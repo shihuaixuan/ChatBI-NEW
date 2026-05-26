@@ -333,6 +333,10 @@ template:
       以下是你可以参考的术语：
       {terminologies}
 
+    generate_semantic_context_info: |
+      以下是已审核业务指标维度口径。命中业务词时优先使用已审核指标维度口径，不自行改写聚合方式：
+      {semantic_context}
+
     generate_data_training_info: |
       以下是你可以参考的SQL示例：
       {data_training}

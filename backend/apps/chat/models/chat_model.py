@@ -47,6 +47,7 @@ class OperationEnum(Enum):
     FILTER_CUSTOM_PROMPT = '11'
     EXECUTE_SQL = '12'
     GENERATE_PICTURE = '13'
+    FILTER_SEMANTIC_ASSET = '14'
 
 
 class ChatFinishStep(Enum):
@@ -226,6 +227,7 @@ class AiModelQuestion(BaseModel):
     sub_query: Optional[list[dict]] = None
     terminologies: str = ""
     data_training: str = ""
+    semantic_context: str = ""
     custom_prompt: str = ""
     error_msg: str = ""
     regenerate_record_id: Optional[int] = None
@@ -260,6 +262,10 @@ class AiModelQuestion(BaseModel):
                                                                      example_answer_2=_example_answer_2,
                                                                      example_answer_3=_example_answer_3)
         templates['schema'] = _base_template['generate_basic_info'].format(engine=self.engine, schema=self.db_schema, sample_data=self.sample_data)
+
+        if self.semantic_context:
+            templates['semantic_context'] = _base_template['generate_semantic_context_info'].format(
+                semantic_context=self.semantic_context)
 
         if self.terminologies:
             templates['terminologies'] = _base_template['generate_terminologies_info'].format(

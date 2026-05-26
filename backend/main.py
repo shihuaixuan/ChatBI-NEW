@@ -1,5 +1,6 @@
 import os
-from typing import Dict, Any
+from pathlib import Path
+from typing import Any
 
 import sqlbot_xpack
 from alembic.config import Config
@@ -15,8 +16,14 @@ from starlette.middleware.cors import CORSMiddleware
 
 from alembic import command
 from apps.api import api_router
-from apps.swagger.i18n import PLACEHOLDER_PREFIX, tags_metadata, i18n_list
-from apps.swagger.i18n import get_translation, DEFAULT_LANG
+from apps.semantic.services.semantic_embedding import submit_missing_approved_embeddings
+from apps.swagger.i18n import (
+    DEFAULT_LANG,
+    PLACEHOLDER_PREFIX,
+    get_translation,
+    i18n_list,
+    tags_metadata,
+)
 from apps.system.crud.aimodel_manage import async_model_info
 from apps.system.crud.assistant import init_dynamic_cors
 from apps.system.middleware.auth import TokenMiddleware
@@ -25,8 +32,11 @@ from common.audit.schemas.request_context import RequestContextMiddlewareCommon
 from common.core.config import settings
 from common.core.response_middleware import ResponseMiddleware, exception_handler
 from common.core.sqlbot_cache import init_sqlbot_cache
-from common.utils.embedding_threads import fill_empty_terminology_embeddings, fill_empty_data_training_embeddings, \
-    fill_empty_table_and_ds_embeddings
+from common.utils.embedding_threads import (
+    fill_empty_data_training_embeddings,
+    fill_empty_table_and_ds_embeddings,
+    fill_empty_terminology_embeddings,
+)
 from common.utils.utils import SQLBotLogUtil
 
 
@@ -47,6 +57,19 @@ def init_table_and_ds_embedding():
     fill_empty_table_and_ds_embeddings()
 
 
+def init_semantic_embedding():
+    submit_missing_approved_embeddings(limit=100)
+
+
+def mount_xpack_static(app: FastAPI):
+    static_path = Path(sqlbot_xpack.__file__).resolve().parent / "static"
+    app.mount(
+        "/xpack_static",
+        StaticFiles(directory=static_path),
+        name="xpack_static",
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     run_migrations()
@@ -55,6 +78,7 @@ async def lifespan(app: FastAPI):
     init_terminology_embedding_data()
     init_data_training_embedding_data()
     init_table_and_ds_embedding()
+    init_semantic_embedding()
     SQLBotLogUtil.info("✅ SQLBot 初始化完成")
     await sqlbot_xpack.core.clean_xpack_cache()
     await async_model_info()  # 异步加密已有模型的密钥和地址
@@ -78,10 +102,10 @@ app = FastAPI(
 )
 
 # cache docs for different text
-_openapi_cache: Dict[str, Dict[str, Any]] = {}
+_openapi_cache: dict[str, dict[str, Any]] = {}
 
 # replace placeholder
-def replace_placeholders_in_schema(schema: Dict[str, Any], trans: Dict[str, str]) -> None:
+def replace_placeholders_in_schema(schema: dict[str, Any], trans: dict[str, str]) -> None:
     """
     search OpenAPI schema，replace PLACEHOLDER_xxx to text。
     """
@@ -111,7 +135,7 @@ def get_language_from_request(request: Request) -> str:
     return DEFAULT_LANG
 
 
-def generate_openapi_for_lang(lang: str) -> Dict[str, Any]:
+def generate_openapi_for_lang(lang: str) -> dict[str, Any]:
     if lang in _openapi_cache:
         return _openapi_cache[lang]
 
@@ -211,6 +235,7 @@ app.add_exception_handler(Exception, exception_handler.global_exception_handler)
 
 mcp.setup_server()
 
+mount_xpack_static(app)
 sqlbot_xpack.init_fastapi_app(app)
 if __name__ == "__main__":
     import uvicorn

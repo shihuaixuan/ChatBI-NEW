@@ -1,12 +1,12 @@
 import concurrent
 import json
 import os
+import time
 import traceback
 import urllib.parse
 import warnings
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import ThreadPoolExecutor, Future, TimeoutError
 from datetime import datetime
-from dis import specialized
 from typing import Any, List, Optional, Union, Dict, Iterator
 
 import orjson
@@ -44,6 +44,11 @@ from apps.db.db import exec_sql, get_version, check_connection
 from apps.system.crud.assistant import AssistantOutDs, AssistantOutDsFactory, get_assistant_ds
 from apps.system.crud.parameter_manage import get_groups
 from apps.system.schemas.system_schema import AssistantOutDsSchema
+from apps.semantic.models.semantic_schema import SemanticRetrieveRequest, SemanticRetrieveResponse
+from apps.semantic.services.asset_usage import save_matched_and_injected_semantic_assets, save_used_semantic_assets
+from apps.semantic.services.semantic_context import build_prompt_context
+from apps.semantic.services.semantic_observability import record_semantic_metric
+from apps.semantic.services.semantic_search import retrieve_semantic_assets
 from apps.terminology.curd.terminology import get_terminology_template
 from common.core.config import settings
 from common.core.db import engine
@@ -65,6 +70,21 @@ session_maker = scoped_session(sessionmaker(bind=engine, class_=Session))
 i18n = I18n()
 
 
+def _retrieve_semantic_assets_with_session(request: SemanticRetrieveRequest) -> SemanticRetrieveResponse:
+    retrieval_session = session_maker()
+    try:
+        return retrieve_semantic_assets(retrieval_session, request, embedding_model=None)
+    finally:
+        retrieval_session.close()
+
+
+def _semantic_match_logs(response: SemanticRetrieveResponse) -> tuple[list[dict], list[dict]]:
+    return (
+        [match.model_dump(mode="json") for match in response.metrics],
+        [match.model_dump(mode="json") for match in response.dimensions],
+    )
+
+
 class LLMService:
     ds: CoreDatasource
     chat_question: ChatQuestion
@@ -83,6 +103,7 @@ class LLMService:
     generate_sql_logs: List[ChatLog]
     generate_chart_logs: List[ChatLog]
     current_logs: dict[OperationEnum, ChatLog]
+    semantic_asset_matches: list
     chunk_list: List[str]
     future: Future
 
@@ -102,6 +123,7 @@ class LLMService:
         self.generate_sql_logs = []
         self.generate_chart_logs = []
         self.current_logs = {}
+        self.semantic_asset_matches = []
         self.chunk_list = []
         self.current_user = current_user
         self.current_assistant = current_assistant
@@ -211,7 +233,7 @@ class LLMService:
                 return True
             else:
                 return False
-        except Exception as e:
+        except Exception:
             return True
 
     def init_messages(self, session: Session):
@@ -374,6 +396,144 @@ class LLMService:
                                                                       log=self.current_logs[
                                                                           OperationEnum.FILTER_SQL_EXAMPLE],
                                                                       full_message=example_list)
+
+    def filter_semantic_assets(self, _session: Session, oid: int = None, ds_id: int = None):
+        self.chat_question.semantic_context = ""
+        self.semantic_asset_matches = []
+        if not getattr(settings, "SEMANTIC_LAYER_ENABLED", False):
+            return
+        if not ds_id or not self.chat_question.question:
+            return
+
+        self.current_logs[OperationEnum.FILTER_SEMANTIC_ASSET] = start_log(
+            session=_session,
+            operate=OperationEnum.FILTER_SEMANTIC_ASSET,
+            record_id=self.record.id,
+            local_operation=True,
+        )
+        started_at = time.monotonic()
+        request = SemanticRetrieveRequest(
+            oid=oid,
+            datasource_id=ds_id,
+            question=self.chat_question.question,
+            metric_top_k=max(int(getattr(settings, "SEMANTIC_METRIC_TOP_K", 5)), 0),
+            dimension_top_k=max(int(getattr(settings, "SEMANTIC_DIMENSION_TOP_K", 8)), 0),
+            approved_only=bool(getattr(settings, "SEMANTIC_APPROVED_ONLY", True)),
+        )
+        timeout_ms = max(int(getattr(settings, "SEMANTIC_SEARCH_TIMEOUT_MS", 800)), 1)
+        full_message: dict[str, Any] = {
+            "question": self.chat_question.question,
+            "oid": oid,
+            "datasource_id": ds_id,
+            "metrics": [],
+            "dimensions": [],
+            "semantic_context": "",
+            "degraded": False,
+            "degradation_reason": "",
+            "duration_ms": 0,
+            "hit_count": 0,
+            "top_score": 0.0,
+        }
+
+        future = executor.submit(_retrieve_semantic_assets_with_session, request)
+        try:
+            response = future.result(timeout=timeout_ms / 1000)
+            semantic_context = build_prompt_context(response)
+            self.chat_question.semantic_context = semantic_context
+            self.semantic_asset_matches = [*response.metrics, *response.dimensions]
+            metric_logs, dimension_logs = _semantic_match_logs(response)
+            top_score = max((match.score for match in self.semantic_asset_matches), default=0.0)
+            full_message.update(
+                {
+                    "metrics": metric_logs,
+                    "dimensions": dimension_logs,
+                    "semantic_context": semantic_context,
+                    "degraded": response.degraded,
+                    "degradation_reason": response.reason if response.degraded else "",
+                    "hit_count": len(self.semantic_asset_matches),
+                    "top_score": top_score,
+                }
+            )
+        except TimeoutError:
+            future.cancel()
+            full_message.update(
+                {
+                    "degraded": True,
+                    "degradation_reason": "semantic search timeout",
+                }
+            )
+        except Exception as exc:
+            full_message.update(
+                {
+                    "degraded": True,
+                    "degradation_reason": str(exc),
+                }
+            )
+        finally:
+            full_message["duration_ms"] = round((time.monotonic() - started_at) * 1000, 2)
+            record_semantic_metric(
+                "semantic_search_latency_ms",
+                increment=0,
+                oid=oid,
+                datasource_id=ds_id,
+                duration_ms=full_message["duration_ms"],
+                hit_count=full_message["hit_count"],
+                top_score=full_message["top_score"],
+                degraded=full_message["degraded"],
+                reason=full_message["degradation_reason"],
+                question=self.chat_question.question,
+            )
+            if full_message["hit_count"] == 0:
+                record_semantic_metric(
+                    "semantic_search_empty_total",
+                    oid=oid,
+                    datasource_id=ds_id,
+                    degraded=full_message["degraded"],
+                    reason=full_message["degradation_reason"],
+                    question=self.chat_question.question,
+                )
+            if full_message["semantic_context"]:
+                record_semantic_metric(
+                    "semantic_prompt_injected_total",
+                    oid=oid,
+                    datasource_id=ds_id,
+                    hit_count=full_message["hit_count"],
+                    top_score=full_message["top_score"],
+                )
+            self.current_logs[OperationEnum.FILTER_SEMANTIC_ASSET] = end_log(
+                session=_session,
+                log=self.current_logs[OperationEnum.FILTER_SEMANTIC_ASSET],
+                full_message=full_message,
+            )
+            self._save_matched_and_injected_semantic_assets(_session)
+
+    def _rollback_semantic_usage_save(self, session: Session) -> None:
+        rollback = getattr(session, "rollback", None)
+        if callable(rollback):
+            rollback()
+
+    def _save_matched_and_injected_semantic_assets(self, session: Session) -> None:
+        if not self.semantic_asset_matches:
+            return
+        try:
+            save_matched_and_injected_semantic_assets(
+                session,
+                self.record.id,
+                self.semantic_asset_matches,
+                self.chat_question.semantic_context,
+            )
+        except Exception as exc:
+            self._rollback_semantic_usage_save(session)
+            SQLBotLogUtil.exception(f"Save semantic matched/injected asset usage failed: {str(exc)}")
+
+    def _save_used_semantic_assets(self, session: Session, sql: str) -> None:
+        if not getattr(self, "semantic_asset_matches", []):
+            return
+        try:
+            save_used_semantic_assets(session, self.record.id, self.semantic_asset_matches, sql)
+        except Exception as exc:
+            self._rollback_semantic_usage_save(session)
+            SQLBotLogUtil.exception(f"Save semantic used asset usage failed: {str(exc)}")
 
     def choose_table_schema(self, _session: Session):
         self.current_logs[OperationEnum.CHOOSE_TABLE] = start_log(session=_session,
@@ -713,6 +873,8 @@ class LLMService:
 
             self.filter_custom_prompts(_session, CustomPromptTypeEnum.GENERATE_SQL, oid, ds_id)
 
+            self.filter_semantic_assets(_session, oid, ds_id)
+
             self.init_messages(_session)
 
         if _error:
@@ -1007,6 +1169,7 @@ class LLMService:
 
     def check_save_sql(self, session: Session, res: str, operate: OperationEnum) -> str:
         sql, *_ = self.check_sql(session=session, res=res, operate=operate)
+        self._save_used_semantic_assets(session, sql)
         save_sql(session=session, sql=sql, record_id=self.record.id)
 
         self.chat_question.sql = sql
@@ -1135,7 +1298,7 @@ class LLMService:
         try:
             chunk = self.chunk_list.pop(0)
             return chunk
-        except IndexError as e:
+        except IndexError:
             return None
 
     def await_result(self):
@@ -1178,6 +1341,8 @@ class LLMService:
                 self.filter_training_template(_session, oid, ds_id)
 
                 self.filter_custom_prompts(_session, CustomPromptTypeEnum.GENERATE_SQL, oid, ds_id)
+
+                self.filter_semantic_assets(_session, oid, ds_id)
 
                 self.init_messages(_session)
 
@@ -1641,7 +1806,7 @@ class LLMService:
                 current_ds = session.get(CoreDatasource, _ds.id)
                 if not current_ds:
                     raise SingleMessageError('chat.ds_is_invalid')
-            except Exception as e:
+            except Exception:
                 raise SingleMessageError("chat.ds_is_invalid")
         else:
             try:

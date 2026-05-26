@@ -7,9 +7,8 @@ from pydantic import (
     BeforeValidator,
     PostgresDsn,
     computed_field,
-    field_validator
+    field_validator,
 )
-from pydantic_core import MultiHostUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -107,6 +106,12 @@ class Settings(BaseSettings):
     EMBEDDING_TERMINOLOGY_TOP_COUNT: int = EMBEDDING_DEFAULT_TOP_COUNT
     EMBEDDING_DATA_TRAINING_TOP_COUNT: int = EMBEDDING_DEFAULT_TOP_COUNT
 
+    SEMANTIC_LAYER_ENABLED: bool = False
+    SEMANTIC_APPROVED_ONLY: bool = True
+    SEMANTIC_METRIC_TOP_K: int = 5
+    SEMANTIC_DIMENSION_TOP_K: int = 8
+    SEMANTIC_SEARCH_TIMEOUT_MS: int = 800
+
     # 是否启用SQL查询行数限制，默认值，可被参数配置覆盖
     GENERATE_SQL_QUERY_LIMIT_ENABLED: bool = True
     GENERATE_SQL_QUERY_HISTORY_ROUND_COUNT: int = 3
@@ -132,6 +137,8 @@ class Settings(BaseSettings):
                      'PARSE_REASONING_BLOCK_ENABLED',
                      'PG_POOL_PRE_PING',
                      'TABLE_EMBEDDING_ENABLED',
+                     'SEMANTIC_LAYER_ENABLED',
+                     'SEMANTIC_APPROVED_ONLY',
                      mode='before')
     @classmethod
     def lowercase_bool(cls, v: Any) -> Any:

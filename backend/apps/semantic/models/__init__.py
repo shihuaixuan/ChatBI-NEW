@@ -1,0 +1,31 @@
+from apps.semantic.models.semantic_model import (
+    AggregationType,
+    AssetOrigin,
+    AssetStatus,
+    AssetType,
+    ChatRecordSemanticAsset,
+    DimensionType,
+    MetricDefineType,
+    SemanticAssetAudit,
+    SemanticDimension,
+    SemanticDimensionValue,
+    SemanticMetric,
+    SemanticType,
+    UsageRole,
+)
+
+__all__ = [
+    "AggregationType",
+    "AssetOrigin",
+    "AssetStatus",
+    "AssetType",
+    "ChatRecordSemanticAsset",
+    "DimensionType",
+    "MetricDefineType",
+    "SemanticAssetAudit",
+    "SemanticDimension",
+    "SemanticDimensionValue",
+    "SemanticMetric",
+    "SemanticType",
+    "UsageRole",
+]

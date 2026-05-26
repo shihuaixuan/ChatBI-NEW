@@ -21,6 +21,7 @@ import EmbeddedCommon from '@/views/embedded/common.vue'
 import Member from '@/views/system/member/index.vue'
 import Professional from '@/views/system/professional/index.vue'
 import Training from '@/views/system/training/index.vue'
+import Semantic from '@/views/system/semantic/index.vue'
 import Prompt from '@/views/system/prompt/index.vue'
 import Audit from '@/views/system/audit/index.vue'
 import Appearance from '@/views/system/appearance/index.vue'
@@ -138,6 +139,12 @@ export const routes = [
         name: 'training',
         component: Training,
         meta: { title: t('training.data_training') },
+      },
+      {
+        path: '/set/semantic',
+        name: 'semantic',
+        component: Semantic,
+        meta: { title: '指标维度' },
       },
       {
         path: '/set/prompt',
