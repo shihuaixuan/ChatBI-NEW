@@ -11,11 +11,33 @@ from sqlalchemy import text
 from apps.ai_model.embedding import EmbeddingModelCache
 from apps.data_training.models.data_training_model import DataTrainingInfo, DataTraining, DataTrainingInfoResult
 from apps.datasource.models.datasource import CoreDatasource
+from apps.semantic.assets.enums import AssetEventType, AssetType
+from apps.semantic.assets.index_sync import AssetChangedEvent, schedule_asset_index_sync
 from apps.system.models.system_model import AssistantModel
 from apps.template.generate_chart.generator import get_base_data_training_template
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
 from common.utils.embedding_threads import run_save_data_training_embeddings
+
+
+def _schedule_data_training_changed(
+    session: SessionDep,
+    oid: int,
+    training_id: int,
+    datasource_id: int | None,
+    change_fields: list[str],
+) -> None:
+    schedule_asset_index_sync(
+        session,
+        AssetChangedEvent(
+            event_type=AssetEventType.DataTrainingChanged,
+            asset_type=AssetType.EXAMPLE,
+            asset_id=training_id,
+            oid=oid,
+            datasource_id=datasource_id,
+            change_fields=change_fields,
+        ),
+    )
 
 
 def get_data_training_base_query(oid: int, name: Optional[str] = None):
@@ -200,6 +222,7 @@ def create_training(session: SessionDep, info: DataTrainingInfo, oid: int, trans
     session.add(data_training)
     session.flush()
     session.refresh(data_training)
+    _schedule_data_training_changed(session, oid, data_training.id, data_training.datasource, [])
     session.commit()
 
     # 处理embedding（批量插入时跳过）
@@ -243,6 +266,7 @@ def update_training(session: SessionDep, info: DataTrainingInfo, oid: int, trans
     if exists:
         raise Exception(trans("i18n_data_training.exists_in_db"))
 
+    training = session.execute(select(DataTraining).where(DataTraining.id == info.id)).scalar_one()
     stmt = update(DataTraining).where(and_(DataTraining.id == info.id)).values(
         question=info.question.strip(),
         description=info.description.strip(),
@@ -251,6 +275,13 @@ def update_training(session: SessionDep, info: DataTrainingInfo, oid: int, trans
         enabled=info.enabled if info.enabled is not None else True
     )
     session.execute(stmt)
+    _schedule_data_training_changed(
+        session,
+        training.oid,
+        training.id,
+        info.datasource,
+        ["question", "description", "datasource", "advanced_application", "enabled"],
+    )
     session.commit()
 
     # embedding
@@ -399,6 +430,9 @@ def batch_create_training(session: SessionDep, info_list: List[DataTrainingInfo]
 
 
 def delete_training(session: SessionDep, ids: list[int]):
+    trainings = session.execute(select(DataTraining).where(DataTraining.id.in_(ids))).scalars().all()
+    for training in trainings:
+        _schedule_data_training_changed(session, training.oid, training.id, training.datasource, ["enabled"])
     stmt = delete(DataTraining).where(and_(DataTraining.id.in_(ids)))
     session.execute(stmt)
     session.commit()
@@ -411,10 +445,12 @@ def enable_training(session: SessionDep, id: int, enabled: bool, trans: Trans):
     if count == 0:
         raise Exception(trans('i18n_data_training.data_training_not_exists'))
 
+    training = session.execute(select(DataTraining).where(DataTraining.id == id)).scalar_one()
     stmt = update(DataTraining).where(and_(DataTraining.id == id)).values(
         enabled=enabled,
     )
     session.execute(stmt)
+    _schedule_data_training_changed(session, training.oid, training.id, training.datasource, ["enabled"])
     session.commit()
 
 

@@ -3,6 +3,9 @@ from typing import Any
 
 from sqlalchemy import Text, cast, func, or_, select
 
+from apps.semantic.assets.enums import AssetEventType as RuntimeAssetEventType
+from apps.semantic.assets.enums import AssetType as RuntimeAssetType
+from apps.semantic.assets.index_sync import AssetChangedEvent, schedule_asset_index_sync
 from apps.semantic.crud.audit import create_audit
 from apps.semantic.models.semantic_model import (
     AssetOrigin,
@@ -42,6 +45,20 @@ def _dimension_snapshot(dimension: SemanticDimension) -> dict[str, Any]:
         "status": dimension.status,
         "origin": dimension.origin,
     }
+
+
+def _schedule_dimension_changed(session: SessionDep, dimension: SemanticDimension, change_fields: list[str]) -> None:
+    schedule_asset_index_sync(
+        session,
+        AssetChangedEvent(
+            event_type=RuntimeAssetEventType.DimensionChanged,
+            asset_type=RuntimeAssetType.DIMENSION,
+            asset_id=dimension.id,
+            oid=dimension.oid,
+            datasource_id=dimension.datasource_id,
+            change_fields=change_fields,
+        ),
+    )
 
 
 def _ensure_dimension_name_available(
@@ -170,6 +187,7 @@ def create_dimension(session: SessionDep, oid: int, payload: DimensionCreate, us
     session.refresh(dimension)
     create_audit(session, AssetType.DIMENSION.value, dimension.id, "CREATE", None, _dimension_snapshot(dimension), user_id)
     invalidate_semantic_asset_cache(oid, dimension.datasource_id)
+    _schedule_dimension_changed(session, dimension, [])
     return dimension
 
 
@@ -200,6 +218,7 @@ def update_dimension(
     session.refresh(dimension)
     create_audit(session, AssetType.DIMENSION.value, dimension.id, "UPDATE", before, _dimension_snapshot(dimension), user_id)
     invalidate_semantic_asset_cache(oid, dimension.datasource_id)
+    _schedule_dimension_changed(session, dimension, list(data.keys()))
     return dimension
 
 
@@ -228,6 +247,7 @@ def approve_dimension(session: SessionDep, oid: int, dimension_id: int, user_id:
     session.refresh(dimension)
     create_audit(session, AssetType.DIMENSION.value, dimension.id, "APPROVE", before, _dimension_snapshot(dimension), user_id)
     invalidate_semantic_asset_cache(oid, dimension.datasource_id)
+    _schedule_dimension_changed(session, dimension, ["status"])
     record_semantic_metric(
         "semantic_asset_approved_total",
         asset_type=AssetType.DIMENSION.value,
@@ -253,4 +273,5 @@ def disable_dimension(session: SessionDep, oid: int, dimension_id: int, reason: 
     after["disable_reason"] = reason
     create_audit(session, AssetType.DIMENSION.value, dimension.id, "DISABLE", before, after, user_id)
     invalidate_semantic_asset_cache(oid, dimension.datasource_id)
+    _schedule_dimension_changed(session, dimension, ["status"])
     return dimension

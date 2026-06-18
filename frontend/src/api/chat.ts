@@ -58,6 +58,11 @@ export class ChatRecord {
   regenerate_record_id?: number
   duration?: number
   total_tokens?: number
+  status?: string
+  trace_id?: string
+  agentic_run_id?: number
+  agentic_trace?: any
+  clarification?: any
 
   constructor()
   constructor(
@@ -259,7 +264,7 @@ const toChatRecord = (data?: any): ChatRecord | undefined => {
   if (!data) {
     return undefined
   }
-  return new ChatRecord(
+  const record = new ChatRecord(
     data.id,
     data.chat_id,
     data.create_time,
@@ -287,6 +292,12 @@ const toChatRecord = (data?: any): ChatRecord | undefined => {
     data.duration,
     data.total_tokens
   )
+  record.status = data.status
+  record.trace_id = data.trace_id
+  record.agentic_run_id = data.agentic_run_id
+  record.agentic_trace = data.agentic_trace
+  record.clarification = data.clarification
+  return record
 }
 const toChatRecordList = (list: any = []): ChatRecord[] => {
   const records: Array<ChatRecord> = []

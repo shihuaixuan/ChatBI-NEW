@@ -13,6 +13,8 @@ from apps.datasource.utils.utils import aes_decrypt
 from apps.db.constant import DB
 from apps.db.db import get_tables, get_fields, exec_sql, check_connection
 from apps.db.engine import get_engine_config, get_engine_conn
+from apps.semantic.assets.enums import AssetEventType, AssetType
+from apps.semantic.assets.index_sync import AssetChangedEvent, AssetIndexSyncService
 from apps.system.schemas.auth import CacheName, CacheNamespace
 from common.core.config import settings
 from common.core.deps import SessionDep, CurrentUser, Trans
@@ -24,6 +26,25 @@ from ..crud.field import delete_field_by_ds_id, update_field
 from ..crud.table import delete_table_by_ds_id, update_table
 from ..models.datasource import CoreDatasource, CreateDatasource, CoreTable, CoreField, ColumnSchema, TableObj, \
     DatasourceConf, TableAndFields
+
+
+def _record_schema_changed(session: SessionDep, ds: CoreDatasource, change_fields: list[str]) -> None:
+    if not settings.SEMANTIC_ASSET_INDEX_SYNC_ENABLED:
+        return
+    event = AssetChangedEvent(
+        event_type=AssetEventType.SchemaChanged,
+        asset_type=AssetType.FIELD,
+        asset_id=ds.id,
+        oid=ds.oid or 1,
+        datasource_id=ds.id,
+        change_fields=change_fields,
+    )
+    service = AssetIndexSyncService()
+    try:
+        report = service.handle_event(event)
+    except Exception as exc:
+        report = service.mark_failed(event, exc)
+    session.info.setdefault("semantic_asset_sync_reports", []).append(report)
 
 
 def get_datasource_list(session: SessionDep, user: CurrentUser, oid: Optional[int] = None) -> List[CoreDatasource]:
@@ -184,6 +205,7 @@ def sync_single_fields(session: SessionDep, trans: Trans, id: int):
     # sync field
     fields = getFieldsByDs(session, ds, table.table_name)
     sync_fields(session, ds, table, fields)
+    _record_schema_changed(session, ds, ["fields"])
 
     # do table embedding
     run_save_table_embeddings([table.id])
@@ -232,6 +254,7 @@ def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable])
     # do table embedding
     run_save_table_embeddings(id_list)
     run_save_ds_embeddings([ds.id])
+    _record_schema_changed(session, ds, ["tables", "fields"])
 
 
 def sync_fields(session: SessionDep, ds: CoreDatasource, table: CoreTable, fields: List[ColumnSchema]):
@@ -270,6 +293,9 @@ def update_table_and_fields(session: SessionDep, data: TableObj):
     update_table(session, data.table)
     for field in data.fields:
         update_field(session, field)
+    ds = session.query(CoreDatasource).filter(CoreDatasource.id == data.table.ds_id).first()
+    if ds is not None:
+        _record_schema_changed(session, ds, ["table_comment", "field_comment", "checked"])
 
     # do table embedding
     run_save_table_embeddings([data.table.id])
@@ -278,6 +304,9 @@ def update_table_and_fields(session: SessionDep, data: TableObj):
 
 def updateTable(session: SessionDep, table: CoreTable):
     update_table(session, table)
+    ds = session.query(CoreDatasource).filter(CoreDatasource.id == table.ds_id).first()
+    if ds is not None:
+        _record_schema_changed(session, ds, ["table_comment", "checked"])
 
     # do table embedding
     run_save_table_embeddings([table.id])
@@ -286,6 +315,9 @@ def updateTable(session: SessionDep, table: CoreTable):
 
 def updateField(session: SessionDep, field: CoreField):
     update_field(session, field)
+    ds = session.query(CoreDatasource).filter(CoreDatasource.id == field.ds_id).first()
+    if ds is not None:
+        _record_schema_changed(session, ds, ["field_comment", "checked"])
 
     # do table embedding
     run_save_table_embeddings([field.table_id])

@@ -10,6 +10,11 @@ components.d.ts
 extra
 .env
 docs
+backend/tests
+backend/alembic
+.codex_run_logs
+.idea
+data/sqlbot
 .agents
 # Byte-compiled / optimized / DLL files
 __pycache__/

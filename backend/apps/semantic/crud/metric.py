@@ -3,6 +3,9 @@ from typing import Any
 
 from sqlalchemy import Text, cast, func, or_, select
 
+from apps.semantic.assets.enums import AssetEventType as RuntimeAssetEventType
+from apps.semantic.assets.enums import AssetType as RuntimeAssetType
+from apps.semantic.assets.index_sync import AssetChangedEvent, schedule_asset_index_sync
 from apps.semantic.crud.audit import create_audit
 from apps.semantic.models.semantic_model import (
     AssetOrigin,
@@ -42,6 +45,20 @@ def _metric_snapshot(metric: SemanticMetric) -> dict[str, Any]:
         "status": metric.status,
         "origin": metric.origin,
     }
+
+
+def _schedule_metric_changed(session: SessionDep, metric: SemanticMetric, change_fields: list[str]) -> None:
+    schedule_asset_index_sync(
+        session,
+        AssetChangedEvent(
+            event_type=RuntimeAssetEventType.MetricChanged,
+            asset_type=RuntimeAssetType.METRIC,
+            asset_id=metric.id,
+            oid=metric.oid,
+            datasource_id=metric.datasource_id,
+            change_fields=change_fields,
+        ),
+    )
 
 
 def _ensure_metric_name_available(session: SessionDep, oid: int, datasource_id: int, name: str, metric_id: int | None = None):
@@ -154,6 +171,7 @@ def create_metric(session: SessionDep, oid: int, payload: MetricCreate, user_id:
     session.refresh(metric)
     create_audit(session, AssetType.METRIC.value, metric.id, "CREATE", None, _metric_snapshot(metric), user_id)
     invalidate_semantic_asset_cache(oid, metric.datasource_id)
+    _schedule_metric_changed(session, metric, [])
     return metric
 
 
@@ -174,6 +192,7 @@ def update_metric(session: SessionDep, oid: int, metric_id: int, payload: Metric
     session.refresh(metric)
     create_audit(session, AssetType.METRIC.value, metric.id, "UPDATE", before, _metric_snapshot(metric), user_id)
     invalidate_semantic_asset_cache(oid, metric.datasource_id)
+    _schedule_metric_changed(session, metric, list(data.keys()))
     if before["status"] == AssetStatus.APPROVED.value:
         run_after_commit(session, lambda metric_id=metric.id: submit_metric_embedding_rebuild(metric_id))
     return metric
@@ -204,6 +223,7 @@ def approve_metric(session: SessionDep, oid: int, metric_id: int, user_id: int |
     session.refresh(metric)
     create_audit(session, AssetType.METRIC.value, metric.id, "APPROVE", before, _metric_snapshot(metric), user_id)
     invalidate_semantic_asset_cache(oid, metric.datasource_id)
+    _schedule_metric_changed(session, metric, ["status"])
     record_semantic_metric(
         "semantic_asset_approved_total",
         asset_type=AssetType.METRIC.value,
@@ -229,4 +249,5 @@ def disable_metric(session: SessionDep, oid: int, metric_id: int, reason: str, u
     after["disable_reason"] = reason
     create_audit(session, AssetType.METRIC.value, metric.id, "DISABLE", before, after, user_id)
     invalidate_semantic_asset_cache(oid, metric.datasource_id)
+    _schedule_metric_changed(session, metric, ["status"])
     return metric

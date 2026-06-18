@@ -16,6 +16,11 @@ export interface ValidateExpressionPayload {
   filter_sql?: string
 }
 
+export interface SemanticAssetDebugParams {
+  datasource_id: number | string
+  table_ids?: number | string | Array<number | string>
+}
+
 export const semanticApi = {
   metricPage: (page: number, size: number, params: SemanticPageParams) =>
     request.get(`/semantic/metrics/page/${page}/${size}`, { params }),
@@ -41,4 +46,28 @@ export const semanticApi = {
     request.post(`/semantic/datasources/${datasourceId}/validate`, data),
   chatRecordAssets: (recordId: number | string) =>
     request.get(`/semantic/chat-records/${recordId}/assets`),
+
+  debugProfile: (params: SemanticAssetDebugParams) =>
+    request.get('/semantic/assets/debug/profile', { params }),
+  debugRuntimeSchema: (params: SemanticAssetDebugParams) =>
+    request.get('/semantic/assets/debug/runtime-schema', { params }),
+  debugCandidates: (params: SemanticAssetDebugParams) =>
+    request.get('/semantic/assets/debug/candidates', { params }),
+  debugDocument: (
+    assetType: string,
+    assetId: number | string,
+    params: SemanticAssetDebugParams
+  ) => request.get(`/semantic/assets/debug/documents/${assetType}/${assetId}`, { params }),
+  debugQuality: (params: SemanticAssetDebugParams) =>
+    request.get('/semantic/assets/debug/quality', { params }),
+  debugSyncDatasource: (params: SemanticAssetDebugParams, dryRun = false) =>
+    request.post('/semantic/assets/debug/sync/datasource', null, {
+      params: { ...params, dry_run: dryRun },
+    }),
+  debugSyncDataset: (params: SemanticAssetDebugParams, dryRun = false) =>
+    request.post('/semantic/assets/debug/sync/dataset', null, {
+      params: { ...params, dry_run: dryRun },
+    }),
+  debugInvalidateCache: (params: SemanticAssetDebugParams) =>
+    request.post('/semantic/assets/debug/cache/invalidate', null, { params }),
 }

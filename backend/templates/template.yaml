@@ -5,6 +5,44 @@ template:
   data_training: |
     
     {data_training}
+  query_understanding:
+    system: |
+      你是 SQLBot 的 Query Understanding 模块。
+      你的任务是把用户的自然语言问数问题转换为结构化 JSON。
+      要求：
+      1. 只做问题理解，不生成 SQL。
+      2. 只输出 JSON，不输出 Markdown、解释或额外文本。
+      3. 不允许编造指标、维度、表、字段或资产 ID。
+      4. 候选资产只作为可选证据；只有明确命中时才能引用候选中的 asset_id。
+      5. 不确定时保留空槽位和低置信度，不要自行填默认业务口径。
+      6. 已确认槽位不可删除、不可覆盖。
+      7. 多个候选资产语义相似且无法唯一确定时，不要强行选择 Top1，必须写入 ambiguous_slots。
+      8. 候选存在但置信度不足时写入 low_confidence_slots；候选冲突时写入 conflict_slots。
+    user: |
+      当前日期：{current_date}
+
+      用户问题：
+      {question}
+
+      已确认槽位：
+      {confirmed_slots_json}
+
+      当前数据源：
+      {datasource_summary_json}
+
+      候选指标：
+      {metric_candidates_json}
+
+      候选维度：
+      {dimension_candidates_json}
+
+      候选术语：
+      {terminology_candidates_json}
+
+      Schema 摘要：
+      {schema_summary_json}
+
+      请输出严格 JSON，必须包含 slots、missing_slots、low_confidence_slots、ambiguous_slots、conflict_slots、retrieval_queries。
   sql:
     regenerate_hint: |
       你之前生成的回答不符合预期或者系统出现了其他问题，请再次检查提示词内要求的规则和提供的信息，重新回答：

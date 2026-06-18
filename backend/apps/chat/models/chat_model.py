@@ -126,6 +126,8 @@ class ChatRecord(SQLModel, table=True):
     recommended_question: str = Field(sa_column=Column(Text, nullable=True))
     datasource_select_answer: str = Field(sa_column=Column(Text, nullable=True))
     finish: bool = Field(sa_column=Column(Boolean, nullable=True, default=False))
+    status: str | None = Field(default=None, max_length=32, nullable=True)
+    trace_id: str | None = Field(default=None, max_length=64, nullable=True)
     error: str = Field(sa_column=Column(Text, nullable=True))
     analysis_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
     predict_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
@@ -152,6 +154,8 @@ class ChatRecordResult(BaseModel):
     recommended_question: Optional[str] = None
     datasource_select_answer: Optional[str] = None
     finish: Optional[bool] = None
+    status: str | None = None
+    trace_id: str | None = None
     error: Optional[str] = None
     analysis_record_id: Optional[int] = None
     predict_record_id: Optional[int] = None

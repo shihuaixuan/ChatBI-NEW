@@ -104,7 +104,21 @@ class SemanticMetric(SQLModel, table=True):
     data_type: str | None = Field(default=None, max_length=64)
     data_format: str | None = Field(default=None, max_length=64)
     default_time_dimension_id: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
+    dataset_ids: list[int] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+    metric_group: str | None = Field(default=None, max_length=128)
+    is_core: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default=text("false")))
     related_dimension_ids: list[int] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+    related_term_ids: list[int] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+    related_example_ids: list[int] = Field(
         default_factory=list,
         sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     )
@@ -151,6 +165,13 @@ class SemanticDimension(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     )
+    dataset_ids: list[int] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+    is_primary_key: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default=text("false")))
+    is_default_time: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default=text("false")))
+    is_default_group_by: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default=text("false")))
     owner_id: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     status: str = Field(default=AssetStatus.CANDIDATE.value, max_length=32, nullable=False)
     origin: str = Field(default=AssetOrigin.FIELD_INIT.value, max_length=32, nullable=False)
@@ -170,6 +191,10 @@ class SemanticDimensionValue(SQLModel, table=True):
 
     id: int | None = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
     dimension_id: int = Field(sa_column=Column(BigInteger, nullable=False))
+    dataset_ids: list[int] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
     value: str = Field(sa_column=Column(Text, nullable=False))
     display_value: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     aliases: list[str] = Field(

@@ -218,7 +218,8 @@
                   :all-messages="computedMessages"
                 />
                 <template v-if="message.role === 'assistant' && !message.first_chat">
-                  <ChartAnswer
+                  <component
+                    :is="answerComponent"
                     v-if="
                       (message?.record?.analysis_record_id === undefined ||
                         message?.record?.analysis_record_id === null) &&
@@ -317,7 +318,7 @@
                         @stop="onChatStop"
                       />
                     </template>
-                  </ChartAnswer>
+                  </component>
                   <AnalysisAnswer
                     v-if="
                       message?.record?.analysis_record_id !== undefined &&
@@ -453,6 +454,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { Chat, chatApi, ChatInfo, type ChatMessage, ChatRecord } from '@/api/chat'
 import ChatRow from './ChatRow.vue'
 import ChartAnswer from './answer/ChartAnswer.vue'
+import AgenticAnswer from './answer/AgenticAnswer.vue'
 import AnalysisAnswer from './answer/AnalysisAnswer.vue'
 import PredictAnswer from './answer/PredictAnswer.vue'
 import UserChat from './chat-block/UserChat.vue'
@@ -517,6 +519,10 @@ const customName = computed(() => {
 const { t } = useI18n()
 
 const chatConfig = useChatConfigStore()
+const useAgenticChatFlow = computed(
+  () => import.meta.env.VITE_AGENTIC_CHATBI_ENABLED === 'true'
+)
+const answerComponent = computed(() => (useAgenticChatFlow.value ? AgenticAnswer : ChartAnswer))
 
 const isPhone = computed(() => {
   return isMobile()
