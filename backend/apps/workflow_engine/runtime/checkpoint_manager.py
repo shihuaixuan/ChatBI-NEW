@@ -84,3 +84,31 @@ class CheckpointManager:
 
     def list(self, run_id: str) -> list[WorkflowCheckpoint]:
         return [checkpoint.model_copy(deep=True) for checkpoint in self._checkpoints.get(run_id, [])]
+
+    def pause(self, run: WorkflowRun, node_name: str) -> WorkflowRun:
+        """保存交互节点的暂停边界。"""
+
+        saved = self.save_progress(run, node_name=node_name)
+        self.publish_event(saved, "run.waiting_input", node_name=node_name)
+        return saved
+
+    def resume(self, run: WorkflowRun) -> WorkflowRun:
+        """保存服务端计算出的恢复游标，不重复创建节点 Checkpoint。"""
+
+        expected_version = run.version
+        run.updated_at = datetime.now(timezone.utc)
+        saved = self._run_store.save(run, expected_version=expected_version)
+        self.publish_event(saved, "run.resumed")
+        return saved
+
+    def fail(self, run: WorkflowRun, error_code: str, node_name: str | None = None) -> WorkflowRun:
+        """以稳定错误码终止 Run，同时保留最近成功 Checkpoint。"""
+
+        expected_version = run.version
+        run.updated_at = datetime.now(timezone.utc)
+        saved = self._run_store.save(run, expected_version=expected_version)
+        payload = {"error_code": error_code}
+        if node_name is not None:
+            self.publish_event(saved, "node.failed", node_name=node_name, public_payload=payload)
+        self.publish_event(saved, "run.failed", public_payload=payload)
+        return saved
