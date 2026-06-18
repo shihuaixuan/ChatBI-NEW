@@ -22,11 +22,12 @@ class RunRepository:
         self._session = session
 
     def create(self, run: WorkflowRun, oid: int | None = None, user_id: int | None = None, request_id: str | None = None) -> WorkflowRun:
+        context_request_id = run.context.request.get("request_id")
         model = WorkflowRunModel(
             run_id=run.run_id,
             oid=oid or int(run.context.request.get("tenant_id", 1)),
             user_id=user_id or int(run.context.request.get("user_id", 0)),
-            request_id=request_id,
+            request_id=request_id or (str(context_request_id) if context_request_id is not None else None),
             definition_name=run.definition_name,
             definition_version=run.definition_version,
             definition_digest=run.definition_digest,

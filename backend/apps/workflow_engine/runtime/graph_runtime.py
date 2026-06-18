@@ -71,7 +71,14 @@ class GraphRuntime:
             updated_at=now,
         )
         created = self._run_store.create(run)
-        self._checkpoints.publish_event(created, "run.created")
+        self._checkpoints.publish_event(
+            created,
+            "run.created",
+            public_payload={
+                "status": created.status.value,
+                "question": created.context.request.get("question"),
+            },
+        )
         return created
 
     def execute(self, run_id: str) -> WorkflowRun:

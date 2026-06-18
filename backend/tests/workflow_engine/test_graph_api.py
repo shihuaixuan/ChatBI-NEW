@@ -1,3 +1,6 @@
+import importlib.util
+import io
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from inspect import signature
 from pathlib import Path
@@ -70,7 +73,7 @@ def test_graph_routes_require_current_user_dependency():
     assert all("current_user" in params for params in route_params.values())
 
 
-def test_graph_query_creates_independent_run_and_public_created_event():
+def test_graph_query_creates_run_and_executes_placeholder_chatbi_graph():
     with Session(engine) as session:
         _cleanup(session)
 
@@ -87,11 +90,17 @@ def test_graph_query_creates_independent_run_and_public_created_event():
     assert response.status_code == 200
     body = response.json()
     assert body["run_id"] == "api-run-1"
-    assert body["status"] == "created"
+    assert body["status"] == "succeeded"
+    assert body["current_node"] == "finish"
+    assert body["context_summary"]["variables"]["answer"]["answer"] == "这是图工作流占位回答：最近 7 天销售额"
 
     with Session(engine) as session:
         stored = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-run-1")).one()
-        events = session.exec(select(WorkflowEventModel).where(WorkflowEventModel.run_id == "api-run-1")).all()
+        events = session.exec(
+            select(WorkflowEventModel)
+            .where(WorkflowEventModel.run_id == "api-run-1")
+            .order_by(WorkflowEventModel.sequence)
+        ).all()
         assert stored.oid == 9501
         assert stored.user_id == 501
         assert stored.request == {
@@ -101,8 +110,40 @@ def test_graph_query_creates_independent_run_and_public_created_event():
             "datasource_id": 7001,
             "request_id": "api-request-1",
         }
-        assert [event.event_type for event in events] == ["run.created"]
+        event_types = [event.event_type for event in events]
+        assert event_types[0] == "run.created"
+        assert "node.started" in event_types
+        assert "node.succeeded" in event_types
+        assert event_types[-1] == "run.succeeded"
         assert events[0].public_payload == {"status": "created", "question": "最近 7 天销售额"}
+        _cleanup(session)
+
+
+def test_runnable_graph_flow_demo_prints_node_status_and_outputs():
+    demo_path = Path(__file__).with_name("run_graph_flow_demo.py")
+    spec = importlib.util.spec_from_file_location("run_graph_flow_demo", demo_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    with Session(engine) as session:
+        _cleanup(session)
+
+    output = io.StringIO()
+    with redirect_stdout(output):
+        exit_code = module.main(["最近 7 天销售额", "--run-id", "api-demo-run-1"])
+
+    text = output.getvalue()
+    assert exit_code == 0
+    assert "输入问题: 最近 7 天销售额" in text
+    assert "创建并执行图响应" in text
+    assert "run.succeeded" in text
+    assert "节点: understand_question | 状态: succeeded" in text
+    assert "节点: execute_sql | 状态: succeeded" in text
+    assert "输出:" in text
+    assert "最终回答: 这是图工作流占位回答：最近 7 天销售额" in text
+
+    with Session(engine) as session:
         _cleanup(session)
 
 
@@ -124,13 +165,15 @@ def test_graph_run_query_and_events_are_scoped_to_current_user():
         forbidden = _client(_user(user_id=999, oid=9501)).get("/graph/runs/api-run-2")
 
         assert run_response.status_code == 200
-        assert run_response.json()["context_summary"] == {
-            "question": "销售额",
-            "datasource_id": 7001,
-            "variables": {},
-        }
+        summary = run_response.json()["context_summary"]
+        assert summary["question"] == "销售额"
+        assert summary["datasource_id"] == 7001
+        assert summary["variables"]["answer"]["answer"] == "这是图工作流占位回答：销售额"
         assert event_response.status_code == 200
-        assert [event["sequence"] for event in event_response.json()["events"]] == [1]
+        assert [event["sequence"] for event in event_response.json()["events"]] == list(
+            range(1, len(event_response.json()["events"]) + 1)
+        )
+        assert event_response.json()["events"][-1]["event_type"] == "run.succeeded"
         assert forbidden.status_code == 404
         _cleanup(session)
 

@@ -5,6 +5,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from sqlmodel import Session, col, func, select
 
+from apps.chatbi_workflow.runtime import build_placeholder_chatbi_runtime
 from apps.workflow_engine.api.schemas import (
     ControlResponse,
     GraphEventListResponse,
@@ -15,7 +16,7 @@ from apps.workflow_engine.api.schemas import (
 )
 from apps.workflow_engine.domain.context import WorkflowContext
 from apps.workflow_engine.domain.event import WorkflowEvent
-from apps.workflow_engine.domain.run import RunStatus, WorkflowRun
+from apps.workflow_engine.domain.run import RunStatus
 from apps.workflow_engine.infrastructure.events.outbox import EventOutbox
 from apps.workflow_engine.infrastructure.events.stream import EventStream
 from apps.workflow_engine.infrastructure.persistence.models import (
@@ -23,7 +24,6 @@ from apps.workflow_engine.infrastructure.persistence.models import (
     WorkflowEventModel,
     WorkflowRunModel,
 )
-from apps.workflow_engine.infrastructure.persistence.run_repository import RunRepository
 
 
 class GraphApiService:
@@ -37,7 +37,6 @@ class GraphApiService:
         self._session = session
 
     def create_query(self, current_user: Any, request: GraphQueryRequest) -> GraphRunResponse:
-        now = datetime.now(timezone.utc)
         run_id = request.run_id or f"graph-{uuid4().hex}"
         request_context = {
             "tenant_id": current_user.oid,
@@ -46,33 +45,14 @@ class GraphApiService:
             "datasource_id": request.datasource_id,
             "request_id": request.request_id,
         }
-        run = WorkflowRun(
+        runtime = build_placeholder_chatbi_runtime(self._session)
+        created = runtime.create_run(
             run_id=run_id,
             definition_name="chatbi",
-            definition_version="v1",
-            definition_digest="pending",
-            status=RunStatus.CREATED,
-            current_node="start",
+            definition_version="minimal-v1",
             context=WorkflowContext(request=request_context, conversation={"question": request.question}),
-            created_at=now,
-            updated_at=now,
         )
-        created = RunRepository(self._session).create(
-            run,
-            oid=current_user.oid,
-            user_id=current_user.id,
-            request_id=request.request_id,
-        )
-        EventOutbox(self._session).append(
-            WorkflowEvent(
-                event_id=str(uuid4()),
-                run_id=created.run_id,
-                sequence=1,
-                event_type="run.created",
-                public_payload={"status": created.status.value, "question": request.question},
-                created_at=now,
-            )
-        )
+        runtime.execute(created.run_id)
         self._session.commit()
         return self._to_run_response(self._load_owned_run(current_user, created.run_id))
 
