@@ -8,7 +8,14 @@ from apps.chatbi_workflow.definitions.chatbi_minimal_v1 import (
     build_chatbi_minimal_definition,
     register_chatbi_minimal_handlers,
 )
+from apps.chatbi_workflow.definitions.chatbi_v1 import (
+    build_chatbi_v1_definition,
+    register_chatbi_v1_handlers,
+)
 from apps.workflow_engine.infrastructure.events.publisher import DatabaseEventPublisher
+from apps.workflow_engine.infrastructure.persistence.interaction_manager import (
+    DatabaseInteractionManager,
+)
 from apps.workflow_engine.infrastructure.persistence.run_repository import RunRepository
 from apps.workflow_engine.registry.condition_registry import ConditionRegistry
 from apps.workflow_engine.registry.definition_validator import DefinitionValidator
@@ -44,4 +51,30 @@ def build_placeholder_chatbi_runtime(session: Session) -> GraphRuntime:
         context_patcher=ContextPatcher(),
         checkpoint_manager=CheckpointManager(run_store, events),
         lease=InMemoryRunLease(),
+    )
+
+
+def build_placeholder_chatbi_v1_runtime(session: Session) -> GraphRuntime:
+    """组装可同步执行的 ChatBI v1 占位图运行时。"""
+
+    gateway = PlaceholderChatBICapabilityGateway()
+    handlers = HandlerRegistry()
+    conditions = ConditionRegistry()
+    register_chatbi_v1_handlers(handlers, gateway)
+    register_chatbi_conditions(conditions)
+
+    registry = WorkflowRegistry(DefinitionValidator(handlers, conditions))
+    registry.publish(build_chatbi_v1_definition())
+
+    run_store = RunRepository(session)
+    events = DatabaseEventPublisher(session)
+    return GraphRuntime(
+        registry=registry,
+        run_store=run_store,
+        scheduler=NodeScheduler(handlers),
+        router=ConditionRouter(conditions),
+        context_patcher=ContextPatcher(),
+        checkpoint_manager=CheckpointManager(run_store, events),
+        lease=InMemoryRunLease(),
+        interaction_manager=DatabaseInteractionManager(session),
     )

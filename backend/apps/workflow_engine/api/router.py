@@ -5,6 +5,7 @@ from apps.workflow_engine.api.schemas import (
     GraphEventListResponse,
     GraphQueryRequest,
     GraphRunResponse,
+    GraphTraceResponse,
     InteractionResponseRequest,
 )
 from apps.workflow_engine.api.service import GraphApiService
@@ -31,6 +32,11 @@ async def list_events(
     after_sequence: int = Query(default=0, ge=0),
 ):
     return GraphApiService(session).list_events(current_user, run_id, after_sequence=after_sequence)
+
+
+@router.get("/runs/{run_id}/trace", response_model=GraphTraceResponse)
+async def get_trace(session: SessionDep, current_user: CurrentUser, run_id: str):
+    return GraphApiService(session).get_trace(current_user, run_id)
 
 
 @router.post("/runs/{run_id}/interactions/{interaction_id}/responses", response_model=ControlResponse)

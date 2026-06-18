@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -8,6 +8,7 @@ class GraphQueryRequest(BaseModel):
 
     question: str = Field(min_length=1)
     datasource_id: int = Field(gt=0)
+    definition_version: Literal["minimal-v1", "v1"] = "minimal-v1"
     request_id: str | None = None
     run_id: str | None = None
 
@@ -37,6 +38,24 @@ class GraphEventListResponse(BaseModel):
     """断点续传事件列表。"""
 
     events: list[GraphEventResponse]
+
+
+class GraphTraceNodeResponse(BaseModel):
+    """单个节点的前端 trace 摘要。"""
+
+    name: str
+    status: str
+    route_reason: str | None = None
+    output: dict[str, Any] | bool | str | int | float | None = None
+
+
+class GraphTraceResponse(BaseModel):
+    """一次 Run 的节点级执行轨迹。"""
+
+    run_id: str
+    status: str
+    current_node: str | None = None
+    nodes: list[GraphTraceNodeResponse]
 
 
 class InteractionResponseRequest(BaseModel):

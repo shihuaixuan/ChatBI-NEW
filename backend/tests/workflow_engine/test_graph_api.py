@@ -50,6 +50,7 @@ def test_graph_routes_are_registered_and_included_by_apps_api():
         "/graph/queries",
         "/graph/runs/{run_id}",
         "/graph/runs/{run_id}/events",
+        "/graph/runs/{run_id}/trace",
         "/graph/runs/{run_id}/interactions/{interaction_id}/responses",
         "/graph/runs/{run_id}/cancel",
         "/graph/runs/{run_id}/retry",
@@ -119,6 +120,129 @@ def test_graph_query_creates_run_and_executes_placeholder_chatbi_graph():
         _cleanup(session)
 
 
+def test_graph_query_can_execute_placeholder_chatbi_v1_graph():
+    with Session(engine) as session:
+        _cleanup(session)
+
+    response = _client().post(
+        "/graph/queries",
+        json={
+            "question": "最近 7 天销售额",
+            "datasource_id": 7001,
+            "definition_version": "v1",
+            "request_id": "api-request-v1",
+            "run_id": "api-run-v1",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == "api-run-v1"
+    assert body["status"] == "succeeded"
+    assert body["current_node"] == "finish"
+    assert body["context_summary"]["variables"]["final_reply"]["final_answer"] == "这是图工作流占位回答：最近 7 天销售额"
+
+    with Session(engine) as session:
+        events = session.exec(
+            select(WorkflowEventModel)
+            .where(WorkflowEventModel.run_id == "api-run-v1")
+            .order_by(WorkflowEventModel.sequence)
+        ).all()
+        assert "classify_question" in [event.node_name for event in events]
+        _cleanup(session)
+
+
+def test_graph_v1_interaction_response_resumes_runtime_to_final_reply():
+    with Session(engine) as session:
+        _cleanup(session)
+
+    created = _client().post(
+        "/graph/queries",
+        json={
+            "question": "需要澄清的问题",
+            "datasource_id": 7001,
+            "definition_version": "v1",
+            "request_id": "api-request-v1-clarify",
+            "run_id": "api-run-v1-clarify",
+        },
+    )
+
+    assert created.status_code == 200
+    assert created.json()["status"] == "waiting_input"
+    assert created.json()["current_node"] == "ask_rewrite_clarification"
+
+    with Session(engine) as session:
+        interaction = session.exec(
+            select(InteractionRequestModel).where(
+                InteractionRequestModel.run_id == "api-run-v1-clarify",
+                InteractionRequestModel.status == "pending",
+            )
+        ).one()
+        interaction_id = interaction.interaction_id
+
+    answered = _client().post(
+        f"/graph/runs/api-run-v1-clarify/interactions/{interaction_id}/responses",
+        json={"response": {"metric": "sales_amount"}},
+    )
+    run_response = _client().get("/graph/runs/api-run-v1-clarify")
+
+    assert answered.status_code == 200
+    assert answered.json()["status"] == "succeeded"
+    assert run_response.status_code == 200
+    body = run_response.json()
+    assert body["status"] == "succeeded"
+    assert body["current_node"] == "finish"
+    assert body["context_summary"]["variables"]["rewrite_response"] == {"metric": "sales_amount"}
+    assert body["context_summary"]["variables"]["final_reply"]["final_answer"] == "这是图工作流占位回答：需要澄清的问题"
+
+    with Session(engine) as session:
+        interaction = session.exec(
+            select(InteractionRequestModel).where(InteractionRequestModel.interaction_id == interaction_id)
+        ).one()
+        events = session.exec(
+            select(WorkflowEventModel)
+            .where(WorkflowEventModel.run_id == "api-run-v1-clarify")
+            .order_by(WorkflowEventModel.sequence)
+        ).all()
+        assert interaction.status == "answered"
+        assert events[-1].event_type == "run.succeeded"
+        _cleanup(session)
+
+
+def test_graph_trace_returns_node_status_route_reason_and_outputs():
+    with Session(engine) as session:
+        _cleanup(session)
+
+    _client().post(
+        "/graph/queries",
+        json={
+            "question": "最近 7 天销售额",
+            "datasource_id": 7001,
+            "definition_version": "v1",
+            "request_id": "api-request-v1-trace",
+            "run_id": "api-run-v1-trace",
+        },
+    )
+
+    response = _client().get("/graph/runs/api-run-v1-trace/trace")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == "api-run-v1-trace"
+    assert body["status"] == "succeeded"
+    assert body["current_node"] == "finish"
+    nodes = {node["name"]: node for node in body["nodes"]}
+    assert nodes["classify_question"]["status"] == "succeeded"
+    assert nodes["classify_question"]["route_reason"] == "QUESTION_DATA_OR_FOLLOWUP"
+    assert nodes["classify_question"]["output"]["category"] == "data"
+    assert nodes["reject_answer"]["status"] == "not_run"
+    assert nodes["reject_answer"]["output"] is None
+    assert nodes["compose_final_reply"]["output"]["final_answer"] == "这是图工作流占位回答：最近 7 天销售额"
+
+    with Session(engine) as session:
+        _cleanup(session)
+
+
 def test_runnable_graph_flow_demo_prints_node_status_and_outputs():
     demo_path = Path(__file__).with_name("run_graph_flow_demo.py")
     spec = importlib.util.spec_from_file_location("run_graph_flow_demo", demo_path)
@@ -141,6 +265,39 @@ def test_runnable_graph_flow_demo_prints_node_status_and_outputs():
     assert "节点: understand_question | 状态: succeeded" in text
     assert "节点: execute_sql | 状态: succeeded" in text
     assert "输出:" in text
+    assert "最终回答: 这是图工作流占位回答：最近 7 天销售额" in text
+
+    with Session(engine) as session:
+        _cleanup(session)
+
+
+def test_runnable_graph_flow_demo_can_print_chatbi_v1_nodes():
+    demo_path = Path(__file__).with_name("run_graph_flow_demo.py")
+    spec = importlib.util.spec_from_file_location("run_graph_flow_demo", demo_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    with Session(engine) as session:
+        _cleanup(session)
+
+    output = io.StringIO()
+    with redirect_stdout(output):
+        exit_code = module.main(
+            [
+                "最近 7 天销售额",
+                "--definition-version",
+                "v1",
+                "--run-id",
+                "api-demo-v1-run-1",
+            ]
+        )
+
+    text = output.getvalue()
+    assert exit_code == 0
+    assert "definition_version: v1" in text
+    assert "节点: classify_question | 状态: succeeded" in text
+    assert "节点: compose_final_reply | 状态: succeeded" in text
     assert "最终回答: 这是图工作流占位回答：最近 7 天销售额" in text
 
     with Session(engine) as session:

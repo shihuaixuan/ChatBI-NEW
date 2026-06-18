@@ -1,0 +1,203 @@
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+
+class QuestionClassificationInput(BaseModel):
+    """问题分类节点输入。"""
+
+    question: str
+    tenant_id: int
+    user_id: int
+    datasource_id: int
+    conversation_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class QuestionClassificationOutput(BaseModel):
+    """问题分类节点输出。"""
+
+    category: Literal["forbidden", "chitchat", "data", "followup"]
+    reason: str
+    risk_level: Literal["low", "medium", "high"] = "low"
+
+
+class QuestionRewriteInput(BaseModel):
+    """问题重写节点输入。"""
+
+    question: str
+    conversation_context: dict[str, Any] = Field(default_factory=dict)
+    user_feedback: dict[str, Any] = Field(default_factory=dict)
+
+
+class AnswerOutput(BaseModel):
+    """业务回复节点输出。"""
+
+    answer: str
+    warnings: list[str] = Field(default_factory=list)
+    render_type: str = "text"
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class QuestionRewriteOutput(BaseModel):
+    """问题重写节点输出。"""
+
+    rewritten_question: str
+    need_user_input: bool = False
+    missing_slots: list[str] = Field(default_factory=list)
+    image_profile_hint: str | None = None
+
+
+class IntentRecognitionInput(BaseModel):
+    """意图识别节点输入。"""
+
+    rewritten_question: str
+    conversation_context: dict[str, Any] = Field(default_factory=dict)
+    user_feedback: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImageProfileOutput(BaseModel):
+    """图像刻画节点输出。"""
+
+    profile: str
+    chart_candidates: list[str] = Field(default_factory=list)
+
+
+class IntentRecognitionOutput(BaseModel):
+    """意图识别节点输出。"""
+
+    intent_type: str
+    confidence: float = Field(ge=0, le=1)
+    ambiguous_slots: list[str] = Field(default_factory=list)
+    conflict_slots: list[str] = Field(default_factory=list)
+
+
+class KnowledgeRetrieveInput(BaseModel):
+    """知识检索节点输入。"""
+
+    rewritten_question: str
+    intent: dict[str, Any]
+    tenant_id: int
+    datasource_id: int
+
+
+class KnowledgeRetrieveOutput(BaseModel):
+    """知识检索节点输出。"""
+
+    hit: bool
+    status: Literal["hit", "missed", "metric_ambiguous"]
+    tables: list[str] = Field(default_factory=list)
+    fields: list[str] = Field(default_factory=list)
+    metrics: list[str] = Field(default_factory=list)
+    terms: list[str] = Field(default_factory=list)
+    examples: list[str] = Field(default_factory=list)
+    ambiguities: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class InteractionAskInput(BaseModel):
+    """人机交互节点输入。"""
+
+    clarification_type: str
+    prompt: str
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    allowed_update_paths: list[str] = Field(default_factory=list)
+
+
+class SqlGenerateInput(BaseModel):
+    """SQL 生成节点输入。"""
+
+    rewritten_question: str
+    intent: dict[str, Any]
+    knowledge: dict[str, Any]
+    datasource_id: int
+
+
+class SqlGenerateOutput(BaseModel):
+    """SQL 生成节点输出。"""
+
+    sql: str
+    strategy: str = "placeholder"
+    explanation: str | None = None
+    used_assets: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SqlExecuteInput(BaseModel):
+    """SQL 执行节点输入。"""
+
+    sql: str
+    datasource_id: int
+    permission: dict[str, Any] = Field(default_factory=dict)
+
+
+class SqlExecuteOutput(BaseModel):
+    """SQL 执行节点输出。"""
+
+    status: Literal["succeeded", "failed"]
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    row_count: int = Field(default=0, ge=0)
+    fields: list[str] = Field(default_factory=list)
+    execution_ms: int = Field(default=0, ge=0)
+    error_code: str | None = None
+    message: str | None = None
+
+
+class SqlErrorInput(BaseModel):
+    """SQL 异常处理节点输入。"""
+
+    sql: str | None = None
+    execution: dict[str, Any]
+
+
+class SqlErrorOutput(BaseModel):
+    """SQL 异常处理节点输出。"""
+
+    error_code: str
+    message: str
+    retryable: bool = False
+    repair_hint: str | None = None
+
+
+class AnswerGenerateInput(BaseModel):
+    """答案生成节点输入。"""
+
+    question: str
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
+class RecommendationOutput(BaseModel):
+    """问题推荐节点输出。"""
+
+    questions: list[str] = Field(default_factory=list)
+
+
+class FinalReplyInput(BaseModel):
+    """最终回复节点输入。"""
+
+    answer: dict[str, Any] = Field(default_factory=dict)
+    recommendations: dict[str, Any] = Field(default_factory=dict)
+    chart: dict[str, Any] = Field(default_factory=dict)
+
+
+class FinalReplyOutput(BaseModel):
+    """最终回复节点输出。"""
+
+    final_answer: str
+    recommendations: list[str] = Field(default_factory=list)
+    chart: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+CHATBI_V1_OUTPUT_MODELS = {
+    "question.classify": QuestionClassificationOutput,
+    "answer.reject": AnswerOutput,
+    "answer.chitchat": AnswerOutput,
+    "question.rewrite": QuestionRewriteOutput,
+    "question.draw_image_profile": ImageProfileOutput,
+    "intent.recognize": IntentRecognitionOutput,
+    "knowledge.retrieve": KnowledgeRetrieveOutput,
+    "sql.generate": SqlGenerateOutput,
+    "sql.execute": SqlExecuteOutput,
+    "sql.handle_error": SqlErrorOutput,
+    "answer.generate": AnswerOutput,
+    "question.recommend": RecommendationOutput,
+    "answer.compose": FinalReplyOutput,
+}

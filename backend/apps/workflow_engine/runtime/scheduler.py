@@ -34,7 +34,9 @@ class NodeScheduler:
         attempt: int,
         context: WorkflowContext,
     ) -> NodeExecutionResult:
-        idempotency_key = f"{run_id}:{node.name}:{attempt}"
+        # 同一个节点可能因澄清恢复或显式循环被再次访问，幂等键必须区分访问轮次。
+        visit_count = context.control.loop_iterations.get(node.name, 0)
+        idempotency_key = f"{run_id}:{node.name}:{visit_count}:{attempt}"
         cached = self._completed_results.get(idempotency_key)
         if cached is not None:
             return cached.model_copy(deep=True)
