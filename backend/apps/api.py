@@ -21,6 +21,7 @@ from apps.system.api import (
     workspace,
 )
 from apps.terminology.api import terminology
+from apps.workflow_engine.api import router as graph_workflow
 
 #from audit.api import audit_api
 
@@ -49,5 +50,6 @@ api_router.include_router(variable_api.router)
 api_router.include_router(headless.router)
 api_router.include_router(semantic.router)
 api_router.include_router(api_asset_debug.router)
+api_router.include_router(graph_workflow.router)
 
 #api_router.include_router(audit_api.router)
