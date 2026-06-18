@@ -15,6 +15,7 @@ from sqlmodel import Session, select
 from apps.workflow_engine.api import router as graph_router
 from apps.workflow_engine.infrastructure.persistence.models import (
     InteractionRequestModel,
+    NodeExecutionModel,
     WorkflowEventModel,
     WorkflowRunModel,
 )
@@ -35,6 +36,7 @@ def _client(user=None) -> TestClient:
 
 def _cleanup(session: Session) -> None:
     session.execute(delete(InteractionRequestModel).where(InteractionRequestModel.run_id.like("api-%")))
+    session.execute(delete(NodeExecutionModel).where(NodeExecutionModel.run_id.like("api-%")))
     session.execute(delete(WorkflowEventModel).where(WorkflowEventModel.run_id.like("api-%")))
     session.execute(delete(WorkflowRunModel).where(WorkflowRunModel.run_id.like("api-%")))
     session.commit()
@@ -204,7 +206,16 @@ def test_graph_v1_interaction_response_resumes_runtime_to_final_reply():
             .where(WorkflowEventModel.run_id == "api-run-v1-clarify")
             .order_by(WorkflowEventModel.sequence)
         ).all()
+        rewrite_executions = session.exec(
+            select(NodeExecutionModel)
+            .where(
+                NodeExecutionModel.run_id == "api-run-v1-clarify",
+                NodeExecutionModel.node_name == "rewrite_question",
+            )
+            .order_by(NodeExecutionModel.attempt)
+        ).all()
         assert interaction.status == "answered"
+        assert [execution.attempt for execution in rewrite_executions] == [1, 2]
         assert events[-1].event_type == "run.succeeded"
         _cleanup(session)
 
@@ -237,9 +248,162 @@ def test_graph_trace_returns_node_status_route_reason_and_outputs():
     assert nodes["classify_question"]["output"]["category"] == "data"
     assert nodes["reject_answer"]["status"] == "not_run"
     assert nodes["reject_answer"]["output"] is None
+    assert nodes["generate_sql"]["output"] == {
+        "statement_type": "select",
+        "sql_redacted": True,
+        "artifact_ref": None,
+    }
+    assert nodes["execute_sql"]["output"] == {
+        "status": "succeeded",
+        "row_count": 1,
+        "fields": [],
+        "execution_ms": 1,
+        "artifact_ref": None,
+    }
     assert nodes["compose_final_reply"]["output"]["final_answer"] == "这是图工作流占位回答：最近 7 天销售额"
 
     with Session(engine) as session:
+        _cleanup(session)
+
+
+def test_graph_query_persists_node_execution_summaries_for_trace_and_retry():
+    with Session(engine) as session:
+        _cleanup(session)
+
+    response = _client().post(
+        "/graph/queries",
+        json={
+            "question": "最近 7 天销售额",
+            "datasource_id": 7001,
+            "definition_version": "v1",
+            "request_id": "api-request-v1-node-execution",
+            "run_id": "api-run-v1-node-execution",
+        },
+    )
+
+    assert response.status_code == 200
+
+    with Session(engine) as session:
+        executions = session.exec(
+            select(NodeExecutionModel)
+            .where(NodeExecutionModel.run_id == "api-run-v1-node-execution")
+            .order_by(NodeExecutionModel.sequence)
+        ).all()
+
+        assert [execution.node_name for execution in executions] == [
+            "classify_question",
+            "rewrite_question",
+            "draw_image_profile",
+            "recognize_intent",
+            "retrieve_knowledge",
+            "generate_sql",
+            "execute_sql",
+            "generate_question_answer",
+            "recommend_questions",
+            "compose_final_reply",
+            "finish",
+        ]
+        classify = executions[0]
+        assert classify.status == "succeeded"
+        assert classify.node_type == "capability"
+        assert classify.handler == "question.classify"
+        assert classify.input_summary == {"question": "最近 7 天销售额", "datasource_id": 7001}
+        assert classify.output_summary == {"category": "data", "reason": "placeholder_data_question", "risk_level": "low"}
+        assert classify.route_summary["reason_code"] == "QUESTION_DATA_OR_FOLLOWUP"
+        _cleanup(session)
+
+
+def test_graph_v1_cancelled_waiting_run_cannot_resume_from_interaction():
+    with Session(engine) as session:
+        _cleanup(session)
+
+    _client().post(
+        "/graph/queries",
+        json={
+            "question": "需要澄清的问题",
+            "datasource_id": 7001,
+            "definition_version": "v1",
+            "request_id": "api-request-v1-cancel",
+            "run_id": "api-run-v1-cancel",
+        },
+    )
+    with Session(engine) as session:
+        interaction_id = session.exec(
+            select(InteractionRequestModel.interaction_id).where(
+                InteractionRequestModel.run_id == "api-run-v1-cancel",
+                InteractionRequestModel.status == "pending",
+            )
+        ).one()
+
+    cancel = _client().post("/graph/runs/api-run-v1-cancel/cancel")
+    answer = _client().post(
+        f"/graph/runs/api-run-v1-cancel/interactions/{interaction_id}/responses",
+        json={"response": {"metric": "sales_amount"}},
+    )
+    run_response = _client().get("/graph/runs/api-run-v1-cancel")
+
+    assert cancel.status_code == 200
+    assert cancel.json()["status"] == "cancelled"
+    assert answer.status_code == 409
+    assert answer.json()["detail"] == "RUN_NOT_WAITING_INPUT"
+    assert run_response.json()["status"] == "cancelled"
+
+    with Session(engine) as session:
+        interaction = session.exec(
+            select(InteractionRequestModel).where(InteractionRequestModel.interaction_id == interaction_id)
+        ).one()
+        assert interaction.status == "cancelled"
+        _cleanup(session)
+
+
+def test_graph_v1_retry_restarts_failed_run_and_executes_graph():
+    with Session(engine) as session:
+        _cleanup(session)
+
+    _client().post(
+        "/graph/queries",
+        json={
+            "question": "最近 7 天销售额",
+            "datasource_id": 7001,
+            "definition_version": "v1",
+            "request_id": "api-request-v1-retry",
+            "run_id": "api-run-v1-retry",
+        },
+    )
+
+    with Session(engine) as session:
+        run = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-run-v1-retry")).one()
+        run.status = "failed"
+        run.current_node = "classify_question"
+        context = run.context
+        context["control"]["current_node"] = "classify_question"
+        context["control"]["previous_node"] = None
+        context["control"]["executed_nodes"] = 0
+        context["control"]["loop_iterations"] = {}
+        context["variables"] = {}
+        run.context = context
+        run.error_code = "TEST_FAILURE"
+        session.add(run)
+        session.commit()
+
+    retry = _client().post("/graph/runs/api-run-v1-retry/retry")
+    run_response = _client().get("/graph/runs/api-run-v1-retry")
+
+    assert retry.status_code == 200
+    assert retry.json()["status"] == "succeeded"
+    body = run_response.json()
+    assert body["status"] == "succeeded"
+    assert body["current_node"] == "finish"
+    assert body["context_summary"]["variables"]["final_reply"]["final_answer"] == "这是图工作流占位回答：最近 7 天销售额"
+
+    with Session(engine) as session:
+        events = session.exec(
+            select(WorkflowEventModel)
+            .where(WorkflowEventModel.run_id == "api-run-v1-retry")
+            .order_by(WorkflowEventModel.sequence)
+        ).all()
+        assert "run.retry_requested" in [event.event_type for event in events]
+        assert events[-1].event_type == "run.succeeded"
         _cleanup(session)
 
 

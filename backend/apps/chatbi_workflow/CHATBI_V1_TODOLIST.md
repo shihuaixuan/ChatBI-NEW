@@ -181,6 +181,7 @@
 - [ ] 将 `CheckpointManager` 的节点边界提交接入数据库 UoW。
   - 目标：Run、NodeExecution、Checkpoint、Event 在同一事务提交。
   - 验收：每个节点都有 `node_execution` 记录。
+  - [x] P0：API Runtime 已写入 `node_execution` 记录，包含节点状态、输入摘要、输出摘要和路由摘要。
 
 - [ ] 增强事件公开摘要。
   - 目标：事件包含节点名、状态、关键摘要，不泄露 SQL 敏感信息或大结果。
@@ -189,8 +190,9 @@
 - [ ] 支持节点输出 artifact。
   - 目标：大 SQL 结果、图像刻画、诊断信息写入 artifact，不直接塞入事件。
   - 验收：节点输出摘要和 artifact ref 都可查询。
+  - [x] P0：Trace API 已对 SQL/结果集做脱敏，并返回 `artifact_ref` 协议字段；真实 artifact 写入待接入。
 
-- [ ] 完善 retry/cancel/resume API 与图执行联动。
+- [x] 完善 retry/cancel/resume API 与图执行联动。
   - 目标：`retry` 能重新推进图，`resume` 能从交互节点继续，`cancel` 能阻止后续执行。
   - 验收：控制 API 有集成测试覆盖。
 

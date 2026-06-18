@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Any
 
 from apps.workflow_engine.domain.context import (
     ContextPatch,
@@ -37,6 +38,7 @@ class GraphRuntime:
         lease: InMemoryRunLease,
         retry_controller: RetryController | None = None,
         interaction_manager: InteractionManager | None = None,
+        node_execution_recorder: Any | None = None,
     ) -> None:
         self._registry = registry
         self._run_store = run_store
@@ -47,6 +49,7 @@ class GraphRuntime:
         self._lease = lease
         self._retry = retry_controller or RetryController()
         self._interactions = interaction_manager
+        self._node_executions = node_execution_recorder
 
     def create_run(
         self,
@@ -120,11 +123,13 @@ class GraphRuntime:
                 result = self._execute_with_retry(run, node, definition.policies.default_retry_policy)
 
                 if result.status is NodeResultStatus.FAILED:
+                    self._record_node_execution(run, node, result)
                     run.status = RunStatus.FAILED
                     error_code = result.error.code if result.error is not None else "NODE_FAILED"
                     return self._checkpoints.fail(run, error_code, node_name=node.name)
 
                 if result.status is NodeResultStatus.WAITING_INPUT:
+                    self._record_node_execution(run, node, result)
                     return self._pause_for_interaction(run, node.name, result)
 
                 updated_context = self._context_patcher.apply(run.context, result.patch)
@@ -137,6 +142,7 @@ class GraphRuntime:
                     run.status = RunStatus.SUCCEEDED
                     run.current_node = node.name
                     run.context.control.current_node = node.name
+                    self._record_node_execution(run, node, result)
                     return self._checkpoints.save_progress(
                         run,
                         node_name=node.name,
@@ -144,6 +150,7 @@ class GraphRuntime:
                     )
 
                 route = self._router.select(definition, node, run.context, result)
+                self._record_node_execution(run, node, result, route)
                 run.current_node = route.target
                 run.context.control.current_node = route.target
                 run = self._checkpoints.save_progress(run, node_name=node.name, route=route)
@@ -221,6 +228,11 @@ class GraphRuntime:
         if result is None:
             raise RuntimeError("NODE_EXECUTION_NOT_ATTEMPTED")
         return result
+
+    def _record_node_execution(self, run, node, result, route=None) -> None:
+        if self._node_executions is None:
+            return
+        self._node_executions.record(run=run, node=node, result=result, route=route)
 
     def _pause_for_interaction(
         self,

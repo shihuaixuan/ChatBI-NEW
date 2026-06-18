@@ -16,6 +16,9 @@ from apps.workflow_engine.infrastructure.events.publisher import DatabaseEventPu
 from apps.workflow_engine.infrastructure.persistence.interaction_manager import (
     DatabaseInteractionManager,
 )
+from apps.workflow_engine.infrastructure.persistence.node_execution_repository import (
+    NodeExecutionRepository,
+)
 from apps.workflow_engine.infrastructure.persistence.run_repository import RunRepository
 from apps.workflow_engine.registry.condition_registry import ConditionRegistry
 from apps.workflow_engine.registry.definition_validator import DefinitionValidator
@@ -51,6 +54,7 @@ def build_placeholder_chatbi_runtime(session: Session) -> GraphRuntime:
         context_patcher=ContextPatcher(),
         checkpoint_manager=CheckpointManager(run_store, events),
         lease=InMemoryRunLease(),
+        node_execution_recorder=NodeExecutionRepository(session),
     )
 
 
@@ -77,4 +81,5 @@ def build_placeholder_chatbi_v1_runtime(session: Session) -> GraphRuntime:
         checkpoint_manager=CheckpointManager(run_store, events),
         lease=InMemoryRunLease(),
         interaction_manager=DatabaseInteractionManager(session),
+        node_execution_recorder=NodeExecutionRepository(session),
     )

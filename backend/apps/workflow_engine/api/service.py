@@ -137,6 +137,8 @@ class GraphApiService:
         request: InteractionResponseRequest,
     ) -> ControlResponse:
         run = self._load_owned_run(current_user, run_id)
+        if run.status != RunStatus.WAITING_INPUT.value:
+            raise HTTPException(status_code=409, detail="RUN_NOT_WAITING_INPUT")
         if run.definition_version == "v1" and run.status == RunStatus.WAITING_INPUT.value:
             runtime = self._build_runtime(run.definition_version)
             resumed = runtime.resume(
@@ -171,6 +173,15 @@ class GraphApiService:
         run.version += 1
         run.updated_at = datetime.now(timezone.utc)
         self._session.add(run)
+        pending_interactions = self._session.exec(
+            select(InteractionRequestModel).where(
+                InteractionRequestModel.run_id == run_id,
+                InteractionRequestModel.status == "pending",
+            )
+        ).all()
+        for interaction in pending_interactions:
+            interaction.status = "cancelled"
+            self._session.add(interaction)
         self._append_control_event(run_id, "run.cancelled", {"status": "cancelled"})
         self._session.commit()
         return ControlResponse(run_id=run_id, status=RunStatus.CANCELLED.value)
@@ -179,6 +190,14 @@ class GraphApiService:
         run = self._load_owned_run(current_user, run_id)
         if run.status != RunStatus.FAILED.value:
             raise HTTPException(status_code=409, detail="RUN_NOT_FAILED")
+        if run.definition_version == "v1":
+            self._restart_run_from_beginning(run)
+            self._append_control_event(run_id, "run.retry_requested", {"status": "created"})
+            self._session.flush()
+            runtime = self._build_runtime(run.definition_version)
+            retried = runtime.execute(run_id)
+            self._session.commit()
+            return ControlResponse(run_id=run_id, status=retried.status.value)
         run.status = RunStatus.CREATED.value
         run.current_node = "start"
         run.error_code = None
@@ -188,6 +207,25 @@ class GraphApiService:
         self._append_control_event(run_id, "run.retry_requested", {"status": "created"})
         self._session.commit()
         return ControlResponse(run_id=run_id, status=RunStatus.CREATED.value)
+
+    def _restart_run_from_beginning(self, run: WorkflowRunModel) -> None:
+        """把失败的 v1 Run 重置到图起点，随后交给 Runtime 重新推进。"""
+
+        context = run.context or {}
+        control = context.setdefault("control", {})
+        control["current_node"] = "classify_question"
+        control["previous_node"] = None
+        control["executed_nodes"] = 0
+        control["loop_iterations"] = {}
+        control["pending_interaction_id"] = None
+        context["variables"] = {}
+        run.context = context
+        run.status = RunStatus.CREATED.value
+        run.current_node = "classify_question"
+        run.error_code = None
+        run.version += 1
+        run.updated_at = datetime.now(timezone.utc)
+        self._session.add(run)
 
     def _load_owned_run(self, current_user: Any, run_id: str) -> WorkflowRunModel:
         run = self._session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == run_id)).one_or_none()
@@ -261,7 +299,29 @@ class GraphApiService:
         # 未执行节点不读取共享变量路径，避免把其他节点后写入的结果误归因到该节点。
         if self._trace_node_status(events, node_name) == "not_run":
             return None
-        return self._read_context_path(context, output_path)
+        output = self._read_context_path(context, output_path)
+        return self._sanitize_trace_output(node_name, output)
+
+    def _sanitize_trace_output(self, node_name: str, output: Any) -> Any:
+        """对 trace 公开输出做最小脱敏，并预留 artifact 引用协议。"""
+
+        if node_name == "generate_sql":
+            sql = output.get("sql", "") if isinstance(output, dict) else ""
+            statement_type = sql.strip().split(maxsplit=1)[0].lower() if sql.strip() else "unknown"
+            return {
+                "statement_type": statement_type,
+                "sql_redacted": True,
+                "artifact_ref": output.get("artifact_ref") if isinstance(output, dict) else None,
+            }
+        if node_name == "execute_sql" and isinstance(output, dict):
+            return {
+                "status": output.get("status"),
+                "row_count": output.get("row_count", 0),
+                "fields": output.get("fields", []),
+                "execution_ms": output.get("execution_ms", 0),
+                "artifact_ref": output.get("artifact_ref"),
+            }
+        return output
 
     def _read_context_path(self, context: dict[str, Any], path: tuple[str, ...]) -> Any:
         current: Any = context
