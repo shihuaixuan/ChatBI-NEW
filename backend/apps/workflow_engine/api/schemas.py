@@ -7,7 +7,7 @@ class GraphQueryRequest(BaseModel):
     """创建 Graph Run 的请求体。"""
 
     question: str = Field(min_length=1)
-    datasource_id: int = Field(gt=0)
+    dataset_id: int = Field(gt=0)
     definition_version: Literal["minimal-v1", "v1"] = "minimal-v1"
     request_id: str | None = None
     run_id: str | None = None

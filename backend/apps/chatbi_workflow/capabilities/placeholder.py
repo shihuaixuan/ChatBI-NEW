@@ -1,8 +1,13 @@
 from typing import Any
 
+from apps.chatbi_workflow.capabilities.adapters.interaction import InteractionAdapter
+
 
 class PlaceholderChatBICapabilityGateway:
     """占位 ChatBI 能力网关，用于先跑通图执行闭环。"""
+
+    def __init__(self) -> None:
+        self._interaction_adapter = InteractionAdapter()
 
     def invoke(
         self,
@@ -38,10 +43,25 @@ class PlaceholderChatBICapabilityGateway:
         if capability == "question.classify":
             question = self._question_from_v1_request(request)
             if any(keyword in question for keyword in ("越权", "无权限", "禁止")):
-                return {"category": "forbidden", "reason": "placeholder_forbidden", "risk_level": "high"}
+                return {
+                    "category": "forbidden",
+                    "reason": "placeholder_forbidden",
+                    "risk_level": "high",
+                    "confidence": 1.0,
+                }
             if any(keyword in question for keyword in ("你好", "闲聊", "天气")):
-                return {"category": "chitchat", "reason": "placeholder_chitchat", "risk_level": "low"}
-            return {"category": "data", "reason": "placeholder_data_question", "risk_level": "low"}
+                return {
+                    "category": "chitchat",
+                    "reason": "placeholder_chitchat",
+                    "risk_level": "low",
+                    "confidence": 1.0,
+                }
+            return {
+                "category": "data",
+                "reason": "placeholder_data_question",
+                "risk_level": "low",
+                "confidence": 1.0,
+            }
         if capability == "answer.reject":
             return {
                 "answer": "当前问题无法在权限范围内回答。",
@@ -77,6 +97,12 @@ class PlaceholderChatBICapabilityGateway:
             return {
                 "intent_type": "metric_query",
                 "confidence": 0.5 if ambiguous else 0.95,
+                "metric_mentions": [],
+                "dimension_mentions": [],
+                "time_mentions": [],
+                "filter_mentions": [],
+                "required_slot_types": ["metric"],
+                "query_shape": {"select_mode": "aggregate"},
                 "ambiguous_slots": ["metric"] if ambiguous else [],
                 "conflict_slots": [],
             }
@@ -115,12 +141,12 @@ class PlaceholderChatBICapabilityGateway:
                 "examples": ["select sum(amount) from orders"],
                 "ambiguities": [],
             }
-        if capability.startswith("interaction.ask_"):
-            return {
-                "prompt": "请补充问题中的关键信息。",
-                "options": [],
-                "response_schema": {"type": "object"},
-            }
+        if capability == "interaction.ask_metric_selection":
+            return self._interaction().ask_metric_selection(request)
+        if capability == "interaction.ask_rewrite_clarification":
+            return self._interaction().ask_rewrite_clarification(request)
+        if capability == "interaction.ask_intent_clarification":
+            return self._interaction().ask_intent_clarification(request)
         if capability == "sql.handle_error":
             execution = request.get("variables", {}).get("sql_execution", {})
             return {
@@ -147,9 +173,43 @@ class PlaceholderChatBICapabilityGateway:
 
         return str(request.get("request", {}).get("question", ""))
 
+    def _interaction(self) -> InteractionAdapter:
+        """懒加载交互适配器，兼容测试网关未调用父类初始化的场景。"""
+
+        adapter = getattr(self, "_interaction_adapter", None)
+        if adapter is None:
+            adapter = InteractionAdapter()
+            self._interaction_adapter = adapter
+        return adapter
+
     def _question_from_any_request(self, request: dict[str, Any]) -> str:
         """兼容最小图扁平请求和 v1 通用节点嵌套请求。"""
 
         if "question" in request:
             return str(request.get("question", ""))
         return self._question_from_v1_request(request)
+
+    def _metric_selection_options(self, request: dict[str, Any]) -> list[dict[str, Any]]:
+        """从知识检索歧义结果中生成指标选择项。"""
+
+        knowledge = request.get("variables", {}).get("knowledge", {})
+        for ambiguity in knowledge.get("ambiguities", []) or []:
+            if ambiguity.get("type") != "metric":
+                continue
+            return [self._metric_option(candidate) for candidate in ambiguity.get("candidates", [])]
+        return []
+
+    @staticmethod
+    def _metric_option(candidate: Any) -> dict[str, Any]:
+        if isinstance(candidate, dict):
+            label = (
+                candidate.get("display_name")
+                or candidate.get("name")
+                or candidate.get("biz_name")
+                or candidate.get("title")
+                or str(candidate.get("asset_id") or "")
+            )
+            value = candidate.get("asset_id") or candidate.get("biz_name") or label
+            return {"label": str(label), "value": value}
+        text = str(candidate)
+        return {"label": text, "value": text}

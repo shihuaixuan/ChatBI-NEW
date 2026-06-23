@@ -15,6 +15,7 @@ class SemanticSQLCompileRequest:
     slots: dict[str, Any] = field(default_factory=dict)
     metric_ids: list[int] = field(default_factory=list)
     dimension_ids: list[int] = field(default_factory=list)
+    repair_context: dict[str, Any] = field(default_factory=dict)
     limit: int | None = None
 
 
@@ -32,12 +33,34 @@ class SemanticSQLCompiler:
         metrics = self._select_metrics(request)
         dimensions = self._select_dimensions(request)
         filters = self._select_filters(request)
+        model_by_name = ontology.model_map
+        model_name_by_id = {model.get("id"): name for name, model in model_by_name.items()}
+        metrics = self._repair_elements_by_candidate_tables(
+            metrics,
+            request.schema.metrics,
+            request.repair_context,
+            model_by_name,
+            model_name_by_id,
+        )
+        dimensions = self._repair_elements_by_candidate_tables(
+            dimensions,
+            request.schema.dimensions,
+            request.repair_context,
+            model_by_name,
+            model_name_by_id,
+        )
+        filters = [
+            (dimension, operator, value)
+            for dimension, operator, value in (
+                (self._repair_element_by_candidate_tables(dimension, request.schema.dimensions, request.repair_context, model_by_name, model_name_by_id), operator, value)
+                for dimension, operator, value in filters
+            )
+            if dimension is not None
+        ]
         filter_dimensions = [item[0] for item in filters]
         if not metrics and not dimensions and not filter_dimensions:
             raise ValueError("SEMANTIC_SQL_ASSET_REQUIRED")
 
-        model_by_name = ontology.model_map
-        model_name_by_id = {model.get("id"): name for name, model in model_by_name.items()}
         selected_model_names = self._selected_model_names(metrics, [*dimensions, *filter_dimensions], model_name_by_id)
         if not selected_model_names:
             raise ValueError("SEMANTIC_SQL_MODEL_REQUIRED")
@@ -101,6 +124,70 @@ class SemanticSQLCompiler:
                 continue
             filters.append((dimension, item.get("operator") or "=", item.get("value")))
         return filters
+
+    def _repair_elements_by_candidate_tables(
+        self,
+        selected_elements: list[SchemaElement],
+        all_elements: list[SchemaElement],
+        repair_context: dict[str, Any],
+        model_by_name: dict[str, dict[str, Any]],
+        model_name_by_id: dict[int | None, str],
+    ) -> list[SchemaElement]:
+        return [
+            repaired
+            for repaired in (
+                self._repair_element_by_candidate_tables(
+                    element,
+                    all_elements,
+                    repair_context,
+                    model_by_name,
+                    model_name_by_id,
+                )
+                for element in selected_elements
+            )
+            if repaired is not None
+        ]
+
+    def _repair_element_by_candidate_tables(
+        self,
+        element: SchemaElement,
+        all_elements: list[SchemaElement],
+        repair_context: dict[str, Any],
+        model_by_name: dict[str, dict[str, Any]],
+        model_name_by_id: dict[int | None, str],
+    ) -> SchemaElement | None:
+        """重试时把落在失败表上的资产切到候选表上的同名资产。"""
+
+        candidate_tables = self._candidate_tables(repair_context)
+        if not candidate_tables:
+            return element
+        model_name = model_name_by_id.get(element.model)
+        if not model_name:
+            return element
+        current_table = self._model_table(model_by_name.get(model_name, {}))
+        if current_table in candidate_tables:
+            return element
+        for candidate in all_elements:
+            candidate_model_name = model_name_by_id.get(candidate.model)
+            if not candidate_model_name:
+                continue
+            candidate_table = self._model_table(model_by_name.get(candidate_model_name, {}))
+            if candidate_table not in candidate_tables:
+                continue
+            if self._same_business_element(element, candidate):
+                return candidate
+        return element
+
+    @staticmethod
+    def _candidate_tables(repair_context: dict[str, Any]) -> set[str]:
+        values = repair_context.get("candidate_tables") if isinstance(repair_context, dict) else []
+        if not isinstance(values, list):
+            return set()
+        return {str(value).strip() for value in values if str(value or "").strip()}
+
+    @staticmethod
+    def _same_business_element(left: SchemaElement, right: SchemaElement) -> bool:
+        return bool(left.biz_name and left.biz_name == right.biz_name) or bool(left.name and left.name == right.name)
 
     @staticmethod
     def _slot_asset_ids(slots: dict[str, Any], slot_name: str, asset_type: str) -> list[int]:

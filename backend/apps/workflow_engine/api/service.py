@@ -7,7 +7,7 @@ from sqlmodel import Session, col, func, select
 
 from apps.chatbi_workflow.runtime import (
     build_placeholder_chatbi_runtime,
-    build_placeholder_chatbi_v1_runtime,
+    build_real_chatbi_v1_runtime,
 )
 from apps.workflow_engine.api.schemas import (
     ControlResponse,
@@ -78,9 +78,12 @@ class GraphApiService:
             "tenant_id": current_user.oid,
             "user_id": current_user.id,
             "question": request.question,
-            "datasource_id": request.datasource_id,
+            "dataset_id": request.dataset_id,
             "request_id": request.request_id,
         }
+        if request.definition_version == "minimal-v1":
+            # minimal-v1 仍使用 datasource_id 字段；v1 主链路已切到 dataset_id。
+            request_context["datasource_id"] = request.dataset_id
         runtime = self._build_runtime(request.definition_version)
         created = runtime.create_run(
             run_id=run_id,
@@ -93,12 +96,12 @@ class GraphApiService:
         return self._to_run_response(self._load_owned_run(current_user, created.run_id))
 
     def _build_runtime(self, definition_version: str):
-        """按请求版本选择当前可用的 ChatBI 占位图运行时。"""
+        """按请求版本选择当前可用的 ChatBI 图运行时。"""
 
         if definition_version == "minimal-v1":
             return build_placeholder_chatbi_runtime(self._session)
         if definition_version == "v1":
-            return build_placeholder_chatbi_v1_runtime(self._session)
+            return build_real_chatbi_v1_runtime(self._session)
         raise HTTPException(status_code=400, detail="UNSUPPORTED_GRAPH_DEFINITION_VERSION")
 
     def get_run(self, current_user: Any, run_id: str) -> GraphRunResponse:
@@ -262,7 +265,7 @@ class GraphApiService:
             output=run.output or {},
             context_summary={
                 "question": request.get("question"),
-                "datasource_id": request.get("datasource_id"),
+                "dataset_id": request.get("dataset_id"),
                 "variables": variables,
             },
         )

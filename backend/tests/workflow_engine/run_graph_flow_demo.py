@@ -129,11 +129,11 @@ def _node_output_paths(definition_version: str) -> dict[str, tuple[str, ...]]:
     return MINIMAL_NODE_OUTPUT_PATHS
 
 
-def run_demo(question: str, datasource_id: int, run_id: str, user_id: int, oid: int, definition_version: str) -> int:
+def run_demo(question: str, dataset_id: int, run_id: str, user_id: int, oid: int, definition_version: str) -> int:
     node_output_paths = _node_output_paths(definition_version)
     print("=== Graph Workflow Demo ===")
     print(f"输入问题: {question}")
-    print(f"datasource_id: {datasource_id}")
+    print(f"dataset_id: {dataset_id}")
     print(f"definition_version: {definition_version}")
     print(f"run_id: {run_id}")
     print(f"要执行节点顺序: {', '.join(node_output_paths.keys())}")
@@ -142,7 +142,7 @@ def run_demo(question: str, datasource_id: int, run_id: str, user_id: int, oid: 
         "/graph/queries",
         json={
             "question": question,
-            "datasource_id": datasource_id,
+            "dataset_id": dataset_id,
             "definition_version": definition_version,
             "request_id": f"demo-request-{uuid4().hex[:8]}",
             "run_id": run_id,
@@ -194,7 +194,7 @@ def run_demo(question: str, datasource_id: int, run_id: str, user_id: int, oid: 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="运行一次 Graph Workflow 占位闭环并打印节点日志。")
     parser.add_argument("question", nargs="?", default="最近 7 天销售额")
-    parser.add_argument("--datasource-id", type=int, default=7001)
+    parser.add_argument("--dataset-id", type=int, default=7001)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--user-id", type=int, default=501)
     parser.add_argument("--oid", type=int, default=9501)
@@ -204,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     run_id = args.run_id or f"demo-run-{uuid4().hex[:12]}"
     return run_demo(
         question=args.question,
-        datasource_id=args.datasource_id,
+        dataset_id=args.dataset_id,
         run_id=run_id,
         user_id=args.user_id,
         oid=args.oid,

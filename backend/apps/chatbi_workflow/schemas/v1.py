@@ -9,7 +9,7 @@ class QuestionClassificationInput(BaseModel):
     question: str
     tenant_id: int
     user_id: int
-    datasource_id: int
+    dataset_id: int
     conversation_context: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -19,6 +19,7 @@ class QuestionClassificationOutput(BaseModel):
     category: Literal["forbidden", "chitchat", "data", "followup"]
     reason: str
     risk_level: Literal["low", "medium", "high"] = "low"
+    confidence: float = Field(default=0.0, ge=0, le=1)
 
 
 class QuestionRewriteInput(BaseModel):
@@ -63,10 +64,19 @@ class ImageProfileOutput(BaseModel):
 
 
 class IntentRecognitionOutput(BaseModel):
-    """意图识别节点输出。"""
+    """意图识别节点输出。
+
+    这里只表达自然语言层面的查询意图和检索线索，不确认 Headless 资产 ID。
+    """
 
     intent_type: str
     confidence: float = Field(ge=0, le=1)
+    metric_mentions: list[str] = Field(default_factory=list)
+    dimension_mentions: list[str] = Field(default_factory=list)
+    time_mentions: list[str] = Field(default_factory=list)
+    filter_mentions: list[dict[str, Any]] = Field(default_factory=list)
+    required_slot_types: list[str] = Field(default_factory=list)
+    query_shape: dict[str, Any] = Field(default_factory=dict)
     ambiguous_slots: list[str] = Field(default_factory=list)
     conflict_slots: list[str] = Field(default_factory=list)
 
@@ -77,7 +87,7 @@ class KnowledgeRetrieveInput(BaseModel):
     rewritten_question: str
     intent: dict[str, Any]
     tenant_id: int
-    datasource_id: int
+    dataset_id: int
 
 
 class KnowledgeRetrieveOutput(BaseModel):
@@ -85,11 +95,19 @@ class KnowledgeRetrieveOutput(BaseModel):
 
     hit: bool
     status: Literal["hit", "missed", "metric_ambiguous"]
+    dataset_id: int | None = None
+    schema_version: int | None = None
+    index_version: int | None = None
     tables: list[str] = Field(default_factory=list)
     fields: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=list)
     terms: list[str] = Field(default_factory=list)
     examples: list[str] = Field(default_factory=list)
+    candidate_groups: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    selected_assets: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    slot_bindings: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    decision: dict[str, Any] = Field(default_factory=dict)
     ambiguities: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -108,7 +126,7 @@ class SqlGenerateInput(BaseModel):
     rewritten_question: str
     intent: dict[str, Any]
     knowledge: dict[str, Any]
-    datasource_id: int
+    dataset_id: int
 
 
 class SqlGenerateOutput(BaseModel):
@@ -116,6 +134,7 @@ class SqlGenerateOutput(BaseModel):
 
     sql: str
     strategy: str = "placeholder"
+    datasource_id: int | None = None
     explanation: str | None = None
     used_assets: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -136,6 +155,9 @@ class SqlExecuteOutput(BaseModel):
     row_count: int = Field(default=0, ge=0)
     fields: list[str] = Field(default_factory=list)
     execution_ms: int = Field(default=0, ge=0)
+    sampled_row_count: int = Field(default=0, ge=0)
+    result_truncated: bool = False
+    artifact_ref: dict[str, Any] | None = None
     error_code: str | None = None
     message: str | None = None
 
@@ -154,6 +176,7 @@ class SqlErrorOutput(BaseModel):
     message: str
     retryable: bool = False
     repair_hint: str | None = None
+    repair_plan: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerGenerateInput(BaseModel):

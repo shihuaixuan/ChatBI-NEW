@@ -196,6 +196,20 @@ class SqlExecutionFailedCondition:
         )
 
 
+class SqlErrorRetryableCondition:
+    """SQL 错误可通过重新生成 SQL 修复时，回到 SQL 生成节点。"""
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        sql_error = context.variables.get("sql_error", {})
+        repair_plan = sql_error.get("repair_plan") if isinstance(sql_error.get("repair_plan"), dict) else {}
+        matched = bool(sql_error.get("retryable")) and repair_plan.get("action") == "regenerate_sql"
+        return ConditionDecision(
+            matched=matched,
+            reason_code="SQL_ERROR_RETRYABLE" if matched else "SQL_ERROR_NOT_RETRYABLE",
+            reason_summary="SQL 错误可通过重新生成 SQL 重试" if matched else "SQL 错误不可自动重试",
+        )
+
+
 def register_chatbi_conditions(registry: ConditionRegistry) -> None:
     """注册 ChatBI 图使用的确定性条件。"""
 
@@ -213,3 +227,4 @@ def register_chatbi_conditions(registry: ConditionRegistry) -> None:
     registry.register("interaction.skipped", InteractionSkippedCondition())
     registry.register("sql.execution_succeeded", SqlExecutionSucceededCondition())
     registry.register("sql.execution_failed", SqlExecutionFailedCondition())
+    registry.register("sql.error_retryable", SqlErrorRetryableCondition())

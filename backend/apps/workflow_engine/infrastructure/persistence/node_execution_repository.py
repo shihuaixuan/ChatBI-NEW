@@ -66,7 +66,7 @@ class NodeExecutionRepository:
         request = run.context.request
         return {
             key: request[key]
-            for key in ("question", "datasource_id")
+            for key in ("question", "dataset_id", "datasource_id")
             if key in request
         }
 

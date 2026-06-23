@@ -210,7 +210,25 @@ gateway.invoke(capability: str, request: dict, idempotency_key: str) -> dict
 
 这样节点只稳定依赖 capability contract，具体能力可以从占位实现切到旧 `agentic_chat`，再切到更成熟服务。
 
-### 4.4 Condition Evaluator 只做判断
+### 4.4 意图槽位和资产确认边界
+
+`recognize_intent` 和 `retrieve_knowledge` 的职责边界必须保持清晰：
+
+- `recognize_intent` 只识别自然语言层面的意图和槽位线索。
+  - 输出 `metric_mentions`、`dimension_mentions`、`time_mentions`、`filter_mentions`。
+  - 输出 `required_slot_types` 和 `query_shape`，描述后续需要确认哪些槽位以及查询形态。
+  - 不输出 Headless `asset_id`、`biz_name` 或数据库字段名。
+- `retrieve_knowledge` 负责把自然语言 mention 确认到 Headless 语义资产。
+  - `metric_mentions` 只召回指标候选。
+  - `dimension_mentions` 只召回维度候选。
+  - `time_mentions` 补充时间维度和时间值候选。
+  - `rewritten_question` 只在缺少必需槽位候选时作为 fallback。
+- 候选进入 `CandidateGate` 前先做 slot-aware rerank。
+  - 完整短语和关键词覆盖优先。
+  - 只命中“人数/次数/率”等弱词时保留歧义，不强行绑定。
+  - 候选输出 `base_score`、`rerank_strategy`、`rerank_reason`，供 trace 排查。
+
+### 4.5 Condition Evaluator 只做判断
 
 条件 evaluator 应该是纯函数式设计：
 

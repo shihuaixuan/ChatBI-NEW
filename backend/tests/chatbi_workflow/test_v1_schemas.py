@@ -37,7 +37,7 @@ def test_v1_capability_node_rejects_output_that_does_not_match_schema():
     assert result.error.code == "QUESTION_CLASSIFY_FAILED"
 
 
-def test_v1_question_classification_input_requires_question_identity_and_datasource():
+def test_v1_question_classification_input_requires_question_identity_and_dataset():
     schema = QuestionClassificationInput.model_json_schema()
 
-    assert set(schema["required"]) == {"question", "tenant_id", "user_id", "datasource_id"}
+    assert set(schema["required"]) == {"question", "tenant_id", "user_id", "dataset_id"}

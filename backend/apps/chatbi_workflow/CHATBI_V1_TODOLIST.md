@@ -51,15 +51,18 @@
 
 - [x] 为意图识别节点定义 schema。
   - 输入：重写问题、上下文信息、用户补充。
-  - 输出：`intent_type`、`confidence`、`ambiguous_slots`、`conflict_slots`
+  - 输出：`intent_type`、`confidence`、`metric_mentions`、`dimension_mentions`、`time_mentions`、`filter_mentions`、`required_slot_types`、`query_shape`、`ambiguous_slots`、`conflict_slots`
   - 写入：`variables.intent`
   - 验收：意图不明确时走澄清分支，明确时进入知识检索。
+  - 验收：意图识别只输出自然语言线索，不选择 Headless `asset_id`、`biz_name` 或数据库字段。
 
 - [x] 为知识库检索节点定义 schema。
   - 输入：重写问题、意图、数据源、租户。
   - 输出：`hit`、`tables`、`fields`、`metrics`、`terms`、`examples`、`ambiguities`
   - 写入：`variables.knowledge`
   - 验收：未命中、多指标歧义、命中三种结果可路由到不同节点。
+  - 验收：优先使用 `metric_mentions/dimension_mentions/time_mentions/filter_mentions` 分槽位召回，`rewritten_question` 仅作为缺槽位 fallback。
+  - 验收：候选进入 `CandidateGate` 前执行可解释 rerank，并输出 `base_score`、`rerank_strategy`、`rerank_reason`。
 
 - [x] 为人机交互节点定义统一 schema。
   - 输入：澄清类型、问题、候选项、允许写回路径。
@@ -140,6 +143,7 @@
 - [x] 新增 v1 分支测试：指标选择。
   - 输入：多维度指标歧义。
   - 验收：Run 进入 `waiting_input`；选择后进入 `generate_sql`。
+  - 验收：交互 prompt/options 来自 `InteractionAdapter`，不是通用占位文案。
 
 - [x] 新增 v1 分支测试：SQL 执行异常。
   - 输入：占位网关模拟 SQL 执行失败。
@@ -147,34 +151,78 @@
 
 ## 里程碑 5：迁移旧 Agentic ChatBI 能力为 adapter
 
-- [ ] 实现 `QuestionAdapter`。
+- [x] 实现 `InteractionAdapter`。
+  - 能力：`interaction.ask_rewrite_clarification`、`interaction.ask_intent_clarification`、`interaction.ask_metric_selection`
+  - 验收：根据 `missing_slots`、`ambiguous_slots/conflict_slots`、`knowledge.ambiguities` 生成 prompt/options/response_schema。
+  - 验收：rewrite 澄清优先使用 `knowledge.candidate_groups.metrics/dimensions` 真实候选；无候选时回退内置示例。
+  - 验收：metric selection 在 ambiguity candidates 为空时可回退到 `knowledge.candidate_groups.metrics`。
+  - 验收：没有 knowledge 上下文时，真实 runtime 注入 `HeadlessSchemaBuilder`，可按 `dataset_id` 轻量加载 schema 候选。
+  - 后续：按问题文本对 schema 候选排序，而不是直接取前 5 个。
+
+- [x] 实现 `QuestionAdapter`。
   - 复用：`agentic_chat.tools.query_understanding` 和 `agentic_chat.services.query_understanding`
   - 能力：`question.classify`、`question.rewrite`、`intent.recognize`
   - 验收：真实问题理解结果能写入 `variables.classification/rewrite/intent`。
+  - 验收：`intent.recognize` 输出自然语言 mention 和 `query_shape`，不直接确认 Headless 资产。
+  - 验收：模型失败或输出非法时保留规则兜底。
 
-- [ ] 实现 `KnowledgeAdapter`。
+- [x] 实现 `KnowledgeAdapter`。
   - 复用：`agentic_chat.tools.schema`、`semantic_asset`、`terminology`、`sql_example`
   - 能力：`knowledge.retrieve`
   - 验收：输出 tables、fields、metrics、terms、examples、ambiguities。
+  - 验收：基于 Headless dataset schema 做 schema mapper + asset document 候选召回。
+  - 验收：按 intent mention 分槽位召回并做可解释 rerank，完整短语优先于弱词重叠。
+  - 验收：`访问人数` 可优先命中完整短语资产；只有 `人数` 等弱词时仍保留 `metric_ambiguous`。
+  - 后续：接入 BM25 / embedding / hybrid score，并完善同义词/别名治理。
 
-- [ ] 实现 `SqlAdapter`。
-  - 复用：`sql_generator`、`semantic_sql_compiler`、`sql_validator`、`sql_executor`
-  - 能力：`sql.generate`、`sql.validate`、`sql.execute`、`sql.handle_error`
-  - 验收：真实 SQL 生成、校验、执行、异常处理可由图节点调用。
+- [x] 实现 `SqlAdapter.generate`。
+  - 复用：`SemanticSQLCompiler`、`HeadlessSchemaBuilder`、`SqlValidateTool`
+  - 能力：`sql.generate`
+  - 验收：真实 SQL 生成和安全校验可由图节点调用，输出 `sql`、`strategy`、`datasource_id`、`explanation`、`used_assets`。
 
-- [ ] 实现 `PermissionAdapter`。
+- [x] 实现 `SqlAdapter.execute`。
+  - 复用：`SqlExecuteTool`、`apps.db.db.exec_sql`
+  - 能力：`sql.execute`
+  - 验收：真实 SQL 执行可由图节点调用，输出 `status`、`rows`、`row_count`、`fields`、`execution_ms`，失败时进入 `handle_sql_error`。
+
+- [x] 实现 SQL 异常处理。
+  - 复用：`SqlAdapter.handle_error`
+  - 能力：`sql.handle_error`
+  - 验收：真实 SQL 异常处理可由图节点调用，输出 `error_code`、`message`、`retryable`、`repair_hint`、`repair_plan`。
+
+- [x] 实现 SQL 自动修复/重试策略第一版。
+  - 复用：`sql_repair`
+  - 能力：SQL repair plan、retryable policy
+  - 验收：可对可修复 SQL 错误生成修复建议或重试计划。
+  - 验收：`regenerate_sql` 计划已通过 `sql.error_retryable` 图条件回到 `generate_sql`，由 `max_loop_iterations` 控制重试上限。
+  - 验收：`SqlAdapter.generate` 已把上一轮错误写入 `repair_context`，并拒绝再次提交同一条失败 SQL。
+  - 验收：`SemanticSQLCompiler` 已消费 `candidate_tables`，可把失败表上的同名资产切换到候选表资产。
+  - 后续：继续消费 `candidate_fields`，并扩展多表 join 修复策略。
+
+- [x] 实现 `PermissionAdapter`。
   - 复用：`agentic_chat.tools.permission`
-  - 能力：`permission.apply`
-  - 验收：权限拒绝不会执行 SQL。
+  - 能力：SQL 执行前置权限检查、行过滤改写、禁用列拒绝
+  - 验收：权限拒绝不会执行 SQL；策略 provider 返回行过滤条件时会改写 SQL；命中禁用列时拒绝执行。
 
-- [ ] 实现 `AnswerAdapter`。
+- [x] 实现 SQL 执行结果 sample 保护。
+  - 目标：避免完整 SQL 结果集进入 run context/trace。
+  - 能力：`SqlAdapter.execute` 只保留 sample rows，并输出 `row_count`、`sampled_row_count`、`result_truncated`、`artifact_ref`。
+  - 验收：大结果只把 sample rows 写入 `variables.sql_execution.rows`。
+
+- [x] 实现真实行列权限改写第一版。
+  - 复用：`PermissionTool` 后续增强、旧 Chat row permission 逻辑
+  - 能力：tenant/user/datasource 维度权限策略 provider、行权限 SQL AST 改写、列权限拒绝
+  - 验收：真实权限策略能改写或拒绝 SQL。
+  - 后续：接入真实权限表和 current_user，扩展复杂 SQL/多层子查询改写覆盖面。
+
+- [x] 实现 `AnswerAdapter`。
   - 复用：`answer_generator`
   - 能力：`answer.reject`、`answer.chitchat`、`answer.generate`、`answer.compose`
   - 验收：最终回复符合前端消费格式。
 
-- [ ] 实现 `RecommendationAdapter`。
+- [x] 实现 `RecommendationAdapter`。
   - 能力：`question.recommend`
-  - 验收：可根据 SQL 结果或上下文生成问题推荐。
+  - 验收：可根据已选指标、维度、SQL 执行状态生成问题推荐。
 
 ## 里程碑 6：运行时与持久化增强
 
@@ -191,6 +239,7 @@
   - 目标：大 SQL 结果、图像刻画、诊断信息写入 artifact，不直接塞入事件。
   - 验收：节点输出摘要和 artifact ref 都可查询。
   - [x] P0：Trace API 已对 SQL/结果集做脱敏，并返回 `artifact_ref` 协议字段；真实 artifact 写入待接入。
+  - [x] P0：`SqlAdapter.execute` 已限制 context 中的 SQL 结果为 sample rows。
 
 - [x] 完善 retry/cancel/resume API 与图执行联动。
   - 目标：`retry` 能重新推进图，`resume` 能从交互节点继续，`cancel` 能阻止后续执行。

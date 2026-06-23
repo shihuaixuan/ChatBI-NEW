@@ -56,4 +56,5 @@ def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions
         "interaction.skipped",
         "sql.execution_failed",
         "sql.execution_succeeded",
+        "sql.error_retryable",
     }
