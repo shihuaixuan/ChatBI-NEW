@@ -1,4 +1,6 @@
-from types import SimpleNamespace
+import importlib
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -72,6 +74,27 @@ def make_datasource(datasource_id=40, oid=1):
     )
 
 
+def import_chat_crud(monkeypatch):
+    datasource_module = ModuleType("apps.datasource.crud.datasource")
+    datasource_module.get_ds = lambda *args, **kwargs: None
+    recommended_module = ModuleType("apps.datasource.crud.recommended_problem")
+    recommended_module.get_datasource_recommended_chart = lambda *args, **kwargs: []
+    db_module = ModuleType("apps.db.db")
+    db_module.exec_sql = lambda *args, **kwargs: None
+    assistant_module = ModuleType("apps.system.crud.assistant")
+    assistant_module.AssistantOutDsFactory = type(
+        "AssistantOutDsFactory",
+        (),
+        {"get_instance": staticmethod(lambda *args, **kwargs: None)},
+    )
+    monkeypatch.setitem(sys.modules, "apps.datasource.crud.datasource", datasource_module)
+    monkeypatch.setitem(sys.modules, "apps.datasource.crud.recommended_problem", recommended_module)
+    monkeypatch.setitem(sys.modules, "apps.db.db", db_module)
+    monkeypatch.setitem(sys.modules, "apps.system.crud.assistant", assistant_module)
+    sys.modules.pop("apps.chat.curd.chat", None)
+    return importlib.import_module("apps.chat.curd.chat")
+
+
 def test_resolve_dataset_chat_binding_returns_dataset_and_datasource():
     from apps.chat.services.headless_binding import resolve_dataset_chat_binding
 
@@ -126,3 +149,18 @@ def test_apply_dataset_binding_to_chat_and_record():
     assert record.dataset_id == 20
     assert record.datasource == 40
     assert record.engine_type == "MySQL"
+
+
+def test_save_question_copies_dataset_and_datasource_from_chat(monkeypatch):
+    chat_crud = import_chat_crud(monkeypatch)
+    from apps.chat.models.chat_model import ChatQuestion
+
+    chat = Chat(id=77, create_by=10, oid=1, dataset_id=20, datasource=40, engine_type="MySQL")
+    session = FakeSession(chat)
+
+    record = chat_crud.save_question(session, make_user(), ChatQuestion(chat_id=77, question="销售额是多少"))
+
+    assert record.dataset_id == 20
+    assert record.datasource == 40
+    assert record.engine_type == "MySQL"
+    assert session.committed is True

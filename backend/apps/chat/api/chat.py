@@ -17,6 +17,7 @@ from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user,
     rename_chat_with_user, get_chat_log_history, get_chart_data_with_user_live
 from apps.chat.models.chat_model import CreateChat, ChatRecord, RenameChat, ChatQuestion, AxisObj, QuickCommand, \
     ChatInfo, Chat, ChatFinishStep
+from apps.chat.services.headless_binding import DatasetBindingError
 from apps.chat.task.llm import LLMService
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from apps.system.schemas.permission import SqlbotPermission, require_permissions
@@ -183,7 +184,6 @@ async def delete(session: SessionDep, current_user: CurrentUser, chart_id: int, 
 
 
 @router.post("/start", response_model=ChatInfo, summary=f"{PLACEHOLDER_PREFIX}start_chat")
-@require_permissions(permission=SqlbotPermission(type='ds', keyExpression="create_chat_obj.datasource"))
 @system_log(LogConfig(
     operation_type=OperationType.CREATE,
     module=OperationModules.CHAT,
@@ -192,6 +192,8 @@ async def delete(session: SessionDep, current_user: CurrentUser, chart_id: int, 
 async def start_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj: CreateChat):
     try:
         return create_chat(session, current_user, create_chat_obj)
+    except DatasetBindingError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -208,8 +210,10 @@ async def start_chat(session: SessionDep, current_user: CurrentUser, create_chat
 async def start_chat(session: SessionDep, current_user: CurrentUser, current_assistant: CurrentAssistant,
                      create_chat_obj: CreateChat = CreateChat(origin=2)):
     try:
-        return create_chat(session, current_user, create_chat_obj, create_chat_obj and create_chat_obj.datasource,
+        return create_chat(session, current_user, create_chat_obj, create_chat_obj and create_chat_obj.dataset_id,
                            current_assistant)
+    except DatasetBindingError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -246,12 +250,12 @@ async def ask_recommend_questions(session: SessionDep, current_user: CurrentUser
     return StreamingResponse(llm_service.await_result(), media_type="text/event-stream")
 
 
-@router.get("/recent_questions/{datasource_id}", response_model=List[str],
+@router.get("/recent_questions/{dataset_id}", response_model=List[str],
             summary=f"{PLACEHOLDER_PREFIX}get_recommend_questions")
-# @require_permissions(permission=SqlbotPermission(type='ds', keyExpression="datasource_id"))
+# @require_permissions(permission=SqlbotPermission(type='dataset', keyExpression="dataset_id"))
 async def recommend_questions(session: SessionDep, current_user: CurrentUser,
-                              datasource_id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}ds_id")):
-    return list_recent_questions(session=session, current_user=current_user, datasource_id=datasource_id)
+                              dataset_id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}dataset_id")):
+    return list_recent_questions(session=session, current_user=current_user, dataset_id=dataset_id)
 
 
 def find_base_question(record_id: int, session: SessionDep):
