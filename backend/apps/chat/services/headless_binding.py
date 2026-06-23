@@ -6,7 +6,11 @@ from sqlmodel import col, select
 
 from apps.chat.models.chat_model import Chat, ChatRecord
 from apps.datasource.models.datasource import CoreDatasource
-from apps.headless.models import HeadlessDataSet, HeadlessDataSetModelConfig, HeadlessModel
+from apps.headless.models import (
+    HeadlessDataSet,
+    HeadlessDataSetModelConfig,
+    HeadlessModel,
+)
 
 
 class DatasetBindingError(ValueError):

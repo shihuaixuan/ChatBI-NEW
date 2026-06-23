@@ -383,25 +383,17 @@
       >
         <div class="input-wrapper" @click="clickInput">
           <div v-if="isCompletePage || selectAssistantDs" class="datasource">
-            <template v-if="currentChat.datasource && currentChat.datasource_name">
-              {{ t('qa.selected_datasource') }}:
-              <img
-                v-if="currentChatEngineType"
-                style="margin-left: 4px; margin-right: 4px"
-                :src="currentChatEngineType"
-                width="16px"
-                height="16px"
-                alt=""
-              />
+            <template v-if="currentChat.dataset_id && currentChat.dataset_name">
+              已选数据集:
               <span class="name">
-                {{ currentChat.datasource_name }}
+                {{ currentChat.dataset_name }}
               </span>
             </template>
           </div>
-          <div v-if="computedMessages.length > 0 && currentChat.datasource" class="quick_question">
+          <div v-if="computedMessages.length > 0 && currentChat.dataset_id" class="quick_question">
             <quick-question
               ref="quickQuestionRef"
-              :datasource-id="currentChat.datasource"
+              :dataset-id="currentChat.dataset_id"
               :current-chat="currentChat"
               :record-id="computedMessages[0].record?.id"
               :disabled="isTyping"
@@ -464,7 +456,6 @@ import ChatCreator from '@/views/chat/ChatCreator.vue'
 import ChatTokenTime from '@/views/chat/ChatTokenTime.vue'
 import ErrorInfo from './ErrorInfo.vue'
 import ChatToolBar from './ChatToolBar.vue'
-import { dsTypeWithImg } from '@/views/ds/js/ds-type'
 import { useI18n } from 'vue-i18n'
 import { find, forEach } from 'lodash-es'
 import custom_small from '@/assets/svg/logo-custom_small.svg'
@@ -704,10 +695,6 @@ function onClickHistory(chat: ChatInfo) {
     }
   })
 }
-
-const currentChatEngineType = computed(() => {
-  return (dsTypeWithImg.find((ele) => currentChat.value.ds_type === ele.type) || {}).img
-})
 
 function onChatDeleted(id: number) {
   console.info('deleted', id)

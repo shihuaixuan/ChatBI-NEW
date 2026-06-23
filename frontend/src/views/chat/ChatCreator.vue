@@ -1,23 +1,14 @@
 <script lang="ts" setup>
 import { onMounted, ref, computed, shallowRef, onBeforeUnmount, onBeforeMount } from 'vue'
 import icon_close_outlined from '@/assets/svg/operate/ope-close.svg'
-import icon_add_outlined from '@/assets/svg/icon_add_outlined.svg'
 import EmptyBackground from '@/views/dashboard/common/EmptyBackground.vue'
 import icon_searchOutline_outlined from '@/assets/svg/icon_search-outline_outlined.svg'
 import { chatApi, ChatInfo } from '@/api/chat.ts'
-import { datasourceApi } from '@/api/datasource.ts'
+import { headlessApi } from '@/api/headless'
 import Card from '@/views/ds/ChatCard.vue'
-import AddDrawer from '@/views/ds/AddDrawer.vue'
-import { useUserStore } from '@/stores/user'
 import { useAssistantStore } from '@/stores/assistant'
-import { request } from '@/utils/request'
 const assistantStore = useAssistantStore()
-const userStore = useUserStore()
 
-const isWsAdmin = computed(() => userStore.isAdmin || userStore.isSpaceAdmin)
-const selectAssistantDs = computed(
-  () => assistantStore.getAssistant && !assistantStore.getEmbedded && !assistantStore.getAutoDs
-)
 const props = withDefaults(
   defineProps<{
     hidden?: boolean
@@ -27,79 +18,63 @@ const props = withDefaults(
   }
 )
 
-const addDrawerRef = ref()
 const searchLoading = ref(false)
-const datasourceConfigVisible = ref(false)
+const datasetConfigVisible = ref(false)
 const keywords = ref('')
-const datasourceList = shallowRef([] as any[])
-const datasourceListWithSearch = computed(() => {
-  if (!keywords.value) return datasourceList.value
-  return datasourceList.value.filter((ele) =>
+const datasetList = shallowRef([] as any[])
+const datasetListWithSearch = computed(() => {
+  if (!keywords.value) return datasetList.value
+  return datasetList.value.filter((ele) =>
     ele.name.toLowerCase().includes(keywords.value.toLowerCase())
   )
 })
 const beforeClose = () => {
-  datasourceConfigVisible.value = false
+  datasetConfigVisible.value = false
   keywords.value = ''
 }
 
 const emits = defineEmits(['onChatCreated'])
 
-function listDs() {
+function listDatasets() {
   searchLoading.value = true
-  ;(selectAssistantDs.value ? request.get('/system/assistant/ds') : datasourceApi.list())
+  headlessApi
+    .datasetList()
     .then((res) => {
-      datasourceList.value = res
+      datasetList.value = Array.isArray(res) ? res : []
     })
     .finally(() => {
       searchLoading.value = false
     })
 }
 
-const innerDs = ref()
+const innerDataset = ref()
 
 const loading = ref(false)
-const statusLoading = ref(false)
 
 function showDs() {
-  listDs()
-  datasourceConfigVisible.value = true
+  listDatasets()
+  datasetConfigVisible.value = true
 }
 
 function hideDs() {
-  innerDs.value = undefined
-  datasourceConfigVisible.value = false
+  innerDataset.value = undefined
+  datasetConfigVisible.value = false
 }
 
-function selectDsInDialog(ds: any) {
-  innerDs.value = ds.id
+function selectDatasetInDialog(dataset: any) {
+  innerDataset.value = dataset.id
 }
 
-function confirmSelectDs() {
-  if (innerDs.value) {
-    if (assistantStore.getType == 1) {
-      createChat(innerDs.value)
-      return
-    }
-    statusLoading.value = true
-    //check first
-    datasourceApi
-      .check_by_id(innerDs.value)
-      .then((res: any) => {
-        if (res) {
-          createChat(innerDs.value)
-        }
-      })
-      .finally(() => {
-        statusLoading.value = false
-      })
+function confirmSelectDataset() {
+  if (innerDataset.value) {
+    createChat(innerDataset.value)
   }
 }
 
-function createChat(datasource: number) {
+function createChat(datasetId: number) {
   loading.value = true
   const param = {
-    datasource: datasource,
+    dataset_id: datasetId,
   } as any
   let method = chatApi.startChat
   if (assistantStore.getAssistant) {
@@ -143,10 +118,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', setHeight)
 })
 
-const handleAddDatasource = () => {
-  addDrawerRef.value.handleAddDatasource()
-}
-
 defineExpose({
   showDs,
   hideDs,
@@ -155,9 +126,9 @@ defineExpose({
 </script>
 
 <template>
-  <div v-loading.body.fullscreen.lock="loading || statusLoading">
+  <div v-loading.body.fullscreen.lock="loading">
     <el-drawer
-      v-model="datasourceConfigVisible"
+      v-model="datasetConfigVisible"
       :close-on-click-modal="false"
       :size="drawerHeight"
       modal-class="datasource-drawer-chat"
@@ -166,7 +137,7 @@ defineExpose({
       :show-close="false"
     >
       <template #header="{ close }">
-        <span style="white-space: nowrap">{{ $t('qa.select_datasource') }}</span>
+        <span style="white-space: nowrap">选择数据集</span>
         <div class="flex-center" style="width: 100%; margin-right: 32px">
           <el-input
             v-model="keywords"
@@ -185,10 +156,10 @@ defineExpose({
           <icon_close_outlined></icon_close_outlined>
         </el-icon>
       </template>
-      <div v-if="datasourceListWithSearch.length" class="card-content">
+      <div v-if="datasetListWithSearch.length" class="card-content">
         <el-row :gutter="16" class="w-full">
           <el-col
-            v-for="ele in datasourceListWithSearch"
+            v-for="ele in datasetListWithSearch"
             :key="ele.id"
             :xs="24"
             :sm="12"
@@ -201,34 +172,25 @@ defineExpose({
               :id="ele.id"
               :key="ele.id"
               :name="ele.name"
-              :type="ele.type"
-              :type-name="ele.type_name"
-              :num="ele.num"
-              :is-selected="ele.id === innerDs"
+              :type="String(ele.domain_id || '')"
+              :type-name="ele.biz_name"
+              :num="(ele.data_set_detail?.dataSetModelConfigs || []).length"
+              :is-selected="ele.id === innerDataset"
               :description="ele.description"
-              @select-ds="selectDsInDialog(ele)"
+              @select-ds="selectDatasetInDialog(ele)"
             ></Card>
           </el-col>
         </el-row>
       </div>
-      <template v-if="!keywords && !datasourceListWithSearch.length && !searchLoading">
+      <template v-if="!keywords && !datasetListWithSearch.length && !searchLoading">
         <EmptyBackground
           class="datasource-yet_btn"
-          :description="$t('datasource.data_source_yet')"
+          description="暂无数据集"
           img-type="noneWhite"
         />
-
-        <div v-if="isWsAdmin" style="text-align: center; margin-top: -10px">
-          <el-button type="primary" @click="handleAddDatasource">
-            <template #icon>
-              <icon_add_outlined></icon_add_outlined>
-            </template>
-            {{ $t('datasource.new_data_source') }}
-          </el-button>
-        </div>
       </template>
       <EmptyBackground
-        v-if="!!keywords && !datasourceListWithSearch.length"
+        v-if="!!keywords && !datasetListWithSearch.length"
         :description="$t('datasource.relevant_content_found')"
         class="datasource-yet"
         img-type="tree"
@@ -239,16 +201,15 @@ defineExpose({
             $t('common.cancel')
           }}</el-button>
           <el-button
-            :type="loading || statusLoading || innerDs === undefined ? 'info' : 'primary'"
-            :disabled="loading || statusLoading || innerDs === undefined"
-            @click="confirmSelectDs"
+            :type="loading || innerDataset === undefined ? 'info' : 'primary'"
+            :disabled="loading || innerDataset === undefined"
+            @click="confirmSelectDataset"
           >
             {{ $t('datasource.confirm') }}
           </el-button>
         </div>
       </template>
     </el-drawer>
-    <AddDrawer ref="addDrawerRef" @search="listDs"></AddDrawer>
   </div>
 </template>
 

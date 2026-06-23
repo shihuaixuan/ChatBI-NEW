@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 MIGRATION = Path(__file__).resolve().parents[2] / "alembic" / "versions" / "076_chat_headless_dataset.py"
 
 

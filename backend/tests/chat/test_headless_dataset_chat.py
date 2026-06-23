@@ -114,7 +114,10 @@ def test_resolve_dataset_chat_binding_returns_dataset_and_datasource():
 
 
 def test_resolve_dataset_chat_binding_rejects_cross_workspace_dataset():
-    from apps.chat.services.headless_binding import DatasetBindingError, resolve_dataset_chat_binding
+    from apps.chat.services.headless_binding import (
+        DatasetBindingError,
+        resolve_dataset_chat_binding,
+    )
 
     session = FakeSession(make_dataset(oid=2))
 

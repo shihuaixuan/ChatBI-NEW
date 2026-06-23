@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { chatApi } from '@/api/chat.ts'
 
 const props = withDefaults(
   defineProps<{
+    datasetId?: number
     datasourceId?: number
     disabled?: boolean
   }>(),
   {
+    datasetId: undefined,
     datasourceId: undefined,
     disabled: false,
   }
@@ -18,6 +20,7 @@ const emits = defineEmits(['clickQuestion'])
 const loading = ref(false)
 
 const computedQuestions = ref([])
+const effectiveDatasetId = computed(() => props.datasetId || props.datasourceId)
 
 function clickQuestion(question: string): void {
   emits('clickQuestion', question)
@@ -27,7 +30,7 @@ onMounted(() => {
   getRecentQuestions()
 })
 async function getRecentQuestions() {
-  chatApi.recentQuestions(props.datasourceId).then((res) => {
+  chatApi.recentQuestions(effectiveDatasetId.value).then((res) => {
     computedQuestions.value = res
   })
 }
