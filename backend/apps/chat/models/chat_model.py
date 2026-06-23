@@ -91,6 +91,7 @@ class Chat(SQLModel, table=True):
     create_by: int = Field(sa_column=Column(BigInteger, nullable=True))
     brief: str = Field(max_length=64, nullable=True)
     chat_type: str = Field(max_length=20, default="chat")  # chat, datasource
+    dataset_id: Optional[int] = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     datasource: int = Field(sa_column=Column(BigInteger, nullable=True))
     engine_type: str = Field(max_length=64)
     origin: Optional[int] = Field(
@@ -110,6 +111,7 @@ class ChatRecord(SQLModel, table=True):
     create_time: datetime = Field(sa_column=Column(DateTime(timezone=False), nullable=True))
     finish_time: datetime = Field(sa_column=Column(DateTime(timezone=False), nullable=True))
     create_by: int = Field(sa_column=Column(BigInteger, nullable=True))
+    dataset_id: Optional[int] = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     datasource: int = Field(sa_column=Column(BigInteger, nullable=True))
     engine_type: str = Field(max_length=64, nullable=True)
     question: str = Field(sa_column=Column(Text, nullable=True))
@@ -144,6 +146,7 @@ class ChatRecordResult(BaseModel):
     question: Optional[str] = None
     sql_answer: Optional[str] = None
     sql: Optional[str] = None
+    dataset_id: Optional[int] = None
     datasource: Optional[int] = None
     data: Optional[str] = None
     chart_answer: Optional[str] = None
@@ -171,6 +174,7 @@ class ChatRecordResult(BaseModel):
 class CreateChat(BaseModel):
     id: int = None
     question: str = None
+    dataset_id: Optional[int] = None
     datasource: int = None
     origin: Optional[int] = 0  # 0是页面上，mcp是1，小助手是2
 
@@ -187,6 +191,9 @@ class ChatInfo(BaseModel):
     create_by: int = None
     brief: str = ''
     chat_type: str = "chat"
+    dataset_id: Optional[int] = None
+    dataset_name: str = ''
+    dataset_exists: bool = True
     datasource: Optional[int] = None
     engine_type: str = ''
     ds_type: str = ''
