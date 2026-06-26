@@ -105,6 +105,17 @@ class PlaceholderChatBICapabilityGateway:
                 "query_shape": {"select_mode": "aggregate"},
                 "ambiguous_slots": ["metric"] if ambiguous else [],
                 "conflict_slots": [],
+                "validation": {
+                    "status": "valid",
+                    "reason_code": "INTENT_VALID",
+                    "repair_hint": None,
+                    "retryable": False,
+                    "retry_count": 0,
+                    "max_retry_count": 2,
+                    "violations": [],
+                    "clarification_required": False,
+                    "slot_issues": [],
+                },
             }
         if capability == "knowledge.retrieve":
             question = self._question_from_v1_request(request)
@@ -147,6 +158,8 @@ class PlaceholderChatBICapabilityGateway:
             return self._interaction().ask_rewrite_clarification(request)
         if capability == "interaction.ask_intent_clarification":
             return self._interaction().ask_intent_clarification(request)
+        if capability == "interaction.ask_slot_clarification":
+            return self._interaction().ask_slot_clarification(request)
         if capability == "sql.handle_error":
             execution = request.get("variables", {}).get("sql_execution", {})
             return {

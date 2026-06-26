@@ -3,13 +3,19 @@ import BaseAnswer from './BaseAnswer.vue'
 import { ChatInfo, type ChatMessage, ChatRecord } from '@/api/chat'
 import {
   graphWorkflowApi,
+  type GraphEventResponse,
   type GraphPendingInteraction,
   type GraphRunResponse,
 } from '@/api/graph-workflow'
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import GraphWorkflowTrace from '@/views/chat/execution-component/GraphWorkflowTrace.vue'
 import GraphWorkflowInteractionCard from '@/views/chat/execution-component/GraphWorkflowInteractionCard.vue'
 import GraphWorkflowFinalAnswer from '@/views/chat/execution-component/GraphWorkflowFinalAnswer.vue'
+import {
+  graphInteractionControlsDisabled,
+  graphLatestEventSequence,
+  pendingInteractionFromGraphEvent,
+} from '@/views/chat/execution-component/graphWorkflowDisplay'
 
 const props = withDefaults(
   defineProps<{
@@ -63,12 +69,26 @@ const _loading = computed({
 })
 
 const traceRefreshKey = ref(0)
+const liveEvents = ref<GraphEventResponse[]>([])
+const pendingLiveEvents: GraphEventResponse[] = []
+const processingLiveEvents = ref(false)
+const streamController = ref<AbortController>()
+const submittingInteraction = ref(false)
+const answeredInteractionIds = new Set<string>()
 const noReasoningName: Array<'sql_answer' | 'chart_answer'> = []
 const pendingInteraction = computed<GraphPendingInteraction | undefined>(() => {
   const interaction = props.message?.record?.clarification as GraphPendingInteraction | undefined
   return interaction?.status === 'pending' ? interaction : undefined
 })
 const waitingInput = computed(() => Boolean(pendingInteraction.value))
+const interactionDisabled = computed(
+  () =>
+    submittingInteraction.value ||
+    graphInteractionControlsDisabled(_loading.value, waitingInput.value)
+)
+const lastEventSequence = computed(() =>
+  graphLatestEventSequence(liveEvents.value, pendingLiveEvents)
+)
 
 function datasetId(currentRecord: ChatRecord) {
   return Number(
@@ -132,8 +152,94 @@ async function refreshRun(currentRecord: ChatRecord) {
   emits('scrollBottom')
 }
 
-async function sendMessage() {
+function nextRunId() {
+  return `graph-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function resetStream() {
+  streamController.value?.abort()
+  streamController.value = undefined
+}
+
+function appendLiveEvent(event: GraphEventResponse) {
+  if (event.sequence && liveEvents.value.some((item) => item.sequence === event.sequence)) return
+  liveEvents.value.push(event)
+  liveEvents.value.sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0))
+}
+
+function queueLiveEvent(event: GraphEventResponse) {
+  pendingLiveEvents.push(event)
+  applyPendingInteractionFromEvent(event)
+  processLiveEvents()
+}
+
+function queueOptimisticResumeEvent(interaction: GraphPendingInteraction, afterSequence: number) {
+  queueLiveEvent({
+    sequence: afterSequence + 0.001,
+    event_type: 'run.resumed',
+    node_name: interaction.node_name,
+    public_payload: {
+      synthetic: true,
+      interaction_id: interaction.interaction_id,
+      node_name: interaction.node_name,
+    },
+  })
+}
+
+function applyPendingInteractionFromEvent(event: GraphEventResponse) {
+  const interaction = pendingInteractionFromGraphEvent(event) as GraphPendingInteraction | undefined
+  if (!interaction || index.value < 0) return
+  if (answeredInteractionIds.has(interaction.interaction_id)) return
+  const currentRecord: ChatRecord | undefined = _currentChat.value.records[index.value]
+  if (!currentRecord) return
+  currentRecord.clarification = interaction
+  currentRecord.status = 'waiting_input'
+  currentRecord.finish = false
+  _loading.value = false
+  emits('stop')
+  nextTick(() => emits('scrollBottom'))
+}
+
+async function processLiveEvents() {
+  if (processingLiveEvents.value) return
+  processingLiveEvents.value = true
+  while (pendingLiveEvents.length) {
+    const event = pendingLiveEvents.shift()
+    if (!event) continue
+    appendLiveEvent(event)
+    await nextTick()
+    if (event.event_type === 'node.succeeded') {
+      await new Promise((resolve) => setTimeout(resolve, 260))
+    }
+  }
+  processingLiveEvents.value = false
+}
+
+async function waitLiveEventQueue() {
+  while (processingLiveEvents.value || pendingLiveEvents.length) {
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  }
+}
+
+async function streamRunToBoundary(currentRecord: ChatRecord, stream: () => Promise<void>) {
+  resetStream()
+  streamController.value = new AbortController()
   _loading.value = true
+  try {
+    await stream()
+    await waitLiveEventQueue()
+    await refreshRun(currentRecord)
+  } catch (error) {
+    if ((error as Error)?.name === 'AbortError') return
+    currentRecord.error = `Graph Workflow SSE Error: ${error}`
+    emits('error', currentRecord.id)
+  } finally {
+    _loading.value = false
+    emits('scrollBottom')
+  }
+}
+
+async function sendMessage() {
   if (index.value < 0) {
     _loading.value = false
     return
@@ -147,37 +253,57 @@ async function sendMessage() {
     return
   }
 
-  try {
-    const run = await graphWorkflowApi.createQuery({
-      question: currentRecord.question || '',
-      dataset_id: currentDatasetId,
-      definition_version: 'v1',
-    })
-    applyRunToRecord(run, currentRecord)
-    traceRefreshKey.value++
-  } catch (error) {
-    currentRecord.error = `Graph Workflow Error: ${error}`
-    emits('error', currentRecord.id)
-  } finally {
-    _loading.value = false
-    emits('scrollBottom')
-  }
+  liveEvents.value = []
+  pendingLiveEvents.splice(0)
+  answeredInteractionIds.clear()
+  currentRecord.trace_id = nextRunId()
+  currentRecord.status = 'running'
+  currentRecord.clarification = undefined
+  currentRecord.finish = false
+  await streamRunToBoundary(currentRecord, () =>
+    graphWorkflowApi.streamQuery(
+      {
+        run_id: currentRecord.trace_id,
+        question: currentRecord.question || '',
+        dataset_id: currentDatasetId,
+        definition_version: 'v1',
+      },
+      {
+        signal: streamController.value?.signal,
+        onEvent: queueLiveEvent,
+      }
+    )
+  )
 }
 
 async function submitInteraction(response: Record<string, any>) {
+  if (submittingInteraction.value) return
   if (index.value < 0) return
   const currentRecord: ChatRecord = _currentChat.value.records[index.value]
   const interaction = currentRecord.clarification as GraphPendingInteraction | undefined
   const interactionId = interaction?.interaction_id
   if (!currentRecord.trace_id || !interactionId) return
-  _loading.value = true
+  submittingInteraction.value = true
+  answeredInteractionIds.add(interactionId)
+  const afterSequence = lastEventSequence.value
   currentRecord.status = 'running'
   currentRecord.clarification = undefined
+  queueOptimisticResumeEvent(interaction, afterSequence)
   try {
-    await graphWorkflowApi.answerInteraction(currentRecord.trace_id, interactionId, response)
-    await refreshRun(currentRecord)
+    await streamRunToBoundary(currentRecord, () =>
+      graphWorkflowApi.streamInteraction(
+        currentRecord.trace_id || '',
+        interactionId,
+        response,
+        afterSequence,
+        {
+          signal: streamController.value?.signal,
+          onEvent: queueLiveEvent,
+        }
+      )
+    )
   } finally {
-    _loading.value = false
+    submittingInteraction.value = false
   }
 }
 
@@ -186,6 +312,7 @@ function skipInteraction() {
 }
 
 function stop() {
+  resetStream()
   const currentRecord = props.message?.record
   const runId = currentRecord?.trace_id
   if (runId && !currentRecord?.finish) {
@@ -213,19 +340,29 @@ onMounted(() => {
   }
 })
 
+onBeforeUnmount(resetStream)
+
 defineExpose({ sendMessage, index: () => index.value, stop })
 </script>
 
 <template>
-  <BaseAnswer v-if="message" :message="message" :reasoning-name="noReasoningName" :loading="_loading">
+  <BaseAnswer
+    v-if="message"
+    :message="message"
+    :reasoning-name="noReasoningName"
+    :loading="_loading"
+  >
     <GraphWorkflowTrace
       :run-id="message.record?.trace_id"
       :refresh-key="traceRefreshKey"
+      :events="liveEvents"
       :pending-interaction="pendingInteraction"
+      :runtime-loading="_loading"
+      @refresh-run="message.record && refreshRun(message.record)"
     />
     <GraphWorkflowInteractionCard
       :interaction="pendingInteraction"
-      :disabled="_loading"
+      :disabled="interactionDisabled"
       @submit="submitInteraction"
       @skip="skipInteraction"
     />

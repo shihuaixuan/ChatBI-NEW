@@ -155,13 +155,19 @@ class GraphRuntime:
                         run,
                         node_name=node.name,
                         completed=True,
+                        summary=self._public_node_summary(result),
                     )
 
                 route = self._router.select(definition, node, run.context, result)
                 self._record_node_execution(run, node, result, route)
                 run.current_node = route.target
                 run.context.control.current_node = route.target
-                run = self._checkpoints.save_progress(run, node_name=node.name, route=route)
+                run = self._checkpoints.save_progress(
+                    run,
+                    node_name=node.name,
+                    route=route,
+                    summary=self._public_node_summary(result),
+                )
 
             return run
 
@@ -256,8 +262,36 @@ class GraphRuntime:
             run.status = RunStatus.FAILED
             return self._checkpoints.fail(run, "INTERACTION_NOT_SUPPORTED", node_name=node_name)
         interaction = self._interactions.create(run.run_id, node_name, result.interaction)
+        pending_summary = {
+            "interaction_id": interaction.interaction_id,
+            "run_id": interaction.run_id,
+            "node_name": interaction.node_name,
+            "status": interaction.status.value,
+            "prompt": interaction.prompt,
+            "options": interaction.options,
+            "response_schema": interaction.response_schema,
+            "allowed_update_paths": interaction.allowed_update_paths,
+        }
         run.context.control.executed_nodes += 1
         run.context.control.previous_node = node_name
         run.context.control.pending_interaction_id = interaction.interaction_id
         run.status = RunStatus.WAITING_INPUT
-        return self._checkpoints.pause(run, node_name=node_name)
+        return self._checkpoints.pause(
+            run,
+            node_name=node_name,
+            summary=pending_summary,
+        )
+
+    @staticmethod
+    def _public_node_summary(result: NodeExecutionResult) -> dict:
+        """提取节点公开摘要，供 SSE 逐步展示，不等待最终 trace。"""
+
+        if result.interaction is not None:
+            return result.interaction
+        values = result.patch.set_values
+        if not values:
+            return {}
+        if len(values) == 1:
+            value = next(iter(values.values()))
+            return value if isinstance(value, dict) else {"value": value}
+        return dict(values)

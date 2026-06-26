@@ -23,6 +23,19 @@ class GraphRunResponse(BaseModel):
     context_summary: dict[str, Any] = Field(default_factory=dict)
 
 
+class GraphPendingInteractionResponse(BaseModel):
+    """等待用户处理的交互摘要，用于前端渲染澄清或选择控件。"""
+
+    interaction_id: str
+    run_id: str
+    node_name: str
+    status: str
+    prompt: str | None = None
+    options: list[dict[str, Any]] = Field(default_factory=list)
+    response_schema: dict[str, Any] = Field(default_factory=dict)
+    allowed_update_paths: list[str] = Field(default_factory=list)
+
+
 class GraphEventResponse(BaseModel):
     """单条可公开事件。"""
 

@@ -16,6 +16,7 @@ PUBLIC_PAYLOAD_ALLOWLIST = frozenset(
         "message",
         "node",
         "node_name",
+        "pending_interaction",
         "progress",
         "question",
         "reason_code",

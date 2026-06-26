@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from apps.chatbi_workflow import runtime as chatbi_runtime
 from apps.chatbi_workflow.capabilities.adapters.knowledge import (
     HeadlessKnowledgeAdapter,
@@ -12,7 +14,8 @@ from apps.chatbi_workflow.definitions.chatbi_v1 import (
 )
 from apps.headless.schemas import DataSetSchema, SchemaElement
 from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.domain.run import RunStatus
+from apps.workflow_engine.domain.interaction import InteractionRequest
+from apps.workflow_engine.domain.run import RunStatus, WorkflowRun
 from apps.workflow_engine.infrastructure.memory import (
     InMemoryEventPublisher,
     InMemoryRunStore,
@@ -49,6 +52,31 @@ class FakeHeadlessSchemaBuilder:
         return self.schema
 
 
+def _dimension_value_issue(dimension: str) -> dict:
+    return {
+        "slot_type": "dimension_value",
+        "dimension": dimension,
+        "role": "ambiguous",
+        "value_status": "not_provided",
+        "reason": f"用户提到了{dimension}维度，但没有提供具体值或分组方式",
+    }
+
+
+def _validation(slot_issues: list[dict] | None = None) -> dict:
+    issues = slot_issues or []
+    return {
+        "status": "valid",
+        "reason_code": "INTENT_VALID",
+        "repair_hint": None,
+        "retryable": False,
+        "retry_count": 0,
+        "max_retry_count": 2,
+        "violations": [],
+        "clarification_required": bool(issues),
+        "slot_issues": issues,
+    }
+
+
 class RealKnowledgeGateway(TrackingGateway):
     def __init__(self, knowledge_adapter: HeadlessKnowledgeAdapter) -> None:
         super().__init__()
@@ -58,6 +86,135 @@ class RealKnowledgeGateway(TrackingGateway):
         self.calls.append(capability)
         if capability == "knowledge.retrieve":
             return self._knowledge_adapter.retrieve(request)
+        return PlaceholderChatBICapabilityGateway.invoke(self, capability, request, idempotency_key)
+
+
+class DimensionAmbiguityGateway(TrackingGateway):
+    def invoke(self, capability: str, request: dict, idempotency_key: str) -> dict:
+        self.calls.append(capability)
+        if capability == "intent.recognize":
+            return {
+                "intent_type": "metric_query",
+                "confidence": 0.95,
+                "metric_mentions": ["访问人数"],
+                "dimension_mentions": ["店铺"],
+                "dimension_slots": [
+                    {
+                        "name": "店铺",
+                        "role": "ambiguous",
+                        "value": None,
+                        "value_status": "not_provided",
+                    }
+                ],
+                "time_mentions": ["今天"],
+                "time_range": {"raw": "今天", "value_status": "provided"},
+                "filter_mentions": [],
+                "required_slot_types": ["metric"],
+                "query_shape": {"select_mode": "aggregate", "needs_group_by": True},
+                "ambiguous_slots": ["dimension"],
+                "conflict_slots": [],
+                "validation": _validation([_dimension_value_issue("店铺")]),
+            }
+        return PlaceholderChatBICapabilityGateway.invoke(self, capability, request, idempotency_key)
+
+
+class MissingDimensionValueGateway(TrackingGateway):
+    def invoke(self, capability: str, request: dict, idempotency_key: str) -> dict:
+        self.calls.append(capability)
+        if capability == "intent.recognize":
+            return {
+                "intent_type": "metric_query",
+                "confidence": 0.95,
+                "metric_mentions": ["访问人数"],
+                "dimension_mentions": ["店铺"],
+                "dimension_slots": [
+                    {
+                        "name": "店铺",
+                        "role": "ambiguous",
+                        "value": None,
+                        "value_status": "not_provided",
+                    }
+                ],
+                "time_mentions": ["今天"],
+                "time_range": {"raw": "今天", "value_status": "provided"},
+                "filter_mentions": [],
+                "required_slot_types": ["metric"],
+                "query_shape": {"select_mode": "aggregate"},
+                "ambiguous_slots": [],
+                "conflict_slots": [],
+                "validation": _validation([_dimension_value_issue("店铺")]),
+            }
+        return PlaceholderChatBICapabilityGateway.invoke(self, capability, request, idempotency_key)
+
+
+class SubjectDomainAmbiguityGateway(TrackingGateway):
+    def invoke(self, capability: str, request: dict, idempotency_key: str) -> dict:
+        self.calls.append(capability)
+        if capability == "intent.recognize":
+            return {
+                "intent_type": "metric_query",
+                "confidence": 0.95,
+                "metric_mentions": ["访问人数"],
+                "dimension_mentions": [],
+                "dimension_slots": [],
+                "time_mentions": ["今天"],
+                "time_range": {"raw": "今天", "value_status": "provided"},
+                "filter_mentions": [],
+                "required_slot_types": ["metric"],
+                "query_shape": {"select_mode": "aggregate"},
+                "subject_domain": {
+                    "status": "ambiguous",
+                    "domain_id": None,
+                    "domain_name": None,
+                    "domain_biz_name": None,
+                    "confidence": 0.5,
+                    "reason": "店铺和商品主题都可能匹配",
+                    "candidate_domain_ids": [1, 2],
+                },
+                "ambiguous_slots": ["subject_domain"],
+                "conflict_slots": [],
+                "validation": _validation(
+                    [
+                        {
+                            "slot_type": "subject_domain",
+                            "reason": "主题域未能唯一确定",
+                        }
+                    ]
+                ),
+            }
+        return PlaceholderChatBICapabilityGateway.invoke(self, capability, request, idempotency_key)
+
+
+class TimeValueInDimensionGateway(TrackingGateway):
+    def invoke(self, capability: str, request: dict, idempotency_key: str) -> dict:
+        self.calls.append(capability)
+        if capability == "intent.recognize":
+            return {
+                "intent_type": "metric_query",
+                "confidence": 0.95,
+                "metric_mentions": ["访问人数"],
+                "dimension_mentions": ["店铺"],
+                "dimension_slots": [
+                    {"name": "店铺", "role": "ambiguous", "value": None, "value_status": "not_provided"}
+                ],
+                "time_mentions": ["今天"],
+                "time_range": {
+                    "raw": "今天",
+                    "value_status": "provided",
+                    "normalized": {
+                        "kind": "single_date",
+                        "anchor": "today",
+                        "offset_days": 0,
+                        "timezone": "Asia/Shanghai",
+                    },
+                },
+                "filter_mentions": [],
+                "required_slot_types": ["metric"],
+                "query_shape": {"select_mode": "aggregate"},
+                "ambiguous_slots": [],
+                "conflict_slots": [],
+                "validation": _validation([_dimension_value_issue("店铺")]),
+            }
         return PlaceholderChatBICapabilityGateway.invoke(self, capability, request, idempotency_key)
 
 
@@ -275,7 +432,149 @@ def test_chatbi_v1_placeholder_intent_clarification_can_resume_to_success():
     assert interaction.options[0] == {"label": "查指标数值", "value": {"intent": "metric_query"}}
     assert resumed.status is RunStatus.SUCCEEDED
     assert gateway.calls.count("intent.recognize") == 2
+    assert "intent.validate" not in gateway.calls
     assert "sql.execute" in gateway.calls
+
+
+def test_chatbi_v1_intent_postprocess_routes_to_slot_clarification_when_dimension_value_is_missing():
+    gateway = TimeValueInDimensionGateway()
+    runtime = _runtime(gateway)
+    run = runtime.create_run(
+        "chatbi-v1-intent-validation-retry",
+        "chatbi",
+        "v1",
+        WorkflowContext(request={"question": "今天店铺访问人数", "dataset_id": 1, "tenant_id": 10, "user_id": 20}),
+    )
+
+    outcome = runtime.execute(run.run_id)
+
+    assert outcome.status is RunStatus.WAITING_INPUT
+    assert outcome.current_node == "ask_slot_clarification"
+    assert gateway.calls.count("intent.recognize") == 1
+    assert "intent.validate" not in gateway.calls
+    assert "knowledge.retrieve" not in gateway.calls
+    assert outcome.context.variables["intent"]["validation"]["clarification_required"] is True
+    assert outcome.context.variables["intent"]["validation"]["slot_issues"][0]["slot_type"] == "dimension_value"
+    assert outcome.context.variables["intent"]["dimension_slots"] == [
+        {"name": "店铺", "role": "ambiguous", "value": None, "value_status": "not_provided"}
+    ]
+
+
+def test_chatbi_v1_dimension_ambiguity_routes_to_slot_clarification():
+    gateway = DimensionAmbiguityGateway()
+    runtime = _runtime(gateway)
+    run = runtime.create_run(
+        "chatbi-v1-dimension-ambiguity",
+        "chatbi",
+        "v1",
+        WorkflowContext(request={"question": "今天店铺的访问人数", "dataset_id": 1, "tenant_id": 10, "user_id": 20}),
+    )
+
+    outcome = runtime.execute(run.run_id)
+
+    assert outcome.status is RunStatus.WAITING_INPUT
+    assert outcome.current_node == "ask_slot_clarification"
+    assert "interaction.ask_intent_clarification" not in gateway.calls
+    interaction = runtime._interactions.get(outcome.context.control.pending_interaction_id or "")
+    assert interaction.prompt == "请确认“店铺”这个维度的使用方式。"
+    assert interaction.options == [
+        {"label": "按店铺分组查看", "value": {"dimension": "店铺", "dimension_usage": "group_by"}},
+        {
+            "label": "筛选某个具体店铺",
+            "value": {
+                "dimension": "店铺",
+                "dimension_usage": "filter_value_required",
+                "dimension_value_fields": ["店铺"],
+            },
+        },
+        {"label": "不使用店铺维度", "value": {"dimension": "店铺", "dimension_usage": "ignore"}},
+    ]
+
+
+def test_chatbi_v1_missing_dimension_value_routes_to_slot_clarification():
+    gateway = MissingDimensionValueGateway()
+    runtime = _runtime(gateway)
+    run = runtime.create_run(
+        "chatbi-v1-missing-dimension-value",
+        "chatbi",
+        "v1",
+        WorkflowContext(request={"question": "今天店铺的访问人数", "dataset_id": 1, "tenant_id": 10, "user_id": 20}),
+    )
+
+    outcome = runtime.execute(run.run_id)
+
+    assert outcome.status is RunStatus.WAITING_INPUT
+    assert outcome.current_node == "ask_slot_clarification"
+    assert "knowledge.retrieve" not in gateway.calls
+    interaction = runtime._interactions.get(outcome.context.control.pending_interaction_id or "")
+    assert interaction.prompt == "请确认“店铺”这个维度的使用方式。"
+
+
+def test_chatbi_v1_slot_clarification_can_resume_to_success():
+    gateway = DimensionAmbiguityGateway()
+    runtime = _runtime(gateway)
+    run = runtime.create_run(
+        "chatbi-v1-slot-clarification",
+        "chatbi",
+        "v1",
+        WorkflowContext(request={"question": "今天店铺的访问人数", "dataset_id": 1, "tenant_id": 10, "user_id": 20}),
+    )
+
+    paused = runtime.execute(run.run_id)
+    pending_interaction_id = paused.context.control.pending_interaction_id
+    outcome = runtime.resume(
+        run.run_id,
+        pending_interaction_id or "",
+        {"dimension": "店铺", "dimension_usage": "group_by"},
+        tenant_id=10,
+        user_id=20,
+    )
+
+    assert outcome.status is RunStatus.SUCCEEDED
+    assert outcome.current_node == "finish"
+    assert "interaction.ask_intent_clarification" not in gateway.calls
+    assert gateway.calls.index("knowledge.retrieve") > gateway.calls.index("intent.recognize")
+    assert gateway.calls.index("knowledge.retrieve") > gateway.calls.index("interaction.ask_slot_clarification")
+    assert outcome.context.variables["intent"]["ambiguous_slots"] == []
+    assert outcome.context.variables["intent"]["dimension_slots"] == [
+        {"name": "店铺", "role": "group_by", "value": None, "value_status": "not_provided"}
+    ]
+
+
+def test_chatbi_v1_subject_domain_clarification_can_resume_to_knowledge():
+    gateway = SubjectDomainAmbiguityGateway()
+    runtime = _runtime(gateway)
+    run = runtime.create_run(
+        "chatbi-v1-subject-domain-clarification",
+        "chatbi",
+        "v1",
+        WorkflowContext(request={"question": "今天访问人数", "dataset_id": 1, "tenant_id": 10, "user_id": 20}),
+    )
+
+    paused = runtime.execute(run.run_id)
+    pending_interaction_id = paused.context.control.pending_interaction_id
+    outcome = runtime.resume(
+        run.run_id,
+        pending_interaction_id or "",
+        {"subject_domain": "商品", "domain_id": 2},
+        tenant_id=10,
+        user_id=20,
+    )
+
+    assert paused.status is RunStatus.WAITING_INPUT
+    assert paused.current_node == "ask_slot_clarification"
+    assert outcome.status is RunStatus.SUCCEEDED
+    assert gateway.calls.index("knowledge.retrieve") > gateway.calls.index("interaction.ask_slot_clarification")
+    assert outcome.context.variables["intent"]["ambiguous_slots"] == []
+    assert outcome.context.variables["intent"]["subject_domain"] == {
+        "status": "selected",
+        "domain_id": 2,
+        "domain_name": "商品",
+        "domain_biz_name": None,
+        "confidence": 1.0,
+        "reason": "用户已确认主题域",
+        "candidate_domain_ids": [2],
+    }
 
 
 def test_chatbi_v1_placeholder_metric_selection_can_resume_to_success():
@@ -335,6 +634,192 @@ def test_chatbi_v1_placeholder_metric_selection_can_resume_to_success():
         "strategy": "metric_selection",
         "reason": "用户已确认指标",
     }
+
+
+def test_metric_selection_patcher_prunes_non_query_dimensions_for_plain_metric_query():
+    now = datetime.now()
+    run = WorkflowRun(
+        run_id="run-1",
+        definition_name="chatbi",
+        definition_version="v1",
+        definition_digest="digest",
+        context=WorkflowContext(
+            request={"question": "今天店铺1的线上客户数", "dataset_id": 3, "tenant_id": 1, "user_id": 1},
+            variables={
+                "intent": {
+                    "intent_type": "metric_query",
+                    "query_shape": {"needs_group_by": False},
+                    "dimension_slots": [{"name": "店铺", "role": "filter", "value": "1", "value_status": "provided"}],
+                },
+                "knowledge": {
+                    "status": "metric_ambiguous",
+                    "ambiguities": [
+                        {
+                            "type": "metric",
+                            "candidates": [
+                                {
+                                    "asset_id": 239,
+                                    "biz_name": "total_customer_cnt_online",
+                                    "name": "总客户数-线上（累计）",
+                                }
+                            ],
+                        }
+                    ],
+                    "candidate_groups": {
+                        "metrics": [
+                            {
+                                "asset_id": 239,
+                                "biz_name": "total_customer_cnt_online",
+                                "name": "总客户数-线上（累计）",
+                            }
+                        ]
+                    },
+                    "selected_assets": {
+                        "metrics": [],
+                        "dimensions": [
+                            {"asset_id": 254, "biz_name": "stall_id", "name": "店铺ID "},
+                            {"asset_id": 255, "biz_name": "top10_contrib_customers", "name": "Top 10 贡献客户"},
+                            {"asset_id": 252, "biz_name": "stat_date", "name": "时间"},
+                        ],
+                    },
+                    "slot_bindings": {
+                        "metrics": [],
+                        "dimensions": [
+                            {"asset_id": 254, "biz_name": "stall_id", "display_name": "店铺ID "},
+                            {"asset_id": 255, "biz_name": "top10_contrib_customers", "display_name": "Top 10 贡献客户"},
+                            {"asset_id": 252, "biz_name": "stat_date", "display_name": "时间"},
+                        ],
+                        "filters": [
+                            {"asset_id": 254, "biz_name": "stall_id", "operator": "=", "value": "1"},
+                            {
+                                "asset_id": 252,
+                                "biz_name": "stat_date",
+                                "operator": "=",
+                                "value": {"kind": "relative_date", "value": "today"},
+                            },
+                        ],
+                    },
+                },
+            },
+        ),
+        created_at=now,
+        updated_at=now,
+    )
+    interaction = InteractionRequest(
+        interaction_id="interaction-1",
+        run_id="run-1",
+        node_name="ask_metric_selection",
+        response_schema={},
+        created_at=now,
+    )
+
+    patch = chatbi_runtime.ChatBIV1InteractionResponsePatcher()(run, interaction, {"metric": 239})
+
+    knowledge = patch.set_values["variables.knowledge"]
+    assert knowledge["selected_assets"]["metrics"] == [
+        {
+            "asset_id": 239,
+            "biz_name": "total_customer_cnt_online",
+            "display_name": "总客户数-线上（累计）",
+            "source": "user_selected",
+        }
+    ]
+    assert [item["asset_id"] for item in knowledge["selected_assets"]["dimensions"]] == [254, 252]
+    assert [item["asset_id"] for item in knowledge["slot_bindings"]["dimensions"]] == [254, 252]
+    assert knowledge["dimensions"] == ["stall_id", "stat_date"]
+
+
+def test_slot_clarification_patcher_uses_structured_dimension_values():
+    now = datetime.now()
+    run = WorkflowRun(
+        run_id="run-slot-values",
+        definition_name="chatbi",
+        definition_version="v1",
+        definition_digest="digest",
+        context=WorkflowContext(
+            request={"question": "今天店铺的客户数是多少", "dataset_id": 3, "tenant_id": 1, "user_id": 1},
+            variables={
+                "intent": {
+                    "intent_type": "metric_query",
+                    "ambiguous_slots": ["dimension"],
+                    "dimension_mentions": ["店铺"],
+                    "dimension_slots": [
+                        {"name": "店铺", "role": "filter", "value": None, "value_status": "not_provided"}
+                    ],
+                },
+            },
+        ),
+        created_at=now,
+        updated_at=now,
+    )
+    interaction = InteractionRequest(
+        interaction_id="interaction-slot-values",
+        run_id="run-slot-values",
+        node_name="ask_slot_clarification",
+        response_schema={},
+        created_at=now,
+    )
+
+    patch = chatbi_runtime.ChatBIV1InteractionResponsePatcher()(
+        run,
+        interaction,
+        {"dimension_usage": "filter_value_required", "dimension_values": {"店铺": "店铺为1"}},
+    )
+
+    intent = patch.set_values["variables.intent"]
+    assert intent["ambiguous_slots"] == []
+    assert intent["dimension_slots"] == [
+        {"name": "店铺", "role": "filter", "value": "1", "value_status": "provided"}
+    ]
+
+
+def test_slot_clarification_patcher_accepts_multiple_dimension_values():
+    now = datetime.now()
+    run = WorkflowRun(
+        run_id="run-multi-slot-values",
+        definition_name="chatbi",
+        definition_version="v1",
+        definition_digest="digest",
+        context=WorkflowContext(
+            request={"question": "今天店铺商品的客户数是多少", "dataset_id": 3, "tenant_id": 1, "user_id": 1},
+            variables={
+                "intent": {
+                    "intent_type": "metric_query",
+                    "ambiguous_slots": ["dimension"],
+                    "dimension_mentions": ["店铺", "商品"],
+                    "dimension_slots": [
+                        {"name": "店铺", "role": "filter", "value": None, "value_status": "not_provided"},
+                        {"name": "商品", "role": "filter", "value": None, "value_status": "not_provided"},
+                    ],
+                },
+            },
+        ),
+        created_at=now,
+        updated_at=now,
+    )
+    interaction = InteractionRequest(
+        interaction_id="interaction-multi-slot-values",
+        run_id="run-multi-slot-values",
+        node_name="ask_slot_clarification",
+        response_schema={},
+        created_at=now,
+    )
+
+    patch = chatbi_runtime.ChatBIV1InteractionResponsePatcher()(
+        run,
+        interaction,
+        {
+            "dimension_usage": "filter_value_required",
+            "dimension_values": {"店铺": "1", "商品": "A100"},
+        },
+    )
+
+    intent = patch.set_values["variables.intent"]
+    assert intent["ambiguous_slots"] == []
+    assert intent["dimension_slots"] == [
+        {"name": "店铺", "role": "filter", "value": "1", "value_status": "provided"},
+        {"name": "商品", "role": "filter", "value": "A100", "value_status": "provided"},
+    ]
 
 
 def test_chatbi_v1_graph_passes_user_question_to_real_headless_knowledge_node():

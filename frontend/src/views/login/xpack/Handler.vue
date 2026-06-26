@@ -195,10 +195,8 @@ const init = (cb?: () => void) => {
       }
     })
     .catch(() => {
-      if (!wsCache.get('oidc-error')) {
-        wsCache.set('oidc-error', 1)
-        window.location.reload()
-      }
+      // 本地或开源环境可能没有 xpack 第三方登录状态接口，失败时回落到默认账号登录。
+      updateLoading(false, 100)
     })
 }
 

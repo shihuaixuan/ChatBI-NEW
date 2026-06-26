@@ -44,6 +44,10 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
             "ask_intent_clarification",
             "interaction.ask_intent_clarification",
         ),
+        "ask_slot_clarification": _interaction_node(
+            "ask_slot_clarification",
+            "interaction.ask_slot_clarification",
+        ),
         "retrieve_knowledge": _capability_node("retrieve_knowledge", "knowledge.retrieve"),
         "ask_metric_selection": _interaction_node("ask_metric_selection", "interaction.ask_metric_selection"),
         "generate_sql": _capability_node("generate_sql", "sql.generate"),
@@ -108,6 +112,12 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
                 condition="intent.ambiguous",
                 priority=0,
             ),
+            EdgeDefinition(
+                source="recognize_intent",
+                target="ask_slot_clarification",
+                condition="slot.clarification_needed",
+                priority=1,
+            ),
             EdgeDefinition(source="recognize_intent", target="retrieve_knowledge"),
             EdgeDefinition(
                 source="ask_intent_clarification",
@@ -122,6 +132,19 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
                 priority=1,
             ),
             EdgeDefinition(source="ask_intent_clarification", target="recognize_intent"),
+            EdgeDefinition(
+                source="ask_slot_clarification",
+                target="retrieve_knowledge",
+                condition="interaction.answered",
+                priority=0,
+            ),
+            EdgeDefinition(
+                source="ask_slot_clarification",
+                target="generate_question_answer",
+                condition="interaction.skipped",
+                priority=1,
+            ),
+            EdgeDefinition(source="ask_slot_clarification", target="retrieve_knowledge"),
             EdgeDefinition(
                 source="retrieve_knowledge",
                 target="generate_question_answer",
@@ -222,6 +245,10 @@ def register_chatbi_v1_handlers(registry: HandlerRegistry, gateway: ChatBICapabi
     registry.register(
         "interaction.ask_intent_clarification",
         ChatBIV1InteractionNode(gateway, "interaction.ask_intent_clarification", "variables.intent_response"),
+    )
+    registry.register(
+        "interaction.ask_slot_clarification",
+        ChatBIV1InteractionNode(gateway, "interaction.ask_slot_clarification", "variables.slot_response"),
     )
     registry.register(
         "interaction.ask_metric_selection",

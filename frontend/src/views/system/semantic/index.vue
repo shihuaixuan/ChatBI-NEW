@@ -27,7 +27,7 @@ const aggregateOptions = [
   { label: 'avg', value: 'AVG' },
   { label: 'count', value: 'COUNT' },
   { label: 'count_distinct', value: 'COUNT_DISTINCT' },
-  { label: 'none', value: '' },
+  { label: 'None', value: 'NONE' },
 ]
 
 const dimensionTypeOptions = [
@@ -1634,7 +1634,9 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
               </el-col>
               <el-col :span="8">
                 <el-form-item label="默认聚合">
-                  <el-input v-model="simpleForm.default_agg" :disabled="simpleForm.metric_define_type !== 'MEASURE'" />
+                  <el-select v-model="simpleForm.default_agg" :disabled="simpleForm.metric_define_type !== 'MEASURE'" placeholder="选择">
+                    <el-option v-for="item in aggregateOptions" :key="item.value" :label="item.label" :value="item.value" />
+                  </el-select>
                 </el-form-item>
               </el-col>
               <el-col :span="8">

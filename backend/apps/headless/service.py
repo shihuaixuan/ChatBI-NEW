@@ -249,15 +249,50 @@ class HeadlessSchemaBuilder:
         if dataset is None or dataset.oid != oid or dataset.status != 1:
             raise ValueError("HEADLESS_DATASET_NOT_FOUND")
         domain = self.session.get(HeadlessDomain, dataset.domain_id)
-        models = _all(
+        dataset_model_configs = _all(
             self.session.exec(
-                select(HeadlessModel).where(
-                    HeadlessModel.oid == oid,
-                    HeadlessModel.domain_id == dataset.domain_id,
-                    HeadlessModel.status == 1,
+                select(HeadlessDataSetModelConfig).where(
+                    HeadlessDataSetModelConfig.oid == oid,
+                    HeadlessDataSetModelConfig.dataset_id == dataset_id,
+                    HeadlessDataSetModelConfig.status == 1,
                 )
             )
         )
+        dataset_assets = _all(
+            self.session.exec(
+                select(HeadlessDataSetAsset).where(
+                    HeadlessDataSetAsset.oid == oid,
+                    HeadlessDataSetAsset.dataset_id == dataset_id,
+                    HeadlessDataSetAsset.status == 1,
+                )
+            )
+        )
+        runtime_configs = _runtime_dataset_configs(dataset, dataset_model_configs)
+        configured_model_ids = [config["id"] for config in runtime_configs if config.get("id") is not None]
+        if configured_model_ids:
+            models = _all(
+                self.session.exec(
+                    select(HeadlessModel).where(
+                        HeadlessModel.oid == oid,
+                        HeadlessModel.id.in_(configured_model_ids),
+                        HeadlessModel.status == 1,
+                    )
+                )
+            )
+            order_by_model_id = {model_id: index for index, model_id in enumerate(configured_model_ids)}
+            models.sort(key=lambda model: order_by_model_id.get(model.id, len(order_by_model_id)))
+        else:
+            models = _all(
+                self.session.exec(
+                    select(HeadlessModel).where(
+                        HeadlessModel.oid == oid,
+                        HeadlessModel.domain_id == dataset.domain_id,
+                        HeadlessModel.status == 1,
+                    )
+                )
+            )
+        model_domain_ids = _selected_model_domain_ids(models)
+        subject_domains = self._load_subject_domains(oid, model_domain_ids, domain)
         datasource_ids = {model.datasource_id for model in models if model.datasource_id is not None}
         datasources = (
             _all(
@@ -342,7 +377,7 @@ class HeadlessSchemaBuilder:
             self.session.exec(
                 select(HeadlessTerm).where(
                     HeadlessTerm.oid == oid,
-                    HeadlessTerm.domain_id == dataset.domain_id,
+                    HeadlessTerm.domain_id.in_(model_domain_ids or [dataset.domain_id]),
                     HeadlessTerm.status == 1,
                 )
             )
@@ -352,31 +387,13 @@ class HeadlessSchemaBuilder:
                 self.session.exec(
                     select(HeadlessModelRelation).where(
                         HeadlessModelRelation.oid == oid,
-                        HeadlessModelRelation.domain_id == dataset.domain_id,
+                        HeadlessModelRelation.domain_id.in_(model_domain_ids or [dataset.domain_id]),
                         HeadlessModelRelation.status == 1,
                     )
                 )
             )
             if model_ids
             else []
-        )
-        dataset_model_configs = _all(
-            self.session.exec(
-                select(HeadlessDataSetModelConfig).where(
-                    HeadlessDataSetModelConfig.oid == oid,
-                    HeadlessDataSetModelConfig.dataset_id == dataset_id,
-                    HeadlessDataSetModelConfig.status == 1,
-                )
-            )
-        )
-        dataset_assets = _all(
-            self.session.exec(
-                select(HeadlessDataSetAsset).where(
-                    HeadlessDataSetAsset.oid == oid,
-                    HeadlessDataSetAsset.dataset_id == dataset_id,
-                    HeadlessDataSetAsset.status == 1,
-                )
-            )
         )
         return self.build_from_assets(
             dataset,
@@ -392,7 +409,27 @@ class HeadlessSchemaBuilder:
             dimension_values=dimension_values,
             dataset_model_configs=dataset_model_configs,
             dataset_assets=dataset_assets,
+            subject_domains=subject_domains,
         )
+
+    def _load_subject_domains(
+        self,
+        oid: int,
+        domain_ids: list[int],
+        fallback_domain: HeadlessDomain | None,
+    ) -> list[HeadlessDomain]:
+        domains: list[HeadlessDomain] = []
+        seen: set[int] = set()
+        for domain_id in domain_ids:
+            if domain_id in seen:
+                continue
+            seen.add(domain_id)
+            domain = fallback_domain if fallback_domain is not None and fallback_domain.id == domain_id else None
+            if domain is None:
+                domain = self.session.get(HeadlessDomain, domain_id)
+            if domain is not None and domain.oid == oid and domain.status == 1:
+                domains.append(domain)
+        return domains
 
     def build_from_assets(
         self,
@@ -409,6 +446,7 @@ class HeadlessSchemaBuilder:
         dimension_values: list[HeadlessDimensionValue] | None = None,
         dataset_model_configs: list[HeadlessDataSetModelConfig] | None = None,
         dataset_assets: list[HeadlessDataSetAsset] | None = None,
+        subject_domains: list[HeadlessDomain] | None = None,
     ) -> DataSetSchema:
         configs = _runtime_dataset_configs(dataset, dataset_model_configs)
         selected_model_ids = {config["id"] for config in configs}
@@ -456,6 +494,7 @@ class HeadlessSchemaBuilder:
             database_type=database_type,
             database_version=database_version,
             data_set=data_set_element,
+            subject_domains=_runtime_subject_domains(selected_models, subject_domains or ([domain] if domain else [])),
             models=[self._model_runtime(model, fields_by_model.get(model.id, []), measures_by_model.get(model.id, [])) for model in selected_models],
             model_relations=exposed_relations,
             metrics=[self._metric_element(dataset, metric) for metric in exposed_metrics],
@@ -663,6 +702,43 @@ def _runtime_dataset_configs(
             for item in sorted(active_configs, key=lambda config: config.sort_order)
         ]
     return [{"id": item.id, "includes_all": item.includes_all} for item in _dataset_configs(dataset)]
+
+
+def _selected_model_domain_ids(models: list[HeadlessModel]) -> list[int]:
+    domain_ids: list[int] = []
+    for model in models:
+        if model.domain_id not in domain_ids:
+            domain_ids.append(model.domain_id)
+    return domain_ids
+
+
+def _runtime_subject_domains(
+    models: list[HeadlessModel],
+    domains: list[HeadlessDomain | None],
+) -> list[dict[str, Any]]:
+    domains_by_id = {domain.id: domain for domain in domains if domain is not None and domain.id is not None}
+    model_ids_by_domain: dict[int, list[int]] = {}
+    for model in models:
+        if model.id is None:
+            continue
+        model_ids_by_domain.setdefault(model.domain_id, []).append(model.id)
+
+    result: list[dict[str, Any]] = []
+    for domain_id in _selected_model_domain_ids(models):
+        model_ids = model_ids_by_domain.get(domain_id) or []
+        if not model_ids:
+            continue
+        domain = domains_by_id.get(domain_id)
+        result.append(
+            {
+                "domain_id": domain_id,
+                "name": domain.name if domain else str(domain_id),
+                "biz_name": domain.biz_name if domain else str(domain_id),
+                "description": domain.description if domain else None,
+                "model_ids": model_ids,
+            }
+        )
+    return result
 
 
 def _runtime_dataset_asset_ids(

@@ -1,3 +1,7 @@
+import asyncio
+import json
+import threading
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -9,10 +13,16 @@ from apps.chatbi_workflow.runtime import (
     build_placeholder_chatbi_runtime,
     build_real_chatbi_v1_runtime,
 )
+from apps.headless.models import (
+    HeadlessDataSet,
+    HeadlessDataSetModelConfig,
+    HeadlessModel,
+)
 from apps.workflow_engine.api.schemas import (
     ControlResponse,
     GraphEventListResponse,
     GraphEventResponse,
+    GraphPendingInteractionResponse,
     GraphQueryRequest,
     GraphRunResponse,
     GraphTraceNodeResponse,
@@ -29,6 +39,7 @@ from apps.workflow_engine.infrastructure.persistence.models import (
     WorkflowEventModel,
     WorkflowRunModel,
 )
+from common.core.db import engine
 
 MINIMAL_TRACE_OUTPUT_PATHS = {
     "understand_question": ("variables", "understanding"),
@@ -50,6 +61,7 @@ V1_TRACE_OUTPUT_PATHS = {
     "draw_image_profile": ("variables", "image_profile"),
     "recognize_intent": ("variables", "intent"),
     "ask_intent_clarification": ("control", "pending_interaction_id"),
+    "ask_slot_clarification": ("control", "pending_interaction_id"),
     "retrieve_knowledge": ("variables", "knowledge"),
     "ask_metric_selection": ("control", "pending_interaction_id"),
     "generate_sql": ("variables", "sql"),
@@ -72,19 +84,26 @@ class GraphApiService:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create_query(self, current_user: Any, request: GraphQueryRequest) -> GraphRunResponse:
+    def create_query(
+        self,
+        current_user: Any,
+        request: GraphQueryRequest,
+        commit_events: bool = False,
+    ) -> GraphRunResponse:
         run_id = request.run_id or f"graph-{uuid4().hex}"
+        dataset_id = self._resolve_dataset_id(current_user.oid, request.dataset_id)
         request_context = {
             "tenant_id": current_user.oid,
             "user_id": current_user.id,
             "question": request.question,
-            "dataset_id": request.dataset_id,
+            "dataset_id": dataset_id,
+            "source_dataset_id": request.dataset_id,
             "request_id": request.request_id,
         }
         if request.definition_version == "minimal-v1":
             # minimal-v1 仍使用 datasource_id 字段；v1 主链路已切到 dataset_id。
             request_context["datasource_id"] = request.dataset_id
-        runtime = self._build_runtime(request.definition_version)
+        runtime = self._build_runtime(request.definition_version, commit_events=commit_events)
         created = runtime.create_run(
             run_id=run_id,
             definition_name="chatbi",
@@ -95,13 +114,43 @@ class GraphApiService:
         self._session.commit()
         return self._to_run_response(self._load_owned_run(current_user, created.run_id))
 
-    def _build_runtime(self, definition_version: str):
+    def _resolve_dataset_id(self, oid: int, dataset_or_datasource_id: int) -> int:
+        """兼容旧前端传入 datasource_id，优先返回真实 Headless dataset_id。"""
+
+        dataset = self._session.get(HeadlessDataSet, dataset_or_datasource_id)
+        if dataset is not None and dataset.oid == oid and dataset.status == 1:
+            return dataset_or_datasource_id
+        statement = (
+            select(HeadlessDataSet.id)
+            .join(
+                HeadlessDataSetModelConfig,
+                HeadlessDataSetModelConfig.dataset_id == HeadlessDataSet.id,
+            )
+            .join(HeadlessModel, HeadlessModel.id == HeadlessDataSetModelConfig.model_id)
+            .where(
+                HeadlessDataSet.oid == oid,
+                HeadlessDataSet.status == 1,
+                HeadlessDataSetModelConfig.status == 1,
+                HeadlessModel.status == 1,
+                HeadlessModel.datasource_id == dataset_or_datasource_id,
+            )
+            .order_by(
+                col(HeadlessDataSetModelConfig.is_default).desc(),
+                col(HeadlessDataSetModelConfig.sort_order).asc(),
+                col(HeadlessDataSet.id).asc(),
+            )
+            .limit(1)
+        )
+        resolved = self._session.exec(statement).one_or_none()
+        return int(resolved) if resolved is not None else dataset_or_datasource_id
+
+    def _build_runtime(self, definition_version: str, commit_events: bool = False):
         """按请求版本选择当前可用的 ChatBI 图运行时。"""
 
         if definition_version == "minimal-v1":
-            return build_placeholder_chatbi_runtime(self._session)
+            return build_placeholder_chatbi_runtime(self._session, commit_events=commit_events)
         if definition_version == "v1":
-            return build_real_chatbi_v1_runtime(self._session)
+            return build_real_chatbi_v1_runtime(self._session, commit_events=commit_events)
         raise HTTPException(status_code=400, detail="UNSUPPORTED_GRAPH_DEFINITION_VERSION")
 
     def get_run(self, current_user: Any, run_id: str) -> GraphRunResponse:
@@ -111,6 +160,79 @@ class GraphApiService:
         self._load_owned_run(current_user, run_id)
         events = EventStream(self._session).list(run_id=run_id, after_sequence=after_sequence)
         return GraphEventListResponse(events=[self._to_event_response(event) for event in events])
+
+    async def stream_events(self, current_user: Any, run_id: str, after_sequence: int = 0) -> AsyncIterator[str]:
+        """以 SSE 协议持续推送公开事件，前端用 sequence 做断点续传。"""
+
+        self._load_owned_run(current_user, run_id)
+        async for frame in self._stream_run_events(current_user, run_id, after_sequence=after_sequence):
+            yield frame
+
+    async def stream_query(self, current_user: Any, request: GraphQueryRequest) -> AsyncIterator[str]:
+        """创建 Run 并在同一个 SSE 响应中推送执行事件。"""
+
+        run_id = request.run_id or f"graph-{uuid4().hex}"
+        stream_request = request.model_copy(update={"run_id": run_id})
+        errors: list[Exception] = []
+
+        def execute_query() -> None:
+            with Session(engine) as session:
+                try:
+                    GraphApiService(session).create_query(
+                        current_user,
+                        stream_request,
+                        commit_events=True,
+                    )
+                except Exception as exc:  # pragma: no cover - 失败路径通过 SSE 错误帧兜底
+                    session.rollback()
+                    errors.append(exc)
+
+        worker = threading.Thread(target=execute_query, daemon=True)
+        worker.start()
+        async for frame in self._stream_run_events(
+            current_user,
+            run_id,
+            after_sequence=0,
+            worker=worker,
+            errors=errors,
+        ):
+            yield frame
+
+    async def _stream_run_events(
+        self,
+        current_user: Any,
+        run_id: str,
+        after_sequence: int = 0,
+        worker: threading.Thread | None = None,
+        errors: list[Exception] | None = None,
+    ) -> AsyncIterator[str]:
+        last_sequence = after_sequence
+        while True:
+            self._session.expire_all()
+            events = EventStream(self._session).list(run_id=run_id, after_sequence=last_sequence)
+            for event in events:
+                last_sequence = event.sequence
+                yield self._to_sse_frame(self._to_event_response(event))
+
+            run = self._session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == run_id)).one_or_none()
+            if run is not None and (run.oid != current_user.oid or run.user_id != current_user.id):
+                raise HTTPException(status_code=404, detail="GRAPH_RUN_NOT_FOUND")
+            if run is not None:
+                worker_running = worker is not None and worker.is_alive()
+                if run.status in {
+                    RunStatus.SUCCEEDED.value,
+                    RunStatus.FAILED.value,
+                    RunStatus.CANCELLED.value,
+                }:
+                    return
+                if run.status == RunStatus.WAITING_INPUT.value and not worker_running:
+                    return
+            if worker is not None and not worker.is_alive() and run is None:
+                if errors:
+                    yield self._to_sse_error_frame(errors[-1])
+                return
+
+            await asyncio.sleep(0.5)
 
     def get_trace(self, current_user: Any, run_id: str) -> GraphTraceResponse:
         run = self._load_owned_run(current_user, run_id)
@@ -138,12 +260,13 @@ class GraphApiService:
         run_id: str,
         interaction_id: str,
         request: InteractionResponseRequest,
+        commit_events: bool = False,
     ) -> ControlResponse:
         run = self._load_owned_run(current_user, run_id)
         if run.status != RunStatus.WAITING_INPUT.value:
             raise HTTPException(status_code=409, detail="RUN_NOT_WAITING_INPUT")
         if run.definition_version == "v1" and run.status == RunStatus.WAITING_INPUT.value:
-            runtime = self._build_runtime(run.definition_version)
+            runtime = self._build_runtime(run.definition_version, commit_events=commit_events)
             resumed = runtime.resume(
                 run_id=run_id,
                 interaction_id=interaction_id,
@@ -169,6 +292,43 @@ class GraphApiService:
         self._append_control_event(run_id, "interaction.answered", {"status": "answered"})
         self._session.commit()
         return ControlResponse(run_id=run_id, status="answered")
+
+    async def stream_interaction_response(
+        self,
+        current_user: Any,
+        run_id: str,
+        interaction_id: str,
+        request: InteractionResponseRequest,
+        after_sequence: int = 0,
+    ) -> AsyncIterator[str]:
+        """提交用户补充信息，并继续以 SSE 推送后续执行事件。"""
+
+        errors: list[Exception] = []
+
+        def answer_and_resume() -> None:
+            with Session(engine) as session:
+                try:
+                    GraphApiService(session).answer_interaction(
+                        current_user,
+                        run_id,
+                        interaction_id,
+                        request,
+                        commit_events=True,
+                    )
+                except Exception as exc:  # pragma: no cover - 失败路径通过 SSE 错误帧兜底
+                    session.rollback()
+                    errors.append(exc)
+
+        worker = threading.Thread(target=answer_and_resume, daemon=True)
+        worker.start()
+        async for frame in self._stream_run_events(
+            current_user,
+            run_id,
+            after_sequence=after_sequence,
+            worker=worker,
+            errors=errors,
+        ):
+            yield frame
 
     def cancel(self, current_user: Any, run_id: str) -> ControlResponse:
         run = self._load_owned_run(current_user, run_id)
@@ -258,6 +418,7 @@ class GraphApiService:
         context = run.context or {}
         request = run.request or context.get("request", {})
         variables = context.get("variables", {})
+        pending_interaction = self._pending_interaction_response(run.run_id)
         return GraphRunResponse(
             run_id=run.run_id,
             status=run.status,
@@ -267,6 +428,9 @@ class GraphApiService:
                 "question": request.get("question"),
                 "dataset_id": request.get("dataset_id"),
                 "variables": variables,
+                "pending_interaction": pending_interaction.model_dump(mode="json")
+                if pending_interaction is not None
+                else None,
             },
         )
 
@@ -302,8 +466,50 @@ class GraphApiService:
         # 未执行节点不读取共享变量路径，避免把其他节点后写入的结果误归因到该节点。
         if self._trace_node_status(events, node_name) == "not_run":
             return None
+        if node_name.startswith("ask_"):
+            pending_interaction = self._pending_interaction_response(
+                self._run_id_from_events(events),
+                node_name=node_name,
+            )
+            if pending_interaction is not None:
+                return pending_interaction.model_dump(mode="json")
         output = self._read_context_path(context, output_path)
         return self._sanitize_trace_output(node_name, output)
+
+    @staticmethod
+    def _run_id_from_events(events: list[WorkflowEvent]) -> str | None:
+        for event in events:
+            return event.run_id
+        return None
+
+    def _pending_interaction_response(
+        self,
+        run_id: str | None,
+        node_name: str | None = None,
+    ) -> GraphPendingInteractionResponse | None:
+        """读取当前 Run 的待处理交互，用于前端直接渲染用户输入控件。"""
+
+        if not run_id:
+            return None
+        statement = select(InteractionRequestModel).where(
+            InteractionRequestModel.run_id == run_id,
+            InteractionRequestModel.status == "pending",
+        )
+        if node_name is not None:
+            statement = statement.where(InteractionRequestModel.node_name == node_name)
+        interaction = self._session.exec(statement.order_by(col(InteractionRequestModel.created_at).desc())).first()
+        if interaction is None:
+            return None
+        return GraphPendingInteractionResponse(
+            interaction_id=interaction.interaction_id,
+            run_id=interaction.run_id,
+            node_name=interaction.node_name,
+            status=interaction.status,
+            prompt=interaction.prompt,
+            options=interaction.options or [],
+            response_schema=interaction.response_schema or {},
+            allowed_update_paths=interaction.allowed_update_paths or [],
+        )
 
     def _sanitize_trace_output(self, node_name: str, output: Any) -> Any:
         """对 trace 公开输出做最小脱敏，并预留 artifact 引用协议。"""
@@ -343,3 +549,15 @@ class GraphApiService:
             public_payload=event.public_payload,
             created_at=event.created_at.isoformat(),
         )
+
+    @staticmethod
+    def _to_sse_frame(event: GraphEventResponse) -> str:
+        return f"id: {event.sequence}\nevent: {event.event_type}\ndata: {event.model_dump_json()}\n\n"
+
+    @staticmethod
+    def _to_sse_error_frame(error: Exception) -> str:
+        payload = {
+            "event_type": "run.failed",
+            "public_payload": {"message": str(error).replace("\n", " ")},
+        }
+        return f"event: run.failed\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"

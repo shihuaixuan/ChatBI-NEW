@@ -447,6 +447,7 @@ import { Chat, chatApi, ChatInfo, type ChatMessage, ChatRecord } from '@/api/cha
 import ChatRow from './ChatRow.vue'
 import ChartAnswer from './answer/ChartAnswer.vue'
 import AgenticAnswer from './answer/AgenticAnswer.vue'
+import GraphWorkflowAnswer from './answer/GraphWorkflowAnswer.vue'
 import AnalysisAnswer from './answer/AnalysisAnswer.vue'
 import PredictAnswer from './answer/PredictAnswer.vue'
 import UserChat from './chat-block/UserChat.vue'
@@ -510,10 +511,16 @@ const customName = computed(() => {
 const { t } = useI18n()
 
 const chatConfig = useChatConfigStore()
+const useGraphChatFlow = computed(
+  () => import.meta.env.VITE_GRAPH_CHATBI_ENABLED === 'true'
+)
 const useAgenticChatFlow = computed(
   () => import.meta.env.VITE_AGENTIC_CHATBI_ENABLED === 'true'
 )
-const answerComponent = computed(() => (useAgenticChatFlow.value ? AgenticAnswer : ChartAnswer))
+const answerComponent = computed(() => {
+  if (useGraphChatFlow.value) return GraphWorkflowAnswer
+  return useAgenticChatFlow.value ? AgenticAnswer : ChartAnswer
+})
 
 const isPhone = computed(() => {
   return isMobile()
@@ -928,6 +935,7 @@ async function clickAnalysis(id?: number) {
 }
 
 function getRecordUsage(recordId: any) {
+  if (!recordId) return
   console.debug('getRecordUsage id: ', recordId)
   nextTick(() => {
     chatApi

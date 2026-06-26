@@ -52,6 +52,7 @@ class DataSetSchema(HeadlessBaseDTO):
     database_type: str | None = None
     database_version: str | None = None
     data_set: SchemaElement
+    subject_domains: list[dict[str, Any]] = Field(default_factory=list)
     models: list[dict[str, Any]] = Field(default_factory=list)
     model_relations: list[JoinRelation] = Field(default_factory=list)
     metrics: list[SchemaElement] = Field(default_factory=list)

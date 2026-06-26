@@ -7,6 +7,8 @@ import pytest
 from apps.chat.models.chat_model import Chat, ChatRecord
 from apps.datasource.models.datasource import CoreDatasource
 from apps.headless.models import HeadlessDataSet, HeadlessModel
+from apps.headless.schemas import DataSetSchema, SchemaElement
+from apps.headless.sql_compiler import SemanticSQLCompiler, SemanticSQLCompileRequest
 
 
 class FakeSession:
@@ -167,3 +169,111 @@ def test_save_question_copies_dataset_and_datasource_from_chat(monkeypatch):
     assert record.datasource == 40
     assert record.engine_type == "MySQL"
     assert session.committed is True
+
+
+def test_sql_compiler_uses_none_aggregation_for_measure_metric():
+    schema = DataSetSchema(
+        data_set=SchemaElement(data_set_id=20, data_set_name="档口经营分析", id=20, name="档口经营分析", biz_name="stall_bi", type="DATASET"),
+        models=[
+            {
+                "id": 10,
+                "name": "档口流量模型",
+                "biz_name": "stall_traffic",
+                "tableQuery": "stall_traffic_1d",
+                "dimensions": [{"name": "档口", "bizName": "stall_id", "expr": "stall_id", "type": "primary_key"}],
+                "measures": [{"name": "访问人数", "bizName": "visit_uv", "expr": "visit_uv", "agg": "SUM"}],
+            }
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=100,
+                name="访问人数",
+                biz_name="visit_uv",
+                type="METRIC",
+                default_agg="NONE",
+                fields=["visit_uv"],
+                type_params={
+                    "metricDefineType": "MEASURE",
+                    "metricDefineByMeasureParams": {
+                        "measures": [{"name": "访问人数", "bizName": "visit_uv", "expr": "visit_uv", "agg": "SUM"}],
+                        "expr": "visit_uv",
+                    },
+                },
+            )
+        ],
+        dimensions=[
+            SchemaElement(data_set_id=20, data_set_name="档口经营分析", model=10, id=200, name="档口", biz_name="stall_id", type="DIMENSION"),
+        ],
+    )
+
+    result = SemanticSQLCompiler().compile(
+        SemanticSQLCompileRequest(
+            schema=schema,
+            question="各档口访问人数",
+            metric_ids=[100],
+            dimension_ids=[200],
+        )
+    )
+
+    assert result.sql == (
+        "select stall_traffic.stall_id as stall_id, stall_traffic.visit_uv as visit_uv "
+        "from stall_traffic_1d stall_traffic"
+    )
+
+
+def test_sql_compiler_renders_today_filter_as_current_date():
+    schema = DataSetSchema(
+        data_set=SchemaElement(data_set_id=20, data_set_name="档口经营分析", id=20, name="档口经营分析", biz_name="stall_bi", type="DATASET"),
+        models=[
+            {
+                "id": 10,
+                "name": "档口流量模型",
+                "biz_name": "stall_traffic",
+                "tableQuery": "stall_traffic_1d",
+                "dimensions": [{"name": "统计日期", "bizName": "stat_date", "expr": "stat_date"}],
+                "measures": [{"name": "访问人数", "bizName": "visit_uv", "expr": "visit_uv", "agg": "SUM"}],
+            }
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=100,
+                name="访问人数",
+                biz_name="visit_uv",
+                type="METRIC",
+                default_agg="SUM",
+                fields=["visit_uv"],
+            )
+        ],
+        dimensions=[
+            SchemaElement(data_set_id=20, data_set_name="档口经营分析", model=10, id=201, name="统计日期", biz_name="stat_date", type="DIMENSION"),
+        ],
+    )
+
+    result = SemanticSQLCompiler().compile(
+        SemanticSQLCompileRequest(
+            schema=schema,
+            slots={
+                "metrics": [{"asset_type": "METRIC", "asset_id": 100}],
+                "filters": [
+                    {
+                        "asset_type": "DIMENSION",
+                        "asset_id": 201,
+                        "operator": "=",
+                        "value": {"kind": "relative_date", "value": "today"},
+                    }
+                ],
+            },
+        )
+    )
+
+    assert result.sql == (
+        "select sum(stall_traffic.visit_uv) as visit_uv "
+        "from stall_traffic_1d stall_traffic "
+        "where stall_traffic.stat_date = CURRENT_DATE"
+    )

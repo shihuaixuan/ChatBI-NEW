@@ -74,10 +74,11 @@ class SemanticSQLCompiler:
             f"{self._qualified_dimension_expr(dimension, model_by_name, model_name_by_id)} as {dimension.biz_name}"
             for dimension in dimensions
         ]
-        select_parts.extend(
-            f"{self._metric_expr(metric, model_by_name, model_name_by_id)} as {metric.biz_name}"
+        metric_selects = [
+            (metric, *self._metric_select_expr(metric, model_by_name, model_name_by_id))
             for metric in metrics
-        )
+        ]
+        select_parts.extend(f"{metric_expr} as {metric.biz_name}" for metric, metric_expr, _ in metric_selects)
         where_parts = [
             *self._model_filters(ordered_model_names, model_by_name),
             *self._slot_filter_conditions(filters, model_by_name, model_name_by_id),
@@ -87,7 +88,7 @@ class SemanticSQLCompiler:
         sql = f"select {', '.join(select_parts)} from {from_sql}"
         if where_parts:
             sql += " where " + " and ".join(where_parts)
-        if metrics and group_parts:
+        if any(is_aggregate for _, _, is_aggregate in metric_selects) and group_parts:
             sql += " group by " + ", ".join(group_parts)
         if request.limit:
             sql += f" limit {request.limit}"
@@ -106,7 +107,13 @@ class SemanticSQLCompiler:
         return self._match_elements(request.question, request.schema.metrics)
 
     def _select_dimensions(self, request: SemanticSQLCompileRequest) -> list[SchemaElement]:
-        dimension_ids = set(request.dimension_ids or self._slot_asset_ids(request.slots, "dimensions", "DIMENSION"))
+        if request.dimension_ids:
+            dimension_ids = set(request.dimension_ids)
+        elif "dimensions" in request.slots or "dimension" in request.slots:
+            dimension_ids = set(self._slot_asset_ids(request.slots, "dimensions", "DIMENSION"))
+            return [dimension for dimension in request.schema.dimensions if dimension.id in dimension_ids]
+        else:
+            dimension_ids = set()
         if dimension_ids:
             return [dimension for dimension in request.schema.dimensions if dimension.id in dimension_ids]
         return self._match_elements(request.question, request.schema.dimensions)
@@ -324,14 +331,23 @@ class SemanticSQLCompiler:
         model_by_name: dict[str, dict[str, Any]],
         model_name_by_id: dict[int | None, str],
     ) -> str:
+        return self._metric_select_expr(metric, model_by_name, model_name_by_id)[0]
+
+    def _metric_select_expr(
+        self,
+        metric: SchemaElement,
+        model_by_name: dict[str, dict[str, Any]],
+        model_name_by_id: dict[int | None, str],
+    ) -> tuple[str, bool]:
         model_name = model_name_by_id.get(metric.model)
         if not model_name:
             raise ValueError("SEMANTIC_SQL_METRIC_MODEL_REQUIRED")
         expr, agg = self._metric_measure_expr(metric, model_by_name[model_name])
         qualified = self._qualify_expr(expr, model_name)
         if self._contains_aggregate(expr):
-            return qualified
-        return self._aggregate_expr(agg or metric.default_agg or "SUM", qualified)
+            return qualified, True
+        resolved_agg = self._resolve_metric_agg(metric, agg)
+        return self._aggregate_expr(resolved_agg, qualified), self._is_aggregate_agg(resolved_agg)
 
     @staticmethod
     def _metric_measure_expr(metric: SchemaElement, model: dict[str, Any]) -> tuple[str, str | None]:
@@ -349,6 +365,17 @@ class SemanticSQLCompiler:
     @staticmethod
     def _contains_aggregate(expr: str) -> bool:
         return re.search(r"\b(sum|count|avg|min|max)\s*\(", expr, flags=re.IGNORECASE) is not None
+
+    @staticmethod
+    def _resolve_metric_agg(metric: SchemaElement, measure_agg: str | None) -> str:
+        metric_agg = str(metric.default_agg or "").strip()
+        if metric_agg.upper() == "NONE":
+            return "NONE"
+        return measure_agg or metric_agg or "SUM"
+
+    @staticmethod
+    def _is_aggregate_agg(agg: str) -> bool:
+        return str(agg or "").upper() in {"SUM", "COUNT", "AVG", "MIN", "MAX", "COUNT_DISTINCT"}
 
     @staticmethod
     def _aggregate_expr(agg: str, expr: str) -> str:
@@ -387,8 +414,56 @@ class SemanticSQLCompiler:
             if not model_name:
                 raise ValueError("SEMANTIC_SQL_FILTER_MODEL_REQUIRED")
             expr = self._dimension_expr(model_by_name[model_name], dimension.biz_name)
-            conditions.append(f"{self._qualify_expr(expr, model_name)} {self._safe_operator(operator)} {self._literal(value)}")
+            qualified_expr = self._qualify_expr(expr, model_name)
+            time_condition = self._time_filter_condition(qualified_expr, value)
+            if time_condition is not None:
+                conditions.append(time_condition)
+                continue
+            conditions.append(f"{qualified_expr} {self._safe_operator(operator)} {self._literal(value)}")
         return conditions
+
+    @classmethod
+    def _time_filter_condition(cls, expr: str, value: Any) -> str | None:
+        """将归一化时间 AST 渲染为 SQL 条件。"""
+
+        if not isinstance(value, dict):
+            return None
+        kind = str(value.get("kind") or "").lower()
+        if kind == "single_date":
+            literal = cls._single_date_literal(value)
+            return f"{expr} = {literal}" if literal else None
+        if kind == "relative_range" and str(value.get("unit") or "").lower() == "day":
+            try:
+                amount = int(value.get("amount") or 0)
+            except (TypeError, ValueError):
+                return None
+            if amount <= 0:
+                return None
+            start_offset = max(amount - 1, 0) if bool(value.get("include_current")) else amount
+            start = cls._date_sub_literal(start_offset)
+            end = "CURRENT_DATE" if bool(value.get("include_current")) else cls._date_sub_literal(1)
+            return f"{expr} >= {start} and {expr} <= {end}"
+        return None
+
+    @classmethod
+    def _single_date_literal(cls, value: dict[str, Any]) -> str | None:
+        if str(value.get("anchor") or "").lower() != "today":
+            return None
+        try:
+            offset_days = int(value.get("offset_days") or 0)
+        except (TypeError, ValueError):
+            return None
+        if offset_days == 0:
+            return "CURRENT_DATE"
+        if offset_days < 0:
+            return cls._date_sub_literal(abs(offset_days))
+        return f"DATE_ADD(CURRENT_DATE, INTERVAL {offset_days} DAY)"
+
+    @staticmethod
+    def _date_sub_literal(days: int) -> str:
+        if days <= 0:
+            return "CURRENT_DATE"
+        return f"DATE_SUB(CURRENT_DATE, INTERVAL {days} DAY)"
 
     @staticmethod
     def _safe_operator(operator: str) -> str:
@@ -397,11 +472,23 @@ class SemanticSQLCompiler:
 
     @staticmethod
     def _literal(value: Any) -> str:
+        if isinstance(value, dict):
+            relative_date = SemanticSQLCompiler._relative_date_literal(value)
+            if relative_date is not None:
+                return relative_date
         if isinstance(value, bool):
             return "true" if value else "false"
         if isinstance(value, int | float):
             return str(value)
         return "'" + str(value).replace("'", "''") + "'"
+
+    @staticmethod
+    def _relative_date_literal(value: dict[str, Any]) -> str | None:
+        kind = str(value.get("kind") or "").strip().lower()
+        relative_value = str(value.get("value") or "").strip().lower()
+        if kind == "relative_date" and relative_value == "today":
+            return "CURRENT_DATE"
+        return None
 
     @staticmethod
     def _qualify_filter(filter_sql: str, alias: str) -> str:

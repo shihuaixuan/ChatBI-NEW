@@ -47,6 +47,7 @@ class CheckpointManager:
         node_name: str,
         route: RouteDecision | None = None,
         completed: bool = False,
+        summary: dict | None = None,
     ) -> WorkflowRun:
         """保存一个成功节点边界，并按固定顺序追加公开事件。"""
 
@@ -65,7 +66,12 @@ class CheckpointManager:
                 created_at=saved.updated_at,
             )
         )
-        self.publish_event(saved, "node.succeeded", node_name=node_name)
+        self.publish_event(
+            saved,
+            "node.succeeded",
+            node_name=node_name,
+            public_payload={"summary": summary or {}},
+        )
         if route is not None:
             self.publish_event(
                 saved,
@@ -85,11 +91,16 @@ class CheckpointManager:
     def list(self, run_id: str) -> list[WorkflowCheckpoint]:
         return [checkpoint.model_copy(deep=True) for checkpoint in self._checkpoints.get(run_id, [])]
 
-    def pause(self, run: WorkflowRun, node_name: str) -> WorkflowRun:
+    def pause(self, run: WorkflowRun, node_name: str, summary: dict | None = None) -> WorkflowRun:
         """保存交互节点的暂停边界。"""
 
-        saved = self.save_progress(run, node_name=node_name)
-        self.publish_event(saved, "run.waiting_input", node_name=node_name)
+        saved = self.save_progress(run, node_name=node_name, summary=summary)
+        self.publish_event(
+            saved,
+            "run.waiting_input",
+            node_name=node_name,
+            public_payload={"pending_interaction": summary or {}},
+        )
         return saved
 
     def resume(self, run: WorkflowRun) -> WorkflowRun:

@@ -82,14 +82,47 @@ class RewriteNeedUserInputCondition:
 class IntentAmbiguousCondition:
     """意图识别不明确时进入意图澄清。"""
 
+    _INTENT_SLOT_NAMES = {"intent", "intent_type", "analysis_type", "analysis_mode", "query_shape"}
+
     def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
         intent = context.variables.get("intent", {})
         confidence = float(intent.get("confidence", 1.0))
-        matched = bool(intent.get("ambiguous_slots") or intent.get("conflict_slots") or confidence < 0.8)
+        ambiguous_slots = {str(slot) for slot in intent.get("ambiguous_slots") or []}
+        conflict_slots = {str(slot) for slot in intent.get("conflict_slots") or []}
+        intent_type = str(intent.get("intent_type") or "").strip()
+        matched = bool(
+            confidence < 0.8
+            or intent_type in {"", "unknown"}
+            or ambiguous_slots.intersection(self._INTENT_SLOT_NAMES)
+            or conflict_slots.intersection(self._INTENT_SLOT_NAMES)
+        )
         return ConditionDecision(
             matched=matched,
             reason_code="INTENT_AMBIGUOUS" if matched else "INTENT_CLEAR",
             reason_summary="意图存在歧义" if matched else "意图识别明确",
+        )
+
+
+class SlotClarificationNeededCondition:
+    """意图后处理判定需要补槽时进入槽位澄清。"""
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        variables = context.variables
+        slot_response = variables.get("slot_response")
+        if isinstance(slot_response, dict) and slot_response.get("skipped") is not True:
+            return ConditionDecision(
+                matched=False,
+                reason_code="SLOT_CLARIFICATION_ANSWERED",
+                reason_summary="用户已补充槽位信息",
+            )
+
+        intent = variables.get("intent", {})
+        validation = intent.get("validation") if isinstance(intent, dict) and isinstance(intent.get("validation"), dict) else {}
+        matched = bool(validation.get("clarification_required"))
+        return ConditionDecision(
+            matched=matched,
+            reason_code="SLOT_CLARIFICATION_NEEDED" if matched else "SLOT_CLARIFICATION_NOT_NEEDED",
+            reason_summary="需要用户补充槽位信息" if matched else "无需用户补充槽位信息",
         )
 
 
@@ -143,7 +176,9 @@ class InteractionAnsweredCondition:
                 variables.get("rewrite_response"),
                 variables.get("intent_response"),
                 variables.get("metric_selection"),
+                variables.get("slot_response"),
             )
+            if not (isinstance(value, dict) and value.get("skipped") is True)
         )
         return ConditionDecision(
             matched=matched,
@@ -161,6 +196,7 @@ class InteractionSkippedCondition:
             variables.get("rewrite_response"),
             variables.get("intent_response"),
             variables.get("metric_selection"),
+            variables.get("slot_response"),
         ]
         matched = any(isinstance(value, dict) and value.get("skipped") is True for value in responses)
         return ConditionDecision(
@@ -220,6 +256,7 @@ def register_chatbi_conditions(registry: ConditionRegistry) -> None:
     registry.register("question.data_or_followup", QuestionDataOrFollowupCondition())
     registry.register("rewrite.need_user_input", RewriteNeedUserInputCondition())
     registry.register("intent.ambiguous", IntentAmbiguousCondition())
+    registry.register("slot.clarification_needed", SlotClarificationNeededCondition())
     registry.register("knowledge.missed", KnowledgeMissedCondition())
     registry.register("knowledge.metric_ambiguous", KnowledgeMetricAmbiguousCondition())
     registry.register("knowledge.hit", KnowledgeHitCondition())

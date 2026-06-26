@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from apps.headless.schemas import DataSetSchema, SchemaElement
@@ -11,23 +12,90 @@ class InteractionSchemaBuilder(Protocol):
     def build_dataset_schema(self, oid: int, dataset_id: int) -> DataSetSchema: ...
 
 
+@dataclass(frozen=True)
+class ClarificationPlan:
+    """统一描述一次澄清卡片需要询问什么。"""
+
+    clarification_type: str
+    prompt: str
+    slots: list[str]
+    options: list[dict[str, Any]]
+    allowed_update_path: str
+    question_key: str
+    input_type: str = "single_select_with_text"
+
+
+class ClarificationCardBuilder:
+    """把业务澄清计划转换成前端可渲染的稳定卡片协议。"""
+
+    def build(self, plan: ClarificationPlan) -> dict[str, Any]:
+        return {
+            "prompt": plan.prompt,
+            "options": plan.options,
+            "response_schema": self._response_schema(plan),
+            "allowed_update_paths": [plan.allowed_update_path],
+        }
+
+    @staticmethod
+    def _response_schema(plan: ClarificationPlan) -> dict[str, Any]:
+        properties = {}
+        for slot in plan.slots:
+            if slot == "domain_id":
+                properties[slot] = {"type": "integer"}
+            elif slot == "dimension_values":
+                properties[slot] = {"type": "object", "additionalProperties": {"type": "string"}}
+            else:
+                properties[slot] = {"type": "string"}
+        properties["skipped"] = {"type": "boolean"}
+        dimension_value_fields = _dimension_value_fields_from_options(plan.options)
+        return {
+            "type": "object",
+            "properties": properties,
+            "x-card": {
+                "card_type": "clarification",
+                "clarification_type": plan.clarification_type,
+                "input_type": plan.input_type,
+                "question_key": plan.question_key,
+                **({"dimension_value_fields": dimension_value_fields} if dimension_value_fields else {}),
+            },
+        }
+
+
+def _dimension_value_fields_from_options(options: list[dict[str, Any]]) -> list[str]:
+    fields: list[str] = []
+    for option in options:
+        value = option.get("value") if isinstance(option, dict) else {}
+        if not isinstance(value, dict):
+            continue
+        for field in value.get("dimension_value_fields") or []:
+            text = str(field or "").strip()
+            if text and text not in fields:
+                fields.append(text)
+    return fields
+
+
 class InteractionAdapter:
     """ChatBI v1 澄清交互适配器，负责生成用户可回答的结构化交互请求。"""
 
     def __init__(self, schema_builder: InteractionSchemaBuilder | None = None) -> None:
         self._schema_builder = schema_builder
+        self._card_builder = ClarificationCardBuilder()
 
     def ask_rewrite_clarification(self, request: dict[str, Any]) -> dict[str, Any]:
         variables = request.get("variables", {})
         rewrite = variables.get("rewrite") if isinstance(variables, dict) and isinstance(variables.get("rewrite"), dict) else {}
         missing_slots = [str(slot) for slot in rewrite.get("missing_slots") or []]
         slots = missing_slots or ["metric"]
-        return {
-            "prompt": self._rewrite_prompt(slots),
-            "options": self._rewrite_options(slots, request, variables),
-            "response_schema": self._response_schema(slots),
-            "allowed_update_paths": ["variables.rewrite_response"],
-        }
+        return self._card_builder.build(
+            ClarificationPlan(
+                clarification_type="rewrite_slots",
+                prompt=self._rewrite_prompt(slots),
+                slots=slots,
+                options=self._rewrite_options(slots, request, variables),
+                allowed_update_path="variables.rewrite_response",
+                question_key=f"rewrite:{','.join(slots)}",
+            )
+        )
 
     def ask_intent_clarification(self, request: dict[str, Any]) -> dict[str, Any]:
         variables = request.get("variables", {})
@@ -39,20 +107,93 @@ class InteractionAdapter:
             prompt = "当前问题里存在互相冲突的分析要求，请选择优先处理的分析方式。"
         elif ambiguous_slots and "metric" in ambiguous_slots:
             prompt = "当前问题的指标不够明确，请确认你想分析的指标或分析方式。"
-        return {
-            "prompt": prompt,
-            "options": self._intent_options(),
-            "response_schema": self._response_schema(["intent"]),
-            "allowed_update_paths": ["variables.intent_response"],
-        }
+        return self._card_builder.build(
+            ClarificationPlan(
+                clarification_type="intent",
+                prompt=prompt,
+                slots=["intent"],
+                options=self._intent_options(),
+                allowed_update_path="variables.intent_response",
+                question_key=f"intent:{self._intent_question_key(intent)}",
+            )
+        )
 
     def ask_metric_selection(self, request: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "prompt": "请选择要分析的指标。",
-            "options": self._metric_selection_options(request),
-            "response_schema": self._response_schema(["metric"]),
-            "allowed_update_paths": ["variables.metric_selection"],
-        }
+        return self._card_builder.build(
+            ClarificationPlan(
+                clarification_type="metric_selection",
+                prompt="请选择要分析的指标。",
+                slots=["metric"],
+                options=self._metric_selection_options(request),
+                allowed_update_path="variables.metric_selection",
+                question_key="metric_selection",
+            )
+        )
+
+    def ask_slot_clarification(self, request: dict[str, Any]) -> dict[str, Any]:
+        variables = request.get("variables", {})
+        intent = variables.get("intent") if isinstance(variables, dict) and isinstance(variables.get("intent"), dict) else {}
+        slot_issues = self._slot_issues(intent)
+        slot_issue_types = {str(issue.get("slot_type") or "") for issue in slot_issues}
+        ambiguous_slots = [str(slot) for slot in intent.get("ambiguous_slots") or []]
+        if "subject_domain" in slot_issue_types:
+            return self._card_builder.build(
+                ClarificationPlan(
+                    clarification_type="subject_domain",
+                    prompt="请确认这个问题属于哪个主题域。",
+                    slots=["subject_domain", "domain_id"],
+                    options=self._subject_domain_options(request, intent),
+                    allowed_update_path="variables.slot_response",
+                    question_key=f"subject_domain:{self._subject_domain_question_key(intent)}",
+                )
+            )
+        if slot_issue_types.intersection({"dimension", "dimension_value"}):
+            dimension_names = self._dimension_names(intent, slot_issues)
+            dimension_name = dimension_names[0]
+            return self._card_builder.build(
+                ClarificationPlan(
+                    clarification_type="dimension_usage",
+                    prompt=f"请确认“{dimension_name}”这个维度的使用方式。",
+                    slots=["dimension", "dimension_usage", "dimension_values"],
+                    options=[
+                        {
+                            "label": f"按{dimension_name}分组查看",
+                            "value": {"dimension": dimension_name, "dimension_usage": "group_by"},
+                        },
+                        {
+                            "label": f"筛选某个具体{dimension_name}",
+                            "value": {
+                                "dimension": dimension_name,
+                                "dimension_usage": "filter_value_required",
+                                "dimension_value_fields": dimension_names,
+                            },
+                        },
+                        {
+                            "label": f"不使用{dimension_name}维度",
+                            "value": {"dimension": dimension_name, "dimension_usage": "ignore"},
+                        },
+                    ],
+                    allowed_update_path="variables.slot_response",
+                    question_key=f"dimension_usage:{dimension_name}",
+                    input_type="dimension_value_form",
+                )
+            )
+        return self._card_builder.build(
+            ClarificationPlan(
+                clarification_type="slot",
+                prompt="请补充问题中的关键信息。",
+                slots=list(slot_issue_types) or ambiguous_slots or ["value"],
+                options=[],
+                allowed_update_path="variables.slot_response",
+                question_key="slot:" + ",".join(list(slot_issue_types) or ambiguous_slots or ["value"]),
+            )
+        )
+
+    @staticmethod
+    def _slot_issues(intent: dict[str, Any]) -> list[dict[str, Any]]:
+        validation = intent.get("validation") if isinstance(intent.get("validation"), dict) else {}
+        issues = validation.get("slot_issues")
+        return [issue for issue in issues if isinstance(issue, dict)] if isinstance(issues, list) else []
 
     def _rewrite_prompt(self, slots: list[str]) -> str:
         labels = [self._slot_label(slot) for slot in slots]
@@ -142,6 +283,89 @@ class InteractionAdapter:
     def _schema_element_option(element: SchemaElement, slot_name: str) -> dict[str, Any]:
         label = element.name or element.biz_name
         return {"label": label, "value": {slot_name: label, "asset_id": element.id}}
+
+    def _subject_domain_options(self, request: dict[str, Any], intent: dict[str, Any]) -> list[dict[str, Any]]:
+        schema = self._load_schema(request)
+        domains = getattr(schema, "subject_domains", []) if schema is not None else []
+        candidates = [domain for domain in domains if isinstance(domain, dict)]
+        candidate_ids = self._subject_domain_candidate_ids(intent)
+        if candidate_ids:
+            candidates = [domain for domain in candidates if self._int_or_none(domain.get("domain_id")) in candidate_ids]
+        if not candidates and candidate_ids:
+            return [
+                {"label": f"主题域 {domain_id}", "value": {"subject_domain": str(domain_id), "domain_id": domain_id}}
+                for domain_id in candidate_ids
+            ]
+        return [
+            {
+                "label": str(domain.get("name") or domain.get("domain_name") or domain.get("biz_name") or ""),
+                "value": {
+                    "subject_domain": str(domain.get("name") or domain.get("domain_name") or domain.get("biz_name") or ""),
+                    "domain_id": self._int_or_none(domain.get("domain_id")),
+                },
+            }
+            for domain in candidates
+            if self._int_or_none(domain.get("domain_id")) is not None
+        ]
+
+    @classmethod
+    def _subject_domain_question_key(cls, intent: dict[str, Any]) -> str:
+        candidate_ids = cls._subject_domain_candidate_ids(intent)
+        if candidate_ids:
+            return ",".join(str(domain_id) for domain_id in candidate_ids)
+        return "unknown"
+
+    @classmethod
+    def _subject_domain_candidate_ids(cls, intent: dict[str, Any]) -> list[int]:
+        subject_domain = intent.get("subject_domain") if isinstance(intent.get("subject_domain"), dict) else {}
+        raw_ids = subject_domain.get("candidate_domain_ids")
+        if not isinstance(raw_ids, list):
+            return []
+        result: list[int] = []
+        for item in raw_ids:
+            domain_id = cls._int_or_none(item)
+            if domain_id is not None and domain_id not in result:
+                result.append(domain_id)
+        return result
+
+    @staticmethod
+    def _intent_question_key(intent: dict[str, Any]) -> str:
+        conflict_slots = [str(slot) for slot in intent.get("conflict_slots") or []]
+        ambiguous_slots = [str(slot) for slot in intent.get("ambiguous_slots") or []]
+        if conflict_slots:
+            return "conflict:" + ",".join(conflict_slots)
+        if ambiguous_slots:
+            return ",".join(ambiguous_slots)
+        confidence = intent.get("confidence")
+        if isinstance(confidence, (int, float)) and float(confidence) < 0.8:
+            return "low_confidence"
+        return "unknown"
+
+    @staticmethod
+    def _dimension_name(intent: dict[str, Any]) -> str:
+        return InteractionAdapter._dimension_names(intent, [])[0]
+
+    @staticmethod
+    def _dimension_names(intent: dict[str, Any], slot_issues: list[dict[str, Any]]) -> list[str]:
+        names: list[str] = []
+        for issue in slot_issues:
+            if str(issue.get("slot_type") or "") not in {"dimension", "dimension_value"}:
+                continue
+            name = str(issue.get("dimension") or "").strip()
+            if name and name not in names:
+                names.append(name)
+        dimension_slots = intent.get("dimension_slots") if isinstance(intent.get("dimension_slots"), list) else []
+        for slot in dimension_slots:
+            if isinstance(slot, dict) and slot.get("name"):
+                name = str(slot["name"])
+                if name not in names:
+                    names.append(name)
+        dimension_mentions = intent.get("dimension_mentions") if isinstance(intent.get("dimension_mentions"), list) else []
+        for mention in dimension_mentions:
+            name = str(mention)
+            if name and name not in names:
+                names.append(name)
+        return names or ["维度"]
 
     @staticmethod
     def _int_or_none(value: Any) -> int | None:

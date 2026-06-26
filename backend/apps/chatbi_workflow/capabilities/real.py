@@ -56,6 +56,8 @@ class RealChatBICapabilityGateway:
             return self._interaction_adapter.ask_rewrite_clarification(request)
         if capability == "interaction.ask_intent_clarification":
             return self._interaction_adapter.ask_intent_clarification(request)
+        if capability == "interaction.ask_slot_clarification":
+            return self._interaction_adapter.ask_slot_clarification(request)
         if capability == "interaction.ask_metric_selection":
             return self._interaction_adapter.ask_metric_selection(request)
         if capability == "sql.generate":

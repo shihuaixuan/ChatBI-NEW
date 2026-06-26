@@ -73,12 +73,28 @@ class IntentRecognitionOutput(BaseModel):
     confidence: float = Field(ge=0, le=1)
     metric_mentions: list[str] = Field(default_factory=list)
     dimension_mentions: list[str] = Field(default_factory=list)
+    dimension_slots: list[dict[str, Any]] = Field(default_factory=list)
     time_mentions: list[str] = Field(default_factory=list)
+    time_range: dict[str, Any] = Field(default_factory=dict)
     filter_mentions: list[dict[str, Any]] = Field(default_factory=list)
     required_slot_types: list[str] = Field(default_factory=list)
     query_shape: dict[str, Any] = Field(default_factory=dict)
+    subject_domain: dict[str, Any] = Field(default_factory=dict)
     ambiguous_slots: list[str] = Field(default_factory=list)
     conflict_slots: list[str] = Field(default_factory=list)
+    validation: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntentValidationOutput(BaseModel):
+    """意图语义校验节点输出。"""
+
+    status: Literal["valid", "invalid"]
+    reason_code: str
+    repair_hint: str | None = None
+    retryable: bool = False
+    retry_count: int = Field(default=0, ge=0)
+    max_retry_count: int = Field(default=2, ge=1)
+    violations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class KnowledgeRetrieveInput(BaseModel):
@@ -107,6 +123,7 @@ class KnowledgeRetrieveOutput(BaseModel):
     candidate_groups: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     selected_assets: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     slot_bindings: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    subject_domain: dict[str, Any] = Field(default_factory=dict)
     decision: dict[str, Any] = Field(default_factory=dict)
     ambiguities: list[dict[str, Any]] = Field(default_factory=list)
 

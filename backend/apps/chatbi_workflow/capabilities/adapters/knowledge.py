@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from apps.chatbi_workflow.capabilities.adapters.time_slots import (
+    normalize_time_range_payload,
+)
 from apps.headless.asset_document import HeadlessAssetDocumentBuilder
 from apps.headless.models import HeadlessAssetDocument
 from apps.headless.schemas import DataSetSchema, SchemaElement, SchemaElementMatch
@@ -100,34 +103,50 @@ class HeadlessKnowledgeAdapter:
 
         schema = self._schema_builder.build_dataset_schema(int(oid), int(dataset_id))
         intent = variables.get("intent") if isinstance(variables.get("intent"), dict) else {}
-        candidate_groups = self._retrieve_candidate_groups(question, intent, schema, int(oid))
+        subject_domain = self._selected_subject_domain(schema, intent)
+        retrieval_schema = self._schema_scoped_by_subject_domain(schema, subject_domain)
+        candidate_groups = self._retrieve_candidate_groups(question, intent, retrieval_schema, int(oid))
         self._rerank_candidate_groups_by_intent(candidate_groups, intent)
         gate_result = self._candidate_gate.decide(candidate_groups)
-        selected_assets = gate_result["selected_assets"]
+        selected_assets = self._constrain_selected_assets_to_metric_models(gate_result["selected_assets"])
         missing_slots = self._missing_required_slots(intent, selected_assets, gate_result["ambiguities"])
         if missing_slots:
+            reason_code = (
+                "TIME_RANGE_PROVIDED_BUT_TIME_DIMENSION_MISSING"
+                if "time_dimension" in missing_slots and self._time_range_provided(intent)
+                else "MISSING_REQUIRED_INTENT_SLOTS"
+            )
             return self._missed(
                 dataset_id,
                 "missing_required_intent_slots",
-                schema=schema,
+                schema=retrieval_schema,
                 candidate_groups=candidate_groups,
+                subject_domain=subject_domain,
                 decision={
                     "status": "slot_missing",
                     "strategy": "intent_slot_grounding",
+                    "reason_code": reason_code,
                     "reason": "意图要求的槽位未能绑定到 Headless 资产。",
+                    "missing_required_slots": missing_slots,
                     "missing_slots": missing_slots,
                 },
             )
         if gate_result["status"] == "missed" or (not any(selected_assets.values()) and not gate_result["ambiguities"]):
-            return self._missed(dataset_id, "no_headless_asset_match", schema=schema, candidate_groups=candidate_groups)
+            return self._missed(
+                dataset_id,
+                "no_headless_asset_match",
+                schema=retrieval_schema,
+                candidate_groups=candidate_groups,
+                subject_domain=subject_domain,
+            )
 
         return {
             "hit": True,
             "status": gate_result["status"],
             "dataset_id": int(dataset_id),
-            "schema_version": self._schema_version(schema),
-            "index_version": self._index_version(schema),
-            "tables": self._tables(schema, selected_assets),
+            "schema_version": self._schema_version(retrieval_schema),
+            "index_version": self._index_version(retrieval_schema),
+            "tables": self._tables(retrieval_schema, selected_assets),
             "fields": self._fields(selected_assets),
             "metrics": [item["biz_name"] for item in selected_assets["metrics"]],
             "dimensions": [item["biz_name"] for item in selected_assets["dimensions"]],
@@ -135,10 +154,106 @@ class HeadlessKnowledgeAdapter:
             "examples": [],
             "candidate_groups": candidate_groups,
             "selected_assets": selected_assets,
-            "slot_bindings": self._slot_bindings(selected_assets),
+            "slot_bindings": self._slot_bindings(selected_assets, intent),
+            "subject_domain": subject_domain or {},
             "decision": gate_result["decision"],
             "ambiguities": gate_result["ambiguities"],
         }
+
+    @staticmethod
+    def _constrain_selected_assets_to_metric_models(
+        selected_assets: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        metric_model_ids = {
+            item.get("model_id")
+            for item in selected_assets.get("metrics", [])
+            if item.get("model_id") is not None
+        }
+        if not metric_model_ids:
+            return selected_assets
+        constrained: dict[str, list[dict[str, Any]]] = {}
+        for group_name, items in selected_assets.items():
+            if group_name == "metrics":
+                constrained[group_name] = items
+                continue
+            constrained[group_name] = [
+                item
+                for item in items
+                if item.get("model_id") in metric_model_ids
+            ]
+        return constrained
+
+    def _selected_subject_domain(self, schema: DataSetSchema, intent: dict[str, Any]) -> dict[str, Any] | None:
+        subject_domain = intent.get("subject_domain") if isinstance(intent.get("subject_domain"), dict) else {}
+        if str(subject_domain.get("status") or "").lower() != "selected":
+            return None
+        domain_id = _int_or_none(subject_domain.get("domain_id"))
+        if domain_id is None:
+            return None
+        for candidate in schema.subject_domains:
+            if _int_or_none(candidate.get("domain_id")) != domain_id:
+                continue
+            return {
+                "status": "selected",
+                "domain_id": domain_id,
+                "domain_name": subject_domain.get("domain_name") or candidate.get("name"),
+                "domain_biz_name": subject_domain.get("domain_biz_name") or candidate.get("biz_name"),
+                "confidence": subject_domain.get("confidence", 0),
+                "reason": subject_domain.get("reason") or "",
+                "candidate_domain_ids": subject_domain.get("candidate_domain_ids") or [domain_id],
+                "model_ids": candidate.get("model_ids") or [],
+            }
+        return None
+
+    @staticmethod
+    def _schema_scoped_by_subject_domain(
+        schema: DataSetSchema,
+        subject_domain: dict[str, Any] | None,
+    ) -> DataSetSchema:
+        if not subject_domain:
+            return schema
+        model_ids = {
+            model_id
+            for model_id in (_int_or_none(value) for value in subject_domain.get("model_ids") or [])
+            if model_id is not None
+        }
+        if not model_ids:
+            return schema
+        metric_ids: set[int] = set()
+        dimension_ids: set[int] = set()
+        model_names = {
+            str(model.get("biz_name"))
+            for model in schema.models
+            if _int_or_none(model.get("id")) in model_ids and model.get("biz_name")
+        }
+        metrics = []
+        for metric in schema.metrics:
+            if metric.model in model_ids:
+                metrics.append(metric)
+                metric_ids.add(metric.id)
+        dimensions = []
+        for dimension in schema.dimensions:
+            if dimension.model in model_ids:
+                dimensions.append(dimension)
+                dimension_ids.add(dimension.id)
+        return schema.model_copy(
+            update={
+                "models": [model for model in schema.models if _int_or_none(model.get("id")) in model_ids],
+                "model_relations": [
+                    relation
+                    for relation in schema.model_relations
+                    if relation.left in model_names and relation.right in model_names
+                ],
+                "metrics": metrics,
+                "dimensions": dimensions,
+                "dimension_values": [value for value in schema.dimension_values if value.model in model_ids],
+                "terms": [
+                    term
+                    for term in schema.terms
+                    if _term_related_to_selected_assets(term, metric_ids, dimension_ids)
+                ],
+            }
+        )
 
     def _retrieve_candidate_groups(
         self,
@@ -393,6 +508,8 @@ class HeadlessKnowledgeAdapter:
         ambiguities: list[dict[str, Any]],
     ) -> list[str]:
         required_slots = set(HeadlessKnowledgeAdapter._text_list(intent.get("required_slot_types")))
+        if HeadlessKnowledgeAdapter._time_range_provided(intent):
+            required_slots.add("time_dimension")
         missing: list[str] = []
         has_metric_ambiguity = any(ambiguity.get("type") == "metric" for ambiguity in ambiguities)
         if "metric" in required_slots and not selected_assets.get("metrics") and not has_metric_ambiguity:
@@ -407,6 +524,11 @@ class HeadlessKnowledgeAdapter:
             if not has_time_dimension:
                 missing.append("time_dimension")
         return missing
+
+    @staticmethod
+    def _time_range_provided(intent: dict[str, Any]) -> bool:
+        time_range = intent.get("time_range") if isinstance(intent, dict) else {}
+        return isinstance(time_range, dict) and str(time_range.get("value_status") or "").lower() == "provided"
 
     @staticmethod
     def _is_time_payload(payload: dict[str, Any]) -> bool:
@@ -457,8 +579,13 @@ class HeadlessKnowledgeAdapter:
                 elif float(candidate.get("score") or 0) > float(old.get("score") or 0):
                     old.update(candidate)
 
-    @staticmethod
-    def _slot_bindings(selected_assets: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    @classmethod
+    def _slot_bindings(
+        cls,
+        selected_assets: dict[str, list[dict[str, Any]]],
+        intent: dict[str, Any] | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        intent = intent if isinstance(intent, dict) else {}
         return {
             "metrics": [
                 {
@@ -482,18 +609,176 @@ class HeadlessKnowledgeAdapter:
                 }
                 for item in selected_assets.get("dimensions", [])
             ],
-            "filters": [
-                {
-                    "asset_type": "VALUE",
-                    "asset_id": item["asset_id"],
-                    "display_name": item["name"],
-                    "biz_name": item["biz_name"],
-                    "confidence": item["score"],
-                    "source": item.get("source") or "headless_schema_mapper",
-                }
-                for item in selected_assets.get("values", [])
-            ],
+            "filters": cls._filter_bindings(selected_assets, intent),
         }
+
+    @classmethod
+    def _filter_bindings(
+        cls,
+        selected_assets: dict[str, list[dict[str, Any]]],
+        intent: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        filters = [
+            {
+                "asset_type": "VALUE",
+                "asset_id": item["asset_id"],
+                "display_name": item["name"],
+                "biz_name": item["biz_name"],
+                "confidence": item["score"],
+                "source": item.get("source") or "headless_schema_mapper",
+            }
+            for item in selected_assets.get("values", [])
+        ]
+        filters.extend(cls._dimension_filter_bindings(selected_assets, intent))
+        time_filter = cls._time_range_filter_binding(selected_assets, intent)
+        if time_filter is not None:
+            filters.append(time_filter)
+        return filters
+
+    @classmethod
+    def _dimension_filter_bindings(
+        cls,
+        selected_assets: dict[str, list[dict[str, Any]]],
+        intent: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        bindings: list[dict[str, Any]] = []
+        seen: set[tuple[int, str, str]] = set()
+        for slot in cls._dimension_filter_slots(intent):
+            if not isinstance(slot, dict):
+                continue
+            if str(slot.get("role") or "").lower() != "filter":
+                continue
+            if str(slot.get("value_status") or "").lower() != "provided":
+                continue
+            value = slot.get("value")
+            if value in (None, ""):
+                continue
+            dimension = cls._match_dimension_candidate(str(slot.get("name") or ""), selected_assets.get("dimensions", []))
+            if dimension is None:
+                continue
+            value = _strip_dimension_prefix_from_value(value, dimension)
+            dedupe_key = (int(dimension["asset_id"]), str(slot.get("operator") or "="), str(value))
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            bindings.append(
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": dimension["asset_id"],
+                    "display_name": dimension["name"],
+                    "biz_name": dimension["biz_name"],
+                    "operator": slot.get("operator") or "=",
+                    "value": value,
+                    "confidence": dimension["score"],
+                    "source": slot.get("source") or "intent_dimension_slot",
+                }
+            )
+        return bindings
+
+    @staticmethod
+    def _dimension_filter_slots(intent: dict[str, Any]) -> list[dict[str, Any]]:
+        slots: list[dict[str, Any]] = []
+        dimension_slots = intent.get("dimension_slots")
+        if isinstance(dimension_slots, list):
+            slots.extend([slot for slot in dimension_slots if isinstance(slot, dict)])
+
+        filter_mentions = intent.get("filter_mentions")
+        if not isinstance(filter_mentions, list):
+            return slots
+        for item in filter_mentions:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("dimension") or item.get("field") or "").strip()
+            value = item.get("value")
+            if not name or value in (None, ""):
+                continue
+            normalized_value = str(value).strip() if isinstance(value, str) else value
+            if normalized_value in (None, ""):
+                continue
+            slots.append(
+                {
+                    "name": name,
+                    "role": "filter",
+                    "value": normalized_value,
+                    "value_status": "provided",
+                    "operator": item.get("operator") or "=",
+                    "source": "intent_filter_mention",
+                }
+            )
+        return slots
+
+    @classmethod
+    def _time_range_filter_binding(
+        cls,
+        selected_assets: dict[str, list[dict[str, Any]]],
+        intent: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        time_range = intent.get("time_range")
+        if not isinstance(time_range, dict):
+            return None
+        if str(time_range.get("value_status") or "").lower() != "provided":
+            return None
+        normalized_time_range = normalize_time_range_payload(time_range)
+        value = normalized_time_range.get("normalized") if isinstance(normalized_time_range, dict) else None
+        if not isinstance(value, dict) or value.get("kind") == "unsupported":
+            return None
+        dimension = cls._default_time_dimension_candidate(selected_assets.get("dimensions", []))
+        if dimension is None:
+            return None
+        return {
+            "asset_type": "DIMENSION",
+            "asset_id": dimension["asset_id"],
+            "display_name": dimension["name"],
+            "biz_name": dimension["biz_name"],
+            "operator": "=",
+            "value": value,
+            "confidence": dimension["score"],
+            "source": "intent_time_range",
+        }
+
+    @staticmethod
+    def _match_dimension_candidate(name: str, candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+        normalized_name = _normalize_text(name)
+        if not normalized_name:
+            return None
+        for candidate in candidates:
+            payload = candidate.get("payload") if isinstance(candidate.get("payload"), dict) else {}
+            aliases = payload.get("alias") or payload.get("aliases") or []
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            alias_texts = aliases if isinstance(aliases, list) else []
+            texts = [
+                candidate.get("name"),
+                candidate.get("biz_name"),
+                candidate.get("matched_text"),
+                payload.get("name"),
+                payload.get("biz_name"),
+                payload.get("bizName"),
+                *alias_texts,
+            ]
+            normalized_texts = [_normalize_text(text) for text in texts]
+            if any(text and (normalized_name == text or normalized_name in text or text in normalized_name) for text in normalized_texts):
+                return candidate
+        return None
+
+    @classmethod
+    def _default_time_dimension_candidate(cls, candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+        time_dimensions = [
+            candidate
+            for candidate in candidates
+            if cls._is_time_payload(candidate.get("payload") if isinstance(candidate.get("payload"), dict) else {})
+        ]
+        if not time_dimensions:
+            return None
+        time_dimensions.sort(key=lambda item: (-float(item.get("score") or 0), int(item.get("asset_id") or 0)))
+        return time_dimensions[0]
+
+    @staticmethod
+    def _time_range_filter_value(raw: Any) -> dict[str, str] | None:
+        normalized = _normalize_text(raw)
+        if normalized in {"今天", "今日"}:
+            return {"kind": "relative_date", "value": "today"}
+        return None
 
     @staticmethod
     def _tables(schema: DataSetSchema, selected_assets: dict[str, list[dict[str, Any]]]) -> list[str]:
@@ -536,6 +821,7 @@ class HeadlessKnowledgeAdapter:
         reason: str,
         schema: DataSetSchema | None = None,
         candidate_groups: dict[str, list[dict[str, Any]]] | None = None,
+        subject_domain: dict[str, Any] | None = None,
         decision: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
@@ -553,6 +839,7 @@ class HeadlessKnowledgeAdapter:
             "candidate_groups": candidate_groups or {"metrics": [], "dimensions": [], "values": [], "terms": []},
             "selected_assets": {"metrics": [], "dimensions": [], "values": [], "terms": []},
             "slot_bindings": {"metrics": [], "dimensions": [], "filters": []},
+            "subject_domain": subject_domain or {},
             "decision": decision
             or {"status": "missed", "strategy": "headless_exact_schema_match", "reason": reason},
             "ambiguities": [],
@@ -563,6 +850,20 @@ def _int_or_none(value: Any) -> int | None:
     if isinstance(value, int):
         return value
     return None
+
+
+def _term_related_to_selected_assets(term: SchemaElement, metric_ids: set[int], dimension_ids: set[int]) -> bool:
+    relations = term.related_schema_elements or []
+    if not relations:
+        return False
+    for relation in relations:
+        relation_type = str(relation.get("type") or "").upper()
+        relation_id = _int_or_none(relation.get("id"))
+        if relation_type == "METRIC" and relation_id in metric_ids:
+            return True
+        if relation_type == "DIMENSION" and relation_id in dimension_ids:
+            return True
+    return False
 
 
 class HeadlessDocumentRetriever:
@@ -705,6 +1006,50 @@ def _score_candidate_field_by_mention(
 
 def _normalize_text(value: Any) -> str:
     return "".join(str(value or "").lower().split())
+
+
+def _strip_dimension_prefix_from_value(value: Any, dimension_candidate: dict[str, Any] | None) -> Any:
+    if dimension_candidate is None or not isinstance(value, str):
+        return value
+    raw_value = value.strip()
+    for prefix in _dimension_value_prefixes(dimension_candidate):
+        if not prefix or not raw_value.startswith(prefix):
+            continue
+        stripped = raw_value[len(prefix) :].strip()
+        if stripped:
+            return stripped
+    return raw_value
+
+
+def _dimension_value_prefixes(dimension_candidate: dict[str, Any]) -> list[str]:
+    payload = dimension_candidate.get("payload") if isinstance(dimension_candidate.get("payload"), dict) else {}
+    aliases = payload.get("alias") or payload.get("aliases") or []
+    if isinstance(aliases, str):
+        aliases = [aliases]
+    alias_texts = aliases if isinstance(aliases, list) else []
+    texts = _unique_texts(
+        [
+            dimension_candidate.get("name"),
+            dimension_candidate.get("matched_text"),
+            payload.get("name"),
+            payload.get("biz_name"),
+            payload.get("bizName"),
+            *alias_texts,
+        ]
+    )
+    prefixes: list[str] = []
+    for text in texts:
+        prefixes.extend([text, *_dimension_name_variants(text)])
+    return sorted(_unique_texts(prefixes), key=len, reverse=True)
+
+
+def _dimension_name_variants(name: str) -> list[str]:
+    text = str(name or "").strip()
+    variants: list[str] = []
+    for suffix in ("ID", "id", "编号", "名称", "维度"):
+        if text.endswith(suffix) and len(text) > len(suffix):
+            variants.append(text[: -len(suffix)].strip())
+    return variants
 
 
 def _semantic_tokens(text: str) -> list[str]:

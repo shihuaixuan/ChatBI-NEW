@@ -1,5 +1,8 @@
+import asyncio
 import importlib.util
 import io
+import threading
+import time
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from inspect import signature
@@ -35,6 +38,13 @@ from apps.workflow_engine.infrastructure.persistence.models import (
 )
 from common.core.db import engine
 from common.core.deps import get_current_user
+
+
+async def _collect_stream_frames(stream):
+    frames = []
+    async for frame in stream:
+        frames.append(frame)
+    return "".join(frames)
 
 
 @pytest.fixture(autouse=True)
@@ -74,10 +84,11 @@ def _fake_chatbi_v1_question_model(monkeypatch):
                 return '{"intent_type":"metric_query","confidence":0.9,"ambiguous_slots":[],"conflict_slots":[]}'
             return '{"category":"data","reason":"测试模型分类为数据问题","risk_level":"low","confidence":0.9}'
 
-    def build_runtime(session):
+    def build_runtime(session, commit_events: bool = False):
         return chatbi_runtime.build_real_chatbi_v1_runtime(
             session,
             question_model_client=FakeQuestionModelClient(),
+            commit_events=commit_events,
         )
 
     monkeypatch.setattr(graph_service, "build_real_chatbi_v1_runtime", build_runtime)
@@ -202,10 +213,13 @@ def test_graph_routes_are_registered_and_included_by_apps_api():
 
     expected_routes = {
         "/graph/queries",
+        "/graph/queries/stream",
         "/graph/runs/{run_id}",
         "/graph/runs/{run_id}/events",
+        "/graph/runs/{run_id}/events/stream",
         "/graph/runs/{run_id}/trace",
         "/graph/runs/{run_id}/interactions/{interaction_id}/responses",
+        "/graph/runs/{run_id}/interactions/{interaction_id}/responses/stream",
         "/graph/runs/{run_id}/cancel",
         "/graph/runs/{run_id}/retry",
     }
@@ -272,6 +286,212 @@ def test_graph_query_creates_run_and_executes_placeholder_chatbi_graph():
         assert "node.succeeded" in event_types
         assert event_types[-1] == "run.succeeded"
         assert events[0].public_payload == {"status": "created", "question": "最近 7 天销售额"}
+        _cleanup(session)
+
+
+def test_graph_event_stream_returns_sse_frames_and_closes_for_completed_run():
+    with Session(engine) as session:
+        _cleanup(session)
+
+
+def test_graph_query_stream_creates_run_and_streams_execution_events():
+    with Session(engine) as session:
+        _cleanup(session)
+
+    with _client().stream(
+        "POST",
+        "/graph/queries/stream",
+        json={
+            "question": "最近 7 天销售额",
+            "dataset_id": 7001,
+            "request_id": "api-query-stream-request-1",
+            "run_id": "api-query-stream-run-1",
+        },
+    ) as response:
+        text = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: run.created\n" in text
+    assert "event: node.started\n" in text
+    assert "event: node.succeeded\n" in text
+    assert '"summary"' in text
+    assert "event: run.succeeded\n" in text
+
+    run_response = _client().get("/graph/runs/api-query-stream-run-1")
+    assert run_response.status_code == 200
+    assert run_response.json()["status"] == "succeeded"
+
+    with Session(engine) as session:
+        _cleanup(session)
+
+    _client().post(
+        "/graph/queries",
+        json={
+            "question": "最近 7 天销售额",
+            "dataset_id": 7001,
+            "request_id": "api-stream-request-1",
+            "run_id": "api-stream-run-1",
+        },
+    )
+
+    with _client().stream(
+        "GET",
+        "/graph/runs/api-stream-run-1/events/stream",
+        params={"after_sequence": 0},
+    ) as response:
+        text = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "id: 1\n" in text
+    assert "event: run.created\n" in text
+    assert "event: node.started\n" in text
+    assert "event: run.succeeded\n" in text
+    assert '"event_type":"run.succeeded"' in text
+
+    with Session(engine) as session:
+        _cleanup(session)
+
+
+def test_graph_query_stream_waiting_input_event_contains_pending_interaction():
+    with Session(engine) as session:
+        _cleanup(session)
+        dataset_id = _seed_v1_headless_dataset(session)
+
+    with _client().stream(
+        "POST",
+        "/graph/queries/stream",
+        json={
+            "question": "需要澄清 今日访问人数",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "request_id": "api-query-stream-request-waiting",
+            "run_id": "api-query-stream-run-waiting",
+        },
+    ) as response:
+        text = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert "event: run.waiting_input\n" in text
+    assert '"pending_interaction"' in text
+    assert '"interaction_id"' in text
+    assert '"status":"pending"' in text
+    assert '"node_name":"ask_rewrite_clarification"' in text
+    assert "请补充要分析的指标" in text
+
+    run_response = _client().get("/graph/runs/api-query-stream-run-waiting")
+    assert run_response.status_code == 200
+    pending_interaction = run_response.json()["context_summary"]["pending_interaction"]
+    assert pending_interaction["status"] == "pending"
+    assert pending_interaction["node_name"] == "ask_rewrite_clarification"
+
+    with Session(engine) as session:
+        _cleanup(session)
+
+
+def test_stream_run_events_waits_for_resume_worker_before_closing_on_old_waiting_state():
+    run_id = "api-stream-race-waiting"
+    now = datetime.now(timezone.utc)
+    with Session(engine) as session:
+        _cleanup(session)
+        session.add(
+            WorkflowRunModel(
+                run_id=run_id,
+                oid=9501,
+                user_id=501,
+                request_id="api-stream-race-request",
+                definition_name="chatbi",
+                definition_version="v1",
+                definition_digest="test",
+                status="waiting_input",
+                current_node="ask_slot_clarification",
+                context={},
+                request={},
+                output={},
+                version=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            WorkflowEventModel(
+                event_id="api-stream-race-event-1",
+                run_id=run_id,
+                sequence=1,
+                event_type="run.waiting_input",
+                node_name="ask_slot_clarification",
+                public_payload={},
+                internal_payload={},
+                created_at=now,
+            )
+        )
+        session.commit()
+
+    def resume_later():
+        time.sleep(0.1)
+        with Session(engine) as worker_session:
+            run = worker_session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == run_id)).one()
+            run.status = "succeeded"
+            run.current_node = "finish"
+            run.updated_at = datetime.now(timezone.utc)
+            worker_session.add(run)
+            worker_session.add(
+                WorkflowEventModel(
+                    event_id="api-stream-race-event-2",
+                    run_id=run_id,
+                    sequence=2,
+                    event_type="run.resumed",
+                    public_payload={},
+                    internal_payload={},
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            worker_session.add(
+                WorkflowEventModel(
+                    event_id="api-stream-race-event-3",
+                    run_id=run_id,
+                    sequence=3,
+                    event_type="node.started",
+                    node_name="retrieve_knowledge",
+                    public_payload={},
+                    internal_payload={},
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            worker_session.add(
+                WorkflowEventModel(
+                    event_id="api-stream-race-event-4",
+                    run_id=run_id,
+                    sequence=4,
+                    event_type="run.succeeded",
+                    public_payload={},
+                    internal_payload={},
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            worker_session.commit()
+
+    worker = threading.Thread(target=resume_later)
+    worker.start()
+    with Session(engine) as session:
+        text = asyncio.run(
+            _collect_stream_frames(
+                graph_service.GraphApiService(session)._stream_run_events(
+                    _user(),
+                    run_id,
+                    after_sequence=1,
+                    worker=worker,
+                )
+            )
+        )
+    worker.join(timeout=1)
+
+    assert "event: run.resumed\n" in text
+    assert "event: node.started\n" in text
+    assert '"node_name":"retrieve_knowledge"' in text
+
+    with Session(engine) as session:
         _cleanup(session)
 
 

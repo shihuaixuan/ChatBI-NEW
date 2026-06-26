@@ -48,7 +48,8 @@ class SqlAdapter:
             raise ValueError("SQL_GENERATE_CONTEXT_REQUIRED")
 
         schema = self._schema_builder.build_dataset_schema(int(oid), int(dataset_id))
-        slots = self._compile_slots(knowledge)
+        intent = variables.get("intent") if isinstance(variables.get("intent"), dict) else {}
+        slots = self._compile_slots(knowledge, intent)
         repair_context = self._repair_context(variables)
         result = self._compiler.compile(
             SemanticSQLCompileRequest(
@@ -144,14 +145,53 @@ class SqlAdapter:
             "repair_plan": repair.plan(),
         }
 
-    def _compile_slots(self, knowledge: dict[str, Any]) -> dict[str, Any]:
+    def _compile_slots(self, knowledge: dict[str, Any], intent: dict[str, Any] | None = None) -> dict[str, Any]:
         slot_bindings = knowledge.get("slot_bindings") if isinstance(knowledge.get("slot_bindings"), dict) else {}
         selected_assets = knowledge.get("selected_assets") if isinstance(knowledge.get("selected_assets"), dict) else {}
+        filters = self._asset_slots(slot_bindings, selected_assets, "filters", "DIMENSION")
+        dimensions = self._dimensions_without_filter_only_assets(
+            self._asset_slots(slot_bindings, selected_assets, "dimensions", "DIMENSION"),
+            filters,
+        )
+        if not self._should_select_dimensions(intent):
+            dimensions = []
         return {
             "metrics": self._asset_slots(slot_bindings, selected_assets, "metrics", "METRIC"),
-            "dimensions": self._asset_slots(slot_bindings, selected_assets, "dimensions", "DIMENSION"),
-            "filters": self._asset_slots(slot_bindings, selected_assets, "filters", "DIMENSION"),
+            "dimensions": dimensions,
+            "filters": filters,
         }
+
+    @staticmethod
+    def _should_select_dimensions(intent: dict[str, Any] | None) -> bool:
+        if not isinstance(intent, dict) or not intent:
+            return True
+        intent_type = str(intent.get("intent_type") or "").lower()
+        query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
+        if bool(query_shape.get("needs_group_by")):
+            return True
+        if intent_type in {"trend_analysis", "ranking_analysis", "comparison_analysis", "detail_query", "share_analysis"}:
+            return True
+        dimension_slots = intent.get("dimension_slots")
+        if isinstance(dimension_slots, list):
+            return any(
+                isinstance(slot, dict) and str(slot.get("role") or "").lower() == "group_by"
+                for slot in dimension_slots
+            )
+        return False
+
+    @staticmethod
+    def _dimensions_without_filter_only_assets(
+        dimensions: list[dict[str, Any]],
+        filters: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        filter_dimension_ids = {
+            item.get("asset_id")
+            for item in filters
+            if str(item.get("asset_type") or "").upper() in {"", "DIMENSION"} and item.get("asset_id") is not None
+        }
+        if not filter_dimension_ids:
+            return dimensions
+        return [item for item in dimensions if item.get("asset_id") not in filter_dimension_ids]
 
     def _repair_context(self, variables: dict[str, Any]) -> dict[str, Any]:
         """从上一轮 SQL 错误中提取可供重生成 SQL 使用的修复上下文。"""
