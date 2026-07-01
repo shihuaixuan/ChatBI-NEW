@@ -13,6 +13,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from pgvector.sqlalchemy import VECTOR
 from sqlmodel import Field, SQLModel
 
 
@@ -495,6 +496,46 @@ class HeadlessAssetDocument(SQLModel, table=True):
     index_version: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, server_default=text("0")))
     embedding_status: str = Field(default="PENDING", max_length=32, nullable=False)
     embedding_ref: str | None = Field(default=None, max_length=256)
+    updated_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
+
+
+class HeadlessAssetEmbedding(SQLModel, table=True):
+    __tablename__ = "headless_asset_embedding"
+    __table_args__ = (
+        Index(
+            "ux_headless_asset_embedding_asset",
+            "oid",
+            "dataset_id",
+            "asset_type",
+            "asset_id",
+            unique=True,
+        ),
+        Index(
+            "idx_headless_asset_embedding_lookup",
+            "oid",
+            "dataset_id",
+            "asset_type",
+            "status",
+        ),
+    )
+
+    id: int | None = Field(default=None, sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
+    oid: int = Field(sa_column=Column(BigInteger, nullable=False))
+    dataset_id: int = Field(sa_column=Column(BigInteger, nullable=False))
+    asset_type: str = Field(max_length=32, nullable=False)
+    asset_id: int = Field(sa_column=Column(BigInteger, nullable=False))
+    document_id: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
+    embedding_text: str = Field(sa_column=Column(Text, nullable=False))
+    embedding_text_hash: str = Field(max_length=64, nullable=False)
+    # 第一版只写入指标向量；维度、维值、术语暂不写入该字段。
+    embedding: list[float] | None = Field(default=None, sa_column=Column(VECTOR(), nullable=True))
+    embedding_provider: str = Field(max_length=64, nullable=False)
+    embedding_model: str = Field(max_length=128, nullable=False)
+    embedding_dim: int = Field(sa_column=Column(BigInteger, nullable=False))
+    embedding_batch_id: str | None = Field(default=None, max_length=64)
+    status: str = Field(default="SUCCEEDED", max_length=32, nullable=False)
+    error_message: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
     updated_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
 
 
