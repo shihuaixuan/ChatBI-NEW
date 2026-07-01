@@ -25,14 +25,24 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
             "grain": ["stat_date", "stall_id"],
             "default_time": "stat_date",
             "metrics": [
-                _metric("aov_sale", "销售订单平均客单价", "SUM(gmv_sale) / NULLIF(SUM(order_cnt_sale), 0)", ["销售客单价"]),
+                _metric(
+                    "aov_sale",
+                    "销售订单平均客单价",
+                    "ROUND(SUM(gmv_sale) / NULLIF(SUM(order_cnt_sale), 0), 2)",
+                    ["销售客单价"],
+                ),
                 _metric(
                     "aov_booking",
                     "订货订单平均客单价",
-                    "SUM(gmv_booking) / NULLIF(SUM(order_cnt_booking), 0)",
+                    "ROUND(SUM(gmv_booking) / NULLIF(SUM(order_cnt_booking), 0), 2)",
                     ["订货客单价"],
                 ),
-                _metric("aov_total", "订单平均客单价", "SUM(gmv_total) / NULLIF(SUM(order_cnt_total), 0)", ["总客单价"]),
+                _metric(
+                    "aov_total",
+                    "订单平均客单价",
+                    "ROUND(SUM(gmv_total) / NULLIF(SUM(order_cnt_total), 0), 2)",
+                    ["总客单价"],
+                ),
             ],
         },
         "snap_unshipped_order": {
@@ -41,7 +51,7 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
             "metrics": [
                 _metric("unshipped_order_cnt", "未发订单数", "COUNT(DISTINCT order_no)", ["未发订单笔数"]),
                 _metric(
-                    "overtime_unshipped_order_cnt",
+                    "overtime_order_cnt",
                     "超时未发订单数",
                     "COUNT(DISTINCT CASE WHEN is_overtime = 1 THEN order_no END)",
                     ["超时订单数", "超时未发订单笔数"],
@@ -59,7 +69,7 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
                     ["负库存商品数量"],
                 ),
                 _metric(
-                    "dormant_product_cnt_30d",
+                    "dormant_product_cnt",
                     "连续30天未动销商品数",
                     "COUNT(DISTINCT CASE WHEN days_unsold >= 30 THEN product_id END)",
                     ["30天未动销商品数", "滞销商品数"],
@@ -70,7 +80,12 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
             "grain": ["stat_date", "customer_id", "stall_id"],
             "default_time": "stat_date",
             "metrics": [
-                _metric("new_deal_customer_cnt", "新增成交客户数", "SUM(is_first_deal)", ["首单成交客户数"]),
+                _metric(
+                    "new_customer_cnt",
+                    "新增成交客户数",
+                    "COUNT(DISTINCT CASE WHEN is_first_deal = 1 THEN customer_id END)",
+                    ["首单成交客户数"],
+                ),
             ],
         },
         "snap_customer_arrears": {

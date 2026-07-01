@@ -42,3 +42,14 @@ def test_normalizes_explicit_month_as_left_closed_right_open_range():
         "end_exclusive": "2026-07-01",
         "timezone": "Asia/Shanghai",
     }
+
+
+def test_normalizes_recent_days_when_time_grain_suffix_is_in_raw_text():
+    assert normalize_time_range("最近 30 天每天") == {
+        "kind": "relative_range",
+        "unit": "day",
+        "amount": 30,
+        "anchor": "today",
+        "include_current": True,
+        "timezone": "Asia/Shanghai",
+    }

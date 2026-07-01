@@ -117,44 +117,30 @@ class ChatBIV1InteractionResponsePatcher:
         slot_bindings: dict[str, Any],
         intent: dict[str, Any],
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        if cls._should_keep_plain_dimensions(intent):
-            return selected_assets, slot_bindings
+        # 交互恢复后重新执行模型锁定和维度角色裁剪，不能复用旧候选全集。
+        selected_assets = HeadlessKnowledgeAdapter._constrain_selected_assets_to_metric_models(selected_assets)
+        model_dimensions = cls._items(selected_assets.get("dimensions"))
+        selected_assets = HeadlessKnowledgeAdapter._constrain_selected_dimensions_by_intent(selected_assets, intent)
         filter_dimension_ids = {
             item.get("asset_id")
             for item in cls._items(slot_bindings.get("filters"))
             if str(item.get("asset_type") or "DIMENSION").upper() == "DIMENSION" and item.get("asset_id") is not None
         }
-        if not filter_dimension_ids:
-            selected_assets["dimensions"] = []
-            slot_bindings["dimensions"] = []
-            return selected_assets, slot_bindings
-        selected_assets["dimensions"] = [
-            item
+        selected_dimension_ids = {
+            item.get("asset_id")
             for item in cls._items(selected_assets.get("dimensions"))
-            if item.get("asset_id") in filter_dimension_ids
+            if item.get("asset_id") is not None
+        }
+        selected_dimension_ids.update(filter_dimension_ids)
+        selected_assets["dimensions"] = [
+            item for item in model_dimensions if item.get("asset_id") in selected_dimension_ids
         ]
         slot_bindings["dimensions"] = [
             item
             for item in cls._items(slot_bindings.get("dimensions"))
-            if item.get("asset_id") in filter_dimension_ids
+            if item.get("asset_id") in selected_dimension_ids
         ]
         return selected_assets, slot_bindings
-
-    @staticmethod
-    def _should_keep_plain_dimensions(intent: dict[str, Any]) -> bool:
-        intent_type = str(intent.get("intent_type") or "").lower()
-        query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
-        if bool(query_shape.get("needs_group_by")):
-            return True
-        if intent_type in {"trend_analysis", "ranking_analysis", "comparison_analysis", "detail_query", "share_analysis"}:
-            return True
-        dimension_slots = intent.get("dimension_slots")
-        if isinstance(dimension_slots, list):
-            return any(
-                isinstance(slot, dict) and str(slot.get("role") or "").lower() == "group_by"
-                for slot in dimension_slots
-            )
-        return False
 
     @staticmethod
     def _items(value: Any) -> list[dict[str, Any]]:

@@ -729,6 +729,56 @@ def test_metric_selection_patcher_prunes_non_query_dimensions_for_plain_metric_q
     assert knowledge["dimensions"] == ["stall_id", "stat_date"]
 
 
+def test_metric_selection_patcher_keeps_only_group_dimension_from_selected_metric_model():
+    selected_assets = {
+        "metrics": [],
+        "dimensions": [
+            {
+                "asset_id": 278,
+                "model_id": 246,
+                "biz_name": "stall_id",
+                "name": "档口ID",
+                "payload": {"alias": ["档口"], "ext_info": {}},
+            },
+            {
+                "asset_id": 296,
+                "model_id": 248,
+                "biz_name": "stall_id",
+                "name": "档口ID",
+                "payload": {"alias": ["档口"], "ext_info": {}},
+            },
+            {
+                "asset_id": 277,
+                "model_id": 246,
+                "biz_name": "seller_id",
+                "name": "商家ID",
+                "payload": {"ext_info": {}},
+            },
+        ],
+    }
+    slot_bindings = {
+        "dimensions": [
+            {"asset_id": 278, "biz_name": "stall_id"},
+            {"asset_id": 296, "biz_name": "stall_id"},
+            {"asset_id": 277, "biz_name": "seller_id"},
+        ],
+        "filters": [],
+    }
+    selected_assets["metrics"] = [{"asset_id": 269, "model_id": 246, "biz_name": "gmv_sale"}]
+
+    assets, bindings = chatbi_runtime.ChatBIV1InteractionResponsePatcher._prune_dimensions_after_metric_selection(
+        selected_assets,
+        slot_bindings,
+        {
+            "query_shape": {"needs_group_by": True},
+            "dimension_slots": [{"name": "档口", "role": "group_by", "value_status": "not_provided"}],
+        },
+    )
+
+    assert [item["asset_id"] for item in assets["dimensions"]] == [278]
+    assert [item["asset_id"] for item in bindings["dimensions"]] == [278]
+
+
 def test_slot_clarification_patcher_uses_structured_dimension_values():
     now = datetime.now()
     run = WorkflowRun(

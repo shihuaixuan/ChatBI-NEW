@@ -76,7 +76,8 @@ def normalize_time_range(raw: Any, timezone: str = "Asia/Shanghai") -> dict[str,
             "timezone": timezone,
         }
 
-    matched = re.fullmatch(r"(最近|近)(\d+)(天|日|周|个月|月|年)", text)
+    # 模型可能把“每天/按天”等粒度词一并放入 raw，只消费开头的范围部分。
+    matched = re.match(r"(最近|近)(\d+)(天|日|周|个月|月|年)", text)
     if matched:
         unit = {
             "天": "day",

@@ -19,8 +19,14 @@ def test_asset_plan_contains_required_derived_metrics():
         for metric in model["metrics"]
     }
 
-    assert metrics["aov_sale"]["expr"] == "SUM(gmv_sale) / NULLIF(SUM(order_cnt_sale), 0)"
+    assert metrics["aov_sale"]["expr"] == "ROUND(SUM(gmv_sale) / NULLIF(SUM(order_cnt_sale), 0), 2)"
     assert metrics["unshipped_order_cnt"]["expr"] == "COUNT(DISTINCT order_no)"
+    assert metrics["overtime_order_cnt"]["expr"] == (
+        "COUNT(DISTINCT CASE WHEN is_overtime = 1 THEN order_no END)"
+    )
+    assert metrics["dormant_product_cnt"]["expr"] == (
+        "COUNT(DISTINCT CASE WHEN days_unsold >= 30 THEN product_id END)"
+    )
     assert metrics["overdue_customer_cnt"]["expr"] == (
         "COUNT(DISTINCT CASE WHEN overdue_amt > 0 THEN customer_id END)"
     )
