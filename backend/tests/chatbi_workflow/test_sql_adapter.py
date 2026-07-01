@@ -1,0 +1,775 @@
+import pytest
+
+from apps.agentic_chat.schemas import ToolResult
+from apps.chatbi_workflow.capabilities.adapters.sql import SqlAdapter
+from apps.headless.schemas import DataSetSchema, SchemaElement
+from apps.headless.sql_compiler import SemanticSQLCompileResult
+
+
+class FakeHeadlessSchemaBuilder:
+    def __init__(self, schema: DataSetSchema) -> None:
+        self.schema = schema
+        self.calls: list[tuple[int, int]] = []
+
+    def build_dataset_schema(self, oid: int, dataset_id: int) -> DataSetSchema:
+        self.calls.append((oid, dataset_id))
+        return self.schema
+
+
+def test_sql_adapter_generates_sql_from_headless_selected_assets():
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="档口经营分析",
+            id=20,
+            name="档口经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[
+            {
+                "id": 10,
+                "name": "档口流量模型",
+                "biz_name": "stall_traffic",
+                "datasource_id": 5,
+                "tableQuery": "stall_traffic_1d",
+                "dimensions": [{"name": "统计日期", "bizName": "stat_date", "expr": "stat_date"}],
+                "measures": [{"name": "访问人数", "bizName": "visit_uv", "expr": "visit_uv", "agg": "SUM"}],
+            }
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=100,
+                name="访问人数",
+                biz_name="visit_uv",
+                type="METRIC",
+                default_agg="SUM",
+                fields=["visit_uv"],
+            )
+        ],
+        dimensions=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=200,
+                name="统计日期",
+                biz_name="stat_date",
+                type="DIMENSION",
+            )
+        ],
+    )
+    schema_builder = FakeHeadlessSchemaBuilder(schema)
+    adapter = SqlAdapter(schema_builder=schema_builder)
+
+    result = adapter.generate(
+        {
+            "request": {"question": "按日期看访问人数", "dataset_id": 20, "tenant_id": 10},
+            "variables": {
+                "rewrite": {"rewritten_question": "按日期看访问人数"},
+                "knowledge": {
+                    "slot_bindings": {
+                        "metrics": [{"asset_type": "METRIC", "asset_id": 100, "display_name": "访问人数"}],
+                        "dimensions": [{"asset_type": "DIMENSION", "asset_id": 200, "display_name": "统计日期"}],
+                    },
+                    "selected_assets": {
+                        "metrics": [{"asset_id": 100, "biz_name": "visit_uv", "display_name": "访问人数"}],
+                        "dimensions": [{"asset_id": 200, "biz_name": "stat_date", "display_name": "统计日期"}],
+                    },
+                },
+            },
+        }
+    )
+
+    assert schema_builder.calls == [(10, 20)]
+    assert result == {
+        "sql": (
+            "select stall_traffic.stat_date as stat_date, sum(stall_traffic.visit_uv) as visit_uv "
+            "from stall_traffic_1d stall_traffic "
+            "group by stall_traffic.stat_date limit 100"
+        ),
+        "strategy": "semantic_sql_compiler",
+        "datasource_id": 5,
+        "explanation": "基于 Headless 语义资产生成 SQL",
+        "used_assets": [
+            {"asset_type": "METRIC", "asset_id": 100, "biz_name": "visit_uv"},
+            {"asset_type": "DIMENSION", "asset_id": 200, "biz_name": "stat_date"},
+        ],
+    }
+
+
+def test_sql_adapter_treats_filter_dimensions_as_where_conditions_only():
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="档口经营分析",
+            id=20,
+            name="档口经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[
+            {
+                "id": 10,
+                "name": "档口流量模型",
+                "biz_name": "stall_traffic",
+                "datasource_id": 5,
+                "tableQuery": "stall_traffic_1d",
+                "dimensions": [
+                    {"name": "档口", "bizName": "stall_id", "expr": "stall_id"},
+                    {"name": "统计日期", "bizName": "stat_date", "expr": "stat_date"},
+                ],
+                "measures": [{"name": "访问人数", "bizName": "visit_uv", "expr": "visit_uv", "agg": "SUM"}],
+            }
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=100,
+                name="访问人数",
+                biz_name="visit_uv",
+                type="METRIC",
+                default_agg="NONE",
+                fields=["visit_uv"],
+            )
+        ],
+        dimensions=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=200,
+                name="档口",
+                biz_name="stall_id",
+                type="DIMENSION",
+            ),
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=201,
+                name="统计日期",
+                biz_name="stat_date",
+                type="DIMENSION",
+            ),
+        ],
+    )
+    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema))
+
+    result = adapter.generate(
+        {
+            "request": {"question": "今天档口1的访问人数", "dataset_id": 20, "tenant_id": 10},
+            "variables": {
+                "rewrite": {"rewritten_question": "今天档口1的访问人数"},
+                "knowledge": {
+                    "slot_bindings": {
+                        "metrics": [{"asset_type": "METRIC", "asset_id": 100, "display_name": "访问人数"}],
+                        "dimensions": [
+                            {"asset_type": "DIMENSION", "asset_id": 200, "display_name": "档口"},
+                            {"asset_type": "DIMENSION", "asset_id": 201, "display_name": "统计日期"},
+                        ],
+                        "filters": [
+                            {
+                                "asset_type": "DIMENSION",
+                                "asset_id": 200,
+                                "display_name": "档口",
+                                "operator": "=",
+                                "value": "1",
+                            },
+                            {
+                                "asset_type": "DIMENSION",
+                                "asset_id": 201,
+                                "display_name": "统计日期",
+                                "operator": "=",
+                                "value": {"kind": "relative_date", "value": "today"},
+                            },
+                        ],
+                    },
+                    "selected_assets": {
+                        "metrics": [{"asset_id": 100, "biz_name": "visit_uv", "display_name": "访问人数"}],
+                        "dimensions": [
+                            {"asset_id": 200, "biz_name": "stall_id", "display_name": "档口"},
+                            {"asset_id": 201, "biz_name": "stat_date", "display_name": "统计日期"},
+                        ],
+                    },
+                },
+            },
+        }
+    )
+
+    assert result["sql"] == (
+        "select stall_traffic.visit_uv as visit_uv "
+        "from stall_traffic_1d stall_traffic "
+        "where stall_traffic.stall_id = '1' and stall_traffic.stat_date = CURRENT_DATE limit 100"
+    )
+
+
+def test_sql_adapter_does_not_select_dimension_mentions_for_plain_metric_query():
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="店铺经营分析",
+            id=20,
+            name="店铺经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[
+            {
+                "id": 10,
+                "name": "客户模型",
+                "biz_name": "customer_model",
+                "datasource_id": 5,
+                "tableQuery": "customer_daily",
+            }
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="店铺经营分析",
+                model=10,
+                id=100,
+                name="总客户数-线上（累计）",
+                biz_name="total_customer_cnt_online",
+                type="METRIC",
+            )
+        ],
+        dimensions=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="店铺经营分析",
+                model=10,
+                id=200,
+                name="店铺ID",
+                biz_name="stall_id",
+                type="DIMENSION",
+            ),
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="店铺经营分析",
+                model=10,
+                id=201,
+                name="时间",
+                biz_name="stat_date",
+                type="DIMENSION",
+            ),
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="店铺经营分析",
+                model=10,
+                id=202,
+                name="Top 10 贡献客户",
+                biz_name="top10_contrib_customers",
+                type="DIMENSION",
+            ),
+        ],
+    )
+    compiler = CapturingCompiler(
+        "select stall_traffic.total_customer_cnt_online as total_customer_cnt_online from stall_traffic_1d stall_traffic"
+    )
+    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=compiler)
+
+    adapter.generate(
+        {
+            "request": {"question": "今天店铺1的线上客户数", "dataset_id": 20, "tenant_id": 10},
+            "variables": {
+                "intent": {
+                    "intent_type": "metric_query",
+                    "query_shape": {"needs_group_by": False},
+                    "dimension_slots": [{"name": "店铺", "role": "filter", "value": "1", "value_status": "provided"}],
+                },
+                "knowledge": {
+                    "slot_bindings": {
+                        "metrics": [{"asset_type": "METRIC", "asset_id": 100, "display_name": "总客户数-线上（累计）"}],
+                        "dimensions": [
+                            {"asset_type": "DIMENSION", "asset_id": 200, "display_name": "店铺ID"},
+                            {"asset_type": "DIMENSION", "asset_id": 202, "display_name": "Top 10 贡献客户"},
+                            {"asset_type": "DIMENSION", "asset_id": 201, "display_name": "时间"},
+                        ],
+                        "filters": [
+                            {"asset_type": "DIMENSION", "asset_id": 200, "display_name": "店铺ID", "operator": "=", "value": "1"},
+                            {
+                                "asset_type": "DIMENSION",
+                                "asset_id": 201,
+                                "display_name": "时间",
+                                "operator": "=",
+                                "value": {"kind": "relative_date", "value": "today"},
+                            },
+                        ],
+                    },
+                    "selected_assets": {
+                        "metrics": [{"asset_id": 100, "biz_name": "total_customer_cnt_online", "display_name": "总客户数-线上（累计）"}],
+                        "dimensions": [
+                            {"asset_id": 200, "biz_name": "stall_id", "display_name": "店铺ID"},
+                            {"asset_id": 202, "biz_name": "top10_contrib_customers", "display_name": "Top 10 贡献客户"},
+                            {"asset_id": 201, "biz_name": "stat_date", "display_name": "时间"},
+                        ],
+                    },
+                },
+            },
+        }
+    )
+
+    assert compiler.requests[0].slots["metrics"] == [
+        {"asset_type": "METRIC", "asset_id": 100, "display_name": "总客户数-线上（累计）", "operator": None, "value": None}
+    ]
+    assert compiler.requests[0].slots["dimensions"] == []
+    assert [item["asset_id"] for item in compiler.requests[0].slots["filters"]] == [200, 201]
+
+
+class UnsafeCompiler:
+    def compile(self, request):
+        return SemanticSQLCompileResult(
+            sql="delete from stall_traffic_1d",
+            tables=["stall_traffic_1d"],
+            metrics=["visit_uv"],
+            dimensions=[],
+        )
+
+
+class CapturingCompiler:
+    def __init__(self, sql: str) -> None:
+        self.sql = sql
+        self.requests = []
+
+    def compile(self, request):
+        self.requests.append(request)
+        return SemanticSQLCompileResult(
+            sql=self.sql,
+            tables=["stall_traffic_1d"],
+            metrics=["visit_uv"],
+            dimensions=[],
+        )
+
+
+def test_sql_adapter_passes_ranking_order_and_limit_to_compiler():
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="档口经营分析",
+            id=20,
+            name="档口经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[{"id": 10, "name": "档口订单", "biz_name": "stall_order", "tableQuery": "fct_stall_order_daily"}],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=100,
+                name="销售GMV",
+                biz_name="gmv_sale",
+                type="METRIC",
+            )
+        ],
+        dimensions=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=200,
+                name="档口",
+                biz_name="stall_id",
+                type="DIMENSION",
+            )
+        ],
+    )
+    compiler = CapturingCompiler(
+        "select stall_order.stall_id, sum(stall_order.gmv_sale) as gmv_sale "
+        "from stall_traffic_1d stall_order group by stall_order.stall_id "
+        "order by gmv_sale desc limit 5"
+    )
+    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=compiler)
+
+    adapter.generate(
+        {
+            "request": {"question": "销售GMV最高的5个档口", "dataset_id": 20, "tenant_id": 10},
+            "variables": {
+                "intent": {
+                    "intent_type": "ranking_analysis",
+                    "query_shape": {
+                        "needs_group_by": True,
+                        "needs_order_by": True,
+                        "order_direction": "desc",
+                        "limit": 5,
+                    },
+                },
+                "knowledge": {
+                    "slot_bindings": {
+                        "metrics": [{"asset_type": "METRIC", "asset_id": 100}],
+                        "dimensions": [{"asset_type": "DIMENSION", "asset_id": 200}],
+                    }
+                },
+            },
+        }
+    )
+
+    assert compiler.requests[0].order_by == [
+        {"asset_type": "METRIC", "asset_id": 100, "direction": "desc"}
+    ]
+    assert compiler.requests[0].limit == 5
+
+
+def test_sql_adapter_rejects_unsafe_generated_sql():
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="档口经营分析",
+            id=20,
+            name="档口经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[{"id": 10, "name": "档口流量模型", "biz_name": "stall_traffic", "tableQuery": "stall_traffic_1d"}],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=100,
+                name="访问人数",
+                biz_name="visit_uv",
+                type="METRIC",
+            )
+        ],
+        dimensions=[],
+    )
+    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=UnsafeCompiler())
+
+    with pytest.raises(ValueError, match="unsafe_statement"):
+        adapter.generate(
+            {
+                "request": {"question": "删除访问人数", "dataset_id": 20, "tenant_id": 10},
+                "variables": {"knowledge": {"slot_bindings": {"metrics": [{"asset_type": "METRIC", "asset_id": 100}]}}},
+            }
+        )
+
+
+def test_sql_adapter_passes_repair_context_to_compiler_on_retry():
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="档口经营分析",
+            id=20,
+            name="档口经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[
+            {
+                "id": 10,
+                "name": "档口流量模型",
+                "biz_name": "stall_traffic",
+                "datasource_id": 5,
+                "tableQuery": "stall_traffic_1d",
+                "measures": [{"name": "访问人数", "bizName": "visit_uv", "expr": "visit_uv", "agg": "SUM"}],
+            }
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=100,
+                name="访问人数",
+                biz_name="visit_uv",
+                type="METRIC",
+                default_agg="SUM",
+                fields=["visit_uv"],
+            )
+        ],
+        dimensions=[],
+    )
+    compiler = CapturingCompiler("select sum(stall_traffic.visit_uv) as visit_uv from stall_traffic_1d stall_traffic")
+    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=compiler)
+
+    adapter.generate(
+        {
+            "request": {"question": "今日访问人数", "dataset_id": 20, "tenant_id": 10},
+            "variables": {
+                "knowledge": {
+                    "slot_bindings": {"metrics": [{"asset_type": "METRIC", "asset_id": 100, "display_name": "访问人数"}]},
+                    "tables": ["stall_traffic_1d"],
+                },
+                "sql": {"sql": "select * from missing_table", "datasource_id": 5},
+                "sql_error": {
+                    "error_code": "sql_execute_error",
+                    "message": "SQL 执行失败：Table 'missing_table' doesn't exist",
+                    "retryable": True,
+                    "repair_plan": {
+                        "action": "regenerate_sql",
+                        "reason": "SQL 引用了不存在的表",
+                        "retryable": True,
+                        "candidate_tables": ["stall_traffic_1d"],
+                    },
+                },
+            },
+        }
+    )
+
+    assert compiler.requests[0].repair_context == {
+        "action": "regenerate_sql",
+        "error_code": "sql_execute_error",
+        "message": "SQL 执行失败：Table 'missing_table' doesn't exist",
+        "failed_sql": "select * from missing_table",
+        "candidate_tables": ["stall_traffic_1d"],
+    }
+
+
+def test_sql_adapter_rejects_retry_when_regenerated_sql_is_same_as_failed_sql():
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="档口经营分析",
+            id=20,
+            name="档口经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[{"id": 10, "name": "档口流量模型", "biz_name": "stall_traffic", "tableQuery": "missing_table"}],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=100,
+                name="访问人数",
+                biz_name="visit_uv",
+                type="METRIC",
+            )
+        ],
+        dimensions=[],
+    )
+    failed_sql = "select sum(visit_uv) as visit_uv from missing_table"
+    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=CapturingCompiler(failed_sql))
+
+    with pytest.raises(ValueError, match="SQL_REPAIR_REGENERATED_SAME_SQL"):
+        adapter.generate(
+            {
+                "request": {"question": "今日访问人数", "dataset_id": 20, "tenant_id": 10},
+                "variables": {
+                    "knowledge": {
+                        "slot_bindings": {
+                            "metrics": [{"asset_type": "METRIC", "asset_id": 100, "display_name": "访问人数"}]
+                        }
+                    },
+                    "sql": {"sql": failed_sql, "datasource_id": 5},
+                    "sql_error": {
+                        "error_code": "sql_execute_error",
+                        "message": "SQL 执行失败：Table 'missing_table' doesn't exist",
+                        "retryable": True,
+                        "repair_plan": {"action": "regenerate_sql", "retryable": True},
+                    },
+                },
+            }
+        )
+
+
+class FakeSqlExecuteTool:
+    def __init__(self, result: ToolResult) -> None:
+        self.result = result
+        self.payloads: list[dict] = []
+
+    def run(self, payload: dict) -> ToolResult:
+        self.payloads.append(payload)
+        return self.result
+
+
+class DenyPermissionAdapter:
+    def apply(self, payload: dict) -> dict:
+        return {"allowed": False, "reason": "没有数据源权限", "sql": None, "error_code": "permission_denied"}
+
+
+def test_sql_adapter_executes_sql_and_normalizes_result_rows():
+    execute_tool = FakeSqlExecuteTool(
+        ToolResult(
+            success=True,
+            payload={
+                "fields": ["visit_uv"],
+                "data": [{"visit_uv": 123}],
+            },
+        )
+    )
+    adapter = SqlAdapter(execute_tool=execute_tool)
+
+    result = adapter.execute(
+        {
+            "variables": {
+                "sql": {
+                    "sql": "select sum(visit_uv) as visit_uv from stall_traffic_1d",
+                    "datasource_id": 5,
+                }
+            }
+        }
+    )
+
+    assert execute_tool.payloads == [
+        {
+            "sql": "select sum(visit_uv) as visit_uv from stall_traffic_1d",
+            "datasource_id": 5,
+        }
+    ]
+    assert result == {
+        "status": "succeeded",
+        "rows": [{"visit_uv": 123}],
+        "row_count": 1,
+        "fields": ["visit_uv"],
+        "execution_ms": 0,
+        "sampled_row_count": 1,
+        "result_truncated": False,
+        "artifact_ref": None,
+        "error_code": None,
+        "message": None,
+    }
+
+
+def test_sql_adapter_keeps_only_sample_rows_for_large_result():
+    execute_tool = FakeSqlExecuteTool(
+        ToolResult(
+            success=True,
+            payload={
+                "fields": ["visit_uv"],
+                "data": [{"visit_uv": 1}, {"visit_uv": 2}, {"visit_uv": 3}],
+            },
+        )
+    )
+    adapter = SqlAdapter(execute_tool=execute_tool, sample_row_limit=2)
+
+    result = adapter.execute(
+        {
+            "variables": {
+                "sql": {
+                    "sql": "select visit_uv from stall_traffic_1d",
+                    "datasource_id": 5,
+                }
+            }
+        }
+    )
+
+    assert result["row_count"] == 3
+    assert result["rows"] == [{"visit_uv": 1}, {"visit_uv": 2}]
+    assert result["sampled_row_count"] == 2
+    assert result["result_truncated"] is True
+    assert result["artifact_ref"] is None
+
+
+def test_sql_adapter_returns_failed_result_when_execute_tool_fails():
+    execute_tool = FakeSqlExecuteTool(
+        ToolResult(success=False, error_code="sql_execute_error", message="table not found")
+    )
+    adapter = SqlAdapter(execute_tool=execute_tool)
+
+    result = adapter.execute(
+        {
+            "variables": {
+                "sql": {
+                    "sql": "select * from missing_table",
+                    "datasource_id": 5,
+                }
+            }
+        }
+    )
+
+    assert result == {
+        "status": "failed",
+        "rows": [],
+        "row_count": 0,
+        "fields": [],
+        "execution_ms": 0,
+        "error_code": "sql_execute_error",
+        "message": "table not found",
+    }
+
+
+def test_sql_adapter_does_not_execute_sql_when_permission_denied():
+    execute_tool = FakeSqlExecuteTool(ToolResult(success=True, payload={"fields": [], "data": []}))
+    adapter = SqlAdapter(execute_tool=execute_tool, permission_adapter=DenyPermissionAdapter())
+
+    result = adapter.execute(
+        {
+            "variables": {
+                "sql": {
+                    "sql": "select * from orders",
+                    "datasource_id": 5,
+                }
+            }
+        }
+    )
+
+    assert execute_tool.payloads == []
+    assert result == {
+        "status": "failed",
+        "rows": [],
+        "row_count": 0,
+        "fields": [],
+        "execution_ms": 0,
+        "error_code": "permission_denied",
+        "message": "没有数据源权限",
+    }
+
+
+def test_sql_adapter_handles_sql_execution_error_with_repair_hint():
+    adapter = SqlAdapter()
+
+    result = adapter.handle_error(
+        {
+            "variables": {
+                "sql": {"sql": "select * from missing_table"},
+                "sql_execution": {
+                    "status": "failed",
+                    "error_code": "datasource_not_found",
+                    "message": "数据源不存在",
+                },
+            }
+        }
+    )
+
+    assert result == {
+        "error_code": "datasource_not_found",
+        "message": "SQL 执行失败：数据源不存在",
+        "retryable": False,
+        "repair_hint": "请检查数据集绑定的数据源是否存在，或当前用户是否有访问权限。",
+        "repair_plan": {
+            "action": "check_datasource",
+            "reason": "数据源不可用，不能自动重试",
+            "retryable": False,
+        },
+    }
+
+
+def test_sql_adapter_marks_repairable_table_error_with_retry_plan():
+    adapter = SqlAdapter()
+
+    result = adapter.handle_error(
+        {
+            "variables": {
+                "sql": {"sql": "select * from missing_table"},
+                "knowledge": {"tables": ["stall_traffic_1d"]},
+                "sql_execution": {
+                    "status": "failed",
+                    "error_code": "sql_execute_error",
+                    "message": "Table 'missing_table' doesn't exist",
+                },
+            }
+        }
+    )
+
+    assert result == {
+        "error_code": "sql_execute_error",
+        "message": "SQL 执行失败：Table 'missing_table' doesn't exist",
+        "retryable": True,
+        "repair_hint": "表不存在，请基于已命中的语义表重新生成 SQL。",
+        "repair_plan": {
+            "action": "regenerate_sql",
+            "reason": "SQL 引用了不存在的表",
+            "retryable": True,
+            "candidate_tables": ["stall_traffic_1d"],
+        },
+    }
