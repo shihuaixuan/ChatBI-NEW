@@ -144,7 +144,12 @@ export const routes = [
         path: '/set/semantic',
         name: 'semantic',
         component: Semantic,
-        meta: { title: '语义资产' },
+        meta: {
+          title: '语义资产',
+          iconActive: 'model',
+          iconDeActive: 'noModel',
+          hiddenInSubMenu: true,
+        },
       },
       {
         path: '/set/prompt',
