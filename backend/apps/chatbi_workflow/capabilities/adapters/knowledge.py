@@ -19,13 +19,20 @@ class CandidateGate:
         self.low_confidence_score = low_confidence_score
         self.ambiguity_gap = ambiguity_gap
 
-    def decide(self, candidate_groups: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    def decide(
+        self,
+        candidate_groups: dict[str, list[dict[str, Any]]],
+        *,
+        expected_metric_mentions: list[str] | None = None,
+    ) -> dict[str, Any]:
         metrics = sorted(candidate_groups.get("metrics", []), key=lambda item: item.get("score", 0), reverse=True)
         dimensions = sorted(candidate_groups.get("dimensions", []), key=lambda item: item.get("score", 0), reverse=True)
         values = sorted(candidate_groups.get("values", []), key=lambda item: item.get("score", 0), reverse=True)
         terms = sorted(candidate_groups.get("terms", []), key=lambda item: item.get("score", 0), reverse=True)
 
-        if len(metrics) >= 2 and self._is_close(metrics[0], metrics[1]):
+        explicit_metrics = self._metrics_for_explicit_mentions(metrics, expected_metric_mentions or [])
+
+        if not explicit_metrics and len(metrics) >= 2 and self._is_close(metrics[0], metrics[1]):
             return {
                 "status": "metric_ambiguous",
                 "selected_assets": {"metrics": [], "dimensions": dimensions, "values": values, "terms": terms},
@@ -52,7 +59,7 @@ class CandidateGate:
         return {
             "status": "hit",
             "selected_assets": {
-                "metrics": metrics[:1],
+                "metrics": explicit_metrics or metrics[:1],
                 "dimensions": dimensions,
                 "values": values,
                 "terms": terms,
@@ -64,6 +71,51 @@ class CandidateGate:
             },
             "ambiguities": [],
         }
+
+    @staticmethod
+    def _metrics_for_explicit_mentions(
+        metrics: list[dict[str, Any]],
+        mentions: list[str],
+    ) -> list[dict[str, Any]]:
+        """为每个显式指标提及选择一个最高分候选，并按提及顺序返回。"""
+
+        selected: list[dict[str, Any]] = []
+        selected_ids: set[int] = set()
+        for mention in mentions:
+            normalized_mention = _normalize_text(mention)
+            if not normalized_mention:
+                continue
+            matching: list[dict[str, Any]] = []
+            exact_matching: list[dict[str, Any]] = []
+            for metric in metrics:
+                asset_id = _int_or_none(metric.get("asset_id"))
+                if asset_id is None or asset_id in selected_ids:
+                    continue
+                texts = (
+                    metric.get("matched_text"),
+                    metric.get("name"),
+                    metric.get("biz_name"),
+                )
+                normalized_texts = [_normalize_text(text) for text in texts]
+                if not any(
+                    text and (text == normalized_mention or text in normalized_mention or normalized_mention in text)
+                    for text in normalized_texts
+                ):
+                    continue
+                matching.append(metric)
+                if normalized_mention in normalized_texts:
+                    exact_matching.append(metric)
+            candidates = exact_matching or matching
+            if not candidates:
+                continue
+            # “人数”一类宽泛词仍交给原有歧义流程，不擅自选择相近候选。
+            if len(candidates) >= 2 and float(candidates[0].get("score") or 0) - float(
+                candidates[1].get("score") or 0
+            ) < 0.12:
+                return []
+            selected.append(candidates[0])
+            selected_ids.add(int(candidates[0]["asset_id"]))
+        return selected
 
     def _is_close(self, top: dict[str, Any], second: dict[str, Any]) -> bool:
         top_score = float(top.get("score") or 0)
@@ -107,7 +159,11 @@ class HeadlessKnowledgeAdapter:
         retrieval_schema = self._schema_scoped_by_subject_domain(schema, subject_domain)
         candidate_groups = self._retrieve_candidate_groups(question, intent, retrieval_schema, int(oid))
         self._rerank_candidate_groups_by_intent(candidate_groups, intent)
-        gate_result = self._candidate_gate.decide(candidate_groups)
+        metric_mentions = intent.get("metric_mentions")
+        gate_result = self._candidate_gate.decide(
+            candidate_groups,
+            expected_metric_mentions=metric_mentions if isinstance(metric_mentions, list) else [],
+        )
         selected_assets = self._constrain_selected_assets_to_metric_models(gate_result["selected_assets"])
         missing_slots = self._missing_required_slots(intent, selected_assets, gate_result["ambiguities"])
         if missing_slots:

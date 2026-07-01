@@ -16,6 +16,7 @@ class SemanticSQLCompileRequest:
     metric_ids: list[int] = field(default_factory=list)
     dimension_ids: list[int] = field(default_factory=list)
     repair_context: dict[str, Any] = field(default_factory=dict)
+    order_by: list[dict[str, Any]] = field(default_factory=list)
     limit: int | None = None
 
 
@@ -90,6 +91,9 @@ class SemanticSQLCompiler:
             sql += " where " + " and ".join(where_parts)
         if any(is_aggregate for _, _, is_aggregate in metric_selects) and group_parts:
             sql += " group by " + ", ".join(group_parts)
+        order_parts = self._order_parts(request.order_by, metrics, dimensions)
+        if order_parts:
+            sql += " order by " + ", ".join(order_parts)
         if request.limit:
             sql += f" limit {request.limit}"
 
@@ -353,6 +357,9 @@ class SemanticSQLCompiler:
     def _metric_measure_expr(metric: SchemaElement, model: dict[str, Any]) -> tuple[str, str | None]:
         params = metric.type_params or {}
         measure_params = params.get("metricDefineByMeasureParams") or {}
+        derived_expr = measure_params.get("expr") if isinstance(measure_params, dict) else None
+        if derived_expr and SemanticSQLCompiler._contains_aggregate(str(derived_expr)):
+            return str(derived_expr), "NONE"
         measures = measure_params.get("measures") if isinstance(measure_params, dict) else []
         if measures:
             measure = measures[0]
@@ -361,6 +368,27 @@ class SemanticSQLCompiler:
             if (measure.get("bizName") or measure.get("biz_name")) == metric.biz_name:
                 return measure.get("expr") or metric.biz_name, measure.get("agg")
         return metric.biz_name, metric.default_agg
+
+    @staticmethod
+    def _order_parts(
+        order_by: list[dict[str, Any]],
+        metrics: list[SchemaElement],
+        dimensions: list[SchemaElement],
+    ) -> list[str]:
+        """把受控排序槽位转换为输出别名排序，避免注入任意表达式。"""
+
+        alias_by_id = {element.id: element.biz_name for element in [*metrics, *dimensions]}
+        parts: list[str] = []
+        for item in order_by:
+            if not isinstance(item, dict):
+                continue
+            asset_id = item.get("asset_id")
+            alias = alias_by_id.get(asset_id)
+            if not alias:
+                continue
+            direction = "asc" if str(item.get("direction") or "").lower() == "asc" else "desc"
+            parts.append(f"{alias} {direction}")
+        return parts
 
     @staticmethod
     def _contains_aggregate(expr: str) -> bool:
@@ -443,7 +471,17 @@ class SemanticSQLCompiler:
             start = cls._date_sub_literal(start_offset)
             end = "CURRENT_DATE" if bool(value.get("include_current")) else cls._date_sub_literal(1)
             return f"{expr} >= {start} and {expr} <= {end}"
+        if kind == "absolute_range":
+            start = cls._safe_iso_date(value.get("start"))
+            end_exclusive = cls._safe_iso_date(value.get("end_exclusive"))
+            if start and end_exclusive:
+                return f"{expr} >= '{start}' and {expr} < '{end_exclusive}'"
         return None
+
+    @staticmethod
+    def _safe_iso_date(value: Any) -> str | None:
+        text = str(value or "").strip()
+        return text if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) else None
 
     @classmethod
     def _single_date_literal(cls, value: dict[str, Any]) -> str | None:

@@ -34,6 +34,8 @@ def is_time_expression(value: Any) -> bool:
         return False
     if text in {_normalize_text(keyword) for keyword in _TIME_KEYWORDS}:
         return True
+    if re.fullmatch(r"\d{4}年\d{1,2}月", text):
+        return True
     return re.fullmatch(r"(最近|近)\d+(天|日|周|个月|月|年)", text) is not None
 
 
@@ -55,6 +57,22 @@ def normalize_time_range(raw: Any, timezone: str = "Asia/Shanghai") -> dict[str,
             "kind": "single_date",
             "anchor": "today",
             "offset_days": single_dates[text],
+            "timezone": timezone,
+        }
+
+    # 绝对月份统一转换为左闭右开区间，避免月底天数差异。
+    absolute_month = re.fullmatch(r"(\d{4})年(\d{1,2})月", text)
+    if absolute_month:
+        year = int(absolute_month.group(1))
+        month = int(absolute_month.group(2))
+        if not 1 <= month <= 12:
+            return {"kind": "unsupported", "raw": raw, "timezone": timezone}
+        end_year = year + (1 if month == 12 else 0)
+        end_month = 1 if month == 12 else month + 1
+        return {
+            "kind": "absolute_range",
+            "start": f"{year:04d}-{month:02d}-01",
+            "end_exclusive": f"{end_year:04d}-{end_month:02d}-01",
             "timezone": timezone,
         }
 

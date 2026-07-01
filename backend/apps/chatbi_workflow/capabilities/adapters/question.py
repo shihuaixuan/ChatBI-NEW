@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from json import JSONDecodeError
 from typing import Any, Protocol
@@ -1626,6 +1627,8 @@ class QuestionAdapter:
 
         keywords = ("今天", "昨日", "昨天", "本周", "上周", "本月", "上月", "最近 7 天", "最近7天", "近 30 天", "近30天")
         mentions = [keyword for keyword in keywords if keyword in question]
+        absolute_months = re.findall(r"\d{4}\s*年\s*\d{1,2}\s*月", question)
+        mentions.extend(month for month in absolute_months if month not in mentions)
         for keyword in ("按天", "按周", "按月"):
             if keyword in question:
                 mentions.append(keyword)
@@ -1649,6 +1652,9 @@ class QuestionAdapter:
 
     @staticmethod
     def _infer_limit(question: str) -> int | None:
+        natural_limit = re.search(r"(?:最高|最低|最好|最差)(?:的)?\s*(\d+)\s*个", question)
+        if natural_limit:
+            return int(natural_limit.group(1))
         for marker in ("Top", "top", "前", "后"):
             index = question.find(marker)
             if index < 0:

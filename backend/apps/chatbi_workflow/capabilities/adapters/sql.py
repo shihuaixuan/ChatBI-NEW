@@ -50,6 +50,7 @@ class SqlAdapter:
         schema = self._schema_builder.build_dataset_schema(int(oid), int(dataset_id))
         intent = variables.get("intent") if isinstance(variables.get("intent"), dict) else {}
         slots = self._compile_slots(knowledge, intent)
+        order_by, limit = self._compile_order_and_limit(intent, slots)
         repair_context = self._repair_context(variables)
         result = self._compiler.compile(
             SemanticSQLCompileRequest(
@@ -57,6 +58,8 @@ class SqlAdapter:
                 question=question,
                 slots=slots,
                 repair_context=repair_context,
+                order_by=order_by,
+                limit=limit,
             )
         )
         self._reject_same_repair_sql(result.sql, repair_context)
@@ -160,6 +163,36 @@ class SqlAdapter:
             "dimensions": dimensions,
             "filters": filters,
         }
+
+    @classmethod
+    def _compile_order_and_limit(
+        cls,
+        intent: dict[str, Any],
+        slots: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        """把排名查询形态绑定到已选择的指标，禁止使用未落地的自由字段。"""
+
+        query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
+        raw_limit = query_shape.get("limit")
+        limit = cls._int_or_none(raw_limit)
+        if limit is not None and not 1 <= limit <= 1000:
+            limit = None
+        if not bool(query_shape.get("needs_order_by")):
+            return [], limit
+        metrics = slots.get("metrics") if isinstance(slots.get("metrics"), list) else []
+        if not metrics:
+            return [], limit
+        metric_id = cls._int_or_none(metrics[0].get("asset_id"))
+        if metric_id is None:
+            return [], limit
+        direction = "asc" if str(query_shape.get("order_direction") or "").lower() == "asc" else "desc"
+        return [
+            {
+                "asset_type": "METRIC",
+                "asset_id": metric_id,
+                "direction": direction,
+            }
+        ], limit
 
     @staticmethod
     def _should_select_dimensions(intent: dict[str, Any] | None) -> bool:
