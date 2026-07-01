@@ -265,11 +265,20 @@ class HeadlessKnowledgeAdapter:
 
         query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
         required_slots = set(cls._text_list(intent.get("required_slot_types")))
+        time_range = intent.get("time_range") if isinstance(intent.get("time_range"), dict) else {}
+        normalized_time = normalize_time_range_payload(time_range).get("normalized") if time_range else None
+        supported_time = isinstance(normalized_time, dict) and normalized_time.get("kind") != "unsupported"
+        current_snapshot = _normalize_text(time_range.get("raw")) in {"当前", "目前"}
         needs_time = (
-            cls._time_range_provided(intent)
+            supported_time
             or bool(query_shape.get("time_grain"))
-            or "time_dimension" in required_slots
-            or bool(cls._text_list(intent.get("time_mentions")))
+            or (
+                not current_snapshot
+                and (
+                    "time_dimension" in required_slots
+                    or bool(cls._text_list(intent.get("time_mentions")))
+                )
+            )
         )
         if needs_time:
             default_time = cls._default_time_dimension_candidate(dimensions)
@@ -611,6 +620,9 @@ class HeadlessKnowledgeAdapter:
         required_slots = set(HeadlessKnowledgeAdapter._text_list(intent.get("required_slot_types")))
         if HeadlessKnowledgeAdapter._time_range_provided(intent):
             required_slots.add("time_dimension")
+        time_range = intent.get("time_range") if isinstance(intent.get("time_range"), dict) else {}
+        if _normalize_text(time_range.get("raw")) in {"当前", "目前"}:
+            required_slots.discard("time_dimension")
         missing: list[str] = []
         has_metric_ambiguity = any(ambiguity.get("type") == "metric" for ambiguity in ambiguities)
         if "metric" in required_slots and not selected_assets.get("metrics") and not has_metric_ambiguity:

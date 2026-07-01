@@ -307,6 +307,11 @@ class ChatBIV1InteractionResponsePatcher:
             for candidate in ambiguity.get("candidates", []) or []:
                 if self._candidate_matches(candidate, selected_text):
                     return candidate
+        candidate_groups = knowledge.get("candidate_groups")
+        if isinstance(candidate_groups, dict):
+            for candidate in candidate_groups.get("metrics", []) or []:
+                if self._candidate_matches(candidate, selected_text):
+                    return candidate
         return selected_metric
 
     def _candidate_matches(self, candidate: Any, selected_text: str) -> bool:
@@ -340,12 +345,17 @@ class ChatBIV1InteractionResponsePatcher:
         )
         biz_name = candidate.get("biz_name") or str(candidate.get("asset_id") or selected_metric)
         asset_id = candidate.get("asset_id") or candidate.get("id") or biz_name
-        return {
+        asset = {
             "asset_id": asset_id,
             "biz_name": str(biz_name),
             "display_name": str(display_name),
             "source": "user_selected",
         }
+        if candidate.get("model_id") is not None:
+            asset["model_id"] = candidate["model_id"]
+        if isinstance(candidate.get("payload"), dict):
+            asset["payload"] = candidate["payload"]
+        return asset
 
 
 def build_placeholder_chatbi_runtime(session: Session, commit_events: bool = False) -> GraphRuntime:

@@ -30,3 +30,7 @@ def test_asset_plan_contains_required_derived_metrics():
     assert metrics["overdue_customer_cnt"]["expr"] == (
         "COUNT(DISTINCT CASE WHEN overdue_amt > 0 THEN customer_id END)"
     )
+    assert build_asset_plan()["fct_customer_trade_daily"]["obsolete_metrics"] == [
+        "new_deal_customer_cnt"
+    ]
+    assert "消费金额" in build_asset_plan()["fct_customer_trade_daily"]["metric_aliases"]["customer_gmv"]

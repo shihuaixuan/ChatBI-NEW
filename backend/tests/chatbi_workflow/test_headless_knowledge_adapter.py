@@ -107,6 +107,46 @@ def test_selected_dimensions_are_pruned_to_explicit_query_roles():
     assert [item["biz_name"] for item in result["dimensions"]] == ["stall_id"]
 
 
+def test_current_snapshot_time_does_not_become_group_dimension():
+    dimensions = [
+        {
+            "asset_id": 200,
+            "name": "档口ID",
+            "biz_name": "stall_id",
+            "model_id": 10,
+            "score": 1.1,
+            "payload": {"alias": ["档口"], "ext_info": {}},
+        },
+        {
+            "asset_id": 201,
+            "name": "快照日期",
+            "biz_name": "snapshot_date",
+            "model_id": 10,
+            "score": 0.88,
+            "payload": {"ext_info": {"dimension_type": "partition_time", "is_default_time": True}},
+        },
+    ]
+
+    result = HeadlessKnowledgeAdapter._constrain_selected_dimensions_by_intent(
+        {"metrics": [], "dimensions": dimensions, "values": [], "terms": []},
+        {
+            "dimension_slots": [
+                {"name": "档口", "role": "group_by", "value_status": "not_provided"},
+            ],
+            "time_range": {
+                "raw": "当前",
+                "value_status": "provided",
+                "normalized": {"kind": "unsupported", "raw": "当前"},
+            },
+            "time_mentions": ["当前"],
+            "required_slot_types": ["metric", "dimension", "time_dimension"],
+            "query_shape": {"needs_group_by": True},
+        },
+    )
+
+    assert [item["biz_name"] for item in result["dimensions"]] == ["stall_id"]
+
+
 def test_headless_knowledge_adapter_retrieves_metric_candidates_from_dataset_schema():
     schema = DataSetSchema(
         data_set=SchemaElement(

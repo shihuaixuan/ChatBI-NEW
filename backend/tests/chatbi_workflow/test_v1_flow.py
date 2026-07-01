@@ -779,6 +779,24 @@ def test_metric_selection_patcher_keeps_only_group_dimension_from_selected_metri
     assert [item["asset_id"] for item in bindings["dimensions"]] == [278]
 
 
+def test_metric_selection_patcher_preserves_selected_metric_model_id():
+    patcher = chatbi_runtime.ChatBIV1InteractionResponsePatcher()
+
+    asset = patcher._metric_asset(
+        {
+            "asset_id": 280,
+            "model_id": 248,
+            "biz_name": "stock_qty",
+            "name": "当前库存件数",
+            "payload": {"fields": ["stock_qty"]},
+        },
+        280,
+    )
+
+    assert asset["model_id"] == 248
+    assert asset["payload"] == {"fields": ["stock_qty"]}
+
+
 def test_slot_clarification_patcher_uses_structured_dimension_values():
     now = datetime.now()
     run = WorkflowRun(

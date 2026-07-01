@@ -48,6 +48,7 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
         "snap_unshipped_order": {
             "grain": ["snapshot_date", "order_no"],
             "default_time": "snapshot_date",
+            "obsolete_metrics": ["overtime_unshipped_order_cnt"],
             "metrics": [
                 _metric("unshipped_order_cnt", "未发订单数", "COUNT(DISTINCT order_no)", ["未发订单笔数"]),
                 _metric(
@@ -61,6 +62,8 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
         "snap_product_inventory": {
             "grain": ["snapshot_date", "stall_id", "product_id"],
             "default_time": "snapshot_date",
+            "obsolete_metrics": ["dormant_product_cnt_30d"],
+            "metric_aliases": {"stock_qty": ["库存总量", "库存量"]},
             "metrics": [
                 _metric(
                     "negative_stock_product_cnt",
@@ -79,6 +82,11 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
         "fct_customer_trade_daily": {
             "grain": ["stat_date", "customer_id", "stall_id"],
             "default_time": "stat_date",
+            "obsolete_metrics": ["new_deal_customer_cnt"],
+            "metric_aliases": {
+                "customer_gmv": ["消费金额", "客户GMV", "GMV"],
+                "order_cnt": ["订单数", "客户订单数"],
+            },
             "metrics": [
                 _metric(
                     "new_customer_cnt",
@@ -91,6 +99,10 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
         "snap_customer_arrears": {
             "grain": ["snapshot_date", "customer_id", "stall_id"],
             "default_time": "snapshot_date",
+            "metric_aliases": {
+                "arrears_amt": ["欠款金额", "客户欠款总金额"],
+                "overdue_amt": ["逾期金额"],
+            },
             "metrics": [
                 _metric(
                     "overdue_customer_cnt",
@@ -172,6 +184,17 @@ def configure_assets(session: Session, dataset_id: int, oid: int, dry_run: bool)
                 )
             ).all()
         }
+        obsolete_metrics = set(target.get("obsolete_metrics") or [])
+        for obsolete_biz_name in obsolete_metrics:
+            obsolete = existing_metrics.get(obsolete_biz_name)
+            if obsolete is not None:
+                _update_value(obsolete, "status", 0, summary)
+        for biz_name, aliases in (target.get("metric_aliases") or {}).items():
+            metric = existing_metrics.get(biz_name)
+            if metric is None:
+                continue
+            merged_aliases = list(dict.fromkeys([*(metric.alias or []), *aliases]))
+            _update_value(metric, "alias", merged_aliases, summary)
         for metric_target in target["metrics"]:
             metric = existing_metrics.get(metric_target["biz_name"])
             if metric is None:
