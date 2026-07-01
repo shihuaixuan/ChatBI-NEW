@@ -1,4 +1,8 @@
+import numpy as np
+
+from apps.headless import schemas
 from apps.headless.api import router
+from apps.headless.models import HeadlessAssetEmbedding
 
 
 def test_headless_router_exposes_schema_and_mapping_contracts():
@@ -38,3 +42,34 @@ def test_headless_router_exposes_metric_embedding_contracts():
 
     assert "/headless/datasets/{dataset_id}/metric-embeddings/rebuild" in paths
     assert "/headless/datasets/{dataset_id}/metric-embeddings" in paths
+
+
+def test_metric_embedding_list_returns_status_dto_without_vector_payload():
+    route = next(
+        route
+        for route in router.routes
+        if route.path == "/headless/datasets/{dataset_id}/metric-embeddings"
+    )
+
+    assert route.response_model == list[schemas.MetricEmbeddingStatusResponse]
+
+    record = HeadlessAssetEmbedding(
+        id=1,
+        oid=1,
+        dataset_id=20,
+        asset_type="METRIC",
+        asset_id=100,
+        document_id=900,
+        embedding_text="指标名称: 销售额",
+        embedding_text_hash="hash-sales",
+        embedding=np.array([0.1, 0.2]),
+        embedding_provider="siliconflow",
+        embedding_model="BAAI/bge-m3",
+        embedding_dim=2,
+        status="SUCCEEDED",
+    )
+
+    payload = schemas.MetricEmbeddingStatusResponse.model_validate(record).model_dump()
+
+    assert payload["status"] == "SUCCEEDED"
+    assert "embedding" not in payload

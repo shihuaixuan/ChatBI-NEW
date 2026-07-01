@@ -43,6 +43,7 @@ from apps.headless.schemas import (
     HeadlessTableMeta,
     MetricBatchCreateFromMeasuresPayload,
     MetricEmbeddingRebuildResponse,
+    MetricEmbeddingStatusResponse,
     MetricPayload,
     ModelBuildSchemaPayload,
     ModelCreateWithAssetsPayload,
@@ -718,10 +719,10 @@ async def rebuild_metric_embeddings(session: SessionDep, current_user: CurrentUs
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/datasets/{dataset_id}/metric-embeddings")
+@router.get("/datasets/{dataset_id}/metric-embeddings", response_model=list[MetricEmbeddingStatusResponse])
 async def list_metric_embeddings(session: SessionDep, current_user: CurrentUser, dataset_id: int):
     _get_active(session, HeadlessDataSet, current_user.oid, dataset_id, "HEADLESS_DATASET_NOT_FOUND")
-    return _all(
+    records = _all(
         session.exec(
             select(HeadlessAssetEmbedding)
             .where(
@@ -732,6 +733,7 @@ async def list_metric_embeddings(session: SessionDep, current_user: CurrentUser,
             .order_by(HeadlessAssetEmbedding.id)
         )
     )
+    return [MetricEmbeddingStatusResponse.model_validate(record) for record in records]
 
 
 def _ensure_domain(session: SessionDep, oid: int, domain_id: int) -> None:
