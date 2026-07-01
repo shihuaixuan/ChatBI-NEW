@@ -12,6 +12,7 @@ from apps.chatbi_workflow.capabilities.adapters.interaction import (
     InteractionAdapter,
 )
 from apps.chatbi_workflow.capabilities.adapters.knowledge import (
+    HeadlessDocumentRetriever,
     HeadlessKnowledgeAdapter,
 )
 from apps.chatbi_workflow.capabilities.adapters.question import (
@@ -403,7 +404,10 @@ def build_real_chatbi_v1_runtime(
     gateway = RealChatBICapabilityGateway(
         question_adapter=QuestionAdapter(model_client=question_model_client, schema_builder=schema_builder),
         answer_adapter=AnswerAdapter(model_client=answer_model_client),
-        knowledge_adapter=HeadlessKnowledgeAdapter(schema_builder=schema_builder),
+        knowledge_adapter=HeadlessKnowledgeAdapter(
+            schema_builder=schema_builder,
+            document_retriever=HeadlessDocumentRetriever(metric_embedding_session=session),
+        ),
         interaction_adapter=InteractionAdapter(schema_builder=schema_builder),
         sql_adapter=SqlAdapter(
             schema_builder=schema_builder,

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Protocol
 
 import httpx
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from apps.headless.models import (
     HeadlessAssetDocument,
@@ -275,3 +275,39 @@ def rebuild_dataset_metric_embeddings(
 
     session.commit()
     return result
+
+
+def retrieve_metric_embedding_matches(
+    session,
+    oid: int,
+    dataset_id: int,
+    question: str,
+    provider: EmbeddingProvider,
+    top_k: int | None = None,
+) -> list[tuple[int, float]]:
+    if session is None:
+        return []
+    vector = provider.embed_query(question)
+    limit = top_k or settings.HEADLESS_METRIC_EMBEDDING_TOP_K
+    rows = session.execute(
+        text(
+            """
+            SELECT asset_id, (1 - (embedding <=> :embedding_array)) AS similarity
+            FROM headless_asset_embedding
+            WHERE oid = :oid
+              AND dataset_id = :dataset_id
+              AND asset_type = 'METRIC'
+              AND status = 'SUCCEEDED'
+              AND embedding IS NOT NULL
+            ORDER BY embedding <=> :embedding_array
+            LIMIT :limit
+            """
+        ),
+        {
+            "embedding_array": str(vector),
+            "oid": oid,
+            "dataset_id": dataset_id,
+            "limit": limit,
+        },
+    )
+    return [(int(row[0]), float(row[1])) for row in rows]

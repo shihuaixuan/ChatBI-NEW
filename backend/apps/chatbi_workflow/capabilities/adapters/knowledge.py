@@ -6,6 +6,11 @@ from apps.chatbi_workflow.capabilities.adapters.time_slots import (
     normalize_time_range_payload,
 )
 from apps.headless.asset_document import HeadlessAssetDocumentBuilder
+from apps.headless.metric_embedding import (
+    EmbeddingProvider,
+    default_metric_embedding_provider,
+    retrieve_metric_embedding_matches,
+)
 from apps.headless.models import HeadlessAssetDocument
 from apps.headless.schemas import DataSetSchema, SchemaElement, SchemaElementMatch
 from apps.headless.service import HeadlessSchemaBuilder, HeadlessSchemaMapper
@@ -992,9 +997,17 @@ def _term_related_to_selected_assets(term: SchemaElement, metric_ids: set[int], 
 class HeadlessDocumentRetriever:
     """基于 HeadlessAssetDocument 的轻量 top-k 检索。"""
 
-    def __init__(self, document_builder: HeadlessAssetDocumentBuilder | None = None, top_k: int = 20) -> None:
+    def __init__(
+        self,
+        document_builder: HeadlessAssetDocumentBuilder | None = None,
+        top_k: int = 20,
+        metric_embedding_session=None,
+        metric_embedding_provider: EmbeddingProvider | None = None,
+    ) -> None:
         self._document_builder = document_builder or HeadlessAssetDocumentBuilder()
         self._top_k = top_k
+        self._metric_embedding_session = metric_embedding_session
+        self._metric_embedding_provider = metric_embedding_provider
 
     def retrieve(self, question: str, schema: DataSetSchema, oid: int) -> dict[str, list[dict[str, Any]]]:
         documents = self._document_builder.build_from_schema(schema, oid=oid, index_version=self._index_version(schema))
@@ -1016,7 +1029,54 @@ class HeadlessDocumentRetriever:
                 groups["values"].append(candidate)
             elif document.asset_type == "TERM":
                 groups["terms"].append(candidate)
+        self._merge_metric_embedding_candidates(question, schema, oid, groups)
         return groups
+
+    def _merge_metric_embedding_candidates(
+        self,
+        question: str,
+        schema: DataSetSchema,
+        oid: int,
+        groups: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        if self._metric_embedding_session is None:
+            return
+        provider = self._metric_embedding_provider or default_metric_embedding_provider()
+        try:
+            matches = retrieve_metric_embedding_matches(
+                self._metric_embedding_session,
+                oid,
+                schema.data_set.id,
+                question,
+                provider,
+                top_k=self._top_k,
+            )
+        except Exception:
+            # embedding 检索失败时降级到已有关键词检索。
+            return
+
+        metric_by_id = {metric.id: metric for metric in schema.metrics}
+        existing_ids = {item.get("asset_id") for item in groups.setdefault("metrics", [])}
+        for asset_id, score in matches:
+            if asset_id in existing_ids:
+                continue
+            metric = metric_by_id.get(asset_id)
+            if metric is None:
+                continue
+            groups["metrics"].append(
+                {
+                    "source": "headless_metric_embedding",
+                    "asset_type": "METRIC",
+                    "asset_id": metric.id,
+                    "model_id": metric.model,
+                    "name": metric.name,
+                    "biz_name": metric.biz_name,
+                    "score": round(min(max(score, 0.0), 1.0), 4),
+                    "matched_text": question,
+                    "matched_field": "embedding",
+                    "payload": metric.model_dump(mode="json"),
+                }
+            )
 
     @staticmethod
     def _score_document(question: str, document: HeadlessAssetDocument) -> tuple[float, str, str]:
