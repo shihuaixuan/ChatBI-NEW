@@ -1056,8 +1056,9 @@ const rebuildKnowledge = async () => {
   ElMessage.success('知识索引已重建')
 }
 
-const rebuildMetricEmbeddings = async () => {
-  if (!selectedDatasetId.value) {
+const rebuildMetricEmbeddings = async (datasetId?: number | string) => {
+  const targetDatasetId = datasetId || selectedDatasetId.value
+  if (!targetDatasetId) {
     ElMessage.warning('请选择数据集')
     return
   }
@@ -1072,7 +1073,7 @@ const rebuildMetricEmbeddings = async () => {
   }
   metricEmbeddingLoading.value = true
   try {
-    const result = await headlessApi.metricEmbeddingRebuild(selectedDatasetId.value)
+    const result = await headlessApi.metricEmbeddingRebuild(targetDatasetId)
     ElMessage.success(`指标向量化完成：成功 ${result.succeeded || 0}，失败 ${result.failed || 0}`)
   } finally {
     metricEmbeddingLoading.value = false
@@ -1302,10 +1303,11 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
           </el-table-column>
           <el-table-column label="别名" min-width="180"><template #default="{ row }">{{ aliasText(row) }}</template></el-table-column>
           <el-table-column prop="description" label="描述" min-width="240" />
-          <el-table-column label="操作" width="140" fixed="right">
+          <el-table-column label="操作" width="220" fixed="right">
             <template #default="{ row }">
               <div class="row-actions">
                 <el-button link type="primary" :icon="Edit" @click="openDatasetEditDialog(row)">编辑</el-button>
+                <el-button link type="primary" :icon="Refresh" :loading="metricEmbeddingLoading" @click="rebuildMetricEmbeddings(row.id)">向量化指标</el-button>
                 <el-button link type="danger" :icon="Delete" @click="deleteEntity('dataset', row)">删除</el-button>
               </div>
             </template>
