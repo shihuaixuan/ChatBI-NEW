@@ -46,6 +46,7 @@ const loading = ref(false)
 const saveLoading = ref(false)
 const schemaLoading = ref(false)
 const mapperLoading = ref(false)
+const metricEmbeddingLoading = ref(false)
 const tablesLoading = ref(false)
 const fieldsLoading = ref(false)
 
@@ -1055,6 +1056,29 @@ const rebuildKnowledge = async () => {
   ElMessage.success('知识索引已重建')
 }
 
+const rebuildMetricEmbeddings = async () => {
+  if (!selectedDatasetId.value) {
+    ElMessage.warning('请选择数据集')
+    return
+  }
+  try {
+    await ElMessageBox.confirm('重新向量化会删除当前数据集已有指标向量并重新生成，是否继续？', '重新向量化指标', {
+      confirmButtonText: '重新向量化',
+      cancelButtonText: '取消',
+      confirmButtonType: 'primary',
+    })
+  } catch {
+    return
+  }
+  metricEmbeddingLoading.value = true
+  try {
+    const result = await headlessApi.metricEmbeddingRebuild(selectedDatasetId.value)
+    ElMessage.success(`指标向量化完成：成功 ${result.succeeded || 0}，失败 ${result.failed || 0}`)
+  } finally {
+    metricEmbeddingLoading.value = false
+  }
+}
+
 const deleteEntity = async (type: SimpleDialogType | 'model' | 'dataset', row: any) => {
   const nameMap: Record<string, string> = {
     domain: '主题域',
@@ -1322,7 +1346,10 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
               ]"
             />
           </div>
-          <el-button :icon="MagicStick" @click="rebuildKnowledge">重建知识索引</el-button>
+          <div class="toolbar-right">
+            <el-button :icon="MagicStick" @click="rebuildKnowledge">重建知识索引</el-button>
+            <el-button type="primary" :icon="Refresh" :loading="metricEmbeddingLoading" @click="rebuildMetricEmbeddings">向量化指标</el-button>
+          </div>
         </div>
         <div v-if="runtimeTab === 'schema'" class="runtime-panel">
           <div class="toolbar">
@@ -2084,5 +2111,10 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
   .schema-grid {
     grid-template-columns: 1fr;
   }
+}
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>
