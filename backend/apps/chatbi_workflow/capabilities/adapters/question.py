@@ -331,6 +331,8 @@ def build_dimension_slots_prompt(
     """构造维度槽位识别提示词。"""
 
     dimension_candidates = _normalize_dimension_candidates(available_dimensions or [])
+    plain_dimension_candidates = [candidate for candidate in dimension_candidates if not candidate.get("is_time")]
+    time_dimension_candidates = [candidate for candidate in dimension_candidates if candidate.get("is_time")]
     system_prompt = """
 # 角色
 
@@ -354,6 +356,8 @@ def build_dimension_slots_prompt(
 
 # 维度候选规则
 
+- 「可用维度」是普通维度候选，只用于 `dimension_mentions` 和 `dimension_slots`。
+- 「时间字段候选」只用于后续时间字段绑定，不能输出到 `dimension_mentions` 或 `dimension_slots`。
 - `dimension_mentions` 和 `dimension_slots[].name` 只能使用「可用维度」中的 `name`。
 - 用户命中 `aliases` 时，输出对应的标准 `name`。
 - 不在「可用维度」的 `name` 或 `aliases` 中的词，不能作为维度。
@@ -378,7 +382,7 @@ def build_dimension_slots_prompt(
 - `value_kind=numeric_id`：值通常是编号、ID、数字代码；如果值部分是数字，保留数字字符串。
 - `value_kind=string_label`：值通常是名称、标签、枚举文本；不要因为包含数字就只保留数字。
 - `value_kind=enum`：值通常是枚举文本，保留用户表达的枚举值。
-- `is_time=true`：该维度是时间字段候选，不承载“今天、本月、最近7天”等时间范围值。
+- `is_time=true`：该维度是时间字段候选，不承载“今天、本月、最近7天”等时间范围值，也不能作为普通维度槽位输出。
 
 # residual_filter_mentions
 
@@ -388,7 +392,8 @@ def build_dimension_slots_prompt(
 """.strip()
     user_prompt = _markdown_user_prompt(
         rewritten_question=rewritten_question,
-        available_dimensions=dimension_candidates,
+        available_dimensions=plain_dimension_candidates,
+        time_dimensions=time_dimension_candidates,
         conversation_context=conversation_context or {},
         user_feedback=user_feedback or {},
         task="请识别维度、维度角色和维度值，并严格按指定 JSON 结构输出。",
@@ -401,6 +406,7 @@ def _markdown_user_prompt(
     rewritten_question: str,
     task: str,
     available_dimensions: list[dict[str, Any]] | None = None,
+    time_dimensions: list[dict[str, Any]] | None = None,
     subject_domains: list[dict[str, Any]] | None = None,
     conversation_context: dict[str, Any] | None = None,
     user_feedback: dict[str, Any] | None = None,
@@ -408,6 +414,8 @@ def _markdown_user_prompt(
     parts = ["# 用户问题", rewritten_question]
     if available_dimensions is not None:
         parts.extend(["# 可用维度", _json_block(available_dimensions)])
+    if time_dimensions is not None:
+        parts.extend(["# 时间字段候选", _json_block(time_dimensions)])
     if subject_domains is not None:
         parts.extend(["# 候选主题域", _json_block(subject_domains)])
     parts.extend(
@@ -603,10 +611,14 @@ def _dimension_text_key(value: Any) -> str:
     return "".join(str(value or "").strip().lower().split())
 
 
-def _dimension_candidate_by_text(dimensions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _dimension_candidate_by_text(
+    dimensions: list[dict[str, Any]], *, include_time: bool = True
+) -> dict[str, dict[str, Any]]:
     candidates = _normalize_dimension_candidates(dimensions)
     by_text: dict[str, dict[str, Any]] = {}
     for candidate in candidates:
+        if not include_time and candidate.get("is_time"):
+            continue
         for text in [candidate.get("name"), *(candidate.get("aliases") or [])]:
             key = _dimension_text_key(text)
             if key:
@@ -957,8 +969,9 @@ class QuestionAdapter:
         payload: dict[str, Any],
         available_dimensions: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        candidate_by_text = _dimension_candidate_by_text(available_dimensions)
-        if not candidate_by_text:
+        normalized_candidates = _normalize_dimension_candidates(available_dimensions)
+        candidate_by_text = _dimension_candidate_by_text(normalized_candidates, include_time=False)
+        if not normalized_candidates:
             slots = [dict(slot) for slot in payload.get("dimension_slots") or [] if isinstance(slot, dict)]
             mentions = cls._unique_strings(
                 [
