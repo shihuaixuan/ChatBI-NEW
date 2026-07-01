@@ -1,4 +1,5 @@
 from apps.headless.models import HeadlessAssetEmbedding
+from apps.headless.metric_embedding import StaticEmbeddingProvider
 
 
 def test_headless_asset_embedding_model_defaults():
@@ -18,3 +19,14 @@ def test_headless_asset_embedding_model_defaults():
     assert record.status == "SUCCEEDED"
     assert record.embedding_batch_id is None
     assert record.error_message is None
+
+
+def test_static_embedding_provider_returns_configured_vector():
+    provider = StaticEmbeddingProvider(vector=[0.4, 0.5], provider="test", model="fake-model")
+
+    vector = provider.embed_query("指标名称: 销售额")
+
+    assert vector == [0.4, 0.5]
+    assert provider.provider == "test"
+    assert provider.model == "fake-model"
+    assert provider.dimension == 2
