@@ -123,6 +123,88 @@ class SqlAdapter:
             "message": None,
         }
 
+    def execute_split(self, request: dict[str, Any]) -> dict[str, Any]:
+        """分别编译和执行跨模型子查询，不在数据库层进行跨粒度关联。"""
+
+        raw_request = request.get("request", {})
+        variables = request.get("variables", {})
+        knowledge = variables.get("knowledge") if isinstance(variables, dict) else {}
+        plans = knowledge.get("multi_query_plans") if isinstance(knowledge, dict) else []
+        dataset_id = raw_request.get("dataset_id")
+        oid = raw_request.get("tenant_id") or raw_request.get("oid") or 1
+        if dataset_id is None or not isinstance(plans, list) or len(plans) < 2:
+            return self._failed("CROSS_MODEL_PLAN_REQUIRED", "缺少可执行的跨模型拆分计划")
+        if self._execute_tool is None:
+            return self._failed("SQL_EXECUTE_TOOL_REQUIRED", "SQL 执行工具未配置")
+
+        schema = self._schema_builder.build_dataset_schema(int(oid), int(dataset_id))
+        query_results: list[dict[str, Any]] = []
+        total_rows = 0
+        total_execution_ms = 0
+        for plan in plans:
+            slots = plan.get("slots") if isinstance(plan.get("slots"), dict) else {}
+            compiled = self._compiler.compile(
+                SemanticSQLCompileRequest(
+                    schema=schema,
+                    question=str(raw_request.get("question") or ""),
+                    slots=slots,
+                )
+            )
+            validated = self._validate_tool.run({"sql": compiled.sql, "allowed_tables": compiled.tables})
+            if not validated.success:
+                return self._failed(validated.error_code or "SQL_VALIDATE_FAILED", "拆分 SQL 校验失败")
+            sql = (validated.payload or {}).get("sql") or compiled.sql
+            datasource_id = self._datasource_id(schema, compiled.metrics, compiled.dimensions)
+            permission = self._permission_adapter.apply(
+                {
+                    "sql": sql,
+                    "datasource_id": datasource_id,
+                    "tenant_id": raw_request.get("tenant_id"),
+                    "user_id": raw_request.get("user_id"),
+                }
+            )
+            if not permission.get("allowed"):
+                return self._failed(
+                    str(permission.get("error_code") or "permission_denied"),
+                    str(permission.get("reason") or "权限校验拒绝"),
+                )
+            execution = self._execute_tool.run(
+                {
+                    "sql": str(permission.get("sql") or sql),
+                    "datasource_id": datasource_id,
+                }
+            )
+            if not execution.success:
+                return self._failed(execution.error_code or "SQL_EXECUTE_FAILED", execution.message or "拆分查询执行失败")
+            payload = execution.payload or {}
+            rows = payload.get("data") or payload.get("rows") or []
+            row_count = int(payload.get("row_count") or len(rows))
+            execution_ms = int(payload.get("execution_ms") or 0)
+            total_rows += row_count
+            total_execution_ms += execution_ms
+            query_results.append(
+                {
+                    "model_id": plan.get("model_id"),
+                    "metrics": plan.get("metrics") or compiled.metrics,
+                    "dimensions": plan.get("dimensions") or compiled.dimensions,
+                    "rows": rows[: self._sample_row_limit],
+                    "row_count": row_count,
+                }
+            )
+
+        return {
+            "status": "succeeded",
+            "rows": query_results,
+            "row_count": total_rows,
+            "fields": ["model_id", "metrics", "dimensions", "rows", "row_count"],
+            "execution_ms": total_execution_ms,
+            "sampled_row_count": len(query_results),
+            "result_truncated": False,
+            "artifact_ref": None,
+            "error_code": None,
+            "message": None,
+        }
+
     def handle_error(self, request: dict[str, Any]) -> dict[str, Any]:
         variables = request.get("variables", {})
         execution = (

@@ -49,7 +49,12 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
             "interaction.ask_slot_clarification",
         ),
         "retrieve_knowledge": _capability_node("retrieve_knowledge", "knowledge.retrieve"),
+        "ask_cross_model_split": _interaction_node(
+            "ask_cross_model_split",
+            "interaction.ask_cross_model_split",
+        ),
         "ask_metric_selection": _interaction_node("ask_metric_selection", "interaction.ask_metric_selection"),
+        "execute_split_queries": _capability_node("execute_split_queries", "sql.execute_split"),
         "generate_sql": _capability_node("generate_sql", "sql.generate"),
         "execute_sql": _capability_node("execute_sql", "sql.execute"),
         "handle_sql_error": _capability_node("handle_sql_error", "sql.handle_error"),
@@ -153,17 +158,49 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
             ),
             EdgeDefinition(
                 source="retrieve_knowledge",
+                target="ask_cross_model_split",
+                condition="knowledge.cross_model",
+                priority=1,
+            ),
+            EdgeDefinition(
+                source="retrieve_knowledge",
                 target="ask_metric_selection",
                 condition="knowledge.metric_ambiguous",
-                priority=1,
+                priority=2,
             ),
             EdgeDefinition(
                 source="retrieve_knowledge",
                 target="generate_sql",
                 condition="knowledge.hit",
-                priority=2,
+                priority=3,
             ),
             EdgeDefinition(source="retrieve_knowledge", target="generate_sql"),
+            EdgeDefinition(
+                source="ask_cross_model_split",
+                target="execute_split_queries",
+                condition="cross_model.split_requested",
+                priority=0,
+            ),
+            EdgeDefinition(
+                source="ask_cross_model_split",
+                target="generate_question_answer",
+                condition="interaction.skipped",
+                priority=1,
+            ),
+            EdgeDefinition(source="ask_cross_model_split", target="generate_question_answer"),
+            EdgeDefinition(
+                source="execute_split_queries",
+                target="handle_sql_error",
+                condition="sql.execution_failed",
+                priority=0,
+            ),
+            EdgeDefinition(
+                source="execute_split_queries",
+                target="generate_question_answer",
+                condition="sql.execution_succeeded",
+                priority=1,
+            ),
+            EdgeDefinition(source="execute_split_queries", target="generate_question_answer"),
             EdgeDefinition(
                 source="ask_metric_selection",
                 target="generate_sql",
@@ -222,6 +259,7 @@ def register_chatbi_v1_handlers(registry: HandlerRegistry, gateway: ChatBICapabi
         "knowledge.retrieve": "variables.knowledge",
         "sql.generate": "variables.sql",
         "sql.execute": "variables.sql_execution",
+        "sql.execute_split": "variables.sql_execution",
         "sql.handle_error": "variables.sql_error",
         "answer.generate": "variables.answer",
         "question.recommend": "variables.recommendations",
@@ -249,6 +287,14 @@ def register_chatbi_v1_handlers(registry: HandlerRegistry, gateway: ChatBICapabi
     registry.register(
         "interaction.ask_slot_clarification",
         ChatBIV1InteractionNode(gateway, "interaction.ask_slot_clarification", "variables.slot_response"),
+    )
+    registry.register(
+        "interaction.ask_cross_model_split",
+        ChatBIV1InteractionNode(
+            gateway,
+            "interaction.ask_cross_model_split",
+            "variables.cross_model_response",
+        ),
     )
     registry.register(
         "interaction.ask_metric_selection",

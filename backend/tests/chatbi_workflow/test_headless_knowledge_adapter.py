@@ -146,6 +146,29 @@ def test_current_snapshot_time_does_not_become_group_dimension():
     assert [item["biz_name"] for item in result["dimensions"]] == ["stall_id"]
 
 
+def test_cross_model_metrics_are_grouped_into_independent_query_plans():
+    selected_assets = {
+        "metrics": [
+            {"asset_id": 100, "model_id": 10, "biz_name": "gmv_total", "name": "总GMV"},
+            {"asset_id": 101, "model_id": 11, "biz_name": "stock_qty", "name": "库存量"},
+        ],
+        "dimensions": [
+            {"asset_id": 200, "model_id": 10, "biz_name": "stall_id", "name": "档口ID"},
+            {"asset_id": 201, "model_id": 11, "biz_name": "stall_id", "name": "档口ID"},
+        ],
+        "values": [],
+        "terms": [],
+    }
+
+    plans = HeadlessKnowledgeAdapter._cross_model_query_plans(selected_assets)
+
+    assert [plan["model_id"] for plan in plans] == [10, 11]
+    assert plans[0]["metric_ids"] == [100]
+    assert plans[1]["metric_ids"] == [101]
+    assert plans[0]["dimension_ids"] == [200]
+    assert plans[1]["dimension_ids"] == [201]
+
+
 def test_headless_knowledge_adapter_retrieves_metric_candidates_from_dataset_schema():
     schema = DataSetSchema(
         data_set=SchemaElement(

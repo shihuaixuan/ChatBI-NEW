@@ -60,10 +60,14 @@ class RealChatBICapabilityGateway:
             return self._interaction_adapter.ask_slot_clarification(request)
         if capability == "interaction.ask_metric_selection":
             return self._interaction_adapter.ask_metric_selection(request)
+        if capability == "interaction.ask_cross_model_split":
+            return self._interaction_adapter.ask_cross_model_split(request)
         if capability == "sql.generate":
             return self._sql_adapter.generate(request)
         if capability == "sql.execute":
             return self._sql_adapter.execute(request)
+        if capability == "sql.execute_split":
+            return self._sql_adapter.execute_split(request)
         if capability == "sql.handle_error":
             return self._sql_adapter.handle_error(request)
         if capability == "answer.reject":

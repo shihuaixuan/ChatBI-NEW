@@ -630,6 +630,96 @@ def test_sql_adapter_executes_sql_and_normalizes_result_rows():
     }
 
 
+def test_sql_adapter_executes_cross_model_plans_as_independent_queries():
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="经营分析",
+            id=20,
+            name="经营分析",
+            biz_name="business_bi",
+            type="DATASET",
+        ),
+        models=[
+            {
+                "id": 10,
+                "name": "订单模型",
+                "biz_name": "orders",
+                "datasource_id": 5,
+                "tableQuery": "orders_daily",
+                "measures": [{"name": "总GMV", "bizName": "gmv_total", "expr": "gmv_total", "agg": "SUM"}],
+            },
+            {
+                "id": 11,
+                "name": "库存模型",
+                "biz_name": "inventory",
+                "datasource_id": 5,
+                "tableQuery": "inventory_snapshot",
+                "measures": [{"name": "库存量", "bizName": "stock_qty", "expr": "stock_qty", "agg": "SUM"}],
+            },
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="经营分析",
+                model=10,
+                id=100,
+                name="总GMV",
+                biz_name="gmv_total",
+                type="METRIC",
+                default_agg="SUM",
+            ),
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="经营分析",
+                model=11,
+                id=101,
+                name="库存量",
+                biz_name="stock_qty",
+                type="METRIC",
+                default_agg="SUM",
+            ),
+        ],
+    )
+    execute_tool = FakeSqlExecuteTool(
+        ToolResult(success=True, payload={"fields": ["value"], "data": [{"value": 10}]})
+    )
+    adapter = SqlAdapter(
+        schema_builder=FakeHeadlessSchemaBuilder(schema),
+        execute_tool=execute_tool,
+    )
+
+    result = adapter.execute_split(
+        {
+            "request": {"question": "总GMV和库存量", "dataset_id": 20, "tenant_id": 10, "user_id": 20},
+            "variables": {
+                "knowledge": {
+                    "multi_query_plans": [
+                        {
+                            "model_id": 10,
+                            "metrics": ["总GMV"],
+                            "dimensions": [],
+                            "slots": {"metrics": [{"asset_type": "METRIC", "asset_id": 100}]},
+                        },
+                        {
+                            "model_id": 11,
+                            "metrics": ["库存量"],
+                            "dimensions": [],
+                            "slots": {"metrics": [{"asset_type": "METRIC", "asset_id": 101}]},
+                        },
+                    ]
+                }
+            },
+        }
+    )
+
+    assert result["status"] == "succeeded"
+    assert len(result["rows"]) == 2
+    assert result["rows"][0]["model_id"] == 10
+    assert result["rows"][1]["model_id"] == 11
+    assert len(execute_tool.payloads) == 2
+
+
 def test_sql_adapter_keeps_only_sample_rows_for_large_result():
     execute_tool = FakeSqlExecuteTool(
         ToolResult(

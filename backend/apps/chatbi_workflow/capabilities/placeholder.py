@@ -154,6 +154,8 @@ class PlaceholderChatBICapabilityGateway:
             }
         if capability == "interaction.ask_metric_selection":
             return self._interaction().ask_metric_selection(request)
+        if capability == "interaction.ask_cross_model_split":
+            return self._interaction().ask_cross_model_split(request)
         if capability == "interaction.ask_rewrite_clarification":
             return self._interaction().ask_rewrite_clarification(request)
         if capability == "interaction.ask_intent_clarification":
@@ -167,6 +169,19 @@ class PlaceholderChatBICapabilityGateway:
                 "message": execution.get("message", "SQL 执行失败"),
                 "retryable": False,
                 "repair_hint": "placeholder_repair_hint",
+            }
+        if capability == "sql.execute_split":
+            return {
+                "status": "succeeded",
+                "rows": [],
+                "row_count": 0,
+                "fields": [],
+                "execution_ms": 0,
+                "sampled_row_count": 0,
+                "result_truncated": False,
+                "artifact_ref": None,
+                "error_code": None,
+                "message": None,
             }
         if capability == "question.recommend":
             return {"questions": ["按月查看销售额趋势", "查看销售额最高的商品"]}

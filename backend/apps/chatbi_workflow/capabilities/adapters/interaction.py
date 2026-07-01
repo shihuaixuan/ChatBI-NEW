@@ -130,6 +130,23 @@ class InteractionAdapter:
             )
         )
 
+    def ask_cross_model_split(self, request: dict[str, Any]) -> dict[str, Any]:
+        """询问用户是否将跨模型问题拆成多个独立查询。"""
+
+        return self._card_builder.build(
+            ClarificationPlan(
+                clarification_type="cross_model_split",
+                prompt="问题包含不同模型的指标，直接关联可能造成重复计算。是否拆分为独立查询？",
+                slots=["cross_model_action"],
+                options=[
+                    {"label": "拆分查询", "value": {"cross_model_action": "split"}},
+                    {"label": "取消查询", "value": {"cross_model_action": "cancel"}},
+                ],
+                allowed_update_path="variables.cross_model_response",
+                question_key="cross_model_split",
+            )
+        )
+
     def ask_slot_clarification(self, request: dict[str, Any]) -> dict[str, Any]:
         variables = request.get("variables", {})
         intent = variables.get("intent") if isinstance(variables, dict) and isinstance(variables.get("intent"), dict) else {}

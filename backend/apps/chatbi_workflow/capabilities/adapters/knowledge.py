@@ -170,6 +170,32 @@ class HeadlessKnowledgeAdapter:
             expected_metric_mentions=metric_mentions if isinstance(metric_mentions, list) else [],
         )
         selected_assets = self._constrain_selected_assets_to_metric_models(gate_result["selected_assets"])
+        multi_query_plans = self._cross_model_query_plans(selected_assets, intent)
+        if len(multi_query_plans) > 1:
+            return {
+                "hit": True,
+                "status": "cross_model",
+                "dataset_id": int(dataset_id),
+                "schema_version": self._schema_version(retrieval_schema),
+                "index_version": self._index_version(retrieval_schema),
+                "tables": self._tables(retrieval_schema, selected_assets),
+                "fields": self._fields(selected_assets),
+                "metrics": [item["biz_name"] for item in selected_assets["metrics"]],
+                "dimensions": [item["biz_name"] for item in selected_assets["dimensions"]],
+                "terms": [item["biz_name"] for item in selected_assets["terms"]],
+                "examples": [],
+                "candidate_groups": candidate_groups,
+                "selected_assets": selected_assets,
+                "slot_bindings": self._slot_bindings(selected_assets, intent),
+                "subject_domain": subject_domain or {},
+                "decision": {
+                    "status": "cross_model",
+                    "strategy": "split_required",
+                    "reason": "指标来自不同模型，必须拆分查询以避免跨粒度重复计算。",
+                },
+                "ambiguities": [],
+                "multi_query_plans": multi_query_plans,
+            }
         selected_assets = self._constrain_selected_dimensions_by_intent(selected_assets, intent)
         missing_slots = self._missing_required_slots(intent, selected_assets, gate_result["ambiguities"])
         if missing_slots:
@@ -244,6 +270,56 @@ class HeadlessKnowledgeAdapter:
                 if item.get("model_id") in metric_model_ids
             ]
         return constrained
+
+    @classmethod
+    def _cross_model_query_plans(
+        cls,
+        selected_assets: dict[str, list[dict[str, Any]]],
+        intent: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """按指标所属模型拆分查询计划，维度只能进入相同模型的子计划。"""
+
+        metrics_by_model: dict[int, list[dict[str, Any]]] = {}
+        for metric in selected_assets.get("metrics", []):
+            model_id = _int_or_none(metric.get("model_id"))
+            if model_id is None:
+                continue
+            metrics_by_model.setdefault(model_id, []).append(metric)
+        plans: list[dict[str, Any]] = []
+        for model_id in sorted(metrics_by_model):
+            metrics = metrics_by_model[model_id]
+            model_assets = {
+                "metrics": metrics,
+                "dimensions": [
+                    dimension
+                    for dimension in selected_assets.get("dimensions", [])
+                    if _int_or_none(dimension.get("model_id")) == model_id
+                ],
+                "values": [
+                    value
+                    for value in selected_assets.get("values", [])
+                    if _int_or_none(value.get("model_id")) == model_id
+                ],
+                "terms": [],
+            }
+            if isinstance(intent, dict):
+                model_assets = cls._constrain_selected_dimensions_by_intent(model_assets, intent)
+            dimensions = model_assets["dimensions"]
+            slot_bindings = cls._slot_bindings(model_assets, intent)
+            plans.append(
+                {
+                    "model_id": model_id,
+                    "metric_ids": [int(metric["asset_id"]) for metric in metrics],
+                    "dimension_ids": [int(dimension["asset_id"]) for dimension in dimensions],
+                    "metrics": [str(metric.get("name") or metric.get("biz_name") or "") for metric in metrics],
+                    "dimensions": [
+                        str(dimension.get("name") or dimension.get("biz_name") or "")
+                        for dimension in dimensions
+                    ],
+                    "slots": slot_bindings,
+                }
+            )
+        return plans
 
     @classmethod
     def _constrain_selected_dimensions_by_intent(
@@ -715,7 +791,7 @@ class HeadlessKnowledgeAdapter:
                     "asset_id": item["asset_id"],
                     "display_name": item["name"],
                     "biz_name": item["biz_name"],
-                    "confidence": item["score"],
+                    "confidence": float(item.get("score") or 0),
                     "source": item.get("source") or "headless_schema_mapper",
                 }
                 for item in selected_assets.get("metrics", [])
@@ -726,7 +802,7 @@ class HeadlessKnowledgeAdapter:
                     "asset_id": item["asset_id"],
                     "display_name": item["name"],
                     "biz_name": item["biz_name"],
-                    "confidence": item["score"],
+                    "confidence": float(item.get("score") or 0),
                     "source": item.get("source") or "headless_schema_mapper",
                 }
                 for item in selected_assets.get("dimensions", [])

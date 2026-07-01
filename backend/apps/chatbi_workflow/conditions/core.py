@@ -152,6 +152,20 @@ class KnowledgeMetricAmbiguousCondition:
         )
 
 
+class KnowledgeCrossModelCondition:
+    """多个模型的指标必须先确认是否拆分查询。"""
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        knowledge = context.variables.get("knowledge", {})
+        plans = knowledge.get("multi_query_plans")
+        matched = knowledge.get("status") == "cross_model" and isinstance(plans, list) and len(plans) > 1
+        return ConditionDecision(
+            matched=matched,
+            reason_code="KNOWLEDGE_CROSS_MODEL" if matched else "KNOWLEDGE_SINGLE_MODEL",
+            reason_summary="指标来自不同模型，需要确认拆分查询" if matched else "指标属于单一模型",
+        )
+
+
 class KnowledgeHitCondition:
     """知识库命中且无指标歧义时进入 SQL 生成。"""
 
@@ -177,6 +191,7 @@ class InteractionAnsweredCondition:
                 variables.get("intent_response"),
                 variables.get("metric_selection"),
                 variables.get("slot_response"),
+                variables.get("cross_model_response"),
             )
             if not (isinstance(value, dict) and value.get("skipped") is True)
         )
@@ -197,12 +212,27 @@ class InteractionSkippedCondition:
             variables.get("intent_response"),
             variables.get("metric_selection"),
             variables.get("slot_response"),
+            variables.get("cross_model_response"),
         ]
         matched = any(isinstance(value, dict) and value.get("skipped") is True for value in responses)
         return ConditionDecision(
             matched=matched,
             reason_code="INTERACTION_SKIPPED" if matched else "INTERACTION_NOT_SKIPPED",
             reason_summary="用户跳过澄清" if matched else "用户未跳过澄清",
+        )
+
+
+class CrossModelSplitRequestedCondition:
+    """用户确认拆分跨模型查询时进入分步执行节点。"""
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        response = context.variables.get("cross_model_response")
+        action = response.get("cross_model_action") if isinstance(response, dict) else None
+        matched = action == "split"
+        return ConditionDecision(
+            matched=matched,
+            reason_code="CROSS_MODEL_SPLIT_REQUESTED" if matched else "CROSS_MODEL_SPLIT_NOT_REQUESTED",
+            reason_summary="用户确认拆分查询" if matched else "用户未确认拆分查询",
         )
 
 
@@ -259,9 +289,11 @@ def register_chatbi_conditions(registry: ConditionRegistry) -> None:
     registry.register("slot.clarification_needed", SlotClarificationNeededCondition())
     registry.register("knowledge.missed", KnowledgeMissedCondition())
     registry.register("knowledge.metric_ambiguous", KnowledgeMetricAmbiguousCondition())
+    registry.register("knowledge.cross_model", KnowledgeCrossModelCondition())
     registry.register("knowledge.hit", KnowledgeHitCondition())
     registry.register("interaction.answered", InteractionAnsweredCondition())
     registry.register("interaction.skipped", InteractionSkippedCondition())
+    registry.register("cross_model.split_requested", CrossModelSplitRequestedCondition())
     registry.register("sql.execution_succeeded", SqlExecutionSucceededCondition())
     registry.register("sql.execution_failed", SqlExecutionFailedCondition())
     registry.register("sql.error_retryable", SqlErrorRetryableCondition())

@@ -110,7 +110,7 @@ class KnowledgeRetrieveOutput(BaseModel):
     """知识检索节点输出。"""
 
     hit: bool
-    status: Literal["hit", "missed", "metric_ambiguous"]
+    status: Literal["hit", "missed", "metric_ambiguous", "cross_model"]
     dataset_id: int | None = None
     schema_version: int | None = None
     index_version: int | None = None
@@ -126,6 +126,7 @@ class KnowledgeRetrieveOutput(BaseModel):
     subject_domain: dict[str, Any] = Field(default_factory=dict)
     decision: dict[str, Any] = Field(default_factory=dict)
     ambiguities: list[dict[str, Any]] = Field(default_factory=list)
+    multi_query_plans: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class InteractionAskInput(BaseModel):
@@ -236,6 +237,7 @@ CHATBI_V1_OUTPUT_MODELS = {
     "knowledge.retrieve": KnowledgeRetrieveOutput,
     "sql.generate": SqlGenerateOutput,
     "sql.execute": SqlExecuteOutput,
+    "sql.execute_split": SqlExecuteOutput,
     "sql.handle_error": SqlErrorOutput,
     "answer.generate": AnswerOutput,
     "question.recommend": RecommendationOutput,
