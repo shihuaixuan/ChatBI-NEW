@@ -65,6 +65,48 @@ def test_candidate_gate_keeps_one_metric_for_each_explicit_mention():
     ]
 
 
+def test_selected_dimensions_are_pruned_to_explicit_query_roles():
+    dimensions = [
+        {
+            "asset_id": 200,
+            "name": "档口ID",
+            "biz_name": "stall_id",
+            "model_id": 10,
+            "score": 1.1,
+            "payload": {"alias": ["档口"], "ext_info": {}},
+        },
+        {
+            "asset_id": 201,
+            "name": "商家ID",
+            "biz_name": "seller_id",
+            "model_id": 10,
+            "score": 0.9,
+            "payload": {"ext_info": {}},
+        },
+        {
+            "asset_id": 202,
+            "name": "记录创建时间",
+            "biz_name": "created_at",
+            "model_id": 10,
+            "score": 0.8,
+            "payload": {"ext_info": {"dimension_type": "partition_time", "is_default_time": False}},
+        },
+    ]
+
+    result = HeadlessKnowledgeAdapter._constrain_selected_dimensions_by_intent(
+        {"metrics": [], "dimensions": dimensions, "values": [], "terms": []},
+        {
+            "dimension_slots": [
+                {"name": "档口", "role": "group_by", "value_status": "not_provided"},
+            ],
+            "time_range": {"raw": None, "value_status": "not_provided"},
+            "query_shape": {"needs_group_by": True},
+        },
+    )
+
+    assert [item["biz_name"] for item in result["dimensions"]] == ["stall_id"]
+
+
 def test_headless_knowledge_adapter_retrieves_metric_candidates_from_dataset_schema():
     schema = DataSetSchema(
         data_set=SchemaElement(

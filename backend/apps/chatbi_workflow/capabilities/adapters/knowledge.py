@@ -165,6 +165,7 @@ class HeadlessKnowledgeAdapter:
             expected_metric_mentions=metric_mentions if isinstance(metric_mentions, list) else [],
         )
         selected_assets = self._constrain_selected_assets_to_metric_models(gate_result["selected_assets"])
+        selected_assets = self._constrain_selected_dimensions_by_intent(selected_assets, intent)
         missing_slots = self._missing_required_slots(intent, selected_assets, gate_result["ambiguities"])
         if missing_slots:
             reason_code = (
@@ -237,6 +238,50 @@ class HeadlessKnowledgeAdapter:
                 for item in items
                 if item.get("model_id") in metric_model_ids
             ]
+        return constrained
+
+    @classmethod
+    def _constrain_selected_dimensions_by_intent(
+        cls,
+        selected_assets: dict[str, list[dict[str, Any]]],
+        intent: dict[str, Any],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """只保留查询计划明确需要的维度，候选维度不能直接进入 SQL。"""
+
+        dimensions = selected_assets.get("dimensions", [])
+        selected_ids: set[int] = set()
+        for slot in intent.get("dimension_slots") or []:
+            if not isinstance(slot, dict):
+                continue
+            if str(slot.get("role") or "").lower() not in {"group_by", "display", "filter"}:
+                continue
+            candidate = cls._match_dimension_candidate(str(slot.get("name") or ""), dimensions)
+            if candidate is not None:
+                selected_ids.add(int(candidate["asset_id"]))
+        for slot in cls._dimension_filter_slots(intent):
+            candidate = cls._match_dimension_candidate(str(slot.get("name") or ""), dimensions)
+            if candidate is not None:
+                selected_ids.add(int(candidate["asset_id"]))
+
+        query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
+        required_slots = set(cls._text_list(intent.get("required_slot_types")))
+        needs_time = (
+            cls._time_range_provided(intent)
+            or bool(query_shape.get("time_grain"))
+            or "time_dimension" in required_slots
+            or bool(cls._text_list(intent.get("time_mentions")))
+        )
+        if needs_time:
+            default_time = cls._default_time_dimension_candidate(dimensions)
+            if default_time is not None:
+                selected_ids.add(int(default_time["asset_id"]))
+
+        constrained = dict(selected_assets)
+        constrained["dimensions"] = [
+            dimension
+            for dimension in dimensions
+            if _int_or_none(dimension.get("asset_id")) in selected_ids
+        ]
         return constrained
 
     def _selected_subject_domain(self, schema: DataSetSchema, intent: dict[str, Any]) -> dict[str, Any] | None:
@@ -826,7 +871,13 @@ class HeadlessKnowledgeAdapter:
         ]
         if not time_dimensions:
             return None
-        time_dimensions.sort(key=lambda item: (-float(item.get("score") or 0), int(item.get("asset_id") or 0)))
+        time_dimensions.sort(
+            key=lambda item: (
+                -int(bool((item.get("payload") or {}).get("ext_info", {}).get("is_default_time"))),
+                -float(item.get("score") or 0),
+                int(item.get("asset_id") or 0),
+            )
+        )
         return time_dimensions[0]
 
     @staticmethod
