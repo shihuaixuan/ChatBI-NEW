@@ -5,6 +5,7 @@ from typing import Protocol
 
 import httpx
 
+from apps.headless.models import HeadlessMetric
 from common.core.config import settings
 
 
@@ -71,3 +72,31 @@ def default_metric_embedding_provider() -> EmbeddingProvider:
         dimension=settings.HEADLESS_METRIC_EMBEDDING_DIMENSION,
         provider=settings.HEADLESS_METRIC_EMBEDDING_PROVIDER,
     )
+
+
+def _clean_text(value) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _unique_texts(values: list[str] | None) -> list[str]:
+    result: list[str] = []
+    for value in values or []:
+        text_value = _clean_text(value)
+        if text_value and text_value not in result:
+            result.append(text_value)
+    return result
+
+
+def build_metric_embedding_text(metric: HeadlessMetric) -> str:
+    lines: list[str] = []
+    name = _clean_text(metric.name)
+    aliases = _unique_texts(metric.alias or [])
+    description = _clean_text(metric.description)
+
+    if name:
+        lines.append(f"指标名称: {name}")
+    if aliases:
+        lines.append(f"指标别名: {', '.join(aliases)}")
+    if description:
+        lines.append(f"指标说明: {description}")
+    return "\n".join(lines)
