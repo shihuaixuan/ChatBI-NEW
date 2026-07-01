@@ -227,3 +227,13 @@ class TermPayload(HeadlessBaseDTO):
 class SchemaMapRequest(HeadlessBaseDTO):
     query_text: str
     dataset_ids: list[int]
+
+
+class MetricEmbeddingRebuildResponse(HeadlessBaseDTO):
+    dataset_id: int
+    asset_type: str = "METRIC"
+    deleted: bool = True
+    processed: int = 0
+    succeeded: int = 0
+    failed: int = 0
+    batch_id: str

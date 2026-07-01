@@ -18,6 +18,7 @@ from apps.headless.asset_relation import (
 from apps.headless.models import (
     HeadlessAssetAlias,
     HeadlessAssetDocument,
+    HeadlessAssetEmbedding,
     HeadlessAssetRelation,
     HeadlessDataSet,
     HeadlessDataSetAsset,
@@ -33,6 +34,7 @@ from apps.headless.models import (
     HeadlessSchemaIndex,
     HeadlessTerm,
 )
+from apps.headless.metric_embedding import rebuild_dataset_metric_embeddings
 from apps.headless.schemas import (
     DataSetPayload,
     DimensionPayload,
@@ -40,6 +42,7 @@ from apps.headless.schemas import (
     HeadlessColumnMeta,
     HeadlessTableMeta,
     MetricBatchCreateFromMeasuresPayload,
+    MetricEmbeddingRebuildResponse,
     MetricPayload,
     ModelBuildSchemaPayload,
     ModelCreateWithAssetsPayload,
@@ -702,6 +705,33 @@ async def list_asset_documents(
     if asset_id is not None:
         conditions.append(HeadlessAssetDocument.asset_id == asset_id)
     return _all(session.exec(select(HeadlessAssetDocument).where(*conditions).order_by(HeadlessAssetDocument.id)))
+
+
+@router.post(
+    "/datasets/{dataset_id}/metric-embeddings/rebuild",
+    response_model=MetricEmbeddingRebuildResponse,
+)
+async def rebuild_metric_embeddings(session: SessionDep, current_user: CurrentUser, dataset_id: int):
+    try:
+        return rebuild_dataset_metric_embeddings(session, current_user.oid, dataset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/datasets/{dataset_id}/metric-embeddings")
+async def list_metric_embeddings(session: SessionDep, current_user: CurrentUser, dataset_id: int):
+    _get_active(session, HeadlessDataSet, current_user.oid, dataset_id, "HEADLESS_DATASET_NOT_FOUND")
+    return _all(
+        session.exec(
+            select(HeadlessAssetEmbedding)
+            .where(
+                HeadlessAssetEmbedding.oid == current_user.oid,
+                HeadlessAssetEmbedding.dataset_id == dataset_id,
+                HeadlessAssetEmbedding.asset_type == "METRIC",
+            )
+            .order_by(HeadlessAssetEmbedding.id)
+        )
+    )
 
 
 def _ensure_domain(session: SessionDep, oid: int, domain_id: int) -> None:
