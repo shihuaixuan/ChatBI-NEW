@@ -1303,9 +1303,9 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
           </el-table-column>
           <el-table-column label="别名" min-width="180"><template #default="{ row }">{{ aliasText(row) }}</template></el-table-column>
           <el-table-column prop="description" label="描述" min-width="240" />
-          <el-table-column label="操作" width="220" fixed="right">
+          <el-table-column label="操作" width="300" fixed="right">
             <template #default="{ row }">
-              <div class="row-actions">
+              <div class="row-actions dataset-row-actions">
                 <el-button link type="primary" :icon="Edit" @click="openDatasetEditDialog(row)">编辑</el-button>
                 <el-button link type="primary" :icon="Refresh" :loading="metricEmbeddingLoading" @click="rebuildMetricEmbeddings(row.id)">向量化指标</el-button>
                 <el-button link type="danger" :icon="Delete" @click="deleteEntity('dataset', row)">删除</el-button>
@@ -1895,6 +1895,14 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
 
 .row-actions :deep(.ed-button + .ed-button) {
   margin-left: 0;
+}
+
+.dataset-row-actions {
+  gap: 10px;
+}
+
+.dataset-row-actions :deep(.ed-button) {
+  flex-shrink: 0;
 }
 
 .metric-define-panel {

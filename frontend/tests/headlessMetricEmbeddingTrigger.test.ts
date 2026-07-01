@@ -11,3 +11,5 @@ const datasetActionColumn = datasetSection.match(/<el-table-column label="操作
 
 assert.match(datasetActionColumn, /向量化指标/)
 assert.match(datasetActionColumn, /@click="rebuildMetricEmbeddings\(row\.id\)"/)
+assert.match(datasetActionColumn, /width="300"/)
+assert.match(datasetActionColumn, /class="row-actions dataset-row-actions"/)
