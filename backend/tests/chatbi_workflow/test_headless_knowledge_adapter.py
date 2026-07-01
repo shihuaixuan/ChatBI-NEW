@@ -134,9 +134,8 @@ def test_current_snapshot_time_does_not_become_group_dimension():
                 {"name": "档口", "role": "group_by", "value_status": "not_provided"},
             ],
             "time_range": {
-                "raw": "当前",
-                "value_status": "provided",
-                "normalized": {"kind": "unsupported", "raw": "当前"},
+                "raw": None,
+                "value_status": "not_provided",
             },
             "time_mentions": ["当前"],
             "required_slot_types": ["metric", "dimension", "time_dimension"],

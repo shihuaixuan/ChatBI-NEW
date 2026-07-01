@@ -268,7 +268,11 @@ class HeadlessKnowledgeAdapter:
         time_range = intent.get("time_range") if isinstance(intent.get("time_range"), dict) else {}
         normalized_time = normalize_time_range_payload(time_range).get("normalized") if time_range else None
         supported_time = isinstance(normalized_time, dict) and normalized_time.get("kind") != "unsupported"
-        current_snapshot = _normalize_text(time_range.get("raw")) in {"当前", "目前"}
+        time_mentions = cls._text_list(intent.get("time_mentions"))
+        current_snapshot = (
+            _normalize_text(time_range.get("raw")) in {"当前", "目前"}
+            or any(_normalize_text(mention) in {"当前", "目前"} for mention in time_mentions)
+        )
         needs_time = (
             supported_time
             or bool(query_shape.get("time_grain"))
@@ -276,7 +280,7 @@ class HeadlessKnowledgeAdapter:
                 not current_snapshot
                 and (
                     "time_dimension" in required_slots
-                    or bool(cls._text_list(intent.get("time_mentions")))
+                    or bool(time_mentions)
                 )
             )
         )
