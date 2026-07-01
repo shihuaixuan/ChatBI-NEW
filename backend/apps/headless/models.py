@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Any
 
+from pgvector.sqlalchemy import VECTOR
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -13,7 +14,6 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from pgvector.sqlalchemy import VECTOR
 from sqlmodel import Field, SQLModel
 
 

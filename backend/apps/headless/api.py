@@ -15,6 +15,7 @@ from apps.headless.asset_relation import (
     build_metric_relations,
     build_term_relations,
 )
+from apps.headless.metric_embedding import rebuild_dataset_metric_embeddings
 from apps.headless.models import (
     HeadlessAssetAlias,
     HeadlessAssetDocument,
@@ -34,7 +35,6 @@ from apps.headless.models import (
     HeadlessSchemaIndex,
     HeadlessTerm,
 )
-from apps.headless.metric_embedding import rebuild_dataset_metric_embeddings
 from apps.headless.schemas import (
     DataSetPayload,
     DimensionPayload,

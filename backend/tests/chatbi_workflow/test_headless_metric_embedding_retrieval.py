@@ -1,4 +1,6 @@
-from apps.chatbi_workflow.capabilities.adapters.knowledge import HeadlessDocumentRetriever
+from apps.chatbi_workflow.capabilities.adapters.knowledge import (
+    HeadlessDocumentRetriever,
+)
 from apps.headless.metric_embedding import StaticEmbeddingProvider
 from apps.headless.schemas import DataSetSchema, SchemaElement
 

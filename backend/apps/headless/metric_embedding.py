@@ -198,7 +198,7 @@ def rebuild_dataset_metric_embeddings(
         raise ValueError("HEADLESS_DATASET_NOT_FOUND")
 
     provider = provider or default_metric_embedding_provider()
-    batch_id = hashlib.sha256(f"{oid}:{dataset_id}:{datetime.now().isoformat()}".encode("utf-8")).hexdigest()[:16]
+    batch_id = hashlib.sha256(f"{oid}:{dataset_id}:{datetime.now().isoformat()}".encode()).hexdigest()[:16]
 
     # 按产品语义，重建前删除当前数据集已有指标向量。
     session.exec(
