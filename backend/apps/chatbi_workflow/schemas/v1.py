@@ -138,6 +138,28 @@ class InteractionAskInput(BaseModel):
     allowed_update_paths: list[str] = Field(default_factory=list)
 
 
+class QueryPlanOutput(BaseModel):
+    """语义查询计划：SQL 生成的唯一事实源。
+
+    由 bind_query_plan 节点产出；检索证据、意图槽位、用户选择在此收敛。
+    metrics/group_bys/filters/order 沿用编译槽位结构
+    （asset_type/asset_id/display_name/operator/value）。
+    """
+
+    status: Literal["ready", "infeasible"]
+    strategy: str = "semantic_compiler"
+    select_mode: str = "aggregate"
+    metrics: list[dict[str, Any]] = Field(default_factory=list)
+    group_bys: list[dict[str, Any]] = Field(default_factory=list)
+    filters: list[dict[str, Any]] = Field(default_factory=list)
+    time: dict[str, Any] = Field(default_factory=dict)
+    order: list[dict[str, Any]] = Field(default_factory=list)
+    limit: int | None = None
+    sub_plans: list[dict[str, Any]] = Field(default_factory=list)
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    infeasible_reason: str | None = None
+
+
 class SqlGenerateInput(BaseModel):
     """SQL 生成节点输入。"""
 

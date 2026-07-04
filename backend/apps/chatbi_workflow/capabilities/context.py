@@ -111,6 +111,10 @@ class ChatBIRunContext:
         return self.domain("knowledge")
 
     @property
+    def plan(self) -> dict[str, Any]:
+        return self.domain("plan")
+
+    @property
     def sql(self) -> dict[str, Any]:
         return self.domain("sql")
 

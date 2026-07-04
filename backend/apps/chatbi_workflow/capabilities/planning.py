@@ -1,0 +1,282 @@
+"""语义查询计划（QueryPlan）绑定。
+
+QueryPlan 是 SQL 生成的唯一事实源：检索、门控、澄清与用户选择的产物在
+`bind_query_plan` 节点收敛为一个可编译、可校验的计划，SQL 生成只读计划。
+
+槽位推导函数（`derive_semantic_slots` / `derive_order_and_limit`）是从
+SQL 适配层平移过来的唯一实现，绑定器与旧路径共用同一份代码——这保证
+"经计划编译"与"直接从 knowledge 编译"在既有查询形态上逐字节等价
+（golden 对比测试锁定）。计划在此之上补充两类旧路径缺失的语义：
+
+- `time.grain`：意图层识别的时间粒度，编译器据此做时间分桶（修复 A7：
+  趋势查询不再退化为区间总量）；
+- 维值资产翻译：命中的 VALUE 资产转换为"父维度 = 标准值"的过滤条件
+  （修复 B9：VALUE 过滤此前在编译器中被静默丢弃）。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from apps.chatbi_workflow.capabilities.context import ChatBIRunContext, int_or_none
+from apps.chatbi_workflow.schemas.v1 import QueryPlanOutput
+
+_TIME_GRAINS = {"day", "week", "month", "quarter", "year"}
+
+
+def slot_items(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _asset_slots(
+    slot_bindings: dict[str, Any],
+    selected_assets: dict[str, Any],
+    key: str,
+    asset_type: str,
+) -> list[dict[str, Any]]:
+    slots = []
+    seen: set[int] = set()
+    for item in [*slot_items(slot_bindings.get(key)), *slot_items(selected_assets.get(key))]:
+        asset_id = int_or_none(item.get("asset_id"))
+        if asset_id is None or asset_id in seen:
+            continue
+        seen.add(asset_id)
+        slots.append(
+            {
+                "asset_type": item.get("asset_type") or asset_type,
+                "asset_id": asset_id,
+                "display_name": item.get("display_name") or item.get("name") or item.get("biz_name"),
+                "operator": item.get("operator"),
+                "value": item.get("value"),
+            }
+        )
+    return slots
+
+
+def _compile_filter_slots(
+    slot_bindings: dict[str, Any],
+    selected_assets: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """优先使用已拆分过滤字段；旧上下文继续读取 filters。"""
+
+    separated_filter_keys = ("value_filters", "dimension_filters", "time_filters")
+    if any(key in slot_bindings for key in separated_filter_keys):
+        return [
+            *_asset_slots(slot_bindings, {}, "value_filters", "VALUE"),
+            *_asset_slots(slot_bindings, {}, "dimension_filters", "DIMENSION"),
+            *_asset_slots(slot_bindings, {}, "time_filters", "DIMENSION"),
+        ]
+    return _asset_slots(slot_bindings, selected_assets, "filters", "DIMENSION")
+
+
+def _dimensions_without_filter_only_assets(
+    dimensions: list[dict[str, Any]],
+    filters: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    filter_dimension_ids = {
+        item.get("asset_id")
+        for item in filters
+        if str(item.get("asset_type") or "").upper() in {"", "DIMENSION"} and item.get("asset_id") is not None
+    }
+    if not filter_dimension_ids:
+        return dimensions
+    return [item for item in dimensions if item.get("asset_id") not in filter_dimension_ids]
+
+
+def _compile_dimension_slots(
+    slot_bindings: dict[str, Any],
+    selected_assets: dict[str, Any],
+    filters: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """新上下文只把 group_dimensions 作为 SQL 维度，避免时间维度进 GROUP BY。"""
+
+    if "group_dimensions" in slot_bindings:
+        return _asset_slots(slot_bindings, {}, "group_dimensions", "DIMENSION")
+    if "business_dimensions" in selected_assets:
+        return _asset_slots({}, selected_assets, "business_dimensions", "DIMENSION")
+    return _dimensions_without_filter_only_assets(
+        _asset_slots(slot_bindings, selected_assets, "dimensions", "DIMENSION"),
+        filters,
+    )
+
+
+def _should_select_dimensions(intent: dict[str, Any] | None) -> bool:
+    if not isinstance(intent, dict) or not intent:
+        return True
+    intent_type = str(intent.get("intent_type") or "").lower()
+    query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
+    if bool(query_shape.get("needs_group_by")):
+        return True
+    if intent_type in {"trend_analysis", "ranking_analysis", "comparison_analysis", "detail_query", "share_analysis"}:
+        return True
+    dimension_slots = intent.get("dimension_slots")
+    if isinstance(dimension_slots, list):
+        return any(
+            isinstance(slot, dict) and str(slot.get("role") or "").lower() == "group_by"
+            for slot in dimension_slots
+        )
+    return False
+
+
+def derive_semantic_slots(knowledge: dict[str, Any], intent: dict[str, Any] | None = None) -> dict[str, Any]:
+    """从知识检索输出推导编译槽位。绑定器与旧 SQL 路径共用的唯一实现。"""
+
+    slot_bindings = knowledge.get("slot_bindings") if isinstance(knowledge.get("slot_bindings"), dict) else {}
+    selected_assets = knowledge.get("selected_assets") if isinstance(knowledge.get("selected_assets"), dict) else {}
+    filters = _compile_filter_slots(slot_bindings, selected_assets)
+    dimensions = _compile_dimension_slots(slot_bindings, selected_assets, filters)
+    if not _should_select_dimensions(intent):
+        dimensions = []
+    return {
+        "metrics": _asset_slots(slot_bindings, selected_assets, "metrics", "METRIC"),
+        "dimensions": dimensions,
+        "filters": filters,
+    }
+
+
+def derive_order_and_limit(
+    intent: dict[str, Any],
+    slots: dict[str, Any],
+) -> tuple[list[dict[str, Any]], int | None]:
+    """把排名查询形态绑定到已选择的指标，禁止使用未落地的自由字段。"""
+
+    query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
+    limit = int_or_none(query_shape.get("limit"))
+    if limit is not None and not 1 <= limit <= 1000:
+        limit = None
+    if not bool(query_shape.get("needs_order_by")):
+        return [], limit
+    metrics = slots.get("metrics") if isinstance(slots.get("metrics"), list) else []
+    if not metrics:
+        return [], limit
+    metric_id = int_or_none(metrics[0].get("asset_id"))
+    if metric_id is None:
+        return [], limit
+    direction = "asc" if str(query_shape.get("order_direction") or "").lower() == "asc" else "desc"
+    return [
+        {
+            "asset_type": "METRIC",
+            "asset_id": metric_id,
+            "direction": direction,
+        }
+    ], limit
+
+
+def derive_time_bucket(knowledge: dict[str, Any], intent: dict[str, Any]) -> dict[str, Any]:
+    """从意图时间粒度与已绑定时间维度推导分桶配置（A7）。"""
+
+    query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
+    grain = str(query_shape.get("time_grain") or "").strip().lower()
+    if grain not in _TIME_GRAINS:
+        return {}
+    slot_bindings = knowledge.get("slot_bindings") if isinstance(knowledge.get("slot_bindings"), dict) else {}
+    for key in ("time_dimensions", "time_filters"):
+        for item in slot_items(slot_bindings.get(key)):
+            dimension_id = int_or_none(item.get("asset_id"))
+            if dimension_id is not None:
+                return {"dimension_id": dimension_id, "grain": grain}
+    return {}
+
+
+def derive_value_filter_slots(
+    knowledge: dict[str, Any],
+    existing_filters: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """把命中的 VALUE 资产翻译为"父维度 = 标准值"的过滤条件（B9）。
+
+    Headless 的 VALUE 元素复用父维度的 id，matched_text 是用户问题里命中的
+    维值文本；schema_value_maps 用于把别名归一为标准存储值。
+    """
+
+    selected_assets = knowledge.get("selected_assets") if isinstance(knowledge.get("selected_assets"), dict) else {}
+    existing_keys = {
+        (int_or_none(item.get("asset_id")), str(item.get("value")))
+        for item in existing_filters
+        if str(item.get("asset_type") or "").upper() in {"", "DIMENSION"}
+    }
+    slots: list[dict[str, Any]] = []
+    for item in slot_items(selected_assets.get("values")):
+        dimension_id = int_or_none(item.get("asset_id"))
+        matched_text = str(item.get("matched_text") or "").strip()
+        if dimension_id is None or not matched_text:
+            continue
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        value = _canonical_dimension_value(matched_text, payload.get("schema_value_maps"))
+        if (dimension_id, str(value)) in existing_keys:
+            continue
+        existing_keys.add((dimension_id, str(value)))
+        slots.append(
+            {
+                "asset_type": "DIMENSION",
+                "asset_id": dimension_id,
+                "display_name": item.get("display_name") or item.get("name") or item.get("biz_name"),
+                "operator": "=",
+                "value": value,
+            }
+        )
+    return slots
+
+
+def _canonical_dimension_value(matched_text: str, schema_value_maps: Any) -> str:
+    """用维值映射把命中的别名归一为标准值；无映射时保留原文。"""
+
+    if not isinstance(schema_value_maps, list):
+        return matched_text
+    for value_map in schema_value_maps:
+        if not isinstance(value_map, dict):
+            continue
+        canonical = str(value_map.get("value") or value_map.get("bizName") or "").strip()
+        if not canonical:
+            continue
+        if matched_text == canonical:
+            return canonical
+        aliases = value_map.get("alias") or value_map.get("aliases") or []
+        if isinstance(aliases, str):
+            aliases = [aliases]
+        if any(matched_text == str(alias).strip() for alias in aliases if alias):
+            return canonical
+    return matched_text
+
+
+class QueryPlanBinder:
+    """把知识检索证据与意图绑定为语义查询计划。"""
+
+    def bind(self, request: dict[str, Any]) -> dict[str, Any]:
+        ctx = ChatBIRunContext(request)
+        knowledge = ctx.knowledge
+        intent = ctx.intent
+
+        if not knowledge.get("hit"):
+            return self._infeasible("knowledge_missed", "知识检索未命中可用资产")
+
+        slots = derive_semantic_slots(knowledge, intent)
+        order, limit = derive_order_and_limit(intent, slots)
+        filters = [*slots["filters"], *derive_value_filter_slots(knowledge, slots["filters"])]
+        metrics = slots["metrics"]
+        group_bys = slots["dimensions"]
+        if not metrics and not group_bys and not filters:
+            return self._infeasible("no_bindable_assets", "没有可绑定到查询计划的资产")
+
+        return QueryPlanOutput(
+            status="ready",
+            strategy="semantic_compiler",
+            select_mode="aggregate",
+            metrics=metrics,
+            group_bys=group_bys,
+            filters=filters,
+            time=derive_time_bucket(knowledge, intent),
+            order=order,
+            limit=limit,
+        ).model_dump(mode="json")
+
+    @staticmethod
+    def _infeasible(reason_code: str, reason: str) -> dict[str, Any]:
+        return QueryPlanOutput(
+            status="infeasible",
+            infeasible_reason=reason_code,
+            issues=[{"type": reason_code, "reason": reason}],
+        ).model_dump(mode="json")

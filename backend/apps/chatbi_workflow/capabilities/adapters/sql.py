@@ -5,6 +5,7 @@ from typing import Any
 from apps.agentic_chat.strategies.sql_repair import SQLRepairStrategy
 from apps.agentic_chat.tools.sql_executor import SqlExecuteTool
 from apps.agentic_chat.tools.sql_validator import SqlValidateTool
+from apps.chatbi_workflow.capabilities import planning
 from apps.chatbi_workflow.capabilities.adapters.permission import PermissionAdapter
 from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
 from apps.headless.service import HeadlessSchemaBuilder
@@ -37,16 +38,30 @@ class SqlAdapter:
 
     def generate(self, request: dict[str, Any]) -> dict[str, Any]:
         ctx = ChatBIRunContext(request)
-        knowledge = ctx.knowledge
         question = ctx.question
         dataset_id = ctx.dataset_id
         if not question or dataset_id is None:
             raise ValueError("SQL_GENERATE_CONTEXT_REQUIRED")
 
         schema = self._schema_builder.build_dataset_schema(ctx.tenant_id, dataset_id)
-        intent = ctx.intent
-        slots = self._compile_slots(knowledge, intent)
-        order_by, limit = self._compile_order_and_limit(intent, slots)
+        plan = ctx.plan
+        if plan.get("status") == "infeasible":
+            raise ValueError(f"QUERY_PLAN_INFEASIBLE:{plan.get('infeasible_reason') or 'unknown'}")
+        if plan.get("status") == "ready":
+            # 计划路径：bind_query_plan 已把资产收敛为唯一事实源。
+            slots = {
+                "metrics": planning.slot_items(plan.get("metrics")),
+                "dimensions": planning.slot_items(plan.get("group_bys")),
+                "filters": planning.slot_items(plan.get("filters")),
+            }
+            order_by = planning.slot_items(plan.get("order"))
+            limit = self._int_or_none(plan.get("limit"))
+            time_bucket = plan.get("time") if isinstance(plan.get("time"), dict) and plan.get("time", {}).get("grain") else None
+        else:
+            # 兼容路径：尚未产出计划的旧上下文，直接从知识检索输出推导。
+            slots = planning.derive_semantic_slots(ctx.knowledge, ctx.intent)
+            order_by, limit = planning.derive_order_and_limit(ctx.intent, slots)
+            time_bucket = None
         repair_context = self._repair_context(ctx)
         result = self._compiler.compile(
             SemanticSQLCompileRequest(
@@ -56,6 +71,7 @@ class SqlAdapter:
                 repair_context=repair_context,
                 order_by=order_by,
                 limit=limit,
+                time_bucket=time_bucket,
             )
         )
         self._reject_same_repair_sql(result.sql, repair_context)
@@ -245,114 +261,6 @@ class SqlAdapter:
             "repair_plan": repair.plan(),
         }
 
-    def _compile_slots(self, knowledge: dict[str, Any], intent: dict[str, Any] | None = None) -> dict[str, Any]:
-        slot_bindings = knowledge.get("slot_bindings") if isinstance(knowledge.get("slot_bindings"), dict) else {}
-        selected_assets = knowledge.get("selected_assets") if isinstance(knowledge.get("selected_assets"), dict) else {}
-        filters = self._compile_filter_slots(slot_bindings, selected_assets)
-        dimensions = self._compile_dimension_slots(slot_bindings, selected_assets, filters)
-        if not self._should_select_dimensions(intent):
-            dimensions = []
-        return {
-            "metrics": self._asset_slots(slot_bindings, selected_assets, "metrics", "METRIC"),
-            "dimensions": dimensions,
-            "filters": filters,
-        }
-
-    def _compile_filter_slots(
-        self,
-        slot_bindings: dict[str, Any],
-        selected_assets: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        """优先使用已拆分过滤字段；旧上下文继续读取 filters。"""
-
-        separated_filter_keys = ("value_filters", "dimension_filters", "time_filters")
-        if any(key in slot_bindings for key in separated_filter_keys):
-            return [
-                *self._asset_slots(slot_bindings, {}, "value_filters", "VALUE"),
-                *self._asset_slots(slot_bindings, {}, "dimension_filters", "DIMENSION"),
-                *self._asset_slots(slot_bindings, {}, "time_filters", "DIMENSION"),
-            ]
-        return self._asset_slots(slot_bindings, selected_assets, "filters", "DIMENSION")
-
-    def _compile_dimension_slots(
-        self,
-        slot_bindings: dict[str, Any],
-        selected_assets: dict[str, Any],
-        filters: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """新上下文只把 group_dimensions 作为 SQL 维度，避免时间维度进 GROUP BY。"""
-
-        if "group_dimensions" in slot_bindings:
-            return self._asset_slots(slot_bindings, {}, "group_dimensions", "DIMENSION")
-        if "business_dimensions" in selected_assets:
-            return self._asset_slots({}, selected_assets, "business_dimensions", "DIMENSION")
-        return self._dimensions_without_filter_only_assets(
-            self._asset_slots(slot_bindings, selected_assets, "dimensions", "DIMENSION"),
-            filters,
-        )
-
-    @classmethod
-    def _compile_order_and_limit(
-        cls,
-        intent: dict[str, Any],
-        slots: dict[str, Any],
-    ) -> tuple[list[dict[str, Any]], int | None]:
-        """把排名查询形态绑定到已选择的指标，禁止使用未落地的自由字段。"""
-
-        query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
-        raw_limit = query_shape.get("limit")
-        limit = cls._int_or_none(raw_limit)
-        if limit is not None and not 1 <= limit <= 1000:
-            limit = None
-        if not bool(query_shape.get("needs_order_by")):
-            return [], limit
-        metrics = slots.get("metrics") if isinstance(slots.get("metrics"), list) else []
-        if not metrics:
-            return [], limit
-        metric_id = cls._int_or_none(metrics[0].get("asset_id"))
-        if metric_id is None:
-            return [], limit
-        direction = "asc" if str(query_shape.get("order_direction") or "").lower() == "asc" else "desc"
-        return [
-            {
-                "asset_type": "METRIC",
-                "asset_id": metric_id,
-                "direction": direction,
-            }
-        ], limit
-
-    @staticmethod
-    def _should_select_dimensions(intent: dict[str, Any] | None) -> bool:
-        if not isinstance(intent, dict) or not intent:
-            return True
-        intent_type = str(intent.get("intent_type") or "").lower()
-        query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
-        if bool(query_shape.get("needs_group_by")):
-            return True
-        if intent_type in {"trend_analysis", "ranking_analysis", "comparison_analysis", "detail_query", "share_analysis"}:
-            return True
-        dimension_slots = intent.get("dimension_slots")
-        if isinstance(dimension_slots, list):
-            return any(
-                isinstance(slot, dict) and str(slot.get("role") or "").lower() == "group_by"
-                for slot in dimension_slots
-            )
-        return False
-
-    @staticmethod
-    def _dimensions_without_filter_only_assets(
-        dimensions: list[dict[str, Any]],
-        filters: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        filter_dimension_ids = {
-            item.get("asset_id")
-            for item in filters
-            if str(item.get("asset_type") or "").upper() in {"", "DIMENSION"} and item.get("asset_id") is not None
-        }
-        if not filter_dimension_ids:
-            return dimensions
-        return [item for item in dimensions if item.get("asset_id") not in filter_dimension_ids]
-
     def _repair_context(self, ctx: ChatBIRunContext) -> dict[str, Any]:
         """从上一轮 SQL 错误中提取可供重生成 SQL 使用的修复上下文。"""
 
@@ -383,39 +291,6 @@ class SqlAdapter:
     @staticmethod
     def _normalize_sql(sql: str) -> str:
         return " ".join(str(sql or "").strip().lower().split())
-
-    def _asset_slots(
-        self,
-        slot_bindings: dict[str, Any],
-        selected_assets: dict[str, Any],
-        key: str,
-        asset_type: str,
-    ) -> list[dict[str, Any]]:
-        slots = []
-        seen: set[int] = set()
-        for item in [*self._items(slot_bindings.get(key)), *self._items(selected_assets.get(key))]:
-            asset_id = self._int_or_none(item.get("asset_id"))
-            if asset_id is None or asset_id in seen:
-                continue
-            seen.add(asset_id)
-            slots.append(
-                {
-                    "asset_type": item.get("asset_type") or asset_type,
-                    "asset_id": asset_id,
-                    "display_name": item.get("display_name") or item.get("name") or item.get("biz_name"),
-                    "operator": item.get("operator"),
-                    "value": item.get("value"),
-                }
-            )
-        return slots
-
-    @staticmethod
-    def _items(value: Any) -> list[dict[str, Any]]:
-        if isinstance(value, dict):
-            return [value]
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-        return []
 
     @staticmethod
     def _int_or_none(value: Any) -> int | None:

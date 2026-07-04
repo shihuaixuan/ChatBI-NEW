@@ -8,6 +8,9 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import sqlglot
+from sqlglot import exp as sqlglot_exp
+
 from apps.headless.schemas import DataSetSchema, JoinRelation, SchemaElement
 from apps.headless.service import build_ontology_from_schema
 
@@ -30,6 +33,7 @@ class SemanticSQLCompileRequest:
     repair_context: dict[str, Any] = field(default_factory=dict)
     order_by: list[dict[str, Any]] = field(default_factory=list)
     limit: int | None = None
+    time_bucket: dict[str, Any] | None = None
 
 
 @dataclass
@@ -50,6 +54,10 @@ class SemanticSQLCompiler:
         metrics = self._select_metrics(request)
         dimensions = self._select_dimensions(request)
         filters = self._select_filters(request)
+        bucket_dimension, bucket_grain = self._resolve_time_bucket(request)
+        if bucket_dimension is not None:
+            # 分桶维度独立渲染，不与普通分组维度重复。
+            dimensions = [dimension for dimension in dimensions if dimension.id != bucket_dimension.id]
         model_by_name = ontology.model_map
         model_name_by_id = {model.get("id"): name for name, model in model_by_name.items()}
         metrics = self._repair_elements_by_candidate_tables(
@@ -75,14 +83,19 @@ class SemanticSQLCompiler:
             if dimension is not None
         ]
         filter_dimensions = [item[0] for item in filters]
-        if not metrics and not dimensions and not filter_dimensions:
+        if not metrics and not dimensions and not filter_dimensions and bucket_dimension is None:
             raise ValueError("SEMANTIC_SQL_ASSET_REQUIRED")
 
-        selected_model_names = self._selected_model_names(metrics, [*dimensions, *filter_dimensions], model_name_by_id)
+        bucket_dimensions = [bucket_dimension] if bucket_dimension is not None else []
+        selected_model_names = self._selected_model_names(
+            metrics,
+            [*dimensions, *filter_dimensions, *bucket_dimensions],
+            model_name_by_id,
+        )
         if not selected_model_names:
             raise ValueError("SEMANTIC_SQL_MODEL_REQUIRED")
 
-        base_model_name = self._base_model_name(metrics, dimensions, model_name_by_id)
+        base_model_name = self._base_model_name(metrics, [*dimensions, *bucket_dimensions], model_name_by_id)
         ordered_model_names = self._order_models(base_model_name, selected_model_names, ontology.join_relations)
         model_sql = {name: self._model_source(model_by_name[name], alias=name) for name in ordered_model_names}
 
@@ -101,13 +114,24 @@ class SemanticSQLCompiler:
             *self._slot_filter_conditions(filters, model_by_name, model_name_by_id),
         ]
         group_parts = [self._qualified_dimension_expr(dimension, model_by_name, model_name_by_id) for dimension in dimensions]
+        if bucket_dimension is not None:
+            bucket_expr = self._time_bucket_expr(
+                self._qualified_dimension_expr(bucket_dimension, model_by_name, model_name_by_id),
+                bucket_grain,
+                request.schema.database_type,
+            )
+            select_parts.insert(0, f"{bucket_expr} as {bucket_dimension.biz_name}")
+            group_parts.insert(0, bucket_expr)
 
         sql = f"select {', '.join(select_parts)} from {from_sql}"
         if where_parts:
             sql += " where " + " and ".join(where_parts)
         if any(is_aggregate for _, _, is_aggregate in metric_selects) and group_parts:
             sql += " group by " + ", ".join(group_parts)
-        order_parts = self._order_parts(request.order_by, metrics, dimensions)
+        order_parts = self._order_parts(request.order_by, metrics, [*dimensions, *bucket_dimensions])
+        if bucket_dimension is not None and not order_parts:
+            # 趋势结果默认按时间桶升序返回。
+            order_parts = [f"{bucket_dimension.biz_name} asc"]
         if order_parts:
             sql += " order by " + ", ".join(order_parts)
         if request.limit:
@@ -117,8 +141,53 @@ class SemanticSQLCompiler:
             sql=sql,
             tables=[self._model_table(model_by_name[name]) for name in ordered_model_names if self._model_table(model_by_name[name])],
             metrics=[metric.biz_name for metric in metrics],
-            dimensions=[dimension.biz_name for dimension in dimensions],
+            dimensions=[dimension.biz_name for dimension in [*bucket_dimensions, *dimensions]],
         )
+
+    _SQLGLOT_DIALECTS = {
+        "mysql": "mysql",
+        "mariadb": "mysql",
+        "tidb": "mysql",
+        "postgresql": "postgres",
+        "postgres": "postgres",
+        "pg": "postgres",
+        "kingbase": "postgres",
+        "doris": "doris",
+        "starrocks": "starrocks",
+        "clickhouse": "clickhouse",
+        "oracle": "oracle",
+        "sqlserver": "tsql",
+        "mssql": "tsql",
+    }
+    _TIME_BUCKET_GRAINS = {"day", "week", "month", "quarter", "year"}
+
+    @classmethod
+    def _resolve_time_bucket(cls, request: SemanticSQLCompileRequest) -> tuple[SchemaElement | None, str]:
+        bucket = request.time_bucket if isinstance(request.time_bucket, dict) else None
+        if not bucket:
+            return None, ""
+        grain = str(bucket.get("grain") or "").strip().lower()
+        if grain not in cls._TIME_BUCKET_GRAINS:
+            raise ValueError("SEMANTIC_SQL_TIME_GRAIN_UNSUPPORTED")
+        dimension_id = bucket.get("dimension_id")
+        dimension = next((item for item in request.schema.dimensions if item.id == dimension_id), None)
+        if dimension is None:
+            raise ValueError("SEMANTIC_SQL_TIME_BUCKET_DIMENSION_NOT_FOUND")
+        return dimension, grain
+
+    @classmethod
+    def _time_bucket_expr(cls, expr: str, grain: str, database_type: str | None) -> str:
+        """按数据源方言渲染时间分桶表达式（sqlglot 转译 DATE_TRUNC）。"""
+
+        dialect = cls._SQLGLOT_DIALECTS.get(str(database_type or "").strip().lower(), "mysql")
+        try:
+            column = sqlglot.parse_one(expr)
+            node = sqlglot_exp.DateTrunc(this=column, unit=sqlglot_exp.Literal.string(grain.upper()))
+            return node.sql(dialect=dialect)
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError("SEMANTIC_SQL_TIME_BUCKET_UNSUPPORTED") from exc
 
     def _select_metrics(self, request: SemanticSQLCompileRequest) -> list[SchemaElement]:
         metric_ids = set(request.metric_ids or self._slot_asset_ids(request.slots, "metrics", "METRIC"))
