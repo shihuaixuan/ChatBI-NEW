@@ -5,6 +5,7 @@ from typing import Any
 from apps.chatbi_workflow.capabilities.adapters.time_slots import (
     normalize_time_range_payload,
 )
+from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
 from apps.headless.asset_document import HeadlessAssetDocumentBuilder
 from apps.headless.metric_embedding import (
     EmbeddingProvider,
@@ -146,23 +147,18 @@ class HeadlessKnowledgeAdapter:
         self._document_retriever = document_retriever or HeadlessDocumentRetriever()
 
     def retrieve(self, request: dict[str, Any]) -> dict[str, Any]:
-        raw_request = request.get("request", {})
-        variables = request.get("variables", {})
-        if not isinstance(variables, dict):
-            variables = {}
-        rewrite = variables.get("rewrite") if isinstance(variables.get("rewrite"), dict) else {}
-        question = str(rewrite.get("rewritten_question") or raw_request.get("question") or "").strip()
-        dataset_id = raw_request.get("dataset_id")
-        oid = raw_request.get("tenant_id") or raw_request.get("oid") or 1
+        ctx = ChatBIRunContext(request)
+        question = ctx.question
+        dataset_id = ctx.dataset_id
 
         if not question or dataset_id is None:
             return self._missed(dataset_id, "missing_question_or_dataset")
 
-        schema = self._schema_builder.build_dataset_schema(int(oid), int(dataset_id))
-        intent = variables.get("intent") if isinstance(variables.get("intent"), dict) else {}
+        schema = self._schema_builder.build_dataset_schema(ctx.tenant_id, dataset_id)
+        intent = ctx.intent
         subject_domain = self._selected_subject_domain(schema, intent)
         retrieval_schema = self._schema_scoped_by_subject_domain(schema, subject_domain)
-        candidate_groups = self._retrieve_candidate_groups(question, intent, retrieval_schema, int(oid))
+        candidate_groups = self._retrieve_candidate_groups(question, intent, retrieval_schema, ctx.tenant_id)
         self._rerank_candidate_groups_by_intent(candidate_groups, intent)
         metric_mentions = intent.get("metric_mentions")
         gate_result = self._candidate_gate.decide(

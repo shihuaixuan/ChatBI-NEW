@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
 from apps.headless.schemas import DataSetSchema, SchemaElement
 
 
@@ -82,24 +83,22 @@ class InteractionAdapter:
         self._card_builder = ClarificationCardBuilder()
 
     def ask_rewrite_clarification(self, request: dict[str, Any]) -> dict[str, Any]:
-        variables = request.get("variables", {})
-        rewrite = variables.get("rewrite") if isinstance(variables, dict) and isinstance(variables.get("rewrite"), dict) else {}
-        missing_slots = [str(slot) for slot in rewrite.get("missing_slots") or []]
+        ctx = ChatBIRunContext(request)
+        missing_slots = [str(slot) for slot in ctx.rewrite.get("missing_slots") or []]
         slots = missing_slots or ["metric"]
         return self._card_builder.build(
             ClarificationPlan(
                 clarification_type="rewrite_slots",
                 prompt=self._rewrite_prompt(slots),
                 slots=slots,
-                options=self._rewrite_options(slots, request, variables),
+                options=self._rewrite_options(slots, ctx),
                 allowed_update_path="variables.rewrite_response",
                 question_key=f"rewrite:{','.join(slots)}",
             )
         )
 
     def ask_intent_clarification(self, request: dict[str, Any]) -> dict[str, Any]:
-        variables = request.get("variables", {})
-        intent = variables.get("intent") if isinstance(variables, dict) and isinstance(variables.get("intent"), dict) else {}
+        intent = ChatBIRunContext(request).intent
         conflict_slots = intent.get("conflict_slots") or []
         ambiguous_slots = intent.get("ambiguous_slots") or []
         prompt = "请确认你想进行哪类分析。"
@@ -148,8 +147,8 @@ class InteractionAdapter:
         )
 
     def ask_slot_clarification(self, request: dict[str, Any]) -> dict[str, Any]:
-        variables = request.get("variables", {})
-        intent = variables.get("intent") if isinstance(variables, dict) and isinstance(variables.get("intent"), dict) else {}
+        ctx = ChatBIRunContext(request)
+        intent = ctx.intent
         slot_issues = self._slot_issues(intent)
         slot_issue_types = {str(issue.get("slot_type") or "") for issue in slot_issues}
         ambiguous_slots = [str(slot) for slot in intent.get("ambiguous_slots") or []]
@@ -159,7 +158,7 @@ class InteractionAdapter:
                     clarification_type="subject_domain",
                     prompt="请确认这个问题属于哪个主题域。",
                     slots=["subject_domain", "domain_id"],
-                    options=self._subject_domain_options(request, intent),
+                    options=self._subject_domain_options(ctx, intent),
                     allowed_update_path="variables.slot_response",
                     question_key=f"subject_domain:{self._subject_domain_question_key(intent)}",
                 )
@@ -223,14 +222,13 @@ class InteractionAdapter:
     def _rewrite_options(
         self,
         slots: list[str],
-        request: dict[str, Any],
-        variables: dict[str, Any],
+        ctx: ChatBIRunContext,
     ) -> list[dict[str, Any]]:
         options: list[dict[str, Any]] = []
-        schema = self._load_schema(request)
+        schema = self._load_schema(ctx)
         if "metric" in slots or "analysis_object" in slots:
             options.extend(
-                self._asset_options(variables, "metrics", "metric")
+                self._asset_options(ctx, "metrics", "metric")
                 or self._schema_asset_options(schema, "metrics", "metric")
                 or self._default_metric_options()
             )
@@ -244,16 +242,17 @@ class InteractionAdapter:
             )
         if "dimension" in slots:
             options.extend(
-                self._asset_options(variables, "dimensions", "dimension")
+                self._asset_options(ctx, "dimensions", "dimension")
                 or self._schema_asset_options(schema, "dimensions", "dimension")
                 or self._default_dimension_options()
             )
         return options
 
-    def _asset_options(self, variables: dict[str, Any], group_name: str, slot_name: str) -> list[dict[str, Any]]:
-        knowledge = variables.get("knowledge") if isinstance(variables.get("knowledge"), dict) else {}
+    def _asset_options(self, ctx: ChatBIRunContext, group_name: str, slot_name: str) -> list[dict[str, Any]]:
         candidate_groups = (
-            knowledge.get("candidate_groups") if isinstance(knowledge.get("candidate_groups"), dict) else {}
+            ctx.knowledge.get("candidate_groups")
+            if isinstance(ctx.knowledge.get("candidate_groups"), dict)
+            else {}
         )
         candidates = candidate_groups.get(group_name) if isinstance(candidate_groups.get(group_name), list) else []
         return [self._asset_option(candidate, slot_name) for candidate in candidates[:5] if isinstance(candidate, dict)]
@@ -283,16 +282,13 @@ class InteractionAdapter:
         elements = schema.metrics if group_name == "metrics" else schema.dimensions
         return [self._schema_element_option(element, slot_name) for element in elements[:5]]
 
-    def _load_schema(self, request: dict[str, Any]) -> DataSetSchema | None:
+    def _load_schema(self, ctx: ChatBIRunContext) -> DataSetSchema | None:
         if self._schema_builder is None:
             return None
-        raw_request = request.get("request", {})
-        dataset_id = self._int_or_none(raw_request.get("dataset_id"))
-        oid = self._int_or_none(raw_request.get("tenant_id") or raw_request.get("oid")) or 1
-        if dataset_id is None:
+        if ctx.dataset_id is None:
             return None
         try:
-            return self._schema_builder.build_dataset_schema(oid, dataset_id)
+            return self._schema_builder.build_dataset_schema(ctx.tenant_id, ctx.dataset_id)
         except Exception:
             return None
 
@@ -301,8 +297,8 @@ class InteractionAdapter:
         label = element.name or element.biz_name
         return {"label": label, "value": {slot_name: label, "asset_id": element.id}}
 
-    def _subject_domain_options(self, request: dict[str, Any], intent: dict[str, Any]) -> list[dict[str, Any]]:
-        schema = self._load_schema(request)
+    def _subject_domain_options(self, ctx: ChatBIRunContext, intent: dict[str, Any]) -> list[dict[str, Any]]:
+        schema = self._load_schema(ctx)
         domains = getattr(schema, "subject_domains", []) if schema is not None else []
         candidates = [domain for domain in domains if isinstance(domain, dict)]
         candidate_ids = self._subject_domain_candidate_ids(intent)
@@ -419,8 +415,7 @@ class InteractionAdapter:
         ]
 
     def _metric_selection_options(self, request: dict[str, Any]) -> list[dict[str, Any]]:
-        variables = request.get("variables", {})
-        knowledge = variables.get("knowledge") if isinstance(variables, dict) and isinstance(variables.get("knowledge"), dict) else {}
+        knowledge = ChatBIRunContext(request).knowledge
         for ambiguity in knowledge.get("ambiguities", []) or []:
             if ambiguity.get("type") != "metric":
                 continue

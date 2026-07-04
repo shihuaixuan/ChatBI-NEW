@@ -19,6 +19,7 @@ from apps.chatbi_workflow.capabilities.adapters.intent_validation import (
 from apps.chatbi_workflow.capabilities.adapters.time_slots import (
     normalize_time_range_payload,
 )
+from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
 from apps.chatbi_workflow.schemas.v1 import (
     IntentRecognitionOutput,
     QuestionClassificationOutput,
@@ -998,20 +999,18 @@ class QuestionAdapter:
     def classify(self, request: dict[str, Any]) -> dict[str, Any]:
         """调用大模型完成问题分类，并把输出收敛为稳定 schema。"""
 
-        raw_request = request.get("request", {})
-        question = str(raw_request.get("question") or "").strip()
-        dataset_id = raw_request.get("dataset_id")
-        conversation_context = self._conversation_context(request)
+        ctx = ChatBIRunContext(request)
+        question = ctx.raw_question
 
         if not question:
             return self._dump("forbidden", "empty_question", "medium", 1.0)
-        if dataset_id is None:
+        if ctx.dataset_id is None:
             return self._dump("forbidden", "missing_dataset", "medium", 1.0)
 
         prompt = build_question_classification_prompt(
             question=question,
-            dataset_id=dataset_id,
-            conversation_context=conversation_context,
+            dataset_id=ctx.dataset_id,
+            conversation_context=ctx.conversation,
         )
         try:
             model_text = self._model_client(prompt)
@@ -1028,20 +1027,16 @@ class QuestionAdapter:
     def rewrite(self, request: dict[str, Any]) -> dict[str, Any]:
         """调用大模型补全上下文，输出稳定的问题重写结果。"""
 
-        raw_request = request.get("request", {})
-        question = str(raw_request.get("question") or "").strip()
-        dataset_id = raw_request.get("dataset_id")
-        variables = request.get("variables", {})
-        user_feedback = variables.get("rewrite_response") if isinstance(variables, dict) else {}
-        if not isinstance(user_feedback, dict):
-            user_feedback = {}
+        ctx = ChatBIRunContext(request)
+        question = ctx.raw_question
+        user_feedback = ctx.rewrite_response
         if not question:
             return self._rewrite_dump("", True, ["question"], None)
 
         prompt = build_question_rewrite_prompt(
             question=question,
-            dataset_id=dataset_id,
-            conversation_context=self._conversation_context(request),
+            dataset_id=ctx.dataset_id,
+            conversation_context=ctx.conversation,
             user_feedback=user_feedback,
         )
         try:
@@ -1050,26 +1045,22 @@ class QuestionAdapter:
             output = QuestionRewriteOutput.model_validate(payload)
         except Exception:
             return self._rewrite_fallback(question, user_feedback)
-        output = self._normalize_rewrite_output(output, dataset_id=dataset_id)
+        output = self._normalize_rewrite_output(output, dataset_id=ctx.dataset_id)
         return output.model_dump(mode="json")
 
     def recognize_intent(self, request: dict[str, Any]) -> dict[str, Any]:
         """调用大模型分段识别分析意图，并在失败时使用轻量规则兜底。"""
 
-        raw_request = request.get("request", {})
-        variables = request.get("variables", {})
-        if not isinstance(variables, dict):
-            variables = {}
-        rewrite = variables.get("rewrite") if isinstance(variables.get("rewrite"), dict) else {}
-        rewritten_question = str(rewrite.get("rewritten_question") or raw_request.get("question") or "").strip()
-        user_feedback = variables.get("intent_response") if isinstance(variables.get("intent_response"), dict) else {}
-        schema = self._load_dataset_schema(request)
+        ctx = ChatBIRunContext(request)
+        rewritten_question = ctx.question
+        user_feedback = ctx.intent_response
+        schema = self._load_dataset_schema(ctx)
         subject_domains = self._subject_domains_from_schema(schema)
         available_dimensions = self._available_dimensions_from_schema(schema)
         if not rewritten_question:
             return self._intent_dump("unknown", 0.4, ["metric"], [])
 
-        conversation_context = self._conversation_context(request)
+        conversation_context = ctx.conversation
         fallback = self._intent_fallback(rewritten_question)
         fallback_payloads = self._intent_subtask_fallback_payloads(fallback)
         subtask_results = self._run_intent_subtasks(
@@ -1629,23 +1620,13 @@ class QuestionAdapter:
             return [value.strip()]
         return []
 
-    @staticmethod
-    def _conversation_context(request: dict[str, Any]) -> dict[str, Any]:
-        conversation = request.get("conversation")
-        if isinstance(conversation, dict):
-            return conversation
-        return {}
-
-    def _load_dataset_schema(self, request: dict[str, Any]) -> Any | None:
+    def _load_dataset_schema(self, ctx: ChatBIRunContext) -> Any | None:
         if self._schema_builder is None:
             return None
-        raw_request = request.get("request", {})
-        dataset_id = _int_or_none(raw_request.get("dataset_id"))
-        oid = _int_or_none(raw_request.get("tenant_id") or raw_request.get("oid")) or 1
-        if dataset_id is None:
+        if ctx.dataset_id is None:
             return None
         try:
-            return self._schema_builder.build_dataset_schema(oid, dataset_id)
+            return self._schema_builder.build_dataset_schema(ctx.tenant_id, ctx.dataset_id)
         except Exception:
             return None
 

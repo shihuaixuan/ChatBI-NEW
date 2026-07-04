@@ -6,6 +6,7 @@ from apps.agentic_chat.strategies.sql_repair import SQLRepairStrategy
 from apps.agentic_chat.tools.sql_executor import SqlExecuteTool
 from apps.agentic_chat.tools.sql_validator import SqlValidateTool
 from apps.chatbi_workflow.capabilities.adapters.permission import PermissionAdapter
+from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
 from apps.headless.service import HeadlessSchemaBuilder
 from apps.headless.sql_compiler import (
     SemanticSQLCompiler,
@@ -35,23 +36,18 @@ class SqlAdapter:
         self._sample_row_limit = max(sample_row_limit, 0)
 
     def generate(self, request: dict[str, Any]) -> dict[str, Any]:
-        raw_request = request.get("request", {})
-        variables = request.get("variables", {})
-        if not isinstance(variables, dict):
-            variables = {}
-        rewrite = variables.get("rewrite") if isinstance(variables.get("rewrite"), dict) else {}
-        knowledge = variables.get("knowledge") if isinstance(variables.get("knowledge"), dict) else {}
-        question = str(rewrite.get("rewritten_question") or raw_request.get("question") or "").strip()
-        dataset_id = raw_request.get("dataset_id")
-        oid = raw_request.get("tenant_id") or raw_request.get("oid") or 1
+        ctx = ChatBIRunContext(request)
+        knowledge = ctx.knowledge
+        question = ctx.question
+        dataset_id = ctx.dataset_id
         if not question or dataset_id is None:
             raise ValueError("SQL_GENERATE_CONTEXT_REQUIRED")
 
-        schema = self._schema_builder.build_dataset_schema(int(oid), int(dataset_id))
-        intent = variables.get("intent") if isinstance(variables.get("intent"), dict) else {}
+        schema = self._schema_builder.build_dataset_schema(ctx.tenant_id, dataset_id)
+        intent = ctx.intent
         slots = self._compile_slots(knowledge, intent)
         order_by, limit = self._compile_order_and_limit(intent, slots)
-        repair_context = self._repair_context(variables)
+        repair_context = self._repair_context(ctx)
         result = self._compiler.compile(
             SemanticSQLCompileRequest(
                 schema=schema,
@@ -79,8 +75,8 @@ class SqlAdapter:
         }
 
     def execute(self, request: dict[str, Any]) -> dict[str, Any]:
-        variables = request.get("variables", {})
-        sql_info = variables.get("sql") if isinstance(variables, dict) and isinstance(variables.get("sql"), dict) else {}
+        ctx = ChatBIRunContext(request)
+        sql_info = ctx.sql
         sql = str(sql_info.get("sql") or "").strip()
         datasource_id = self._int_or_none(sql_info.get("datasource_id"))
         if not sql or datasource_id is None:
@@ -91,8 +87,8 @@ class SqlAdapter:
             {
                 "sql": sql,
                 "datasource_id": datasource_id,
-                "tenant_id": request.get("request", {}).get("tenant_id"),
-                "user_id": request.get("request", {}).get("user_id"),
+                "tenant_id": ctx.request_value("tenant_id"),
+                "user_id": ctx.request_value("user_id"),
             }
         )
         if not permission.get("allowed"):
@@ -125,23 +121,20 @@ class SqlAdapter:
 
     def generate_split(self, request: dict[str, Any]) -> dict[str, Any]:
         """分别编译跨模型子查询，但不在 SQL 生成节点执行查询。"""
-        raw_request = request.get("request", {})
-        variables = request.get("variables", {})
-        knowledge = variables.get("knowledge") if isinstance(variables, dict) else {}
-        plans = knowledge.get("multi_query_plans") if isinstance(knowledge, dict) else []
-        dataset_id = raw_request.get("dataset_id")
-        oid = raw_request.get("tenant_id") or raw_request.get("oid") or 1
+        ctx = ChatBIRunContext(request)
+        plans = ctx.knowledge.get("multi_query_plans")
+        dataset_id = ctx.dataset_id
         if dataset_id is None or not isinstance(plans, list) or len(plans) < 2:
             raise ValueError("CROSS_MODEL_PLAN_REQUIRED")
 
-        schema = self._schema_builder.build_dataset_schema(int(oid), int(dataset_id))
+        schema = self._schema_builder.build_dataset_schema(ctx.tenant_id, dataset_id)
         queries: list[dict[str, Any]] = []
         for plan in plans:
             slots = plan.get("slots") if isinstance(plan.get("slots"), dict) else {}
             compiled = self._compiler.compile(
                 SemanticSQLCompileRequest(
                     schema=schema,
-                    question=str(raw_request.get("question") or ""),
+                    question=ctx.raw_question,
                     slots=slots,
                 )
             )
@@ -168,10 +161,8 @@ class SqlAdapter:
     def execute_split(self, request: dict[str, Any]) -> dict[str, Any]:
         """逐条执行已生成的跨模型 SQL，不承担 SQL 编译职责。"""
 
-        raw_request = request.get("request", {})
-        variables = request.get("variables", {})
-        split_sql = variables.get("split_sql") if isinstance(variables, dict) else {}
-        queries = split_sql.get("queries") if isinstance(split_sql, dict) else []
+        ctx = ChatBIRunContext(request)
+        queries = ctx.split_sql.get("queries")
         if not isinstance(queries, list) or len(queries) < 2:
             return self._failed("CROSS_MODEL_SQL_REQUIRED", "缺少已生成的跨模型 SQL")
         if self._execute_tool is None:
@@ -189,8 +180,8 @@ class SqlAdapter:
                 {
                     "sql": sql,
                     "datasource_id": datasource_id,
-                    "tenant_id": raw_request.get("tenant_id"),
-                    "user_id": raw_request.get("user_id"),
+                    "tenant_id": ctx.request_value("tenant_id"),
+                    "user_id": ctx.request_value("user_id"),
                 }
             )
             if not permission.get("allowed"):
@@ -236,21 +227,15 @@ class SqlAdapter:
         }
 
     def handle_error(self, request: dict[str, Any]) -> dict[str, Any]:
-        variables = request.get("variables", {})
-        execution = (
-            variables.get("sql_execution")
-            if isinstance(variables, dict) and isinstance(variables.get("sql_execution"), dict)
-            else {}
-        )
+        ctx = ChatBIRunContext(request)
+        execution = ctx.sql_execution
         error_code = str(execution.get("error_code") or "SQL_EXECUTION_FAILED")
         raw_message = str(execution.get("message") or "SQL 执行失败")
-        sql_info = variables.get("sql") if isinstance(variables.get("sql"), dict) else {}
-        knowledge = variables.get("knowledge") if isinstance(variables.get("knowledge"), dict) else {}
         repair = self._repair_strategy.decide(
             error_code=error_code,
             message=raw_message,
-            sql=str(sql_info.get("sql") or ""),
-            knowledge=knowledge,
+            sql=str(ctx.sql.get("sql") or ""),
+            knowledge=ctx.knowledge,
         )
         return {
             "error_code": error_code,
@@ -368,19 +353,18 @@ class SqlAdapter:
             return dimensions
         return [item for item in dimensions if item.get("asset_id") not in filter_dimension_ids]
 
-    def _repair_context(self, variables: dict[str, Any]) -> dict[str, Any]:
+    def _repair_context(self, ctx: ChatBIRunContext) -> dict[str, Any]:
         """从上一轮 SQL 错误中提取可供重生成 SQL 使用的修复上下文。"""
 
-        sql_error = variables.get("sql_error") if isinstance(variables.get("sql_error"), dict) else {}
+        sql_error = ctx.sql_error
         repair_plan = sql_error.get("repair_plan") if isinstance(sql_error.get("repair_plan"), dict) else {}
         if not bool(sql_error.get("retryable")) or repair_plan.get("action") != "regenerate_sql":
             return {}
-        sql_info = variables.get("sql") if isinstance(variables.get("sql"), dict) else {}
         context = {
             "action": "regenerate_sql",
             "error_code": sql_error.get("error_code"),
             "message": sql_error.get("message"),
-            "failed_sql": sql_info.get("sql"),
+            "failed_sql": ctx.sql.get("sql"),
         }
         for key in ("candidate_tables", "candidate_fields"):
             if key in repair_plan:

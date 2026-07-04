@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
 from apps.chatbi_workflow.schemas.v1 import AnswerOutput, FinalReplyOutput
 
 
@@ -126,11 +127,10 @@ class AnswerAdapter:
     def generate(self, request: dict[str, Any]) -> dict[str, Any]:
         """生成业务回答，模型不可用时返回稳定降级文案。"""
 
-        variables = request.get("variables", {})
-        node_failure = variables.get("node_failure") if isinstance(variables, dict) else None
+        node_failure = ChatBIRunContext(request).node_failure
         fallback_text = "暂时无法生成完整回答，请稍后重试。"
         model_warning = "answer_generation_model_failed"
-        if isinstance(node_failure, dict) and node_failure.get("error_code"):
+        if node_failure.get("error_code"):
             fallback_text = f"本次查询未能完成（{node_failure.get('error_code')}），请调整问题后重试。"
             model_warning = "answer_generation_degraded"
         return self._generate_with_model(
@@ -144,17 +144,12 @@ class AnswerAdapter:
     def compose(self, request: dict[str, Any]) -> dict[str, Any]:
         """本地合成最终回复，保持前端响应契约稳定。"""
 
-        variables = request.get("variables", {})
-        if not isinstance(variables, dict):
-            variables = {}
-        answer = variables.get("answer") if isinstance(variables.get("answer"), dict) else {}
-        recommendations = variables.get("recommendations") if isinstance(variables.get("recommendations"), dict) else {}
-        image_profile = variables.get("image_profile") if isinstance(variables.get("image_profile"), dict) else {}
-        final_answer = str(answer.get("answer") or "暂时无法生成完整回答，请稍后重试。")
+        ctx = ChatBIRunContext(request)
+        final_answer = str(ctx.answer.get("answer") or "暂时无法生成完整回答，请稍后重试。")
         return FinalReplyOutput(
             final_answer=final_answer,
-            recommendations=list(recommendations.get("questions") or []),
-            chart=image_profile,
+            recommendations=list(ctx.recommendations.get("questions") or []),
+            chart=ctx.image_profile,
             metadata={"source": "real_chatbi_v1"},
         ).model_dump(mode="json")
 
@@ -166,12 +161,8 @@ class AnswerAdapter:
         parse_warning: str,
         model_warning: str,
     ) -> dict[str, Any]:
-        raw_request = request.get("request", {})
-        question = str(raw_request.get("question") or "").strip()
-        variables = request.get("variables", {})
-        if not isinstance(variables, dict):
-            variables = {}
-        prompt = build_answer_generation_prompt(mode=mode, question=question, variables=variables)
+        ctx = ChatBIRunContext(request)
+        prompt = build_answer_generation_prompt(mode=mode, question=ctx.raw_question, variables=ctx.variables)
         try:
             model_text = self._model_client(prompt)
         except Exception:
