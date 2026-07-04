@@ -123,9 +123,8 @@ class SqlAdapter:
             "message": None,
         }
 
-    def execute_split(self, request: dict[str, Any]) -> dict[str, Any]:
-        """分别编译和执行跨模型子查询，不在数据库层进行跨粒度关联。"""
-
+    def generate_split(self, request: dict[str, Any]) -> dict[str, Any]:
+        """分别编译跨模型子查询，但不在 SQL 生成节点执行查询。"""
         raw_request = request.get("request", {})
         variables = request.get("variables", {})
         knowledge = variables.get("knowledge") if isinstance(variables, dict) else {}
@@ -133,14 +132,10 @@ class SqlAdapter:
         dataset_id = raw_request.get("dataset_id")
         oid = raw_request.get("tenant_id") or raw_request.get("oid") or 1
         if dataset_id is None or not isinstance(plans, list) or len(plans) < 2:
-            return self._failed("CROSS_MODEL_PLAN_REQUIRED", "缺少可执行的跨模型拆分计划")
-        if self._execute_tool is None:
-            return self._failed("SQL_EXECUTE_TOOL_REQUIRED", "SQL 执行工具未配置")
+            raise ValueError("CROSS_MODEL_PLAN_REQUIRED")
 
         schema = self._schema_builder.build_dataset_schema(int(oid), int(dataset_id))
-        query_results: list[dict[str, Any]] = []
-        total_rows = 0
-        total_execution_ms = 0
+        queries: list[dict[str, Any]] = []
         for plan in plans:
             slots = plan.get("slots") if isinstance(plan.get("slots"), dict) else {}
             compiled = self._compiler.compile(
@@ -152,9 +147,44 @@ class SqlAdapter:
             )
             validated = self._validate_tool.run({"sql": compiled.sql, "allowed_tables": compiled.tables})
             if not validated.success:
-                return self._failed(validated.error_code or "SQL_VALIDATE_FAILED", "拆分 SQL 校验失败")
+                raise ValueError(validated.error_code or "SQL_VALIDATE_FAILED")
             sql = (validated.payload or {}).get("sql") or compiled.sql
             datasource_id = self._datasource_id(schema, compiled.metrics, compiled.dimensions)
+            queries.append(
+                {
+                    "model_id": plan.get("model_id"),
+                    "metrics": plan.get("metrics") or compiled.metrics,
+                    "dimensions": plan.get("dimensions") or compiled.dimensions,
+                    "sql": sql,
+                    "datasource_id": datasource_id,
+                }
+            )
+        return {
+            "queries": queries,
+            "strategy": "semantic_sql_compiler",
+            "explanation": "按模型分别生成 SQL",
+        }
+
+    def execute_split(self, request: dict[str, Any]) -> dict[str, Any]:
+        """逐条执行已生成的跨模型 SQL，不承担 SQL 编译职责。"""
+
+        raw_request = request.get("request", {})
+        variables = request.get("variables", {})
+        split_sql = variables.get("split_sql") if isinstance(variables, dict) else {}
+        queries = split_sql.get("queries") if isinstance(split_sql, dict) else []
+        if not isinstance(queries, list) or len(queries) < 2:
+            return self._failed("CROSS_MODEL_SQL_REQUIRED", "缺少已生成的跨模型 SQL")
+        if self._execute_tool is None:
+            return self._failed("SQL_EXECUTE_TOOL_REQUIRED", "SQL 执行工具未配置")
+
+        query_results: list[dict[str, Any]] = []
+        total_rows = 0
+        total_execution_ms = 0
+        for query in queries:
+            sql = str(query.get("sql") or "").strip()
+            datasource_id = self._int_or_none(query.get("datasource_id"))
+            if not sql or datasource_id is None:
+                return self._failed("CROSS_MODEL_SQL_INVALID", "跨模型 SQL 缺少 SQL 或 datasource_id")
             permission = self._permission_adapter.apply(
                 {
                     "sql": sql,
@@ -184,9 +214,9 @@ class SqlAdapter:
             total_execution_ms += execution_ms
             query_results.append(
                 {
-                    "model_id": plan.get("model_id"),
-                    "metrics": plan.get("metrics") or compiled.metrics,
-                    "dimensions": plan.get("dimensions") or compiled.dimensions,
+                    "model_id": query.get("model_id"),
+                    "metrics": query.get("metrics") or [],
+                    "dimensions": query.get("dimensions") or [],
                     "rows": rows[: self._sample_row_limit],
                     "row_count": row_count,
                 }
@@ -233,11 +263,8 @@ class SqlAdapter:
     def _compile_slots(self, knowledge: dict[str, Any], intent: dict[str, Any] | None = None) -> dict[str, Any]:
         slot_bindings = knowledge.get("slot_bindings") if isinstance(knowledge.get("slot_bindings"), dict) else {}
         selected_assets = knowledge.get("selected_assets") if isinstance(knowledge.get("selected_assets"), dict) else {}
-        filters = self._asset_slots(slot_bindings, selected_assets, "filters", "DIMENSION")
-        dimensions = self._dimensions_without_filter_only_assets(
-            self._asset_slots(slot_bindings, selected_assets, "dimensions", "DIMENSION"),
-            filters,
-        )
+        filters = self._compile_filter_slots(slot_bindings, selected_assets)
+        dimensions = self._compile_dimension_slots(slot_bindings, selected_assets, filters)
         if not self._should_select_dimensions(intent):
             dimensions = []
         return {
@@ -245,6 +272,39 @@ class SqlAdapter:
             "dimensions": dimensions,
             "filters": filters,
         }
+
+    def _compile_filter_slots(
+        self,
+        slot_bindings: dict[str, Any],
+        selected_assets: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """优先使用已拆分过滤字段；旧上下文继续读取 filters。"""
+
+        separated_filter_keys = ("value_filters", "dimension_filters", "time_filters")
+        if any(key in slot_bindings for key in separated_filter_keys):
+            return [
+                *self._asset_slots(slot_bindings, {}, "value_filters", "VALUE"),
+                *self._asset_slots(slot_bindings, {}, "dimension_filters", "DIMENSION"),
+                *self._asset_slots(slot_bindings, {}, "time_filters", "DIMENSION"),
+            ]
+        return self._asset_slots(slot_bindings, selected_assets, "filters", "DIMENSION")
+
+    def _compile_dimension_slots(
+        self,
+        slot_bindings: dict[str, Any],
+        selected_assets: dict[str, Any],
+        filters: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """新上下文只把 group_dimensions 作为 SQL 维度，避免时间维度进 GROUP BY。"""
+
+        if "group_dimensions" in slot_bindings:
+            return self._asset_slots(slot_bindings, {}, "group_dimensions", "DIMENSION")
+        if "business_dimensions" in selected_assets:
+            return self._asset_slots({}, selected_assets, "business_dimensions", "DIMENSION")
+        return self._dimensions_without_filter_only_assets(
+            self._asset_slots(slot_bindings, selected_assets, "dimensions", "DIMENSION"),
+            filters,
+        )
 
     @classmethod
     def _compile_order_and_limit(

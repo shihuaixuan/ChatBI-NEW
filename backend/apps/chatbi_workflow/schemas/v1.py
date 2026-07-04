@@ -157,6 +157,14 @@ class SqlGenerateOutput(BaseModel):
     used_assets: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class SplitSqlGenerateOutput(BaseModel):
+    """跨模型 SQL 生成节点输出。"""
+
+    queries: list[dict[str, Any]] = Field(default_factory=list)
+    strategy: str = "placeholder"
+    explanation: str | None = None
+
+
 class SqlExecuteInput(BaseModel):
     """SQL 执行节点输入。"""
 
@@ -236,6 +244,7 @@ CHATBI_V1_OUTPUT_MODELS = {
     "intent.recognize": IntentRecognitionOutput,
     "knowledge.retrieve": KnowledgeRetrieveOutput,
     "sql.generate": SqlGenerateOutput,
+    "sql.generate_split": SplitSqlGenerateOutput,
     "sql.execute": SqlExecuteOutput,
     "sql.execute_split": SqlExecuteOutput,
     "sql.handle_error": SqlErrorOutput,

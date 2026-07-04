@@ -21,6 +21,27 @@ class PlaceholderChatBICapabilityGateway:
             return {"tables": ["placeholder_table"], "fields": ["placeholder_metric"]}
         if capability == "sql.generate":
             return {"sql": "select 1 as placeholder_value"}
+        if capability == "sql.generate_split":
+            return {
+                "queries": [
+                    {
+                        "model_id": 1,
+                        "metrics": ["占位指标一"],
+                        "dimensions": [],
+                        "sql": "select 1 as placeholder_value",
+                        "datasource_id": 1,
+                    },
+                    {
+                        "model_id": 2,
+                        "metrics": ["占位指标二"],
+                        "dimensions": [],
+                        "sql": "select 2 as placeholder_value",
+                        "datasource_id": 1,
+                    },
+                ],
+                "strategy": "placeholder",
+                "explanation": "占位跨模型 SQL",
+            }
         if capability == "sql.validate":
             return {"valid": True, "reason": "placeholder_valid"}
         if capability == "permission.apply":

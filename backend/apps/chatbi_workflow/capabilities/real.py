@@ -64,6 +64,8 @@ class RealChatBICapabilityGateway:
             return self._interaction_adapter.ask_cross_model_split(request)
         if capability == "sql.generate":
             return self._sql_adapter.generate(request)
+        if capability == "sql.generate_split":
+            return self._sql_adapter.generate_split(request)
         if capability == "sql.execute":
             return self._sql_adapter.execute(request)
         if capability == "sql.execute_split":

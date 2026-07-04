@@ -172,6 +172,7 @@ class HeadlessKnowledgeAdapter:
         selected_assets = self._constrain_selected_assets_to_metric_models(gate_result["selected_assets"])
         multi_query_plans = self._cross_model_query_plans(selected_assets, intent)
         if len(multi_query_plans) > 1:
+            output_assets = self._selected_assets_with_dimension_groups(selected_assets)
             return {
                 "hit": True,
                 "status": "cross_model",
@@ -185,7 +186,7 @@ class HeadlessKnowledgeAdapter:
                 "terms": [item["biz_name"] for item in selected_assets["terms"]],
                 "examples": [],
                 "candidate_groups": candidate_groups,
-                "selected_assets": selected_assets,
+                "selected_assets": output_assets,
                 "slot_bindings": self._slot_bindings(selected_assets, intent),
                 "subject_domain": subject_domain or {},
                 "decision": {
@@ -228,6 +229,7 @@ class HeadlessKnowledgeAdapter:
                 subject_domain=subject_domain,
             )
 
+        output_assets = self._selected_assets_with_dimension_groups(selected_assets)
         return {
             "hit": True,
             "status": gate_result["status"],
@@ -241,7 +243,7 @@ class HeadlessKnowledgeAdapter:
             "terms": [item["biz_name"] for item in selected_assets["terms"]],
             "examples": [],
             "candidate_groups": candidate_groups,
-            "selected_assets": selected_assets,
+            "selected_assets": output_assets,
             "slot_bindings": self._slot_bindings(selected_assets, intent),
             "subject_domain": subject_domain or {},
             "decision": gate_result["decision"],
@@ -270,6 +272,23 @@ class HeadlessKnowledgeAdapter:
                 if item.get("model_id") in metric_model_ids
             ]
         return constrained
+
+    @classmethod
+    def _selected_assets_with_dimension_groups(
+        cls,
+        selected_assets: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """保留旧 dimensions，同时明确拆出普通业务维度和时间维度。"""
+
+        dimensions = selected_assets.get("dimensions", [])
+        grouped = dict(selected_assets)
+        grouped["business_dimensions"] = [
+            item for item in dimensions if not cls._is_time_payload(item.get("payload") or {})
+        ]
+        grouped["time_dimensions"] = [
+            item for item in dimensions if cls._is_time_payload(item.get("payload") or {})
+        ]
+        return grouped
 
     @classmethod
     def _cross_model_query_plans(
@@ -501,11 +520,16 @@ class HeadlessKnowledgeAdapter:
 
         # rewritten_question 只做补漏：当意图要求的槽位仍没有候选时，再从整句补充对应资产。
         required_slots = set(self._text_list(intent.get("required_slot_types")))
+        requires_dimension_assets = self._requires_dimension_assets(intent)
+        has_required_dimension_candidates = self._has_required_dimension_candidates(
+            candidate_groups["dimensions"],
+            intent,
+        )
         if "metric" in required_slots and not candidate_groups["metrics"]:
             self._merge_allowed_groups(candidate_groups, fallback_groups, {"metrics"})
         if (
-            {"dimension", "time_dimension", "comparison_target"} & required_slots
-            and not candidate_groups["dimensions"]
+            (requires_dimension_assets or {"dimension", "time_dimension", "comparison_target"} & required_slots)
+            and not has_required_dimension_candidates
         ):
             self._merge_allowed_groups(candidate_groups, fallback_groups, {"dimensions"})
         if "filter" in required_slots and not candidate_groups["values"]:
@@ -537,6 +561,37 @@ class HeadlessKnowledgeAdapter:
                     int(item.get("asset_id") or 0),
                 )
             )
+
+    @staticmethod
+    def _requires_dimension_assets(intent: dict[str, Any]) -> bool:
+        """以维度槽位角色作为是否必须绑定维度资产的事实来源。"""
+
+        dimension_slots = intent.get("dimension_slots")
+        if not isinstance(dimension_slots, list):
+            return False
+        for slot in dimension_slots:
+            if not isinstance(slot, dict):
+                continue
+            if str(slot.get("role") or "").lower() in {"group_by", "display", "filter"}:
+                return True
+        return False
+
+    @classmethod
+    def _has_required_dimension_candidates(
+        cls,
+        candidates: list[dict[str, Any]],
+        intent: dict[str, Any],
+    ) -> bool:
+        """判断当前候选是否已经满足业务维度槽位，时间维度不能替代 group_by 维度。"""
+
+        executable_slots = [
+            slot
+            for slot in intent.get("dimension_slots") or []
+            if isinstance(slot, dict) and str(slot.get("role") or "").lower() in {"group_by", "display", "filter"}
+        ]
+        if executable_slots:
+            return any(cls._match_dimension_candidate(str(slot.get("name") or ""), candidates) for slot in executable_slots)
+        return bool(candidates)
 
     def _rerank_candidate(self, candidate: dict[str, Any], mentions: list[str], slot_name: str) -> None:
         """用短语命中、关键词覆盖和字段权重修正原始文本重叠分。"""
@@ -705,6 +760,8 @@ class HeadlessKnowledgeAdapter:
         required_slots = set(HeadlessKnowledgeAdapter._text_list(intent.get("required_slot_types")))
         if HeadlessKnowledgeAdapter._time_range_provided(intent):
             required_slots.add("time_dimension")
+        if HeadlessKnowledgeAdapter._requires_dimension_assets(intent):
+            required_slots.add("dimension")
         time_range = intent.get("time_range") if isinstance(intent.get("time_range"), dict) else {}
         if _normalize_text(time_range.get("raw")) in {"当前", "目前"}:
             required_slots.discard("time_dimension")
@@ -712,7 +769,10 @@ class HeadlessKnowledgeAdapter:
         has_metric_ambiguity = any(ambiguity.get("type") == "metric" for ambiguity in ambiguities)
         if "metric" in required_slots and not selected_assets.get("metrics") and not has_metric_ambiguity:
             missing.append("metric")
-        if "dimension" in required_slots and not selected_assets.get("dimensions"):
+        if "dimension" in required_slots and not HeadlessKnowledgeAdapter._has_required_dimension_candidates(
+            selected_assets.get("dimensions", []),
+            intent,
+        ):
             missing.append("dimension")
         if "time_dimension" in required_slots:
             has_time_dimension = any(
@@ -784,6 +844,17 @@ class HeadlessKnowledgeAdapter:
         intent: dict[str, Any] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         intent = intent if isinstance(intent, dict) else {}
+        dimension_assets = selected_assets.get("dimensions", [])
+        business_dimension_assets = [
+            item for item in dimension_assets if not cls._is_time_payload(item.get("payload") or {})
+        ]
+        time_dimension_assets = [
+            item for item in dimension_assets if cls._is_time_payload(item.get("payload") or {})
+        ]
+        value_filters = cls._value_filter_bindings(selected_assets)
+        dimension_filters = cls._dimension_filter_bindings(selected_assets, intent)
+        time_filter = cls._time_range_filter_binding(selected_assets, intent)
+        time_filters = [time_filter] if time_filter is not None else []
         return {
             "metrics": [
                 {
@@ -796,19 +867,56 @@ class HeadlessKnowledgeAdapter:
                 }
                 for item in selected_assets.get("metrics", [])
             ],
-            "dimensions": [
-                {
-                    "asset_type": "DIMENSION",
-                    "asset_id": item["asset_id"],
-                    "display_name": item["name"],
-                    "biz_name": item["biz_name"],
-                    "confidence": float(item.get("score") or 0),
-                    "source": item.get("source") or "headless_schema_mapper",
-                }
-                for item in selected_assets.get("dimensions", [])
-            ],
-            "filters": cls._filter_bindings(selected_assets, intent),
+            "dimensions": cls._dimension_bindings(dimension_assets),
+            "business_dimensions": cls._dimension_bindings(business_dimension_assets),
+            "time_dimensions": cls._dimension_bindings(time_dimension_assets),
+            "group_dimensions": cls._group_dimension_bindings(business_dimension_assets, intent),
+            "value_filters": value_filters,
+            "dimension_filters": dimension_filters,
+            "time_filters": time_filters,
+            "filters": [*value_filters, *dimension_filters, *time_filters],
         }
+
+    @staticmethod
+    def _dimension_bindings(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """把维度候选转成对外稳定的槽位绑定结构。"""
+
+        return [
+            {
+                "asset_type": "DIMENSION",
+                "asset_id": item["asset_id"],
+                "display_name": item["name"],
+                "biz_name": item["biz_name"],
+                "confidence": float(item.get("score") or 0),
+                "source": item.get("source") or "headless_schema_mapper",
+            }
+            for item in items
+        ]
+
+    @classmethod
+    def _group_dimension_bindings(
+        cls,
+        business_dimension_assets: list[dict[str, Any]],
+        intent: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """只把用户明确要求展示或分组的普通维度交给 SQL SELECT/GROUP BY。"""
+
+        bindings: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        for slot in intent.get("dimension_slots") or []:
+            if not isinstance(slot, dict):
+                continue
+            if str(slot.get("role") or "").lower() not in {"group_by", "display"}:
+                continue
+            dimension = cls._match_dimension_candidate(str(slot.get("name") or ""), business_dimension_assets)
+            if dimension is None:
+                continue
+            asset_id = int(dimension["asset_id"])
+            if asset_id in seen:
+                continue
+            seen.add(asset_id)
+            bindings.append(cls._dimension_bindings([dimension])[0])
+        return bindings
 
     @classmethod
     def _filter_bindings(
@@ -816,7 +924,18 @@ class HeadlessKnowledgeAdapter:
         selected_assets: dict[str, list[dict[str, Any]]],
         intent: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        filters = [
+        filters = cls._value_filter_bindings(selected_assets)
+        filters.extend(cls._dimension_filter_bindings(selected_assets, intent))
+        time_filter = cls._time_range_filter_binding(selected_assets, intent)
+        if time_filter is not None:
+            filters.append(time_filter)
+        return filters
+
+    @staticmethod
+    def _value_filter_bindings(selected_assets: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        """维度值候选只作为过滤值绑定，不进入分组维度。"""
+
+        return [
             {
                 "asset_type": "VALUE",
                 "asset_id": item["asset_id"],
@@ -827,11 +946,6 @@ class HeadlessKnowledgeAdapter:
             }
             for item in selected_assets.get("values", [])
         ]
-        filters.extend(cls._dimension_filter_bindings(selected_assets, intent))
-        time_filter = cls._time_range_filter_binding(selected_assets, intent)
-        if time_filter is not None:
-            filters.append(time_filter)
-        return filters
 
     @classmethod
     def _dimension_filter_bindings(

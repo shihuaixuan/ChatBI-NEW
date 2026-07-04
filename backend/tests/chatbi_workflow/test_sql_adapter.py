@@ -347,6 +347,91 @@ class CapturingCompiler:
         )
 
 
+def test_sql_adapter_uses_separated_group_dimensions_and_time_filters():
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="店铺经营分析",
+            id=20,
+            name="店铺经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[{"id": 10, "name": "店铺订单", "biz_name": "stall_order", "tableQuery": "stall_traffic_1d"}],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="店铺经营分析",
+                model=10,
+                id=100,
+                name="总GMV",
+                biz_name="gmv_total",
+                type="METRIC",
+            )
+        ],
+        dimensions=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="店铺经营分析",
+                model=10,
+                id=200,
+                name="店铺ID",
+                biz_name="stall_id",
+                type="DIMENSION",
+            ),
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="店铺经营分析",
+                model=10,
+                id=201,
+                name="统计日期",
+                biz_name="stat_date",
+                type="DIMENSION",
+            ),
+        ],
+    )
+    compiler = CapturingCompiler(
+        "select stall_order.stall_id, sum(stall_order.gmv_total) as gmv_total "
+        "from stall_traffic_1d stall_order group by stall_order.stall_id"
+    )
+    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=compiler)
+
+    adapter.generate(
+        {
+            "request": {"question": "最近 30 天按店铺看总GMV", "dataset_id": 20, "tenant_id": 10},
+            "variables": {
+                "intent": {
+                    "intent_type": "metric_query",
+                    "dimension_slots": [{"name": "店铺", "role": "group_by", "value": None, "value_status": "not_provided"}],
+                },
+                "knowledge": {
+                    "slot_bindings": {
+                        "metrics": [{"asset_type": "METRIC", "asset_id": 100, "display_name": "总GMV"}],
+                        "group_dimensions": [{"asset_type": "DIMENSION", "asset_id": 200, "display_name": "店铺ID"}],
+                        "time_filters": [
+                            {
+                                "asset_type": "DIMENSION",
+                                "asset_id": 201,
+                                "display_name": "统计日期",
+                                "operator": "=",
+                                "value": {"kind": "relative_range", "amount": 30, "unit": "day"},
+                            }
+                        ],
+                    },
+                    "selected_assets": {
+                        "metrics": [{"asset_id": 100, "biz_name": "gmv_total", "display_name": "总GMV"}],
+                        "business_dimensions": [{"asset_id": 200, "biz_name": "stall_id", "display_name": "店铺ID"}],
+                        "time_dimensions": [{"asset_id": 201, "biz_name": "stat_date", "display_name": "统计日期"}],
+                    },
+                },
+            },
+        }
+    )
+
+    assert [item["asset_id"] for item in compiler.requests[0].slots["dimensions"]] == [200]
+    assert [item["asset_id"] for item in compiler.requests[0].slots["filters"]] == [201]
+
+
 def test_sql_adapter_passes_ranking_order_and_limit_to_compiler():
     schema = DataSetSchema(
         data_set=SchemaElement(
@@ -689,7 +774,7 @@ def test_sql_adapter_executes_cross_model_plans_as_independent_queries():
         execute_tool=execute_tool,
     )
 
-    result = adapter.execute_split(
+    generated = adapter.generate_split(
         {
             "request": {"question": "总GMV和库存量", "dataset_id": 20, "tenant_id": 10, "user_id": 20},
             "variables": {
@@ -710,6 +795,17 @@ def test_sql_adapter_executes_cross_model_plans_as_independent_queries():
                     ]
                 }
             },
+        }
+    )
+    assert len(generated["queries"]) == 2
+    assert "gmv_total" in generated["queries"][0]["sql"]
+    assert "stock_qty" in generated["queries"][1]["sql"]
+    assert execute_tool.payloads == []
+
+    result = adapter.execute_split(
+        {
+            "request": {"question": "总GMV和库存量", "dataset_id": 20, "tenant_id": 10, "user_id": 20},
+            "variables": {"split_sql": generated},
         }
     )
 

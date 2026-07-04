@@ -408,4 +408,65 @@ assert.deepEqual(mergedCompletedSteps.find((step) => step.key === 'execute_sql')
   { uv: 94400 },
 ])
 
+const splitQuerySteps = buildGraphWorkflowSteps({
+  run_id: 'run-split-query',
+  status: 'succeeded',
+  current_node: 'finish',
+  nodes: [
+    {
+      name: 'ask_cross_model_split',
+      status: 'succeeded',
+      output: { prompt: '检测到指标来自不同模型，是否分开查询？' },
+    },
+    {
+      name: 'generate_split_queries',
+      status: 'succeeded',
+      output: {
+        queries: [
+          {
+            model_id: 10,
+            metrics: ['总GMV'],
+            sql: 'select stall_id, sum(gmv_total) as gmv_total from orders group by stall_id',
+          },
+          {
+            model_id: 11,
+            metrics: ['当前库存量'],
+            sql: 'select stall_id, sum(stock_qty) as stock_qty from inventory group by stall_id',
+          },
+        ],
+      },
+    },
+    {
+      name: 'execute_split_queries',
+      status: 'succeeded',
+      output: {
+        rows: [
+          {
+            model_id: 10,
+            metrics: ['总GMV'],
+            rows: [{ stall_id: 100011, gmv_total: 458248.85 }],
+            row_count: 1,
+          },
+          {
+            model_id: 11,
+            metrics: ['当前库存量'],
+            rows: [{ stall_id: 100011, stock_qty: 7023 }],
+            row_count: 1,
+          },
+        ],
+      },
+    },
+  ],
+})
+assert.equal(splitQuerySteps[0]?.label, '用户询问')
+assert.deepEqual(splitQuerySteps.slice(1).map((step) => step.label), ['生成查询', '查询数据'])
+assert.equal(splitQuerySteps[1]?.summary, '已生成 2 条 SQL')
+assert.equal(splitQuerySteps[1]?.details?.queries?.[0]?.title, '总GMV')
+assert.match(splitQuerySteps[1]?.details?.queries?.[0]?.sql || '', /gmv_total/)
+assert.equal(splitQuerySteps[2]?.summary, '2 条查询，共返回 2 行')
+assert.deepEqual(splitQuerySteps[2]?.details?.queries?.[0]?.rows, [
+  { stall_id: 100011, gmv_total: 458248.85 },
+])
+assert.equal(splitQuerySteps[2]?.details?.queries?.[1]?.title, '当前库存量')
+
 console.info('graphWorkflowDisplay tests passed')

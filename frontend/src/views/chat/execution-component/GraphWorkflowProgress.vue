@@ -86,6 +86,32 @@ function statusText(status: string) {
           </div>
           <div v-if="step.summary" class="step-summary">{{ step.summary }}</div>
           <pre v-if="step.details?.sql" class="step-sql">{{ step.details.sql }}</pre>
+          <div v-if="step.details?.queries?.length" class="split-query-list">
+            <section
+              v-for="(query, queryIndex) in step.details.queries"
+              :key="`${step.key}-${queryIndex}`"
+              class="split-query"
+            >
+              <div class="split-query-title">{{ query.title }}</div>
+              <pre v-if="query.sql" class="step-sql">{{ query.sql }}</pre>
+              <div v-if="query.rows?.length" class="step-result">
+                <table>
+                  <thead>
+                    <tr>
+                      <th v-for="column in query.columns" :key="column">{{ column }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, rowIndex) in query.rows" :key="rowIndex">
+                      <td v-for="column in query.columns" :key="column">
+                        {{ row[column] ?? '' }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
           <div v-if="step.details?.rows?.length" class="step-result">
             <table>
               <thead>
@@ -162,6 +188,23 @@ function statusText(status: string) {
   display: grid;
   gap: 10px;
   margin-top: 12px;
+}
+
+.split-query-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.split-query {
+  min-width: 0;
+}
+
+.split-query-title {
+  margin-bottom: 4px;
+  color: rgba(31, 35, 41, 0.72);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .step-row {

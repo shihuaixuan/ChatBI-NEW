@@ -28,6 +28,22 @@ class FakeSchemaMapper:
         return SchemaMapInfo(data_set_element_matches={schema.data_set.id: self.matches})
 
 
+class TextAwareSchemaMapper:
+    def __init__(self, matches_by_text: dict[str, list[SchemaElementMatch]]) -> None:
+        self.matches_by_text = matches_by_text
+        self.queries: list[str] = []
+
+    def map_schema(self, query_text: str, schema: DataSetSchema) -> SchemaMapInfo:
+        self.queries.append(query_text)
+        matches = self.matches_by_text.get(query_text, [])
+        return SchemaMapInfo(data_set_element_matches={schema.data_set.id: matches})
+
+
+class EmptyDocumentRetriever:
+    def retrieve(self, query_text: str, schema: DataSetSchema, oid: int) -> dict[str, list[dict]]:
+        return {"metrics": [], "dimensions": [], "values": [], "terms": []}
+
+
 def test_candidate_gate_keeps_one_metric_for_each_explicit_mention():
     gate = CandidateGate()
 
@@ -105,6 +121,177 @@ def test_selected_dimensions_are_pruned_to_explicit_query_roles():
     )
 
     assert [item["biz_name"] for item in result["dimensions"]] == ["stall_id"]
+
+
+def test_group_by_dimension_slot_triggers_dimension_fallback_without_required_slot_type():
+    metric = SchemaElement(
+        data_set_id=20,
+        data_set_name="店铺经营分析",
+        model=10,
+        id=100,
+        name="总GMV",
+        biz_name="gmv_total",
+        type="METRIC",
+        fields=["gmv_total"],
+    )
+    dimension = SchemaElement(
+        data_set_id=20,
+        data_set_name="店铺经营分析",
+        model=10,
+        id=200,
+        name="店铺ID",
+        biz_name="stall_id",
+        type="DIMENSION",
+        alias=["店铺"],
+    )
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="店铺经营分析",
+            id=20,
+            name="店铺经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[{"id": 10, "name": "店铺订单模型", "biz_name": "stall_order", "tableQuery": "stall_order_daily"}],
+        metrics=[metric],
+        dimensions=[dimension],
+    )
+    mapper = TextAwareSchemaMapper(
+        {
+            "总GMV": [SchemaElementMatch(element=metric, similarity=0.96, detect_word="总GMV", word="总GMV")],
+            "最近 30 天商城店铺的总 GMV 是多少？": [
+                SchemaElementMatch(element=dimension, similarity=0.9, detect_word="店铺", word="商城店铺")
+            ],
+        }
+    )
+    adapter = HeadlessKnowledgeAdapter(
+        schema_builder=FakeHeadlessSchemaBuilder(schema),
+        schema_mapper=mapper,
+        document_retriever=EmptyDocumentRetriever(),
+    )
+
+    result = adapter.retrieve(
+        {
+            "request": {
+                "question": "最近 30 天商城店铺的总 GMV 是多少？",
+                "dataset_id": 20,
+                "tenant_id": 10,
+                "user_id": 20,
+            },
+            "variables": {
+                "rewrite": {"rewritten_question": "最近 30 天商城店铺的总 GMV 是多少？"},
+                "intent": {
+                    "intent_type": "metric_query",
+                    "metric_mentions": ["总GMV"],
+                    "dimension_mentions": ["商城店铺"],
+                    "dimension_slots": [
+                        {"name": "商城店铺", "role": "group_by", "value": None, "value_status": "not_provided"}
+                    ],
+                    "required_slot_types": ["metric"],
+                    "query_shape": {"select_mode": "aggregate", "needs_group_by": False},
+                },
+            },
+        }
+    )
+
+    assert result["hit"] is True
+    assert [item["biz_name"] for item in result["selected_assets"]["dimensions"]] == ["stall_id"]
+    assert result["slot_bindings"]["dimensions"][0]["biz_name"] == "stall_id"
+
+
+def test_group_by_dimension_fallback_is_not_satisfied_by_time_dimensions():
+    metric = SchemaElement(
+        data_set_id=20,
+        data_set_name="店铺经营分析",
+        model=10,
+        id=100,
+        name="总GMV",
+        biz_name="gmv_total",
+        type="METRIC",
+        fields=["gmv_total"],
+    )
+    time_dimension = SchemaElement(
+        data_set_id=20,
+        data_set_name="店铺经营分析",
+        model=10,
+        id=201,
+        name="统计日期",
+        biz_name="stat_date",
+        type="DIMENSION",
+        ext_info={"dimension_type": "partition_time", "is_default_time": True},
+    )
+    store_dimension = SchemaElement(
+        data_set_id=20,
+        data_set_name="店铺经营分析",
+        model=10,
+        id=200,
+        name="店铺ID",
+        biz_name="stall_id",
+        type="DIMENSION",
+        alias=["店铺"],
+    )
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="店铺经营分析",
+            id=20,
+            name="店铺经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[{"id": 10, "name": "店铺订单模型", "biz_name": "stall_order", "tableQuery": "stall_order_daily"}],
+        metrics=[metric],
+        dimensions=[time_dimension, store_dimension],
+    )
+    mapper = TextAwareSchemaMapper(
+        {
+            "总GMV": [SchemaElementMatch(element=metric, similarity=0.96, detect_word="总GMV", word="总GMV")],
+            "最近 30 天商城店铺的总 GMV 是多少？": [
+                SchemaElementMatch(element=store_dimension, similarity=0.9, detect_word="店铺", word="商城店铺")
+            ],
+        }
+    )
+    adapter = HeadlessKnowledgeAdapter(
+        schema_builder=FakeHeadlessSchemaBuilder(schema),
+        schema_mapper=mapper,
+        document_retriever=EmptyDocumentRetriever(),
+    )
+
+    result = adapter.retrieve(
+        {
+            "request": {
+                "question": "最近 30 天商城店铺的总 GMV 是多少？",
+                "dataset_id": 20,
+                "tenant_id": 10,
+                "user_id": 20,
+            },
+            "variables": {
+                "rewrite": {"rewritten_question": "最近 30 天商城店铺的总 GMV 是多少？"},
+                "intent": {
+                    "intent_type": "metric_query",
+                    "metric_mentions": ["总GMV"],
+                    "dimension_mentions": ["店铺"],
+                    "dimension_slots": [
+                        {"name": "店铺", "role": "group_by", "value": None, "value_status": "not_provided"}
+                    ],
+                    "time_mentions": ["最近 30 天"],
+                    "time_range": {"raw": "最近 30 天", "value_status": "provided"},
+                    "required_slot_types": ["metric"],
+                    "query_shape": {"select_mode": "aggregate", "needs_group_by": False},
+                },
+            },
+        }
+    )
+
+    selected_dimension_biz_names = [item["biz_name"] for item in result["selected_assets"]["dimensions"]]
+    assert "stall_id" in selected_dimension_biz_names
+    assert "stat_date" in selected_dimension_biz_names
+    assert [item["biz_name"] for item in result["selected_assets"]["business_dimensions"]] == ["stall_id"]
+    assert [item["biz_name"] for item in result["selected_assets"]["time_dimensions"]] == ["stat_date"]
+    assert [item["biz_name"] for item in result["slot_bindings"]["group_dimensions"]] == ["stall_id"]
+    assert [item["biz_name"] for item in result["slot_bindings"]["time_dimensions"]] == ["stat_date"]
+    assert [item["biz_name"] for item in result["slot_bindings"]["time_filters"]] == ["stat_date"]
 
 
 def test_current_snapshot_time_does_not_become_group_dimension():

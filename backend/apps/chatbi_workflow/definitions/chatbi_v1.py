@@ -54,6 +54,7 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
             "interaction.ask_cross_model_split",
         ),
         "ask_metric_selection": _interaction_node("ask_metric_selection", "interaction.ask_metric_selection"),
+        "generate_split_queries": _capability_node("generate_split_queries", "sql.generate_split"),
         "execute_split_queries": _capability_node("execute_split_queries", "sql.execute_split"),
         "generate_sql": _capability_node("generate_sql", "sql.generate"),
         "execute_sql": _capability_node("execute_sql", "sql.execute"),
@@ -177,7 +178,7 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
             EdgeDefinition(source="retrieve_knowledge", target="generate_sql"),
             EdgeDefinition(
                 source="ask_cross_model_split",
-                target="execute_split_queries",
+                target="generate_split_queries",
                 condition="cross_model.split_requested",
                 priority=0,
             ),
@@ -188,6 +189,7 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
                 priority=1,
             ),
             EdgeDefinition(source="ask_cross_model_split", target="generate_question_answer"),
+            EdgeDefinition(source="generate_split_queries", target="execute_split_queries"),
             EdgeDefinition(
                 source="execute_split_queries",
                 target="handle_sql_error",
@@ -258,6 +260,7 @@ def register_chatbi_v1_handlers(registry: HandlerRegistry, gateway: ChatBICapabi
         "intent.recognize": "variables.intent",
         "knowledge.retrieve": "variables.knowledge",
         "sql.generate": "variables.sql",
+        "sql.generate_split": "variables.split_sql",
         "sql.execute": "variables.sql_execution",
         "sql.execute_split": "variables.sql_execution",
         "sql.handle_error": "variables.sql_error",

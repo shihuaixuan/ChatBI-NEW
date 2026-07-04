@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
+import time
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from json import JSONDecodeError
 from typing import Any, Protocol
@@ -40,6 +44,43 @@ class QuestionSchemaBuilder(Protocol):
     """意图识别节点使用的轻量 schema 构建协议。"""
 
     def build_dataset_schema(self, oid: int, dataset_id: int) -> Any: ...
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IntentSubtaskConfig:
+    """意图识别子任务并行调度配置。"""
+
+    enabled: bool = True
+    max_workers: int = 3
+    subtask_timeout_seconds: float = 20.0
+    overall_timeout_seconds: float = 25.0
+
+
+@dataclass(frozen=True)
+class IntentSubtaskResult:
+    """意图识别子任务执行结果，业务 payload 与执行元信息分离。"""
+
+    name: str
+    payload: dict[str, Any]
+    status: str
+    source: str
+    error_code: str | None
+    retry_count: int
+    duration_ms: int
+
+    def trace_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "status": self.status,
+            "source": self.source,
+            "duration_ms": self.duration_ms,
+            "retry_count": self.retry_count,
+        }
+        if self.error_code:
+            payload["error_code"] = self.error_code
+        return payload
 
 
 def build_question_classification_prompt(
@@ -283,35 +324,270 @@ def build_semantic_mentions_prompt(
     system_prompt = """
 # 角色
 
-你是 ChatBI 工作流中的指标和时间线索识别器，只负责抽取指标线索和时间线索。
+你是 ChatBI 工作流中的“指标线索和时间线索识别器”。
 
-# 输出
+你只负责从用户问题中抽取：
+1. 指标线索
+2. 时间线索
 
-只输出 JSON 对象。
+你不负责识别分组、筛选、对比、排序、维度绑定、指标 ID、字段名、业务口径或 SQL 语义。
 
-```json
+# 核心原则
+
+只抽取用户原文中明确出现的线索。
+
+不要推断。
+不要补全。
+不要改写。
+不要标准化。
+不要输出解释。
+不要输出 JSON 以外的任何内容。
+
+# 输出格式
+
+只输出一个 JSON 对象，结构必须完全符合以下格式：
+
 {
   "metric_mentions": [],
   "time_mentions": [],
-  "time_range": {"raw": null, "value_status": "provided | not_provided"},
+  "time_range": {
+    "raw": null,
+    "value_status": "provided | not_provided"
+  },
   "ambiguous_slots": [],
   "conflict_slots": []
 }
-```
 
-# 指标规则
+# 字段规则
 
-- `metric_mentions` 输出用户问题中的指标、事实或业务对象线索。
-- 保留指标修饰词。
-- 不输出指标 ID、字段名、`biz_name`。
-- `线上 / 线下 / 新增 / 活跃 / 累计 / 累积` 等词如果不是「可用维度」中的 `name` 或 `aliases`，应保留在 `metric_mentions` 中。
+## metric_mentions
 
-# 时间规则
+`metric_mentions` 只输出用户问题中明确出现的“指标、事实或可度量业务结果”线索。
 
-- 今天、昨天、本月、上月、最近7天、近30天、去年同期等进入 `time_mentions`。
-- 用户明确提到时间范围时，`time_range.value_status=provided`。
-- 用户没有提到时间范围时，`time_range.value_status=not_provided`。
-- 不要把时间表达放入 `metric_mentions`。
+可以进入 `metric_mentions` 的例子：
+
+- 销售额
+- 订单数
+- 客单价
+- 转化率
+- GMV
+- 支付金额
+- 新增用户数
+- 退款率
+- 成交客户数
+- 库存周转天数
+
+保留用户原文中的指标修饰词，例如：
+
+- 新增销售额
+- 支付订单数
+- 有效访问人数
+- 去重用户数
+- 平均客单价
+
+不要把以下内容放入 `metric_mentions`：
+
+- 时间表达：今天、昨天、最近7天、本月、去年同期
+- 分组对象：按城市、按渠道、按门店、按商品分类
+- 筛选对象：北京、华东区、App 端、会员用户
+- 对比对象：同比、环比、对比去年、和上月比
+- 排序或 TopN：最高、最低、前10、排名
+- 展示方式：趋势、分布、明细、占比图
+- 单纯的维度名：城市、渠道、门店、商品、用户、地区
+
+如果用户只说“看一下北京最近7天的数据”，没有明确指标，则 `metric_mentions` 输出空数组。
+
+`available_dimensions` 如果存在，只能作为辅助理解维度语义的参考，不是指标抽取的白名单或黑名单。
+
+不要输出指标 ID、字段名、`biz_name` 或任何系统内部标识。
+
+## time_mentions
+
+`time_mentions` 输出用户问题中明确出现的时间线索。
+
+可以进入 `time_mentions` 的例子：
+
+- 今天
+- 昨天
+- 本周
+- 上周
+- 本月
+- 上月
+- 今年
+- 去年
+- 最近7天
+- 近30天
+- 过去三个月
+- 2024年
+- 2024-01-01 到 2024-01-31
+- 去年同期
+- 同比
+- 环比
+
+不要把时间表达放入 `metric_mentions`。
+
+## time_range
+
+`time_range` 表示用户是否明确提供了时间范围。
+
+当用户明确提到时间范围时：
+
+{
+  "raw": "用户原文中的时间表达",
+  "value_status": "provided"
+}
+
+当用户没有明确提到时间范围时：
+
+{
+  "raw": null,
+  "value_status": "not_provided"
+}
+
+如果用户提到多个时间表达，`time_range.raw` 保留完整原文片段，例如：
+
+{
+  "raw": "本月和上月",
+  "value_status": "provided"
+}
+
+## ambiguous_slots
+
+当某个词既可能是指标，也可能是维度、对象或其他语义，且无法仅根据用户问题判断时，放入 `ambiguous_slots`。
+
+例如：
+
+- “看一下用户”：用户可能是对象，不一定是指标。
+- “分析订单”：订单可能是业务对象，不一定是订单数。
+- “门店情况”：门店是维度对象，“情况”没有明确指标。
+
+如果没有歧义，输出空数组。
+
+## conflict_slots
+
+当用户问题中存在明显冲突的时间或指标表达时，放入 `conflict_slots`。
+
+例如：
+
+- “今天和昨天的本月销售额”
+- “最近7天的上月订单数”
+- “今年去年销售额”
+
+如果没有冲突，输出空数组。
+
+# 抽取步骤
+
+1. 先识别所有明确时间表达，放入 `time_mentions`。
+2. 根据是否存在时间表达设置 `time_range`。
+3. 再识别明确指标线索，放入 `metric_mentions`。
+4. 排除时间、分组、筛选、对比、排序、展示方式等非指标线索。
+5. 对不确定语义放入 `ambiguous_slots`。
+6. 对明显冲突语义放入 `conflict_slots`。
+7. 最终只输出 JSON 对象。
+
+# 示例
+
+用户问题：
+
+最近7天销售额是多少？
+
+输出：
+
+{
+  "metric_mentions": ["销售额"],
+  "time_mentions": ["最近7天"],
+  "time_range": {
+    "raw": "最近7天",
+    "value_status": "provided"
+  },
+  "ambiguous_slots": [],
+  "conflict_slots": []
+}
+
+用户问题：
+
+按城市看本月订单数
+
+输出：
+
+{
+  "metric_mentions": ["订单数"],
+  "time_mentions": ["本月"],
+  "time_range": {
+    "raw": "本月",
+    "value_status": "provided"
+  },
+  "ambiguous_slots": [],
+  "conflict_slots": []
+}
+
+用户问题：
+
+北京 App 端的销售额
+
+输出：
+
+{
+  "metric_mentions": ["销售额"],
+  "time_mentions": [],
+  "time_range": {
+    "raw": null,
+    "value_status": "not_provided"
+  },
+  "ambiguous_slots": [],
+  "conflict_slots": []
+}
+
+用户问题：
+
+看一下北京最近7天的数据
+
+输出：
+
+{
+  "metric_mentions": [],
+  "time_mentions": ["最近7天"],
+  "time_range": {
+    "raw": "最近7天",
+    "value_status": "provided"
+  },
+  "ambiguous_slots": [],
+  "conflict_slots": []
+}
+
+用户问题：
+
+分析一下订单
+
+输出：
+
+{
+  "metric_mentions": [],
+  "time_mentions": [],
+  "time_range": {
+    "raw": null,
+    "value_status": "not_provided"
+  },
+  "ambiguous_slots": ["订单"],
+  "conflict_slots": []
+}
+
+用户问题：
+
+最近7天的上月销售额
+
+输出：
+
+{
+  "metric_mentions": ["销售额"],
+  "time_mentions": ["最近7天", "上月"],
+  "time_range": {
+    "raw": "最近7天的上月",
+    "value_status": "provided"
+  },
+  "ambiguous_slots": [],
+  "conflict_slots": ["最近7天的上月"]
+}
 """.strip()
     user_prompt = _markdown_user_prompt(
         rewritten_question=rewritten_question,
@@ -347,7 +623,7 @@ def build_dimension_slots_prompt(
 {
   "dimension_mentions": [],
   "dimension_slots": [
-    {"name": "维度标准名", "role": "group_by | filter | ambiguous", "value": null, "value_status": "provided | not_provided | ambiguous", "value_confidence": 0.0}
+    {"name": "自然语言维度名", "role": "group_by | filter | ambiguous", "value": null, "value_status": "provided | not_provided | ambiguous", "value_confidence": 0.0}
   ],
   "residual_filter_mentions": [],
   "ambiguous_slots": [],
@@ -357,11 +633,12 @@ def build_dimension_slots_prompt(
 
 # 维度候选规则
 
-- 「可用维度」是普通维度候选，只用于 `dimension_mentions` 和 `dimension_slots`。
+- 「可用维度」是普通维度候选，只作为理解用户维度表达的参考，不是输出白名单。
 - 「时间字段候选」只用于后续时间字段绑定，不能输出到 `dimension_mentions` 或 `dimension_slots`。
-- `dimension_mentions` 和 `dimension_slots[].name` 只能使用「可用维度」中的 `name`。
-- 用户命中 `aliases` 时，输出对应的标准 `name`。
-- 不在「可用维度」的 `name` 或 `aliases` 中的词，不能作为维度。
+- `dimension_mentions` 和 `dimension_slots[].name` 输出用户问题里的自然语言维度短语，例如“店铺”“商品”“地区”“渠道”。
+- 用户表达命中「可用维度」的 `name` 或 `aliases` 时，必须输出对应的标准 `name`。
+- 用户表达没有完全命中时，应在「可用维度」中选择语义最相近、业务上最有关联的候选，并输出对应的标准 `name`。
+- 如果多个候选都可能匹配，或用户表达和全部候选差异很大，不要强行替换；保留用户原文维度短语，并在 `ambiguous_slots` 中加入 `dimension`。
 - 不输出维度 ID、字段名、`biz_name`。
 
 # 维度角色规则
@@ -692,10 +969,31 @@ class QuestionAdapter:
         model_client: QuestionClassificationModelClient | None = None,
         schema_builder: QuestionSchemaBuilder | None = None,
         intent_post_processor: IntentPostProcessor | None = None,
+        intent_subtask_config: IntentSubtaskConfig | None = None,
     ) -> None:
         self._model_client = model_client or DefaultQuestionClassificationModelClient()
         self._schema_builder = schema_builder
         self._intent_post_processor = intent_post_processor or IntentPostProcessor()
+        self._intent_subtask_config = intent_subtask_config or IntentSubtaskConfig()
+        self._last_intent_subtask_trace: dict[str, Any] = {
+            "enabled": False,
+            "all_subtasks_fallback": False,
+            "subtasks": {},
+        }
+
+    @property
+    def last_intent_subtask_trace(self) -> dict[str, Any]:
+        """返回最近一次意图识别子任务执行摘要，避免调用方修改内部状态。"""
+
+        return {
+            "enabled": bool(self._last_intent_subtask_trace.get("enabled")),
+            "all_subtasks_fallback": bool(self._last_intent_subtask_trace.get("all_subtasks_fallback")),
+            "subtasks": {
+                name: dict(value)
+                for name, value in dict(self._last_intent_subtask_trace.get("subtasks") or {}).items()
+                if isinstance(value, dict)
+            },
+        }
 
     def classify(self, request: dict[str, Any]) -> dict[str, Any]:
         """调用大模型完成问题分类，并把输出收敛为稳定 schema。"""
@@ -773,32 +1071,182 @@ class QuestionAdapter:
 
         conversation_context = self._conversation_context(request)
         fallback = self._intent_fallback(rewritten_question)
-        shape = self._recognize_intent_shape(
-            rewritten_question,
-            conversation_context,
-            user_feedback,
-            subject_domains,
-            fallback,
+        fallback_payloads = self._intent_subtask_fallback_payloads(fallback)
+        subtask_results = self._run_intent_subtasks(
+            {
+                "shape": lambda: self._recognize_intent_shape(
+                    rewritten_question,
+                    conversation_context,
+                    user_feedback,
+                    subject_domains,
+                    fallback,
+                ),
+                "semantic": lambda: self._recognize_semantic_mentions(
+                    rewritten_question,
+                    conversation_context,
+                    user_feedback,
+                    available_dimensions,
+                    fallback,
+                ),
+                "dimensions": lambda: self._recognize_dimension_slots(
+                    rewritten_question,
+                    conversation_context,
+                    user_feedback,
+                    available_dimensions,
+                    fallback,
+                ),
+            },
+            fallback_payloads,
         )
-        semantic = self._recognize_semantic_mentions(
-            rewritten_question,
-            conversation_context,
-            user_feedback,
-            available_dimensions,
-            fallback,
-        )
-        dimensions = self._recognize_dimension_slots(
-            rewritten_question,
-            conversation_context,
-            user_feedback,
-            available_dimensions,
-            fallback,
-        )
+        shape = subtask_results["shape"].payload
+        semantic = subtask_results["semantic"].payload
+        dimensions = subtask_results["dimensions"].payload
         intent_payload = self._merge_intent_parts(shape, semantic, dimensions)
         output = IntentRecognitionOutput.model_validate(intent_payload)
         output = self._apply_intent_feedback(output, user_feedback)
         validation = self._intent_post_processor.validate(output.model_dump(mode="json"), retry_count=0)
         return output.model_copy(update={"validation": validation}).model_dump(mode="json")
+
+    def _intent_subtask_fallback_payloads(self, fallback: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        return {
+            "shape": {
+                "intent_type": fallback.get("intent_type"),
+                "confidence": fallback.get("confidence", 0),
+                "required_slot_types": fallback.get("required_slot_types", []),
+                "query_shape": fallback.get("query_shape", {}),
+                "subject_domain": fallback.get("subject_domain") or _default_subject_domain("not_required"),
+                "ambiguous_slots": fallback.get("ambiguous_slots", []),
+                "conflict_slots": fallback.get("conflict_slots", []),
+            },
+            "semantic": {
+                "metric_mentions": fallback.get("metric_mentions", []),
+                "time_mentions": fallback.get("time_mentions", []),
+                "time_range": normalize_time_range_payload(
+                    fallback.get("time_range") or {"raw": None, "value_status": "not_provided"}
+                ),
+                "ambiguous_slots": [],
+                "conflict_slots": [],
+            },
+            "dimensions": {
+                "dimension_mentions": fallback.get("dimension_mentions", []),
+                "dimension_slots": fallback.get("dimension_slots", []),
+                "residual_filter_mentions": fallback.get("filter_mentions", []),
+                "ambiguous_slots": [],
+                "conflict_slots": [],
+            },
+        }
+
+    def _run_intent_subtasks(
+        self,
+        tasks: dict[str, Callable[[], dict[str, Any]]],
+        fallback_payloads: dict[str, dict[str, Any]],
+    ) -> dict[str, IntentSubtaskResult]:
+        if not self._intent_subtask_config.enabled:
+            results = {
+                name: self._run_intent_subtask(name, task, fallback_payloads[name])
+                for name, task in tasks.items()
+            }
+            self._record_intent_subtask_trace(enabled=False, results=results)
+            return results
+
+        max_workers = max(1, min(self._intent_subtask_config.max_workers, len(tasks)))
+        executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="intent-subtask")
+        try:
+            future_to_name: dict[Future[IntentSubtaskResult], str] = {
+                executor.submit(self._run_intent_subtask, name, task, fallback_payloads[name]): name
+                for name, task in tasks.items()
+            }
+            timeout_seconds = min(
+                self._intent_subtask_config.subtask_timeout_seconds,
+                self._intent_subtask_config.overall_timeout_seconds,
+            )
+            done, not_done = wait(future_to_name, timeout=timeout_seconds)
+            results: dict[str, IntentSubtaskResult] = {}
+            for future in done:
+                name = future_to_name[future]
+                try:
+                    results[name] = future.result(timeout=0)
+                except Exception as exc:
+                    results[name] = self._fallback_intent_subtask_result(
+                        name=name,
+                        fallback_payload=fallback_payloads[name],
+                        source="exception_fallback",
+                        error_code=exc.__class__.__name__,
+                        started_at=None,
+                    )
+            for future in not_done:
+                name = future_to_name[future]
+                future.cancel()
+                results[name] = self._fallback_intent_subtask_result(
+                    name=name,
+                    fallback_payload=fallback_payloads[name],
+                    source="timeout_fallback",
+                    error_code="INTENT_SUBTASK_TIMEOUT",
+                    started_at=None,
+                )
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+        ordered_results = {name: results[name] for name in tasks}
+        self._record_intent_subtask_trace(enabled=True, results=ordered_results)
+        return ordered_results
+
+    def _run_intent_subtask(
+        self,
+        name: str,
+        task: Callable[[], dict[str, Any]],
+        fallback_payload: dict[str, Any],
+    ) -> IntentSubtaskResult:
+        start = time.monotonic()
+        try:
+            payload = task()
+            status = "succeeded"
+            source = "model"
+            error_code = None
+        except Exception as exc:
+            payload = dict(fallback_payload)
+            status = "fallback"
+            source = "exception_fallback"
+            error_code = exc.__class__.__name__
+            logger.warning("intent subtask failed; using fallback", extra={"subtask": name, "error_code": error_code})
+        return IntentSubtaskResult(
+            name=name,
+            payload=payload,
+            status=status,
+            source=source,
+            error_code=error_code,
+            retry_count=0,
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
+
+    def _fallback_intent_subtask_result(
+        self,
+        name: str,
+        fallback_payload: dict[str, Any],
+        source: str,
+        error_code: str,
+        started_at: float | None,
+    ) -> IntentSubtaskResult:
+        duration_ms = 0 if started_at is None else int((time.monotonic() - started_at) * 1000)
+        return IntentSubtaskResult(
+            name=name,
+            payload=dict(fallback_payload),
+            status="fallback",
+            source=source,
+            error_code=error_code,
+            retry_count=0,
+            duration_ms=duration_ms,
+        )
+
+    def _record_intent_subtask_trace(
+        self,
+        enabled: bool,
+        results: dict[str, IntentSubtaskResult],
+    ) -> None:
+        self._last_intent_subtask_trace = {
+            "enabled": enabled,
+            "all_subtasks_fallback": all(result.status == "fallback" for result in results.values()),
+            "subtasks": {name: result.trace_payload() for name, result in results.items()},
+        }
 
     def _recognize_intent_shape(
         self,
@@ -816,15 +1264,7 @@ class QuestionAdapter:
                 subject_domains=subject_domains,
             )
 
-        fallback_payload = {
-            "intent_type": fallback.get("intent_type"),
-            "confidence": fallback.get("confidence", 0),
-            "required_slot_types": fallback.get("required_slot_types", []),
-            "query_shape": fallback.get("query_shape", {}),
-            "subject_domain": fallback.get("subject_domain") or _default_subject_domain("not_required"),
-            "ambiguous_slots": fallback.get("ambiguous_slots", []),
-            "conflict_slots": fallback.get("conflict_slots", []),
-        }
+        fallback_payload = self._intent_subtask_fallback_payloads(fallback)["shape"]
         return self._recognize_subtask(
             prompt,
             {**user_feedback},
@@ -848,13 +1288,7 @@ class QuestionAdapter:
                 available_dimensions=available_dimensions,
             )
 
-        fallback_payload = {
-            "metric_mentions": fallback.get("metric_mentions", []),
-            "time_mentions": fallback.get("time_mentions", []),
-            "time_range": fallback.get("time_range") or {"raw": None, "value_status": "not_provided"},
-            "ambiguous_slots": [],
-            "conflict_slots": [],
-        }
+        fallback_payload = self._intent_subtask_fallback_payloads(fallback)["semantic"]
         return self._recognize_subtask(
             prompt,
             {**user_feedback},
@@ -878,13 +1312,7 @@ class QuestionAdapter:
                 available_dimensions=available_dimensions,
             )
 
-        fallback_payload = {
-            "dimension_mentions": fallback.get("dimension_mentions", []),
-            "dimension_slots": fallback.get("dimension_slots", []),
-            "residual_filter_mentions": fallback.get("filter_mentions", []),
-            "ambiguous_slots": [],
-            "conflict_slots": [],
-        }
+        fallback_payload = self._intent_subtask_fallback_payloads(fallback)["dimensions"]
         return self._recognize_subtask(
             prompt,
             {**user_feedback},
@@ -903,11 +1331,8 @@ class QuestionAdapter:
         retry_feedback: dict[str, Any] = {}
         for retry_count in range(self._intent_post_processor.max_retry_count):
             prompt = prompt_builder({**user_feedback, **retry_feedback})
-            try:
-                model_text = self._model_client(prompt)
-                result = self._extract_json_object(model_text)
-            except Exception:
-                result = fallback_payload
+            model_text = self._model_client(prompt)
+            result = self._extract_json_object(model_text)
             validation = validator(result)
             result = validation["payload"]
             if validation["status"] == "invalid" and validation["retryable"] and retry_count + 1 < self._intent_post_processor.max_retry_count:
@@ -972,6 +1397,7 @@ class QuestionAdapter:
     ) -> dict[str, Any]:
         normalized_candidates = _normalize_dimension_candidates(available_dimensions)
         candidate_by_text = _dimension_candidate_by_text(normalized_candidates, include_time=False)
+        candidate_by_text_with_time = _dimension_candidate_by_text(normalized_candidates, include_time=True)
         if not normalized_candidates:
             slots = [dict(slot) for slot in payload.get("dimension_slots") or [] if isinstance(slot, dict)]
             mentions = cls._unique_strings(
@@ -991,19 +1417,41 @@ class QuestionAdapter:
             }
         mentions: list[str] = []
         for mention in cls._text_list(payload.get("dimension_mentions")):
-            candidate = candidate_by_text.get(_dimension_text_key(mention))
-            if candidate is not None and candidate["name"] not in mentions:
-                mentions.append(candidate["name"])
+            mention_key = _dimension_text_key(mention)
+            if mention_key in candidate_by_text_with_time and mention_key not in candidate_by_text:
+                continue
+            candidate = candidate_by_text.get(mention_key)
+            normalized_mention = candidate["name"] if candidate is not None else mention
+            if normalized_mention not in mentions:
+                mentions.append(normalized_mention)
 
         slots: list[dict[str, Any]] = []
         for slot in payload.get("dimension_slots") or []:
             if not isinstance(slot, dict):
                 continue
-            candidate = candidate_by_text.get(_dimension_text_key(slot.get("name") or slot.get("dimension")))
+            raw_name = str(slot.get("name") or slot.get("dimension") or "").strip()
+            if not raw_name:
+                continue
+            raw_name_key = _dimension_text_key(raw_name)
+            if raw_name_key in candidate_by_text_with_time and raw_name_key not in candidate_by_text:
+                continue
+            candidate = candidate_by_text.get(raw_name_key)
+            slot_name = candidate["name"] if candidate is not None else raw_name
             if candidate is None:
+                normalized_slot = {
+                    "name": slot_name,
+                    "role": cls._valid_dimension_role(slot.get("role")),
+                    "value": slot.get("value"),
+                    "value_status": cls._valid_value_status(slot.get("value_status"), slot.get("value")),
+                }
+                if "value_confidence" in slot:
+                    normalized_slot["value_confidence"] = cls._confidence(slot.get("value_confidence"))
+                slots.append(normalized_slot)
+                if slot_name not in mentions:
+                    mentions.append(slot_name)
                 continue
             normalized_slot = {
-                "name": candidate["name"],
+                "name": slot_name,
                 "role": cls._valid_dimension_role(slot.get("role")),
                 "value": slot.get("value"),
                 "value_status": cls._valid_value_status(slot.get("value_status"), slot.get("value")),
@@ -1011,8 +1459,8 @@ class QuestionAdapter:
             if "value_confidence" in slot:
                 normalized_slot["value_confidence"] = cls._confidence(slot.get("value_confidence"))
             slots.append(normalized_slot)
-            if candidate["name"] not in mentions:
-                mentions.append(candidate["name"])
+            if slot_name not in mentions:
+                mentions.append(slot_name)
 
         return {
             "dimension_mentions": mentions,

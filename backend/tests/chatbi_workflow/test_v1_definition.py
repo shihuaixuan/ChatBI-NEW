@@ -37,6 +37,7 @@ def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions
         "retrieve_knowledge",
         "ask_cross_model_split",
         "ask_metric_selection",
+        "generate_split_queries",
         "execute_split_queries",
         "generate_sql",
         "execute_sql",

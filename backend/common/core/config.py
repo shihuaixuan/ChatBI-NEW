@@ -97,7 +97,13 @@ class Settings(BaseSettings):
     SERVER_IMAGE_TIMEOUT: int = 15
 
     LOCAL_MODEL_PATH: str = '/opt/sqlbot/models'
-    DEFAULT_EMBEDDING_MODEL: str = 'shibing624/text2vec-base-chinese'
+    DEFAULT_EMBEDDING_MODEL: str = 'BAAI/bge-m3'
+    EMBEDDING_PROVIDER: str = "openai_compatible"
+    EMBEDDING_API_BASE_URL: str = "https://api.siliconflow.cn/v1"
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_MODEL: str = "BAAI/bge-m3"
+    EMBEDDING_DIMENSION: int = 1024
+    EMBEDDING_API_TIMEOUT: float = 30.0
     EMBEDDING_ENABLED: bool = True
     EMBEDDING_DEFAULT_SIMILARITY: float = 0.4
     EMBEDDING_TERMINOLOGY_SIMILARITY: float = EMBEDDING_DEFAULT_SIMILARITY

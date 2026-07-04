@@ -50,6 +50,14 @@ export interface GraphWorkflowStepDetails {
   sql?: string
   rows?: Array<Record<string, any>>
   columns?: string[]
+  queries?: GraphWorkflowQueryDetails[]
+}
+
+export interface GraphWorkflowQueryDetails {
+  title: string
+  sql?: string
+  rows?: Array<Record<string, any>>
+  columns?: string[]
 }
 
 export interface NormalizedGraphInteractionOption {
@@ -76,7 +84,10 @@ export const GRAPH_NODE_LABELS: Record<string, string> = {
   ask_intent_clarification: '确认分析方式',
   ask_slot_clarification: '补充槽位信息',
   ask_metric_selection: '选择分析指标',
+  ask_cross_model_split: '用户询问',
   draw_image_profile: '选择图表形式',
+  generate_split_queries: '生成查询',
+  execute_split_queries: '查询数据',
   generate_sql: '生成查询',
   execute_sql: '查询数据',
   handle_sql_error: '修复查询',
@@ -344,10 +355,22 @@ function graphNodeSummary(
   if (node.name === 'draw_image_profile')
     return output.profile || listText(output.chart_candidates) || ''
   if (node.name === 'generate_sql') return output.sql ? '已生成 SQL' : ''
+  if (node.name === 'generate_split_queries') {
+    const queryCount = Array.isArray(output.queries) ? output.queries.length : 0
+    return queryCount ? `已生成 ${queryCount} 条 SQL` : ''
+  }
   if (node.name === 'execute_sql') {
     const rowCount =
       output.row_count ?? output.rows_count ?? output.rows?.length ?? output.data?.length
     return rowCount !== undefined ? `返回 ${rowCount} 行` : ''
+  }
+  if (node.name === 'execute_split_queries') {
+    const queries = Array.isArray(output.rows) ? output.rows : []
+    const rowCount = queries.reduce(
+      (total, query) => total + Number(query?.row_count ?? query?.rows?.length ?? 0),
+      0
+    )
+    return queries.length ? `${queries.length} 条查询，共返回 ${rowCount} 行` : ''
   }
   if (node.name === 'handle_sql_error') return output.error || output.message || ''
   if (node.name === 'generate_question_answer') return output.answer || output.final_answer || ''
@@ -364,6 +387,10 @@ function graphNodeDetails(node: GraphTraceNodeLike): GraphWorkflowStepDetails | 
     const sql = output.sql || output.query || output.generated_sql
     return sql ? { sql: String(sql) } : undefined
   }
+  if (node.name === 'generate_split_queries') {
+    const queries = normalizeSplitQueries(output.queries, 'sql')
+    return queries.length ? { queries } : undefined
+  }
   if (node.name === 'execute_sql') {
     const rows = normalizeRows(output.rows || output.data || output.result || output.records)
     if (!rows.length) return undefined
@@ -372,7 +399,34 @@ function graphNodeDetails(node: GraphTraceNodeLike): GraphWorkflowStepDetails | 
       columns: normalizeColumns(output.columns, rows),
     }
   }
+  if (node.name === 'execute_split_queries') {
+    const queries = normalizeSplitQueries(output.rows, 'rows')
+    return queries.length ? { queries } : undefined
+  }
   return undefined
+}
+
+function normalizeSplitQueries(
+  value: any,
+  mode: 'sql' | 'rows'
+): GraphWorkflowQueryDetails[] {
+  if (!Array.isArray(value)) return []
+  const queries: GraphWorkflowQueryDetails[] = []
+  value.forEach((query) => {
+    const title = listText(query?.metrics) || `模型 ${query?.model_id ?? '-'}`
+    if (mode === 'sql') {
+      const sql = String(query?.sql || '').trim()
+      if (sql) queries.push({ title, sql })
+      return
+    }
+    const rows = normalizeRows(query?.rows)
+    queries.push({
+      title,
+      rows,
+      columns: normalizeColumns(query?.columns, rows),
+    })
+  })
+  return queries
 }
 
 function normalizeOption(

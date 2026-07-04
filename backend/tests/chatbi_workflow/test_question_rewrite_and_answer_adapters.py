@@ -1,8 +1,13 @@
+import json
+import threading
+import time
+
 from apps.chatbi_workflow.capabilities.adapters.answer import (
     AnswerAdapter,
     build_answer_generation_prompt,
 )
 from apps.chatbi_workflow.capabilities.adapters.question import (
+    IntentSubtaskConfig,
     QuestionAdapter,
     build_dimension_slots_prompt,
     build_intent_recognition_prompt,
@@ -41,6 +46,57 @@ class SequenceModelClient:
         self.prompts.append(prompt)
         index = min(len(self.prompts) - 1, len(self.responses) - 1)
         return self.responses[index]
+
+
+class PromptAwareConcurrentModelClient:
+    def __init__(self, responses_by_marker: dict[str, str], delays_by_marker: dict[str, float] | None = None) -> None:
+        self.responses_by_marker = responses_by_marker
+        self.delays_by_marker = delays_by_marker or {}
+        self.prompts = []
+        self.thread_names = []
+        self.started_markers = []
+        self.finished_markers = []
+        self._lock = threading.Lock()
+
+    def __call__(self, prompt):
+        marker = self._marker_for_prompt(prompt)
+        with self._lock:
+            self.prompts.append(prompt)
+            self.thread_names.append(threading.current_thread().name)
+            self.started_markers.append(marker)
+        delay = self.delays_by_marker.get(marker, 0)
+        if delay:
+            time.sleep(delay)
+        with self._lock:
+            self.finished_markers.append(marker)
+        return self.responses_by_marker[marker]
+
+    @staticmethod
+    def _marker_for_prompt(prompt) -> str:
+        if "分析形态识别器" in prompt.system_prompt:
+            return "shape"
+        if "指标和时间线索识别器" in prompt.system_prompt or "指标线索和时间线索识别器" in prompt.system_prompt:
+            return "semantic"
+        if "维度槽位识别器" in prompt.system_prompt:
+            return "dimensions"
+        raise AssertionError(f"unexpected prompt: {prompt.system_prompt}")
+
+
+class FailingPromptAwareModelClient(PromptAwareConcurrentModelClient):
+    def __init__(self, responses_by_marker: dict[str, str], failing_marker: str) -> None:
+        super().__init__(responses_by_marker=responses_by_marker)
+        self.failing_marker = failing_marker
+
+    def __call__(self, prompt):
+        marker = self._marker_for_prompt(prompt)
+        if marker == self.failing_marker:
+            with self._lock:
+                self.prompts.append(prompt)
+                self.thread_names.append(threading.current_thread().name)
+                self.started_markers.append(marker)
+                self.finished_markers.append(marker)
+            raise RuntimeError(f"{marker} failed")
+        return super().__call__(prompt)
 
 
 class FakeSqlAdapter:
@@ -279,6 +335,21 @@ def test_dimension_slots_prompt_separates_time_dimensions_from_plain_dimensions(
     assert "统计日期" in time_section
 
 
+def test_dimension_slots_prompt_guides_semantic_mapping_to_available_dimensions():
+    prompt = build_dimension_slots_prompt(
+        "最近 30 天商城店铺的总 GMV 是多少？",
+        available_dimensions=[
+            {"name": "档口ID", "aliases": ["档口"]},
+            {"name": "商家ID", "aliases": ["商家"]},
+        ],
+    )
+
+    assert "语义最相近" in prompt.system_prompt
+    assert "输出对应的标准 `name`" in prompt.system_prompt
+    assert "多个候选都可能匹配" in prompt.system_prompt
+    assert "ambiguous_slots" in prompt.system_prompt
+
+
 def test_split_intent_prompts_are_scoped_to_small_outputs():
     shape_prompt = build_intent_shape_prompt("最近7天销售额趋势")
     semantic_prompt = build_semantic_mentions_prompt("最近7天销售额趋势")
@@ -290,7 +361,7 @@ def test_split_intent_prompts_are_scoped_to_small_outputs():
     assert "分析形态识别器" in shape_prompt.system_prompt
     assert "metric_mentions" not in shape_prompt.system_prompt
     assert "dimension_slots" not in shape_prompt.system_prompt
-    assert "指标和时间线索识别器" in semantic_prompt.system_prompt
+    assert "指标线索和时间线索识别器" in semantic_prompt.system_prompt
     assert "dimension_slots" not in semantic_prompt.system_prompt
     assert "维度槽位识别器" in dimension_prompt.system_prompt
     assert "metric_mentions" not in dimension_prompt.system_prompt
@@ -326,7 +397,7 @@ def test_question_adapter_recognizes_intent_with_split_subtasks_and_program_merg
         "# 角色",
     ]
     assert "分析形态识别器" in adapter._model_client.prompts[0].system_prompt
-    assert "指标和时间线索识别器" in adapter._model_client.prompts[1].system_prompt
+    assert "指标线索和时间线索识别器" in adapter._model_client.prompts[1].system_prompt
     assert "维度槽位识别器" in adapter._model_client.prompts[2].system_prompt
     assert result == {
         "intent_type": "trend_analysis",
@@ -355,6 +426,228 @@ def test_question_adapter_recognizes_intent_with_split_subtasks_and_program_merg
         "conflict_slots": [],
         "validation": DEFAULT_VALIDATION,
     }
+
+
+def test_question_adapter_parallel_intent_subtasks_merge_by_name_not_finish_order():
+    model_client = PromptAwareConcurrentModelClient(
+        responses_by_marker={
+            "shape": json.dumps(
+                {
+                    "intent_type": "trend_analysis",
+                    "confidence": 0.91,
+                    "required_slot_types": ["metric"],
+                    "query_shape": {"select_mode": "aggregate", "time_grain": "day"},
+                    "subject_domain": {"status": "not_required"},
+                    "ambiguous_slots": [],
+                    "conflict_slots": [],
+                },
+                ensure_ascii=False,
+            ),
+            "semantic": json.dumps(
+                {
+                    "metric_mentions": ["访问人数"],
+                    "time_mentions": ["最近 7 天"],
+                    "time_range": {"raw": "最近 7 天", "value_status": "provided"},
+                    "ambiguous_slots": [],
+                    "conflict_slots": [],
+                },
+                ensure_ascii=False,
+            ),
+            "dimensions": json.dumps(
+                {
+                    "dimension_mentions": ["店铺"],
+                    "dimension_slots": [
+                        {"name": "店铺", "role": "group_by", "value": None, "value_status": "not_provided"}
+                    ],
+                    "residual_filter_mentions": [],
+                    "ambiguous_slots": [],
+                    "conflict_slots": [],
+                },
+                ensure_ascii=False,
+            ),
+        },
+        delays_by_marker={"shape": 0.08, "semantic": 0.04, "dimensions": 0.0},
+    )
+    adapter = QuestionAdapter(model_client=model_client)
+
+    result = adapter.recognize_intent(
+        _v1_request("最近 7 天按店铺看访问人数", variables={"rewrite": {"rewritten_question": "最近 7 天按店铺看访问人数"}})
+    )
+
+    assert result["intent_type"] == "trend_analysis"
+    assert result["metric_mentions"] == ["访问人数"]
+    assert result["dimension_mentions"] == ["店铺"]
+    assert result["query_shape"] == {"select_mode": "aggregate", "time_grain": "day"}
+    assert set(model_client.started_markers) == {"shape", "semantic", "dimensions"}
+    assert model_client.finished_markers[0] == "dimensions"
+    assert adapter.last_intent_subtask_trace["enabled"] is True
+    assert adapter.last_intent_subtask_trace["all_subtasks_fallback"] is False
+    assert set(adapter.last_intent_subtask_trace["subtasks"]) == {"shape", "semantic", "dimensions"}
+
+
+def test_question_adapter_parallel_intent_subtask_failure_only_falls_back_that_subtask():
+    model_client = FailingPromptAwareModelClient(
+        responses_by_marker={
+            "shape": json.dumps(
+                {
+                    "intent_type": "ranking_analysis",
+                    "confidence": 0.92,
+                    "required_slot_types": ["metric", "dimension", "order", "limit"],
+                    "query_shape": {"select_mode": "aggregate", "needs_order_by": True, "order_direction": "desc"},
+                    "subject_domain": {"status": "not_required"},
+                    "ambiguous_slots": [],
+                    "conflict_slots": [],
+                },
+                ensure_ascii=False,
+            ),
+            "semantic": "{}",
+            "dimensions": json.dumps(
+                {
+                    "dimension_mentions": ["商品"],
+                    "dimension_slots": [
+                        {"name": "商品", "role": "group_by", "value": None, "value_status": "not_provided"}
+                    ],
+                    "residual_filter_mentions": [],
+                    "ambiguous_slots": [],
+                    "conflict_slots": [],
+                },
+                ensure_ascii=False,
+            ),
+        },
+        failing_marker="semantic",
+    )
+    adapter = QuestionAdapter(model_client=model_client)
+
+    result = adapter.recognize_intent(
+        _v1_request("销售额最高的商品", variables={"rewrite": {"rewritten_question": "销售额最高的商品"}})
+    )
+
+    assert result["intent_type"] == "ranking_analysis"
+    assert result["metric_mentions"] == ["销售额"]
+    assert result["dimension_mentions"] == ["商品"]
+    assert adapter.last_intent_subtask_trace["subtasks"]["semantic"]["status"] == "fallback"
+    assert adapter.last_intent_subtask_trace["subtasks"]["semantic"]["source"] == "exception_fallback"
+    assert adapter.last_intent_subtask_trace["subtasks"]["shape"]["status"] == "succeeded"
+    assert adapter.last_intent_subtask_trace["subtasks"]["dimensions"]["status"] == "succeeded"
+
+
+def test_question_adapter_parallel_intent_records_all_subtasks_fallback_when_model_unavailable():
+    adapter = QuestionAdapter(model_client=FakeModelClient(RuntimeError("model unavailable")))
+
+    result = adapter.recognize_intent(
+        _v1_request("看一下销售额", variables={"rewrite": {"rewritten_question": "看一下销售额"}})
+    )
+
+    assert result["metric_mentions"] == ["销售额"]
+    assert adapter.last_intent_subtask_trace["all_subtasks_fallback"] is True
+    assert {name: item["source"] for name, item in adapter.last_intent_subtask_trace["subtasks"].items()} == {
+        "shape": "exception_fallback",
+        "semantic": "exception_fallback",
+        "dimensions": "exception_fallback",
+    }
+
+
+def test_question_adapter_can_disable_parallel_intent_subtasks():
+    model_client = PromptAwareConcurrentModelClient(
+        responses_by_marker={
+            "shape": json.dumps(
+                {
+                    "intent_type": "metric_query",
+                    "confidence": 0.9,
+                    "required_slot_types": ["metric"],
+                    "query_shape": {"select_mode": "aggregate"},
+                    "subject_domain": {"status": "not_required"},
+                    "ambiguous_slots": [],
+                    "conflict_slots": [],
+                },
+                ensure_ascii=False,
+            ),
+            "semantic": json.dumps(
+                {
+                    "metric_mentions": ["访问人数"],
+                    "time_mentions": [],
+                    "time_range": {"raw": None, "value_status": "not_provided"},
+                    "ambiguous_slots": [],
+                    "conflict_slots": [],
+                },
+                ensure_ascii=False,
+            ),
+            "dimensions": json.dumps(
+                {
+                    "dimension_mentions": [],
+                    "dimension_slots": [],
+                    "residual_filter_mentions": [],
+                    "ambiguous_slots": [],
+                    "conflict_slots": [],
+                },
+                ensure_ascii=False,
+            ),
+        }
+    )
+    adapter = QuestionAdapter(
+        model_client=model_client,
+        intent_subtask_config=IntentSubtaskConfig(enabled=False),
+    )
+
+    result = adapter.recognize_intent(_v1_request("访问人数", variables={"rewrite": {"rewritten_question": "访问人数"}}))
+
+    assert result["metric_mentions"] == ["访问人数"]
+    assert model_client.started_markers == ["shape", "semantic", "dimensions"]
+    assert adapter.last_intent_subtask_trace["enabled"] is False
+
+
+def test_question_adapter_parallel_intent_subtask_timeout_uses_fallback_payload():
+    model_client = PromptAwareConcurrentModelClient(
+        responses_by_marker={
+            "shape": json.dumps(
+                {
+                    "intent_type": "metric_query",
+                    "confidence": 0.9,
+                    "required_slot_types": ["metric"],
+                    "query_shape": {"select_mode": "aggregate"},
+                    "subject_domain": {"status": "not_required"},
+                    "ambiguous_slots": [],
+                    "conflict_slots": [],
+                },
+                ensure_ascii=False,
+            ),
+            "semantic": json.dumps(
+                {
+                    "metric_mentions": ["模型不应返回"],
+                    "time_mentions": [],
+                    "time_range": {"raw": None, "value_status": "not_provided"},
+                    "ambiguous_slots": [],
+                    "conflict_slots": [],
+                },
+                ensure_ascii=False,
+            ),
+            "dimensions": json.dumps(
+                {
+                    "dimension_mentions": [],
+                    "dimension_slots": [],
+                    "residual_filter_mentions": [],
+                    "ambiguous_slots": [],
+                    "conflict_slots": [],
+                },
+                ensure_ascii=False,
+            ),
+        },
+        delays_by_marker={"semantic": 0.2},
+    )
+    adapter = QuestionAdapter(
+        model_client=model_client,
+        intent_subtask_config=IntentSubtaskConfig(
+            enabled=True,
+            max_workers=3,
+            subtask_timeout_seconds=0.05,
+            overall_timeout_seconds=0.05,
+        ),
+    )
+
+    result = adapter.recognize_intent(_v1_request("销售额", variables={"rewrite": {"rewritten_question": "销售额"}}))
+
+    assert result["metric_mentions"] == ["销售额"]
+    assert adapter.last_intent_subtask_trace["subtasks"]["semantic"]["source"] == "timeout_fallback"
 
 
 def test_question_adapter_recognizes_subject_domain_from_dataset_schema():
@@ -634,7 +927,7 @@ def test_question_adapter_keeps_residual_filter_mentions_without_duplicate_dimen
     assert result["filter_mentions"] == [{"name": "高价值客户", "value": "高价值客户", "status": "ungrounded"}]
 
 
-def test_question_adapter_filters_dimension_slots_by_dataset_dimensions():
+def test_question_adapter_preserves_unmatched_dimension_slots_and_normalizes_matched_aliases():
     schema = DataSetSchema(
         data_set=SchemaElement(
             data_set_id=7001,
@@ -691,10 +984,50 @@ def test_question_adapter_filters_dimension_slots_by_dataset_dimensions():
     )
 
     assert "# 可用维度" in model_client.prompts[2].user_prompt
-    assert "线上" not in result["dimension_mentions"]
+    assert "线上" in result["dimension_mentions"]
     assert {"name": "店铺ID", "role": "filter", "value": "1", "value_status": "provided"} in result["dimension_slots"]
-    assert all(slot["name"] != "线上" for slot in result["dimension_slots"])
-    assert result["validation"]["clarification_required"] is False
+    assert {"name": "线上", "role": "ambiguous", "value": None, "value_status": "not_provided"} in result[
+        "dimension_slots"
+    ]
+    assert result["validation"]["clarification_required"] is True
+
+
+def test_semantic_mentions_prompt_does_not_force_unmatched_dimension_words_into_metrics():
+    prompt = build_semantic_mentions_prompt(
+        "今天店铺的访问人数",
+        available_dimensions=[
+            {"name": "档口ID", "aliases": []},
+            {"name": "商家ID", "aliases": []},
+        ],
+    )
+
+    assert "应保留在 `metric_mentions` 中" not in prompt.system_prompt
+    assert "不能进入 dimension_mentions 或 dimension_slots" not in prompt.system_prompt
+
+
+def test_dimension_slots_normalization_preserves_unmatched_natural_language_mentions():
+    payload = {
+        "dimension_mentions": ["店铺"],
+        "dimension_slots": [
+            {"name": "店铺", "role": "ambiguous", "value": None, "value_status": "not_provided"},
+        ],
+        "residual_filter_mentions": [],
+        "ambiguous_slots": [],
+        "conflict_slots": [],
+    }
+
+    result = QuestionAdapter._normalize_dimension_slots_payload(
+        payload,
+        available_dimensions=[
+            {"name": "档口ID", "aliases": []},
+            {"name": "商家ID", "aliases": []},
+        ],
+    )
+
+    assert result["dimension_mentions"] == ["店铺"]
+    assert result["dimension_slots"] == [
+        {"name": "店铺", "role": "ambiguous", "value": None, "value_status": "not_provided"}
+    ]
 
 
 def test_question_adapter_filters_time_dimensions_from_plain_dimension_slots():
