@@ -19,6 +19,11 @@ class PlaceholderChatBICapabilityGateway:
             return {"normalized_question": request["question"]}
         if capability == "schema.retrieve":
             return {"tables": ["placeholder_table"], "fields": ["placeholder_metric"]}
+        if capability == "plan.bind":
+            knowledge = request.get("variables", {}).get("knowledge", {})
+            if not knowledge.get("hit"):
+                return {"status": "infeasible", "infeasible_reason": "knowledge_missed"}
+            return {"status": "ready", "strategy": "placeholder"}
         if capability == "sql.generate":
             return {"sql": "select 1 as placeholder_value"}
         if capability == "sql.generate_split":

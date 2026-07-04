@@ -37,6 +37,7 @@ def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions
         "retrieve_knowledge",
         "ask_cross_model_split",
         "ask_metric_selection",
+        "bind_query_plan",
         "generate_split_queries",
         "execute_split_queries",
         "generate_sql",
@@ -76,6 +77,8 @@ def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions
         "interaction.cross_model.skipped",
         "knowledge.missed",
         "knowledge.hit",
+        # 查询计划不可行时不进入 SQL 生成，转解释性回答。
+        "plan.infeasible",
         "cross_model.split_requested",
         "sql.execution_failed",
         "sql.execution_succeeded",

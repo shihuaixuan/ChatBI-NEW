@@ -265,6 +265,7 @@ CHATBI_V1_OUTPUT_MODELS = {
     "question.draw_image_profile": ImageProfileOutput,
     "intent.recognize": IntentRecognitionOutput,
     "knowledge.retrieve": KnowledgeRetrieveOutput,
+    "plan.bind": QueryPlanOutput,
     "sql.generate": SqlGenerateOutput,
     "sql.generate_split": SplitSqlGenerateOutput,
     "sql.execute": SqlExecuteOutput,

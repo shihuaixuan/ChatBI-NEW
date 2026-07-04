@@ -276,6 +276,22 @@ class SqlErrorRetryableCondition:
         )
 
 
+class PlanInfeasibleCondition:
+    """查询计划判定不可行时转入解释性回答，禁止带病进入 SQL 生成。"""
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        plan = context.variables.get("plan")
+        matched = isinstance(plan, dict) and plan.get("status") == "infeasible"
+        summary = "查询计划可执行"
+        if matched:
+            summary = f"查询计划不可行（{plan.get('infeasible_reason') or 'unknown'}），转入解释性回答"
+        return ConditionDecision(
+            matched=matched,
+            reason_code="PLAN_INFEASIBLE" if matched else "PLAN_FEASIBLE",
+            reason_summary=summary,
+        )
+
+
 class NodeDegradedCondition:
     """任一能力节点发生业务失败（node_failure 已写入）时命中，转入解释性回答。"""
 
@@ -392,6 +408,7 @@ def register_chatbi_conditions(registry: ConditionRegistry) -> None:
     registry.register("sql.execution_failed", SqlExecutionFailedCondition())
     registry.register("sql.error_retryable", SqlErrorRetryableCondition())
     registry.register("node.degraded", NodeDegradedCondition())
+    registry.register("plan.infeasible", PlanInfeasibleCondition())
 
     # 交互回答的作用域化条件：每个交互节点只消费自己的回答。
     scoped_responses = {

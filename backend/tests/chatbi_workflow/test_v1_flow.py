@@ -302,6 +302,7 @@ def test_chatbi_v1_placeholder_main_path_executes_full_graph_to_final_reply():
         "question.draw_image_profile",
         "intent.recognize",
         "knowledge.retrieve",
+        "plan.bind",
         "sql.generate",
         "sql.execute",
         "answer.generate",

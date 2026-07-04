@@ -81,6 +81,7 @@ export const GRAPH_NODE_LABELS: Record<string, string> = {
   ask_rewrite_clarification: '补充问题信息',
   recognize_intent: '识别分析意图',
   retrieve_knowledge: '匹配数据资产',
+  bind_query_plan: '构建查询计划',
   ask_intent_clarification: '确认分析方式',
   ask_slot_clarification: '补充槽位信息',
   ask_metric_selection: '选择分析指标',

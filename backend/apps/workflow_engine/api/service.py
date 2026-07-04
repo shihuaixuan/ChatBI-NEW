@@ -64,6 +64,7 @@ V1_TRACE_OUTPUT_PATHS = {
     "ask_slot_clarification": ("control", "pending_interaction_id"),
     "retrieve_knowledge": ("variables", "knowledge"),
     "ask_metric_selection": ("control", "pending_interaction_id"),
+    "bind_query_plan": ("variables", "plan"),
     "generate_sql": ("variables", "sql"),
     "execute_sql": ("variables", "sql_execution"),
     "handle_sql_error": ("variables", "sql_error"),
