@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 import re
+from calendar import monthrange
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from apps.headless.schemas import DataSetSchema, JoinRelation, SchemaElement
 from apps.headless.service import build_ontology_from_schema
+
+
+def _default_today(timezone_name: str) -> date:
+    try:
+        timezone = ZoneInfo(timezone_name or "Asia/Shanghai")
+    except Exception:
+        timezone = ZoneInfo("Asia/Shanghai")
+    return datetime.now(timezone).date()
 
 
 @dataclass
@@ -29,6 +41,10 @@ class SemanticSQLCompileResult:
 
 
 class SemanticSQLCompiler:
+    def __init__(self, today_provider: Callable[[str], date] | None = None) -> None:
+        # 时间条件在编译期解析为绝对日期，today 可注入以便测试与回放。
+        self._today_provider = today_provider or _default_today
+
     def compile(self, request: SemanticSQLCompileRequest) -> SemanticSQLCompileResult:
         ontology = build_ontology_from_schema(request.schema)
         metrics = self._select_metrics(request)
@@ -447,36 +463,104 @@ class SemanticSQLCompiler:
             if time_condition is not None:
                 conditions.append(time_condition)
                 continue
+            if self._is_unrenderable_time_ast(value):
+                # 归一化时间结构一旦无法渲染必须显式失败，禁止把 dict 拼成字符串字面量。
+                raise ValueError("SEMANTIC_SQL_TIME_RANGE_UNSUPPORTED")
             conditions.append(f"{qualified_expr} {self._safe_operator(operator)} {self._literal(value)}")
         return conditions
 
-    @classmethod
-    def _time_filter_condition(cls, expr: str, value: Any) -> str | None:
+    @staticmethod
+    def _is_unrenderable_time_ast(value: Any) -> bool:
+        if not isinstance(value, dict) or "kind" not in value:
+            return False
+        return SemanticSQLCompiler._relative_date_literal(value) is None
+
+    def _time_filter_condition(self, expr: str, value: Any) -> str | None:
         """将归一化时间 AST 渲染为 SQL 条件。"""
 
         if not isinstance(value, dict):
             return None
         kind = str(value.get("kind") or "").lower()
         if kind == "single_date":
-            literal = cls._single_date_literal(value)
+            literal = self._single_date_literal(value)
             return f"{expr} = {literal}" if literal else None
-        if kind == "relative_range" and str(value.get("unit") or "").lower() == "day":
-            try:
-                amount = int(value.get("amount") or 0)
-            except (TypeError, ValueError):
-                return None
-            if amount <= 0:
-                return None
-            start_offset = max(amount - 1, 0) if bool(value.get("include_current")) else amount
-            start = cls._date_sub_literal(start_offset)
-            end = "CURRENT_DATE" if bool(value.get("include_current")) else cls._date_sub_literal(1)
-            return f"{expr} >= {start} and {expr} <= {end}"
+        if kind == "relative_range":
+            return self._relative_range_condition(expr, value)
         if kind == "absolute_range":
-            start = cls._safe_iso_date(value.get("start"))
-            end_exclusive = cls._safe_iso_date(value.get("end_exclusive"))
+            start = self._safe_iso_date(value.get("start"))
+            end_exclusive = self._safe_iso_date(value.get("end_exclusive"))
             if start and end_exclusive:
                 return f"{expr} >= '{start}' and {expr} < '{end_exclusive}'"
+            return None
+        if kind in {"current_period", "previous_period"}:
+            return self._period_condition(expr, value, previous=kind == "previous_period")
         return None
+
+    def _relative_range_condition(self, expr: str, value: dict[str, Any]) -> str | None:
+        unit = str(value.get("unit") or "").lower()
+        try:
+            amount = int(value.get("amount") or 0)
+        except (TypeError, ValueError):
+            return None
+        if amount <= 0:
+            return None
+        include_current = bool(value.get("include_current"))
+        if unit == "day":
+            start_offset = max(amount - 1, 0) if include_current else amount
+            start = self._date_sub_literal(start_offset)
+            end = "CURRENT_DATE" if include_current else self._date_sub_literal(1)
+            return f"{expr} >= {start} and {expr} <= {end}"
+        if unit not in {"week", "month", "year"}:
+            return None
+        anchor = self._today(value)
+        if not include_current:
+            anchor = anchor - timedelta(days=1)
+        if unit == "week":
+            start = anchor - timedelta(days=7 * amount - 1)
+        elif unit == "month":
+            start = self._shift_months(anchor, -amount) + timedelta(days=1)
+        else:
+            start = self._shift_months(anchor, -12 * amount) + timedelta(days=1)
+        return f"{expr} >= '{start.isoformat()}' and {expr} <= '{anchor.isoformat()}'"
+
+    def _period_condition(self, expr: str, value: dict[str, Any], previous: bool) -> str | None:
+        unit = str(value.get("unit") or "").lower()
+        today = self._today(value)
+        bounds = self._period_bounds(today, unit)
+        if bounds is None:
+            return None
+        if previous:
+            bounds = self._period_bounds(bounds[0] - timedelta(days=1), unit)
+            if bounds is None:
+                return None
+        start, end_exclusive = bounds
+        return f"{expr} >= '{start.isoformat()}' and {expr} < '{end_exclusive.isoformat()}'"
+
+    def _today(self, value: dict[str, Any]) -> date:
+        return self._today_provider(str(value.get("timezone") or "Asia/Shanghai"))
+
+    @staticmethod
+    def _period_bounds(anchor: date, unit: str) -> tuple[date, date] | None:
+        if unit == "week":
+            start = anchor - timedelta(days=anchor.weekday())
+            return start, start + timedelta(days=7)
+        if unit == "month":
+            start = anchor.replace(day=1)
+            return start, SemanticSQLCompiler._shift_months(start, 1)
+        if unit == "quarter":
+            start = date(anchor.year, 3 * ((anchor.month - 1) // 3) + 1, 1)
+            return start, SemanticSQLCompiler._shift_months(start, 3)
+        if unit == "year":
+            return date(anchor.year, 1, 1), date(anchor.year + 1, 1, 1)
+        return None
+
+    @staticmethod
+    def _shift_months(anchor: date, months: int) -> date:
+        total = anchor.year * 12 + (anchor.month - 1) + months
+        year, month_index = divmod(total, 12)
+        month = month_index + 1
+        day = min(anchor.day, monthrange(year, month)[1])
+        return date(year, month, day)
 
     @staticmethod
     def _safe_iso_date(value: Any) -> str | None:

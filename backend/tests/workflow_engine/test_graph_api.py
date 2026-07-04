@@ -529,7 +529,7 @@ def test_graph_query_can_execute_chatbi_v1_graph():
         _cleanup(session)
 
 
-def test_graph_v1_classification_model_failure_stops_run(monkeypatch):
+def test_graph_v1_classification_model_failure_degrades_to_explanatory_answer(monkeypatch):
     class FailingQuestionModelClient:
         def __call__(self, prompt):
             raise RuntimeError("model unavailable")
@@ -558,8 +558,12 @@ def test_graph_v1_classification_model_failure_stops_run(monkeypatch):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "failed"
-    assert body["current_node"] == "classify_question"
+    # A3 降级语义：分类模型失败不再终止 Run，而是路由到解释性回答并正常完成。
+    assert body["status"] == "succeeded"
+    assert body["current_node"] == "finish"
+    variables = body["context_summary"]["variables"]
+    assert variables["node_failure"]["error_code"] == "QUESTION_CLASSIFY_FAILED"
+    assert variables["final_reply"]["final_answer"]
 
     with Session(engine) as session:
         executions = session.exec(
@@ -567,9 +571,9 @@ def test_graph_v1_classification_model_failure_stops_run(monkeypatch):
             .where(NodeExecutionModel.run_id == "api-run-v1-classify-failed")
             .order_by(NodeExecutionModel.sequence)
         ).all()
-        assert [(execution.node_name, execution.status, execution.error_code) for execution in executions] == [
-            ("classify_question", "failed", "QUESTION_CLASSIFY_FAILED")
-        ]
+        assert executions[0].node_name == "classify_question"
+        assert executions[0].status == "succeeded"
+        assert [execution.node_name for execution in executions][-1] == "finish"
         _cleanup(session)
 
 

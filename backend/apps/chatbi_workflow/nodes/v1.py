@@ -10,7 +10,12 @@ from apps.workflow_engine.domain.execution import (
 
 
 class ChatBIV1CapabilityNode:
-    """ChatBI v1 通用能力节点，负责调用网关并把结果写入指定上下文路径。"""
+    """ChatBI v1 通用能力节点，负责调用网关并把结果写入指定上下文路径。
+
+    业务能力抛出的异常不再终止整个 Run：异常被转换为 `variables.node_failure`
+    的结构化失败记录并成功返回，由图定义中的 `node.degraded` 条件边把流程
+    路由到解释性回答节点。只有引擎层错误才应该导致 Run 失败。
+    """
 
     def __init__(
         self,
@@ -45,11 +50,16 @@ class ChatBIV1CapabilityNode:
             )
         except Exception as exc:
             return NodeExecutionResult(
-                status=NodeResultStatus.FAILED,
-                error=NodeError(
-                    code=f"{self._capability.upper().replace('.', '_')}_FAILED",
-                    message=str(exc),
-                    retryable=False,
+                status=NodeResultStatus.SUCCEEDED,
+                patch=ContextPatch(
+                    set_values={
+                        "variables.node_failure": {
+                            "node": request.node_name,
+                            "capability": self._capability,
+                            "error_code": f"{self._capability.upper().replace('.', '_')}_FAILED",
+                            "message": str(exc),
+                        }
+                    }
                 ),
             )
 

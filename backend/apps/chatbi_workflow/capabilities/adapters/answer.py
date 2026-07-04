@@ -126,12 +126,19 @@ class AnswerAdapter:
     def generate(self, request: dict[str, Any]) -> dict[str, Any]:
         """生成业务回答，模型不可用时返回稳定降级文案。"""
 
+        variables = request.get("variables", {})
+        node_failure = variables.get("node_failure") if isinstance(variables, dict) else None
+        fallback_text = "暂时无法生成完整回答，请稍后重试。"
+        model_warning = "answer_generation_model_failed"
+        if isinstance(node_failure, dict) and node_failure.get("error_code"):
+            fallback_text = f"本次查询未能完成（{node_failure.get('error_code')}），请调整问题后重试。"
+            model_warning = "answer_generation_degraded"
         return self._generate_with_model(
             "generate",
             request,
-            fallback=self._answer_dump("暂时无法生成完整回答，请稍后重试。", ["answer_generation_model_failed"]),
+            fallback=self._answer_dump(fallback_text, [model_warning]),
             parse_warning="answer_generation_parse_failed",
-            model_warning="answer_generation_model_failed",
+            model_warning=model_warning,
         )
 
     def compose(self, request: dict[str, Any]) -> dict[str, Any]:

@@ -381,6 +381,7 @@ class GraphApiService:
         control["executed_nodes"] = 0
         control["loop_iterations"] = {}
         control["pending_interaction_id"] = None
+        control["active_ms"] = 0
         context["variables"] = {}
         run.context = context
         run.status = RunStatus.CREATED.value

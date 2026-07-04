@@ -276,6 +276,100 @@ class SqlErrorRetryableCondition:
         )
 
 
+class NodeDegradedCondition:
+    """任一能力节点发生业务失败（node_failure 已写入）时命中，转入解释性回答。"""
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        failure = context.variables.get("node_failure")
+        matched = isinstance(failure, dict) and bool(failure.get("error_code"))
+        summary = "无节点失败记录"
+        if matched:
+            summary = f"节点 {failure.get('node')} 失败（{failure.get('error_code')}），转入解释性回答"
+        return ConditionDecision(
+            matched=matched,
+            reason_code="NODE_DEGRADED" if matched else "NODE_NOT_DEGRADED",
+            reason_summary=summary,
+        )
+
+
+class InteractionResponseAnsweredCondition:
+    """指定交互节点的回答已给出且未跳过时命中。
+
+    与全局 InteractionAnsweredCondition 不同，本条件只看单个响应变量，
+    避免早前交互的残留回答污染后续交互节点的路由（多轮澄清中"跳过"失效）。
+    """
+
+    def __init__(self, response_key: str, label: str) -> None:
+        self._response_key = response_key
+        self._label = label
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        value = context.variables.get(self._response_key)
+        skipped = isinstance(value, dict) and value.get("skipped") is True
+        matched = bool(value) and not skipped
+        return ConditionDecision(
+            matched=matched,
+            reason_code="INTERACTION_ANSWERED" if matched else "INTERACTION_NOT_ANSWERED",
+            reason_summary=f"用户已回答{self._label}" if matched else f"用户尚未回答{self._label}",
+        )
+
+
+class InteractionResponseSkippedCondition:
+    """指定交互节点被用户显式跳过时命中。"""
+
+    def __init__(self, response_key: str, label: str) -> None:
+        self._response_key = response_key
+        self._label = label
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        value = context.variables.get(self._response_key)
+        matched = isinstance(value, dict) and value.get("skipped") is True
+        return ConditionDecision(
+            matched=matched,
+            reason_code="INTERACTION_SKIPPED" if matched else "INTERACTION_NOT_SKIPPED",
+            reason_summary=f"用户跳过了{self._label}" if matched else f"用户未跳过{self._label}",
+        )
+
+
+class ClarificationRoundGate:
+    """在既有条件之上限制某个澄清节点的提问轮次。
+
+    exhausted=False：条件命中且轮次未用尽时匹配（允许继续提问）。
+    exhausted=True：条件命中但轮次已用尽时匹配（改走兜底回答，而不是撞上
+    LOOP_ITERATION_LIMIT_EXCEEDED 导致整个 Run 失败）。
+    """
+
+    def __init__(self, inner, ask_node: str, max_rounds: int = 2, exhausted: bool = False) -> None:
+        self._inner = inner
+        self._ask_node = ask_node
+        self._max_rounds = max_rounds
+        self._exhausted = exhausted
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        inner_decision = self._inner.evaluate(context, result)
+        rounds = int(context.control.loop_iterations.get(self._ask_node, 0))
+        within_budget = rounds < self._max_rounds
+        if self._exhausted:
+            matched = inner_decision.matched and not within_budget
+            return ConditionDecision(
+                matched=matched,
+                reason_code="CLARIFICATION_ROUNDS_EXHAUSTED" if matched else inner_decision.reason_code,
+                reason_summary=(
+                    f"{self._ask_node} 已提问 {rounds} 轮仍未消除歧义，转入兜底回答"
+                    if matched
+                    else inner_decision.reason_summary
+                ),
+            )
+        matched = inner_decision.matched and within_budget
+        return ConditionDecision(
+            matched=matched,
+            reason_code=inner_decision.reason_code if matched else (
+                "CLARIFICATION_ROUNDS_EXHAUSTED" if inner_decision.matched else inner_decision.reason_code
+            ),
+            reason_summary=inner_decision.reason_summary,
+        )
+
+
 def register_chatbi_conditions(registry: ConditionRegistry) -> None:
     """注册 ChatBI 图使用的确定性条件。"""
 
@@ -297,3 +391,40 @@ def register_chatbi_conditions(registry: ConditionRegistry) -> None:
     registry.register("sql.execution_succeeded", SqlExecutionSucceededCondition())
     registry.register("sql.execution_failed", SqlExecutionFailedCondition())
     registry.register("sql.error_retryable", SqlErrorRetryableCondition())
+    registry.register("node.degraded", NodeDegradedCondition())
+
+    # 交互回答的作用域化条件：每个交互节点只消费自己的回答。
+    scoped_responses = {
+        "rewrite": ("rewrite_response", "补充问题澄清"),
+        "intent": ("intent_response", "分析方式澄清"),
+        "slot": ("slot_response", "槽位澄清"),
+        "metric": ("metric_selection", "指标选择"),
+        "cross_model": ("cross_model_response", "跨模型拆分确认"),
+    }
+    for name, (response_key, label) in scoped_responses.items():
+        registry.register(
+            f"interaction.{name}.answered",
+            InteractionResponseAnsweredCondition(response_key, label),
+        )
+        registry.register(
+            f"interaction.{name}.skipped",
+            InteractionResponseSkippedCondition(response_key, label),
+        )
+
+    # 澄清轮次门控：入口条件命中但轮次用尽时改走兜底回答。
+    clarification_gates = {
+        "rewrite": (RewriteNeedUserInputCondition(), "ask_rewrite_clarification"),
+        "intent": (IntentAmbiguousCondition(), "ask_intent_clarification"),
+        "slot": (SlotClarificationNeededCondition(), "ask_slot_clarification"),
+        "metric": (KnowledgeMetricAmbiguousCondition(), "ask_metric_selection"),
+        "cross_model": (KnowledgeCrossModelCondition(), "ask_cross_model_split"),
+    }
+    for name, (inner, ask_node) in clarification_gates.items():
+        registry.register(
+            f"clarify.{name}.allowed",
+            ClarificationRoundGate(inner, ask_node, exhausted=False),
+        )
+        registry.register(
+            f"clarify.{name}.exhausted",
+            ClarificationRoundGate(inner, ask_node, exhausted=True),
+        )

@@ -1,3 +1,7 @@
+from datetime import date
+
+import pytest
+
 from apps.headless.schemas import DataSetSchema, SchemaElement
 from apps.headless.sql_compiler import SemanticSQLCompiler, SemanticSQLCompileRequest
 
@@ -130,3 +134,107 @@ def test_sql_compiler_renders_absolute_month_as_left_closed_right_open_range():
 
     assert "business_model.stat_date >= '2026-06-01'" in result.sql
     assert "business_model.stat_date < '2026-07-01'" in result.sql
+
+
+def _compile_time_filter(value: dict, today: date = date(2026, 7, 4)) -> str:
+    result = SemanticSQLCompiler(today_provider=lambda timezone: today).compile(
+        SemanticSQLCompileRequest(
+            schema=_schema(),
+            slots={
+                "metrics": [{"asset_type": "METRIC", "asset_id": 100}],
+                "filters": [
+                    {"asset_type": "DIMENSION", "asset_id": 200, "operator": "=", "value": value}
+                ],
+            },
+        )
+    )
+    return result.sql
+
+
+def test_sql_compiler_renders_current_month_as_calendar_range():
+    sql = _compile_time_filter({"kind": "current_period", "unit": "month", "timezone": "Asia/Shanghai"})
+
+    assert "business_model.stat_date >= '2026-07-01'" in sql
+    assert "business_model.stat_date < '2026-08-01'" in sql
+
+
+def test_sql_compiler_renders_previous_month_as_calendar_range():
+    sql = _compile_time_filter({"kind": "previous_period", "unit": "month", "timezone": "Asia/Shanghai"})
+
+    assert "business_model.stat_date >= '2026-06-01'" in sql
+    assert "business_model.stat_date < '2026-07-01'" in sql
+
+
+def test_sql_compiler_renders_current_week_from_monday():
+    # 2026-07-04 是周六，本周从周一 2026-06-29 开始。
+    sql = _compile_time_filter({"kind": "current_period", "unit": "week", "timezone": "Asia/Shanghai"})
+
+    assert "business_model.stat_date >= '2026-06-29'" in sql
+    assert "business_model.stat_date < '2026-07-06'" in sql
+
+
+def test_sql_compiler_renders_previous_quarter_as_calendar_range():
+    sql = _compile_time_filter({"kind": "previous_period", "unit": "quarter", "timezone": "Asia/Shanghai"})
+
+    assert "business_model.stat_date >= '2026-04-01'" in sql
+    assert "business_model.stat_date < '2026-07-01'" in sql
+
+
+def test_sql_compiler_renders_current_year_as_calendar_range():
+    sql = _compile_time_filter({"kind": "current_period", "unit": "year", "timezone": "Asia/Shanghai"})
+
+    assert "business_model.stat_date >= '2026-01-01'" in sql
+    assert "business_model.stat_date < '2027-01-01'" in sql
+
+
+def test_sql_compiler_renders_recent_months_as_rolling_window():
+    sql = _compile_time_filter(
+        {
+            "kind": "relative_range",
+            "unit": "month",
+            "amount": 3,
+            "anchor": "today",
+            "include_current": True,
+            "timezone": "Asia/Shanghai",
+        }
+    )
+
+    assert "business_model.stat_date >= '2026-04-05'" in sql
+    assert "business_model.stat_date <= '2026-07-04'" in sql
+
+
+def test_sql_compiler_renders_recent_months_with_month_end_clamp():
+    # 月底日期做月份平移时需要按目标月天数收敛，不能溢出。
+    sql = _compile_time_filter(
+        {
+            "kind": "relative_range",
+            "unit": "month",
+            "amount": 1,
+            "anchor": "today",
+            "include_current": True,
+            "timezone": "Asia/Shanghai",
+        },
+        today=date(2026, 3, 31),
+    )
+
+    assert "business_model.stat_date >= '2026-03-01'" in sql
+    assert "business_model.stat_date <= '2026-03-31'" in sql
+
+
+def test_sql_compiler_rejects_unrenderable_time_ast_instead_of_stringifying():
+    with pytest.raises(ValueError, match="SEMANTIC_SQL_TIME_RANGE_UNSUPPORTED"):
+        _compile_time_filter({"kind": "unsupported", "raw": "农历新年", "timezone": "Asia/Shanghai"})
+
+
+def test_sql_compiler_rejects_zero_amount_relative_range():
+    with pytest.raises(ValueError, match="SEMANTIC_SQL_TIME_RANGE_UNSUPPORTED"):
+        _compile_time_filter(
+            {
+                "kind": "relative_range",
+                "unit": "month",
+                "amount": 0,
+                "anchor": "today",
+                "include_current": True,
+                "timezone": "Asia/Shanghai",
+            }
+        )

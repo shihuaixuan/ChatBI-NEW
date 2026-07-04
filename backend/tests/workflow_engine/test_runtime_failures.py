@@ -170,13 +170,26 @@ def test_runtime_enforces_per_node_loop_budget():
     assert events.list("run-loop")[-1].public_payload["error_code"] == "LOOP_ITERATION_LIMIT_EXCEEDED"
 
 
-def test_runtime_enforces_total_run_timeout():
+def test_runtime_enforces_total_run_timeout_on_active_execution_time():
     runtime, store, events = _build_runtime(SuccessHandler())
     created = runtime.create_run("run-timeout", "failure", "v1", WorkflowContext())
-    created.created_at = created.created_at - timedelta(seconds=301)
+    created.context.control.active_ms = 300_001
     store.save(created, expected_version=created.version)
 
     outcome = runtime.execute("run-timeout")
 
     assert outcome.status is RunStatus.FAILED
     assert events.list("run-timeout")[-1].public_payload["error_code"] == "RUN_TIMEOUT_EXCEEDED"
+
+
+def test_runtime_ignores_wall_clock_age_of_run():
+    """超时预算不包含等待用户输入的墙钟时间：旧 Run 恢复执行不应立即超时。"""
+
+    runtime, store, _ = _build_runtime(SuccessHandler())
+    created = runtime.create_run("run-old", "failure", "v1", WorkflowContext())
+    created.created_at = created.created_at - timedelta(hours=1)
+    store.save(created, expected_version=created.version)
+
+    outcome = runtime.execute("run-old")
+
+    assert outcome.status is RunStatus.SUCCEEDED

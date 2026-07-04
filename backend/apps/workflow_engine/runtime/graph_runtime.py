@@ -107,8 +107,9 @@ class GraphRuntime:
                 self._checkpoints.publish_event(run, "run.started")
 
             while run.status is RunStatus.RUNNING:
-                elapsed_ms = (datetime.now(timezone.utc) - run.created_at).total_seconds() * 1000
-                if elapsed_ms > definition.policies.run_timeout_ms:
+                # 超时预算只统计活跃执行时间；等待用户输入的时间不计入，
+                # 否则用户在澄清卡片上停留超过预算就会导致恢复后立即失败。
+                if run.context.control.active_ms > definition.policies.run_timeout_ms:
                     run.status = RunStatus.FAILED
                     return self._checkpoints.fail(run, "RUN_TIMEOUT_EXCEEDED")
                 if run.context.control.executed_nodes >= definition.policies.max_nodes_per_run:
@@ -128,7 +129,10 @@ class GraphRuntime:
                         node_name=node.name,
                     )
                 self._checkpoints.publish_event(run, "node.started", node_name=node.name)
+                node_started_at = datetime.now(timezone.utc)
                 result = self._execute_with_retry(run, node, definition.policies.default_retry_policy)
+                node_active_ms = int((datetime.now(timezone.utc) - node_started_at).total_seconds() * 1000)
+                run.context.control.active_ms += node_active_ms
 
                 if result.status is NodeResultStatus.FAILED:
                     self._record_node_execution(run, node, result)

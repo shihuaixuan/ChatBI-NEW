@@ -13,6 +13,7 @@ class ControlContext(BaseModel):
     executed_nodes: int = Field(default=0, ge=0)
     loop_iterations: dict[str, int] = Field(default_factory=dict)
     pending_interaction_id: str | None = None
+    active_ms: int = Field(default=0, ge=0)
 
 
 class WorkflowContext(BaseModel):

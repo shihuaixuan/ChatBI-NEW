@@ -32,9 +32,13 @@ def test_v1_capability_node_rejects_output_that_does_not_match_schema():
         )
     )
 
-    assert result.status is NodeResultStatus.FAILED
-    assert result.error is not None
-    assert result.error.code == "QUESTION_CLASSIFY_FAILED"
+    # A3 降级语义：不合规输出不再终止 Run，而是转结构化 node_failure，
+    # 由图中的 node.degraded 边路由到解释性回答；输出路径本身不被写入。
+    assert result.status is NodeResultStatus.SUCCEEDED
+    assert "variables.classification" not in result.patch.set_values
+    failure = result.patch.set_values["variables.node_failure"]
+    assert failure["error_code"] == "QUESTION_CLASSIFY_FAILED"
+    assert failure["node"] == "classify_question"
 
 
 def test_v1_question_classification_input_requires_question_identity_and_dataset():
