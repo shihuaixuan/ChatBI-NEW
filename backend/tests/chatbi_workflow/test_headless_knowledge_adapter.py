@@ -1189,3 +1189,18 @@ def test_headless_knowledge_adapter_ranks_document_by_business_term_overlap():
     assert result["status"] == "hit"
     assert result["selected_assets"]["metrics"][0]["asset_id"] == 100
     assert result["selected_assets"]["metrics"][0]["score"] - result["candidate_groups"]["metrics"][1]["score"] >= 0.12
+
+
+def test_candidate_groups_output_strips_full_payload():
+    """输出边界瘦身：candidate_groups 不携带资产全量 payload，且不影响原对象。"""
+
+    groups = {
+        "metrics": [{"asset_id": 1, "name": "销售额", "score": 0.9, "payload": {"ext_info": {"big": "blob"}}}],
+        "dimensions": [],
+    }
+
+    public = HeadlessKnowledgeAdapter._public_candidate_groups(groups)
+
+    assert public["metrics"][0] == {"asset_id": 1, "name": "销售额", "score": 0.9}
+    # ambiguities/selected_assets 仍引用原对象，payload 必须保留在原件上。
+    assert "payload" in groups["metrics"][0]

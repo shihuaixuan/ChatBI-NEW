@@ -181,7 +181,7 @@ class HeadlessKnowledgeAdapter:
                 "dimensions": [item["biz_name"] for item in selected_assets["dimensions"]],
                 "terms": [item["biz_name"] for item in selected_assets["terms"]],
                 "examples": [],
-                "candidate_groups": candidate_groups,
+                "candidate_groups": self._public_candidate_groups(candidate_groups),
                 "selected_assets": output_assets,
                 "slot_bindings": self._slot_bindings(selected_assets, intent),
                 "subject_domain": subject_domain or {},
@@ -238,12 +238,31 @@ class HeadlessKnowledgeAdapter:
             "dimensions": [item["biz_name"] for item in selected_assets["dimensions"]],
             "terms": [item["biz_name"] for item in selected_assets["terms"]],
             "examples": [],
-            "candidate_groups": candidate_groups,
+            "candidate_groups": self._public_candidate_groups(candidate_groups),
             "selected_assets": output_assets,
             "slot_bindings": self._slot_bindings(selected_assets, intent),
             "subject_domain": subject_domain or {},
             "decision": gate_result["decision"],
             "ambiguities": gate_result["ambiguities"],
+        }
+
+    @staticmethod
+    def _public_candidate_groups(
+        candidate_groups: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """输出边界瘦身：candidate_groups 只服务 trace 与澄清选项展示。
+
+        资产全量 payload（SchemaElement 完整 dump）只在检索管线内部使用；
+        进入上下文会被逐节点深拷贝、随 Run 快照与事件反复落库。这里构造
+        去 payload 的副本，原对象（selected_assets/ambiguities 引用）不受影响。
+        """
+
+        return {
+            group_name: [
+                {key: value for key, value in candidate.items() if key != "payload"}
+                for candidate in candidates
+            ]
+            for group_name, candidates in candidate_groups.items()
         }
 
     @staticmethod
@@ -1150,7 +1169,7 @@ class HeadlessKnowledgeAdapter:
             "dimensions": [],
             "terms": [],
             "examples": [],
-            "candidate_groups": candidate_groups or {"metrics": [], "dimensions": [], "values": [], "terms": []},
+            "candidate_groups": HeadlessKnowledgeAdapter._public_candidate_groups(candidate_groups or {"metrics": [], "dimensions": [], "values": [], "terms": []}),
             "selected_assets": {"metrics": [], "dimensions": [], "values": [], "terms": []},
             "slot_bindings": {"metrics": [], "dimensions": [], "filters": []},
             "subject_domain": subject_domain or {},
