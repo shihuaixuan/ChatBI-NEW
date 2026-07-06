@@ -26,6 +26,15 @@
 - 候选进入 `CandidateGate` 前会执行可解释 rerank，输出 `base_score`、`rerank_strategy`、`rerank_reason`。
 - 已通过单元测试验证：“访问人数”优先于“转化人数/关注人数”等仅部分重叠候选；只有“人数”这种弱词时仍保留 `metric_ambiguous`。
 
+2026-07-06 完成 Step 3 执行域重构：
+
+- 单查询与拆分查询统一输出 `variables.execution.queries[]/results[]`。
+- 迁移期继续镜像 `variables.sql_execution`，旧消费端可平滑回退。
+- 拆分子查询改为有界并行，每个真实查询使用独立数据库 Session。
+- 完整结果正文写入文件 artifact，`workflow_artifact` 保存元数据；上下文仅保留引用、统计和样本行。
+- 答案模型改读白名单投影视图，不再接收 SQL、候选 payload 与全量 variables。
+- Trace 与前端优先消费统一结果结构，保留旧结果形状回退。
+
 当前流程阻塞在：
 
 - `execute_sql` 节点。
