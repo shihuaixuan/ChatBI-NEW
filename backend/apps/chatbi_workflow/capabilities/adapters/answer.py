@@ -29,7 +29,7 @@ class AnswerModelClient(Protocol):
 def build_answer_generation_prompt(
     mode: str,
     question: str,
-    variables: dict[str, Any],
+    projection: dict[str, Any],
 ) -> AnswerGenerationPrompt:
     """构造稳定 JSON 输出的回复提示词。"""
 
@@ -47,7 +47,7 @@ def build_answer_generation_prompt(
 回复要求：
 - mode=reject 时，只说明当前问题无法处理或不在权限范围内，不提供绕过方法。
 - mode=chitchat 时，简短回应，并引导用户提出业务数据分析问题。
-- mode=generate 时，基于 variables 中已有结果生成回答；如果缺少结果，说明暂时无法生成完整回答。
+- mode=generate 时，基于 projection 中已有结果生成回答；如果缺少结果，说明暂时无法生成完整回答。
 - warnings 必须是字符串数组。
 - render_type 默认使用 text。
 - citations 必须是对象数组，没有引用时返回空数组。
@@ -55,7 +55,7 @@ def build_answer_generation_prompt(
     user_payload = {
         "mode": mode,
         "question": question,
-        "variables": variables,
+        "projection": projection,
     }
     user_prompt = "请生成 ChatBI 回复，并严格返回 JSON：\n" + json.dumps(
         user_payload,
@@ -63,6 +63,99 @@ def build_answer_generation_prompt(
         sort_keys=True,
     )
     return AnswerGenerationPrompt(system_prompt=system_prompt, user_prompt=user_prompt)
+
+
+def build_answer_projection(request: dict[str, Any]) -> dict[str, Any]:
+    """构造答案模型最小输入，排除 SQL、候选 payload 和完整结果。"""
+
+    ctx = ChatBIRunContext(request)
+    execution = ctx.execution
+    results = execution.get("results")
+    if not isinstance(results, list):
+        results = []
+    if not results and execution:
+        # 兼容 Step 3 之前的单查询扁平结果。
+        results = [
+            {
+                "query_id": "query-0",
+                "status": execution.get("status"),
+                "row_count": execution.get("row_count", 0),
+                "fields": execution.get("fields", []),
+                "sample_rows": execution.get("rows", []),
+                "execution_ms": execution.get("execution_ms", 0),
+                "artifact_ref": execution.get("artifact_ref"),
+                "error_code": execution.get("error_code"),
+                "message": execution.get("message"),
+            }
+        ]
+    decision = (
+        ctx.knowledge.get("decision")
+        if isinstance(ctx.knowledge.get("decision"), dict)
+        else {}
+    )
+    return {
+        "question": {
+            "raw": ctx.raw_question,
+            "rewritten": ctx.question,
+        },
+        "plan": _project_plan(ctx.plan),
+        "execution": {
+            "status": execution.get("status"),
+            "row_count": execution.get("row_count", 0),
+            "results": [
+                _project_execution_result(item)
+                for item in results
+                if isinstance(item, dict)
+            ],
+            "error_code": execution.get("error_code"),
+            "message": execution.get("message"),
+        },
+        "knowledge_decision": {
+            "status": decision.get("status"),
+            "reason": decision.get("reason"),
+        },
+        "node_failure": _project_error(ctx.node_failure),
+        "sql_error": _project_error(ctx.sql_error),
+    }
+
+
+def _project_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    allowed = (
+        "status",
+        "strategy",
+        "select_mode",
+        "metrics",
+        "group_bys",
+        "filters",
+        "time",
+        "order",
+        "limit",
+        "issues",
+        "infeasible_reason",
+    )
+    return {key: plan.get(key) for key in allowed if key in plan}
+
+
+def _project_execution_result(result: dict[str, Any]) -> dict[str, Any]:
+    allowed = (
+        "query_id",
+        "status",
+        "row_count",
+        "fields",
+        "sample_rows",
+        "sampled_row_count",
+        "result_truncated",
+        "artifact_ref",
+        "execution_ms",
+        "error_code",
+        "message",
+    )
+    return {key: result.get(key) for key in allowed if key in result}
+
+
+def _project_error(error: dict[str, Any]) -> dict[str, Any]:
+    allowed = ("node", "capability", "error_code", "message", "retryable")
+    return {key: error.get(key) for key in allowed if key in error}
 
 
 class DefaultAnswerModelClient:
@@ -162,7 +255,11 @@ class AnswerAdapter:
         model_warning: str,
     ) -> dict[str, Any]:
         ctx = ChatBIRunContext(request)
-        prompt = build_answer_generation_prompt(mode=mode, question=ctx.raw_question, variables=ctx.variables)
+        prompt = build_answer_generation_prompt(
+            mode=mode,
+            question=ctx.raw_question,
+            projection=build_answer_projection(request),
+        )
         try:
             model_text = self._model_client(prompt)
         except Exception:

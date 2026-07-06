@@ -5,6 +5,7 @@ import time
 from apps.chatbi_workflow.capabilities.adapters.answer import (
     AnswerAdapter,
     build_answer_generation_prompt,
+    build_answer_projection,
 )
 from apps.chatbi_workflow.capabilities.adapters.question import (
     IntentSubtaskConfig,
@@ -1152,7 +1153,7 @@ def test_answer_generation_prompt_constrains_model_to_answer_json():
     prompt = build_answer_generation_prompt(
         mode="generate",
         question="今日的访问量",
-        variables={"sql_execution": {"status": "succeeded", "row_count": 1}},
+        projection={"execution": {"status": "succeeded", "row_count": 1}},
     )
 
     assert "只生成用户可读回复" in prompt.system_prompt
@@ -1160,7 +1161,61 @@ def test_answer_generation_prompt_constrains_model_to_answer_json():
     assert '"answer"' in prompt.system_prompt
     assert '"warnings"' in prompt.system_prompt
     assert "今日的访问量" in prompt.user_prompt
-    assert "sql_execution" in prompt.user_prompt
+    assert '"execution"' in prompt.user_prompt
+
+
+def test_answer_projection_excludes_sql_candidates_and_full_result_rows():
+    projection = build_answer_projection(
+        _v1_request(
+            "今日的访问量",
+            variables={
+                "rewrite": {"rewritten_question": "今日访问量"},
+                "plan": {
+                    "status": "ready",
+                    "metrics": [{"asset_id": 1, "display_name": "访问量"}],
+                },
+                "execution": {
+                    "status": "succeeded",
+                    "row_count": 2,
+                    "queries": [
+                        {
+                            "query_id": "query-0",
+                            "sql": "select secret from private_table",
+                            "datasource_id": 5,
+                        }
+                    ],
+                    "results": [
+                        {
+                            "query_id": "query-0",
+                            "status": "succeeded",
+                            "row_count": 2,
+                            "fields": ["value"],
+                            "sample_rows": [{"value": 1}],
+                            "artifact_ref": {"artifact_id": "artifact-1"},
+                        }
+                    ],
+                },
+                "knowledge": {
+                    "candidate_groups": {
+                        "metrics": [{"payload": {"private": "private-payload"}}]
+                    },
+                    "selected_assets": {"metrics": [{"payload": {"secret": True}}]},
+                    "slot_bindings": {"metrics": [{"asset_id": 1}]},
+                    "decision": {"status": "accepted", "reason": "口径已确认"},
+                },
+            },
+        )
+    )
+    serialized = json.dumps(projection, ensure_ascii=False)
+
+    assert "select secret from private_table" not in serialized
+    assert "candidate_groups" not in serialized
+    assert "selected_assets" not in serialized
+    assert "slot_bindings" not in serialized
+    assert "private-payload" not in serialized
+    assert projection["execution"]["results"][0]["sample_rows"] == [
+        {"value": 1}
+    ]
 
 
 def test_answer_adapter_generates_answer_with_model_json():
