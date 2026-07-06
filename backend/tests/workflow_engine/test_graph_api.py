@@ -1,6 +1,7 @@
 import asyncio
 import importlib.util
 import io
+import json
 import threading
 import time
 from contextlib import redirect_stdout
@@ -535,6 +536,18 @@ def test_graph_query_can_execute_chatbi_v1_graph():
             .order_by(WorkflowEventModel.sequence)
         ).all()
         assert "classify_question" in [event.node_name for event in events]
+        execute_event = next(
+            event
+            for event in events
+            if event.event_type == "node.succeeded"
+            and event.node_name == "execute_sql"
+        )
+        public_summary = json.dumps(
+            execute_event.public_payload,
+            ensure_ascii=False,
+        )
+        assert "select " not in public_summary.lower()
+        assert "placeholder_value" not in public_summary
         _cleanup(session)
 
 

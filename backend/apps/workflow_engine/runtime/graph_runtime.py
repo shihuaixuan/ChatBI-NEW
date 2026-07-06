@@ -159,7 +159,7 @@ class GraphRuntime:
                         run,
                         node_name=node.name,
                         completed=True,
-                        summary=self._public_node_summary(result),
+                        summary=self._public_node_summary(result, node.name),
                     )
 
                 route = self._router.select(definition, node, run.context, result)
@@ -170,7 +170,7 @@ class GraphRuntime:
                     run,
                     node_name=node.name,
                     route=route,
-                    summary=self._public_node_summary(result),
+                    summary=self._public_node_summary(result, node.name),
                 )
 
             return run
@@ -287,7 +287,10 @@ class GraphRuntime:
         )
 
     @staticmethod
-    def _public_node_summary(result: NodeExecutionResult) -> dict:
+    def _public_node_summary(
+        result: NodeExecutionResult,
+        node_name: str | None = None,
+    ) -> dict:
         """提取节点公开摘要，供 SSE 逐步展示，不等待最终 trace。"""
 
         if result.interaction is not None:
@@ -295,6 +298,23 @@ class GraphRuntime:
         values = result.patch.set_values
         if not values:
             return {}
+        if node_name in {"execute_sql", "execute_split_queries"}:
+            execution = values.get("variables.execution")
+            if not isinstance(execution, dict):
+                execution = values.get("variables.sql_execution")
+            if isinstance(execution, dict):
+                results = execution.get("results")
+                query_count = len(results) if isinstance(results, list) else 0
+                if query_count == 0 and node_name == "execute_sql":
+                    query_count = 1
+                return {
+                    "status": execution.get("status"),
+                    "query_count": query_count,
+                    "row_count": execution.get("row_count", 0),
+                    "fields": execution.get("fields", []),
+                    "execution_ms": execution.get("execution_ms", 0),
+                    "artifact_refs": execution.get("artifact_refs", []),
+                }
         if len(values) == 1:
             value = next(iter(values.values()))
             return value if isinstance(value, dict) else {"value": value}
