@@ -1,4 +1,6 @@
 from copy import deepcopy
+import os
+from pathlib import Path
 from typing import Any
 
 from sqlmodel import Session
@@ -20,6 +22,7 @@ from apps.chatbi_workflow.capabilities.adapters.question import (
     QuestionClassificationModelClient,
 )
 from apps.chatbi_workflow.capabilities.adapters.sql import SqlAdapter
+from apps.chatbi_workflow.capabilities.execution import SessionSqlExecutionGateway
 from apps.chatbi_workflow.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
@@ -38,6 +41,10 @@ from apps.workflow_engine.domain.context import ContextPatch
 from apps.workflow_engine.domain.interaction import InteractionRequest
 from apps.workflow_engine.domain.run import WorkflowRun
 from apps.workflow_engine.infrastructure.events.publisher import DatabaseEventPublisher
+from apps.workflow_engine.infrastructure.artifacts.file_store import (
+    FileArtifactStore,
+    SessionArtifactMetadataStore,
+)
 from apps.workflow_engine.infrastructure.persistence.interaction_manager import (
     DatabaseInteractionManager,
 )
@@ -55,6 +62,7 @@ from apps.workflow_engine.runtime.graph_runtime import GraphRuntime
 from apps.workflow_engine.runtime.lease import InMemoryRunLease
 from apps.workflow_engine.runtime.router import ConditionRouter
 from apps.workflow_engine.runtime.scheduler import NodeScheduler
+from common.core.db import engine
 
 
 class ChatBIV1InteractionResponsePatcher:
@@ -401,6 +409,17 @@ def build_real_chatbi_v1_runtime(
     """组装真实 classify_question + 其他占位能力回退的 ChatBI v1 运行时。"""
 
     schema_builder = HeadlessSchemaBuilder(session)
+    session_factory = lambda: Session(engine)
+    artifact_root = Path(
+        os.getenv(
+            "SQLBOT_WORKFLOW_ARTIFACT_DIR",
+            str(Path(__file__).resolve().parents[2] / "data" / "workflow_artifacts"),
+        )
+    )
+    artifact_store = FileArtifactStore(
+        root=artifact_root,
+        metadata_store=SessionArtifactMetadataStore(session_factory),
+    )
     gateway = RealChatBICapabilityGateway(
         question_adapter=QuestionAdapter(model_client=question_model_client, schema_builder=schema_builder),
         answer_adapter=AnswerAdapter(model_client=answer_model_client),
@@ -411,7 +430,11 @@ def build_real_chatbi_v1_runtime(
         interaction_adapter=InteractionAdapter(schema_builder=schema_builder),
         sql_adapter=SqlAdapter(
             schema_builder=schema_builder,
-            execute_tool=SqlExecuteTool(session),
+            execute_tool=SessionSqlExecutionGateway(
+                session_factory,
+                execute_tool_factory=SqlExecuteTool,
+            ),
+            artifact_store=artifact_store,
         ),
         fallback_gateway=PlaceholderChatBICapabilityGateway(),
     )

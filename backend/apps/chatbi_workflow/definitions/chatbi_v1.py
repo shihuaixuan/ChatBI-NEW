@@ -320,12 +320,16 @@ def register_chatbi_v1_handlers(registry: HandlerRegistry, gateway: ChatBICapabi
         "plan.bind": "variables.plan",
         "sql.generate": "variables.sql",
         "sql.generate_split": "variables.split_sql",
-        "sql.execute": "variables.sql_execution",
-        "sql.execute_split": "variables.sql_execution",
+        "sql.execute": "variables.execution",
+        "sql.execute_split": "variables.execution",
         "sql.handle_error": "variables.sql_error",
         "answer.generate": "variables.answer",
         "question.recommend": "variables.recommendations",
         "answer.compose": "variables.final_reply",
+    }
+    mirror_output_paths = {
+        "sql.execute": ("variables.sql_execution",),
+        "sql.execute_split": ("variables.sql_execution",),
     }
     for capability, output_path in output_paths.items():
         registry.register(
@@ -335,6 +339,7 @@ def register_chatbi_v1_handlers(registry: HandlerRegistry, gateway: ChatBICapabi
                 capability,
                 output_path,
                 output_model=CHATBI_V1_OUTPUT_MODELS[capability],
+                mirror_output_paths=mirror_output_paths.get(capability, ()),
             ),
         )
 

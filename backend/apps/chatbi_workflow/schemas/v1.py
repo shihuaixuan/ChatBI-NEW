@@ -199,6 +199,8 @@ class SqlExecuteOutput(BaseModel):
     """SQL 执行节点输出。"""
 
     status: Literal["succeeded", "failed"]
+    queries: list[dict[str, Any]] = Field(default_factory=list)
+    results: list[dict[str, Any]] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
     row_count: int = Field(default=0, ge=0)
     fields: list[str] = Field(default_factory=list)
@@ -206,6 +208,7 @@ class SqlExecuteOutput(BaseModel):
     sampled_row_count: int = Field(default=0, ge=0)
     result_truncated: bool = False
     artifact_ref: dict[str, Any] | None = None
+    artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     error_code: str | None = None
     message: str | None = None
 

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from apps.agentic_chat.strategies.sql_repair import SQLRepairStrategy
 from apps.agentic_chat.tools.sql_executor import SqlExecuteTool
 from apps.agentic_chat.tools.sql_validator import SqlValidateTool
 from apps.chatbi_workflow.capabilities import planning
+from apps.chatbi_workflow.capabilities.execution import (
+    ExecutionQuery,
+    ExecutionResult,
+    ResultArtifactStore,
+    build_execution_output,
+)
 from apps.chatbi_workflow.capabilities.adapters.permission import PermissionAdapter
 from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
 from apps.headless.service import HeadlessSchemaBuilder
@@ -26,7 +33,9 @@ class SqlAdapter:
         validate_tool: SqlValidateTool | None = None,
         permission_adapter: PermissionAdapter | None = None,
         repair_strategy: SQLRepairStrategy | None = None,
+        artifact_store: ResultArtifactStore | None = None,
         sample_row_limit: int = 50,
+        max_parallel_queries: int = 4,
     ) -> None:
         self._schema_builder = schema_builder or HeadlessSchemaBuilder()
         self._compiler = compiler or SemanticSQLCompiler()
@@ -34,7 +43,9 @@ class SqlAdapter:
         self._validate_tool = validate_tool or SqlValidateTool()
         self._permission_adapter = permission_adapter or PermissionAdapter()
         self._repair_strategy = repair_strategy or SQLRepairStrategy()
+        self._artifact_store = artifact_store
         self._sample_row_limit = max(sample_row_limit, 0)
+        self._max_parallel_queries = max(max_parallel_queries, 1)
 
     def generate(self, request: dict[str, Any]) -> dict[str, Any]:
         ctx = ChatBIRunContext(request)
@@ -97,43 +108,117 @@ class SqlAdapter:
         datasource_id = self._int_or_none(sql_info.get("datasource_id"))
         if not sql or datasource_id is None:
             return self._failed("SQL_EXECUTE_CONTEXT_REQUIRED", "缺少 SQL 或 datasource_id")
+        query = ExecutionQuery(
+            query_id="query-0",
+            sql=sql,
+            datasource_id=datasource_id,
+            plan_ref=0,
+            metrics=[
+                str(item.get("biz_name"))
+                for item in sql_info.get("used_assets", [])
+                if isinstance(item, dict)
+                and item.get("biz_name")
+                and item.get("asset_type") == "METRIC"
+            ],
+            dimensions=[
+                str(item.get("biz_name"))
+                for item in sql_info.get("used_assets", [])
+                if isinstance(item, dict)
+                and item.get("biz_name")
+                and item.get("asset_type") == "DIMENSION"
+            ],
+        )
+        result = self._execute_query(ctx, query)
+        return build_execution_output([query], [result])
+
+    def _execute_query(
+        self,
+        ctx: ChatBIRunContext,
+        query: ExecutionQuery,
+    ) -> ExecutionResult:
         if self._execute_tool is None:
-            return self._failed("SQL_EXECUTE_TOOL_REQUIRED", "SQL 执行工具未配置")
+            return self._failed_result(
+                query.query_id,
+                "SQL_EXECUTE_TOOL_REQUIRED",
+                "SQL 执行工具未配置",
+            )
         permission = self._permission_adapter.apply(
             {
-                "sql": sql,
-                "datasource_id": datasource_id,
+                "sql": query.sql,
+                "datasource_id": query.datasource_id,
                 "tenant_id": ctx.request_value("tenant_id"),
                 "user_id": ctx.request_value("user_id"),
             }
         )
         if not permission.get("allowed"):
-            return self._failed(
+            return self._failed_result(
+                query.query_id,
                 str(permission.get("error_code") or "permission_denied"),
                 str(permission.get("reason") or "权限校验拒绝"),
             )
-        sql = str(permission.get("sql") or sql)
+        permitted_sql = str(permission.get("sql") or query.sql)
 
-        result = self._execute_tool.run({"sql": sql, "datasource_id": datasource_id})
+        result = self._execute_tool.run(
+            {"sql": permitted_sql, "datasource_id": query.datasource_id}
+        )
         if not result.success:
-            return self._failed(result.error_code or "SQL_EXECUTE_FAILED", result.message or "SQL 执行失败")
+            return self._failed_result(
+                query.query_id,
+                result.error_code or "SQL_EXECUTE_FAILED",
+                result.message or "SQL 执行失败",
+            )
         payload = result.payload or {}
         rows = payload.get("data") or payload.get("rows") or []
         fields = payload.get("fields") or []
         row_count = int(payload.get("row_count") or len(rows))
         sample_rows = rows[: self._sample_row_limit]
-        return {
-            "status": "succeeded",
-            "rows": sample_rows,
-            "row_count": row_count,
-            "fields": fields,
-            "execution_ms": int(payload.get("execution_ms") or 0),
-            "sampled_row_count": len(sample_rows),
-            "result_truncated": row_count > len(sample_rows),
-            "artifact_ref": payload.get("artifact_ref"),
-            "error_code": None,
-            "message": None,
-        }
+        artifact_ref = payload.get("artifact_ref")
+        if self._artifact_store is not None:
+            try:
+                artifact_ref = self._artifact_store.put_json(
+                    run_id=ctx.run_id,
+                    kind="sql_result",
+                    payload={
+                        "query_id": query.query_id,
+                        "fields": fields,
+                        "rows": rows,
+                        "row_count": row_count,
+                    },
+                    metadata={
+                        "query_id": query.query_id,
+                        "row_count": row_count,
+                    },
+                )
+            except Exception:
+                return self._failed_result(
+                    query.query_id,
+                    "SQL_RESULT_ARTIFACT_WRITE_FAILED",
+                    "SQL 结果 Artifact 写入失败",
+                )
+        return ExecutionResult(
+            query_id=query.query_id,
+            status="succeeded",
+            row_count=row_count,
+            fields=fields,
+            sample_rows=sample_rows,
+            sampled_row_count=len(sample_rows),
+            result_truncated=row_count > len(sample_rows),
+            artifact_ref=artifact_ref,
+            execution_ms=int(payload.get("execution_ms") or 0),
+        )
+
+    @staticmethod
+    def _failed_result(
+        query_id: str,
+        error_code: str,
+        message: str,
+    ) -> ExecutionResult:
+        return ExecutionResult(
+            query_id=query_id,
+            status="failed",
+            error_code=error_code,
+            message=message,
+        )
 
     def generate_split(self, request: dict[str, Any]) -> dict[str, Any]:
         """分别编译跨模型子查询，但不在 SQL 生成节点执行查询。"""
@@ -175,72 +260,59 @@ class SqlAdapter:
         }
 
     def execute_split(self, request: dict[str, Any]) -> dict[str, Any]:
-        """逐条执行已生成的跨模型 SQL，不承担 SQL 编译职责。"""
+        """并行执行已生成的跨模型 SQL，不承担 SQL 编译职责。"""
 
         ctx = ChatBIRunContext(request)
-        queries = ctx.split_sql.get("queries")
-        if not isinstance(queries, list) or len(queries) < 2:
+        raw_queries = ctx.split_sql.get("queries")
+        if not isinstance(raw_queries, list) or len(raw_queries) < 2:
             return self._failed("CROSS_MODEL_SQL_REQUIRED", "缺少已生成的跨模型 SQL")
-        if self._execute_tool is None:
-            return self._failed("SQL_EXECUTE_TOOL_REQUIRED", "SQL 执行工具未配置")
-
-        query_results: list[dict[str, Any]] = []
-        total_rows = 0
-        total_execution_ms = 0
-        for query in queries:
-            sql = str(query.get("sql") or "").strip()
-            datasource_id = self._int_or_none(query.get("datasource_id"))
+        queries: list[ExecutionQuery] = []
+        for index, raw_query in enumerate(raw_queries):
+            sql = str(raw_query.get("sql") or "").strip()
+            datasource_id = self._int_or_none(raw_query.get("datasource_id"))
             if not sql or datasource_id is None:
                 return self._failed("CROSS_MODEL_SQL_INVALID", "跨模型 SQL 缺少 SQL 或 datasource_id")
-            permission = self._permission_adapter.apply(
-                {
-                    "sql": sql,
-                    "datasource_id": datasource_id,
-                    "tenant_id": ctx.request_value("tenant_id"),
-                    "user_id": ctx.request_value("user_id"),
-                }
-            )
-            if not permission.get("allowed"):
-                return self._failed(
-                    str(permission.get("error_code") or "permission_denied"),
-                    str(permission.get("reason") or "权限校验拒绝"),
+            queries.append(
+                ExecutionQuery(
+                    query_id=f"query-{index}",
+                    sql=sql,
+                    datasource_id=datasource_id,
+                    plan_ref=index,
+                    model_id=self._int_or_none(raw_query.get("model_id")),
+                    metrics=[
+                        str(item)
+                        for item in raw_query.get("metrics") or []
+                        if item is not None
+                    ],
+                    dimensions=[
+                        str(item)
+                        for item in raw_query.get("dimensions") or []
+                        if item is not None
+                    ],
                 )
-            execution = self._execute_tool.run(
-                {
-                    "sql": str(permission.get("sql") or sql),
-                    "datasource_id": datasource_id,
-                }
             )
-            if not execution.success:
-                return self._failed(execution.error_code or "SQL_EXECUTE_FAILED", execution.message or "拆分查询执行失败")
-            payload = execution.payload or {}
-            rows = payload.get("data") or payload.get("rows") or []
-            row_count = int(payload.get("row_count") or len(rows))
-            execution_ms = int(payload.get("execution_ms") or 0)
-            total_rows += row_count
-            total_execution_ms += execution_ms
-            query_results.append(
-                {
-                    "model_id": query.get("model_id"),
-                    "metrics": query.get("metrics") or [],
-                    "dimensions": query.get("dimensions") or [],
-                    "rows": rows[: self._sample_row_limit],
-                    "row_count": row_count,
-                }
-            )
+        with ThreadPoolExecutor(
+            max_workers=min(len(queries), self._max_parallel_queries)
+        ) as executor:
+            futures = [
+                executor.submit(self._execute_query, ctx, query)
+                for query in queries
+            ]
+            results = [
+                self._completed_future_result(query, future)
+                for query, future in zip(queries, futures)
+            ]
+        return build_execution_output(queries, results)
 
-        return {
-            "status": "succeeded",
-            "rows": query_results,
-            "row_count": total_rows,
-            "fields": ["model_id", "metrics", "dimensions", "rows", "row_count"],
-            "execution_ms": total_execution_ms,
-            "sampled_row_count": len(query_results),
-            "result_truncated": False,
-            "artifact_ref": None,
-            "error_code": None,
-            "message": None,
-        }
+    def _completed_future_result(self, query, future) -> ExecutionResult:
+        try:
+            return future.result()
+        except Exception:
+            return self._failed_result(
+                query.query_id,
+                "SQL_EXECUTE_UNEXPECTED_ERROR",
+                "拆分查询执行发生未预期错误",
+            )
 
     def handle_error(self, request: dict[str, Any]) -> dict[str, Any]:
         ctx = ChatBIRunContext(request)

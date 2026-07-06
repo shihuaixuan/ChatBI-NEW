@@ -42,12 +42,17 @@ class ChatBIRunContext:
         self._conversation = _dict(payload.get("conversation"))
         self._variables = _dict(payload.get("variables"))
         self._node_name = str(payload.get("node_name") or "")
+        self._run_id = str(payload.get("run_id") or "")
 
     # ---- 请求身份（由服务端注入，节点不可修改） ----
 
     @property
     def node_name(self) -> str:
         return self._node_name
+
+    @property
+    def run_id(self) -> str:
+        return self._run_id
 
     @property
     def raw_question(self) -> str:
@@ -123,8 +128,15 @@ class ChatBIRunContext:
         return self.domain("split_sql")
 
     @property
+    def execution(self) -> dict[str, Any]:
+        standard = self.domain("execution")
+        return standard or self.domain("sql_execution")
+
+    @property
     def sql_execution(self) -> dict[str, Any]:
-        return self.domain("sql_execution")
+        """兼容旧调用方；新代码统一读取 execution。"""
+
+        return self.execution
 
     @property
     def sql_error(self) -> dict[str, Any]:

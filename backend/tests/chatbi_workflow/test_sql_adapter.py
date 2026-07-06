@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from apps.agentic_chat.schemas import ToolResult
@@ -667,6 +669,60 @@ class FakeSqlExecuteTool:
         return self.result
 
 
+class FakeResultArtifactStore:
+    def __init__(self, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[dict] = []
+
+    def put_json(self, **payload):
+        if self.fail:
+            raise RuntimeError("artifact unavailable")
+        self.calls.append(payload)
+        return {
+            "artifact_id": "artifact-1",
+            "kind": "sql_result",
+            "content_type": "application/json",
+            "size": 10,
+            "digest": "sha256:test",
+            "metadata": payload.get("metadata") or {},
+        }
+
+
+class BlockingSqlExecuteTool:
+    def __init__(self) -> None:
+        self.barrier = threading.Barrier(2)
+        self.lock = threading.Lock()
+        self.active_calls = 0
+        self.max_active_calls = 0
+
+    def run(self, payload: dict) -> ToolResult:
+        with self.lock:
+            self.active_calls += 1
+            self.max_active_calls = max(self.max_active_calls, self.active_calls)
+        self.barrier.wait(timeout=2)
+        with self.lock:
+            self.active_calls -= 1
+        value = 1 if "first" in payload["sql"] else 2
+        return ToolResult(
+            success=True,
+            payload={"fields": ["value"], "data": [{"value": value}]},
+        )
+
+
+class SelectiveFailureSqlExecuteTool:
+    def run(self, payload: dict) -> ToolResult:
+        if "failed" in payload["sql"]:
+            return ToolResult(
+                success=False,
+                error_code="sql_execute_error",
+                message="query failed",
+            )
+        return ToolResult(
+            success=True,
+            payload={"fields": ["value"], "data": [{"value": 1}]},
+        )
+
+
 class DenyPermissionAdapter:
     def apply(self, payload: dict) -> dict:
         return {"allowed": False, "reason": "没有数据源权限", "sql": None, "error_code": "permission_denied"}
@@ -701,18 +757,77 @@ def test_sql_adapter_executes_sql_and_normalizes_result_rows():
             "datasource_id": 5,
         }
     ]
-    assert result == {
-        "status": "succeeded",
-        "rows": [{"visit_uv": 123}],
-        "row_count": 1,
-        "fields": ["visit_uv"],
-        "execution_ms": 0,
-        "sampled_row_count": 1,
-        "result_truncated": False,
-        "artifact_ref": None,
-        "error_code": None,
-        "message": None,
-    }
+    assert result["status"] == "succeeded"
+    assert result["rows"] == [{"visit_uv": 123}]
+    assert result["row_count"] == 1
+    assert result["fields"] == ["visit_uv"]
+    assert result["queries"][0]["query_id"] == "query-0"
+    assert result["results"][0]["sample_rows"] == [{"visit_uv": 123}]
+
+
+def test_sql_adapter_executes_single_query_with_uniform_result_and_artifact():
+    execute_tool = FakeSqlExecuteTool(
+        ToolResult(
+            success=True,
+            payload={
+                "fields": ["value"],
+                "data": [{"value": 1}, {"value": 2}],
+                "execution_ms": 4,
+            },
+        )
+    )
+    artifact_store = FakeResultArtifactStore()
+    adapter = SqlAdapter(
+        execute_tool=execute_tool,
+        artifact_store=artifact_store,
+        sample_row_limit=1,
+    )
+
+    result = adapter.execute(
+        {
+            "run_id": "run-1",
+            "variables": {
+                "sql": {
+                    "sql": "select value from t",
+                    "datasource_id": 5,
+                }
+            },
+        }
+    )
+
+    assert result["queries"][0]["query_id"] == "query-0"
+    assert result["results"][0]["sample_rows"] == [{"value": 1}]
+    assert result["results"][0]["artifact_ref"]["artifact_id"] == "artifact-1"
+    assert artifact_store.calls[0]["payload"]["rows"] == [
+        {"value": 1},
+        {"value": 2},
+    ]
+    assert result["rows"] == [{"value": 1}]
+
+
+def test_sql_adapter_returns_stable_failure_when_artifact_write_fails():
+    execute_tool = FakeSqlExecuteTool(
+        ToolResult(success=True, payload={"fields": ["value"], "data": [{"value": 1}]})
+    )
+    adapter = SqlAdapter(
+        execute_tool=execute_tool,
+        artifact_store=FakeResultArtifactStore(fail=True),
+    )
+
+    result = adapter.execute(
+        {
+            "run_id": "run-1",
+            "variables": {
+                "sql": {
+                    "sql": "select value from t",
+                    "datasource_id": 5,
+                }
+            },
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert result["results"][0]["error_code"] == "SQL_RESULT_ARTIFACT_WRITE_FAILED"
 
 
 def test_sql_adapter_executes_cross_model_plans_as_independent_queries():
@@ -810,10 +925,79 @@ def test_sql_adapter_executes_cross_model_plans_as_independent_queries():
     )
 
     assert result["status"] == "succeeded"
-    assert len(result["rows"]) == 2
-    assert result["rows"][0]["model_id"] == 10
-    assert result["rows"][1]["model_id"] == 11
+    assert result["rows"] == []
+    assert len(result["results"]) == 2
+    assert result["queries"][0]["model_id"] == 10
+    assert result["queries"][1]["model_id"] == 11
     assert len(execute_tool.payloads) == 2
+
+
+def test_sql_adapter_executes_split_queries_in_parallel_and_keeps_order():
+    execute_tool = BlockingSqlExecuteTool()
+    adapter = SqlAdapter(
+        execute_tool=execute_tool,
+        artifact_store=FakeResultArtifactStore(),
+    )
+
+    result = adapter.execute_split(
+        {
+            "run_id": "run-1",
+            "variables": {
+                "split_sql": {
+                    "queries": [
+                        {
+                            "sql": "select first",
+                            "datasource_id": 5,
+                            "model_id": 10,
+                        },
+                        {
+                            "sql": "select second",
+                            "datasource_id": 5,
+                            "model_id": 11,
+                        },
+                    ]
+                }
+            },
+        }
+    )
+
+    assert execute_tool.max_active_calls == 2
+    assert [item["query_id"] for item in result["results"]] == [
+        "query-0",
+        "query-1",
+    ]
+    assert [item["sample_rows"][0]["value"] for item in result["results"]] == [
+        1,
+        2,
+    ]
+
+
+def test_sql_adapter_preserves_successful_split_result_when_sibling_fails():
+    adapter = SqlAdapter(
+        execute_tool=SelectiveFailureSqlExecuteTool(),
+        artifact_store=FakeResultArtifactStore(),
+    )
+
+    result = adapter.execute_split(
+        {
+            "run_id": "run-1",
+            "variables": {
+                "split_sql": {
+                    "queries": [
+                        {"sql": "select first", "datasource_id": 5},
+                        {"sql": "select failed", "datasource_id": 5},
+                    ]
+                }
+            },
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert [item["status"] for item in result["results"]] == [
+        "succeeded",
+        "failed",
+    ]
+    assert result["error_code"] == "sql_execute_error"
 
 
 def test_sql_adapter_keeps_only_sample_rows_for_large_result():
@@ -863,15 +1047,11 @@ def test_sql_adapter_returns_failed_result_when_execute_tool_fails():
         }
     )
 
-    assert result == {
-        "status": "failed",
-        "rows": [],
-        "row_count": 0,
-        "fields": [],
-        "execution_ms": 0,
-        "error_code": "sql_execute_error",
-        "message": "table not found",
-    }
+    assert result["status"] == "failed"
+    assert result["rows"] == []
+    assert result["error_code"] == "sql_execute_error"
+    assert result["message"] == "table not found"
+    assert result["results"][0]["status"] == "failed"
 
 
 def test_sql_adapter_does_not_execute_sql_when_permission_denied():
@@ -890,15 +1070,11 @@ def test_sql_adapter_does_not_execute_sql_when_permission_denied():
     )
 
     assert execute_tool.payloads == []
-    assert result == {
-        "status": "failed",
-        "rows": [],
-        "row_count": 0,
-        "fields": [],
-        "execution_ms": 0,
-        "error_code": "permission_denied",
-        "message": "没有数据源权限",
-    }
+    assert result["status"] == "failed"
+    assert result["rows"] == []
+    assert result["error_code"] == "permission_denied"
+    assert result["message"] == "没有数据源权限"
+    assert result["results"][0]["status"] == "failed"
 
 
 def test_sql_adapter_handles_sql_execution_error_with_repair_hint():

@@ -240,7 +240,7 @@ class SqlExecutionSucceededCondition:
     """SQL 执行成功后进入答案生成。"""
 
     def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
-        execution = context.variables.get("sql_execution") or context.variables.get("sql_result", {})
+        execution = _execution_context(context)
         matched = execution.get("status", "succeeded") == "succeeded"
         return ConditionDecision(
             matched=matched,
@@ -253,13 +253,24 @@ class SqlExecutionFailedCondition:
     """SQL 执行返回失败状态时进入异常处理。"""
 
     def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
-        execution = context.variables.get("sql_execution", {})
+        execution = _execution_context(context)
         matched = execution.get("status") == "failed"
         return ConditionDecision(
             matched=matched,
             reason_code="SQL_EXECUTION_FAILED" if matched else "SQL_EXECUTION_NOT_FAILED",
             reason_summary="SQL 执行失败" if matched else "SQL 执行未失败",
         )
+
+
+def _execution_context(context: WorkflowContext) -> dict:
+    standard = context.variables.get("execution")
+    if isinstance(standard, dict) and standard:
+        return standard
+    legacy = context.variables.get("sql_execution")
+    if isinstance(legacy, dict):
+        return legacy
+    fallback = context.variables.get("sql_result")
+    return fallback if isinstance(fallback, dict) else {}
 
 
 class SqlErrorRetryableCondition:

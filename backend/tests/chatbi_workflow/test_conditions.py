@@ -1,6 +1,8 @@
 from apps.chatbi_workflow.conditions.core import (
     KnowledgeCrossModelCondition,
     SlotClarificationNeededCondition,
+    SqlExecutionFailedCondition,
+    SqlExecutionSucceededCondition,
 )
 from apps.workflow_engine.domain.context import WorkflowContext
 from apps.workflow_engine.domain.execution import NodeExecutionResult, NodeResultStatus
@@ -50,3 +52,16 @@ def test_knowledge_cross_model_condition_routes_to_split_confirmation():
 
     assert decision.matched is True
     assert decision.reason_code == "KNOWLEDGE_CROSS_MODEL"
+
+
+def test_sql_execution_conditions_prefer_standard_execution_domain():
+    context = WorkflowContext(
+        variables={
+            "execution": {"status": "succeeded"},
+            "sql_execution": {"status": "failed"},
+        }
+    )
+    result = NodeExecutionResult(status=NodeResultStatus.SUCCEEDED)
+
+    assert SqlExecutionSucceededCondition().evaluate(context, result).matched is True
+    assert SqlExecutionFailedCondition().evaluate(context, result).matched is False

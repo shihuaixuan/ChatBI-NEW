@@ -23,17 +23,20 @@ class ChatBIV1CapabilityNode:
         capability: str,
         output_path: str,
         output_model: type | None = None,
+        mirror_output_paths: tuple[str, ...] = (),
     ) -> None:
         self._gateway = gateway
         self._capability = capability
         self._output_path = output_path
         self._output_model = output_model
+        self._mirror_output_paths = mirror_output_paths
 
     def execute(self, request: NodeExecutionRequest) -> NodeExecutionResult:
         try:
             result = self._gateway.invoke(
                 self._capability,
                 {
+                    "run_id": request.run_id,
                     "request": request.context_view.get("request", {}),
                     "conversation": request.context_view.get("conversation", {}),
                     "variables": request.context_view.get("variables", {}),
@@ -44,9 +47,13 @@ class ChatBIV1CapabilityNode:
             )
             if self._output_model is not None:
                 result = self._output_model.model_validate(result).model_dump(mode="json")
+            set_values = {self._output_path: result}
+            set_values.update(
+                {path: result for path in self._mirror_output_paths}
+            )
             return NodeExecutionResult(
                 status=NodeResultStatus.SUCCEEDED,
-                patch=ContextPatch(set_values={self._output_path: result}),
+                patch=ContextPatch(set_values=set_values),
             )
         except Exception as exc:
             return NodeExecutionResult(
@@ -77,6 +84,7 @@ class ChatBIV1InteractionNode:
             spec = self._gateway.invoke(
                 self._capability,
                 {
+                    "run_id": request.run_id,
                     "request": request.context_view.get("request", {}),
                     "conversation": request.context_view.get("conversation", {}),
                     "variables": request.context_view.get("variables", {}),

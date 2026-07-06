@@ -71,3 +71,29 @@ def test_context_tolerates_missing_namespaces():
     assert ctx.dataset_id is None
     assert ctx.variables == {}
     assert ctx.question == ""
+
+
+def test_run_context_prefers_standard_execution_domain():
+    ctx = ChatBIRunContext(
+        _request(
+            variables={
+                "execution": {"status": "succeeded", "row_count": 2},
+                "sql_execution": {"status": "failed", "row_count": 0},
+            }
+        )
+    )
+
+    assert ctx.execution == {"status": "succeeded", "row_count": 2}
+    assert ctx.sql_execution == {"status": "succeeded", "row_count": 2}
+
+
+def test_run_context_falls_back_to_legacy_sql_execution_domain():
+    ctx = ChatBIRunContext(
+        _request(
+            variables={
+                "sql_execution": {"status": "succeeded", "row_count": 1}
+            }
+        )
+    )
+
+    assert ctx.execution == {"status": "succeeded", "row_count": 1}

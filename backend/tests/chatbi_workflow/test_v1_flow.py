@@ -310,6 +310,7 @@ def test_chatbi_v1_placeholder_main_path_executes_full_graph_to_final_reply():
         "answer.compose",
     ]
     assert outcome.context.variables["final_reply"]["final_answer"] == "这是图工作流占位回答：最近 7 天销售额"
+    assert outcome.context.variables["execution"] == outcome.context.variables["sql_execution"]
     assert outcome.context.variables["completed"] is True
 
 
