@@ -1,5 +1,5 @@
-from copy import deepcopy
 import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -40,11 +40,11 @@ from apps.headless.service import HeadlessSchemaBuilder
 from apps.workflow_engine.domain.context import ContextPatch
 from apps.workflow_engine.domain.interaction import InteractionRequest
 from apps.workflow_engine.domain.run import WorkflowRun
-from apps.workflow_engine.infrastructure.events.publisher import DatabaseEventPublisher
 from apps.workflow_engine.infrastructure.artifacts.file_store import (
     FileArtifactStore,
     SessionArtifactMetadataStore,
 )
+from apps.workflow_engine.infrastructure.events.publisher import DatabaseEventPublisher
 from apps.workflow_engine.infrastructure.persistence.interaction_manager import (
     DatabaseInteractionManager,
 )
@@ -409,7 +409,12 @@ def build_real_chatbi_v1_runtime(
     """组装真实 classify_question + 其他占位能力回退的 ChatBI v1 运行时。"""
 
     schema_builder = HeadlessSchemaBuilder(session)
-    session_factory = lambda: Session(engine)
+
+    def session_factory() -> Session:
+        """为并行执行与 artifact 元数据写入创建独立会话。"""
+
+        return Session(engine)
+
     artifact_root = Path(
         os.getenv(
             "SQLBOT_WORKFLOW_ARTIFACT_DIR",

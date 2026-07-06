@@ -49,7 +49,7 @@ class ChatBIV1CapabilityNode:
                 result = self._output_model.model_validate(result).model_dump(mode="json")
             set_values = {self._output_path: result}
             set_values.update(
-                {path: result for path in self._mirror_output_paths}
+                dict.fromkeys(self._mirror_output_paths, result)
             )
             return NodeExecutionResult(
                 status=NodeResultStatus.SUCCEEDED,

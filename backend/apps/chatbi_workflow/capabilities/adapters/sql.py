@@ -7,14 +7,14 @@ from apps.agentic_chat.strategies.sql_repair import SQLRepairStrategy
 from apps.agentic_chat.tools.sql_executor import SqlExecuteTool
 from apps.agentic_chat.tools.sql_validator import SqlValidateTool
 from apps.chatbi_workflow.capabilities import planning
+from apps.chatbi_workflow.capabilities.adapters.permission import PermissionAdapter
+from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
 from apps.chatbi_workflow.capabilities.execution import (
     ExecutionQuery,
     ExecutionResult,
     ResultArtifactStore,
     build_execution_output,
 )
-from apps.chatbi_workflow.capabilities.adapters.permission import PermissionAdapter
-from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
 from apps.headless.service import HeadlessSchemaBuilder
 from apps.headless.sql_compiler import (
     SemanticSQLCompiler,
@@ -300,7 +300,7 @@ class SqlAdapter:
             ]
             results = [
                 self._completed_future_result(query, future)
-                for query, future in zip(queries, futures)
+                for query, future in zip(queries, futures, strict=True)
             ]
         return build_execution_output(queries, results)
 

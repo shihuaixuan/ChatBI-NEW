@@ -33,6 +33,7 @@ from apps.workflow_engine.api import service as graph_service
 from apps.workflow_engine.infrastructure.persistence.models import (
     InteractionRequestModel,
     NodeExecutionModel,
+    WorkflowArtifactModel,
     WorkflowEventModel,
     WorkflowRunModel,
 )
@@ -65,7 +66,7 @@ def _fake_chatbi_v1_sql_execute_tool(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _fake_chatbi_v1_question_model(monkeypatch):
+def _fake_chatbi_v1_question_model(monkeypatch, tmp_path):
     class FakeQuestionModelClient:
         def __call__(self, prompt):
             user_prompt = getattr(prompt, "user_prompt", "")
@@ -84,13 +85,19 @@ def _fake_chatbi_v1_question_model(monkeypatch):
                 return '{"intent_type":"metric_query","confidence":0.9,"ambiguous_slots":[],"conflict_slots":[]}'
             return '{"category":"data","reason":"测试模型分类为数据问题","risk_level":"low","confidence":0.9}'
 
+    class FailingAnswerModelClient:
+        def __call__(self, prompt):
+            raise RuntimeError("answer model unavailable")
+
     def build_runtime(session, commit_events: bool = False):
         return chatbi_runtime.build_real_chatbi_v1_runtime(
             session,
             question_model_client=FakeQuestionModelClient(),
+            answer_model_client=FailingAnswerModelClient(),
             commit_events=commit_events,
         )
 
+    monkeypatch.setenv("SQLBOT_WORKFLOW_ARTIFACT_DIR", str(tmp_path / "artifacts"))
     monkeypatch.setattr(graph_service, "build_real_chatbi_v1_runtime", build_runtime)
 
 
@@ -106,6 +113,7 @@ def _client(user=None) -> TestClient:
 
 
 def _cleanup(session: Session) -> None:
+    session.execute(delete(WorkflowArtifactModel).where(WorkflowArtifactModel.run_id.like("api-%")))
     session.execute(delete(InteractionRequestModel).where(InteractionRequestModel.run_id.like("api-%")))
     session.execute(delete(NodeExecutionModel).where(NodeExecutionModel.run_id.like("api-%")))
     session.execute(delete(WorkflowEventModel).where(WorkflowEventModel.run_id.like("api-%")))
@@ -277,6 +285,7 @@ def test_graph_query_creates_run_and_executes_placeholder_chatbi_graph():
             "user_id": 501,
             "question": "最近 7 天销售额",
             "dataset_id": 7001,
+            "source_dataset_id": 7001,
             "datasource_id": 7001,
             "request_id": "api-request-1",
         }
@@ -534,10 +543,14 @@ def test_graph_v1_classification_model_failure_degrades_to_explanatory_answer(mo
         def __call__(self, prompt):
             raise RuntimeError("model unavailable")
 
-    def build_runtime(session):
+    def build_runtime(session, commit_events: bool = False):
         return chatbi_runtime.build_real_chatbi_v1_runtime(
             session,
             question_model_client=FailingQuestionModelClient(),
+            answer_model_client=lambda prompt: (_ for _ in ()).throw(
+                RuntimeError("answer model unavailable")
+            ),
+            commit_events=commit_events,
         )
 
     monkeypatch.setattr(graph_service, "build_real_chatbi_v1_runtime", build_runtime)
@@ -678,17 +691,66 @@ def test_graph_trace_returns_node_status_route_reason_and_outputs():
         "sql_redacted": True,
         "artifact_ref": None,
     }
-    assert nodes["execute_sql"]["output"] == {
+    assert {
+        key: nodes["execute_sql"]["output"][key]
+        for key in (
+            "status",
+            "query_count",
+            "row_count",
+            "fields",
+            "execution_ms",
+        )
+    } == {
         "status": "succeeded",
+        "query_count": 1,
         "row_count": 1,
         "fields": [],
         "execution_ms": 1,
-        "artifact_ref": None,
     }
+    assert len(nodes["execute_sql"]["output"]["artifact_refs"]) == 1
+    assert nodes["execute_sql"]["output"]["artifact_refs"][0]["artifact_id"].startswith(
+        "artifact-"
+    )
     assert nodes["compose_final_reply"]["output"]["final_answer"] == "暂时无法生成完整回答，请稍后重试。"
 
     with Session(engine) as session:
         _cleanup(session)
+
+
+def test_graph_trace_sanitizes_unified_split_execution_results():
+    with Session(engine) as session:
+        service = graph_service.GraphApiService(session)
+        output = service._sanitize_trace_output(
+            "execute_split_queries",
+            {
+                "status": "succeeded",
+                "row_count": 3,
+                "fields": ["value"],
+                "execution_ms": 8,
+                "results": [
+                    {
+                        "query_id": "query-0",
+                        "artifact_ref": {"artifact_id": "artifact-1"},
+                    },
+                    {
+                        "query_id": "query-1",
+                        "artifact_ref": {"artifact_id": "artifact-2"},
+                    },
+                ],
+            },
+        )
+
+    assert output == {
+        "status": "succeeded",
+        "query_count": 2,
+        "row_count": 3,
+        "fields": ["value"],
+        "execution_ms": 8,
+        "artifact_refs": [
+            {"artifact_id": "artifact-1"},
+            {"artifact_id": "artifact-2"},
+        ],
+    }
 
 
 def test_graph_query_persists_node_execution_summaries_for_trace_and_retry():
@@ -722,6 +784,7 @@ def test_graph_query_persists_node_execution_summaries_for_trace_and_retry():
             "draw_image_profile",
             "recognize_intent",
             "retrieve_knowledge",
+            "bind_query_plan",
             "generate_sql",
             "execute_sql",
             "generate_question_answer",

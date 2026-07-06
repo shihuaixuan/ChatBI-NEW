@@ -366,9 +366,14 @@ function graphNodeSummary(
     return rowCount !== undefined ? `返回 ${rowCount} 行` : ''
   }
   if (node.name === 'execute_split_queries') {
-    const queries = Array.isArray(output.rows) ? output.rows : []
+    const queries = Array.isArray(output.results)
+      ? output.results
+      : Array.isArray(output.rows)
+        ? output.rows
+        : []
     const rowCount = queries.reduce(
-      (total, query) => total + Number(query?.row_count ?? query?.rows?.length ?? 0),
+      (total, query) =>
+        total + Number(query?.row_count ?? query?.sample_rows?.length ?? query?.rows?.length ?? 0),
       0
     )
     return queries.length ? `${queries.length} 条查询，共返回 ${rowCount} 行` : ''
@@ -393,7 +398,10 @@ function graphNodeDetails(node: GraphTraceNodeLike): GraphWorkflowStepDetails | 
     return queries.length ? { queries } : undefined
   }
   if (node.name === 'execute_sql') {
-    const rows = normalizeRows(output.rows || output.data || output.result || output.records)
+    const result = Array.isArray(output.results) ? output.results[0] : undefined
+    const rows = normalizeRows(
+      result?.sample_rows || output.rows || output.data || output.result || output.records
+    )
     if (!rows.length) return undefined
     return {
       rows,
@@ -401,16 +409,27 @@ function graphNodeDetails(node: GraphTraceNodeLike): GraphWorkflowStepDetails | 
     }
   }
   if (node.name === 'execute_split_queries') {
-    const queries = normalizeSplitQueries(output.rows, 'rows')
+    const queries = Array.isArray(output.results)
+      ? normalizeExecutionResults(output.results)
+      : normalizeSplitQueries(output.rows, 'rows')
     return queries.length ? { queries } : undefined
   }
   return undefined
 }
 
-function normalizeSplitQueries(
-  value: any,
-  mode: 'sql' | 'rows'
-): GraphWorkflowQueryDetails[] {
+function normalizeExecutionResults(value: any): GraphWorkflowQueryDetails[] {
+  if (!Array.isArray(value)) return []
+  return value.map((result, index) => {
+    const rows = normalizeRows(result?.sample_rows)
+    return {
+      title: String(result?.query_id || `查询 ${index + 1}`),
+      rows,
+      columns: normalizeColumns(result?.fields, rows),
+    }
+  })
+}
+
+function normalizeSplitQueries(value: any, mode: 'sql' | 'rows'): GraphWorkflowQueryDetails[] {
   if (!Array.isArray(value)) return []
   const queries: GraphWorkflowQueryDetails[] = []
   value.forEach((query) => {

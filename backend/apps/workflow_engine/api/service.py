@@ -66,7 +66,8 @@ V1_TRACE_OUTPUT_PATHS = {
     "ask_metric_selection": ("control", "pending_interaction_id"),
     "bind_query_plan": ("variables", "plan"),
     "generate_sql": ("variables", "sql"),
-    "execute_sql": ("variables", "sql_execution"),
+    "execute_sql": ("variables", "execution"),
+    "execute_split_queries": ("variables", "execution"),
     "handle_sql_error": ("variables", "sql_error"),
     "generate_question_answer": ("variables", "answer"),
     "recommend_questions": ("variables", "recommendations"),
@@ -524,13 +525,28 @@ class GraphApiService:
                 "sql_redacted": True,
                 "artifact_ref": output.get("artifact_ref") if isinstance(output, dict) else None,
             }
-        if node_name == "execute_sql" and isinstance(output, dict):
+        if node_name in {"execute_sql", "execute_split_queries"} and isinstance(output, dict):
+            results = output.get("results")
+            if not isinstance(results, list):
+                results = []
+            artifact_refs = output.get("artifact_refs")
+            if not isinstance(artifact_refs, list):
+                artifact_refs = [
+                    item.get("artifact_ref")
+                    for item in results
+                    if isinstance(item, dict)
+                    and isinstance(item.get("artifact_ref"), dict)
+                ]
+            query_count = len(results)
+            if query_count == 0 and node_name == "execute_sql":
+                query_count = 1
             return {
                 "status": output.get("status"),
+                "query_count": query_count,
                 "row_count": output.get("row_count", 0),
                 "fields": output.get("fields", []),
                 "execution_ms": output.get("execution_ms", 0),
-                "artifact_ref": output.get("artifact_ref"),
+                "artifact_refs": artifact_refs,
             }
         return output
 
