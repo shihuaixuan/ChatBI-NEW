@@ -1,7 +1,20 @@
+from apps.chatbi_workflow.capabilities.interactions import (
+    CHATBI_V1_INTERACTION_SPECS,
+    read_interaction_response,
+)
 from apps.workflow_engine.domain.context import WorkflowContext
 from apps.workflow_engine.domain.execution import NodeExecutionResult
 from apps.workflow_engine.registry.condition_registry import ConditionRegistry
 from apps.workflow_engine.runtime.router import ConditionDecision
+
+
+def _all_interaction_responses(variables: dict) -> list[dict]:
+    """按标准域优先、旧字段回退枚举所有 ChatBI v1 交互回答。"""
+
+    return [
+        read_interaction_response(variables, spec.node_name, spec.legacy_key)
+        for spec in CHATBI_V1_INTERACTION_SPECS.values()
+    ]
 
 
 class SqlValidCondition:
@@ -108,7 +121,7 @@ class SlotClarificationNeededCondition:
 
     def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
         variables = context.variables
-        slot_response = variables.get("slot_response")
+        slot_response = read_interaction_response(variables, "ask_slot_clarification", "slot_response")
         if isinstance(slot_response, dict) and slot_response.get("skipped") is not True:
             return ConditionDecision(
                 matched=False,
@@ -186,13 +199,7 @@ class InteractionAnsweredCondition:
         variables = context.variables
         matched = any(
             value
-            for value in (
-                variables.get("rewrite_response"),
-                variables.get("intent_response"),
-                variables.get("metric_selection"),
-                variables.get("slot_response"),
-                variables.get("cross_model_response"),
-            )
+            for value in _all_interaction_responses(variables)
             if not (isinstance(value, dict) and value.get("skipped") is True)
         )
         return ConditionDecision(
@@ -206,14 +213,7 @@ class InteractionSkippedCondition:
     """用户显式跳过澄清时进入兜底回复。"""
 
     def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
-        variables = context.variables
-        responses = [
-            variables.get("rewrite_response"),
-            variables.get("intent_response"),
-            variables.get("metric_selection"),
-            variables.get("slot_response"),
-            variables.get("cross_model_response"),
-        ]
+        responses = _all_interaction_responses(context.variables)
         matched = any(isinstance(value, dict) and value.get("skipped") is True for value in responses)
         return ConditionDecision(
             matched=matched,
@@ -226,7 +226,7 @@ class CrossModelSplitRequestedCondition:
     """用户确认拆分跨模型查询时进入分步执行节点。"""
 
     def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
-        response = context.variables.get("cross_model_response")
+        response = read_interaction_response(context.variables, "ask_cross_model_split", "cross_model_response")
         action = response.get("cross_model_action") if isinstance(response, dict) else None
         matched = action == "split"
         return ConditionDecision(
@@ -326,12 +326,13 @@ class InteractionResponseAnsweredCondition:
     避免早前交互的残留回答污染后续交互节点的路由（多轮澄清中"跳过"失效）。
     """
 
-    def __init__(self, response_key: str, label: str) -> None:
-        self._response_key = response_key
+    def __init__(self, node_name: str, legacy_key: str, label: str) -> None:
+        self._node_name = node_name
+        self._legacy_key = legacy_key
         self._label = label
 
     def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
-        value = context.variables.get(self._response_key)
+        value = read_interaction_response(context.variables, self._node_name, self._legacy_key)
         skipped = isinstance(value, dict) and value.get("skipped") is True
         matched = bool(value) and not skipped
         return ConditionDecision(
@@ -344,12 +345,13 @@ class InteractionResponseAnsweredCondition:
 class InteractionResponseSkippedCondition:
     """指定交互节点被用户显式跳过时命中。"""
 
-    def __init__(self, response_key: str, label: str) -> None:
-        self._response_key = response_key
+    def __init__(self, node_name: str, legacy_key: str, label: str) -> None:
+        self._node_name = node_name
+        self._legacy_key = legacy_key
         self._label = label
 
     def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
-        value = context.variables.get(self._response_key)
+        value = read_interaction_response(context.variables, self._node_name, self._legacy_key)
         matched = isinstance(value, dict) and value.get("skipped") is True
         return ConditionDecision(
             matched=matched,
@@ -421,22 +423,22 @@ def register_chatbi_conditions(registry: ConditionRegistry) -> None:
     registry.register("node.degraded", NodeDegradedCondition())
     registry.register("plan.infeasible", PlanInfeasibleCondition())
 
-    # 交互回答的作用域化条件：每个交互节点只消费自己的回答。
-    scoped_responses = {
-        "rewrite": ("rewrite_response", "补充问题澄清"),
-        "intent": ("intent_response", "分析方式澄清"),
-        "slot": ("slot_response", "槽位澄清"),
-        "metric": ("metric_selection", "指标选择"),
-        "cross_model": ("cross_model_response", "跨模型拆分确认"),
+    labels = {
+        "rewrite": "补充问题澄清",
+        "intent": "分析方式澄清",
+        "slot": "槽位澄清",
+        "metric": "指标选择",
+        "cross_model": "跨模型拆分确认",
     }
-    for name, (response_key, label) in scoped_responses.items():
+    for spec in CHATBI_V1_INTERACTION_SPECS.values():
+        label = labels[spec.name]
         registry.register(
-            f"interaction.{name}.answered",
-            InteractionResponseAnsweredCondition(response_key, label),
+            f"interaction.{spec.name}.answered",
+            InteractionResponseAnsweredCondition(spec.node_name, spec.legacy_key, label),
         )
         registry.register(
-            f"interaction.{name}.skipped",
-            InteractionResponseSkippedCondition(response_key, label),
+            f"interaction.{spec.name}.skipped",
+            InteractionResponseSkippedCondition(spec.node_name, spec.legacy_key, label),
         )
 
     # 澄清轮次门控：入口条件命中但轮次用尽时改走兜底回答。
@@ -448,11 +450,12 @@ def register_chatbi_conditions(registry: ConditionRegistry) -> None:
         "cross_model": (KnowledgeCrossModelCondition(), "ask_cross_model_split"),
     }
     for name, (inner, ask_node) in clarification_gates.items():
+        max_rounds = CHATBI_V1_INTERACTION_SPECS[ask_node].max_rounds
         registry.register(
             f"clarify.{name}.allowed",
-            ClarificationRoundGate(inner, ask_node, exhausted=False),
+            ClarificationRoundGate(inner, ask_node, max_rounds=max_rounds, exhausted=False),
         )
         registry.register(
             f"clarify.{name}.exhausted",
-            ClarificationRoundGate(inner, ask_node, exhausted=True),
+            ClarificationRoundGate(inner, ask_node, max_rounds=max_rounds, exhausted=True),
         )

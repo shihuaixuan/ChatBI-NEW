@@ -1,4 +1,5 @@
 from apps.chatbi_workflow.capabilities.gateway import ChatBICapabilityGateway
+from apps.chatbi_workflow.capabilities.interactions import CHATBI_V1_INTERACTION_SPECS
 from apps.chatbi_workflow.nodes.answer import FinishNode
 from apps.chatbi_workflow.nodes.v1 import (
     ChatBIV1CapabilityNode,
@@ -20,7 +21,21 @@ def _capability_node(name: str, handler: str) -> NodeDefinition:
 
 
 def _interaction_node(name: str, handler: str) -> NodeDefinition:
-    return NodeDefinition(name=name, type=NodeType.INTERACTION, handler=handler)
+    spec = CHATBI_V1_INTERACTION_SPECS[name]
+    return NodeDefinition(
+        name=name,
+        type=NodeType.INTERACTION,
+        handler=handler,
+        metadata={
+            "interaction": {
+                "name": spec.name,
+                "response_key": spec.legacy_key,
+                "standard_path": spec.standard_path,
+                "legacy_path": spec.legacy_path,
+                "max_rounds": spec.max_rounds,
+            }
+        },
+    )
 
 
 def build_chatbi_v1_definition() -> WorkflowDefinition:

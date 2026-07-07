@@ -84,3 +84,14 @@ def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions
         "sql.execution_succeeded",
         "sql.error_retryable",
     }
+
+
+def test_interaction_nodes_declare_standard_and_legacy_paths():
+    definition = build_chatbi_v1_definition()
+
+    metadata = definition.nodes["ask_metric_selection"].metadata["interaction"]
+
+    assert metadata["standard_path"] == "variables.interactions.ask_metric_selection"
+    assert metadata["legacy_path"] == "variables.metric_selection"
+    assert metadata["response_key"] == "metric_selection"
+    assert metadata["max_rounds"] == 2
