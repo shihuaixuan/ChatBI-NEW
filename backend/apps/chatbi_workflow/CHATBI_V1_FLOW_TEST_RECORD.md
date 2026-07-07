@@ -514,7 +514,7 @@ apps.datasource.crud.datasource
 - 指标歧义识别。
 - 指标选择交互。
 - 用户回答恢复。
-- 用户选择合并回 knowledge。
+- 用户选择由 QueryPlanBinder 绑定到 plan。
 - SQL 生成。
 - 第一阶段知识检索 rerank 单元测试：
   - “访问人数”完整短语优先。
@@ -572,3 +572,10 @@ execute_sql
 ```
 
 这样即使真实 datasource 当前不可用，v1 图也能形成稳定的生产闭环，而不是 run failed。
+
+## Step 4 交互子系统定稿记录
+
+- 用户回答同时写入标准 `variables.interactions.<ask_node>` 域和旧 response 字段。
+- ChatBI v1 runtime 不再使用业务级交互回答补丁器。
+- 槽位澄清由 knowledge 节点构造本地 intent 视图消费；指标选择由 QueryPlanBinder 绑定为 plan。
+- 作用域条件继续兼容旧 response 字段，保证历史 run 可读。

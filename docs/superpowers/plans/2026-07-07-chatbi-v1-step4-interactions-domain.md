@@ -31,7 +31,7 @@
 - Modify `backend/apps/chatbi_workflow/runtime.py`：移除 `ChatBIV1InteractionResponsePatcher` 类与注入。
 - Modify `backend/apps/chatbi_workflow/capabilities/adapters/knowledge.py`：在 retrieve 内使用 slot clarification response 构造本地 intent 视图。
 - Modify `backend/apps/chatbi_workflow/capabilities/planning.py`：在 QueryPlanBinder 内消费 metric selection response。
-- Modify `backend/apps/semantic/assets/quality_service.py`：修正 typos 命中的 `unparseable` 拼写。
+- Modify `backend/apps/semantic/assets/quality_service.py`：修正 typos 命中的 `unparsable` 拼写。
 - Modify `docs/chatbi-v1-graph-refactor-analysis-and-design.md`：实现完成后标记 Step 4 完成。
 - Tests under `backend/tests/chatbi_workflow` and `backend/tests/workflow_engine`：覆盖标准域、条件、resume、slot/metric 消费、runtime 不再注入 patcher。
 
@@ -1156,7 +1156,7 @@ issues.append(
 Search to ensure no old token remains:
 
 ```bash
-rg -n "sql_unparseable|unparseable" backend docs
+rg -n "sql_unparsable|unparsable" backend docs
 ```
 
 Expected: no output.
@@ -1231,4 +1231,3 @@ git push -u ChatBI-NEW codex/headless-dataset-chat
 ```
 
 Expected: local branch has no tracked changes before push; remote PR branch updates successfully.
-

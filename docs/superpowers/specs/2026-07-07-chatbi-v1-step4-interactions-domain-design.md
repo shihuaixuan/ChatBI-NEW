@@ -173,7 +173,7 @@ Step 4 的目标是把“交互回答是什么”和“业务如何消费回答�
 8. metric selection 在 `bind_query_plan` 内生成用户选中指标的 plan；
 9. metric selection 维度裁剪保持现有行为；
 10. `ChatBI v1` runtime 不再注入 `ChatBIV1InteractionResponsePatcher`；
-11. `Typos Check` 命中的 `unparseable` 拼写问题被修正；
+11. `Typos Check` 命中的 `unparsable` 拼写问题被修正；
 12. 相关 chatbi_workflow、workflow_engine 测试通过。
 
 验收时需确认 Step 3 的执行域、artifact、answer projection 测试不回归。
