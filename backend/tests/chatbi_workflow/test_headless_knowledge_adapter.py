@@ -2,6 +2,7 @@ from apps.chatbi_workflow.capabilities.adapters.knowledge import (
     CandidateGate,
     HeadlessKnowledgeAdapter,
 )
+from apps.chatbi_workflow.capabilities.interactions import apply_slot_response_to_intent
 from apps.headless.schemas import (
     DataSetSchema,
     SchemaElement,
@@ -42,6 +43,38 @@ class TextAwareSchemaMapper:
 class EmptyDocumentRetriever:
     def retrieve(self, query_text: str, schema: DataSetSchema, oid: int) -> dict[str, list[dict]]:
         return {"metrics": [], "dimensions": [], "values": [], "terms": []}
+
+
+def test_apply_slot_response_to_intent_sets_dimension_filter_value():
+    intent = {
+        "ambiguous_slots": ["dimension"],
+        "dimension_mentions": ["店铺"],
+        "dimension_slots": [
+            {"name": "店铺", "role": "filter", "value": None, "value_status": "not_provided"}
+        ],
+    }
+
+    updated = apply_slot_response_to_intent(
+        intent,
+        {"dimension_usage": "filter_value_required", "dimension_values": {"店铺": "店铺为1"}},
+    )
+
+    assert updated["ambiguous_slots"] == []
+    assert updated["dimension_slots"] == [
+        {"name": "店铺", "role": "filter", "value": "1", "value_status": "provided"}
+    ]
+    assert intent["dimension_slots"][0]["value"] is None
+
+
+def test_apply_slot_response_to_intent_sets_subject_domain():
+    updated = apply_slot_response_to_intent(
+        {"ambiguous_slots": ["subject_domain"]},
+        {"domain_id": "7", "domain_name": "交易域"},
+    )
+
+    assert updated["subject_domain"]["domain_id"] == 7
+    assert updated["subject_domain"]["domain_name"] == "交易域"
+    assert updated["ambiguous_slots"] == []
 
 
 def test_candidate_gate_keeps_one_metric_for_each_explicit_mention():
@@ -609,6 +642,83 @@ def test_headless_knowledge_adapter_binds_dimension_filter_from_intent_slot():
             "source": "intent_dimension_slot",
         }
     ]
+
+
+def test_headless_knowledge_adapter_consumes_standard_slot_interaction_response():
+    metric = SchemaElement(
+        data_set_id=20,
+        data_set_name="档口经营分析",
+        model=10,
+        id=100,
+        name="访问人数",
+        biz_name="visit_uv",
+        type="METRIC",
+        fields=["visit_uv"],
+    )
+    stall = SchemaElement(
+        data_set_id=20,
+        data_set_name="档口经营分析",
+        model=10,
+        id=200,
+        name="档口",
+        biz_name="stall_id",
+        type="DIMENSION",
+    )
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="档口经营分析",
+            id=20,
+            name="档口经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[{"id": 10, "name": "档口流量模型", "biz_name": "stall_traffic", "tableQuery": "stall_traffic_1d"}],
+        metrics=[metric],
+        dimensions=[stall],
+    )
+    adapter = HeadlessKnowledgeAdapter(
+        schema_builder=FakeHeadlessSchemaBuilder(schema),
+        schema_mapper=FakeSchemaMapper(
+            [
+                SchemaElementMatch(element=metric, similarity=0.96, detect_word="访问人数", word="访问人数"),
+                SchemaElementMatch(element=stall, similarity=0.96, detect_word="档口", word="档口"),
+            ]
+        ),
+    )
+
+    result = adapter.retrieve(
+        {
+            "request": {"question": "今天档口的访问人数", "dataset_id": 20, "tenant_id": 10, "user_id": 20},
+            "variables": {
+                "rewrite": {"rewritten_question": "今天档口的访问人数"},
+                "intent": {
+                    "intent_type": "metric_query",
+                    "metric_mentions": ["访问人数"],
+                    "dimension_mentions": ["档口"],
+                    "dimension_slots": [
+                        {"name": "档口", "role": "filter", "value": None, "value_status": "not_provided"}
+                    ],
+                    "ambiguous_slots": ["dimension"],
+                    "required_slot_types": ["metric"],
+                },
+                "interactions": {
+                    "ask_slot_clarification": {
+                        "node_name": "ask_slot_clarification",
+                        "round": 1,
+                        "response": {
+                            "dimension_usage": "filter_value_required",
+                            "dimension_values": {"档口": "档口为1"},
+                        },
+                        "skipped": False,
+                    }
+                },
+            },
+        }
+    )
+
+    assert result["hit"] is True
+    assert result["slot_bindings"]["filters"][0]["value"] == "1"
 
 
 def test_headless_knowledge_adapter_binds_dimension_filter_from_filter_mentions():

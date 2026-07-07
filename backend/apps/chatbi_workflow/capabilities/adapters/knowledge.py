@@ -6,6 +6,7 @@ from apps.chatbi_workflow.capabilities.adapters.time_slots import (
     normalize_time_range_payload,
 )
 from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
+from apps.chatbi_workflow.capabilities.interactions import apply_slot_response_to_intent
 from apps.headless.asset_document import HeadlessAssetDocumentBuilder
 from apps.headless.metric_embedding import (
     EmbeddingProvider,
@@ -155,7 +156,7 @@ class HeadlessKnowledgeAdapter:
             return self._missed(dataset_id, "missing_question_or_dataset")
 
         schema = self._schema_builder.build_dataset_schema(ctx.tenant_id, dataset_id)
-        intent = ctx.intent
+        intent = apply_slot_response_to_intent(ctx.intent, ctx.slot_response)
         subject_domain = self._selected_subject_domain(schema, intent)
         retrieval_schema = self._schema_scoped_by_subject_domain(schema, subject_domain)
         candidate_groups = self._retrieve_candidate_groups(question, intent, retrieval_schema, ctx.tenant_id)

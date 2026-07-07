@@ -74,8 +74,6 @@ class ChatBIV1InteractionResponsePatcher:
         interaction: InteractionRequest,
         response: dict[str, Any],
     ) -> ContextPatch | None:
-        if interaction.node_name == "ask_slot_clarification":
-            return self._patch_slot_clarification(run, response)
         if interaction.node_name != "ask_metric_selection":
             return None
         if response.get("skipped") is True:

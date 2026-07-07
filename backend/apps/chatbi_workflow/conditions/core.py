@@ -122,7 +122,7 @@ class SlotClarificationNeededCondition:
     def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
         variables = context.variables
         slot_response = read_interaction_response(variables, "ask_slot_clarification", "slot_response")
-        if isinstance(slot_response, dict) and slot_response.get("skipped") is not True:
+        if slot_response and slot_response.get("skipped") is not True:
             return ConditionDecision(
                 matched=False,
                 reason_code="SLOT_CLARIFICATION_ANSWERED",

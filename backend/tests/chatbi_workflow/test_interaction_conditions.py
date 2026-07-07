@@ -3,6 +3,7 @@ from apps.chatbi_workflow.conditions.core import (
     InteractionResponseAnsweredCondition,
     InteractionResponseSkippedCondition,
     InteractionSkippedCondition,
+    SlotClarificationNeededCondition,
 )
 from apps.workflow_engine.domain.context import WorkflowContext
 from apps.workflow_engine.domain.execution import NodeExecutionResult, NodeResultStatus
@@ -70,3 +71,22 @@ def test_scoped_interaction_condition_prefers_standard_domain():
 
     assert answered.matched is True
     assert skipped.matched is False
+
+
+def test_slot_clarification_needed_matches_before_user_response():
+    context = WorkflowContext(
+        variables={
+            "intent": {
+                "validation": {
+                    "clarification_required": True,
+                    "slot_issues": [{"slot_type": "dimension_value"}],
+                }
+            }
+        }
+    )
+    result = NodeExecutionResult(status=NodeResultStatus.SUCCEEDED)
+
+    decision = SlotClarificationNeededCondition().evaluate(context, result)
+
+    assert decision.matched is True
+    assert decision.reason_code == "SLOT_CLARIFICATION_NEEDED"
