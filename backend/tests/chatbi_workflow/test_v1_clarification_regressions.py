@@ -9,7 +9,6 @@
 
 from datetime import timedelta
 
-from apps.chatbi_workflow import runtime as chatbi_runtime
 from apps.chatbi_workflow.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
@@ -80,7 +79,6 @@ def _runtime(gateway: TrackingGateway) -> tuple[GraphRuntime, InMemoryRunStore]:
         checkpoint_manager=CheckpointManager(store, events),
         lease=InMemoryRunLease(),
         interaction_manager=InteractionManager(),
-        interaction_response_patcher=chatbi_runtime.ChatBIV1InteractionResponsePatcher(),
     )
     return runtime, store
 

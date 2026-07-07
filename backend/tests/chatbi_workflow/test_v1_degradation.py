@@ -6,7 +6,6 @@ run.failed 事件，图中的 generate_question_answer 兜底节点永远走不�
 把流程路由到解释性回答，Run 正常完成。
 """
 
-from apps.chatbi_workflow import runtime as chatbi_runtime
 from apps.chatbi_workflow.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
@@ -65,7 +64,6 @@ def _run(gateway: FailingCapabilityGateway, question: str = "最近 7 天销售�
         checkpoint_manager=CheckpointManager(store, InMemoryEventPublisher()),
         lease=InMemoryRunLease(),
         interaction_manager=InteractionManager(),
-        interaction_response_patcher=chatbi_runtime.ChatBIV1InteractionResponsePatcher(),
     )
     runtime.create_run(
         "chatbi-v1-degrade",

@@ -45,7 +45,7 @@ ChatBIV1CapabilityNode
 | `recognize_intent` | `intent.recognize` | 已接入 `QuestionAdapter`：大模型结构化意图识别，失败时规则兜底 | 后续可接 `QueryUnderstandingService` 的 intent、confidence、slot issues |
 | `ask_intent_clarification` | `interaction.ask_intent_clarification` | 已接入 `InteractionAdapter`：根据低置信度/歧义/冲突生成意图澄清选项 | 后续可根据数据集能力动态裁剪意图选项 |
 | `retrieve_knowledge` | `knowledge.retrieve` | 已接入 `HeadlessKnowledgeAdapter`：基于 `dataset_id` 加载 Headless schema，做 schema mapper + asset document top-k 检索 + `CandidateGate` 判定 | 已能输出真实候选、slot bindings、metric ambiguity；异常不再 fallback 到 placeholder |
-| `ask_metric_selection` | `interaction.ask_metric_selection` | 已接入 `InteractionAdapter`：从 knowledge ambiguity 或 candidate groups 生成指标选择项 | 已和 interaction response patcher 打通，用户选择可合并回 knowledge |
+| `ask_metric_selection` | `interaction.ask_metric_selection` | 已接入 `InteractionAdapter`：从 knowledge ambiguity 或 candidate groups 生成指标选择项 | 用户回答写入标准 `interactions` 域，由 `QueryPlanBinder` 收敛为 plan |
 | `generate_sql` | `sql.generate` | 已接入 `SqlAdapter.generate()`：基于 `dataset_id` 加载 Headless schema，并复用 `SemanticSQLCompiler` 生成 SQL | 后续补 SQL validator、fallback schema generator、生成失败分支 |
 | `execute_sql` | `sql.execute` | 已接入 `SqlAdapter.execute()`：复用 `SqlExecuteTool` 执行 SQL，并只保留 sample rows、row_count、fields | 后续补真实 artifact 存储和更细错误分类 |
 | `handle_sql_error` | `sql.handle_error` | 已接入 `SqlAdapter.handle_error()`：归一化 SQL 执行错误，并通过 `SQLRepairStrategy` 输出 repair hint/plan | `regenerate_sql` 计划已通过图边回到 `generate_sql`，由 `max_loop_iterations` 控制重试上限 |
@@ -548,14 +548,10 @@ question.recommend -> RecommendationAdapter
 - 已由 `InteractionAdapter.ask_metric_selection()` 接入。
 - 从 `variables.knowledge.ambiguities` 生成 options，优先使用 `display_name/name/biz_name/title` 展示，值使用 `asset_id/biz_name`。
 - 当 ambiguity candidates 为空但 `variables.knowledge.candidate_groups.metrics` 有候选时，回退使用 candidate groups 前 5 个指标候选。
-- 回答写入 `variables.metric_selection`。
-- 恢复时通过 ChatBI v1 的 interaction response patcher 把用户选择合并回 `variables.knowledge`：
-  - `status` 改为 `hit`，`ambiguities` 清空。
-  - `metrics` 改为用户确认的单一指标。
-  - `selected_assets.metrics` 写入用户确认的指标资产。
-  - `slot_bindings.metrics` 写入 `source=user_selected`、`confidence=1.0` 的绑定结果。
-  - `decision.status` 改为 `user_selected`。
-- 恢复后直接进入 `generate_sql`，不必重新检索知识，除非用户选择了“其他，请补充”。
+- 回答同时写入 `variables.interactions.ask_metric_selection.response` 与旧兼容字段 `variables.metric_selection`。
+- `variables.knowledge` 保持检索节点输出，不在恢复阶段改写。
+- 恢复后直接进入 `bind_query_plan`，由 `QueryPlanBinder` 根据用户选择把单一指标绑定到 `variables.plan.metrics`。
+- 除非用户选择了“其他，请补充”，否则不必重新检索知识。
 
 ### 5.11 `generate_sql`
 
@@ -772,7 +768,7 @@ question.recommend -> RecommendationAdapter
 - `CandidateGate` 判定 hit/missed/metric_ambiguous
 - runtime 注入 `HeadlessSchemaBuilder(session)`
 - 真实 knowledge 异常不 fallback 到 placeholder
-- 用户完成 `ask_metric_selection` 后，已通过 v1 interaction response patcher 合并回 `selected_assets.metrics`
+- 用户完成 `ask_metric_selection` 后，由 `QueryPlanBinder` 将回答收敛为 `plan.metrics`
 
 下一步目标能力：
 

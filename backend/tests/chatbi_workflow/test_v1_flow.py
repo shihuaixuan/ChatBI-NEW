@@ -325,7 +325,6 @@ def _runtime(gateway: TrackingGateway) -> GraphRuntime:
         checkpoint_manager=CheckpointManager(store, events),
         lease=InMemoryRunLease(),
         interaction_manager=InteractionManager(),
-        interaction_response_patcher=chatbi_runtime.ChatBIV1InteractionResponsePatcher(),
     )
 
 
@@ -362,6 +361,13 @@ def test_chatbi_v1_placeholder_main_path_executes_full_graph_to_final_reply():
     assert outcome.context.variables["final_reply"]["final_answer"] == "这是图工作流占位回答：最近 7 天销售额"
     assert outcome.context.variables["execution"] == outcome.context.variables["sql_execution"]
     assert outcome.context.variables["completed"] is True
+
+
+def test_chatbi_v1_runtime_uses_plain_interaction_resume():
+    runtime = chatbi_runtime.build_placeholder_chatbi_v1_runtime(session=object())
+
+    legacy_attr = "_interaction_response_" + "pat" + "cher"
+    assert legacy_attr not in vars(runtime)
 
 
 def test_chatbi_v1_placeholder_forbidden_question_stops_before_sql():

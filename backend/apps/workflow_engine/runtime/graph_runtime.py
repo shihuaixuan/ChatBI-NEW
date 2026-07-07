@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -27,8 +26,6 @@ from apps.workflow_engine.runtime.retry import RetryController
 from apps.workflow_engine.runtime.router import ConditionRouter
 from apps.workflow_engine.runtime.scheduler import NodeScheduler
 
-InteractionResponsePatcher = Callable[[WorkflowRun, InteractionRequest, dict[str, Any]], ContextPatch | None]
-
 
 class GraphRuntime:
     """单 Run、单活跃节点的同步图运行时。"""
@@ -44,7 +41,6 @@ class GraphRuntime:
         lease: InMemoryRunLease,
         retry_controller: RetryController | None = None,
         interaction_manager: InteractionManager | None = None,
-        interaction_response_patcher: InteractionResponsePatcher | None = None,
         node_execution_recorder: Any | None = None,
     ) -> None:
         self._registry = registry
@@ -56,7 +52,6 @@ class GraphRuntime:
         self._lease = lease
         self._retry = retry_controller or RetryController()
         self._interactions = interaction_manager
-        self._interaction_response_patcher = interaction_response_patcher
         self._node_executions = node_execution_recorder
 
     def create_run(
@@ -220,10 +215,6 @@ class GraphRuntime:
                 run.context,
                 ContextPatch(set_values=patch_values),
             )
-            if self._interaction_response_patcher is not None:
-                extra_patch = self._interaction_response_patcher(run, answered, response)
-                if extra_patch is not None:
-                    run.context = self._context_patcher.apply(run.context, extra_patch)
             definition = self._registry.get(run.definition_name, run.definition_version)
             current_node = definition.nodes[run.current_node]
             route = self._router.select(

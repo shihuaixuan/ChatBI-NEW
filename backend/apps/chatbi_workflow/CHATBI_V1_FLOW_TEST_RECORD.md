@@ -357,7 +357,8 @@ POST /graph/runs/flow-test-v1-current-1/interactions/515aff47-cfcb-4472-aff3-2dd
 }
 ```
 
-恢复后，`ChatBIV1InteractionResponsePatcher` 把用户选择合并回 `variables.knowledge`。
+恢复后，用户选择写入 `variables.interactions.ask_metric_selection.response` 与旧兼容字段
+`variables.metric_selection`；指标绑定由 `QueryPlanBinder` 收敛到 `variables.plan`。
 
 合并后的关键上下文：
 
