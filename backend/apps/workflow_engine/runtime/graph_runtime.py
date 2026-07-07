@@ -204,7 +204,18 @@ class GraphRuntime:
                 raise InteractionError("INTERACTION_NOT_FOUND", interaction_id)
 
             answered = self._interactions.answer(interaction_id, response)
-            patch_values = dict.fromkeys(answered.allowed_update_paths, response)
+            answered_at = datetime.now(timezone.utc)
+            round_count = int(run.context.control.loop_iterations.get(answered.node_name, 0) or 1)
+            patch_values = {
+                path: self._interaction_update_value(
+                    path=path,
+                    interaction=answered,
+                    response=response,
+                    round_count=round_count,
+                    answered_at=answered_at,
+                )
+                for path in answered.allowed_update_paths
+            }
             run.context = self._context_patcher.apply(
                 run.context,
                 ContextPatch(set_values=patch_values),
@@ -230,6 +241,27 @@ class GraphRuntime:
 
         # 释放恢复事务的 Lease 后再进入标准执行循环，避免同一进程自锁。
         return self.execute(run_id)
+
+    @staticmethod
+    def _interaction_update_value(
+        *,
+        path: str,
+        interaction: InteractionRequest,
+        response: dict[str, Any],
+        round_count: int,
+        answered_at: datetime,
+    ) -> dict[str, Any]:
+        """标准交互域写结构化记录；旧兼容路径继续写原始回答。"""
+
+        if not path.startswith("variables.interactions."):
+            return response
+        return {
+            "node_name": interaction.node_name,
+            "round": max(1, round_count),
+            "response": response,
+            "skipped": response.get("skipped") is True,
+            "answered_at": answered_at.isoformat(),
+        }
 
     def _execute_with_retry(self, run, node, default_policy) -> NodeExecutionResult:
         policy = node.retry_policy or default_policy

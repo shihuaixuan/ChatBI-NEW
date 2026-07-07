@@ -1,5 +1,6 @@
 
 from apps.chatbi_workflow.capabilities.gateway import ChatBICapabilityGateway
+from apps.chatbi_workflow.capabilities.interactions import standard_interaction_path
 from apps.workflow_engine.domain.context import ContextPatch
 from apps.workflow_engine.domain.errors import NodeError
 from apps.workflow_engine.domain.execution import (
@@ -93,11 +94,16 @@ class ChatBIV1InteractionNode:
                 },
                 request.idempotency_key,
             )
+            legacy_paths = spec.get("allowed_update_paths", [self._response_path])
+            allowed_update_paths = [standard_interaction_path(request.node_name)]
+            for path in legacy_paths:
+                if path not in allowed_update_paths:
+                    allowed_update_paths.append(path)
             interaction = {
                 "prompt": spec.get("prompt"),
                 "options": spec.get("options", []),
                 "response_schema": spec.get("response_schema", {"type": "object"}),
-                "allowed_update_paths": spec.get("allowed_update_paths", [self._response_path]),
+                "allowed_update_paths": allowed_update_paths,
             }
             return NodeExecutionResult(status=NodeResultStatus.WAITING_INPUT, interaction=interaction)
         except Exception as exc:

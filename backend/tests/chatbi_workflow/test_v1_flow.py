@@ -607,6 +607,10 @@ def test_chatbi_v1_placeholder_metric_selection_can_resume_to_success():
         {"label": "gross_profit", "value": "gross_profit"},
     ]
     assert resumed.status is RunStatus.SUCCEEDED
+    assert resumed.context.variables["metric_selection"] == {"metric": "sales_amount"}
+    assert resumed.context.variables["interactions"]["ask_metric_selection"]["response"] == {
+        "metric": "sales_amount"
+    }
     assert gateway.calls.count("knowledge.retrieve") == 1
     assert gateway.calls.index("sql.generate") > gateway.calls.index("interaction.ask_metric_selection")
     assert "sql.execute" in gateway.calls

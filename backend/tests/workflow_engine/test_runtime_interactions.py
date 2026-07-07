@@ -30,6 +30,9 @@ from apps.workflow_engine.runtime.scheduler import NodeScheduler
 
 
 class ClarificationHandler:
+    def __init__(self, allowed_update_paths: list[str] | None = None) -> None:
+        self._allowed_update_paths = allowed_update_paths or ["conversation.clarification"]
+
     def execute(self, request):
         return NodeExecutionResult(
             status=NodeResultStatus.WAITING_INPUT,
@@ -40,7 +43,7 @@ class ClarificationHandler:
                     "required": ["metric"],
                     "properties": {"metric": {"type": "string"}},
                 },
-                "allowed_update_paths": ["conversation.clarification"],
+                "allowed_update_paths": self._allowed_update_paths,
             },
         )
 
@@ -54,10 +57,14 @@ class FinishHandler:
         return NodeExecutionResult(status=NodeResultStatus.SUCCEEDED)
 
 
-def _runtime():
+def _runtime(
+    *,
+    interaction_node_name: str = "clarify",
+    allowed_update_paths: list[str] | None = None,
+):
     handlers = HandlerRegistry()
     finish = FinishHandler()
-    handlers.register("clarify", ClarificationHandler())
+    handlers.register("clarify", ClarificationHandler(allowed_update_paths))
     handlers.register("finish", finish)
     conditions = ConditionRegistry()
     registry = WorkflowRegistry(DefinitionValidator(handlers, conditions))
@@ -65,12 +72,16 @@ def _runtime():
         WorkflowDefinition(
             name="interaction",
             version="v1",
-            start_node="clarify",
+            start_node=interaction_node_name,
             nodes={
-                "clarify": NodeDefinition(name="clarify", type=NodeType.INTERACTION, handler="clarify"),
+                interaction_node_name: NodeDefinition(
+                    name=interaction_node_name,
+                    type=NodeType.INTERACTION,
+                    handler="clarify",
+                ),
                 "finish": NodeDefinition(name="finish", type=NodeType.TERMINAL, handler="finish"),
             },
-            edges=[EdgeDefinition(source="clarify", target="finish")],
+            edges=[EdgeDefinition(source=interaction_node_name, target="finish")],
             input_schema={},
             output_schema={},
         )
@@ -115,6 +126,40 @@ def test_runtime_pauses_and_resumes_same_run_from_server_selected_edge():
     assert store.get("run-interaction").context.conversation["clarification"] == {"metric": "revenue"}
     assert finish.inputs[-1]["conversation"]["clarification"] == {"metric": "revenue"}
     assert "run.resumed" in [event.event_type for event in events.list("run-interaction")]
+
+
+def test_resume_writes_structured_record_for_standard_interaction_path():
+    runtime, _, _, _, _ = _runtime(
+        interaction_node_name="ask_metric_selection",
+        allowed_update_paths=[
+            "variables.interactions.ask_metric_selection",
+            "variables.metric_selection",
+        ],
+    )
+    run = runtime.create_run(
+        "run-standard-interaction",
+        "interaction",
+        "v1",
+        WorkflowContext(request={"tenant_id": 1, "user_id": 7}),
+    )
+    waiting = runtime.execute(run.run_id)
+
+    outcome = runtime.resume(
+        waiting.run_id,
+        waiting.context.control.pending_interaction_id or "",
+        {"metric": "revenue"},
+        tenant_id=1,
+        user_id=7,
+    )
+
+    variables = outcome.context.variables
+    record = variables["interactions"]["ask_metric_selection"]
+    assert record["node_name"] == "ask_metric_selection"
+    assert record["round"] == 1
+    assert record["response"] == {"metric": "revenue"}
+    assert record["skipped"] is False
+    assert "answered_at" in record
+    assert variables["metric_selection"] == {"metric": "revenue"}
 
 
 def test_runtime_rejects_duplicate_invalid_and_wrong_user_responses():
