@@ -19,6 +19,10 @@ from __future__ import annotations
 from typing import Any
 
 from apps.chatbi_workflow.capabilities.context import ChatBIRunContext, int_or_none
+from apps.chatbi_workflow.capabilities.interactions import (
+    prune_dimensions_for_selected_metric,
+    selected_metric_from_response,
+)
 from apps.chatbi_workflow.schemas.v1 import QueryPlanOutput
 
 _TIME_GRAINS = {"day", "week", "month", "quarter", "year"}
@@ -254,6 +258,16 @@ class QueryPlanBinder:
             return self._infeasible("knowledge_missed", "知识检索未命中可用资产")
 
         slots = derive_semantic_slots(knowledge, intent)
+        selected_metric = selected_metric_from_response(knowledge, ctx.metric_selection)
+        if selected_metric is not None:
+            slots["metrics"] = [_selected_metric_slot(selected_metric)]
+            selected_assets = knowledge.get("selected_assets") if isinstance(knowledge.get("selected_assets"), dict) else {}
+            selected_assets = {**selected_assets, "metrics": [selected_metric]}
+            slots["dimensions"], slots["filters"] = prune_dimensions_for_selected_metric(
+                selected_assets,
+                slots,
+                intent,
+            )
         order, limit = derive_order_and_limit(intent, slots)
         filters = [*slots["filters"], *derive_value_filter_slots(knowledge, slots["filters"])]
         metrics = slots["metrics"]
@@ -280,3 +294,16 @@ class QueryPlanBinder:
             infeasible_reason=reason_code,
             issues=[{"type": reason_code, "reason": reason}],
         ).model_dump(mode="json")
+
+
+def _selected_metric_slot(metric: dict[str, Any]) -> dict[str, Any]:
+    slot = {
+        "asset_type": "METRIC",
+        "asset_id": metric.get("asset_id"),
+        "display_name": metric.get("display_name") or metric.get("name") or metric.get("biz_name"),
+        "operator": None,
+        "value": None,
+    }
+    if metric.get("model_id") is not None:
+        slot["model_id"] = metric["model_id"]
+    return slot

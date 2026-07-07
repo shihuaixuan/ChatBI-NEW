@@ -74,48 +74,7 @@ class ChatBIV1InteractionResponsePatcher:
         interaction: InteractionRequest,
         response: dict[str, Any],
     ) -> ContextPatch | None:
-        if interaction.node_name != "ask_metric_selection":
-            return None
-        if response.get("skipped") is True:
-            return None
-        selected_metric = response.get("metric") or response.get("metric_id") or response.get("asset_id")
-        if selected_metric in (None, ""):
-            return None
-        knowledge = deepcopy(run.context.variables.get("knowledge", {}))
-        candidate = self._find_metric_candidate(knowledge, selected_metric)
-        metric_asset = self._metric_asset(candidate, selected_metric)
-        metric_binding = {
-            **metric_asset,
-            "confidence": 1.0,
-        }
-        selected_assets = deepcopy(knowledge.get("selected_assets") or {})
-        selected_assets["metrics"] = [metric_asset]
-        slot_bindings = deepcopy(knowledge.get("slot_bindings") or {})
-        slot_bindings["metrics"] = [metric_binding]
-        intent = run.context.variables.get("intent") if isinstance(run.context.variables.get("intent"), dict) else {}
-        selected_assets, slot_bindings = self._prune_dimensions_after_metric_selection(
-            selected_assets,
-            slot_bindings,
-            intent,
-        )
-
-        knowledge.update(
-            {
-                "hit": True,
-                "status": "hit",
-                "metrics": [metric_asset["biz_name"]],
-                "dimensions": [item.get("biz_name") for item in selected_assets.get("dimensions", []) if item.get("biz_name")],
-                "ambiguities": [],
-                "selected_assets": selected_assets,
-                "slot_bindings": slot_bindings,
-                "decision": {
-                    "status": "user_selected",
-                    "strategy": "metric_selection",
-                    "reason": "用户已确认指标",
-                },
-            }
-        )
-        return ContextPatch(set_values={"variables.knowledge": knowledge})
+        return None
 
     @classmethod
     def _prune_dimensions_after_metric_selection(

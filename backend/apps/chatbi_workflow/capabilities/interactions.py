@@ -264,3 +264,172 @@ def _int_or_none(value: Any) -> int | None:
     if isinstance(value, str) and value.strip().isdigit():
         return int(value.strip())
     return None
+
+
+def selected_metric_from_response(
+    knowledge: dict[str, Any],
+    response: dict[str, Any],
+) -> dict[str, Any] | None:
+    """从用户指标选择回答中定位候选指标；返回副本，不改写 knowledge。"""
+
+    if not isinstance(knowledge, dict) or not isinstance(response, dict):
+        return None
+    if not response or response.get("skipped") is True:
+        return None
+    selected = _first_present(response, ("metric", "metric_id", "asset_id"))
+    if selected in (None, ""):
+        return None
+    selected_text = str(selected)
+    for candidate in _metric_candidates(knowledge):
+        if _candidate_matches(candidate, selected_text):
+            return _metric_asset(candidate, selected)
+    return _metric_asset(selected, selected)
+
+
+def prune_dimensions_for_selected_metric(
+    selected_assets: dict[str, Any],
+    slots: dict[str, Any],
+    intent: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """按用户选中指标的模型裁剪分组维度；过滤条件保留给编译器处理。"""
+
+    dimensions = deepcopy(slots.get("dimensions")) if isinstance(slots.get("dimensions"), list) else []
+    filters = deepcopy(slots.get("filters")) if isinstance(slots.get("filters"), list) else []
+    metrics = _items(selected_assets.get("metrics"))
+    selected_model_ids = {item.get("model_id") for item in metrics if item.get("model_id") is not None}
+
+    dimension_models = {
+        item.get("asset_id"): item.get("model_id")
+        for item in _items(selected_assets.get("dimensions"))
+        if item.get("asset_id") is not None and item.get("model_id") is not None
+    }
+    dimension_assets = {
+        item.get("asset_id"): item
+        for item in _items(selected_assets.get("dimensions"))
+        if item.get("asset_id") is not None
+    }
+    requested_names = _requested_dimension_names(intent)
+    pruned_dimensions = []
+    for item in dimensions:
+        asset_id = item.get("asset_id")
+        model_id = dimension_models.get(asset_id)
+        if selected_model_ids and model_id is not None and model_id not in selected_model_ids:
+            continue
+        if requested_names and not _dimension_matches_any(dimension_assets.get(asset_id, item), requested_names):
+            continue
+        pruned_dimensions.append(item)
+    return pruned_dimensions, filters
+
+
+def _first_present(source: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        value = source.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _metric_candidates(knowledge: dict[str, Any]) -> list[Any]:
+    candidates: list[Any] = []
+    for ambiguity in knowledge.get("ambiguities", []) or []:
+        if isinstance(ambiguity, dict) and ambiguity.get("type") == "metric":
+            candidates.extend(ambiguity.get("candidates") or [])
+    groups = knowledge.get("candidate_groups")
+    if isinstance(groups, dict):
+        candidates.extend(groups.get("metrics") or [])
+    selected_assets = knowledge.get("selected_assets")
+    if isinstance(selected_assets, dict):
+        candidates.extend(selected_assets.get("metrics") or [])
+    slot_bindings = knowledge.get("slot_bindings")
+    if isinstance(slot_bindings, dict):
+        candidates.extend(slot_bindings.get("metrics") or [])
+    return candidates
+
+
+def _candidate_matches(candidate: Any, selected_text: str) -> bool:
+    if isinstance(candidate, dict):
+        values = (
+            candidate.get("asset_id"),
+            candidate.get("id"),
+            candidate.get("biz_name"),
+            candidate.get("display_name"),
+            candidate.get("name"),
+            candidate.get("title"),
+        )
+        return any(str(value) == selected_text for value in values if value not in (None, ""))
+    return str(candidate) == selected_text
+
+
+def _metric_asset(candidate: Any, selected_metric: Any) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        text = str(candidate)
+        return {
+            "asset_id": candidate,
+            "biz_name": text,
+            "display_name": text,
+            "source": "user_selected",
+        }
+    display_name = (
+        candidate.get("display_name")
+        or candidate.get("name")
+        or candidate.get("title")
+        or candidate.get("biz_name")
+        or str(selected_metric)
+    )
+    biz_name = candidate.get("biz_name") or str(candidate.get("asset_id") or selected_metric)
+    asset_id = candidate.get("asset_id") or candidate.get("id") or biz_name
+    asset = {
+        "asset_id": asset_id,
+        "biz_name": str(biz_name),
+        "display_name": str(display_name),
+        "source": "user_selected",
+    }
+    if candidate.get("model_id") is not None:
+        asset["model_id"] = candidate["model_id"]
+    if isinstance(candidate.get("payload"), dict):
+        asset["payload"] = deepcopy(candidate["payload"])
+    return asset
+
+
+def _items(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _requested_dimension_names(intent: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    if not isinstance(intent, dict):
+        return names
+    for slot in intent.get("dimension_slots") or []:
+        if not isinstance(slot, dict):
+            continue
+        if str(slot.get("role") or "").lower() not in {"group_by", "display"}:
+            continue
+        name = str(slot.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _dimension_matches_any(candidate: dict[str, Any], requested_names: list[str]) -> bool:
+    fields = [
+        candidate.get("display_name"),
+        candidate.get("name"),
+        candidate.get("biz_name"),
+        candidate.get("matched_text"),
+    ]
+    payload = candidate.get("payload") if isinstance(candidate.get("payload"), dict) else {}
+    fields.extend([payload.get("name"), payload.get("biz_name")])
+    aliases = payload.get("alias") or payload.get("aliases") or []
+    if isinstance(aliases, str):
+        aliases = [aliases]
+    fields.extend(aliases if isinstance(aliases, list) else [])
+    normalized_fields = [str(field or "").strip() for field in fields if str(field or "").strip()]
+    for name in requested_names:
+        normalized_name = str(name or "").strip()
+        if any(normalized_name in field or field in normalized_name for field in normalized_fields):
+            return True
+    return False

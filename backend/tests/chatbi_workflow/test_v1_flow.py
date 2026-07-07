@@ -1,10 +1,12 @@
-from datetime import datetime
-
 from apps.chatbi_workflow import runtime as chatbi_runtime
 from apps.chatbi_workflow.capabilities.adapters.knowledge import (
     HeadlessKnowledgeAdapter,
 )
-from apps.chatbi_workflow.capabilities.interactions import apply_slot_response_to_intent
+from apps.chatbi_workflow.capabilities.interactions import (
+    apply_slot_response_to_intent,
+    prune_dimensions_for_selected_metric,
+    selected_metric_from_response,
+)
 from apps.chatbi_workflow.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
@@ -21,8 +23,7 @@ from apps.headless.schemas import (
     SchemaMapInfo,
 )
 from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.domain.interaction import InteractionRequest
-from apps.workflow_engine.domain.run import RunStatus, WorkflowRun
+from apps.workflow_engine.domain.run import RunStatus
 from apps.workflow_engine.infrastructure.memory import (
     InMemoryEventPublisher,
     InMemoryRunStore,
@@ -107,6 +108,19 @@ class RealKnowledgeGateway(TrackingGateway):
         if capability == "knowledge.retrieve":
             return self._knowledge_adapter.retrieve(request)
         return PlaceholderChatBICapabilityGateway.invoke(self, capability, request, idempotency_key)
+
+
+class MetricSelectionPlanningGateway(TrackingGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self._plan_binder = QueryPlanBinder()
+
+    def invoke(self, capability: str, request: dict, idempotency_key: str) -> dict:
+        self.calls.append(capability)
+        if capability == "plan.bind":
+            return self._plan_binder.bind(request)
+        self.calls.pop()
+        return super().invoke(capability, request, idempotency_key)
 
 
 class DimensionAmbiguityGateway(TrackingGateway):
@@ -699,7 +713,7 @@ def test_chatbi_v1_subject_domain_clarification_can_resume_to_knowledge():
 
 
 def test_chatbi_v1_placeholder_metric_selection_can_resume_to_success():
-    gateway = TrackingGateway()
+    gateway = MetricSelectionPlanningGateway()
     runtime = _runtime(gateway)
     run = runtime.create_run(
         "chatbi-v1-metric-selection",
@@ -734,129 +748,93 @@ def test_chatbi_v1_placeholder_metric_selection_can_resume_to_success():
     assert gateway.calls.index("sql.generate") > gateway.calls.index("interaction.ask_metric_selection")
     assert "sql.execute" in gateway.calls
     knowledge = resumed.context.variables["knowledge"]
-    assert knowledge["status"] == "hit"
-    assert knowledge["metrics"] == ["sales_amount"]
-    assert knowledge["ambiguities"] == []
-    assert knowledge["selected_assets"]["metrics"] == [
-        {
-            "asset_id": "sales_amount",
-            "biz_name": "sales_amount",
-            "display_name": "sales_amount",
-            "source": "user_selected",
-        }
-    ]
-    assert knowledge["slot_bindings"]["metrics"] == [
-        {
-            "asset_id": "sales_amount",
-            "biz_name": "sales_amount",
-            "display_name": "sales_amount",
-            "confidence": 1.0,
-            "source": "user_selected",
-        }
-    ]
-    assert knowledge["decision"] == {
-        "status": "user_selected",
-        "strategy": "metric_selection",
-        "reason": "用户已确认指标",
+    assert knowledge["status"] == "metric_ambiguous"
+    assert knowledge["ambiguities"] == [{"type": "metric", "candidates": ["sales_amount", "gross_profit"]}]
+    plan = resumed.context.variables["plan"]
+    assert plan["status"] == "ready"
+    assert plan["metrics"][0]["asset_id"] == "sales_amount"
+
+
+def test_metric_selection_plan_keeps_plain_metric_query_filter_only_dimensions():
+    knowledge = {
+        "hit": True,
+        "status": "metric_ambiguous",
+        "ambiguities": [
+            {
+                "type": "metric",
+                "candidates": [
+                    {
+                        "asset_id": 239,
+                        "biz_name": "total_customer_cnt_online",
+                        "name": "总客户数-线上（累计）",
+                    }
+                ],
+            }
+        ],
+        "candidate_groups": {
+            "metrics": [
+                {
+                    "asset_id": 239,
+                    "biz_name": "total_customer_cnt_online",
+                    "name": "总客户数-线上（累计）",
+                }
+            ]
+        },
+        "selected_assets": {
+            "metrics": [],
+            "dimensions": [
+                {"asset_id": 254, "biz_name": "stall_id", "name": "店铺ID "},
+                {"asset_id": 255, "biz_name": "top10_contrib_customers", "name": "Top 10 贡献客户"},
+                {"asset_id": 252, "biz_name": "stat_date", "name": "时间"},
+            ],
+        },
+        "slot_bindings": {
+            "metrics": [],
+            "dimensions": [
+                {"asset_id": 254, "biz_name": "stall_id", "display_name": "店铺ID "},
+                {"asset_id": 255, "biz_name": "top10_contrib_customers", "display_name": "Top 10 贡献客户"},
+                {"asset_id": 252, "biz_name": "stat_date", "display_name": "时间"},
+            ],
+            "filters": [
+                {"asset_id": 254, "biz_name": "stall_id", "operator": "=", "value": "1"},
+                {
+                    "asset_id": 252,
+                    "biz_name": "stat_date",
+                    "operator": "=",
+                    "value": {"kind": "relative_date", "value": "today"},
+                },
+            ],
+        },
+    }
+    variables = {
+        "intent": {
+            "intent_type": "metric_query",
+            "query_shape": {"needs_group_by": False},
+            "dimension_slots": [{"name": "店铺", "role": "filter", "value": "1", "value_status": "provided"}],
+        },
+        "knowledge": knowledge,
+        "interactions": {
+            "ask_metric_selection": {
+                "node_name": "ask_metric_selection",
+                "round": 1,
+                "response": {"metric": 239},
+                "skipped": False,
+            }
+        },
     }
 
+    plan = QueryPlanBinder().bind({"request": {"question": "今天店铺1的线上客户数"}, "variables": variables})
 
-def test_metric_selection_patcher_prunes_non_query_dimensions_for_plain_metric_query():
-    now = datetime.now()
-    run = WorkflowRun(
-        run_id="run-1",
-        definition_name="chatbi",
-        definition_version="v1",
-        definition_digest="digest",
-        context=WorkflowContext(
-            request={"question": "今天店铺1的线上客户数", "dataset_id": 3, "tenant_id": 1, "user_id": 1},
-            variables={
-                "intent": {
-                    "intent_type": "metric_query",
-                    "query_shape": {"needs_group_by": False},
-                    "dimension_slots": [{"name": "店铺", "role": "filter", "value": "1", "value_status": "provided"}],
-                },
-                "knowledge": {
-                    "status": "metric_ambiguous",
-                    "ambiguities": [
-                        {
-                            "type": "metric",
-                            "candidates": [
-                                {
-                                    "asset_id": 239,
-                                    "biz_name": "total_customer_cnt_online",
-                                    "name": "总客户数-线上（累计）",
-                                }
-                            ],
-                        }
-                    ],
-                    "candidate_groups": {
-                        "metrics": [
-                            {
-                                "asset_id": 239,
-                                "biz_name": "total_customer_cnt_online",
-                                "name": "总客户数-线上（累计）",
-                            }
-                        ]
-                    },
-                    "selected_assets": {
-                        "metrics": [],
-                        "dimensions": [
-                            {"asset_id": 254, "biz_name": "stall_id", "name": "店铺ID "},
-                            {"asset_id": 255, "biz_name": "top10_contrib_customers", "name": "Top 10 贡献客户"},
-                            {"asset_id": 252, "biz_name": "stat_date", "name": "时间"},
-                        ],
-                    },
-                    "slot_bindings": {
-                        "metrics": [],
-                        "dimensions": [
-                            {"asset_id": 254, "biz_name": "stall_id", "display_name": "店铺ID "},
-                            {"asset_id": 255, "biz_name": "top10_contrib_customers", "display_name": "Top 10 贡献客户"},
-                            {"asset_id": 252, "biz_name": "stat_date", "display_name": "时间"},
-                        ],
-                        "filters": [
-                            {"asset_id": 254, "biz_name": "stall_id", "operator": "=", "value": "1"},
-                            {
-                                "asset_id": 252,
-                                "biz_name": "stat_date",
-                                "operator": "=",
-                                "value": {"kind": "relative_date", "value": "today"},
-                            },
-                        ],
-                    },
-                },
-            },
-        ),
-        created_at=now,
-        updated_at=now,
-    )
-    interaction = InteractionRequest(
-        interaction_id="interaction-1",
-        run_id="run-1",
-        node_name="ask_metric_selection",
-        response_schema={},
-        created_at=now,
-    )
-
-    patch = chatbi_runtime.ChatBIV1InteractionResponsePatcher()(run, interaction, {"metric": 239})
-
-    knowledge = patch.set_values["variables.knowledge"]
-    assert knowledge["selected_assets"]["metrics"] == [
-        {
-            "asset_id": 239,
-            "biz_name": "total_customer_cnt_online",
-            "display_name": "总客户数-线上（累计）",
-            "source": "user_selected",
-        }
-    ]
-    assert [item["asset_id"] for item in knowledge["selected_assets"]["dimensions"]] == [254, 252]
-    assert [item["asset_id"] for item in knowledge["slot_bindings"]["dimensions"]] == [254, 252]
-    assert knowledge["dimensions"] == ["stall_id", "stat_date"]
+    assert plan["status"] == "ready"
+    assert plan["metrics"][0]["asset_id"] == 239
+    assert plan["group_bys"] == []
+    assert [item["asset_id"] for item in plan["filters"]] == [254, 252]
+    assert knowledge["selected_assets"]["metrics"] == []
 
 
-def test_metric_selection_patcher_keeps_only_group_dimension_from_selected_metric_model():
+def test_metric_selection_prunes_group_dimension_to_selected_metric_model():
     selected_assets = {
-        "metrics": [],
+        "metrics": [{"asset_id": 269, "model_id": 246, "biz_name": "gmv_sale"}],
         "dimensions": [
             {
                 "asset_id": 278,
@@ -889,33 +867,46 @@ def test_metric_selection_patcher_keeps_only_group_dimension_from_selected_metri
         ],
         "filters": [],
     }
-    selected_assets["metrics"] = [{"asset_id": 269, "model_id": 246, "biz_name": "gmv_sale"}]
+    slots = {
+        "dimensions": [
+            {"asset_id": 278, "display_name": "档口ID", "biz_name": "stall_id"},
+            {"asset_id": 296, "display_name": "档口ID", "biz_name": "stall_id"},
+            {"asset_id": 277, "display_name": "商家ID", "biz_name": "seller_id"},
+        ],
+        "filters": [],
+    }
 
-    assets, bindings = chatbi_runtime.ChatBIV1InteractionResponsePatcher._prune_dimensions_after_metric_selection(
+    dimensions, filters = prune_dimensions_for_selected_metric(
         selected_assets,
-        slot_bindings,
+        slots,
         {
             "query_shape": {"needs_group_by": True},
             "dimension_slots": [{"name": "档口", "role": "group_by", "value_status": "not_provided"}],
         },
     )
 
-    assert [item["asset_id"] for item in assets["dimensions"]] == [278]
-    assert [item["asset_id"] for item in bindings["dimensions"]] == [278]
+    assert [item["asset_id"] for item in dimensions] == [278]
+    assert filters == []
+    assert [item["asset_id"] for item in slot_bindings["dimensions"]] == [278, 296, 277]
 
 
-def test_metric_selection_patcher_preserves_selected_metric_model_id():
-    patcher = chatbi_runtime.ChatBIV1InteractionResponsePatcher()
-
-    asset = patcher._metric_asset(
+def test_metric_selection_helper_preserves_selected_metric_model_id():
+    asset = selected_metric_from_response(
         {
-            "asset_id": 280,
-            "model_id": 248,
-            "biz_name": "stock_qty",
-            "name": "当前库存件数",
-            "payload": {"fields": ["stock_qty"]},
+            "hit": True,
+            "candidate_groups": {
+                "metrics": [
+                    {
+                        "asset_id": 280,
+                        "model_id": 248,
+                        "biz_name": "stock_qty",
+                        "name": "当前库存件数",
+                        "payload": {"fields": ["stock_qty"]},
+                    }
+                ]
+            },
         },
-        280,
+        {"metric": 280},
     )
 
     assert asset["model_id"] == 248

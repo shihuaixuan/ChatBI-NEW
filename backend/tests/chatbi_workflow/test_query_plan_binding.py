@@ -280,6 +280,57 @@ def test_binder_translates_value_assets_into_dimension_filters():
     assert "stall_traffic.city = '北京'" in sql
 
 
+def test_binder_uses_metric_selection_response_without_mutating_knowledge():
+    knowledge = {
+        "hit": True,
+        "status": "metric_ambiguous",
+        "ambiguities": [
+            {
+                "type": "metric",
+                "candidates": [
+                    {"asset_id": 100, "biz_name": "visit_uv", "name": "访问人数"},
+                    {"asset_id": 101, "biz_name": "order_cnt", "name": "订单数"},
+                ],
+            }
+        ],
+        "candidate_groups": {
+            "metrics": [
+                {"asset_id": 100, "biz_name": "visit_uv", "name": "访问人数"},
+                {"asset_id": 101, "biz_name": "order_cnt", "name": "订单数"},
+            ]
+        },
+        "selected_assets": {"metrics": [], "dimensions": [], "values": [], "terms": []},
+        "slot_bindings": {
+            "metrics": [],
+            "group_dimensions": [],
+            "time_filters": [],
+            "value_filters": [],
+            "dimension_filters": [],
+        },
+    }
+    variables = {
+        "knowledge": knowledge,
+        "intent": {"intent_type": "metric_query", "query_shape": {"select_mode": "aggregate"}},
+        "interactions": {
+            "ask_metric_selection": {
+                "node_name": "ask_metric_selection",
+                "round": 1,
+                "response": {"metric": 100},
+                "skipped": False,
+            }
+        },
+    }
+
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    assert plan["status"] == "ready"
+    assert plan["strategy"] == "semantic_compiler"
+    assert plan["metrics"] == [
+        {"asset_type": "METRIC", "asset_id": 100, "display_name": "访问人数", "operator": None, "value": None}
+    ]
+    assert knowledge["selected_assets"]["metrics"] == []
+
+
 def test_binder_marks_plan_infeasible_when_knowledge_missed():
     plan = QueryPlanBinder().bind(_request({"knowledge": {"hit": False, "status": "missed"}, "intent": {}}))
 
