@@ -1218,6 +1218,100 @@ def test_answer_projection_excludes_sql_candidates_and_full_result_rows():
     ]
 
 
+def test_answer_projection_calculates_share_analysis_rows():
+    projection = build_answer_projection(
+        _v1_request(
+            "各店铺访问人数占比",
+            variables={
+                "plan": {
+                    "status": "ready",
+                    "strategy": "multi_query",
+                    "sub_plans": [{"role": "part"}, {"role": "total"}],
+                },
+                "execution": {
+                    "status": "succeeded",
+                    "queries": [
+                        {"query_id": "query-0", "role": "part"},
+                        {"query_id": "query-1", "role": "total"},
+                    ],
+                    "results": [
+                        {
+                            "query_id": "query-0",
+                            "status": "succeeded",
+                            "fields": ["shop_name", "visit_uv"],
+                            "sample_rows": [
+                                {"shop_name": "A", "visit_uv": 30},
+                                {"shop_name": "B", "visit_uv": 70},
+                            ],
+                        },
+                        {
+                            "query_id": "query-1",
+                            "status": "succeeded",
+                            "fields": ["visit_uv"],
+                            "sample_rows": [{"visit_uv": 100}],
+                        },
+                    ],
+                },
+            },
+        )
+    )
+
+    assert projection["execution"]["analysis"] == {
+        "kind": "share",
+        "metric": "visit_uv",
+        "total": 100.0,
+        "rows": [
+            {"dimensions": {"shop_name": "A"}, "value": 30.0, "share": 0.3},
+            {"dimensions": {"shop_name": "B"}, "value": 70.0, "share": 0.7},
+        ],
+    }
+
+
+def test_answer_projection_calculates_comparison_delta():
+    projection = build_answer_projection(
+        _v1_request(
+            "本月访问人数环比",
+            variables={
+                "plan": {
+                    "status": "ready",
+                    "strategy": "multi_query",
+                    "sub_plans": [{"role": "current"}, {"role": "baseline"}],
+                },
+                "execution": {
+                    "status": "succeeded",
+                    "queries": [
+                        {"query_id": "query-0", "role": "current"},
+                        {"query_id": "query-1", "role": "baseline"},
+                    ],
+                    "results": [
+                        {
+                            "query_id": "query-0",
+                            "status": "succeeded",
+                            "fields": ["visit_uv"],
+                            "sample_rows": [{"visit_uv": 120}],
+                        },
+                        {
+                            "query_id": "query-1",
+                            "status": "succeeded",
+                            "fields": ["visit_uv"],
+                            "sample_rows": [{"visit_uv": 100}],
+                        },
+                    ],
+                },
+            },
+        )
+    )
+
+    assert projection["execution"]["analysis"] == {
+        "kind": "comparison",
+        "metric": "visit_uv",
+        "current": 120.0,
+        "baseline": 100.0,
+        "delta": 20.0,
+        "change_rate": 0.2,
+    }
+
+
 def test_answer_adapter_generates_answer_with_model_json():
     adapter = AnswerAdapter(
         model_client=FakeModelClient(

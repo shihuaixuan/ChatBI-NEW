@@ -303,6 +303,33 @@ class PlanInfeasibleCondition:
         )
 
 
+class PlanMultiQueryCondition:
+    """查询计划需要多查询执行时命中。"""
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        plan = context.variables.get("plan")
+        matched = isinstance(plan, dict) and plan.get("status") == "ready" and plan.get("strategy") == "multi_query"
+        return ConditionDecision(
+            matched=matched,
+            reason_code="PLAN_MULTI_QUERY" if matched else "PLAN_SINGLE_QUERY",
+            reason_summary="查询计划需要多查询执行" if matched else "查询计划不需要多查询执行",
+        )
+
+
+class ResultEmptyCondition:
+    """执行成功但没有返回数据时命中，交给回答节点生成解释和建议。"""
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        execution = _execution_context(context)
+        validation = execution.get("validation") if isinstance(execution.get("validation"), dict) else {}
+        matched = validation.get("status") == "empty"
+        return ConditionDecision(
+            matched=matched,
+            reason_code="RESULT_EMPTY" if matched else "RESULT_NOT_EMPTY",
+            reason_summary="查询结果为空" if matched else "查询结果非空或未判定为空",
+        )
+
+
 class NodeDegradedCondition:
     """任一能力节点发生业务失败（node_failure 已写入）时命中，转入解释性回答。"""
 
@@ -422,6 +449,8 @@ def register_chatbi_conditions(registry: ConditionRegistry) -> None:
     registry.register("sql.error_retryable", SqlErrorRetryableCondition())
     registry.register("node.degraded", NodeDegradedCondition())
     registry.register("plan.infeasible", PlanInfeasibleCondition())
+    registry.register("plan.multi_query", PlanMultiQueryCondition())
+    registry.register("result.empty", ResultEmptyCondition())
 
     labels = {
         "rewrite": "补充问题澄清",

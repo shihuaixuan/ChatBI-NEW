@@ -348,3 +348,176 @@ def test_sql_generate_rejects_infeasible_plan_explicitly():
 
     with pytest.raises(ValueError, match="QUERY_PLAN_INFEASIBLE"):
         _generate_sql(variables)
+
+
+def test_binder_sets_detail_select_mode_from_intent_shape():
+    case = GOLDEN_CASES["ranking_with_group_and_limit"]
+    variables = {
+        "knowledge": case["knowledge"],
+        "intent": {
+            "intent_type": "detail_query",
+            "query_shape": {"select_mode": "detail", "limit": 20},
+        },
+    }
+
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    assert plan["status"] == "ready"
+    assert plan["select_mode"] == "detail"
+    assert plan["limit"] == 20
+
+
+def test_binder_translates_metric_filter_mention_into_having():
+    case = GOLDEN_CASES["ranking_with_group_and_limit"]
+    variables = {
+        "knowledge": case["knowledge"],
+        "intent": {
+            "intent_type": "ranking_analysis",
+            "query_shape": {"needs_group_by": True},
+            "filter_mentions": [
+                {
+                    "target": "metric",
+                    "name": "访问人数",
+                    "operator": ">",
+                    "value": 100,
+                }
+            ],
+        },
+    }
+
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    assert plan["status"] == "ready"
+    assert plan["having"] == [
+        {
+            "asset_type": "METRIC",
+            "asset_id": 100,
+            "display_name": "访问人数",
+            "operator": ">",
+            "value": 100,
+        }
+    ]
+
+
+def test_plan_having_reaches_sql_generate():
+    case = GOLDEN_CASES["ranking_with_group_and_limit"]
+    variables = {
+        "knowledge": case["knowledge"],
+        "intent": {
+            "intent_type": "ranking_analysis",
+            "query_shape": {"needs_group_by": True},
+            "filter_mentions": [
+                {
+                    "target": "metric",
+                    "name": "访问人数",
+                    "operator": ">",
+                    "value": 100,
+                }
+            ],
+        },
+    }
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    sql = _generate_sql({**variables, "plan": plan})
+
+    assert "having sum(stall_traffic.visit_uv) > 100" in sql
+
+
+def test_binder_uses_capability_matrix_to_block_unsupported_intent():
+    case = GOLDEN_CASES["metric_with_time_filter"]
+    variables = {
+        "knowledge": case["knowledge"],
+        "intent": {
+            "intent_type": "anomaly_analysis",
+            "query_shape": {"select_mode": "aggregate"},
+        },
+    }
+
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    assert plan["status"] == "infeasible"
+    assert plan["strategy"] == "infeasible"
+    assert plan["infeasible_reason"] == "unsupported_intent_type"
+
+
+def test_binder_builds_share_multi_query_sub_plans():
+    case = GOLDEN_CASES["ranking_with_group_and_limit"]
+    variables = {
+        "knowledge": case["knowledge"],
+        "intent": {
+            "intent_type": "share_analysis",
+            "query_shape": {"select_mode": "share", "needs_group_by": True},
+        },
+    }
+
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    assert plan["status"] == "ready"
+    assert plan["strategy"] == "multi_query"
+    assert [item["role"] for item in plan["sub_plans"]] == ["part", "total"]
+    assert plan["sub_plans"][0]["slots"]["dimensions"]
+    assert plan["sub_plans"][1]["slots"]["dimensions"] == []
+
+
+def test_binder_builds_comparison_multi_query_sub_plans_for_current_period():
+    knowledge = {
+        "hit": True,
+        "status": "hit",
+        "slot_bindings": {
+            "metrics": [_metric_binding()],
+            "group_dimensions": [],
+            "time_filters": [
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": 200,
+                    "display_name": "统计日期",
+                    "biz_name": "stat_date",
+                    "operator": "=",
+                    "value": {"kind": "current_period", "unit": "month", "timezone": "Asia/Shanghai"},
+                }
+            ],
+            "value_filters": [],
+            "dimension_filters": [],
+        },
+        "selected_assets": {"metrics": [], "dimensions": [], "values": [], "terms": []},
+    }
+    variables = {
+        "knowledge": knowledge,
+        "intent": {
+            "intent_type": "comparison_analysis",
+            "query_shape": {"select_mode": "aggregate"},
+        },
+    }
+
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    assert plan["status"] == "ready"
+    assert plan["strategy"] == "multi_query"
+    assert [item["role"] for item in plan["sub_plans"]] == ["current", "baseline"]
+    baseline_time_filter = plan["sub_plans"][1]["slots"]["filters"][0]
+    assert baseline_time_filter["value"] == {
+        "kind": "previous_period",
+        "unit": "month",
+        "timezone": "Asia/Shanghai",
+    }
+
+
+def test_split_sql_generation_uses_query_plan_sub_plans():
+    case = GOLDEN_CASES["ranking_with_group_and_limit"]
+    variables = {
+        "knowledge": case["knowledge"],
+        "intent": {
+            "intent_type": "share_analysis",
+            "query_shape": {"select_mode": "share", "needs_group_by": True},
+        },
+    }
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    result = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(_schema())).generate_split(
+        _request({**variables, "plan": plan})
+    )
+
+    assert result["strategy"] == "semantic_sql_compiler"
+    assert [item["plan_ref"] for item in result["queries"]] == [0, 1]
+    assert "group by stall_traffic.shop_name" in result["queries"][0]["sql"]
+    assert "group by" not in result["queries"][1]["sql"]

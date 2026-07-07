@@ -424,7 +424,7 @@ Layer 0  headless/sql_compiler  句型扩展：六类时间结构渲染(A6)、�
 
 **5.3.6 观测与体积（落 C2/C4）**
 
-- 节点 metadata 声明 `public_summary_fields`（白名单投影），`_public_node_summary` 与 trace 共用同一投影——事件与 trace 的脱敏口径合一，SQL/数据行是否公开变成一处配置。
+- 节点 metadata 声明 `display.label`、`trace.output_path`、`trace.redaction`，事件公开摘要与 trace API 共用同一投影——事件与 trace 的脱敏口径合一，SQL/数据行是否公开变成一处配置。
 - `execution.results[].sample_rows_ref` 走 artifact 仓储（`ArtifactRepository` 已存在）；trace/前端按需取。
 - `RunScopedServices.schema(oid, dataset_id)`：Run 生命周期内缓存 DataSetSchema（修 C1），并作为所有 adapter 的注入来源。
 
@@ -437,8 +437,8 @@ Layer 0  headless/sql_compiler  句型扩展：六类时间结构渲染(A6)、�
 | **Step 2** 引入 QueryPlan | `bind_query_plan` 节点产出 `plan`（含 time.grain、VALUE→维度过滤翻译）；`sql.generate` 只读 plan；**编译器时间分桶（A7）+ sqlglot 方言渲染（C6）**；knowledge 输出瘦身（candidates 去 payload、删摘要字段）；保留一版 `slot_bindings` 双写供比对，验证后删除。**（已完成：planning.py + bind_query_plan 节点 + 编译器 time_bucket + candidate_groups 去 payload；golden 对比见 `test_query_plan_binding.py`。未尽事项：摘要字段与 selected_assets/ambiguities 的 payload 依赖 ResponsePatcher，随 Step 4 退役一并删除；slot_bindings 双写保留至 Step 4。）** | golden SQL 对比测试：旧可表达形态逐用例一致；趋势用例产出分桶 SQL |
 | **Step 3** 执行域统一 | `execution.queries[]/results[]` 单/拆分同构；拆分子查询并行执行；rows 走 artifact；answer 改读投影视图。**（已完成：标准域与 `sql_execution` 兼容镜像、文件正文 + DB 元数据 artifact store、有界并行与部分失败保留、answer projection、Trace/前端新结构优先；见 `test_execution_domain.py`、`test_file_artifact_store.py`、`test_sql_adapter.py`、`graphWorkflowDisplay.test.mjs`。）** | 跨模型用例回答与图表数据不回归；答案 prompt 不再包含全量 variables、SQL 与候选 payload |
 | **Step 4** 交互子系统定稿 | `interactions` 域 + 条件工厂 + ResponsePatcher 退役；澄清轮次进节点 metadata。**（已完成：标准 `variables.interactions.<ask_node>` 域、旧 response 字段兼容、slot/metric 回答改由消费节点处理、ChatBI runtime 不再注入 ResponsePatcher；见 `test_interactions_domain.py`、`test_interaction_conditions.py`、`test_v1_flow.py`。）** | 五类澄清 + 跳过 + 多轮组合的端到端测试 |
-| **Step 5** 校验、能力矩阵与覆盖闭环 | `validate_result` 节点 + 空结果路径；capability_matrix + strategy 分派；**比较/占比的多查询计划**（复用拆分执行）；plan.having + detail 模式；ChatBIConfig 收拢 B8 阈值；retry 改检查点恢复 | 覆盖矩阵中 6 类意图端到端正确；"环比/占比"产出确定性计算结果；不可行问题得到如实说明 |
-| **Step 6** 观测合一 | 节点 metadata（label/trace/脱敏）→ trace API 与前端派生；删除 V1_TRACE_OUTPUT_PATHS 与前端 GRAPH_NODE_LABELS 手抄表 | 跨模型节点在 trace 可见；前端零硬编码节点名 |
+| **Step 5** 校验、能力矩阵与覆盖闭环 | `validate_result` 节点 + 空结果路径；capability_matrix + strategy 分派；**比较/占比的多查询计划**（复用拆分执行）；plan.having + detail 模式；ChatBIConfig 收拢 B8 阈值；retry 改检查点恢复。**（已完成：`validate_result` 图节点与 `execution.validation` 双写；空结果 `result.empty` 路由；`QueryPlan` detail/HAVING；`share_analysis` part/total 与 `comparison_analysis` current/baseline 子计划；`generate_split_queries` 优先读取 `plan.sub_plans`；answer projection 确定性计算 share/comparison；`ChatBIConfig` 接入 SQL 执行与候选门控默认值；v1 retry 保留上下文并优先从 checkpoint 恢复。见 `test_execution_domain.py`、`test_query_plan_binding.py`、`test_semantic_sql_compiler.py`、`test_question_rewrite_and_answer_adapters.py`、`test_sql_adapter.py`、`test_v1_flow.py`、`test_graph_api.py`。）** | 覆盖矩阵中 6 类意图端到端正确；"环比/占比"产出确定性计算结果；不可行问题得到如实说明 |
+| **Step 6** 观测合一 | 节点 metadata（label/trace/脱敏）→ trace API 与前端派生；删除 V1_TRACE_OUTPUT_PATHS 与前端 GRAPH_NODE_LABELS 手抄表。**（已完成：v1/minimal-v1 节点 metadata 声明 display/trace/redaction；trace API 与 node.succeeded 事件共用 metadata 投影；前端优先读取后端 label，未知 label 退回节点名。见 `test_graph_api.py`、`graphWorkflowDisplay.test.mjs`。）** | 跨模型节点在 trace 可见；前端零硬编码节点名 |
 
 依赖关系：Step 0 完全独立；1→2→3 顺序执行；4、5 依赖 1；6 随时可做。P2 项（受约束宽表 LLM 回退、检索 embedding 化、多轮 conversation、模板策略实体化、资产建模 lint）在此骨架上另行立项。
 
@@ -474,3 +474,104 @@ Layer 0  headless/sql_compiler  句型扩展：六类时间结构渲染(A6)、�
 4. **重构主线**：以 QueryPlan 为中心重塑上下文（表达力 = 覆盖矩阵全集），以作用域化交互与降级链路修正控制流语义，以能力矩阵消灭静默降级，六步迁移每步可合入可回滚。
 
 建议的执行顺序：Step 0（A1-A4 + A6，含回归测试）先行单独提交评审，其余按 5.4 推进。
+
+---
+
+## 8. Step 3–5 实现审查（2026-07-07）
+
+对已标记"已完成"的 Step 3（执行域统一）、Step 4（交互子系统）、Step 5（校验/能力矩阵/多查询）逐文件核查代码正确性、合理性、规范性与测试质量。审查基准为 `codex/headless-dataset-chat` 当前工作区（Step 5 尚未提交）。相关测试当前全绿（`test_execution_domain.py`/`test_query_plan_binding.py`/`test_interaction_conditions.py`/`test_v1_flow.py` 共 52 passed）——但绿测并不代表覆盖闭环，下面 R1 即是"测试通过却功能断裂"的例子。
+
+### 8.1 结论摘要
+
+骨架落地质量高：执行域单/拆分同构、有界并行 + 部分失败保留、artifact 写入闭环、降级链路（`node.degraded`）、作用域化交互条件（修 A2）、能力矩阵反静默降级、编译器 HAVING/detail/分桶/方言渲染，都实现得干净且有测试。但**多查询确定性计算（Step 5 的占比/环比核心卖点）在真实链路里是断的**，另有若干中低风险问题。按严重程度：
+
+| 级别 | 编号 | 一句话 |
+| --- | --- | --- |
+| 高 | R1 | `ExecutionQuery` 无 `role` 字段 → 占比/环比在真实链路丢失 role → answer 侧确定性合并静默失效 |
+| 中 | R2 | 环比 baseline 只认 `current_period`，`relative_range`/绝对区间的对比落空且无提示 |
+| 中 | R3 | `validate_result` 的 `suspicious`（部分子查询空）无路由边，等同 passed |
+| 中 | R4 | 能力矩阵 `_MULTI_QUERY_INTENTS` 缺 sub_plans 时判 `infeasible`，把"占比但没绑上时间/维度"的常见问句直接打成不可行 |
+| 低 | R5 | `build_interaction_record` 为死代码（引擎 resume 内联了等价逻辑），`consumed` 字段设计文档写了但未落地 |
+| 低 | R6 | `handle_error` 只读单查询 `sql_error`，拆分执行的部分失败无法进修复环 |
+| 低 | R7 | share 分母 `_first_numeric` 靠"第一个数值列"猜指标，多指标/维度值为数字时会错配 |
+
+### 8.2 高风险
+
+**R1（高）：多查询 `role` 在执行域被丢弃，占比/环比确定性计算在真实链路失效。**
+`planning._sub_plan` 产出 `{role, slots}`，`sql.generate_split` 把 `role` 写进 `split_sql.queries[]`（`sql.py:265-275`）；但 `execute_split` 构造 `ExecutionQuery` 时**没有 role 字段**（`execution.py:42-51` 模型里就没有 role），`build_execution_output` 序列化 `execution.queries[]` 自然不含 role。而 answer 投影 `_results_by_role` 正是靠 `execution.queries[].role` 把结果映射到 part/total、current/baseline（`answer.py:185-201`）——真实链路里这个 map 恒为空，`_project_multi_query_analysis` 永远返回 `{}`，占比/环比退回"LLM 对采样行心算"，即 Step 5 声称要消灭的 G3/G4 静默降级。
+**为什么测试没抓到**：`test_answer_projection_calculates_share_analysis_rows`/`_comparison_delta` 直接手工构造带 `role` 的 `execution.queries`（`test_question_rewrite_and_answer_adapters.py:1234-1235/1283-1284`），绕过了 generate_split→execute_split 这段真实路径；`test_sql_adapter` 的拆分用例只断言 SQL 与 model_id，不校验 role 透传。
+**修法**：`ExecutionQuery` 增 `role: str | None`，`execute_split` 从 `raw_query.get("role")` 透传，`build_execution_output` 序列化保留；补一个 generate_split→execute_split→build_answer_projection 的端到端用例锁定 role 贯通。（`plan_ref` 已透传，次选方案是让 `_results_by_role` 回退用 `plan_ref` 对齐 `plan.sub_plans[i].role`，但显式 role 字段更直接。）
+
+### 8.3 中风险
+
+**R2（中）：环比 baseline 推导只覆盖 `current_period`。**
+`_comparison_sub_plans` 用 `_current_period_filter_index` 找过滤条件，只在 `kind=="current_period"` 时命中（`planning.py:287-294`），随后把 baseline 平移为 `previous_period`。"本月 vs 上月"可行，但"最近 7 天 vs 前 7 天"（`relative_range`）、"2026-06 vs 2025-06"（同比、`absolute_range`）都拿不到 index → 返回 `[]` → sub_plans 少于 2 → 能力矩阵判 `infeasible`。方向本身对（确定性平移窗口），但覆盖面比文档 3.3 承诺的"同比/环比/两对象"窄。**修法**：为 `relative_range`/`absolute_range` 补 baseline 平移规则，或在 8.4-R4 的前提下把"识别到 comparison 但无法构窗"如实降级为带说明的解释性回答，而非笼统 infeasible。
+
+**R3（中）：`validation.status=="suspicious"` 没有路由消费。**
+`validate_execution_output` 会对"部分子查询空"产出 `suspicious`（`execution.py:178-183`），但图里只有 `result.empty`（匹配 `status=="empty"`）一条边（`chatbi_v1.py:443-448`、`core.py:319-330`）。`suspicious` 既不进空结果解释路径也无专门提示，落到默认边直接当正常结果回答——占比场景 part 有值 total 空（分母缺失）时尤其危险。**修法**：要么把 `suspicious` 纳入 `result.empty` 的解释路径，要么新增 `result.suspicious` 边；answer 投影已透传 `validation`，回答侧也应读到并提示。
+
+**R4（中）：能力矩阵对多查询意图"无 sub_plans 即 infeasible"过于激进。**
+`decide_capability` 里 `comparison_analysis`/`share_analysis` 只要 `sub_plans<2` 就 `infeasible`（`capability_matrix.py:35-43`）。但 sub_plans 是否生成强依赖 R2 的时间窗识别与"metrics+group_bys 齐备"（`_share_sub_plans` 要求 group_bys 非空）。结果："各渠道销售额占比"若维度没绑上、"环比"若时间是 relative_range，都会被判成不可行并如实告知"不支持"——而这些正是文档矩阵里承诺确定性覆盖的高频问句。**这是"反静默降级"用力过猛变成"假阴性"**：把可降级为普通聚合 + 提示的情况，报成了能力缺失。**修法**：区分"意图是多查询但计划要素不全"（应澄清或降级为单查询 + 说明）与"真正不可表达"（infeasible）；前者不应占用 infeasible 语义。
+
+### 8.4 低风险与规范性
+
+**R5（低）：交互记录有死代码与未落地字段。** `interactions.build_interaction_record` 除测试外无生产调用点——引擎 `graph_runtime._interaction_update_value`（`graph_runtime.py:253-272`）内联了等价的记录构造。两处结构须手动保持一致（已经有细微差异：`build_interaction_record` 用 `answered_at.isoformat()` 且 `safe_round`，引擎侧字段相同但独立维护）。且 4.3 节设计的 `consumed` 字段全代码库无写入方（`grep consumed` 仅命中文档），"consumed 后不再生效"实际是靠消费节点重跑覆盖 + `skipped` 判定实现的。**修法**：让引擎 resume 复用 `build_interaction_record`（消除双份），或删除该死函数；文档 4.3 的 `consumed` 要么落地要么标注为"未采用，改由重跑覆盖实现"。
+
+**R6（低）：修复环只服务单查询。** `handle_error` 读 `ctx.sql_execution` 的顶层 `error_code`（`sql.py:345-349`），拆分执行的失败虽然通过兼容摘要暴露了 first_failure 的 error_code，但 `repair_context` 里的 `failed_sql` 取自 `ctx.sql.get("sql")`（单查询字段），拆分场景为空 → 修复重生成走不通。当前拆分失败实际直接落 `handle_sql_error → generate_question_answer`，可接受，但与"拆分执行泛化复用"的目标不完全对齐。**修法**：明确拆分查询不进 SQL 重生成环（文档标注），或让 repair_context 支持按 query_id 定位失败子查询。
+
+**R7（低）：share 指标靠"首个数值列"猜。** `_share_analysis` 先取 total 行的 `_first_numeric` 作为指标名，part 行按同名列取值、取不到再 `_first_numeric` 兜底（`answer.py:204-226`）。当宽表维度值本身是数字（如"年份""门店编号"）或存在多指标时，"第一个能转成 float 的列"可能是维度而非指标。**修法**：share/comparison 的指标列名应从 `plan.metrics[].display_name`/编译产出的别名确定，而不是从结果行猜。
+
+**规范性正例（确认无误）：**
+- 执行域 `build_execution_output` 用 `query_ids != result_ids` 强校验对齐（`execution.py:86-87`），并生成兼容镜像顶层字段，单/拆分同构落实到位；`_row_count` 正确处理 bool/str/list 多形态。
+- 并行执行用独立 Session（`SessionSqlExecutionGateway`）+ `ThreadPoolExecutor(max_workers=min(len, max_parallel))`，`_completed_future_result` 兜住单子查询异常不影响其他——部分失败语义正确，线程安全前提（每查询独立 session）成立。
+- artifact 写入失败转 `SQL_RESULT_ARTIFACT_WRITE_FAILED` 失败结果而非静默吞（`sql.py:208-213`）；answer 投影严格白名单投影，确实排除了 SQL 原文、候选 payload、全量 variables（`answer.py:128-167`）——B5 目标达成。
+- 作用域化交互条件 `InteractionResponseAnsweredCondition/SkippedCondition` 按节点名 + legacy_key 只读本节点回答（`core.py:349-387`），配合 `ClarificationRoundGate` 的 allowed/exhausted 双条件 + 出边优先级，A2 串扰在结构上被消除；`ResponsePatcher` 已从 runtime 移除，跨类私有方法调用清除。
+- 编译器 A6 六类时间结构齐全（`_period_condition` 用真实日历运算，`_shift_months` 正确处理月末），未知 kind 显式 `SEMANTIC_SQL_TIME_RANGE_UNSUPPORTED`（`sql_compiler.py:582-584`），分桶经 sqlglot 按 datasource 方言 transpile（C6）——A6/A7/C6 落实且有编译器测试。
+- retry 优先从最近 checkpoint 恢复、无 checkpoint 才回退撤销失败节点 visit（`service.py:354-396`），A5 语义修正到位。
+
+### 8.5 建议动作
+
+1. **R1 必须在 Step 5 合入前修**——否则文档"环比/占比产出确定性计算结果"的验收项不成立（真实链路走的是 LLM 心算旧路径）。补端到端 role 贯通测试。
+2. R2/R4 一并处理：把 comparison/share 的"要素不全"与"不可表达"分层，避免 infeasible 假阴性吞掉高频问句。
+3. R3 给 `suspicious` 一条出边或并入空结果解释。
+4. R5–R7 作为规范性清理，可随 Step 5 收尾或单独小提交。
+5. 5.4 路线图 Step 5 的"已完成"标注建议下调为"实现完成，占比/环比确定性合并存在 R1 阻断，验收未通过"，待 R1 修复并补测后再标完成。
+
+---
+
+## 9. Step 6 实现审查（2026-07-07）
+
+对 Step 6（观测合一）核查：节点 metadata（label/trace/redaction）是否成为单一事实源、trace API 与事件摘要是否共用同一投影、`V1_TRACE_OUTPUT_PATHS` 与前端 `GRAPH_NODE_LABELS` 手抄表是否删除。测试当前全绿（后端 `test_graph_api.py` 21 passed，前端 `graphWorkflowDisplay.test.mjs` 7 passed）。
+
+### 9.1 结论
+
+**Step 6 是三步里完成度最高的一步，核心目标全部达成，没有发现高/中风险缺陷。** 三处手抄表已消灭，脱敏口径已合一。仅有若干低风险的一致性/规范性观察。
+
+三处漂移逐一核实：
+- **`V1_TRACE_OUTPUT_PATHS` 已删除**：`grep` 全仓无残留；trace 输出路径改为从 `node.metadata.trace.output_path` 读取（`public_projection.py:21-31`），`_trace_nodes` 直接筛"声明了 trace 输出路径的节点"（`service.py:452-458`）。
+- **脱敏口径合一**：事件侧 `public_node_summary` 与 trace 侧 `_sanitize_trace_output` 都收敛到同一个 `sanitize_public_output(node, output)`（`public_projection.py:34-59`、`service.py:544-547`）——`sql_summary`/`split_sql_summary`/`execution_summary` 三种 redaction 策略只有一份实现，C4"两通道两口径"根治。测试 `test_graph_node_events_use_v1_metadata_projection_for_public_summary` 断言事件 payload 与 trace 投影逐字段一致。
+- **前端零硬编码节点名**：`graphNodeLabel` 只做 `node.label || node.name`（`graphWorkflowDisplay.ts:280-283`），label 来自后端 `node_display_label`（metadata.display.label）；事件流分支也优先取 `public_payload.label`（`:118-133`）。无 `GRAPH_NODE_LABELS` 常量表。
+
+### 9.2 确认无误的要点
+
+- **节点 metadata 是单一事实源**：`display.label` / `trace.output_path` / `trace.redaction` 全部在图定义 `_trace_metadata` 声明（`chatbi_v1.py:19-35`），runtime（node.started/succeeded 事件）、trace API、前端三条通道都从它派生。新增节点（`bind_query_plan`/`validate_result`）与跨模型三节点（`ask_cross_model_split`/`generate_split_queries`/`execute_split_queries`）都在 trace 可见——正是 C4 点名缺失的节点，测试 `test_graph_trace_is_derived_from_v1_node_metadata` 显式锁定。
+- **未执行节点不误归因**：`_trace_node_output` 对 `status=="not_run"` 的节点直接返回 None，不去读共享 variables 路径（`service.py:483-485`），避免把后写入的结果错挂到未跑节点——这是 metadata 驱动读取共享路径时的正确防御。
+- **交互节点特判合理**：trace 读到 `ask_*` 节点时优先返回 pending_interaction 快照（`service.py:486-493`），label 也经 `node_display_label` 派生，与展示层一致。
+- **数据行仍走 artifact**：`_execution_result_summaries` 只带 `PUBLIC_SAMPLE_ROW_LIMIT=5` 行 + `artifact_ref`（`public_projection.py:149-171`），公开通道不外泄全量结果，与 Step 3 的 artifact 化一致。
+- **minimal-v1 定义同构**：`chatbi_minimal_v1.py` 用同一套 `_trace_metadata` 结构，投影逻辑复用，无第二份实现。
+
+### 9.3 低风险观察
+
+**O1（低，非缺陷，需确认意图）：SQL 全文在公开通道保留。** `_sql_summary` 返回 `statement_type` + 完整 `sql`（`public_projection.py:84-91`），`_query_summaries` 同样带全量 `sql`；测试也断言 `output["sql"].startswith("select ")`。也就是说"redaction"当前实为"结构化摘要"，SQL 原文对前端可见（口径已统一为"都可见"，解决了 C4 的不一致，但并非"隐藏 SQL"）。设计文档 5.3.6 只要求"SQL/数据行是否公开变成一处配置"——现在确实是一处配置（改 redaction 策略即可），目标达成。若产品上要求对终端用户隐藏 SQL 原文，只需在 `_sql_summary`/`_query_summaries` 去掉 `sql` 字段，一处生效。**建议**：在文档或代码注释里明确"当前策略：SQL 全文公开"是有意为之，避免被误读为脱敏遗漏。
+
+**O2（低）：redaction 策略是字符串魔法值，无枚举约束。** `redaction` 为自由字符串（`"none"/"sql_summary"/"split_sql_summary"/"execution_summary"`），`sanitize_public_output` 用 if-else 分派，拼错的策略名会静默落到"原样返回 output"（`public_projection.py:51-59`）——即无脱敏。风险低（图定义是内部代码、有测试覆盖已用策略），但一个 typo 会让某节点意外全量公开。**建议**：把 redaction 收敛为枚举/常量，未知值 fail-fast 或至少默认走最严格投影而非透传。
+
+**O3（低）：`execute_sql` 空结果的 query_count 补丁是特例硬编码。** `_execution_summary` 里 `if query_count == 0 and node_name == "execute_sql": query_count = 1`（`public_projection.py:118-119`），用节点名做特判修正计数。可读性可接受但属"按名字打补丁"，若将来单查询节点改名会失效。**建议**：改由 execution 结构本身表达（如 results 恒非空、或用 plan_ref 数量），而非依赖节点名。
+
+**O4（低，规范性正例转提示）：前端 `intentTypeLabel` 仍是前端本地词表。** `graphWorkflowDisplay.ts:504-516` 保留了一份 intent_type→中文 的映射。这不是 Step 6 要消灭的"节点名手抄表"（节点 label 已从后端来），但它是同类"前后端各存一份业务枚举翻译"的隐患——intent_type 若后端增减，前端需同步。属 Step 6 范围之外，记录备查即可。
+
+### 9.4 建议动作
+
+1. Step 6 可标记为**验收通过**（三处漂移消除 + 脱敏合一 + 测试锁定，均达标）。
+2. O1 明确"SQL 公开"的产品决策并注释；O2 把 redaction 收敛为枚举 + 未知值兜底最严格投影——两项都是"防未来回归"的小加固，不阻断验收。
+3. O3/O4 作为可选清理，随手做或记入技术债。

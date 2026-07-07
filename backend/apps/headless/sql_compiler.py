@@ -34,6 +34,8 @@ class SemanticSQLCompileRequest:
     order_by: list[dict[str, Any]] = field(default_factory=list)
     limit: int | None = None
     time_bucket: dict[str, Any] | None = None
+    select_mode: str = "aggregate"
+    having: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -100,14 +102,21 @@ class SemanticSQLCompiler:
         model_sql = {name: self._model_source(model_by_name[name], alias=name) for name in ordered_model_names}
 
         from_sql = self._build_from_sql(ordered_model_names, model_sql, ontology.join_relations)
+        detail_mode = str(request.select_mode or "").strip().lower() == "detail"
         select_parts = [
             f"{self._qualified_dimension_expr(dimension, model_by_name, model_name_by_id)} as {dimension.biz_name}"
             for dimension in dimensions
         ]
-        metric_selects = [
-            (metric, *self._metric_select_expr(metric, model_by_name, model_name_by_id))
-            for metric in metrics
-        ]
+        if detail_mode:
+            metric_selects = [
+                (metric, self._metric_detail_expr(metric, model_by_name, model_name_by_id), False)
+                for metric in metrics
+            ]
+        else:
+            metric_selects = [
+                (metric, *self._metric_select_expr(metric, model_by_name, model_name_by_id))
+                for metric in metrics
+            ]
         select_parts.extend(f"{metric_expr} as {metric.biz_name}" for metric, metric_expr, _ in metric_selects)
         where_parts = [
             *self._model_filters(ordered_model_names, model_by_name),
@@ -126,8 +135,11 @@ class SemanticSQLCompiler:
         sql = f"select {', '.join(select_parts)} from {from_sql}"
         if where_parts:
             sql += " where " + " and ".join(where_parts)
-        if any(is_aggregate for _, _, is_aggregate in metric_selects) and group_parts:
+        if not detail_mode and any(is_aggregate for _, _, is_aggregate in metric_selects) and group_parts:
             sql += " group by " + ", ".join(group_parts)
+        having_parts = [] if detail_mode else self._having_parts(request.having, metric_selects)
+        if having_parts:
+            sql += " having " + " and ".join(having_parts)
         order_parts = self._order_parts(request.order_by, metrics, [*dimensions, *bucket_dimensions])
         if bucket_dimension is not None and not order_parts:
             # 趋势结果默认按时间桶升序返回。
@@ -438,6 +450,20 @@ class SemanticSQLCompiler:
         resolved_agg = self._resolve_metric_agg(metric, agg)
         return self._aggregate_expr(resolved_agg, qualified), self._is_aggregate_agg(resolved_agg)
 
+    def _metric_detail_expr(
+        self,
+        metric: SchemaElement,
+        model_by_name: dict[str, dict[str, Any]],
+        model_name_by_id: dict[int | None, str],
+    ) -> str:
+        """明细模式投影指标原始表达式，不自动套聚合函数。"""
+
+        model_name = model_name_by_id.get(metric.model)
+        if not model_name:
+            raise ValueError("SEMANTIC_SQL_METRIC_MODEL_REQUIRED")
+        expr, _ = self._metric_measure_expr(metric, model_by_name[model_name])
+        return self._qualify_expr(expr, model_name)
+
     @staticmethod
     def _metric_measure_expr(metric: SchemaElement, model: dict[str, Any]) -> tuple[str, str | None]:
         params = metric.type_params or {}
@@ -473,6 +499,27 @@ class SemanticSQLCompiler:
                 continue
             direction = "asc" if str(item.get("direction") or "").lower() == "asc" else "desc"
             parts.append(f"{alias} {direction}")
+        return parts
+
+    @staticmethod
+    def _having_parts(
+        having: list[dict[str, Any]],
+        metric_selects: list[tuple[SchemaElement, str, bool]],
+    ) -> list[str]:
+        """把受控指标阈值过滤转换为 HAVING，禁止自由表达式进入 SQL。"""
+
+        metric_expr_by_id = {metric.id: metric_expr for metric, metric_expr, _ in metric_selects}
+        parts: list[str] = []
+        for item in having:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("asset_type") or "").upper() not in {"", "METRIC"}:
+                continue
+            metric_expr = metric_expr_by_id.get(item.get("asset_id"))
+            if not metric_expr:
+                continue
+            operator = SemanticSQLCompiler._safe_operator(str(item.get("operator") or "="))
+            parts.append(f"{metric_expr} {operator} {SemanticSQLCompiler._literal(item.get('value'))}")
         return parts
 
     @staticmethod

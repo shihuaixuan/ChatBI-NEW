@@ -29,6 +29,7 @@ class GraphPendingInteractionResponse(BaseModel):
     interaction_id: str
     run_id: str
     node_name: str
+    label: str | None = None
     status: str
     prompt: str | None = None
     options: list[dict[str, Any]] = Field(default_factory=list)
@@ -57,6 +58,7 @@ class GraphTraceNodeResponse(BaseModel):
     """单个节点的前端 trace 摘要。"""
 
     name: str
+    label: str
     status: str
     route_reason: str | None = None
     output: dict[str, Any] | bool | str | int | float | None = None

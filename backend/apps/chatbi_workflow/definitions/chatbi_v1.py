@@ -16,25 +16,60 @@ from apps.workflow_engine.domain.definition import (
 from apps.workflow_engine.registry.handler_registry import HandlerRegistry
 
 
-def _capability_node(name: str, handler: str) -> NodeDefinition:
-    return NodeDefinition(name=name, type=NodeType.CAPABILITY, handler=handler)
+def _trace_metadata(
+    label: str,
+    output_path: tuple[str, ...],
+    *,
+    redaction: str = "none",
+    extra: dict | None = None,
+) -> dict:
+    metadata = {
+        "display": {"label": label},
+        "trace": {
+            "output_path": list(output_path),
+            "redaction": redaction,
+        },
+    }
+    if extra:
+        metadata.update(extra)
+    return metadata
 
 
-def _interaction_node(name: str, handler: str) -> NodeDefinition:
+def _capability_node(
+    name: str,
+    handler: str,
+    label: str,
+    output_path: tuple[str, ...],
+    *,
+    redaction: str = "none",
+) -> NodeDefinition:
+    return NodeDefinition(
+        name=name,
+        type=NodeType.CAPABILITY,
+        handler=handler,
+        metadata=_trace_metadata(label, output_path, redaction=redaction),
+    )
+
+
+def _interaction_node(name: str, handler: str, label: str) -> NodeDefinition:
     spec = CHATBI_V1_INTERACTION_SPECS[name]
     return NodeDefinition(
         name=name,
         type=NodeType.INTERACTION,
         handler=handler,
-        metadata={
-            "interaction": {
-                "name": spec.name,
-                "response_key": spec.legacy_key,
-                "standard_path": spec.standard_path,
-                "legacy_path": spec.legacy_path,
-                "max_rounds": spec.max_rounds,
-            }
-        },
+        metadata=_trace_metadata(
+            label,
+            ("control", "pending_interaction_id"),
+            extra={
+                "interaction": {
+                    "name": spec.name,
+                    "response_key": spec.legacy_key,
+                    "standard_path": spec.standard_path,
+                    "legacy_path": spec.legacy_path,
+                    "max_rounds": spec.max_rounds,
+                }
+            },
+        ),
     )
 
 
@@ -45,40 +80,138 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
     """
 
     nodes = {
-        "classify_question": _capability_node("classify_question", "question.classify"),
-        "reject_answer": _capability_node("reject_answer", "answer.reject"),
-        "chitchat_answer": _capability_node("chitchat_answer", "answer.chitchat"),
-        "rewrite_question": _capability_node("rewrite_question", "question.rewrite"),
+        "classify_question": _capability_node(
+            "classify_question",
+            "question.classify",
+            "问题分类",
+            ("variables", "classification"),
+        ),
+        "reject_answer": _capability_node("reject_answer", "answer.reject", "生成拒答", ("variables", "answer")),
+        "chitchat_answer": _capability_node(
+            "chitchat_answer",
+            "answer.chitchat",
+            "闲聊回复",
+            ("variables", "answer"),
+        ),
+        "rewrite_question": _capability_node(
+            "rewrite_question",
+            "question.rewrite",
+            "问题标准化",
+            ("variables", "rewrite"),
+        ),
         "ask_rewrite_clarification": _interaction_node(
             "ask_rewrite_clarification",
             "interaction.ask_rewrite_clarification",
+            "补充问题信息",
         ),
-        "draw_image_profile": _capability_node("draw_image_profile", "question.draw_image_profile"),
-        "recognize_intent": _capability_node("recognize_intent", "intent.recognize"),
+        "draw_image_profile": _capability_node(
+            "draw_image_profile",
+            "question.draw_image_profile",
+            "选择图表形式",
+            ("variables", "image_profile"),
+        ),
+        "recognize_intent": _capability_node(
+            "recognize_intent",
+            "intent.recognize",
+            "识别分析意图",
+            ("variables", "intent"),
+        ),
         "ask_intent_clarification": _interaction_node(
             "ask_intent_clarification",
             "interaction.ask_intent_clarification",
+            "确认分析方式",
         ),
         "ask_slot_clarification": _interaction_node(
             "ask_slot_clarification",
             "interaction.ask_slot_clarification",
+            "补充槽位信息",
         ),
-        "retrieve_knowledge": _capability_node("retrieve_knowledge", "knowledge.retrieve"),
+        "retrieve_knowledge": _capability_node(
+            "retrieve_knowledge",
+            "knowledge.retrieve",
+            "匹配数据资产",
+            ("variables", "knowledge"),
+        ),
         "ask_cross_model_split": _interaction_node(
             "ask_cross_model_split",
             "interaction.ask_cross_model_split",
+            "确认跨模型拆分",
         ),
-        "ask_metric_selection": _interaction_node("ask_metric_selection", "interaction.ask_metric_selection"),
-        "bind_query_plan": _capability_node("bind_query_plan", "plan.bind"),
-        "generate_split_queries": _capability_node("generate_split_queries", "sql.generate_split"),
-        "execute_split_queries": _capability_node("execute_split_queries", "sql.execute_split"),
-        "generate_sql": _capability_node("generate_sql", "sql.generate"),
-        "execute_sql": _capability_node("execute_sql", "sql.execute"),
-        "handle_sql_error": _capability_node("handle_sql_error", "sql.handle_error"),
-        "generate_question_answer": _capability_node("generate_question_answer", "answer.generate"),
-        "recommend_questions": _capability_node("recommend_questions", "question.recommend"),
-        "compose_final_reply": _capability_node("compose_final_reply", "answer.compose"),
-        "finish": NodeDefinition(name="finish", type=NodeType.TERMINAL, handler="answer.finish"),
+        "ask_metric_selection": _interaction_node(
+            "ask_metric_selection",
+            "interaction.ask_metric_selection",
+            "选择分析指标",
+        ),
+        "bind_query_plan": _capability_node(
+            "bind_query_plan",
+            "plan.bind",
+            "构建查询计划",
+            ("variables", "plan"),
+        ),
+        "generate_split_queries": _capability_node(
+            "generate_split_queries",
+            "sql.generate_split",
+            "生成拆分查询",
+            ("variables", "split_sql"),
+            redaction="split_sql_summary",
+        ),
+        "execute_split_queries": _capability_node(
+            "execute_split_queries",
+            "sql.execute_split",
+            "执行拆分查询",
+            ("variables", "execution"),
+            redaction="execution_summary",
+        ),
+        "validate_result": _capability_node(
+            "validate_result",
+            "execution.validate",
+            "结果校验",
+            ("variables", "execution", "validation"),
+        ),
+        "generate_sql": _capability_node(
+            "generate_sql",
+            "sql.generate",
+            "生成查询",
+            ("variables", "sql"),
+            redaction="sql_summary",
+        ),
+        "execute_sql": _capability_node(
+            "execute_sql",
+            "sql.execute",
+            "查询数据",
+            ("variables", "execution"),
+            redaction="execution_summary",
+        ),
+        "handle_sql_error": _capability_node(
+            "handle_sql_error",
+            "sql.handle_error",
+            "修复查询",
+            ("variables", "sql_error"),
+        ),
+        "generate_question_answer": _capability_node(
+            "generate_question_answer",
+            "answer.generate",
+            "生成答案",
+            ("variables", "answer"),
+        ),
+        "recommend_questions": _capability_node(
+            "recommend_questions",
+            "question.recommend",
+            "推荐追问",
+            ("variables", "recommendations"),
+        ),
+        "compose_final_reply": _capability_node(
+            "compose_final_reply",
+            "answer.compose",
+            "整理回复",
+            ("variables", "final_reply"),
+        ),
+        "finish": NodeDefinition(
+            name="finish",
+            type=NodeType.TERMINAL,
+            handler="answer.finish",
+            metadata=_trace_metadata("结束", ("variables", "completed")),
+        ),
     }
     return WorkflowDefinition(
         name="chatbi",
@@ -241,6 +374,12 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
                 condition="plan.infeasible",
                 priority=1,
             ),
+            EdgeDefinition(
+                source="bind_query_plan",
+                target="generate_split_queries",
+                condition="plan.multi_query",
+                priority=2,
+            ),
             EdgeDefinition(source="bind_query_plan", target="generate_sql"),
             EdgeDefinition(
                 source="ask_cross_model_split",
@@ -266,11 +405,11 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
             ),
             EdgeDefinition(
                 source="execute_split_queries",
-                target="generate_question_answer",
+                target="validate_result",
                 condition="sql.execution_succeeded",
                 priority=2,
             ),
-            EdgeDefinition(source="execute_split_queries", target="generate_question_answer"),
+            EdgeDefinition(source="execute_split_queries", target="validate_result"),
             EdgeDefinition(
                 source="ask_metric_selection",
                 target="bind_query_plan",
@@ -295,11 +434,19 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
             ),
             EdgeDefinition(
                 source="execute_sql",
-                target="generate_question_answer",
+                target="validate_result",
                 condition="sql.execution_succeeded",
                 priority=2,
             ),
-            EdgeDefinition(source="execute_sql", target="generate_question_answer"),
+            EdgeDefinition(source="execute_sql", target="validate_result"),
+            EdgeDefinition(source="validate_result", target="generate_question_answer", condition="node.degraded", priority=0),
+            EdgeDefinition(
+                source="validate_result",
+                target="generate_question_answer",
+                condition="result.empty",
+                priority=1,
+            ),
+            EdgeDefinition(source="validate_result", target="generate_question_answer"),
             EdgeDefinition(source="handle_sql_error", target="generate_question_answer", condition="node.degraded", priority=0),
             EdgeDefinition(
                 source="handle_sql_error",
@@ -337,6 +484,7 @@ def register_chatbi_v1_handlers(registry: HandlerRegistry, gateway: ChatBICapabi
         "sql.generate_split": "variables.split_sql",
         "sql.execute": "variables.execution",
         "sql.execute_split": "variables.execution",
+        "execution.validate": "variables.execution.validation",
         "sql.handle_error": "variables.sql_error",
         "answer.generate": "variables.answer",
         "question.recommend": "variables.recommendations",
@@ -345,6 +493,7 @@ def register_chatbi_v1_handlers(registry: HandlerRegistry, gateway: ChatBICapabi
     mirror_output_paths = {
         "sql.execute": ("variables.sql_execution",),
         "sql.execute_split": ("variables.sql_execution",),
+        "execution.validate": ("variables.sql_execution.validation",),
     }
     for capability, output_path in output_paths.items():
         registry.register(

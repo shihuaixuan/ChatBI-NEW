@@ -5,6 +5,7 @@ from typing import Any
 from apps.chatbi_workflow.capabilities.adapters.time_slots import (
     normalize_time_range_payload,
 )
+from apps.chatbi_workflow.capabilities.config import ChatBIConfig
 from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
 from apps.chatbi_workflow.capabilities.interactions import apply_slot_response_to_intent
 from apps.headless.asset_document import HeadlessAssetDocumentBuilder
@@ -141,10 +142,16 @@ class HeadlessKnowledgeAdapter:
         schema_mapper: HeadlessSchemaMapper | None = None,
         candidate_gate: CandidateGate | None = None,
         document_retriever: HeadlessDocumentRetriever | None = None,
+        config: ChatBIConfig | None = None,
     ) -> None:
+        config = config or ChatBIConfig()
         self._schema_builder = schema_builder or HeadlessSchemaBuilder()
         self._schema_mapper = schema_mapper or HeadlessSchemaMapper()
-        self._candidate_gate = candidate_gate or CandidateGate()
+        self._candidate_gate = candidate_gate or CandidateGate(
+            accept_score=config.candidate_accept_score,
+            low_confidence_score=config.candidate_low_confidence_score,
+            ambiguity_gap=config.candidate_ambiguity_gap,
+        )
         self._document_retriever = document_retriever or HeadlessDocumentRetriever()
 
     def retrieve(self, request: dict[str, Any]) -> dict[str, Any]:

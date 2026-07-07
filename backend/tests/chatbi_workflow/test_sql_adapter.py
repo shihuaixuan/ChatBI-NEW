@@ -4,6 +4,7 @@ import pytest
 
 from apps.agentic_chat.schemas import ToolResult
 from apps.chatbi_workflow.capabilities.adapters.sql import SqlAdapter
+from apps.chatbi_workflow.capabilities.config import ChatBIConfig
 from apps.headless.schemas import DataSetSchema, SchemaElement
 from apps.headless.sql_compiler import SemanticSQLCompileResult
 
@@ -1028,6 +1029,36 @@ def test_sql_adapter_keeps_only_sample_rows_for_large_result():
     assert result["sampled_row_count"] == 2
     assert result["result_truncated"] is True
     assert result["artifact_ref"] is None
+
+
+def test_sql_adapter_uses_chatbi_config_sample_row_limit():
+    execute_tool = FakeSqlExecuteTool(
+        ToolResult(
+            success=True,
+            payload={
+                "fields": ["visit_uv"],
+                "data": [{"visit_uv": 1}, {"visit_uv": 2}, {"visit_uv": 3}],
+            },
+        )
+    )
+    adapter = SqlAdapter(
+        execute_tool=execute_tool,
+        config=ChatBIConfig(sql_sample_row_limit=1),
+    )
+
+    result = adapter.execute(
+        {
+            "variables": {
+                "sql": {
+                    "sql": "select visit_uv from stall_traffic_1d",
+                    "datasource_id": 5,
+                }
+            }
+        }
+    )
+
+    assert result["rows"] == [{"visit_uv": 1}]
+    assert result["sampled_row_count"] == 1
 
 
 def test_sql_adapter_returns_failed_result_when_execute_tool_fails():

@@ -40,6 +40,7 @@ def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions
         "bind_query_plan",
         "generate_split_queries",
         "execute_split_queries",
+        "validate_result",
         "generate_sql",
         "execute_sql",
         "handle_sql_error",
@@ -79,6 +80,8 @@ def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions
         "knowledge.hit",
         # 查询计划不可行时不进入 SQL 生成，转解释性回答。
         "plan.infeasible",
+        "plan.multi_query",
+        "result.empty",
         "cross_model.split_requested",
         "sql.execution_failed",
         "sql.execution_succeeded",

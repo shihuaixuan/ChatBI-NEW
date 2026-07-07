@@ -4,6 +4,7 @@ from apps.chatbi_workflow.capabilities.execution import (
     ExecutionQuery,
     ExecutionResult,
     build_execution_output,
+    validate_execution_output,
 )
 
 
@@ -78,3 +79,41 @@ def test_build_execution_output_preserves_success_and_first_failure():
 def test_build_execution_output_rejects_misaligned_query_ids():
     with pytest.raises(ValueError, match="EXECUTION_QUERY_RESULT_MISMATCH"):
         build_execution_output([_query("query-0")], [_result("query-1")])
+
+
+def test_validate_execution_output_marks_empty_success_result():
+    output = build_execution_output(
+        [_query()],
+        [
+            ExecutionResult(
+                query_id="query-0",
+                status="succeeded",
+                row_count=0,
+                fields=["value"],
+                sample_rows=[],
+                sampled_row_count=0,
+                result_truncated=False,
+                execution_ms=3,
+            )
+        ],
+    )
+
+    validation = validate_execution_output(output)
+
+    assert validation["status"] == "empty"
+    assert validation["issues"] == [
+        {
+            "type": "empty_result",
+            "query_id": "query-0",
+            "message": "查询成功但没有返回数据",
+        }
+    ]
+    assert validation["suggestions"] == ["可以尝试放宽筛选条件或调整时间范围"]
+
+
+def test_validate_execution_output_passes_non_empty_success_result():
+    output = build_execution_output([_query()], [_result()])
+
+    validation = validate_execution_output(output)
+
+    assert validation == {"status": "passed", "issues": [], "suggestions": []}

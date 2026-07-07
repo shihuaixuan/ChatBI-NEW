@@ -9,6 +9,10 @@ from uuid import uuid4
 from fastapi import HTTPException
 from sqlmodel import Session, col, func, select
 
+from apps.chatbi_workflow.definitions.chatbi_minimal_v1 import (
+    build_chatbi_minimal_definition,
+)
+from apps.chatbi_workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
 from apps.chatbi_workflow.runtime import (
     build_placeholder_chatbi_runtime,
     build_real_chatbi_v1_runtime,
@@ -30,50 +34,23 @@ from apps.workflow_engine.api.schemas import (
     InteractionResponseRequest,
 )
 from apps.workflow_engine.domain.context import WorkflowContext
+from apps.workflow_engine.domain.definition import NodeDefinition, WorkflowDefinition
 from apps.workflow_engine.domain.event import WorkflowEvent
 from apps.workflow_engine.domain.run import RunStatus
 from apps.workflow_engine.infrastructure.events.outbox import EventOutbox
 from apps.workflow_engine.infrastructure.events.stream import EventStream
 from apps.workflow_engine.infrastructure.persistence.models import (
     InteractionRequestModel,
+    WorkflowCheckpointModel,
     WorkflowEventModel,
     WorkflowRunModel,
 )
+from apps.workflow_engine.runtime.public_projection import (
+    node_display_label,
+    node_trace_output_path,
+    sanitize_public_output,
+)
 from common.core.db import engine
-
-MINIMAL_TRACE_OUTPUT_PATHS = {
-    "understand_question": ("variables", "understanding"),
-    "retrieve_schema": ("variables", "schema"),
-    "generate_sql": ("variables", "sql"),
-    "validate_sql": ("variables", "sql_validation"),
-    "apply_permission": ("variables", "permission"),
-    "execute_sql": ("variables", "sql_result"),
-    "generate_answer": ("variables", "answer"),
-    "finish": ("variables", "completed"),
-}
-
-V1_TRACE_OUTPUT_PATHS = {
-    "classify_question": ("variables", "classification"),
-    "reject_answer": ("variables", "answer"),
-    "chitchat_answer": ("variables", "answer"),
-    "rewrite_question": ("variables", "rewrite"),
-    "ask_rewrite_clarification": ("control", "pending_interaction_id"),
-    "draw_image_profile": ("variables", "image_profile"),
-    "recognize_intent": ("variables", "intent"),
-    "ask_intent_clarification": ("control", "pending_interaction_id"),
-    "ask_slot_clarification": ("control", "pending_interaction_id"),
-    "retrieve_knowledge": ("variables", "knowledge"),
-    "ask_metric_selection": ("control", "pending_interaction_id"),
-    "bind_query_plan": ("variables", "plan"),
-    "generate_sql": ("variables", "sql"),
-    "execute_sql": ("variables", "execution"),
-    "execute_split_queries": ("variables", "execution"),
-    "handle_sql_error": ("variables", "sql_error"),
-    "generate_question_answer": ("variables", "answer"),
-    "recommend_questions": ("variables", "recommendations"),
-    "compose_final_reply": ("variables", "final_reply"),
-    "finish": ("variables", "completed"),
-}
 
 
 class GraphApiService:
@@ -240,19 +217,20 @@ class GraphApiService:
         run = self._load_owned_run(current_user, run_id)
         events = EventStream(self._session).list(run_id=run_id, after_sequence=0)
         context = run.context or {}
-        output_paths = self._trace_output_paths(run.definition_version)
+        trace_nodes = self._trace_nodes(run.definition_version)
         return GraphTraceResponse(
             run_id=run.run_id,
             status=run.status,
             current_node=run.current_node,
             nodes=[
                 GraphTraceNodeResponse(
-                    name=node_name,
-                    status=self._trace_node_status(events, node_name),
-                    route_reason=self._trace_route_reason(events, node_name),
-                    output=self._trace_node_output(context, node_name, output_path, events),
+                    name=node.name,
+                    label=node_display_label(node),
+                    status=self._trace_node_status(events, node.name),
+                    route_reason=self._trace_route_reason(events, node.name),
+                    output=self._trace_node_output(context, node, events),
                 )
-                for node_name, output_path in output_paths.items()
+                for node in trace_nodes
             ],
         )
 
@@ -356,7 +334,7 @@ class GraphApiService:
         if run.status != RunStatus.FAILED.value:
             raise HTTPException(status_code=409, detail="RUN_NOT_FAILED")
         if run.definition_version == "v1":
-            self._restart_run_from_beginning(run)
+            self._restore_v1_run_for_retry(run)
             self._append_control_event(run_id, "run.retry_requested", {"status": "created"})
             self._session.flush()
             runtime = self._build_runtime(run.definition_version)
@@ -373,25 +351,49 @@ class GraphApiService:
         self._session.commit()
         return ControlResponse(run_id=run_id, status=RunStatus.CREATED.value)
 
-    def _restart_run_from_beginning(self, run: WorkflowRunModel) -> None:
-        """把失败的 v1 Run 重置到图起点，随后交给 Runtime 重新推进。"""
+    def _restore_v1_run_for_retry(self, run: WorkflowRunModel) -> None:
+        """把失败的 v1 Run 恢复到最近成功节点边界，随后交给 Runtime 继续推进。"""
 
-        context = run.context or {}
+        checkpoint_context = self._latest_checkpoint_context(run.run_id)
+        context = checkpoint_context or dict(run.context or {})
         control = context.setdefault("control", {})
-        control["current_node"] = "classify_question"
-        control["previous_node"] = None
-        control["executed_nodes"] = 0
-        control["loop_iterations"] = {}
+        current_node = str(control.get("current_node") or run.current_node or "classify_question")
+        control["current_node"] = current_node
         control["pending_interaction_id"] = None
-        control["active_ms"] = 0
-        context["variables"] = {}
+        if checkpoint_context is None:
+            self._rollback_failed_node_visit(control, current_node)
         run.context = context
         run.status = RunStatus.CREATED.value
-        run.current_node = "classify_question"
+        run.current_node = current_node
         run.error_code = None
         run.version += 1
         run.updated_at = datetime.now(timezone.utc)
         self._session.add(run)
+
+    def _latest_checkpoint_context(self, run_id: str) -> dict[str, Any] | None:
+        checkpoint = self._session.exec(
+            select(WorkflowCheckpointModel)
+            .where(WorkflowCheckpointModel.run_id == run_id)
+            .order_by(col(WorkflowCheckpointModel.sequence).desc())
+        ).first()
+        return dict(checkpoint.context) if checkpoint is not None else None
+
+    @staticmethod
+    def _rollback_failed_node_visit(control: dict[str, Any], current_node: str) -> None:
+        """无持久 checkpoint 时，撤销失败节点进入执行前增加的 visit 计数。"""
+
+        loop_iterations = control.get("loop_iterations")
+        if not isinstance(loop_iterations, dict):
+            control["loop_iterations"] = {}
+            return
+        try:
+            current_count = int(loop_iterations.get(current_node) or 0)
+        except (TypeError, ValueError):
+            current_count = 0
+        if current_count <= 1:
+            loop_iterations.pop(current_node, None)
+        else:
+            loop_iterations[current_node] = current_count - 1
 
     def _load_owned_run(self, current_user: Any, run_id: str) -> WorkflowRunModel:
         run = self._session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == run_id)).one_or_none()
@@ -421,7 +423,10 @@ class GraphApiService:
         context = run.context or {}
         request = run.request or context.get("request", {})
         variables = context.get("variables", {})
-        pending_interaction = self._pending_interaction_response(run.run_id)
+        pending_interaction = self._pending_interaction_response(
+            run.run_id,
+            definition_version=run.definition_version,
+        )
         return GraphRunResponse(
             run_id=run.run_id,
             status=run.status,
@@ -437,10 +442,20 @@ class GraphApiService:
             },
         )
 
-    def _trace_output_paths(self, definition_version: str) -> dict[str, tuple[str, ...]]:
+    def _trace_definition(self, definition_version: str) -> WorkflowDefinition:
         if definition_version == "v1":
-            return V1_TRACE_OUTPUT_PATHS
-        return MINIMAL_TRACE_OUTPUT_PATHS
+            return build_chatbi_v1_definition()
+        if definition_version == "minimal-v1":
+            return build_chatbi_minimal_definition()
+        raise HTTPException(status_code=400, detail="UNSUPPORTED_GRAPH_DEFINITION_VERSION")
+
+    def _trace_nodes(self, definition_version: str) -> list[NodeDefinition]:
+        definition = self._trace_definition(definition_version)
+        return [
+            node
+            for node in definition.nodes.values()
+            if node_trace_output_path(node) is not None
+        ]
 
     def _trace_node_status(self, events: list[WorkflowEvent], node_name: str) -> str:
         event_types = [event.event_type for event in events if event.node_name == node_name]
@@ -462,22 +477,25 @@ class GraphApiService:
     def _trace_node_output(
         self,
         context: dict[str, Any],
-        node_name: str,
-        output_path: tuple[str, ...],
+        node: NodeDefinition,
         events: list[WorkflowEvent],
     ) -> Any:
         # 未执行节点不读取共享变量路径，避免把其他节点后写入的结果误归因到该节点。
-        if self._trace_node_status(events, node_name) == "not_run":
+        if self._trace_node_status(events, node.name) == "not_run":
             return None
-        if node_name.startswith("ask_"):
+        if node.name.startswith("ask_"):
             pending_interaction = self._pending_interaction_response(
                 self._run_id_from_events(events),
-                node_name=node_name,
+                node_name=node.name,
+                node_label=node_display_label(node),
             )
             if pending_interaction is not None:
                 return pending_interaction.model_dump(mode="json")
+        output_path = node_trace_output_path(node)
+        if output_path is None:
+            return None
         output = self._read_context_path(context, output_path)
-        return self._sanitize_trace_output(node_name, output)
+        return self._sanitize_trace_output(node, output)
 
     @staticmethod
     def _run_id_from_events(events: list[WorkflowEvent]) -> str | None:
@@ -489,6 +507,8 @@ class GraphApiService:
         self,
         run_id: str | None,
         node_name: str | None = None,
+        definition_version: str | None = None,
+        node_label: str | None = None,
     ) -> GraphPendingInteractionResponse | None:
         """读取当前 Run 的待处理交互，用于前端直接渲染用户输入控件。"""
 
@@ -507,6 +527,7 @@ class GraphApiService:
             interaction_id=interaction.interaction_id,
             run_id=interaction.run_id,
             node_name=interaction.node_name,
+            label=node_label or self._trace_node_label(definition_version, interaction.node_name),
             status=interaction.status,
             prompt=interaction.prompt,
             options=interaction.options or [],
@@ -514,41 +535,16 @@ class GraphApiService:
             allowed_update_paths=interaction.allowed_update_paths or [],
         )
 
-    def _sanitize_trace_output(self, node_name: str, output: Any) -> Any:
-        """对 trace 公开输出做最小脱敏，并预留 artifact 引用协议。"""
+    def _trace_node_label(self, definition_version: str | None, node_name: str) -> str | None:
+        if not definition_version:
+            return None
+        node = self._trace_definition(definition_version).nodes.get(node_name)
+        return node_display_label(node) if node is not None else None
 
-        if node_name == "generate_sql":
-            sql = output.get("sql", "") if isinstance(output, dict) else ""
-            statement_type = sql.strip().split(maxsplit=1)[0].lower() if sql.strip() else "unknown"
-            return {
-                "statement_type": statement_type,
-                "sql_redacted": True,
-                "artifact_ref": output.get("artifact_ref") if isinstance(output, dict) else None,
-            }
-        if node_name in {"execute_sql", "execute_split_queries"} and isinstance(output, dict):
-            results = output.get("results")
-            if not isinstance(results, list):
-                results = []
-            artifact_refs = output.get("artifact_refs")
-            if not isinstance(artifact_refs, list):
-                artifact_refs = [
-                    item.get("artifact_ref")
-                    for item in results
-                    if isinstance(item, dict)
-                    and isinstance(item.get("artifact_ref"), dict)
-                ]
-            query_count = len(results)
-            if query_count == 0 and node_name == "execute_sql":
-                query_count = 1
-            return {
-                "status": output.get("status"),
-                "query_count": query_count,
-                "row_count": output.get("row_count", 0),
-                "fields": output.get("fields", []),
-                "execution_ms": output.get("execution_ms", 0),
-                "artifact_refs": artifact_refs,
-            }
-        return output
+    def _sanitize_trace_output(self, node: NodeDefinition, output: Any) -> Any:
+        """trace 公开输出与事件摘要共用 metadata 驱动的投影策略。"""
+
+        return sanitize_public_output(node, output)
 
     def _read_context_path(self, context: dict[str, Any], path: tuple[str, ...]) -> Any:
         current: Any = context

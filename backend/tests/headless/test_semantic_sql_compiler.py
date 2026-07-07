@@ -339,3 +339,115 @@ def test_semantic_sql_compiler_renders_derived_metric_order_and_limit():
     assert "SUM(gmv_sale) / NULLIF(SUM(order_cnt_sale), 0) as aov_sale" in result.sql
     assert "group by stall_order.stall_id" in result.sql
     assert result.sql.endswith("order by aov_sale desc limit 5")
+
+
+def test_semantic_sql_compiler_detail_mode_projects_metric_without_aggregation():
+    schema = DataSetSchema(
+        data_set=SchemaElement(data_set_id=20, data_set_name="档口经营分析", id=20, name="档口经营分析", biz_name="stall_bi", type="DATASET"),
+        models=[
+            {
+                "id": 10,
+                "name": "档口流量模型",
+                "biz_name": "stall_traffic",
+                "tableQuery": "stall_traffic_1d",
+                "dimensions": [{"name": "店铺", "bizName": "stall_id", "expr": "stall_id"}],
+                "measures": [{"name": "访问人数", "bizName": "visit_uv", "expr": "visit_uv", "agg": "SUM"}],
+            }
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=100,
+                name="访问人数",
+                biz_name="visit_uv",
+                type="METRIC",
+                default_agg="SUM",
+                fields=["visit_uv"],
+            )
+        ],
+        dimensions=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=200,
+                name="店铺",
+                biz_name="stall_id",
+                type="DIMENSION",
+            )
+        ],
+    )
+
+    result = SemanticSQLCompiler().compile(
+        SemanticSQLCompileRequest(
+            schema=schema,
+            slots={
+                "metrics": [{"asset_type": "METRIC", "asset_id": 100}],
+                "dimensions": [{"asset_type": "DIMENSION", "asset_id": 200}],
+            },
+            select_mode="detail",
+            limit=20,
+        )
+    )
+
+    assert result.sql == (
+        "select stall_traffic.stall_id as stall_id, stall_traffic.visit_uv as visit_uv "
+        "from stall_traffic_1d stall_traffic limit 20"
+    )
+
+
+def test_semantic_sql_compiler_renders_metric_having_condition():
+    schema = DataSetSchema(
+        data_set=SchemaElement(data_set_id=20, data_set_name="档口经营分析", id=20, name="档口经营分析", biz_name="stall_bi", type="DATASET"),
+        models=[
+            {
+                "id": 10,
+                "name": "档口流量模型",
+                "biz_name": "stall_traffic",
+                "tableQuery": "stall_traffic_1d",
+                "dimensions": [{"name": "店铺", "bizName": "stall_id", "expr": "stall_id"}],
+                "measures": [{"name": "访问人数", "bizName": "visit_uv", "expr": "visit_uv", "agg": "SUM"}],
+            }
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=100,
+                name="访问人数",
+                biz_name="visit_uv",
+                type="METRIC",
+                default_agg="SUM",
+                fields=["visit_uv"],
+            )
+        ],
+        dimensions=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=200,
+                name="店铺",
+                biz_name="stall_id",
+                type="DIMENSION",
+            )
+        ],
+    )
+
+    result = SemanticSQLCompiler().compile(
+        SemanticSQLCompileRequest(
+            schema=schema,
+            metric_ids=[100],
+            dimension_ids=[200],
+            having=[{"asset_type": "METRIC", "asset_id": 100, "operator": ">", "value": 100}],
+        )
+    )
+
+    assert result.sql == (
+        "select stall_traffic.stall_id as stall_id, sum(stall_traffic.visit_uv) as visit_uv "
+        "from stall_traffic_1d stall_traffic "
+        "group by stall_traffic.stall_id having sum(stall_traffic.visit_uv) > 100"
+    )

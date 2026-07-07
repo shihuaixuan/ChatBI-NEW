@@ -75,6 +75,8 @@ class RealChatBICapabilityGateway:
             return self._sql_adapter.execute(request)
         if capability == "sql.execute_split":
             return self._sql_adapter.execute_split(request)
+        if capability == "execution.validate":
+            return self._sql_adapter.validate_result(request)
         if capability == "sql.handle_error":
             return self._sql_adapter.handle_error(request)
         if capability == "answer.reject":

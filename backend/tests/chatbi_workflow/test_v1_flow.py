@@ -307,6 +307,32 @@ class RepairableSqlGateway(TrackingGateway):
         return PlaceholderChatBICapabilityGateway.invoke(self, capability, request, idempotency_key)
 
 
+class EmptyResultGateway(TrackingGateway):
+    def invoke(self, capability: str, request: dict, idempotency_key: str) -> dict:
+        self.calls.append(capability)
+        if capability == "sql.execute":
+            return {
+                "status": "succeeded",
+                "rows": [],
+                "row_count": 0,
+                "fields": ["visit_uv"],
+                "execution_ms": 1,
+            }
+        if capability == "execution.validate":
+            return {
+                "status": "empty",
+                "issues": [
+                    {
+                        "type": "empty_result",
+                        "query_id": "query-0",
+                        "message": "查询成功但没有返回数据",
+                    }
+                ],
+                "suggestions": ["可以尝试放宽筛选条件或调整时间范围"],
+            }
+        return PlaceholderChatBICapabilityGateway.invoke(self, capability, request, idempotency_key)
+
+
 def _runtime(gateway: TrackingGateway) -> GraphRuntime:
     handlers = HandlerRegistry()
     conditions = ConditionRegistry()
@@ -354,6 +380,7 @@ def test_chatbi_v1_placeholder_main_path_executes_full_graph_to_final_reply():
         "plan.bind",
         "sql.generate",
         "sql.execute",
+        "execution.validate",
         "answer.generate",
         "question.recommend",
         "answer.compose",
@@ -361,6 +388,25 @@ def test_chatbi_v1_placeholder_main_path_executes_full_graph_to_final_reply():
     assert outcome.context.variables["final_reply"]["final_answer"] == "这是图工作流占位回答：最近 7 天销售额"
     assert outcome.context.variables["execution"] == outcome.context.variables["sql_execution"]
     assert outcome.context.variables["completed"] is True
+
+
+def test_chatbi_v1_empty_sql_result_is_validated_before_answer():
+    gateway = EmptyResultGateway()
+    runtime = _runtime(gateway)
+    run = runtime.create_run(
+        "chatbi-v1-empty-result-validation",
+        "chatbi",
+        "v1",
+        WorkflowContext(request={"question": "今天访问人数", "dataset_id": 1, "tenant_id": 10, "user_id": 20}),
+    )
+
+    outcome = runtime.execute(run.run_id)
+
+    assert outcome.status is RunStatus.SUCCEEDED
+    assert gateway.calls.index("execution.validate") > gateway.calls.index("sql.execute")
+    assert gateway.calls.index("answer.generate") > gateway.calls.index("execution.validate")
+    assert outcome.context.variables["execution"]["validation"]["status"] == "empty"
+    assert outcome.context.variables["execution"]["validation"]["issues"][0]["type"] == "empty_result"
 
 
 def test_chatbi_v1_runtime_uses_plain_interaction_resume():

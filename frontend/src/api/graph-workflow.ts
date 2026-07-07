@@ -17,6 +17,7 @@ export interface GraphPendingInteraction {
   interaction_id: string
   run_id: string
   node_name: string
+  label?: string
   status: string
   prompt?: string
   options?: Array<Record<string, any>>
@@ -39,6 +40,7 @@ export interface GraphRunResponse {
 
 export interface GraphTraceNode {
   name: string
+  label?: string
   status: string
   route_reason?: string
   output?: any

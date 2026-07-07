@@ -48,6 +48,7 @@ class CheckpointManager:
         route: RouteDecision | None = None,
         completed: bool = False,
         summary: dict | None = None,
+        node_label: str | None = None,
     ) -> WorkflowRun:
         """保存一个成功节点边界，并按固定顺序追加公开事件。"""
 
@@ -70,7 +71,7 @@ class CheckpointManager:
             saved,
             "node.succeeded",
             node_name=node_name,
-            public_payload={"summary": summary or {}},
+            public_payload=self._node_public_payload(summary=summary, node_label=node_label),
         )
         if route is not None:
             self.publish_event(
@@ -91,15 +92,24 @@ class CheckpointManager:
     def list(self, run_id: str) -> list[WorkflowCheckpoint]:
         return [checkpoint.model_copy(deep=True) for checkpoint in self._checkpoints.get(run_id, [])]
 
-    def pause(self, run: WorkflowRun, node_name: str, summary: dict | None = None) -> WorkflowRun:
+    def pause(
+        self,
+        run: WorkflowRun,
+        node_name: str,
+        summary: dict | None = None,
+        node_label: str | None = None,
+    ) -> WorkflowRun:
         """保存交互节点的暂停边界。"""
 
-        saved = self.save_progress(run, node_name=node_name, summary=summary)
+        saved = self.save_progress(run, node_name=node_name, summary=summary, node_label=node_label)
         self.publish_event(
             saved,
             "run.waiting_input",
             node_name=node_name,
-            public_payload={"pending_interaction": summary or {}},
+            public_payload=self._node_public_payload(
+                pending_interaction=summary,
+                node_label=node_label,
+            ),
         )
         return saved
 
@@ -112,14 +122,38 @@ class CheckpointManager:
         self.publish_event(saved, "run.resumed")
         return saved
 
-    def fail(self, run: WorkflowRun, error_code: str, node_name: str | None = None) -> WorkflowRun:
+    def fail(
+        self,
+        run: WorkflowRun,
+        error_code: str,
+        node_name: str | None = None,
+        node_label: str | None = None,
+    ) -> WorkflowRun:
         """以稳定错误码终止 Run，同时保留最近成功 Checkpoint。"""
 
         expected_version = run.version
         run.updated_at = datetime.now(timezone.utc)
         saved = self._run_store.save(run, expected_version=expected_version)
         payload = {"error_code": error_code}
+        if node_label:
+            payload["label"] = node_label
         if node_name is not None:
             self.publish_event(saved, "node.failed", node_name=node_name, public_payload=payload)
         self.publish_event(saved, "run.failed", public_payload=payload)
         return saved
+
+    @staticmethod
+    def _node_public_payload(
+        *,
+        summary: dict | None = None,
+        pending_interaction: dict | None = None,
+        node_label: str | None = None,
+    ) -> dict:
+        payload: dict = {}
+        if node_label:
+            payload["label"] = node_label
+        if summary is not None:
+            payload["summary"] = summary
+        if pending_interaction is not None:
+            payload["pending_interaction"] = pending_interaction
+        return payload

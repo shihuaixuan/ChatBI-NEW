@@ -16,8 +16,10 @@ SQL 适配层平移过来的唯一实现，绑定器与旧路径共用同一份�
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
+from apps.chatbi_workflow.capabilities.capability_matrix import decide_capability
 from apps.chatbi_workflow.capabilities.context import ChatBIRunContext, int_or_none
 from apps.chatbi_workflow.capabilities.interactions import (
     prune_dimensions_for_selected_metric,
@@ -170,6 +172,61 @@ def derive_order_and_limit(
     ], limit
 
 
+def derive_select_mode(intent: dict[str, Any]) -> str:
+    """从意图形态推导查询模式；默认保持聚合查询兼容。"""
+
+    query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
+    select_mode = str(query_shape.get("select_mode") or "").strip().lower()
+    if select_mode == "detail" or str(intent.get("intent_type") or "").lower() == "detail_query":
+        return "detail"
+    return "aggregate"
+
+
+def derive_having(intent: dict[str, Any], metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把指标阈值线索绑定为 HAVING 槽位，普通维度筛选不在这里处理。"""
+
+    mentions = intent.get("filter_mentions")
+    if not isinstance(mentions, list) or not metrics:
+        return []
+    slots: list[dict[str, Any]] = []
+    for mention in mentions:
+        if not isinstance(mention, dict) or not _is_metric_filter_mention(mention, metrics):
+            continue
+        metric = _metric_for_having(mention, metrics)
+        if metric is None:
+            continue
+        value = mention.get("value")
+        if value in (None, ""):
+            continue
+        slots.append(
+            {
+                "asset_type": "METRIC",
+                "asset_id": metric.get("asset_id"),
+                "display_name": metric.get("display_name") or metric.get("name") or metric.get("biz_name"),
+                "operator": _safe_having_operator(mention.get("operator")),
+                "value": value,
+            }
+        )
+    return slots
+
+
+def derive_multi_query_sub_plans(
+    intent: dict[str, Any],
+    metrics: list[dict[str, Any]],
+    group_bys: list[dict[str, Any]],
+    filters: list[dict[str, Any]],
+    having: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """为比较/占比生成可复用 split 执行节点的子查询计划。"""
+
+    intent_type = str(intent.get("intent_type") or "").strip().lower()
+    if intent_type == "share_analysis":
+        return _share_sub_plans(metrics, group_bys, filters, having)
+    if intent_type == "comparison_analysis":
+        return _comparison_sub_plans(metrics, group_bys, filters, having)
+    return []
+
+
 def derive_time_bucket(knowledge: dict[str, Any], intent: dict[str, Any]) -> dict[str, Any]:
     """从意图时间粒度与已绑定时间维度推导分桶配置（A7）。"""
 
@@ -184,6 +241,128 @@ def derive_time_bucket(knowledge: dict[str, Any], intent: dict[str, Any]) -> dic
             if dimension_id is not None:
                 return {"dimension_id": dimension_id, "grain": grain}
     return {}
+
+
+def _share_sub_plans(
+    metrics: list[dict[str, Any]],
+    group_bys: list[dict[str, Any]],
+    filters: list[dict[str, Any]],
+    having: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not metrics or not group_bys:
+        return []
+    return [
+        _sub_plan("part", metrics, group_bys, filters, having),
+        _sub_plan("total", metrics, [], filters, []),
+    ]
+
+
+def _comparison_sub_plans(
+    metrics: list[dict[str, Any]],
+    group_bys: list[dict[str, Any]],
+    filters: list[dict[str, Any]],
+    having: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not metrics:
+        return []
+    time_filter_index = _current_period_filter_index(filters)
+    if time_filter_index is None:
+        return []
+    baseline_filters = copy.deepcopy(filters)
+    current_value = baseline_filters[time_filter_index].get("value")
+    unit = str(current_value.get("unit") or "").strip().lower()
+    baseline_filters[time_filter_index]["value"] = {
+        key: current_value[key]
+        for key in ("unit", "timezone")
+        if key in current_value
+    }
+    baseline_filters[time_filter_index]["value"]["kind"] = "previous_period"
+    baseline_filters[time_filter_index]["value"]["unit"] = unit
+    return [
+        _sub_plan("current", metrics, group_bys, filters, having),
+        _sub_plan("baseline", metrics, group_bys, baseline_filters, having),
+    ]
+
+
+def _current_period_filter_index(filters: list[dict[str, Any]]) -> int | None:
+    for index, item in enumerate(filters):
+        value = item.get("value")
+        if not isinstance(value, dict):
+            continue
+        if str(value.get("kind") or "").lower() == "current_period" and str(value.get("unit") or "").strip():
+            return index
+    return None
+
+
+def _sub_plan(
+    role: str,
+    metrics: list[dict[str, Any]],
+    dimensions: list[dict[str, Any]],
+    filters: list[dict[str, Any]],
+    having: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "role": role,
+        "slots": {
+            "metrics": copy.deepcopy(metrics),
+            "dimensions": copy.deepcopy(dimensions),
+            "filters": copy.deepcopy(filters),
+            "having": copy.deepcopy(having),
+        },
+    }
+
+
+def _is_metric_filter_mention(mention: dict[str, Any], metrics: list[dict[str, Any]]) -> bool:
+    marker = str(
+        mention.get("target")
+        or mention.get("slot_type")
+        or mention.get("type")
+        or mention.get("filter_type")
+        or ""
+    ).strip().lower()
+    if marker in {"metric", "metric_filter", "having"}:
+        return True
+    if str(mention.get("asset_type") or "").upper() == "METRIC":
+        return True
+    name = str(mention.get("name") or mention.get("metric") or "").strip()
+    return bool(name and _metric_for_having({"name": name}, metrics) is not None)
+
+
+def _metric_for_having(mention: dict[str, Any], metrics: list[dict[str, Any]]) -> dict[str, Any] | None:
+    asset_id = int_or_none(mention.get("asset_id") or mention.get("metric_id"))
+    if asset_id is not None:
+        for metric in metrics:
+            if int_or_none(metric.get("asset_id")) == asset_id:
+                return metric
+    name = str(mention.get("name") or mention.get("metric") or "").strip()
+    if name:
+        for metric in metrics:
+            names = {
+                str(metric.get("display_name") or "").strip(),
+                str(metric.get("name") or "").strip(),
+                str(metric.get("biz_name") or "").strip(),
+            }
+            if name in names:
+                return metric
+    if len(metrics) == 1 and _is_explicit_metric_marker(mention):
+        return metrics[0]
+    return None
+
+
+def _is_explicit_metric_marker(mention: dict[str, Any]) -> bool:
+    marker = str(
+        mention.get("target")
+        or mention.get("slot_type")
+        or mention.get("type")
+        or mention.get("filter_type")
+        or ""
+    ).strip().lower()
+    return marker in {"metric", "metric_filter", "having"} or str(mention.get("asset_type") or "").upper() == "METRIC"
+
+
+def _safe_having_operator(operator: Any) -> str:
+    normalized = str(operator or "=").strip().lower()
+    return normalized if normalized in {"=", "!=", "<>", ">", "<", ">=", "<="} else "="
 
 
 def derive_value_filter_slots(
@@ -272,25 +451,33 @@ class QueryPlanBinder:
         filters = [*slots["filters"], *derive_value_filter_slots(knowledge, slots["filters"])]
         metrics = slots["metrics"]
         group_bys = slots["dimensions"]
+        having = derive_having(intent, metrics)
         if not metrics and not group_bys and not filters:
             return self._infeasible("no_bindable_assets", "没有可绑定到查询计划的资产")
+        sub_plans = derive_multi_query_sub_plans(intent, metrics, group_bys, filters, having)
+        decision = decide_capability(intent, {"sub_plans": sub_plans})
+        if decision.status == "infeasible":
+            return self._infeasible(decision.reason_code or "query_plan_infeasible", decision.reason or "查询计划不可行")
 
         return QueryPlanOutput(
-            status="ready",
-            strategy="semantic_compiler",
-            select_mode="aggregate",
+            status=decision.status,
+            strategy=decision.strategy,
+            select_mode=derive_select_mode(intent),
             metrics=metrics,
             group_bys=group_bys,
             filters=filters,
+            having=having,
             time=derive_time_bucket(knowledge, intent),
             order=order,
             limit=limit,
+            sub_plans=sub_plans,
         ).model_dump(mode="json")
 
     @staticmethod
     def _infeasible(reason_code: str, reason: str) -> dict[str, Any]:
         return QueryPlanOutput(
             status="infeasible",
+            strategy="infeasible",
             infeasible_reason=reason_code,
             issues=[{"type": reason_code, "reason": reason}],
         ).model_dump(mode="json")

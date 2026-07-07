@@ -152,6 +152,7 @@ class QueryPlanOutput(BaseModel):
     metrics: list[dict[str, Any]] = Field(default_factory=list)
     group_bys: list[dict[str, Any]] = Field(default_factory=list)
     filters: list[dict[str, Any]] = Field(default_factory=list)
+    having: list[dict[str, Any]] = Field(default_factory=list)
     time: dict[str, Any] = Field(default_factory=dict)
     order: list[dict[str, Any]] = Field(default_factory=list)
     limit: int | None = None
@@ -211,6 +212,14 @@ class SqlExecuteOutput(BaseModel):
     artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     error_code: str | None = None
     message: str | None = None
+
+
+class ResultValidationOutput(BaseModel):
+    """执行结果校验节点输出。"""
+
+    status: Literal["passed", "empty", "failed", "suspicious"]
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
 
 
 class SqlErrorInput(BaseModel):
@@ -273,6 +282,7 @@ CHATBI_V1_OUTPUT_MODELS = {
     "sql.generate_split": SplitSqlGenerateOutput,
     "sql.execute": SqlExecuteOutput,
     "sql.execute_split": SqlExecuteOutput,
+    "execution.validate": ResultValidationOutput,
     "sql.handle_error": SqlErrorOutput,
     "answer.generate": AnswerOutput,
     "question.recommend": RecommendationOutput,

@@ -9,6 +9,7 @@ export type GraphStepStatus =
 
 export interface GraphTraceNodeLike {
   name: string
+  label?: string
   status: string
   route_reason?: string
   output?: any
@@ -25,6 +26,7 @@ export interface GraphPendingInteractionLike {
   interaction_id: string
   run_id: string
   node_name: string
+  label?: string
   status: string
   prompt?: string
   options?: Array<Record<string, any>>
@@ -75,36 +77,6 @@ export interface NormalizedGraphInteraction {
   dimensionValueFields: string[]
 }
 
-export const GRAPH_NODE_LABELS: Record<string, string> = {
-  classify_question: '问题分类',
-  rewrite_question: '问题标准化',
-  ask_rewrite_clarification: '补充问题信息',
-  recognize_intent: '识别分析意图',
-  retrieve_knowledge: '匹配数据资产',
-  bind_query_plan: '构建查询计划',
-  ask_intent_clarification: '确认分析方式',
-  ask_slot_clarification: '补充槽位信息',
-  ask_metric_selection: '选择分析指标',
-  ask_cross_model_split: '用户询问',
-  draw_image_profile: '选择图表形式',
-  generate_split_queries: '生成查询',
-  execute_split_queries: '查询数据',
-  generate_sql: '生成查询',
-  execute_sql: '查询数据',
-  handle_sql_error: '修复查询',
-  generate_question_answer: '生成答案',
-  recommend_questions: '推荐追问',
-  compose_final_reply: '整理回复',
-  finish: '结束',
-}
-
-const INTERACTION_TITLES: Record<string, string> = {
-  ask_rewrite_clarification: '请补充问题信息',
-  ask_intent_clarification: '请确认分析方式',
-  ask_slot_clarification: '请补充槽位信息',
-  ask_metric_selection: '请选择要分析的指标',
-}
-
 export function buildGraphWorkflowSteps(
   trace?: GraphTraceLike | null,
   pendingInteraction?: GraphPendingInteractionLike | null
@@ -114,7 +86,7 @@ export function buildGraphWorkflowSteps(
     .filter((node) => node.status !== 'not_run')
     .map((node) => ({
       key: node.name,
-      label: graphNodeLabel(node.name),
+      label: graphNodeLabel(node),
       status: graphStepStatus(node, trace, pendingInteraction),
       summary: graphNodeSummary(node, pendingInteraction),
       details: graphNodeDetails(node),
@@ -123,7 +95,7 @@ export function buildGraphWorkflowSteps(
 
 export function buildGraphWorkflowStepsFromEvents(
   events: GraphWorkflowEventLike[],
-  _trace?: GraphTraceLike | null,
+  trace?: GraphTraceLike | null,
   pendingInteraction?: GraphPendingInteractionLike | null
 ): GraphWorkflowStep[] {
   const stepMap = new Map<string, GraphWorkflowStep>()
@@ -139,20 +111,26 @@ export function buildGraphWorkflowStepsFromEvents(
     }
     const nodeName = event.node_name || event.public_payload?.node_name
     if (!nodeName) continue
+    const traceNode = trace?.nodes.find((node) => node.name === nodeName)
     const existing = stepMap.get(nodeName)
     const eventSummary = event.public_payload?.summary
     const eventNode: GraphTraceNodeLike = {
       name: nodeName,
+      label:
+        typeof event.public_payload?.label === 'string'
+          ? event.public_payload.label
+          : traceNode?.label,
       status: 'not_run',
       output: eventSummary ?? event.public_payload,
     }
     const nextStep: GraphWorkflowStep = existing || {
       key: nodeName,
-      label: graphNodeLabel(nodeName),
+      label: graphNodeLabel(eventNode),
       status: 'pending',
       summary: graphNodeSummary(eventNode, pendingInteraction),
       details: graphNodeDetails(eventNode),
     }
+    if (eventNode.label) nextStep.label = eventNode.label
     if (event.event_type === 'node.started') nextStep.status = 'running'
     if (event.event_type === 'node.succeeded') nextStep.status = 'succeeded'
     if (event.event_type === 'node.failed') nextStep.status = 'failed'
@@ -167,7 +145,11 @@ export function buildGraphWorkflowStepsFromEvents(
   if (pendingInteraction?.status === 'pending' && !stepMap.has(pendingInteraction.node_name)) {
     stepMap.set(pendingInteraction.node_name, {
       key: pendingInteraction.node_name,
-      label: graphNodeLabel(pendingInteraction.node_name),
+      label: graphNodeLabel({
+        name: pendingInteraction.node_name,
+        label: pendingInteraction.label,
+        status: pendingInteraction.status,
+      }),
       status: 'waiting_input',
       summary: pendingInteraction.prompt || '',
       details: undefined,
@@ -206,7 +188,7 @@ export function graphProgressHeadline(
   const runningNode =
     trace.nodes.find((node) => node.status === 'started') ||
     trace.nodes.find((node) => node.name === trace.current_node)
-  if (runningNode) return `正在执行：${graphNodeLabel(runningNode.name)}...`
+  if (runningNode) return `正在执行：${graphNodeLabel(runningNode)}...`
   return '正在执行...'
 }
 
@@ -295,8 +277,9 @@ function isDimensionValueMap(value: unknown): value is Record<string, string> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
-export function graphNodeLabel(name: string) {
-  return GRAPH_NODE_LABELS[name] || name
+export function graphNodeLabel(node: GraphTraceNodeLike | string) {
+  if (typeof node === 'string') return node
+  return node.label || node.name
 }
 
 function graphStepStatus(
@@ -323,7 +306,7 @@ function graphStepStatus(
 function traceTerminalHeadline(trace?: GraphTraceLike | null) {
   if (!trace) return ''
   const failedNode = trace.nodes.find((node) => node.status === 'failed')
-  if (failedNode) return `执行失败：${graphNodeLabel(failedNode.name)}`
+  if (failedNode) return `执行失败：${graphNodeLabel(failedNode)}`
   if (trace.status === 'failed') return '执行失败'
   if (trace.status === 'cancelled') return '已停止'
   if (trace.status === 'succeeded') return '已完成'
@@ -353,6 +336,7 @@ function graphNodeSummary(
       ''
     )
   }
+  if (node.name === 'bind_query_plan') return queryPlanSummary(output)
   if (node.name === 'draw_image_profile')
     return output.profile || listText(output.chart_candidates) || ''
   if (node.name === 'generate_sql') return output.sql ? '已生成 SQL' : ''
@@ -480,7 +464,7 @@ function interactionSlots(interaction: GraphPendingInteractionLike) {
 }
 
 function interactionTitle(interaction: GraphPendingInteractionLike) {
-  return INTERACTION_TITLES[interaction.node_name] || interaction.prompt || '请补充信息'
+  return interaction.prompt || '请补充信息'
 }
 
 function isPendingInteraction(value: any): value is GraphPendingInteractionLike {
@@ -529,6 +513,38 @@ function intentTypeLabel(value: any) {
     unknown: '待确认',
   }
   return labels[String(value)] || String(value)
+}
+
+function queryPlanSummary(output: Record<string, any>) {
+  const parts = [
+    listText(output.metrics) ? `指标：${listText(output.metrics)}` : '',
+    listText(output.group_bys) ? `维度：${listText(output.group_bys)}` : '',
+    planFilterText(output.filters),
+    planFilterText(output.having, '条件'),
+    Array.isArray(output.sub_plans) && output.sub_plans.length
+      ? `子查询：${output.sub_plans.length} 个`
+      : '',
+    output.status === 'infeasible' && output.infeasible_reason
+      ? `不可行：${output.infeasible_reason}`
+      : '',
+  ].filter(Boolean)
+  return parts.join('；') || output.strategy || output.status || ''
+}
+
+function planFilterText(filters: any, label = '筛选') {
+  if (!Array.isArray(filters) || !filters.length) return ''
+  const texts = filters
+    .map((filter) => {
+      if (!filter || typeof filter !== 'object') return ''
+      const name = displayValue(filter) || filter.field || filter.dimension
+      const operator = filter.operator || '='
+      const value = filter.value
+      if (!name && value === undefined) return ''
+      if (value === undefined || value === null || value === '') return String(name)
+      return `${name}${operator}${displayValue(value) || String(value)}`
+    })
+    .filter(Boolean)
+  return texts.length ? `${label}：${texts.join('、')}` : ''
 }
 
 function dimensionSlotText(slots: any, mentions: any) {

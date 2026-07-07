@@ -6,7 +6,7 @@ from apps.workflow_engine.domain.context import (
     ControlContext,
     WorkflowContext,
 )
-from apps.workflow_engine.domain.definition import NodeType
+from apps.workflow_engine.domain.definition import NodeDefinition, NodeType
 from apps.workflow_engine.domain.execution import NodeExecutionResult, NodeResultStatus
 from apps.workflow_engine.domain.interaction import (
     InteractionRequest,
@@ -22,6 +22,10 @@ from apps.workflow_engine.runtime.interaction import (
     InteractionManager,
 )
 from apps.workflow_engine.runtime.lease import InMemoryRunLease
+from apps.workflow_engine.runtime.public_projection import (
+    node_display_label,
+    public_node_summary,
+)
 from apps.workflow_engine.runtime.retry import RetryController
 from apps.workflow_engine.runtime.router import ConditionRouter
 from apps.workflow_engine.runtime.scheduler import NodeScheduler
@@ -122,8 +126,14 @@ class GraphRuntime:
                         run,
                         "LOOP_ITERATION_LIMIT_EXCEEDED",
                         node_name=node.name,
+                        node_label=node_display_label(node),
                     )
-                self._checkpoints.publish_event(run, "node.started", node_name=node.name)
+                self._checkpoints.publish_event(
+                    run,
+                    "node.started",
+                    node_name=node.name,
+                    public_payload={"label": node_display_label(node)},
+                )
                 node_started_at = datetime.now(timezone.utc)
                 result = self._execute_with_retry(run, node, definition.policies.default_retry_policy)
                 node_active_ms = int((datetime.now(timezone.utc) - node_started_at).total_seconds() * 1000)
@@ -133,11 +143,16 @@ class GraphRuntime:
                     self._record_node_execution(run, node, result)
                     run.status = RunStatus.FAILED
                     error_code = result.error.code if result.error is not None else "NODE_FAILED"
-                    return self._checkpoints.fail(run, error_code, node_name=node.name)
+                    return self._checkpoints.fail(
+                        run,
+                        error_code,
+                        node_name=node.name,
+                        node_label=node_display_label(node),
+                    )
 
                 if result.status is NodeResultStatus.WAITING_INPUT:
                     self._record_node_execution(run, node, result)
-                    return self._pause_for_interaction(run, node.name, result)
+                    return self._pause_for_interaction(run, node, result)
 
                 updated_context = self._context_patcher.apply(run.context, result.patch)
                 updated_context.control.executed_nodes += 1
@@ -154,7 +169,8 @@ class GraphRuntime:
                         run,
                         node_name=node.name,
                         completed=True,
-                        summary=self._public_node_summary(result, node.name),
+                        summary=public_node_summary(result, node),
+                        node_label=node_display_label(node),
                     )
 
                 route = self._router.select(definition, node, run.context, result)
@@ -165,7 +181,8 @@ class GraphRuntime:
                     run,
                     node_name=node.name,
                     route=route,
-                    summary=self._public_node_summary(result, node.name),
+                    summary=public_node_summary(result, node),
+                    node_label=node_display_label(node),
                 )
 
             return run
@@ -282,17 +299,23 @@ class GraphRuntime:
     def _pause_for_interaction(
         self,
         run: WorkflowRun,
-        node_name: str,
+        node: NodeDefinition,
         result: NodeExecutionResult,
     ) -> WorkflowRun:
         if self._interactions is None or result.interaction is None:
             run.status = RunStatus.FAILED
-            return self._checkpoints.fail(run, "INTERACTION_NOT_SUPPORTED", node_name=node_name)
-        interaction = self._interactions.create(run.run_id, node_name, result.interaction)
+            return self._checkpoints.fail(
+                run,
+                "INTERACTION_NOT_SUPPORTED",
+                node_name=node.name,
+                node_label=node_display_label(node),
+            )
+        interaction = self._interactions.create(run.run_id, node.name, result.interaction)
         pending_summary = {
             "interaction_id": interaction.interaction_id,
             "run_id": interaction.run_id,
             "node_name": interaction.node_name,
+            "label": node_display_label(node),
             "status": interaction.status.value,
             "prompt": interaction.prompt,
             "options": interaction.options,
@@ -300,45 +323,12 @@ class GraphRuntime:
             "allowed_update_paths": interaction.allowed_update_paths,
         }
         run.context.control.executed_nodes += 1
-        run.context.control.previous_node = node_name
+        run.context.control.previous_node = node.name
         run.context.control.pending_interaction_id = interaction.interaction_id
         run.status = RunStatus.WAITING_INPUT
         return self._checkpoints.pause(
             run,
-            node_name=node_name,
+            node_name=node.name,
             summary=pending_summary,
+            node_label=node_display_label(node),
         )
-
-    @staticmethod
-    def _public_node_summary(
-        result: NodeExecutionResult,
-        node_name: str | None = None,
-    ) -> dict:
-        """提取节点公开摘要，供 SSE 逐步展示，不等待最终 trace。"""
-
-        if result.interaction is not None:
-            return result.interaction
-        values = result.patch.set_values
-        if not values:
-            return {}
-        if node_name in {"execute_sql", "execute_split_queries"}:
-            execution = values.get("variables.execution")
-            if not isinstance(execution, dict):
-                execution = values.get("variables.sql_execution")
-            if isinstance(execution, dict):
-                results = execution.get("results")
-                query_count = len(results) if isinstance(results, list) else 0
-                if query_count == 0 and node_name == "execute_sql":
-                    query_count = 1
-                return {
-                    "status": execution.get("status"),
-                    "query_count": query_count,
-                    "row_count": execution.get("row_count", 0),
-                    "fields": execution.get("fields", []),
-                    "execution_ms": execution.get("execution_ms", 0),
-                    "artifact_refs": execution.get("artifact_refs", []),
-                }
-        if len(values) == 1:
-            value = next(iter(values.values()))
-            return value if isinstance(value, dict) else {"value": value}
-        return dict(values)

@@ -88,6 +88,22 @@ def build_answer_projection(request: dict[str, Any]) -> dict[str, Any]:
                 "message": execution.get("message"),
             }
         ]
+    projected_results = [
+        _project_execution_result(item)
+        for item in results
+        if isinstance(item, dict)
+    ]
+    execution_projection = {
+        "status": execution.get("status"),
+        "validation": _project_validation(execution.get("validation")),
+        "row_count": execution.get("row_count", 0),
+        "results": projected_results,
+        "error_code": execution.get("error_code"),
+        "message": execution.get("message"),
+    }
+    analysis = _project_multi_query_analysis(ctx.plan, execution, results)
+    if analysis:
+        execution_projection["analysis"] = analysis
     decision = (
         ctx.knowledge.get("decision")
         if isinstance(ctx.knowledge.get("decision"), dict)
@@ -99,17 +115,7 @@ def build_answer_projection(request: dict[str, Any]) -> dict[str, Any]:
             "rewritten": ctx.question,
         },
         "plan": _project_plan(ctx.plan),
-        "execution": {
-            "status": execution.get("status"),
-            "row_count": execution.get("row_count", 0),
-            "results": [
-                _project_execution_result(item)
-                for item in results
-                if isinstance(item, dict)
-            ],
-            "error_code": execution.get("error_code"),
-            "message": execution.get("message"),
-        },
+        "execution": execution_projection,
         "knowledge_decision": {
             "status": decision.get("status"),
             "reason": decision.get("reason"),
@@ -127,6 +133,7 @@ def _project_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "metrics",
         "group_bys",
         "filters",
+        "having",
         "time",
         "order",
         "limit",
@@ -151,6 +158,119 @@ def _project_execution_result(result: dict[str, Any]) -> dict[str, Any]:
         "message",
     )
     return {key: result.get(key) for key in allowed if key in result}
+
+
+def _project_validation(validation: Any) -> dict[str, Any]:
+    if not isinstance(validation, dict):
+        return {}
+    allowed = ("status", "issues", "suggestions")
+    return {key: validation.get(key) for key in allowed if key in validation}
+
+
+def _project_multi_query_analysis(
+    plan: dict[str, Any],
+    execution: dict[str, Any],
+    results: list[Any],
+) -> dict[str, Any]:
+    if plan.get("strategy") != "multi_query":
+        return {}
+    role_results = _results_by_role(execution, results)
+    if {"part", "total"}.issubset(role_results):
+        return _share_analysis(role_results["part"], role_results["total"])
+    if {"current", "baseline"}.issubset(role_results):
+        return _comparison_analysis(role_results["current"], role_results["baseline"])
+    return {}
+
+
+def _results_by_role(execution: dict[str, Any], results: list[Any]) -> dict[str, dict[str, Any]]:
+    queries = execution.get("queries")
+    role_by_query_id = {}
+    if isinstance(queries, list):
+        role_by_query_id = {
+            query.get("query_id"): query.get("role")
+            for query in queries
+            if isinstance(query, dict) and query.get("query_id") and query.get("role")
+        }
+    mapped: dict[str, dict[str, Any]] = {}
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        role = role_by_query_id.get(result.get("query_id"))
+        if role:
+            mapped[str(role)] = result
+    return mapped
+
+
+def _share_analysis(part_result: dict[str, Any], total_result: dict[str, Any]) -> dict[str, Any]:
+    total_row = _first_row(total_result)
+    total_metric, total = _first_numeric(total_row)
+    if not total_metric or total in (None, 0):
+        return {}
+    rows = []
+    for row in _sample_rows(part_result):
+        value = _numeric_value(row.get(total_metric))
+        metric = total_metric
+        if value is None:
+            metric, value = _first_numeric(row)
+        if not metric or value is None:
+            continue
+        rows.append(
+            {
+                "dimensions": {key: val for key, val in row.items() if key != metric},
+                "value": value,
+                "share": value / total,
+            }
+        )
+    if not rows:
+        return {}
+    return {"kind": "share", "metric": total_metric, "total": total, "rows": rows}
+
+
+def _comparison_analysis(current_result: dict[str, Any], baseline_result: dict[str, Any]) -> dict[str, Any]:
+    current_metric, current = _first_numeric(_first_row(current_result))
+    baseline_metric, baseline = _first_numeric(_first_row(baseline_result))
+    metric = current_metric or baseline_metric
+    if not metric or current is None or baseline is None:
+        return {}
+    return {
+        "kind": "comparison",
+        "metric": metric,
+        "current": current,
+        "baseline": baseline,
+        "delta": current - baseline,
+        "change_rate": None if baseline == 0 else (current - baseline) / baseline,
+    }
+
+
+def _first_row(result: dict[str, Any]) -> dict[str, Any]:
+    rows = _sample_rows(result)
+    return rows[0] if rows else {}
+
+
+def _sample_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = result.get("sample_rows")
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _first_numeric(row: dict[str, Any]) -> tuple[str | None, float | None]:
+    for key, value in row.items():
+        number = _numeric_value(value)
+        if number is not None:
+            return key, number
+    return None, None
+
+
+def _numeric_value(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _project_error(error: dict[str, Any]) -> dict[str, Any]:

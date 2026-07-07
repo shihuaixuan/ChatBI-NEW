@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import importlib.util
 import io
 import json
@@ -18,6 +19,7 @@ from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from apps.chatbi_workflow import runtime as chatbi_runtime
+from apps.chatbi_workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
 from apps.headless.models import (
     HeadlessAssetDocument,
     HeadlessDataSet,
@@ -547,7 +549,9 @@ def test_graph_query_can_execute_chatbi_v1_graph():
             ensure_ascii=False,
         )
         assert "select " not in public_summary.lower()
-        assert "placeholder_value" not in public_summary
+        assert execute_event.public_payload["summary"]["results"][0]["sample_rows"] == [
+            {"placeholder_value": 1}
+        ]
         _cleanup(session)
 
 
@@ -699,11 +703,9 @@ def test_graph_trace_returns_node_status_route_reason_and_outputs():
     assert nodes["classify_question"]["output"]["category"] == "data"
     assert nodes["reject_answer"]["status"] == "not_run"
     assert nodes["reject_answer"]["output"] is None
-    assert nodes["generate_sql"]["output"] == {
-        "statement_type": "select",
-        "sql_redacted": True,
-        "artifact_ref": None,
-    }
+    assert nodes["generate_sql"]["output"]["statement_type"] == "select"
+    assert nodes["generate_sql"]["output"]["sql"].lower().startswith("select ")
+    assert nodes["generate_sql"]["output"]["artifact_ref"] is None
     assert {
         key: nodes["execute_sql"]["output"][key]
         for key in (
@@ -724,9 +726,86 @@ def test_graph_trace_returns_node_status_route_reason_and_outputs():
     assert nodes["execute_sql"]["output"]["artifact_refs"][0]["artifact_id"].startswith(
         "artifact-"
     )
+    assert nodes["execute_sql"]["output"]["results"][0]["sample_rows"] == [{"placeholder_value": 1}]
     assert nodes["compose_final_reply"]["output"]["final_answer"] == "暂时无法生成完整回答，请稍后重试。"
 
     with Session(engine) as session:
+        _cleanup(session)
+
+
+def test_graph_trace_is_derived_from_v1_node_metadata():
+    with Session(engine) as session:
+        _cleanup(session)
+        dataset_id = _seed_v1_headless_dataset(session)
+
+    _client().post(
+        "/graph/queries",
+        json={
+            "question": "今日访问人数",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "request_id": "api-request-v1-trace-metadata",
+            "run_id": "api-run-v1-trace-metadata",
+        },
+    )
+
+    response = _client().get("/graph/runs/api-run-v1-trace-metadata/trace")
+
+    assert response.status_code == 200
+    body = response.json()
+    node_names = [node["name"] for node in body["nodes"]]
+    assert "ask_cross_model_split" in node_names
+    assert "generate_split_queries" in node_names
+    assert "execute_split_queries" in node_names
+    assert "validate_result" in node_names
+    nodes = {node["name"]: node for node in body["nodes"]}
+    assert nodes["classify_question"]["label"] == "问题分类"
+    assert nodes["ask_cross_model_split"]["label"] == "确认跨模型拆分"
+    assert nodes["validate_result"]["label"] == "结果校验"
+    assert nodes["generate_sql"]["output"]["statement_type"] == "select"
+    assert nodes["generate_sql"]["output"]["sql"].lower().startswith("select ")
+
+    with Session(engine) as session:
+        _cleanup(session)
+
+
+def test_graph_node_events_use_v1_metadata_projection_for_public_summary():
+    with Session(engine) as session:
+        _cleanup(session)
+        dataset_id = _seed_v1_headless_dataset(session)
+
+    _client().post(
+        "/graph/queries",
+        json={
+            "question": "今日访问人数",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "request_id": "api-request-v1-event-metadata",
+            "run_id": "api-run-v1-event-metadata",
+        },
+    )
+
+    with Session(engine) as session:
+        events = session.exec(
+            select(WorkflowEventModel)
+            .where(WorkflowEventModel.run_id == "api-run-v1-event-metadata")
+            .order_by(WorkflowEventModel.sequence)
+        ).all()
+        generate_sql_event = next(
+            event
+            for event in events
+            if event.event_type == "node.succeeded"
+            and event.node_name == "generate_sql"
+        )
+        assert generate_sql_event.public_payload == {
+            "label": "生成查询",
+            "summary": {
+                "statement_type": "select",
+                "sql": generate_sql_event.public_payload["summary"]["sql"],
+                "artifact_ref": None,
+            },
+        }
+        assert generate_sql_event.public_payload["summary"]["sql"].lower().startswith("select ")
         _cleanup(session)
 
 
@@ -734,7 +813,7 @@ def test_graph_trace_sanitizes_unified_split_execution_results():
     with Session(engine) as session:
         service = graph_service.GraphApiService(session)
         output = service._sanitize_trace_output(
-            "execute_split_queries",
+            build_chatbi_v1_definition().nodes["execute_split_queries"],
             {
                 "status": "succeeded",
                 "row_count": 3,
@@ -743,10 +822,18 @@ def test_graph_trace_sanitizes_unified_split_execution_results():
                 "results": [
                     {
                         "query_id": "query-0",
+                        "status": "succeeded",
+                        "row_count": 1,
+                        "fields": ["value"],
+                        "sample_rows": [{"value": 1}],
                         "artifact_ref": {"artifact_id": "artifact-1"},
                     },
                     {
                         "query_id": "query-1",
+                        "status": "succeeded",
+                        "row_count": 2,
+                        "fields": ["value"],
+                        "sample_rows": [{"value": 2}],
                         "artifact_ref": {"artifact_id": "artifact-2"},
                     },
                 ],
@@ -762,6 +849,28 @@ def test_graph_trace_sanitizes_unified_split_execution_results():
         "artifact_refs": [
             {"artifact_id": "artifact-1"},
             {"artifact_id": "artifact-2"},
+        ],
+        "results": [
+            {
+                "query_id": "query-0",
+                "status": "succeeded",
+                "row_count": 1,
+                "fields": ["value"],
+                "sample_rows": [{"value": 1}],
+                "result_truncated": False,
+                "execution_ms": 0,
+                "artifact_ref": {"artifact_id": "artifact-1"},
+            },
+            {
+                "query_id": "query-1",
+                "status": "succeeded",
+                "row_count": 2,
+                "fields": ["value"],
+                "sample_rows": [{"value": 2}],
+                "result_truncated": False,
+                "execution_ms": 0,
+                "artifact_ref": {"artifact_id": "artifact-2"},
+            },
         ],
     }
 
@@ -800,6 +909,7 @@ def test_graph_query_persists_node_execution_summaries_for_trace_and_retry():
             "bind_query_plan",
             "generate_sql",
             "execute_sql",
+            "validate_result",
             "generate_question_answer",
             "recommend_questions",
             "compose_final_reply",
@@ -863,7 +973,7 @@ def test_graph_v1_cancelled_waiting_run_cannot_resume_from_interaction():
         _cleanup(session)
 
 
-def test_graph_v1_retry_restarts_failed_run_and_executes_graph():
+def test_graph_v1_retry_resumes_from_latest_context_without_clearing_variables():
     with Session(engine) as session:
         _cleanup(session)
         dataset_id = _seed_v1_headless_dataset(session)
@@ -882,13 +992,11 @@ def test_graph_v1_retry_restarts_failed_run_and_executes_graph():
     with Session(engine) as session:
         run = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-run-v1-retry")).one()
         run.status = "failed"
-        run.current_node = "classify_question"
-        context = run.context
-        context["control"]["current_node"] = "classify_question"
-        context["control"]["previous_node"] = None
-        context["control"]["executed_nodes"] = 0
-        context["control"]["loop_iterations"] = {}
-        context["variables"] = {}
+        run.current_node = "generate_question_answer"
+        context = copy.deepcopy(run.context)
+        context["control"]["current_node"] = "generate_question_answer"
+        context["control"]["previous_node"] = "validate_result"
+        context["variables"]["retry_marker"] = "preserve-me"
         run.context = context
         run.error_code = "TEST_FAILURE"
         session.add(run)
@@ -902,14 +1010,22 @@ def test_graph_v1_retry_restarts_failed_run_and_executes_graph():
     body = run_response.json()
     assert body["status"] == "succeeded"
     assert body["current_node"] == "finish"
+    assert body["context_summary"]["variables"]["retry_marker"] == "preserve-me"
     assert body["context_summary"]["variables"]["final_reply"]["final_answer"] == "暂时无法生成完整回答，请稍后重试。"
 
     with Session(engine) as session:
+        node_names = session.exec(
+            select(NodeExecutionModel.node_name)
+            .where(NodeExecutionModel.run_id == "api-run-v1-retry")
+            .order_by(NodeExecutionModel.sequence)
+        ).all()
         events = session.exec(
             select(WorkflowEventModel)
             .where(WorkflowEventModel.run_id == "api-run-v1-retry")
             .order_by(WorkflowEventModel.sequence)
         ).all()
+        assert node_names.count("classify_question") == 1
+        assert node_names[-4:] == ["generate_question_answer", "recommend_questions", "compose_final_reply", "finish"]
         assert "run.retry_requested" in [event.event_type for event in events]
         assert events[-1].event_type == "run.succeeded"
         _cleanup(session)

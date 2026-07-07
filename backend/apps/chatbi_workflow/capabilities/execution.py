@@ -67,6 +67,14 @@ class ExecutionResult(BaseModel):
     message: str | None = None
 
 
+class ExecutionValidation(BaseModel):
+    """SQL 执行结果校验结论。"""
+
+    status: Literal["passed", "empty", "failed", "suspicious"]
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+
+
 def build_execution_output(
     queries: list[ExecutionQuery],
     results: list[ExecutionResult],
@@ -121,3 +129,87 @@ def _unique_fields(results: list[ExecutionResult]) -> list[str]:
             seen.add(field)
             fields.append(field)
     return fields
+
+
+def validate_execution_output(execution: dict[str, Any]) -> dict[str, Any]:
+    """校验 SQL 执行结果，显式标记空结果，避免把空数据当作正常答案。"""
+
+    results = _execution_results(execution)
+    if str(execution.get("status") or "").lower() == "failed":
+        error_code = str(execution.get("error_code") or "SQL_EXECUTION_FAILED")
+        message = str(execution.get("message") or "SQL 执行失败")
+        return ExecutionValidation(
+            status="failed",
+            issues=[{"type": "execution_failed", "error_code": error_code, "message": message}],
+            suggestions=[],
+        ).model_dump(mode="json")
+
+    failed_results = [item for item in results if str(item.get("status") or "").lower() == "failed"]
+    if failed_results:
+        first = failed_results[0]
+        return ExecutionValidation(
+            status="failed",
+            issues=[
+                {
+                    "type": "execution_failed",
+                    "query_id": first.get("query_id"),
+                    "error_code": first.get("error_code") or "SQL_EXECUTION_FAILED",
+                    "message": first.get("message") or "SQL 执行失败",
+                }
+            ],
+            suggestions=[],
+        ).model_dump(mode="json")
+
+    empty_issues = [
+        {
+            "type": "empty_result",
+            "query_id": item.get("query_id") or f"query-{index}",
+            "message": "查询成功但没有返回数据",
+        }
+        for index, item in enumerate(results or [_legacy_result(execution)])
+        if _row_count(item) == 0
+    ]
+    if empty_issues and len(empty_issues) == len(results or [execution]):
+        return ExecutionValidation(
+            status="empty",
+            issues=empty_issues,
+            suggestions=["可以尝试放宽筛选条件或调整时间范围"],
+        ).model_dump(mode="json")
+    if empty_issues:
+        return ExecutionValidation(
+            status="suspicious",
+            issues=empty_issues,
+            suggestions=["部分子查询没有返回数据，可以检查筛选条件是否过窄"],
+        ).model_dump(mode="json")
+    return ExecutionValidation(status="passed").model_dump(mode="json")
+
+
+def _execution_results(execution: dict[str, Any]) -> list[dict[str, Any]]:
+    results = execution.get("results")
+    if isinstance(results, list):
+        return [item for item in results if isinstance(item, dict)]
+    if execution:
+        return [_legacy_result(execution)]
+    return []
+
+
+def _legacy_result(execution: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "query_id": "query-0",
+        "status": execution.get("status"),
+        "row_count": execution.get("row_count", 0),
+        "error_code": execution.get("error_code"),
+        "message": execution.get("message"),
+    }
+
+
+def _row_count(result: dict[str, Any]) -> int:
+    value = result.get("row_count")
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    rows = result.get("sample_rows") or result.get("rows")
+    return len(rows) if isinstance(rows, list) else 0

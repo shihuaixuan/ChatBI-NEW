@@ -13,6 +13,7 @@ PUBLIC_PAYLOAD_ALLOWLIST = frozenset(
         "answer",
         "error_code",
         "interaction_id",
+        "label",
         "message",
         "node",
         "node_name",

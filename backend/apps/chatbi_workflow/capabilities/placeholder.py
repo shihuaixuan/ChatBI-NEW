@@ -1,6 +1,7 @@
 from typing import Any
 
 from apps.chatbi_workflow.capabilities.adapters.interaction import InteractionAdapter
+from apps.chatbi_workflow.capabilities.execution import validate_execution_output
 
 
 class PlaceholderChatBICapabilityGateway:
@@ -209,6 +210,8 @@ class PlaceholderChatBICapabilityGateway:
                 "error_code": None,
                 "message": None,
             }
+        if capability == "execution.validate":
+            return validate_execution_output(request.get("variables", {}).get("execution", {}))
         if capability == "question.recommend":
             return {"questions": ["按月查看销售额趋势", "查看销售额最高的商品"]}
         if capability == "answer.compose":
