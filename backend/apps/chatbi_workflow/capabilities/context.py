@@ -16,6 +16,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from apps.chatbi_workflow.capabilities.interactions import (
+    read_interaction_record,
+    read_interaction_response,
+)
+
 
 def int_or_none(value: Any) -> int | None:
     """宽松整数转换：接受 int 与数字字符串，拒绝 bool 与其他类型。"""
@@ -160,22 +165,28 @@ class ChatBIRunContext:
 
     # ---- 交互回答（一次性输入，消费方式见各节点） ----
 
+    def interaction(self, node_name: str) -> dict[str, Any]:
+        return read_interaction_record(self._variables, node_name)
+
+    def interaction_response(self, node_name: str, legacy_key: str | None = None) -> dict[str, Any]:
+        return read_interaction_response(self._variables, node_name, legacy_key)
+
     @property
     def rewrite_response(self) -> dict[str, Any]:
-        return self.domain("rewrite_response")
+        return self.interaction_response("ask_rewrite_clarification", "rewrite_response")
 
     @property
     def intent_response(self) -> dict[str, Any]:
-        return self.domain("intent_response")
+        return self.interaction_response("ask_intent_clarification", "intent_response")
 
     @property
     def slot_response(self) -> dict[str, Any]:
-        return self.domain("slot_response")
+        return self.interaction_response("ask_slot_clarification", "slot_response")
 
     @property
     def metric_selection(self) -> dict[str, Any]:
-        return self.domain("metric_selection")
+        return self.interaction_response("ask_metric_selection", "metric_selection")
 
     @property
     def cross_model_response(self) -> dict[str, Any]:
-        return self.domain("cross_model_response")
+        return self.interaction_response("ask_cross_model_split", "cross_model_response")

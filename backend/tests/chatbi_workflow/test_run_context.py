@@ -65,6 +65,27 @@ def test_context_interaction_responses_are_dict_guarded():
     assert ctx.rewrite_response == {}
 
 
+def test_run_context_prefers_standard_interaction_response_over_legacy_key():
+    ctx = ChatBIRunContext(
+        _request(
+            variables={
+                "interactions": {
+                    "ask_metric_selection": {
+                        "node_name": "ask_metric_selection",
+                        "round": 1,
+                        "response": {"metric": 239},
+                        "skipped": False,
+                    }
+                },
+                "metric_selection": {"metric": 999},
+            }
+        )
+    )
+
+    assert ctx.interaction("ask_metric_selection")["round"] == 1
+    assert ctx.metric_selection == {"metric": 239}
+
+
 def test_context_tolerates_missing_namespaces():
     ctx = ChatBIRunContext({})
     assert ctx.raw_question == ""
