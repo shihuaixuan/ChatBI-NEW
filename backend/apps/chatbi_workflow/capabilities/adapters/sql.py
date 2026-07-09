@@ -306,6 +306,7 @@ class SqlAdapter:
                     sql=sql,
                     datasource_id=datasource_id,
                     plan_ref=index,
+                    role=str(raw_query.get("role") or "") or None,
                     model_id=self._int_or_none(raw_query.get("model_id")),
                     metrics=[
                         str(item)

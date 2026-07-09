@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python -m pytest tests/headless/test_sql_compiler_time_filters.py tests/headless/test_semantic_sql_compiler.py tests/chatbi_workflow/test_sql_adapter.py -q)",
+      "Bash(.venv/bin/python -m pytest tests/workflow_engine/ -q)",
+      "Bash(.venv/bin/python -m pytest tests/workflow_engine/test_graph_api.py::test_graph_v1_retry_restarts_failed_run_and_executes_graph -x -q)",
+      "Bash(git stash *)",
+      "Bash(.venv/bin/python -m pytest tests/workflow_engine/test_graph_api.py tests/workflow_engine/test_event_outbox.py -q)",
+      "Bash(.venv/bin/python -m pytest tests/workflow_engine/ -q --deselect tests/workflow_engine/test_event_outbox.py::test_event_outbox_publishes_pending_events_and_retains_failed_for_retry --ignore=tests/workflow_engine/test_graph_api.py)",
+      "Bash(.venv/bin/python -m pytest tests/chatbi_workflow/ -q)",
+      "Bash(.venv/bin/python -m pytest tests/chatbi_workflow/test_v1_clarification_regressions.py -q)",
+      "Bash(.venv/bin/python -m pytest tests/chatbi_workflow/ tests/workflow_engine/ -q --ignore=tests/workflow_engine/test_graph_api.py --deselect tests/workflow_engine/test_event_outbox.py::test_event_outbox_publishes_pending_events_and_retains_failed_for_retry)",
+      "Bash(.venv/bin/python -m ruff check apps/headless/sql_compiler.py apps/workflow_engine/ apps/chatbi_workflow/ tests/chatbi_workflow/test_v1_clarification_regressions.py tests/chatbi_workflow/test_v1_degradation.py tests/headless/test_sql_compiler_time_filters.py tests/workflow_engine/test_runtime_failures.py tests/workflow_engine/test_graph_api.py)",
+      "Bash(.venv/bin/python -m pytest tests/chatbi_workflow/ tests/workflow_engine/ tests/headless/ -q --ignore=tests/workflow_engine/test_graph_api.py --deselect tests/workflow_engine/test_event_outbox.py::test_event_outbox_publishes_pending_events_and_retains_failed_for_retry)",
+      "Bash(.venv/bin/python -m ruff check apps/chatbi_workflow/capabilities/adapters/question.py apps/chatbi_workflow/capabilities/context.py)",
+      "Bash(.venv/bin/python -m ruff check apps/chatbi_workflow/capabilities/adapters/sql.py apps/chatbi_workflow/capabilities/adapters/knowledge.py)",
+      "Bash(.venv/bin/python *)",
+      "Bash(npx vitest *)",
+      "Bash(npx tsx *)",
+      "Bash(python -m pytest tests/chatbi_workflow tests/workflow_engine tests/headless -q)",
+      "Bash(python -m pytest tests/chatbi_workflow -q)"
+    ]
+  }
+}

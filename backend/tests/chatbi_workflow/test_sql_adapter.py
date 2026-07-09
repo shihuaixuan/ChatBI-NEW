@@ -1166,3 +1166,160 @@ def test_sql_adapter_marks_repairable_table_error_with_retry_plan():
             "candidate_tables": ["stall_traffic_1d"],
         },
     }
+
+
+def test_execute_split_preserves_sub_plan_role_for_share_analysis_e2e():
+    """角色丢失就是 G3/G4 静默降级：R1 回归测试。"""
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=30,
+            data_set_name="档口经营分析",
+            id=30,
+            name="档口经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[
+            {
+                "id": 10,
+                "name": "档口流量模型",
+                "biz_name": "stall_traffic",
+                "datasource_id": 5,
+                "tableQuery": "stall_traffic_1d",
+                "dimensions": [
+                    {"name": "档口", "bizName": "shop_name", "expr": "shop_name"}
+                ],
+                "measures": [
+                    {"name": "访问人数", "bizName": "visit_uv", "expr": "visit_uv", "agg": "SUM"}
+                ],
+            }
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=30,
+                data_set_name="档口经营分析",
+                model=10,
+                id=100,
+                name="访问人数",
+                biz_name="visit_uv",
+                type="METRIC",
+                default_agg="SUM",
+            )
+        ],
+        dimensions=[
+            SchemaElement(
+                data_set_id=30,
+                data_set_name="档口经营分析",
+                model=10,
+                id=200,
+                name="档口",
+                biz_name="shop_name",
+                type="DIMENSION",
+            )
+        ],
+    )
+    # part 查询按档口分组返回 30+70，total 查询返回单行汇总 100。
+    class RoleAwareFakeSqlExecuteTool:
+        def run(self, payload):
+            sql = payload.get("sql", "")
+            if "shop_name" in sql:
+                return ToolResult(
+                    success=True,
+                    payload={
+                        "fields": ["shop_name", "visit_uv"],
+                        "data": [
+                            {"shop_name": "A", "visit_uv": 30},
+                            {"shop_name": "B", "visit_uv": 70},
+                        ],
+                    },
+                )
+            return ToolResult(
+                success=True,
+                payload={"fields": ["visit_uv"], "data": [{"visit_uv": 100}]},
+            )
+
+    adapter = SqlAdapter(
+        schema_builder=FakeHeadlessSchemaBuilder(schema),
+        execute_tool=RoleAwareFakeSqlExecuteTool(),
+    )
+
+    # Step 1: generate_split with role-annotated sub_plans.
+    plans = [
+        {
+            "role": "part",
+            "model_id": 10,
+            "metrics": [{"asset_type": "METRIC", "asset_id": 100}],
+            "dimensions": [{"asset_type": "DIMENSION", "asset_id": 200}],
+            "slots": {
+                "metrics": [{"asset_type": "METRIC", "asset_id": 100, "display_name": "访问人数"}],
+                "dimensions": [{"asset_type": "DIMENSION", "asset_id": 200, "display_name": "档口"}],
+            },
+        },
+        {
+            "role": "total",
+            "model_id": 10,
+            "metrics": [{"asset_type": "METRIC", "asset_id": 100}],
+            "dimensions": [],
+            "slots": {
+                "metrics": [{"asset_type": "METRIC", "asset_id": 100, "display_name": "访问人数"}],
+                "dimensions": [],
+            },
+        },
+    ]
+    generated = adapter.generate_split(
+        {
+            "request": {
+                "question": "各档口销售额占比",
+                "dataset_id": 30,
+                "tenant_id": 10,
+                "user_id": 20,
+            },
+            "variables": {
+                "plan": {
+                    "strategy": "multi_query",
+                    "sub_plans": plans,
+                }
+            },
+        }
+    )
+    assert len(generated["queries"]) == 2
+    assert generated["queries"][0]["role"] == "part"
+    assert generated["queries"][1]["role"] == "total"
+
+    # Step 2: execute_split — role must survive through ExecutionQuery round-trip.
+    exec_result = adapter.execute_split(
+        {
+            "request": {
+                "question": "各档口销售额占比",
+                "dataset_id": 30,
+                "tenant_id": 10,
+                "user_id": 20,
+                "run_id": "run-share-role-e2e",
+            },
+            "variables": {"split_sql": generated},
+        }
+    )
+    assert exec_result["status"] == "succeeded"
+    assert exec_result["queries"][0]["role"] == "part"
+    assert exec_result["queries"][1]["role"] == "total"
+
+    # Step 3: answer projection sees the analysis block via role map.
+    from apps.chatbi_workflow.capabilities.adapters.answer import build_answer_projection
+
+    projection = build_answer_projection(
+        {
+            "variables": {
+                "plan": {
+                    "strategy": "multi_query",
+                    "sub_plans": plans,
+                },
+                "execution": exec_result,
+                "question": {"rewritten": "各档口销售额占比"},
+                "knowledge": {},
+            }
+        }
+    )
+    assert projection["execution"].get("analysis", {}).get("kind") == "share"
+    analysis = projection["execution"]["analysis"]
+    assert analysis["total"] == 100.0
+    assert len(analysis["rows"]) == 2

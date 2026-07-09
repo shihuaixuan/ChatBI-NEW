@@ -17,6 +17,7 @@ SQL 适配层平移过来的唯一实现，绑定器与旧路径共用同一份�
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 
 from apps.chatbi_workflow.capabilities.capability_matrix import decide_capability
@@ -265,33 +266,78 @@ def _comparison_sub_plans(
 ) -> list[dict[str, Any]]:
     if not metrics:
         return []
-    time_filter_index = _current_period_filter_index(filters)
+    time_filter_index = _comparison_time_filter_index(filters)
     if time_filter_index is None:
         return []
     baseline_filters = copy.deepcopy(filters)
-    current_value = baseline_filters[time_filter_index].get("value")
-    unit = str(current_value.get("unit") or "").strip().lower()
-    baseline_filters[time_filter_index]["value"] = {
-        key: current_value[key]
-        for key in ("unit", "timezone")
-        if key in current_value
-    }
-    baseline_filters[time_filter_index]["value"]["kind"] = "previous_period"
-    baseline_filters[time_filter_index]["value"]["unit"] = unit
+    baseline_value = _baseline_time_value(baseline_filters[time_filter_index].get("value"))
+    if baseline_value is None:
+        return []
+    baseline_filters[time_filter_index]["value"] = baseline_value
     return [
         _sub_plan("current", metrics, group_bys, filters, having),
         _sub_plan("baseline", metrics, group_bys, baseline_filters, having),
     ]
 
 
-def _current_period_filter_index(filters: list[dict[str, Any]]) -> int | None:
+def _comparison_time_filter_index(filters: list[dict[str, Any]]) -> int | None:
+    """定位可推导对比基准窗口的时间过滤条件。
+
+    支持 current_period（本月/本周…→上一周期）与月对齐的 absolute_range
+    （YYYY年M月 → 上一自然月）。relative_range 等窗口无法确定性平移，交由
+    能力矩阵回退单查询并如实说明（见 R2/R4）。
+    """
+
     for index, item in enumerate(filters):
         value = item.get("value")
-        if not isinstance(value, dict):
-            continue
-        if str(value.get("kind") or "").lower() == "current_period" and str(value.get("unit") or "").strip():
+        if _baseline_time_value(value) is not None:
             return index
     return None
+
+
+def _baseline_time_value(value: Any) -> dict[str, Any] | None:
+    """把当前时间窗平移为对比基准窗口；无法确定性平移时返回 None。"""
+
+    if not isinstance(value, dict):
+        return None
+    kind = str(value.get("kind") or "").lower()
+    if kind == "current_period" and str(value.get("unit") or "").strip():
+        baseline = {key: value[key] for key in ("unit", "timezone") if key in value}
+        baseline["kind"] = "previous_period"
+        baseline["unit"] = str(value.get("unit") or "").strip().lower()
+        return baseline
+    if kind == "absolute_range":
+        return _previous_month_absolute_range(value)
+    return None
+
+
+def _previous_month_absolute_range(value: dict[str, Any]) -> dict[str, Any] | None:
+    """月对齐的绝对区间 → 上一自然月区间（环比），非月对齐则不平移。"""
+
+    start = _month_aligned_start(value.get("start"))
+    end_exclusive = _month_aligned_start(value.get("end_exclusive"))
+    if start is None or end_exclusive is None:
+        return None
+    # 仅处理"整月"区间：结束月恰为起始月的下一月。
+    if (start[0], start[1] + 1) != (end_exclusive[0], end_exclusive[1]) and not (
+        start[1] == 12 and end_exclusive == (start[0] + 1, 1)
+    ):
+        return None
+    prev_year, prev_month = (start[0] - 1, 12) if start[1] == 1 else (start[0], start[1] - 1)
+    baseline = dict(value)
+    baseline["start"] = f"{prev_year:04d}-{prev_month:02d}-01"
+    baseline["end_exclusive"] = f"{start[0]:04d}-{start[1]:02d}-01"
+    return baseline
+
+
+def _month_aligned_start(text: Any) -> tuple[int, int] | None:
+    """解析 YYYY-MM-01 形态的月初日期，返回 (year, month)；否则 None。"""
+
+    match = re.fullmatch(r"(\d{4})-(\d{2})-01", str(text or ""))
+    if not match:
+        return None
+    year, month = int(match.group(1)), int(match.group(2))
+    return (year, month) if 1 <= month <= 12 else None
 
 
 def _sub_plan(
@@ -459,6 +505,19 @@ class QueryPlanBinder:
         if decision.status == "infeasible":
             return self._infeasible(decision.reason_code or "query_plan_infeasible", decision.reason or "查询计划不可行")
 
+        # 多查询要素不全被回退为单查询时，携带说明供回答侧如实提示（不静默降级）。
+        issues: list[dict[str, Any]] = []
+        effective_sub_plans = sub_plans
+        if decision.strategy != "multi_query":
+            effective_sub_plans = []
+            if decision.downgrade_note:
+                issues.append(
+                    {
+                        "type": decision.reason_code or "multi_query_downgraded_to_single",
+                        "reason": decision.downgrade_note,
+                    }
+                )
+
         return QueryPlanOutput(
             status=decision.status,
             strategy=decision.strategy,
@@ -470,7 +529,8 @@ class QueryPlanBinder:
             time=derive_time_bucket(knowledge, intent),
             order=order,
             limit=limit,
-            sub_plans=sub_plans,
+            sub_plans=effective_sub_plans,
+            issues=issues,
         ).model_dump(mode="json")
 
     @staticmethod

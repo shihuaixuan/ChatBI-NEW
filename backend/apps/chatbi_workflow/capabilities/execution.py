@@ -46,6 +46,7 @@ class ExecutionQuery(BaseModel):
     sql: str
     datasource_id: int
     plan_ref: int | None = None
+    role: str | None = None
     model_id: int | None = None
     metrics: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)

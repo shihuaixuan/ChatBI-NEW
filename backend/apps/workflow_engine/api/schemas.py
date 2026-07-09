@@ -11,6 +11,7 @@ class GraphQueryRequest(BaseModel):
     definition_version: Literal["minimal-v1", "v1"] = "minimal-v1"
     request_id: str | None = None
     run_id: str | None = None
+    chat_id: int | None = Field(default=None, gt=0)
 
 
 class GraphRunResponse(BaseModel):

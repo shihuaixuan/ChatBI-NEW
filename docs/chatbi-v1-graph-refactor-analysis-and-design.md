@@ -497,21 +497,25 @@ Layer 0  headless/sql_compiler  句型扩展：六类时间结构渲染(A6)、�
 
 ### 8.2 高风险
 
-**R1（高）：多查询 `role` 在执行域被丢弃，占比/环比确定性计算在真实链路失效。**
+**R1（高）：多查询 `role` 在执行域被丢弃，占比/环比确定性计算在真实链路失效。~~【已修复 2026-07-07】~~**
 `planning._sub_plan` 产出 `{role, slots}`，`sql.generate_split` 把 `role` 写进 `split_sql.queries[]`（`sql.py:265-275`）；但 `execute_split` 构造 `ExecutionQuery` 时**没有 role 字段**（`execution.py:42-51` 模型里就没有 role），`build_execution_output` 序列化 `execution.queries[]` 自然不含 role。而 answer 投影 `_results_by_role` 正是靠 `execution.queries[].role` 把结果映射到 part/total、current/baseline（`answer.py:185-201`）——真实链路里这个 map 恒为空，`_project_multi_query_analysis` 永远返回 `{}`，占比/环比退回"LLM 对采样行心算"，即 Step 5 声称要消灭的 G3/G4 静默降级。
 **为什么测试没抓到**：`test_answer_projection_calculates_share_analysis_rows`/`_comparison_delta` 直接手工构造带 `role` 的 `execution.queries`（`test_question_rewrite_and_answer_adapters.py:1234-1235/1283-1284`），绕过了 generate_split→execute_split 这段真实路径；`test_sql_adapter` 的拆分用例只断言 SQL 与 model_id，不校验 role 透传。
 **修法**：`ExecutionQuery` 增 `role: str | None`，`execute_split` 从 `raw_query.get("role")` 透传，`build_execution_output` 序列化保留；补一个 generate_split→execute_split→build_answer_projection 的端到端用例锁定 role 贯通。（`plan_ref` 已透传，次选方案是让 `_results_by_role` 回退用 `plan_ref` 对齐 `plan.sub_plans[i].role`，但显式 role 字段更直接。）
+**修复实现（2026-07-07）**：`ExecutionQuery` 已增 `role: str | None`（`execution.py:47`）；`execute_split` 从 `raw_query.get("role")` 透传（`sql.py:309`）；`build_execution_output` 经 `model_dump` 自动保留 role。新增端到端回归 `test_execute_split_preserves_sub_plan_role_for_share_analysis_e2e`（`test_sql_adapter.py`），走 generate_split→execute_split→build_answer_projection 全链路，断言 `execution.queries[].role` 贯通且 `execution.analysis.kind=="share"`、`total==100`。全量 238 项相关测试通过。
 
 ### 8.3 中风险
 
-**R2（中）：环比 baseline 推导只覆盖 `current_period`。**
+**R2（中）：环比 baseline 推导只覆盖 `current_period`。~~【已修复 2026-07-07】~~**
 `_comparison_sub_plans` 用 `_current_period_filter_index` 找过滤条件，只在 `kind=="current_period"` 时命中（`planning.py:287-294`），随后把 baseline 平移为 `previous_period`。"本月 vs 上月"可行，但"最近 7 天 vs 前 7 天"（`relative_range`）、"2026-06 vs 2025-06"（同比、`absolute_range`）都拿不到 index → 返回 `[]` → sub_plans 少于 2 → 能力矩阵判 `infeasible`。方向本身对（确定性平移窗口），但覆盖面比文档 3.3 承诺的"同比/环比/两对象"窄。**修法**：为 `relative_range`/`absolute_range` 补 baseline 平移规则，或在 8.4-R4 的前提下把"识别到 comparison 但无法构窗"如实降级为带说明的解释性回答，而非笼统 infeasible。
+**修复实现（2026-07-07）**：新增 `_baseline_time_value` 统一平移逻辑：`current_period → previous_period`（原有）+ **月对齐 `absolute_range` → 上一自然月区间**（新增，纯字面日期运算，含跨年边界，`planning.py`）；非月对齐区间与 `relative_range` 不做易错的编译器日期平移，改走 R4 降级。回归用例 `test_binder_builds_comparison_sub_plans_for_absolute_month_range` 锁定"2026-06 → 2026-05"平移，边界（跨年、非整月拒绝）经手工验证。baseline 产出的是编译器已支持的 `absolute_range` 结构，无需改编译器。
 
-**R3（中）：`validation.status=="suspicious"` 没有路由消费。**
+**R3（中）：`validation.status=="suspicious"` 没有路由消费。~~【已修复 2026-07-07】~~**
 `validate_execution_output` 会对"部分子查询空"产出 `suspicious`（`execution.py:178-183`），但图里只有 `result.empty`（匹配 `status=="empty"`）一条边（`chatbi_v1.py:443-448`、`core.py:319-330`）。`suspicious` 既不进空结果解释路径也无专门提示，落到默认边直接当正常结果回答——占比场景 part 有值 total 空（分母缺失）时尤其危险。**修法**：要么把 `suspicious` 纳入 `result.empty` 的解释路径，要么新增 `result.suspicious` 边；answer 投影已透传 `validation`，回答侧也应读到并提示。
+**修复实现（2026-07-07）**：新增 `ResultSuspiciousCondition`（`core.py`，注册为 `result.suspicious`），与 `result.empty` 平级、互斥；`validate_result` 增一条 `result.suspicious`（priority 2）出边路由到 `generate_question_answer`，`route_reason=RESULT_SUSPICIOUS` 在 trace 可见。answer projection 本就透传 `validation.status/issues/suggestions`，回答 LLM 据此如实提示口径风险。回归用例 `test_validate_execution_output_marks_partial_empty_as_suspicious`（part 有值 + total 空 → suspicious），并更新 `test_v1_definition` 的条件全集断言。
 
-**R4（中）：能力矩阵对多查询意图"无 sub_plans 即 infeasible"过于激进。**
+**R4（中）：能力矩阵对多查询意图"无 sub_plans 即 infeasible"过于激进。~~【已修复 2026-07-07】~~**
 `decide_capability` 里 `comparison_analysis`/`share_analysis` 只要 `sub_plans<2` 就 `infeasible`（`capability_matrix.py:35-43`）。但 sub_plans 是否生成强依赖 R2 的时间窗识别与"metrics+group_bys 齐备"（`_share_sub_plans` 要求 group_bys 非空）。结果："各渠道销售额占比"若维度没绑上、"环比"若时间是 relative_range，都会被判成不可行并如实告知"不支持"——而这些正是文档矩阵里承诺确定性覆盖的高频问句。**这是"反静默降级"用力过猛变成"假阴性"**：把可降级为普通聚合 + 提示的情况，报成了能力缺失。**修法**：区分"意图是多查询但计划要素不全"（应澄清或降级为单查询 + 说明）与"真正不可表达"（infeasible）；前者不应占用 infeasible 语义。
+**修复实现（2026-07-07）**：`decide_capability` 对"多查询意图但 sub_plans 不足"改为返回 `status="ready", strategy="semantic_compiler"` + `downgrade_note`，而非 `infeasible`（`CapabilityDecision` 新增 `downgrade_note` 字段）。binder 把降级说明写入 `plan.issues`（`type="multi_query_downgraded_to_single"`）并清空 sub_plans，走单查询聚合 + 如实提示；`unsupported_intent_type`（真正不可表达）仍判 infeasible 不变。回归用例：`test_binder_downgrades_comparison_without_shiftable_window_to_single_query`、`test_binder_downgrades_share_without_group_by_to_single_query`。**注**：降级说明经 `plan.issues` → answer projection 的 `_project_plan`（已含 issues 白名单）透传到回答侧，回答 LLM 可据此如实说明"已按单次聚合返回"。
 
 ### 8.4 低风险与规范性
 
@@ -531,11 +535,11 @@ Layer 0  headless/sql_compiler  句型扩展：六类时间结构渲染(A6)、�
 
 ### 8.5 建议动作
 
-1. **R1 必须在 Step 5 合入前修**——否则文档"环比/占比产出确定性计算结果"的验收项不成立（真实链路走的是 LLM 心算旧路径）。补端到端 role 贯通测试。
-2. R2/R4 一并处理：把 comparison/share 的"要素不全"与"不可表达"分层，避免 infeasible 假阴性吞掉高频问句。
-3. R3 给 `suspicious` 一条出边或并入空结果解释。
+1. ~~**R1 必须在 Step 5 合入前修**~~ **【已完成 2026-07-07】**——role 透传已修复并补端到端回归，真实链路占比/环比走确定性合并路径。
+2. ~~R2/R4 一并处理~~ **【已完成 2026-07-07】**——comparison baseline 扩展到月对齐 absolute_range；多查询要素不全改为回退单查询 + `plan.issues` 说明，不再假阴性 infeasible。剩余：`relative_range` 的环比 baseline（"最近7天vs前7天"）仍走降级而非确定性平移，若要覆盖需在编译器补相对区间日期平移（易错，建议独立立项验证）。
+3. ~~R3 给 `suspicious` 一条出边或并入空结果解释。~~ **【已完成 2026-07-07】**——新增 `result.suspicious` 平级路由 + 回归测试。
 4. R5–R7 作为规范性清理，可随 Step 5 收尾或单独小提交。
-5. 5.4 路线图 Step 5 的"已完成"标注建议下调为"实现完成，占比/环比确定性合并存在 R1 阻断，验收未通过"，待 R1 修复并补测后再标完成。
+5. 5.4 路线图 Step 5：R1（正确性阻断）、R2/R4（覆盖面）、R3（存疑结果路由）全部修复；占比/环比在要素齐备时端到端确定性正确、要素不全时如实降级、部分空结果如实提示。剩余仅 R5–R7 规范性清理。
 
 ---
 

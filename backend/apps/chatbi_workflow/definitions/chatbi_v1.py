@@ -446,6 +446,12 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
                 condition="result.empty",
                 priority=1,
             ),
+            EdgeDefinition(
+                source="validate_result",
+                target="generate_question_answer",
+                condition="result.suspicious",
+                priority=2,
+            ),
             EdgeDefinition(source="validate_result", target="generate_question_answer"),
             EdgeDefinition(source="handle_sql_error", target="generate_question_answer", condition="node.degraded", priority=0),
             EdgeDefinition(

@@ -188,6 +188,44 @@ def test_question_rewrite_prompt_defines_chatbi_required_information():
     assert "只有用户明确要求趋势、对比、环比、同比、排行、按维度拆解" in prompt.system_prompt
 
 
+def test_question_rewrite_prompt_preserves_semantic_boundaries_for_followup():
+    prompt = build_question_rewrite_prompt(
+        question="那订单数呢",
+        conversation_context={
+            "last_question": "今天店铺的访问人数",
+            "last_rewritten_question": "查询今天店铺的访问人数",
+            "last_intent": {
+                "metric_mentions": ["访问人数"],
+                "time_range": {"raw": "今天", "value_status": "provided"},
+                "dimension_slots": [{"name": "店铺", "role": "ambiguous"}],
+            },
+        },
+        user_feedback={},
+    )
+
+    assert "语义保真规范化" in prompt.system_prompt
+    assert "保持修饰关系、归属关系、并列关系和筛选关系" in prompt.system_prompt
+    assert "只替换用户本轮明确提到的槽位" in prompt.system_prompt
+    assert "不新增用户没有表达的分组、筛选、比较、排序或明细意图" in prompt.system_prompt
+    assert "不拆分或重组指标短语内部的业务修饰关系" in prompt.system_prompt
+    assert "last_rewritten_question" in prompt.user_prompt
+    assert "那订单数呢" in prompt.user_prompt
+
+
+def test_dimension_prompt_keeps_metric_phrase_as_boundary_without_semantic_dependency():
+    prompt = build_dimension_slots_prompt(
+        rewritten_question="最近 30 天商城店铺的成交客户数是多少？",
+        available_dimensions=[
+            {"name": "店铺", "aliases": ["门店"], "is_time": False},
+            {"name": "客户", "aliases": ["买家"], "is_time": False},
+        ],
+    )
+
+    assert "不要为了命中维度候选而拆分指标短语内部的业务修饰关系" in prompt.system_prompt
+    assert "维度识别必须独立完成" in prompt.system_prompt
+    assert "不要依赖指标线索识别子任务的输出" in prompt.system_prompt
+
+
 def test_question_adapter_rewrites_question_with_model_json():
     adapter = QuestionAdapter(
         model_client=FakeModelClient(
@@ -1394,21 +1432,33 @@ def test_recommendation_adapter_generates_contextual_questions_from_selected_ass
 
 
 def test_real_gateway_routes_rewrite_and_answer_capabilities_to_real_adapters():
+    class GatewayQuestionModelClient:
+        def __call__(self, prompt):
+            if '"rewritten_question"' in prompt.system_prompt:
+                return (
+                    '{"rewritten_question":"今日访问量","need_user_input":false,'
+                    '"missing_slots":[],"image_profile_hint":"table"}'
+                )
+            marker = PromptAwareConcurrentModelClient._marker_for_prompt(prompt)
+            return {
+                "shape": (
+                    '{"intent_type":"metric_query","confidence":0.95,'
+                    '"required_slot_types":["metric"],"query_shape":{"select_mode":"aggregate"},'
+                    '"subject_domain":{"status":"not_required"},"ambiguous_slots":[],"conflict_slots":[]}'
+                ),
+                "semantic": (
+                    '{"metric_mentions":["访问量"],"time_mentions":["今日"],'
+                    '"time_range":{"raw":"今日","value_status":"provided"},'
+                    '"ambiguous_slots":[],"conflict_slots":[]}'
+                ),
+                "dimensions": (
+                    '{"dimension_mentions":[],"dimension_slots":[],"residual_filter_mentions":[],'
+                    '"ambiguous_slots":[],"conflict_slots":[]}'
+                ),
+            }[marker]
+
     question_adapter = QuestionAdapter(
-        model_client=SequenceModelClient(
-            [
-                '{"rewritten_question":"今日访问量","need_user_input":false,'
-                '"missing_slots":[],"image_profile_hint":"table"}',
-                '{"intent_type":"metric_query","confidence":0.95,'
-                '"required_slot_types":["metric"],"query_shape":{"select_mode":"aggregate"},'
-                '"subject_domain":{"status":"not_required"},"ambiguous_slots":[],"conflict_slots":[]}',
-                '{"metric_mentions":["访问量"],"time_mentions":["今日"],'
-                '"time_range":{"raw":"今日","value_status":"provided"},'
-                '"ambiguous_slots":[],"conflict_slots":[]}',
-                '{"dimension_mentions":[],"dimension_slots":[],"residual_filter_mentions":[],'
-                '"ambiguous_slots":[],"conflict_slots":[]}',
-            ]
-        )
+        model_client=GatewayQuestionModelClient()
     )
     answer_adapter = AnswerAdapter(
         model_client=FakeModelClient(

@@ -502,6 +502,118 @@ def test_binder_builds_comparison_multi_query_sub_plans_for_current_period():
     }
 
 
+def test_binder_builds_comparison_sub_plans_for_absolute_month_range():
+    """R2：YYYY年M月 的绝对区间对比 → 上一自然月区间（同比/环比可确定性平移）。"""
+    knowledge = {
+        "hit": True,
+        "status": "hit",
+        "slot_bindings": {
+            "metrics": [_metric_binding()],
+            "group_dimensions": [],
+            "time_filters": [
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": 200,
+                    "display_name": "统计日期",
+                    "biz_name": "stat_date",
+                    "operator": "=",
+                    "value": {
+                        "kind": "absolute_range",
+                        "start": "2026-06-01",
+                        "end_exclusive": "2026-07-01",
+                        "timezone": "Asia/Shanghai",
+                    },
+                }
+            ],
+            "value_filters": [],
+            "dimension_filters": [],
+        },
+        "selected_assets": {"metrics": [], "dimensions": [], "values": [], "terms": []},
+    }
+    variables = {
+        "knowledge": knowledge,
+        "intent": {"intent_type": "comparison_analysis", "query_shape": {"select_mode": "aggregate"}},
+    }
+
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    assert plan["status"] == "ready"
+    assert plan["strategy"] == "multi_query"
+    baseline_time_filter = plan["sub_plans"][1]["slots"]["filters"][0]
+    assert baseline_time_filter["value"]["start"] == "2026-05-01"
+    assert baseline_time_filter["value"]["end_exclusive"] == "2026-06-01"
+
+
+def test_binder_downgrades_comparison_without_shiftable_window_to_single_query():
+    """R4：对比意图但时间窗无法确定性平移（relative_range），回退单查询 + 说明，而非 infeasible。"""
+    knowledge = {
+        "hit": True,
+        "status": "hit",
+        "slot_bindings": {
+            "metrics": [_metric_binding()],
+            "group_dimensions": [],
+            "time_filters": [
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": 200,
+                    "display_name": "统计日期",
+                    "biz_name": "stat_date",
+                    "operator": "=",
+                    "value": {
+                        "kind": "relative_range",
+                        "unit": "day",
+                        "amount": 7,
+                        "anchor": "today",
+                        "include_current": True,
+                        "timezone": "Asia/Shanghai",
+                    },
+                }
+            ],
+            "value_filters": [],
+            "dimension_filters": [],
+        },
+        "selected_assets": {"metrics": [], "dimensions": [], "values": [], "terms": []},
+    }
+    variables = {
+        "knowledge": knowledge,
+        "intent": {"intent_type": "comparison_analysis", "query_shape": {"select_mode": "aggregate"}},
+    }
+
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    assert plan["status"] == "ready"
+    assert plan["strategy"] == "semantic_compiler"
+    assert plan["sub_plans"] == []
+    assert any(issue["type"] == "multi_query_downgraded_to_single" for issue in plan["issues"])
+
+
+def test_binder_downgrades_share_without_group_by_to_single_query():
+    """R4：占比意图但无分组维度，无法构建 part/total，回退单查询 + 说明。"""
+    knowledge = {
+        "hit": True,
+        "status": "hit",
+        "slot_bindings": {
+            "metrics": [_metric_binding()],
+            "group_dimensions": [],
+            "time_filters": [],
+            "value_filters": [],
+            "dimension_filters": [],
+        },
+        "selected_assets": {"metrics": [], "dimensions": [], "values": [], "terms": []},
+    }
+    variables = {
+        "knowledge": knowledge,
+        "intent": {"intent_type": "share_analysis", "query_shape": {"select_mode": "share"}},
+    }
+
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    assert plan["status"] == "ready"
+    assert plan["strategy"] == "semantic_compiler"
+    assert plan["sub_plans"] == []
+    assert any(issue["type"] == "multi_query_downgraded_to_single" for issue in plan["issues"])
+
+
 def test_split_sql_generation_uses_query_plan_sub_plans():
     case = GOLDEN_CASES["ranking_with_group_and_limit"]
     variables = {

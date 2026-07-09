@@ -117,3 +117,35 @@ def test_validate_execution_output_passes_non_empty_success_result():
     validation = validate_execution_output(output)
 
     assert validation == {"status": "passed", "issues": [], "suggestions": []}
+
+
+def test_validate_execution_output_marks_partial_empty_as_suspicious():
+    """R3：多查询里 total 子查询为空（part 有值）→ suspicious，而非静默 passed。"""
+    part = ExecutionResult(
+        query_id="query-0",
+        status="succeeded",
+        row_count=2,
+        fields=["shop_name", "visit_uv"],
+        sample_rows=[{"shop_name": "A", "visit_uv": 30}],
+        sampled_row_count=1,
+        execution_ms=3,
+    )
+    total_empty = ExecutionResult(
+        query_id="query-1",
+        status="succeeded",
+        row_count=0,
+        fields=["visit_uv"],
+        sample_rows=[],
+        sampled_row_count=0,
+        execution_ms=2,
+    )
+    output = build_execution_output(
+        [_query("query-0"), _query("query-1")],
+        [part, total_empty],
+    )
+
+    validation = validate_execution_output(output)
+
+    assert validation["status"] == "suspicious"
+    assert validation["issues"][0]["query_id"] == "query-1"
+    assert validation["suggestions"]

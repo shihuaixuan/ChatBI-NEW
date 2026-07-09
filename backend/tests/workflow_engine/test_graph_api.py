@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
+from apps.chat.models.chat_model import Chat, ChatRecord
 from apps.chatbi_workflow import runtime as chatbi_runtime
 from apps.chatbi_workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
 from apps.headless.models import (
@@ -116,6 +117,12 @@ def _client(user=None) -> TestClient:
 
 
 def _cleanup(session: Session) -> None:
+    chat_ids = session.exec(
+        select(Chat.id).where(Chat.oid == 9501, Chat.brief.in_(["api_graph_context_chat"]))
+    ).all()
+    if chat_ids:
+        session.execute(delete(ChatRecord).where(ChatRecord.chat_id.in_(chat_ids)))
+        session.execute(delete(Chat).where(Chat.id.in_(chat_ids)))
     session.execute(delete(WorkflowArtifactModel).where(WorkflowArtifactModel.run_id.like("api-%")))
     session.execute(delete(InteractionRequestModel).where(InteractionRequestModel.run_id.like("api-%")))
     session.execute(delete(NodeExecutionModel).where(NodeExecutionModel.run_id.like("api-%")))
@@ -552,6 +559,112 @@ def test_graph_query_can_execute_chatbi_v1_graph():
         assert execute_event.public_payload["summary"]["results"][0]["sample_rows"] == [
             {"placeholder_value": 1}
         ]
+        _cleanup(session)
+
+
+def test_graph_query_with_chat_id_loads_previous_semantic_context():
+    now = datetime.now()
+    with Session(engine) as session:
+        _cleanup(session)
+        dataset_id = _seed_v1_headless_dataset(session)
+        chat = Chat(
+            oid=9501,
+            create_time=now,
+            create_by=501,
+            brief="api_graph_context_chat",
+            chat_type="chat",
+            dataset_id=dataset_id,
+            datasource=7001,
+            engine_type="PostgreSQL",
+        )
+        session.add(chat)
+        session.flush()
+        previous_record = ChatRecord(
+            chat_id=chat.id or 0,
+            create_time=now,
+            finish_time=now,
+            create_by=501,
+            dataset_id=dataset_id,
+            datasource=7001,
+            engine_type="PostgreSQL",
+            question="今天店铺的访问人数",
+            finish=True,
+            status="succeeded",
+            trace_id="api-prev-context",
+        )
+        session.add(previous_record)
+        session.add(
+            WorkflowRunModel(
+                run_id="api-prev-context",
+                oid=9501,
+                user_id=501,
+                request_id="api-prev-context-request",
+                definition_name="chatbi",
+                definition_version="v1",
+                definition_digest="test",
+                status="succeeded",
+                current_node="finish",
+                context={
+                    "request": {
+                        "tenant_id": 9501,
+                        "user_id": 501,
+                        "question": "今天店铺的访问人数",
+                        "dataset_id": dataset_id,
+                    },
+                    "conversation": {"question": "今天店铺的访问人数"},
+                    "variables": {
+                        "rewrite": {"rewritten_question": "查询今天店铺的访问人数"},
+                        "intent": {
+                            "intent_type": "metric_query",
+                            "metric_mentions": ["访问人数"],
+                            "time_range": {"raw": "今天", "value_status": "provided"},
+                            "dimension_slots": [{"name": "店铺", "role": "ambiguous"}],
+                            "filter_mentions": [],
+                            "query_shape": {"select_mode": "aggregate"},
+                        },
+                    },
+                },
+                request={},
+                output={},
+                version=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.commit()
+        chat_id = chat.id
+
+    response = _client().post(
+        "/graph/queries",
+        json={
+            "question": "那订单数呢",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "request_id": "api-context-request",
+            "run_id": "api-context-run",
+            "chat_id": chat_id,
+        },
+    )
+
+    assert response.status_code == 200
+
+    with Session(engine) as session:
+        stored = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-context-run")).one()
+        record = session.exec(select(ChatRecord).where(ChatRecord.trace_id == "api-context-run")).one()
+        context = stored.context
+        assert stored.request["chat_id"] == chat_id
+        assert stored.request["record_id"] == record.id
+        assert record.question == "那订单数呢"
+        assert record.status == stored.status
+        assert record.finish is True
+        assert context["conversation"]["question"] == "那订单数呢"
+        assert context["conversation"]["last_question"] == "今天店铺的访问人数"
+        assert context["conversation"]["last_rewritten_question"] == "查询今天店铺的访问人数"
+        assert context["conversation"]["last_intent"]["metric_mentions"] == ["访问人数"]
+        assert context["conversation"]["last_intent"]["time_range"] == {
+            "raw": "今天",
+            "value_status": "provided",
+        }
         _cleanup(session)
 
 

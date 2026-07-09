@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from sqlmodel import Session, col, func, select
 
+from apps.chat.models.chat_model import Chat, ChatRecord
 from apps.chatbi_workflow.definitions.chatbi_minimal_v1 import (
     build_chatbi_minimal_definition,
 )
@@ -71,6 +72,14 @@ class GraphApiService:
     ) -> GraphRunResponse:
         run_id = request.run_id or f"graph-{uuid4().hex}"
         dataset_id = self._resolve_dataset_id(current_user.oid, request.dataset_id)
+        chat_record = self._create_chat_record_for_query(
+            current_user=current_user,
+            chat_id=request.chat_id,
+            question=request.question,
+            run_id=run_id,
+            dataset_id=dataset_id,
+            source_dataset_id=request.dataset_id,
+        )
         request_context = {
             "tenant_id": current_user.oid,
             "user_id": current_user.id,
@@ -79,19 +88,190 @@ class GraphApiService:
             "source_dataset_id": request.dataset_id,
             "request_id": request.request_id,
         }
+        if request.chat_id is not None:
+            request_context["chat_id"] = request.chat_id
+        if chat_record is not None and chat_record.id is not None:
+            request_context["record_id"] = chat_record.id
         if request.definition_version == "minimal-v1":
             # minimal-v1 仍使用 datasource_id 字段；v1 主链路已切到 dataset_id。
             request_context["datasource_id"] = request.dataset_id
-        runtime = self._build_runtime(request.definition_version, commit_events=commit_events)
-        created = runtime.create_run(
-            run_id=run_id,
-            definition_name="chatbi",
-            definition_version=request.definition_version,
-            context=WorkflowContext(request=request_context, conversation={"question": request.question}),
+        conversation = self._build_conversation_context(
+            current_user=current_user,
+            question=request.question,
+            dataset_id=dataset_id,
+            chat_record=chat_record,
         )
-        runtime.execute(created.run_id)
-        self._session.commit()
+        runtime = self._build_runtime(request.definition_version, commit_events=commit_events)
+        try:
+            created = runtime.create_run(
+                run_id=run_id,
+                definition_name="chatbi",
+                definition_version=request.definition_version,
+                context=WorkflowContext(request=request_context, conversation=conversation),
+            )
+            runtime.execute(created.run_id)
+            self._sync_chat_record_from_run(chat_record, created.run_id)
+            self._session.commit()
+        except Exception:
+            self._mark_chat_record_failed(chat_record)
+            self._session.commit()
+            raise
         return self._to_run_response(self._load_owned_run(current_user, created.run_id))
+
+    def _create_chat_record_for_query(
+        self,
+        *,
+        current_user: Any,
+        chat_id: int | None,
+        question: str,
+        run_id: str,
+        dataset_id: int,
+        source_dataset_id: int,
+    ) -> ChatRecord | None:
+        if chat_id is None:
+            return None
+
+        chat = self._session.get(Chat, chat_id)
+        if chat is None or chat.oid != current_user.oid or chat.create_by != current_user.id:
+            raise HTTPException(status_code=404, detail="CHAT_NOT_FOUND")
+        if chat.dataset_id is not None and int(chat.dataset_id) != int(dataset_id):
+            raise HTTPException(status_code=400, detail="CHAT_DATASET_MISMATCH")
+
+        now = datetime.now()
+        record = ChatRecord(
+            chat_id=chat_id,
+            create_time=now,
+            create_by=current_user.id,
+            dataset_id=dataset_id,
+            datasource=chat.datasource or source_dataset_id,
+            engine_type=chat.engine_type,
+            question=question,
+            finish=False,
+            status=RunStatus.RUNNING.value,
+            trace_id=run_id,
+        )
+        self._session.add(record)
+        self._session.flush()
+        return record
+
+    def _build_conversation_context(
+        self,
+        *,
+        current_user: Any,
+        question: str,
+        dataset_id: int,
+        chat_record: ChatRecord | None,
+    ) -> dict[str, Any]:
+        conversation: dict[str, Any] = {"question": question}
+        if chat_record is None or chat_record.id is None:
+            return conversation
+
+        previous_context = self._load_previous_semantic_context(
+            current_user=current_user,
+            dataset_id=dataset_id,
+            chat_record=chat_record,
+        )
+        conversation.update(previous_context)
+        return conversation
+
+    def _load_previous_semantic_context(
+        self,
+        *,
+        current_user: Any,
+        dataset_id: int,
+        chat_record: ChatRecord,
+    ) -> dict[str, Any]:
+        records = self._session.exec(
+            select(ChatRecord)
+            .where(
+                ChatRecord.chat_id == chat_record.chat_id,
+                ChatRecord.id != chat_record.id,
+                col(ChatRecord.finish).is_(True),
+                col(ChatRecord.trace_id).is_not(None),
+            )
+            .order_by(col(ChatRecord.create_time).desc(), col(ChatRecord.id).desc())
+            .limit(10)
+        ).all()
+        for record in records:
+            run = self._session.exec(
+                select(WorkflowRunModel).where(
+                    WorkflowRunModel.run_id == record.trace_id,
+                    WorkflowRunModel.oid == current_user.oid,
+                    WorkflowRunModel.user_id == current_user.id,
+                    WorkflowRunModel.status == RunStatus.SUCCEEDED.value,
+                )
+            ).one_or_none()
+            if run is None:
+                continue
+            run_request = run.context.get("request") if isinstance(run.context, dict) else {}
+            if isinstance(run_request, dict) and run_request.get("dataset_id") != dataset_id:
+                continue
+            projected = self._project_previous_semantic_context(run, record)
+            if projected:
+                return projected
+        return {}
+
+    def _project_previous_semantic_context(
+        self,
+        run: WorkflowRunModel,
+        record: ChatRecord,
+    ) -> dict[str, Any]:
+        context = run.context if isinstance(run.context, dict) else {}
+        variables = context.get("variables") if isinstance(context.get("variables"), dict) else {}
+        rewrite = variables.get("rewrite") if isinstance(variables.get("rewrite"), dict) else {}
+        intent = variables.get("intent") if isinstance(variables.get("intent"), dict) else {}
+
+        projected_intent = self._project_intent_context(intent)
+        projected: dict[str, Any] = {
+            "last_record_id": record.id,
+            "last_run_id": run.run_id,
+            "last_question": record.question,
+        }
+        rewritten_question = rewrite.get("rewritten_question")
+        if isinstance(rewritten_question, str) and rewritten_question.strip():
+            projected["last_rewritten_question"] = rewritten_question.strip()
+        if projected_intent:
+            projected["last_intent"] = projected_intent
+        return projected
+
+    @staticmethod
+    def _project_intent_context(intent: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(intent, dict):
+            return {}
+        allowed_keys = {
+            "intent_type",
+            "metric_mentions",
+            "time_range",
+            "dimension_slots",
+            "filter_mentions",
+            "query_shape",
+        }
+        # 只向下一轮暴露语义摘要，避免把内部资产绑定或大对象塞进 prompt。
+        return {key: intent[key] for key in allowed_keys if key in intent}
+
+    def _sync_chat_record_from_run(self, record: ChatRecord | None, run_id: str) -> None:
+        if record is None:
+            return
+        run = self._session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == run_id)).one_or_none()
+        if run is None:
+            return
+        record.status = run.status
+        record.finish = run.status in {
+            RunStatus.SUCCEEDED.value,
+            RunStatus.FAILED.value,
+            RunStatus.CANCELLED.value,
+        }
+        if record.finish:
+            record.finish_time = datetime.now()
+        self._session.add(record)
+
+    def _mark_chat_record_failed(self, record: ChatRecord | None) -> None:
+        if record is None:
+            return
+        record.status = RunStatus.FAILED.value
+        record.finish = True
+        record.finish_time = datetime.now()
+        self._session.add(record)
 
     def _resolve_dataset_id(self, oid: int, dataset_or_datasource_id: int) -> int:
         """兼容旧前端传入 datasource_id，优先返回真实 Headless dataset_id。"""

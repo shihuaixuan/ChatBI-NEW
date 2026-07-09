@@ -330,6 +330,25 @@ class ResultEmptyCondition:
         )
 
 
+class ResultSuspiciousCondition:
+    """部分子查询为空等可疑结果时命中，交给回答节点如实提示口径风险。
+
+    与 result.empty 平级：占比场景 part 有值而 total 为空（分母缺失）、
+    多查询部分成功等情况，落到默认边会被当作正常结果回答，故单独给一条
+    可在 trace 观测、回答侧可提示的路由。
+    """
+
+    def evaluate(self, context: WorkflowContext, result: NodeExecutionResult) -> ConditionDecision:
+        execution = _execution_context(context)
+        validation = execution.get("validation") if isinstance(execution.get("validation"), dict) else {}
+        matched = validation.get("status") == "suspicious"
+        return ConditionDecision(
+            matched=matched,
+            reason_code="RESULT_SUSPICIOUS" if matched else "RESULT_NOT_SUSPICIOUS",
+            reason_summary="查询结果存疑（部分子查询为空）" if matched else "查询结果未判定为存疑",
+        )
+
+
 class NodeDegradedCondition:
     """任一能力节点发生业务失败（node_failure 已写入）时命中，转入解释性回答。"""
 
@@ -451,6 +470,7 @@ def register_chatbi_conditions(registry: ConditionRegistry) -> None:
     registry.register("plan.infeasible", PlanInfeasibleCondition())
     registry.register("plan.multi_query", PlanMultiQueryCondition())
     registry.register("result.empty", ResultEmptyCondition())
+    registry.register("result.suspicious", ResultSuspiciousCondition())
 
     labels = {
         "rewrite": "补充问题澄清",

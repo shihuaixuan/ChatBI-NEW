@@ -11,6 +11,7 @@ export interface GraphQueryRequest {
   definition_version?: 'minimal-v1' | 'v1'
   request_id?: string
   run_id?: string
+  chat_id?: number
 }
 
 export interface GraphPendingInteraction {
