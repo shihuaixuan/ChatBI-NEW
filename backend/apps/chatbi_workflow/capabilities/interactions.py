@@ -291,18 +291,17 @@ def prune_dimensions_for_selected_metric(
     slots: dict[str, Any],
     intent: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """按用户选中指标的模型裁剪分组维度；过滤条件保留给编译器处理。"""
+    """按用户选中指标的模型裁剪分组维度；同 biz_name 可回退到指标模型内实例。
+
+    过滤条件保留给编译器处理。找不到同模型等价维度时丢弃该分组维度
+    （完整不兼容阻断由 knowledge 层在检索阶段完成）。
+    """
 
     dimensions = deepcopy(slots.get("dimensions")) if isinstance(slots.get("dimensions"), list) else []
     filters = deepcopy(slots.get("filters")) if isinstance(slots.get("filters"), list) else []
     metrics = _items(selected_assets.get("metrics"))
     selected_model_ids = {item.get("model_id") for item in metrics if item.get("model_id") is not None}
 
-    dimension_models = {
-        item.get("asset_id"): item.get("model_id")
-        for item in _items(selected_assets.get("dimensions"))
-        if item.get("asset_id") is not None and item.get("model_id") is not None
-    }
     dimension_assets = {
         item.get("asset_id"): item
         for item in _items(selected_assets.get("dimensions"))
@@ -310,15 +309,84 @@ def prune_dimensions_for_selected_metric(
     }
     requested_names = _requested_dimension_names(intent)
     pruned_dimensions = []
+    seen_ids: set[Any] = set()
     for item in dimensions:
         asset_id = item.get("asset_id")
-        model_id = dimension_models.get(asset_id)
+        asset = dimension_assets.get(asset_id, item)
+        model_id = asset.get("model_id")
         if selected_model_ids and model_id is not None and model_id not in selected_model_ids:
+            # 槽位里已有同模型等价实例时，直接丢弃错模型副本，避免重复绑定。
+            if _slot_list_has_metric_model_equivalent(asset, dimensions, dimension_assets, selected_model_ids):
+                continue
+            remapped = _remap_dimension_slot_to_metric_models(item, asset, selected_model_ids, selected_assets)
+            if remapped is None:
+                continue
+            item = remapped
+            asset = remapped
+            asset_id = item.get("asset_id")
+        if requested_names and not _dimension_matches_any(asset, requested_names):
             continue
-        if requested_names and not _dimension_matches_any(dimension_assets.get(asset_id, item), requested_names):
+        if asset_id is not None and asset_id in seen_ids:
             continue
+        if asset_id is not None:
+            seen_ids.add(asset_id)
         pruned_dimensions.append(item)
     return pruned_dimensions, filters
+
+
+def _slot_list_has_metric_model_equivalent(
+    asset: dict[str, Any],
+    dimensions: list[dict[str, Any]],
+    dimension_assets: dict[Any, dict[str, Any]],
+    selected_model_ids: set[Any],
+) -> bool:
+    source_biz = str(asset.get("biz_name") or "").strip().lower()
+    source_name = str(asset.get("name") or asset.get("display_name") or "").strip().lower()
+    for slot in dimensions:
+        candidate = dimension_assets.get(slot.get("asset_id"), slot)
+        if candidate.get("model_id") not in selected_model_ids:
+            continue
+        cand_biz = str(candidate.get("biz_name") or slot.get("biz_name") or "").strip().lower()
+        cand_name = str(
+            candidate.get("name") or candidate.get("display_name") or slot.get("display_name") or ""
+        ).strip().lower()
+        if source_biz and cand_biz == source_biz:
+            return True
+        if source_name and (cand_name == source_name or cand_biz == source_name):
+            return True
+    return False
+
+
+def _remap_dimension_slot_to_metric_models(
+    slot: dict[str, Any],
+    asset: dict[str, Any],
+    selected_model_ids: set[Any],
+    selected_assets: dict[str, Any],
+) -> dict[str, Any] | None:
+    """指标澄清后：把错模型维度槽位重映射到同 biz_name 的指标模型实例。"""
+
+    source_biz = str(asset.get("biz_name") or slot.get("biz_name") or "").strip().lower()
+    source_name = str(asset.get("name") or asset.get("display_name") or slot.get("display_name") or "").strip().lower()
+    for candidate in _items(selected_assets.get("dimensions")):
+        if candidate.get("model_id") not in selected_model_ids:
+            continue
+        cand_biz = str(candidate.get("biz_name") or "").strip().lower()
+        cand_name = str(candidate.get("name") or candidate.get("display_name") or "").strip().lower()
+        if source_biz and cand_biz == source_biz:
+            remapped = deepcopy(slot)
+            remapped["asset_id"] = candidate.get("asset_id")
+            remapped["display_name"] = candidate.get("name") or candidate.get("display_name") or remapped.get("display_name")
+            if candidate.get("model_id") is not None:
+                remapped["model_id"] = candidate["model_id"]
+            return remapped
+        if source_name and (cand_name == source_name or cand_biz == source_name):
+            remapped = deepcopy(slot)
+            remapped["asset_id"] = candidate.get("asset_id")
+            remapped["display_name"] = candidate.get("name") or candidate.get("display_name") or remapped.get("display_name")
+            if candidate.get("model_id") is not None:
+                remapped["model_id"] = candidate["model_id"]
+            return remapped
+    return None
 
 
 def _first_present(source: dict[str, Any], keys: tuple[str, ...]) -> Any:

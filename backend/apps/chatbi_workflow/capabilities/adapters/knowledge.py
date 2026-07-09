@@ -173,9 +173,12 @@ class HeadlessKnowledgeAdapter:
             candidate_groups,
             expected_metric_mentions=metric_mentions if isinstance(metric_mentions, list) else [],
         )
-        selected_assets = self._constrain_selected_assets_to_metric_models(gate_result["selected_assets"])
-        multi_query_plans = self._cross_model_query_plans(selected_assets, intent)
+        # 指标优先：先按指标模型做维度重解析（同 biz_name/别名），再决定单模型或拆分。
+        selected_assets = gate_result["selected_assets"]
+        multi_query_plans = self._cross_model_query_plans(selected_assets, intent, retrieval_schema)
         if len(multi_query_plans) > 1:
+            # 拆分路径：各子计划已在对应模型内重解析；汇总资产仅保留各模型内实例。
+            selected_assets = self._merge_assets_from_multi_query_plans(selected_assets, multi_query_plans)
             output_assets = self._selected_assets_with_dimension_groups(selected_assets)
             return {
                 "hit": True,
@@ -201,7 +204,43 @@ class HeadlessKnowledgeAdapter:
                 "ambiguities": [],
                 "multi_query_plans": multi_query_plans,
             }
+
+        resolve_result = self._resolve_selected_assets_to_metric_models(
+            selected_assets,
+            retrieval_schema,
+            intent,
+        )
+        selected_assets = resolve_result["selected_assets"]
+        incompatible_dimensions = resolve_result["incompatible_dimensions"]
         selected_assets = self._constrain_selected_dimensions_by_intent(selected_assets, intent)
+
+        if incompatible_dimensions and selected_assets.get("metrics"):
+            output_assets = self._selected_assets_with_dimension_groups(selected_assets)
+            infeasible_decision = self._dimension_incompatible_decision(
+                selected_assets.get("metrics", []),
+                incompatible_dimensions,
+                retrieval_schema,
+            )
+            return {
+                "hit": True,
+                "status": "hit",
+                "dataset_id": int(dataset_id),
+                "schema_version": self._schema_version(retrieval_schema),
+                "index_version": self._index_version(retrieval_schema),
+                "tables": self._tables(retrieval_schema, selected_assets),
+                "fields": self._fields(selected_assets),
+                "metrics": [item["biz_name"] for item in selected_assets["metrics"]],
+                "dimensions": [item["biz_name"] for item in selected_assets["dimensions"]],
+                "terms": [item["biz_name"] for item in selected_assets["terms"]],
+                "examples": [],
+                "candidate_groups": self._public_candidate_groups(candidate_groups),
+                "selected_assets": output_assets,
+                "slot_bindings": self._slot_bindings(selected_assets, intent),
+                "subject_domain": subject_domain or {},
+                "decision": infeasible_decision,
+                "ambiguities": gate_result["ambiguities"],
+            }
+
         missing_slots = self._missing_required_slots(intent, selected_assets, gate_result["ambiguities"])
         if missing_slots:
             reason_code = (
@@ -273,28 +312,376 @@ class HeadlessKnowledgeAdapter:
             for group_name, candidates in candidate_groups.items()
         }
 
-    @staticmethod
-    def _constrain_selected_assets_to_metric_models(
+    @classmethod
+    def _resolve_selected_assets_to_metric_models(
+        cls,
         selected_assets: dict[str, list[dict[str, Any]]],
-    ) -> dict[str, list[dict[str, Any]]]:
+        schema: DataSetSchema | None = None,
+        intent: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """指标优先：在指标模型内重解析维度/维值，找不到等价实例则记为不兼容。
+
+        替代旧的「按 model_id 过滤后丢弃」：外模型召回的维度若在指标模型内
+        有同 biz_name / 别名实例，则绑定该实例；否则进入 incompatible 列表，
+        由调用方决定阻断（避免静默丢维度）。
+        """
+
         metric_model_ids = {
             item.get("model_id")
             for item in selected_assets.get("metrics", [])
             if item.get("model_id") is not None
         }
         if not metric_model_ids:
-            return selected_assets
-        constrained: dict[str, list[dict[str, Any]]] = {}
-        for group_name, items in selected_assets.items():
-            if group_name == "metrics":
-                constrained[group_name] = items
+            return {"selected_assets": selected_assets, "incompatible_dimensions": []}
+
+        schema_dimensions = list(schema.dimensions) if schema is not None else []
+        required_mentions = cls._required_dimension_mentions(intent)
+        resolved_dimensions: list[dict[str, Any]] = []
+        incompatible_dimensions: list[dict[str, Any]] = []
+        seen_dimension_ids: set[int] = set()
+
+        for item in selected_assets.get("dimensions", []):
+            resolved = cls._resolve_dimension_to_metric_models(item, metric_model_ids, schema_dimensions)
+            if resolved is None:
+                if cls._dimension_mention_is_required(item, required_mentions):
+                    incompatible_dimensions.append(cls._incompatible_dimension_record(item))
                 continue
-            constrained[group_name] = [
+            asset_id = _int_or_none(resolved.get("asset_id"))
+            if asset_id is not None and asset_id in seen_dimension_ids:
+                continue
+            if asset_id is not None:
+                seen_dimension_ids.add(asset_id)
+            resolved_dimensions.append(resolved)
+
+        # 意图明确要求的维度若召回列表里没有，也尝试在指标模型内按 mention 解析。
+        for mention in required_mentions:
+            if any(cls._candidate_matches_mention(item, mention) for item in resolved_dimensions):
+                continue
+            if any(cls._candidate_matches_mention(item, mention) for item in incompatible_dimensions):
+                continue
+            synthetic = {
+                "name": mention,
+                "biz_name": mention,
+                "matched_text": mention,
+                "model_id": None,
+                "asset_id": None,
+                "score": 0.0,
+                "payload": {},
+            }
+            resolved = cls._resolve_dimension_to_metric_models(synthetic, metric_model_ids, schema_dimensions)
+            if resolved is None:
+                incompatible_dimensions.append(cls._incompatible_dimension_record(synthetic, mention=mention))
+                continue
+            asset_id = _int_or_none(resolved.get("asset_id"))
+            if asset_id is not None and asset_id in seen_dimension_ids:
+                continue
+            if asset_id is not None:
+                seen_dimension_ids.add(asset_id)
+            resolved_dimensions.append(resolved)
+
+        resolved_values: list[dict[str, Any]] = []
+        seen_value_ids: set[int] = set()
+        for item in selected_assets.get("values", []):
+            resolved = cls._resolve_value_to_metric_models(item, metric_model_ids, schema_dimensions)
+            if resolved is None:
+                continue
+            asset_id = _int_or_none(resolved.get("asset_id"))
+            if asset_id is not None and asset_id in seen_value_ids:
+                continue
+            if asset_id is not None:
+                seen_value_ids.add(asset_id)
+            resolved_values.append(resolved)
+
+        constrained: dict[str, list[dict[str, Any]]] = {
+            "metrics": selected_assets.get("metrics", []),
+            "dimensions": resolved_dimensions,
+            "values": resolved_values,
+            "terms": [
                 item
-                for item in items
-                if item.get("model_id") in metric_model_ids
-            ]
-        return constrained
+                for item in selected_assets.get("terms", [])
+                if item.get("model_id") in metric_model_ids or item.get("model_id") is None
+            ],
+        }
+        return {
+            "selected_assets": constrained,
+            "incompatible_dimensions": incompatible_dimensions,
+        }
+
+    @classmethod
+    def _resolve_dimension_to_metric_models(
+        cls,
+        item: dict[str, Any],
+        metric_model_ids: set[Any],
+        schema_dimensions: list[SchemaElement],
+    ) -> dict[str, Any] | None:
+        if item.get("model_id") in metric_model_ids:
+            return item
+        equivalent = cls._find_equivalent_dimension_in_models(item, metric_model_ids, schema_dimensions)
+        if equivalent is None:
+            return None
+        return cls._candidate_from_schema_dimension(
+            equivalent,
+            score=float(item.get("score") or 0.8),
+            matched_text=str(item.get("matched_text") or item.get("name") or equivalent.name),
+            source="metric_model_equivalent",
+        )
+
+    @classmethod
+    def _resolve_value_to_metric_models(
+        cls,
+        item: dict[str, Any],
+        metric_model_ids: set[Any],
+        schema_dimensions: list[SchemaElement],
+    ) -> dict[str, Any] | None:
+        if item.get("model_id") in metric_model_ids:
+            return item
+        # 维值：先找父维度在指标模型内的等价实例，再保留原命中文本。
+        equivalent = cls._find_equivalent_dimension_in_models(item, metric_model_ids, schema_dimensions)
+        if equivalent is None:
+            return None
+        candidate = cls._candidate_from_schema_dimension(
+            equivalent,
+            score=float(item.get("score") or 0.8),
+            matched_text=str(item.get("matched_text") or item.get("name") or equivalent.name),
+            source="metric_model_equivalent_value",
+        )
+        candidate["asset_type"] = "VALUE"
+        # 保留原 VALUE 的 asset_id 语义不稳；用等价维度 id，过滤绑定靠 matched_text。
+        return candidate
+
+    @classmethod
+    def _find_equivalent_dimension_in_models(
+        cls,
+        item: dict[str, Any],
+        metric_model_ids: set[Any],
+        schema_dimensions: list[SchemaElement],
+    ) -> SchemaElement | None:
+        """在指标模型内按 biz_name > 别名/名称 查找等价维度。"""
+
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        source_biz = _normalize_text(item.get("biz_name") or payload.get("biz_name") or payload.get("bizName"))
+        source_names = {
+            text
+            for text in (
+                _normalize_text(item.get("name")),
+                _normalize_text(item.get("matched_text")),
+                _normalize_text(payload.get("name")),
+                *[_normalize_text(alias) for alias in cls._alias_list(payload)],
+            )
+            if text
+        }
+        source_semantic = _normalize_text(
+            payload.get("ext_info", {}).get("semantic_type") if isinstance(payload.get("ext_info"), dict) else ""
+        ) or _normalize_text(payload.get("semantic_type"))
+
+        # 优先级 a：biz_name 精确相等
+        if source_biz:
+            for dimension in schema_dimensions:
+                if dimension.model not in metric_model_ids:
+                    continue
+                if _normalize_text(dimension.biz_name) == source_biz:
+                    return dimension
+
+        # 优先级 b：别名 / 名称命中
+        for dimension in schema_dimensions:
+            if dimension.model not in metric_model_ids:
+                continue
+            dim_names = {
+                text
+                for text in (
+                    _normalize_text(dimension.name),
+                    _normalize_text(dimension.biz_name),
+                    *[_normalize_text(alias) for alias in (dimension.alias or [])],
+                )
+                if text
+            }
+            if source_names & dim_names:
+                if source_semantic:
+                    dim_semantic = _normalize_text((dimension.ext_info or {}).get("semantic_type"))
+                    if dim_semantic and dim_semantic != source_semantic:
+                        continue
+                return dimension
+        return None
+
+    @staticmethod
+    def _candidate_from_schema_dimension(
+        dimension: SchemaElement,
+        *,
+        score: float,
+        matched_text: str,
+        source: str,
+    ) -> dict[str, Any]:
+        return {
+            "source": source,
+            "asset_type": "DIMENSION",
+            "asset_id": dimension.id,
+            "model_id": dimension.model,
+            "name": dimension.name,
+            "biz_name": dimension.biz_name,
+            "score": score,
+            "matched_text": matched_text,
+            "matched_field": "metric_model_equivalent",
+            "payload": dimension.model_dump(mode="json"),
+        }
+
+    @classmethod
+    def _required_dimension_mentions(cls, intent: dict[str, Any] | None) -> list[str]:
+        if not isinstance(intent, dict):
+            return []
+        mentions: list[str] = []
+        for slot in intent.get("dimension_slots") or []:
+            if not isinstance(slot, dict):
+                continue
+            if str(slot.get("role") or "").lower() not in {"group_by", "display", "filter"}:
+                continue
+            name = str(slot.get("name") or "").strip()
+            if name and name not in mentions:
+                mentions.append(name)
+        for mention in cls._text_list(intent.get("dimension_mentions")):
+            if mention not in mentions:
+                mentions.append(mention)
+        return mentions
+
+    @classmethod
+    def _dimension_mention_is_required(cls, item: dict[str, Any], required_mentions: list[str]) -> bool:
+        if not required_mentions:
+            # 无明确维度意图时，外模型噪声候选直接丢弃，不阻断查询。
+            return False
+        return any(cls._candidate_matches_mention(item, mention) for mention in required_mentions)
+
+    @classmethod
+    def _candidate_matches_mention(cls, item: dict[str, Any], mention: str) -> bool:
+        return cls._match_dimension_candidate(mention, [item]) is not None
+
+    @staticmethod
+    def _incompatible_dimension_record(item: dict[str, Any], mention: str | None = None) -> dict[str, Any]:
+        display = (
+            mention
+            or str(item.get("name") or "")
+            or str(item.get("matched_text") or "")
+            or str(item.get("biz_name") or "")
+        )
+        return {
+            "name": display,
+            "biz_name": item.get("biz_name"),
+            "model_id": item.get("model_id"),
+            "asset_id": item.get("asset_id"),
+            "matched_text": item.get("matched_text"),
+        }
+
+    @classmethod
+    def _dimension_incompatible_decision(
+        cls,
+        metrics: list[dict[str, Any]],
+        incompatible_dimensions: list[dict[str, Any]],
+        schema: DataSetSchema | None,
+    ) -> dict[str, Any]:
+        metric = metrics[0] if metrics else {}
+        metric_name = str(metric.get("name") or metric.get("biz_name") or "该指标")
+        dimension_names = [
+            str(item.get("name") or item.get("biz_name") or "")
+            for item in incompatible_dimensions
+            if item.get("name") or item.get("biz_name")
+        ]
+        dimension_label = "、".join(dimension_names) if dimension_names else "请求的维度"
+        suggestions = cls._analyzable_dimension_suggestions(metric, schema)
+        reason = (
+            f"指标『{metric_name}』所在的分析模型不包含维度『{dimension_label}』，"
+            "当前不支持跨模型组合查询"
+        )
+        if suggestions:
+            reason = f"{reason}。可改用该指标可分析的维度：{'、'.join(suggestions)}"
+        return {
+            "status": "infeasible",
+            "strategy": "metric_model_dimension_resolve",
+            "reason_code": "DIMENSION_NOT_IN_METRIC_MODEL",
+            "reason": reason,
+            "infeasible_reason": {
+                "code": "DIMENSION_NOT_IN_METRIC_MODEL",
+                "metric": metric_name,
+                "dimensions": dimension_names,
+                "reason": reason,
+                "suggestions": [f"改用『{metric_name}』可分析的维度：{'、'.join(suggestions)}"] if suggestions else [],
+            },
+            "incompatible_dimensions": incompatible_dimensions,
+            "suggestions": suggestions,
+        }
+
+    @classmethod
+    def _analyzable_dimension_suggestions(
+        cls,
+        metric: dict[str, Any],
+        schema: DataSetSchema | None,
+        limit: int = 5,
+    ) -> list[str]:
+        suggestions: list[str] = []
+        payload = metric.get("payload") if isinstance(metric.get("payload"), dict) else {}
+        related = payload.get("related_schema_elements") or []
+        for item in related:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("biz_name") or item.get("bizName") or "").strip()
+            if name and name not in suggestions:
+                suggestions.append(name)
+            if len(suggestions) >= limit:
+                return suggestions
+
+        model_id = metric.get("model_id")
+        if schema is None or model_id is None:
+            return suggestions
+        for dimension in schema.dimensions:
+            if dimension.model != model_id:
+                continue
+            if cls._is_time_dimension(dimension):
+                continue
+            name = str(dimension.name or dimension.biz_name or "").strip()
+            if name and name not in suggestions:
+                suggestions.append(name)
+            if len(suggestions) >= limit:
+                break
+        return suggestions
+
+    @staticmethod
+    def _alias_list(payload: dict[str, Any]) -> list[Any]:
+        aliases = payload.get("alias") or payload.get("aliases") or []
+        if isinstance(aliases, str):
+            return [aliases]
+        return aliases if isinstance(aliases, list) else []
+
+    @classmethod
+    def _merge_assets_from_multi_query_plans(
+        cls,
+        selected_assets: dict[str, list[dict[str, Any]]],
+        multi_query_plans: list[dict[str, Any]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """把各子计划已重解析的维度汇总回 selected_assets（仅模型内实例）。"""
+
+        dimensions: list[dict[str, Any]] = []
+        values: list[dict[str, Any]] = []
+        seen_dim: set[int] = set()
+        seen_val: set[int] = set()
+        for plan in multi_query_plans:
+            plan_assets = plan.get("selected_assets") if isinstance(plan.get("selected_assets"), dict) else {}
+            for item in plan_assets.get("dimensions") or []:
+                asset_id = _int_or_none(item.get("asset_id"))
+                if asset_id is not None and asset_id in seen_dim:
+                    continue
+                if asset_id is not None:
+                    seen_dim.add(asset_id)
+                dimensions.append(item)
+            for item in plan_assets.get("values") or []:
+                asset_id = _int_or_none(item.get("asset_id"))
+                if asset_id is not None and asset_id in seen_val:
+                    continue
+                if asset_id is not None:
+                    seen_val.add(asset_id)
+                values.append(item)
+        return {
+            "metrics": selected_assets.get("metrics", []),
+            "dimensions": dimensions,
+            "values": values,
+            "terms": selected_assets.get("terms", []),
+        }
 
     @classmethod
     def _selected_assets_with_dimension_groups(
@@ -318,8 +705,9 @@ class HeadlessKnowledgeAdapter:
         cls,
         selected_assets: dict[str, list[dict[str, Any]]],
         intent: dict[str, Any] | None = None,
+        schema: DataSetSchema | None = None,
     ) -> list[dict[str, Any]]:
-        """按指标所属模型拆分查询计划，维度只能进入相同模型的子计划。"""
+        """按指标所属模型拆分查询计划；每个子计划在对应模型内重解析维度。"""
 
         metrics_by_model: dict[int, list[dict[str, Any]]] = {}
         for metric in selected_assets.get("metrics", []):
@@ -332,18 +720,12 @@ class HeadlessKnowledgeAdapter:
             metrics = metrics_by_model[model_id]
             model_assets = {
                 "metrics": metrics,
-                "dimensions": [
-                    dimension
-                    for dimension in selected_assets.get("dimensions", [])
-                    if _int_or_none(dimension.get("model_id")) == model_id
-                ],
-                "values": [
-                    value
-                    for value in selected_assets.get("values", [])
-                    if _int_or_none(value.get("model_id")) == model_id
-                ],
+                "dimensions": list(selected_assets.get("dimensions", [])),
+                "values": list(selected_assets.get("values", [])),
                 "terms": [],
             }
+            resolve_result = cls._resolve_selected_assets_to_metric_models(model_assets, schema, intent)
+            model_assets = resolve_result["selected_assets"]
             if isinstance(intent, dict):
                 model_assets = cls._constrain_selected_dimensions_by_intent(model_assets, intent)
             dimensions = model_assets["dimensions"]
@@ -359,6 +741,8 @@ class HeadlessKnowledgeAdapter:
                         for dimension in dimensions
                     ],
                     "slots": slot_bindings,
+                    "selected_assets": model_assets,
+                    "incompatible_dimensions": resolve_result["incompatible_dimensions"],
                 }
             )
         return plans

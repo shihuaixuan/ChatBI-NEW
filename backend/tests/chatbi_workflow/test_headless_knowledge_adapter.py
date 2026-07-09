@@ -1314,3 +1314,316 @@ def test_candidate_groups_output_strips_full_payload():
     assert public["metrics"][0] == {"asset_id": 1, "name": "销售额", "score": 0.9}
     # ambiguities/selected_assets 仍引用原对象，payload 必须保留在原件上。
     assert "payload" in groups["metrics"][0]
+
+
+def test_resolve_dimension_to_metric_model_by_biz_name():
+    """P0：外模型召回的店铺维度，按 biz_name 重解析到指标模型内实例。"""
+
+    store_in_metric_model = SchemaElement(
+        data_set_id=20,
+        data_set_name="经营分析",
+        model=10,
+        id=210,
+        name="店铺ID",
+        biz_name="store_id",
+        type="DIMENSION",
+        alias=["店铺"],
+    )
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="经营分析",
+            id=20,
+            name="经营分析",
+            biz_name="biz",
+            type="DATASET",
+        ),
+        models=[
+            {"id": 10, "name": "销售模型", "biz_name": "sales", "tableQuery": "sales"},
+            {"id": 20, "name": "订单模型", "biz_name": "orders", "tableQuery": "orders"},
+        ],
+        metrics=[],
+        dimensions=[store_in_metric_model],
+    )
+    selected_assets = {
+        "metrics": [{"asset_id": 100, "name": "销售额", "biz_name": "gmv", "model_id": 10, "score": 0.95}],
+        "dimensions": [
+            {
+                "asset_id": 999,
+                "name": "店铺",
+                "biz_name": "store_id",
+                "model_id": 20,
+                "score": 1.1,
+                "matched_text": "店铺",
+                "payload": {"name": "店铺", "biz_name": "store_id", "alias": ["店铺"], "ext_info": {}},
+            }
+        ],
+        "values": [],
+        "terms": [],
+    }
+
+    result = HeadlessKnowledgeAdapter._resolve_selected_assets_to_metric_models(
+        selected_assets,
+        schema,
+        {"dimension_slots": [{"name": "店铺", "role": "group_by"}]},
+    )
+
+    assert result["incompatible_dimensions"] == []
+    assert len(result["selected_assets"]["dimensions"]) == 1
+    resolved = result["selected_assets"]["dimensions"][0]
+    assert resolved["asset_id"] == 210
+    assert resolved["model_id"] == 10
+    assert resolved["biz_name"] == "store_id"
+    assert resolved["source"] == "metric_model_equivalent"
+
+
+def test_resolve_marks_incompatible_when_no_equivalent_in_metric_model():
+    """P0：意图要求的维度在指标模型内无等价实例 → 不兼容。"""
+
+    channel = SchemaElement(
+        data_set_id=20,
+        data_set_name="经营分析",
+        model=10,
+        id=220,
+        name="渠道",
+        biz_name="channel",
+        type="DIMENSION",
+    )
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="经营分析",
+            id=20,
+            name="经营分析",
+            biz_name="biz",
+            type="DATASET",
+        ),
+        models=[{"id": 10, "name": "销售模型", "biz_name": "sales", "tableQuery": "sales"}],
+        metrics=[],
+        dimensions=[channel],
+    )
+    selected_assets = {
+        "metrics": [
+            {
+                "asset_id": 100,
+                "name": "销售额",
+                "biz_name": "gmv",
+                "model_id": 10,
+                "score": 0.95,
+                "payload": {
+                    "related_schema_elements": [
+                        {"name": "渠道", "biz_name": "channel"},
+                        {"name": "门店", "biz_name": "store"},
+                    ]
+                },
+            }
+        ],
+        "dimensions": [
+            {
+                "asset_id": 888,
+                "name": "配送方式",
+                "biz_name": "delivery_type",
+                "model_id": 20,
+                "score": 0.9,
+                "matched_text": "配送方式",
+                "payload": {"name": "配送方式", "biz_name": "delivery_type", "ext_info": {}},
+            }
+        ],
+        "values": [],
+        "terms": [],
+    }
+
+    result = HeadlessKnowledgeAdapter._resolve_selected_assets_to_metric_models(
+        selected_assets,
+        schema,
+        {"dimension_slots": [{"name": "配送方式", "role": "group_by"}]},
+    )
+
+    assert result["selected_assets"]["dimensions"] == []
+    assert len(result["incompatible_dimensions"]) == 1
+    assert result["incompatible_dimensions"][0]["name"] == "配送方式"
+
+    decision = HeadlessKnowledgeAdapter._dimension_incompatible_decision(
+        selected_assets["metrics"],
+        result["incompatible_dimensions"],
+        schema,
+    )
+    assert decision["reason_code"] == "DIMENSION_NOT_IN_METRIC_MODEL"
+    assert "配送方式" in decision["reason"]
+    assert "渠道" in decision["suggestions"] or "门店" in decision["suggestions"]
+
+
+def test_retrieve_rewrites_cross_model_store_dimension_to_metric_model():
+    """P0 端到端：召回外模型店铺维度后，输出绑定到指标模型内实例。"""
+
+    metric = SchemaElement(
+        data_set_id=20,
+        data_set_name="经营分析",
+        model=10,
+        id=100,
+        name="销售额",
+        biz_name="gmv",
+        type="METRIC",
+        fields=["gmv"],
+        related_schema_elements=[{"name": "店铺ID", "biz_name": "store_id"}],
+    )
+    store_a = SchemaElement(
+        data_set_id=20,
+        data_set_name="经营分析",
+        model=10,
+        id=210,
+        name="店铺ID",
+        biz_name="store_id",
+        type="DIMENSION",
+        alias=["店铺"],
+    )
+    store_b = SchemaElement(
+        data_set_id=20,
+        data_set_name="经营分析",
+        model=20,
+        id=310,
+        name="店铺",
+        biz_name="store_id",
+        type="DIMENSION",
+        alias=["店铺", "门店"],
+    )
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="经营分析",
+            id=20,
+            name="经营分析",
+            biz_name="biz",
+            type="DATASET",
+        ),
+        models=[
+            {"id": 10, "name": "销售模型", "biz_name": "sales", "tableQuery": "sales_daily"},
+            {"id": 20, "name": "订单模型", "biz_name": "orders", "tableQuery": "order_detail"},
+        ],
+        metrics=[metric],
+        dimensions=[store_a, store_b],
+    )
+    # 故意只召回外模型店铺（更高分），验证重解析能找回模型 A 实例。
+    mapper = TextAwareSchemaMapper(
+        {
+            "销售额": [SchemaElementMatch(element=metric, similarity=0.98, detect_word="销售额", word="销售额")],
+            "店铺": [SchemaElementMatch(element=store_b, similarity=0.99, detect_word="店铺", word="店铺")],
+        }
+    )
+    adapter = HeadlessKnowledgeAdapter(
+        schema_builder=FakeHeadlessSchemaBuilder(schema),
+        schema_mapper=mapper,
+        document_retriever=EmptyDocumentRetriever(),
+    )
+
+    result = adapter.retrieve(
+        {
+            "request": {"question": "各店铺销售额", "dataset_id": 20, "tenant_id": 10, "user_id": 20},
+            "variables": {
+                "rewrite": {"rewritten_question": "各店铺销售额"},
+                "intent": {
+                    "intent_type": "metric_query",
+                    "metric_mentions": ["销售额"],
+                    "dimension_mentions": ["店铺"],
+                    "dimension_slots": [{"name": "店铺", "role": "group_by"}],
+                    "required_slot_types": ["metric", "dimension"],
+                    "query_shape": {"select_mode": "aggregate", "needs_group_by": True},
+                },
+            },
+        }
+    )
+
+    assert result["hit"] is True
+    assert result["status"] == "hit"
+    assert result["decision"].get("status") != "infeasible"
+    dims = result["selected_assets"]["dimensions"]
+    assert len(dims) == 1
+    assert dims[0]["asset_id"] == 210
+    assert dims[0]["model_id"] == 10
+    assert dims[0]["biz_name"] == "store_id"
+
+
+def test_retrieve_blocks_incompatible_dimension_with_user_reason():
+    """P0：维度与指标模型不兼容时 hit 仍为 True，但 decision 标记 infeasible。"""
+
+    metric = SchemaElement(
+        data_set_id=20,
+        data_set_name="经营分析",
+        model=10,
+        id=100,
+        name="销售额",
+        biz_name="gmv",
+        type="METRIC",
+        fields=["gmv"],
+        related_schema_elements=[{"name": "渠道", "biz_name": "channel"}],
+    )
+    channel = SchemaElement(
+        data_set_id=20,
+        data_set_name="经营分析",
+        model=10,
+        id=220,
+        name="渠道",
+        biz_name="channel",
+        type="DIMENSION",
+    )
+    delivery = SchemaElement(
+        data_set_id=20,
+        data_set_name="经营分析",
+        model=20,
+        id=330,
+        name="配送方式",
+        biz_name="delivery_type",
+        type="DIMENSION",
+    )
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="经营分析",
+            id=20,
+            name="经营分析",
+            biz_name="biz",
+            type="DATASET",
+        ),
+        models=[
+            {"id": 10, "name": "销售模型", "biz_name": "sales", "tableQuery": "sales_daily"},
+            {"id": 20, "name": "履约模型", "biz_name": "fulfillment", "tableQuery": "fulfillment"},
+        ],
+        metrics=[metric],
+        dimensions=[channel, delivery],
+    )
+    mapper = TextAwareSchemaMapper(
+        {
+            "销售额": [SchemaElementMatch(element=metric, similarity=0.98, detect_word="销售额", word="销售额")],
+            "配送方式": [
+                SchemaElementMatch(element=delivery, similarity=0.95, detect_word="配送方式", word="配送方式")
+            ],
+        }
+    )
+    adapter = HeadlessKnowledgeAdapter(
+        schema_builder=FakeHeadlessSchemaBuilder(schema),
+        schema_mapper=mapper,
+        document_retriever=EmptyDocumentRetriever(),
+    )
+
+    result = adapter.retrieve(
+        {
+            "request": {"question": "各配送方式销售额", "dataset_id": 20, "tenant_id": 10, "user_id": 20},
+            "variables": {
+                "rewrite": {"rewritten_question": "各配送方式销售额"},
+                "intent": {
+                    "intent_type": "metric_query",
+                    "metric_mentions": ["销售额"],
+                    "dimension_mentions": ["配送方式"],
+                    "dimension_slots": [{"name": "配送方式", "role": "group_by"}],
+                    "required_slot_types": ["metric", "dimension"],
+                    "query_shape": {"select_mode": "aggregate", "needs_group_by": True},
+                },
+            },
+        }
+    )
+
+    assert result["hit"] is True
+    assert result["decision"]["status"] == "infeasible"
+    assert result["decision"]["reason_code"] == "DIMENSION_NOT_IN_METRIC_MODEL"
+    assert "配送方式" in result["decision"]["reason"]
+    assert "渠道" in result["decision"]["suggestions"]

@@ -482,6 +482,28 @@ class QueryPlanBinder:
         if not knowledge.get("hit"):
             return self._infeasible("knowledge_missed", "知识检索未命中可用资产")
 
+        # 知识层已判定维度与指标模型不兼容：前移阻断，避免编译期 JOIN 硬失败。
+        decision = knowledge.get("decision") if isinstance(knowledge.get("decision"), dict) else {}
+        if decision.get("reason_code") == "DIMENSION_NOT_IN_METRIC_MODEL" or decision.get("status") == "infeasible":
+            reason_payload = decision.get("infeasible_reason")
+            reason_code = "DIMENSION_NOT_IN_METRIC_MODEL"
+            if isinstance(reason_payload, dict):
+                reason_code = str(reason_payload.get("code") or reason_code)
+                reason_text = str(reason_payload.get("reason") or decision.get("reason") or "维度与指标不兼容")
+                suggestions = list(reason_payload.get("suggestions") or decision.get("suggestions") or [])
+            else:
+                reason_text = str(decision.get("reason") or "维度与指标不兼容")
+                suggestions = list(decision.get("suggestions") or [])
+            issues = [{"type": reason_code, "reason": reason_text}]
+            for suggestion in suggestions:
+                issues.append({"type": "suggestion", "reason": str(suggestion)})
+            return QueryPlanOutput(
+                status="infeasible",
+                strategy="infeasible",
+                infeasible_reason=reason_code,
+                issues=issues,
+            ).model_dump(mode="json")
+
         slots = derive_semantic_slots(knowledge, intent)
         selected_metric = selected_metric_from_response(knowledge, ctx.metric_selection)
         if selected_metric is not None:
@@ -501,26 +523,29 @@ class QueryPlanBinder:
         if not metrics and not group_bys and not filters:
             return self._infeasible("no_bindable_assets", "没有可绑定到查询计划的资产")
         sub_plans = derive_multi_query_sub_plans(intent, metrics, group_bys, filters, having)
-        decision = decide_capability(intent, {"sub_plans": sub_plans})
-        if decision.status == "infeasible":
-            return self._infeasible(decision.reason_code or "query_plan_infeasible", decision.reason or "查询计划不可行")
+        capability = decide_capability(intent, {"sub_plans": sub_plans})
+        if capability.status == "infeasible":
+            return self._infeasible(
+                capability.reason_code or "query_plan_infeasible",
+                capability.reason or "查询计划不可行",
+            )
 
         # 多查询要素不全被回退为单查询时，携带说明供回答侧如实提示（不静默降级）。
         issues: list[dict[str, Any]] = []
         effective_sub_plans = sub_plans
-        if decision.strategy != "multi_query":
+        if capability.strategy != "multi_query":
             effective_sub_plans = []
-            if decision.downgrade_note:
+            if capability.downgrade_note:
                 issues.append(
                     {
-                        "type": decision.reason_code or "multi_query_downgraded_to_single",
-                        "reason": decision.downgrade_note,
+                        "type": capability.reason_code or "multi_query_downgraded_to_single",
+                        "reason": capability.downgrade_note,
                     }
                 )
 
         return QueryPlanOutput(
-            status=decision.status,
-            strategy=decision.strategy,
+            status=capability.status,
+            strategy=capability.strategy,
             select_mode=derive_select_mode(intent),
             metrics=metrics,
             group_bys=group_bys,

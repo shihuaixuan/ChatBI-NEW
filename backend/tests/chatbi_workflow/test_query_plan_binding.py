@@ -633,3 +633,46 @@ def test_split_sql_generation_uses_query_plan_sub_plans():
     assert [item["plan_ref"] for item in result["queries"]] == [0, 1]
     assert "group by stall_traffic.shop_name" in result["queries"][0]["sql"]
     assert "group by" not in result["queries"][1]["sql"]
+
+
+def test_binder_blocks_dimension_not_in_metric_model():
+    """P0：knowledge 判定维度不兼容时，bind_query_plan 产出用户可读 infeasible。"""
+
+    knowledge = {
+        "hit": True,
+        "status": "hit",
+        "slot_bindings": {
+            "metrics": [_metric_binding()],
+            "group_dimensions": [],
+            "time_filters": [],
+            "value_filters": [],
+            "dimension_filters": [],
+        },
+        "selected_assets": {"metrics": [], "dimensions": [], "values": [], "terms": []},
+        "decision": {
+            "status": "infeasible",
+            "strategy": "metric_model_dimension_resolve",
+            "reason_code": "DIMENSION_NOT_IN_METRIC_MODEL",
+            "reason": "指标『访问人数』所在的分析模型不包含维度『配送方式』，当前不支持跨模型组合查询",
+            "infeasible_reason": {
+                "code": "DIMENSION_NOT_IN_METRIC_MODEL",
+                "metric": "访问人数",
+                "dimensions": ["配送方式"],
+                "reason": "指标『访问人数』所在的分析模型不包含维度『配送方式』，当前不支持跨模型组合查询",
+                "suggestions": ["改用『访问人数』可分析的维度：店铺名称、城市"],
+            },
+            "suggestions": ["店铺名称", "城市"],
+        },
+    }
+    variables = {
+        "knowledge": knowledge,
+        "intent": {"intent_type": "metric_query", "query_shape": {"select_mode": "aggregate"}},
+    }
+
+    plan = QueryPlanBinder().bind(_request(variables))
+
+    assert plan["status"] == "infeasible"
+    assert plan["infeasible_reason"] == "DIMENSION_NOT_IN_METRIC_MODEL"
+    assert any(issue["type"] == "DIMENSION_NOT_IN_METRIC_MODEL" for issue in plan["issues"])
+    assert any("配送方式" in str(issue.get("reason") or "") for issue in plan["issues"])
+    assert any(issue["type"] == "suggestion" for issue in plan["issues"])

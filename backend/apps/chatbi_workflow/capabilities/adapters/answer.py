@@ -48,6 +48,7 @@ def build_answer_generation_prompt(
 - mode=reject 时，只说明当前问题无法处理或不在权限范围内，不提供绕过方法。
 - mode=chitchat 时，简短回应，并引导用户提出业务数据分析问题。
 - mode=generate 时，基于 projection 中已有结果生成回答；如果缺少结果，说明暂时无法生成完整回答。
+- 若 projection.plan.status 为 infeasible，或 infeasible_reason / issues 说明维度与指标不兼容，必须把原因和建议如实转述给用户，不要编造查询结果。
 - warnings 必须是字符串数组。
 - render_type 默认使用 text。
 - citations 必须是对象数组，没有引用时返回空数组。
