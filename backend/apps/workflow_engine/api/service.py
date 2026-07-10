@@ -468,13 +468,27 @@ class GraphApiService:
                 raise HTTPException(status_code=404, detail="GRAPH_RUN_NOT_FOUND")
             if run is not None:
                 worker_running = worker is not None and worker.is_alive()
-                if run.status in {
+                reached_stream_boundary = run.status in {
                     RunStatus.SUCCEEDED.value,
                     RunStatus.FAILED.value,
                     RunStatus.CANCELLED.value,
-                }:
-                    return
-                if run.status == RunStatus.WAITING_INPUT.value and not worker_running:
+                } or run.status == RunStatus.WAITING_INPUT.value
+                if reached_stream_boundary and worker_running:
+                    # Run 状态可能先于最后一条公开事件提交，等待 worker 完成后再关闭流。
+                    await asyncio.sleep(0.5)
+                    continue
+                if reached_stream_boundary:
+                    # worker 已结束后排空最终事件，避免遗漏 run.succeeded/run.failed 等终态帧。
+                    while True:
+                        trailing_events = EventStream(self._session).list(
+                            run_id=run_id,
+                            after_sequence=last_sequence,
+                        )
+                        if not trailing_events:
+                            break
+                        for event in trailing_events:
+                            last_sequence = event.sequence
+                            yield self._to_sse_frame(self._to_event_response(event))
                     return
             if worker is not None and not worker.is_alive() and run is None:
                 if errors:

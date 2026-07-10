@@ -34,6 +34,7 @@ from apps.headless.models import (
 )
 from apps.workflow_engine.api import router as graph_router
 from apps.workflow_engine.api import service as graph_service
+from apps.workflow_engine.domain.event import WorkflowEvent
 from apps.workflow_engine.infrastructure.persistence.models import (
     InteractionRequestModel,
     NodeExecutionModel,
@@ -554,6 +555,82 @@ def test_graph_chat_query_stream_creates_owned_record_and_run():
         assert record is not None
         assert record.trace_id == run.run_id
         assert record.execution_type == "graph"
+        _cleanup(session)
+
+
+def test_stream_drains_final_event_after_worker_finishes(monkeypatch):
+    """Worker 结束后必须再读取一次，避免终态 Run 先于最终事件可见。"""
+
+    now = datetime.now(timezone.utc)
+    run_id = "api-stream-terminal-drain"
+    with Session(engine) as session:
+        _cleanup(session)
+        session.add(
+            WorkflowRunModel(
+                run_id=run_id,
+                oid=9501,
+                user_id=501,
+                definition_name="chatbi",
+                definition_version="v1",
+                definition_digest="stream-test",
+                status="succeeded",
+                context={},
+                request={},
+                output={},
+                version=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.commit()
+
+        class SequencedEventStream:
+            def __init__(self, _session):
+                pass
+
+            def list(self, run_id: str, after_sequence: int = 0):
+                if after_sequence == 0:
+                    return [
+                        WorkflowEvent(
+                            event_id="node-finished",
+                            run_id=run_id,
+                            sequence=1,
+                            event_type="node.succeeded",
+                            node_name="finish",
+                            created_at=now,
+                        )
+                    ]
+                if after_sequence == 1:
+                    return [
+                        WorkflowEvent(
+                            event_id="run-finished",
+                            run_id=run_id,
+                            sequence=2,
+                            event_type="run.succeeded",
+                            created_at=now,
+                        )
+                    ]
+                return []
+
+        class FinishedWorker:
+            @staticmethod
+            def is_alive() -> bool:
+                return False
+
+        monkeypatch.setattr(graph_service, "EventStream", SequencedEventStream)
+        frames = asyncio.run(
+            _collect_stream_frames(
+                graph_service.GraphApiService(session)._stream_run_events(
+                    _user(),
+                    run_id,
+                    worker=FinishedWorker(),
+                    errors=[],
+                )
+            )
+        )
+
+        assert "event: node.succeeded\n" in frames
+        assert "event: run.succeeded\n" in frames
         _cleanup(session)
 
 
