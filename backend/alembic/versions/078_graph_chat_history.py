@@ -36,6 +36,13 @@ def upgrade():
     # WorkflowRun 的执行归属只为后续显式写入预留，严禁从历史 JSON 推断回填。
     op.add_column("workflow_run", sa.Column("chat_id", sa.BigInteger(), nullable=True))
     op.add_column("workflow_run", sa.Column("record_id", sa.BigInteger(), nullable=True))
+    # 交互式 Run 必须同时绑定 chat_id 和 record_id，独立 Run 则必须同时为空。
+    op.create_check_constraint(
+        "ck_workflow_run_chat_ownership",
+        "workflow_run",
+        "(chat_id IS NULL AND record_id IS NULL) "
+        "OR (chat_id IS NOT NULL AND record_id IS NOT NULL)",
+    )
     op.create_index(
         "idx_workflow_run_chat",
         "workflow_run",

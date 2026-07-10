@@ -23,6 +23,11 @@ def test_graph_chat_history_migration_adds_non_destructive_schema():
     assert 'op.add_column("workflow_run"' in content
     assert '"chat_id"' in content
     assert '"record_id"' in content
+    # 数据库必须拒绝只绑定 chat_id 或只绑定 record_id 的半绑定状态。
+    assert 'op.create_check_constraint(' in content
+    assert '"ck_workflow_run_chat_ownership"' in content
+    assert "chat_id IS NULL AND record_id IS NULL" in content
+    assert "chat_id IS NOT NULL AND record_id IS NOT NULL" in content
     assert 'op.create_table("workflow_artifact_cleanup"' in content
     assert "DELETE FROM chat" not in content
     assert "UPDATE workflow_run" not in content

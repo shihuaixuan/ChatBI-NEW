@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Identity,
@@ -58,6 +59,12 @@ class WorkflowRunModel(SQLModel, table=True):
         Index("idx_workflow_run_request", "request_id"),
         Index("idx_workflow_run_chat", "chat_id", text("created_at DESC")),
         Index("ux_workflow_run_record", "record_id", unique=True),
+        # 交互式 Run 必须完整绑定会话和记录；独立 Run 则两者都不绑定。
+        CheckConstraint(
+            "(chat_id IS NULL AND record_id IS NULL) "
+            "OR (chat_id IS NOT NULL AND record_id IS NOT NULL)",
+            name="ck_workflow_run_chat_ownership",
+        ),
     )
 
     id: int | None = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))

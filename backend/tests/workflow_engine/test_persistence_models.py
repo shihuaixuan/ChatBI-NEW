@@ -1,4 +1,4 @@
-from sqlalchemy import Index, UniqueConstraint
+from sqlalchemy import CheckConstraint, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 
 from apps.workflow_engine.infrastructure.persistence.models import (
@@ -22,6 +22,15 @@ def _unique_constraint_names(model) -> set[str]:
         constraint.name
         for constraint in model.__table__.constraints
         if isinstance(constraint, UniqueConstraint)
+    }
+
+
+def _check_constraint_names(model) -> set[str]:
+    # 命名约束便于迁移、排障和后续契约测试稳定识别。
+    return {
+        constraint.name
+        for constraint in model.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
     }
 
 
@@ -58,6 +67,7 @@ def test_workflow_run_declares_chat_ownership_columns_and_indexes():
         "idx_workflow_run_chat",
         "ux_workflow_run_record",
     }.issubset(_index_names(WorkflowRunModel))
+    assert "ck_workflow_run_chat_ownership" in _check_constraint_names(WorkflowRunModel)
 
 
 def test_workflow_artifact_cleanup_model_is_retryable():
