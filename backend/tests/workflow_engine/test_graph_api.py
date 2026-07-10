@@ -359,7 +359,7 @@ def test_graph_query_creates_run_and_executes_placeholder_chatbi_graph():
         _cleanup(session)
 
 
-def test_graph_chat_query_creates_owned_record_and_run():
+def test_graph_chat_history_survives_reload_boundary():
     chat_id, dataset_id = _seed_graph_chat()
 
     response = _client().post(
@@ -384,6 +384,9 @@ def test_graph_chat_query_creates_owned_record_and_run():
         assert run.record_id == record.id
         assert record.trace_id == run.run_id
         assert record.execution_type == "graph"
+        assert record.status == "succeeded"
+        assert record.finish is True
+        assert record.sql_answer
         _cleanup(session)
 
 
@@ -554,7 +557,7 @@ def test_graph_chat_query_stream_creates_owned_record_and_run():
         _cleanup(session)
 
 
-def test_graph_chat_interaction_resume_updates_same_record():
+def test_graph_chat_waiting_record_resumes_into_stable_snapshot():
     chat_id, dataset_id = _seed_graph_chat()
     created = _client().post(
         f"/graph/chats/{chat_id}/queries",
@@ -567,6 +570,7 @@ def test_graph_chat_interaction_resume_updates_same_record():
     )
     assert created.status_code == 200
     record_id = created.json()["record_id"]
+    assert _load_chat_record(record_id).status == "waiting_input"
     interaction_id = _load_pending_interaction_id("api-chat-clarify")
 
     answered = _client().post(
