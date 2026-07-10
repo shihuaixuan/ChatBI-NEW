@@ -1,6 +1,3 @@
-import os
-from pathlib import Path
-
 from sqlmodel import Session
 
 from apps.agentic_chat.tools.sql_executor import SqlExecuteTool
@@ -38,6 +35,7 @@ from apps.headless.service import HeadlessSchemaBuilder
 from apps.workflow_engine.infrastructure.artifacts.file_store import (
     FileArtifactStore,
     SessionArtifactMetadataStore,
+    workflow_artifact_root,
 )
 from apps.workflow_engine.infrastructure.events.publisher import DatabaseEventPublisher
 from apps.workflow_engine.infrastructure.persistence.interaction_manager import (
@@ -110,14 +108,8 @@ def build_real_chatbi_v1_runtime(
 
         return Session(engine)
 
-    artifact_root = Path(
-        os.getenv(
-            "SQLBOT_WORKFLOW_ARTIFACT_DIR",
-            str(Path(__file__).resolve().parents[2] / "data" / "workflow_artifacts"),
-        )
-    )
     artifact_store = FileArtifactStore(
-        root=artifact_root,
+        root=workflow_artifact_root(),
         metadata_store=SessionArtifactMetadataStore(session_factory),
     )
     gateway = RealChatBICapabilityGateway(

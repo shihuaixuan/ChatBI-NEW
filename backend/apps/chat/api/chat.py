@@ -174,13 +174,8 @@ async def delete(session: SessionDep, chart_id: int, brief: str):
     remark_expr="brief"
 ))
 async def delete(session: SessionDep, current_user: CurrentUser, chart_id: int, brief: str):
-    try:
-        return delete_chat_with_user(session=session, current_user=current_user, chart_id=chart_id)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
+    # 删除服务保留明确的权限、数据库冲突和 Artifact 清理错误，不在 API 层宽泛吞掉。
+    return delete_chat_with_user(session=session, current_user=current_user, chart_id=chart_id)
 
 
 @router.post("/start", response_model=ChatInfo, summary=f"{PLACEHOLDER_PREFIX}start_chat")

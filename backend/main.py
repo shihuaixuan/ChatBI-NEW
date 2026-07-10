@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from fastapi_mcp import FastApiMCP
+from sqlmodel import Session
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 
@@ -28,8 +29,10 @@ from apps.system.crud.aimodel_manage import async_model_info
 from apps.system.crud.assistant import init_dynamic_cors
 from apps.system.middleware.auth import TokenMiddleware
 from apps.system.schemas.permission import RequestContextMiddleware
+from apps.workflow_engine.infrastructure.artifacts.cleanup import ArtifactCleanupService
 from common.audit.schemas.request_context import RequestContextMiddlewareCommon
 from common.core.config import settings
+from common.core.db import engine
 from common.core.response_middleware import ResponseMiddleware, exception_handler
 from common.core.sqlbot_cache import init_sqlbot_cache
 from common.utils.embedding_threads import (
@@ -43,6 +46,13 @@ from common.utils.utils import SQLBotLogUtil
 def run_migrations():
     alembic_cfg = Config("alembic.ini")
     command.upgrade(alembic_cfg, "head")
+
+
+def init_workflow_artifact_cleanup() -> None:
+    """应用启动时重试上次未完成的 Artifact 正文清理。"""
+
+    with Session(engine) as session:
+        ArtifactCleanupService(session).process_pending()
 
 
 def init_terminology_embedding_data():
@@ -73,6 +83,7 @@ def mount_xpack_static(app: FastAPI):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     run_migrations()
+    init_workflow_artifact_cleanup()
     init_sqlbot_cache()
     init_dynamic_cors(app)
     init_terminology_embedding_data()

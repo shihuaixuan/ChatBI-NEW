@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,36 @@ from apps.workflow_engine.domain.artifact import ArtifactRef, WorkflowArtifact
 from apps.workflow_engine.infrastructure.persistence.artifact_repository import (
     ArtifactRepository,
 )
+
+
+def workflow_artifact_root() -> Path:
+    """返回 Graph Artifact 正文的唯一根目录。"""
+
+    return Path(
+        os.getenv(
+            "SQLBOT_WORKFLOW_ARTIFACT_DIR",
+            str(Path(__file__).resolve().parents[4] / "data" / "workflow_artifacts"),
+        )
+    ).expanduser().resolve()
+
+
+def _artifact_path_from_uri(storage_uri: str, root: Path) -> Path:
+    """解析并校验 Artifact 文件必须位于指定根目录内。"""
+
+    parsed = urlparse(storage_uri)
+    if parsed.scheme != "file":
+        raise ValueError("ARTIFACT_STORAGE_URI_UNSUPPORTED")
+    path = Path(unquote(parsed.path)).resolve()
+    if not path.is_relative_to(root.resolve()):
+        raise ValueError("ARTIFACT_PATH_OUTSIDE_ROOT")
+    return path
+
+
+def delete_artifact_body(storage_uri: str, root: Path | None = None) -> None:
+    """只允许删除 Artifact 根目录内的 file URI。"""
+
+    path = _artifact_path_from_uri(storage_uri, root or workflow_artifact_root())
+    path.unlink(missing_ok=True)
 
 
 class ArtifactMetadataStore(Protocol):
@@ -108,10 +139,4 @@ class FileArtifactStore:
         return artifact, content
 
     def _path_from_uri(self, storage_uri: str) -> Path:
-        parsed = urlparse(storage_uri)
-        if parsed.scheme != "file":
-            raise ValueError("ARTIFACT_STORAGE_URI_UNSUPPORTED")
-        path = Path(unquote(parsed.path)).resolve()
-        if not path.is_relative_to(self._root):
-            raise ValueError("ARTIFACT_PATH_OUTSIDE_ROOT")
-        return path
+        return _artifact_path_from_uri(storage_uri, self._root)

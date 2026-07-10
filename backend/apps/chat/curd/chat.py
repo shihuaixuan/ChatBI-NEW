@@ -15,6 +15,7 @@ from apps.chat.services.headless_binding import (
     apply_binding_to_record,
     resolve_dataset_chat_binding,
 )
+from apps.chat.services.deletion import ChatDeletionService
 from apps.datasource.crud.datasource import get_ds
 from apps.datasource.crud.recommended_problem import get_datasource_recommended_chart
 from apps.datasource.models.datasource import CoreDatasource
@@ -117,15 +118,9 @@ def delete_chat(session, chart_id) -> str:
 
 
 def delete_chat_with_user(session, current_user: CurrentUser, chart_id) -> str:
-    chat = session.query(Chat).filter(Chat.id == chart_id).first()
-    if not chat:
-        return f'Chat with id {chart_id} has been deleted'
-    if chat.create_by != current_user.id:
-        raise Exception(f"Chat with id {chart_id} not Owned by the current user")
-    session.delete(chat)
-    session.commit()
+    """删除会话及其关联的 Graph 执行数据。"""
 
-    return f'Chat with id {chart_id} has been deleted'
+    return ChatDeletionService(session).delete_for_user(current_user, chart_id)
 
 
 def get_chart_config(session: SessionDep, chart_record_id: int):
