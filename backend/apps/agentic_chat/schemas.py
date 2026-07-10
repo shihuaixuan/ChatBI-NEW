@@ -2,6 +2,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+# ToolResult 已下沉到共享能力层；此处 re-export 保持既有 import 路径兼容。
+# deprecated：新代码一律 from apps.chatbi_capabilities.schemas import ToolResult。
+from apps.chatbi_capabilities.schemas import ToolResult  # noqa: F401
+
 
 class AgenticQuestionRequest(BaseModel):
     chat_id: int = Field(gt=0)
@@ -89,13 +93,6 @@ class AgenticEventPayload(BaseModel):
     record_id: int | None = None
     run_id: int | None = None
     step_index: int | None = None
-
-
-class ToolResult(BaseModel):
-    success: bool
-    payload: dict[str, Any] = Field(default_factory=dict)
-    message: str | None = None
-    error_code: str | None = None
 
 
 class AgenticDecision(BaseModel):

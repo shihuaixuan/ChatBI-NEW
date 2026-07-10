@@ -1,22 +1,5 @@
-from apps.agentic_chat.schemas import ToolResult
+# 实现已下沉到共享能力层；本文件仅保持既有 import 路径兼容（graph 与 v1 均引用此路径）。
+# deprecated：新代码一律 from apps.chatbi_capabilities.sql.executor import SqlExecuteTool。
+from apps.chatbi_capabilities.sql.executor import SqlExecuteTool
 
-
-class SqlExecuteTool:
-    name = "sql.execute"
-
-    def __init__(self, session):
-        self.session = session
-
-    def run(self, payload: dict) -> ToolResult:
-        from apps.datasource.crud.datasource import get_ds
-        from apps.db.db import exec_sql
-
-        datasource_id = payload.get("datasource_id")
-        sql = payload.get("sql")
-        ds = get_ds(self.session, datasource_id) if datasource_id else None
-        if not ds:
-            return ToolResult(success=False, error_code="datasource_not_found", message="数据源不存在")
-        try:
-            return ToolResult(success=True, payload=exec_sql(ds, sql, origin_column=False))
-        except Exception as exc:
-            return ToolResult(success=False, error_code="sql_execute_error", message=str(exc))
+__all__ = ["SqlExecuteTool"]
