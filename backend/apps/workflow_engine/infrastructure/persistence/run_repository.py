@@ -11,6 +11,48 @@ class RunVersionConflictError(RuntimeError):
     pass
 
 
+class RunOwnershipError(RuntimeError):
+    """Run 物理归属与领域 Context 无法形成一致快照。"""
+
+
+class RunOwnershipIncompleteError(RunOwnershipError):
+    """Run 的物理归属字段未成对提供。"""
+
+
+class RunOwnershipConflictError(RunOwnershipError):
+    """Run 的物理归属与 Context 已提供的归属冲突。"""
+
+
+def _merge_run_ownership(
+    context: WorkflowContext,
+    chat_id: int | None,
+    record_id: int | None,
+) -> WorkflowContext:
+    """以物理列为真源校验并补齐领域 Context 的 Run 归属。"""
+    merged = context.model_copy(deep=True)
+    request = merged.request
+    if (chat_id is None) != (record_id is None):
+        raise RunOwnershipIncompleteError("GRAPH_CHAT_OWNERSHIP_INCOMPLETE")
+    if chat_id is not None and (
+        type(chat_id) is not int or type(record_id) is not int
+    ):
+        raise RunOwnershipConflictError("GRAPH_CHAT_OWNERSHIP_CONFLICT")
+    if (
+        ("chat_id" in request and request["chat_id"] != chat_id)
+        or ("record_id" in request and request["record_id"] != record_id)
+    ):
+        raise RunOwnershipConflictError("GRAPH_CHAT_OWNERSHIP_CONFLICT")
+
+    if chat_id is None and record_id is None:
+        request.pop("chat_id", None)
+        request.pop("record_id", None)
+        return merged
+
+    request["chat_id"] = chat_id
+    request["record_id"] = record_id
+    return merged
+
+
 class RunRepository:
     """WorkflowRun 的数据库仓储。
 
@@ -25,21 +67,22 @@ class RunRepository:
         context_request_id = run.context.request.get("request_id")
         chat_id = run.context.request.get("chat_id")
         record_id = run.context.request.get("record_id")
+        context = _merge_run_ownership(run.context, chat_id, record_id)
         model = WorkflowRunModel(
             run_id=run.run_id,
             oid=oid or int(run.context.request.get("tenant_id", 1)),
             user_id=user_id or int(run.context.request.get("user_id", 0)),
             # 物理列是交互式 Run 归属的持久化真源，数据库约束保证两列同空或同非空。
-            chat_id=int(chat_id) if chat_id is not None else None,
-            record_id=int(record_id) if record_id is not None else None,
+            chat_id=context.request.get("chat_id"),
+            record_id=context.request.get("record_id"),
             request_id=request_id or (str(context_request_id) if context_request_id is not None else None),
             definition_name=run.definition_name,
             definition_version=run.definition_version,
             definition_digest=run.definition_digest,
             status=run.status.value,
             current_node=run.current_node,
-            context=run.context.model_dump(mode="json"),
-            request=run.context.request,
+            context=context.model_dump(mode="json"),
+            request=context.request,
             output={},
             version=run.version,
             created_at=run.created_at,
@@ -59,9 +102,16 @@ class RunRepository:
             raise RunVersionConflictError(
                 f"RUN_VERSION_CONFLICT: expected={expected_version}, actual={model.version}"
             )
+        # 先拒绝数据库既有分裂状态和调用方冲突，确保失败发生在任何 ORM 写入之前。
+        _merge_run_ownership(
+            WorkflowContext.model_validate(model.context),
+            model.chat_id,
+            model.record_id,
+        )
+        context = _merge_run_ownership(run.context, model.chat_id, model.record_id)
         model.status = run.status.value
         model.current_node = run.current_node
-        model.context = run.context.model_dump(mode="json")
+        model.context = context.model_dump(mode="json")
         model.error_code = None if run.status is not RunStatus.FAILED else model.error_code
         model.version = expected_version + 1
         model.updated_at = run.updated_at or datetime.now(timezone.utc)
@@ -71,16 +121,11 @@ class RunRepository:
 
     def to_domain(self, model: WorkflowRunModel) -> WorkflowRun:
         """使用仓储的唯一规则把 ORM 快照转换为领域 Run。"""
-        context = WorkflowContext.model_validate(model.context)
-        # 领域快照统一从物理列读取归属，避免旧 JSON 覆盖数据库不变量。
-        if model.chat_id is None:
-            context.request.pop("chat_id", None)
-        else:
-            context.request["chat_id"] = model.chat_id
-        if model.record_id is None:
-            context.request.pop("record_id", None)
-        else:
-            context.request["record_id"] = model.record_id
+        context = _merge_run_ownership(
+            WorkflowContext.model_validate(model.context),
+            model.chat_id,
+            model.record_id,
+        )
         return WorkflowRun(
             run_id=model.run_id,
             definition_name=model.definition_name,

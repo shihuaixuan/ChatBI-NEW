@@ -4,10 +4,12 @@ import orjson
 from sqlmodel import Session
 
 from apps.chat.models.chat_model import ChatRecord
-from apps.workflow_engine.domain.context import WorkflowContext
 from apps.workflow_engine.domain.run import RunStatus, WorkflowRun
 from apps.workflow_engine.infrastructure.persistence.models import WorkflowRunModel
-from apps.workflow_engine.infrastructure.persistence.run_repository import RunRepository
+from apps.workflow_engine.infrastructure.persistence.run_repository import (
+    RunOwnershipError,
+    RunRepository,
+)
 from apps.workflow_engine.ports.run_store import RunStore
 
 
@@ -82,22 +84,11 @@ class GraphChatRecordProjector:
 
     def project_model(self, run: WorkflowRunModel) -> ChatRecord | None:
         """复用仓储转换规则投影 ORM Run。"""
-        context = WorkflowContext.model_validate(run.context)
-        context_chat_id = context.request.get("chat_id")
-        context_record_id = context.request.get("record_id")
-        if (run.chat_id is None) != (run.record_id is None):
-            raise GraphResultNotProjectableError("GRAPH_CHAT_OWNERSHIP_INCOMPLETE")
-        if run.chat_id is None and run.record_id is None:
-            if context_chat_id is not None or context_record_id is not None:
-                raise GraphResultNotProjectableError("GRAPH_CHAT_OWNERSHIP_CONFLICT")
-        elif (
-            context_chat_id is not None
-            and context_chat_id != run.chat_id
-            or context_record_id is not None
-            and context_record_id != run.record_id
-        ):
-            raise GraphResultNotProjectableError("GRAPH_CHAT_OWNERSHIP_CONFLICT")
-        return self.project(RunRepository(self._session).to_domain(run))
+        try:
+            domain_run = RunRepository(self._session).to_domain(run)
+        except RunOwnershipError as exc:
+            raise GraphResultNotProjectableError(str(exc)) from exc
+        return self.project(domain_run)
 
 
 class ChatProjectingRunStore:
