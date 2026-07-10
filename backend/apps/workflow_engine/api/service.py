@@ -115,12 +115,7 @@ class GraphApiService:
         """创建绑定聊天记录并同步投影执行状态的交互式 Graph Run。"""
 
         run_id = request.run_id or f"graph-{uuid4().hex}"
-        dataset_id = self._resolve_dataset_id(current_user.oid, request.dataset_id)
-        chat = self._session.get(Chat, chat_id)
-        if chat is None or chat.oid != current_user.oid or chat.create_by != current_user.id:
-            raise HTTPException(status_code=404, detail="CHAT_NOT_FOUND")
-        if chat.dataset_id is None or int(chat.dataset_id) != dataset_id:
-            raise HTTPException(status_code=400, detail="CHAT_DATASET_MISMATCH")
+        chat, dataset_id = self._resolve_chat_query_context(current_user, chat_id, request)
 
         record = ChatRecord(
             chat_id=chat_id,
@@ -176,6 +171,22 @@ class GraphApiService:
         runtime.execute(created.run_id)
         self._session.commit()
         return self._to_run_response(self._load_owned_run(current_user, created.run_id))
+
+    def _resolve_chat_query_context(
+        self,
+        current_user: Any,
+        chat_id: int,
+        request: GraphChatQueryRequest,
+    ) -> tuple[Chat, int]:
+        """集中校验交互式 Graph 请求的会话归属和数据集边界。"""
+
+        dataset_id = self._resolve_dataset_id(current_user.oid, request.dataset_id)
+        chat = self._session.get(Chat, chat_id)
+        if chat is None or chat.oid != current_user.oid or chat.create_by != current_user.id:
+            raise HTTPException(status_code=404, detail="CHAT_NOT_FOUND")
+        if chat.dataset_id is None or int(chat.dataset_id) != dataset_id:
+            raise HTTPException(status_code=400, detail="CHAT_DATASET_MISMATCH")
+        return chat, dataset_id
 
     def _build_conversation_context(
         self,
@@ -356,7 +367,7 @@ class GraphApiService:
         ):
             yield frame
 
-    async def stream_chat_query(
+    def stream_chat_query(
         self,
         current_user: Any,
         chat_id: int,
@@ -364,33 +375,39 @@ class GraphApiService:
     ) -> AsyncIterator[str]:
         """创建交互式 Run，并通过现有 SSE 协议推送执行事件。"""
 
+        # 在构造 StreamingResponse 前完成显式业务校验，确保 404/400 不会退化为 HTTP 200 的 SSE 错误帧。
+        self._resolve_chat_query_context(current_user, chat_id, request)
         run_id = request.run_id or f"graph-{uuid4().hex}"
         stream_request = request.model_copy(update={"run_id": run_id})
-        errors: list[Exception] = []
 
-        def execute_query() -> None:
-            with Session(engine) as session:
-                try:
-                    GraphApiService(session).create_chat_query(
-                        current_user,
-                        chat_id,
-                        stream_request,
-                        commit_events=True,
-                    )
-                except Exception as exc:  # pragma: no cover - 原异常由 SSE 错误帧传递
-                    session.rollback()
-                    errors.append(exc)
+        async def generate_frames() -> AsyncIterator[str]:
+            errors: list[Exception] = []
 
-        worker = threading.Thread(target=execute_query, daemon=True)
-        worker.start()
-        async for frame in self._stream_run_events(
-            current_user,
-            run_id,
-            after_sequence=0,
-            worker=worker,
-            errors=errors,
-        ):
-            yield frame
+            def execute_query() -> None:
+                with Session(engine) as session:
+                    try:
+                        GraphApiService(session).create_chat_query(
+                            current_user,
+                            chat_id,
+                            stream_request,
+                            commit_events=True,
+                        )
+                    except Exception as exc:  # pragma: no cover - 原异常由 SSE 错误帧传递
+                        session.rollback()
+                        errors.append(exc)
+
+            worker = threading.Thread(target=execute_query, daemon=True)
+            worker.start()
+            async for frame in self._stream_run_events(
+                current_user,
+                run_id,
+                after_sequence=0,
+                worker=worker,
+                errors=errors,
+            ):
+                yield frame
+
+        return generate_frames()
 
     async def _stream_run_events(
         self,

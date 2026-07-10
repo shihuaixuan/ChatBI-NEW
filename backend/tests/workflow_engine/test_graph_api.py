@@ -387,7 +387,7 @@ def test_graph_chat_query_creates_owned_record_and_run():
         _cleanup(session)
 
 
-def test_standalone_graph_query_ignores_body_chat_id_and_remains_unowned():
+def test_standalone_graph_query_rejects_body_chat_id():
     chat_id, dataset_id = _seed_graph_chat()
 
     response = _client().post(
@@ -401,19 +401,18 @@ def test_standalone_graph_query_ignores_body_chat_id_and_remains_unowned():
         },
     )
 
-    assert response.status_code == 200
-    assert response.json()["record_id"] is None
+    assert response.status_code == 422
     with Session(engine) as session:
-        run = session.exec(
+        assert (
+            session.exec(
             select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-standalone-body-chat-run")
-        ).one()
-        assert run.chat_id is None
-        assert run.record_id is None
+            ).one_or_none()
+            is None
+        )
         assert (
             session.exec(select(ChatRecord).where(ChatRecord.trace_id == "api-standalone-body-chat-run")).one_or_none()
             is None
         )
-        assert "last_question" not in run.context["conversation"]
         _cleanup(session)
 
 
@@ -469,6 +468,58 @@ def test_graph_chat_query_rejects_dataset_mismatch_without_creating_history():
         )
         assert (
             session.exec(select(ChatRecord).where(ChatRecord.trace_id == "api-chat-dataset-mismatch-run")).one_or_none()
+            is None
+        )
+        _cleanup(session)
+
+
+def test_graph_chat_stream_rejects_unowned_chat_before_starting_sse():
+    chat_id, dataset_id = _seed_graph_chat()
+
+    response = _client(user=_user(user_id=502)).post(
+        f"/graph/chats/{chat_id}/queries/stream",
+        json={
+            "question": "本月销售额",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "run_id": "api-chat-stream-unowned-run",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "CHAT_NOT_FOUND"
+    with Session(engine) as session:
+        assert (
+            session.exec(
+                select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-stream-unowned-run")
+            ).one_or_none()
+            is None
+        )
+        _cleanup(session)
+
+
+def test_graph_chat_stream_rejects_dataset_mismatch_before_starting_sse():
+    chat_id, _ = _seed_graph_chat()
+
+    response = _client().post(
+        f"/graph/chats/{chat_id}/queries/stream",
+        json={
+            "question": "本月销售额",
+            "dataset_id": 999999,
+            "definition_version": "v1",
+            "run_id": "api-chat-stream-dataset-mismatch-run",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "CHAT_DATASET_MISMATCH"
+    with Session(engine) as session:
+        assert (
+            session.exec(
+                select(WorkflowRunModel).where(
+                    WorkflowRunModel.run_id == "api-chat-stream-dataset-mismatch-run"
+                )
+            ).one_or_none()
             is None
         )
         _cleanup(session)

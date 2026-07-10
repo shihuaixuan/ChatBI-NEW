@@ -1,10 +1,13 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GraphQueryRequest(BaseModel):
     """独立 Graph Run 请求，不创建聊天历史。"""
+
+    # Graph 请求必须显式遵守契约，禁止把会话归属等未知字段静默丢弃。
+    model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1)
     dataset_id: int = Field(gt=0)
