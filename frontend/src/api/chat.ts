@@ -61,6 +61,8 @@ export class ChatRecord {
   total_tokens?: number
   status?: string
   trace_id?: string
+  // 每条历史记录独立决定回答组件，不能依赖当前全局流程开关。
+  execution_type?: 'legacy' | 'agentic' | 'graph'
   agentic_run_id?: number
   agentic_trace?: any
   clarification?: any
@@ -315,6 +317,7 @@ const toChatRecord = (data?: any): ChatRecord | undefined => {
   )
   record.status = data.status
   record.trace_id = data.trace_id
+  record.execution_type = data.execution_type
   record.agentic_run_id = data.agentic_run_id
   record.agentic_trace = data.agentic_trace
   record.clarification = data.clarification

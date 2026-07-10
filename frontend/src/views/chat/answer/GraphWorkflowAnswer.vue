@@ -58,6 +58,7 @@ const _currentChat = computed({
   get: () => props.currentChat,
   set: (v) => emits('update:currentChat', v),
 })
+const _currentChatId = computed(() => Number(props.currentChatId || 0))
 
 const internalLoading = ref(false)
 const _loading = computed({
@@ -101,7 +102,10 @@ function datasetId(currentRecord: ChatRecord) {
 }
 
 function applyRunToRecord(run: GraphRunResponse, currentRecord: ChatRecord) {
+  // 临时前端记录在首次 Run 查询后替换为服务端生成的真实记录 ID。
+  if (run.record_id) currentRecord.id = run.record_id
   currentRecord.trace_id = run.run_id
+  currentRecord.execution_type = 'graph'
   currentRecord.status = run.status
   currentRecord.agentic_trace = run.context_summary?.variables
   currentRecord.clarification =
@@ -138,8 +142,14 @@ function applyRunToRecord(run: GraphRunResponse, currentRecord: ChatRecord) {
     emits('finish', currentRecord.id)
   }
   if (run.status === 'failed') {
+    currentRecord.finish = true
     currentRecord.error = 'Graph Workflow 执行失败，请查看执行详情。'
     emits('error', currentRecord.id)
+  }
+  if (run.status === 'cancelled') {
+    currentRecord.finish = true
+    currentRecord.clarification = undefined
+    emits('stop')
   }
 }
 
@@ -245,6 +255,12 @@ async function sendMessage() {
     return
   }
   const currentRecord: ChatRecord = _currentChat.value.records[index.value]
+  if (!_currentChatId.value) {
+    currentRecord.error = '当前会话 ID 无效，无法启动 Graph Workflow。'
+    emits('error', currentRecord.id)
+    _loading.value = false
+    return
+  }
   const currentDatasetId = datasetId(currentRecord)
   if (!currentDatasetId) {
     currentRecord.error = '当前会话没有可用数据集，无法启动 Graph Workflow。'
@@ -261,7 +277,8 @@ async function sendMessage() {
   currentRecord.clarification = undefined
   currentRecord.finish = false
   await streamRunToBoundary(currentRecord, () =>
-    graphWorkflowApi.streamQuery(
+    graphWorkflowApi.streamChatQuery(
+      _currentChatId.value,
       {
         run_id: currentRecord.trace_id,
         question: currentRecord.question || '',
@@ -321,6 +338,7 @@ function stop() {
       .then((run) => {
         if (currentRecord) {
           currentRecord.status = run.status
+          currentRecord.finish = run.status === 'cancelled'
           currentRecord.clarification = undefined
           traceRefreshKey.value++
         }
@@ -335,7 +353,11 @@ function stop() {
 
 onMounted(() => {
   const currentRecord = props.message?.record
-  if (currentRecord?.trace_id && !currentRecord.finish) {
+  // 终态历史直接展示 ChatRecord 快照，只恢复仍在运行或等待输入的 Run。
+  if (
+    currentRecord?.trace_id &&
+    ['running', 'waiting_input'].includes(currentRecord.status || '')
+  ) {
     refreshRun(currentRecord)
   }
 })

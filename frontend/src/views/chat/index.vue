@@ -219,7 +219,7 @@
                 />
                 <template v-if="message.role === 'assistant' && !message.first_chat">
                   <component
-                    :is="answerComponent"
+                    :is="answerComponentForRecord(message.record)"
                     v-if="
                       (message?.record?.analysis_record_id === undefined ||
                         message?.record?.analysis_record_id === null) &&
@@ -517,10 +517,14 @@ const useGraphChatFlow = computed(
 const useAgenticChatFlow = computed(
   () => import.meta.env.VITE_AGENTIC_CHATBI_ENABLED === 'true'
 )
-const answerComponent = computed(() => {
+function answerComponentForRecord(record?: ChatRecord) {
+  // 历史记录由自身执行类型决定组件，避免切换全局开关后错误渲染旧消息。
+  if (record?.execution_type === 'graph') return GraphWorkflowAnswer
+  if (record?.execution_type === 'agentic') return AgenticAnswer
+  if (record?.execution_type === 'legacy') return ChartAnswer
   if (useGraphChatFlow.value) return GraphWorkflowAnswer
   return useAgenticChatFlow.value ? AgenticAnswer : ChartAnswer
-})
+}
 
 const isPhone = computed(() => {
   return isMobile()
@@ -827,6 +831,11 @@ const sendMessage = async (
   const currentRecord = new ChatRecord()
   currentRecord.create_time = new Date()
   currentRecord.chat_id = currentChatId.value
+  currentRecord.execution_type = useGraphChatFlow.value
+    ? 'graph'
+    : useAgenticChatFlow.value
+      ? 'agentic'
+      : 'legacy'
   currentRecord.question = inputMessage.value
   currentRecord.regenerate_record_id = regenerate_record_id
   currentRecord.sql_answer = ''

@@ -11,7 +11,6 @@ export interface GraphQueryRequest {
   definition_version?: 'minimal-v1' | 'v1'
   request_id?: string
   run_id?: string
-  chat_id?: number
 }
 
 export interface GraphPendingInteraction {
@@ -28,6 +27,8 @@ export interface GraphPendingInteraction {
 
 export interface GraphRunResponse {
   run_id: string
+  // 交互式 Graph Run 返回服务端生成的真实聊天记录 ID。
+  record_id?: number
   status: string
   current_node?: string
   output?: Record<string, any>
@@ -115,6 +116,17 @@ export const graphWorkflowApi = {
         definition_version: 'v1',
         ...data,
       }),
+      handlers,
+    }),
+  // 新问题必须通过 chat-scoped 入口建立稳定的 Run/ChatRecord 归属。
+  streamChatQuery: (
+    chatId: number,
+    data: GraphQueryRequest,
+    handlers: GraphStreamHandlers = {}
+  ) =>
+    streamGraphSse(`/graph/chats/${chatId}/queries/stream`, {
+      method: 'POST',
+      body: JSON.stringify({ definition_version: 'v1', ...data }),
       handlers,
     }),
   streamEvents: (runId: string, afterSequence: number, handlers: GraphStreamHandlers = {}) =>
