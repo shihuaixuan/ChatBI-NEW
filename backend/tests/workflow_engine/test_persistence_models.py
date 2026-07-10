@@ -4,6 +4,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from apps.workflow_engine.infrastructure.persistence.models import (
     InteractionRequestModel,
     NodeExecutionModel,
+    WorkflowArtifactCleanupModel,
     WorkflowArtifactModel,
     WorkflowCheckpointModel,
     WorkflowDefinitionModel,
@@ -45,6 +46,27 @@ def test_workflow_run_has_versioning_indexes_and_json_context():
         "idx_workflow_run_definition",
         "idx_workflow_run_request",
     }.issubset(_index_names(WorkflowRunModel))
+
+
+def test_workflow_run_declares_chat_ownership_columns_and_indexes():
+    # Graph 执行归属允许为空，避免迁移时推断既有 Run 的会话关系。
+    columns = WorkflowRunModel.__table__.c
+
+    assert columns.chat_id.nullable is True
+    assert columns.record_id.nullable is True
+    assert {
+        "idx_workflow_run_chat",
+        "ux_workflow_run_record",
+    }.issubset(_index_names(WorkflowRunModel))
+
+
+def test_workflow_artifact_cleanup_model_is_retryable():
+    # 清理任务必须保留状态和尝试次数，供会话删除后的异步重试使用。
+    assert WorkflowArtifactCleanupModel.__tablename__ == "workflow_artifact_cleanup"
+    columns = WorkflowArtifactCleanupModel.__table__.c
+    assert columns.artifact_id.nullable is False
+    assert columns.status.nullable is False
+    assert columns.attempts.nullable is False
 
 
 def test_node_execution_event_and_interaction_constraints_are_declared():

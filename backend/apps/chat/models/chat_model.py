@@ -130,6 +130,8 @@ class ChatRecord(SQLModel, table=True):
     finish: bool = Field(sa_column=Column(Boolean, nullable=True, default=False))
     status: str | None = Field(default=None, max_length=32, nullable=True)
     trace_id: str | None = Field(default=None, max_length=64, nullable=True)
+    # 旧记录默认归入 legacy；迁移会把已有 Agentic 记录标记为 agentic。
+    execution_type: str = Field(default="legacy", max_length=32, nullable=False)
     error: str = Field(sa_column=Column(Text, nullable=True))
     analysis_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
     predict_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
@@ -159,6 +161,8 @@ class ChatRecordResult(BaseModel):
     finish: Optional[bool] = None
     status: str | None = None
     trace_id: str | None = None
+    # 响应层保持可选，兼容尚未投影执行类型的历史查询结果。
+    execution_type: str | None = None
     error: Optional[str] = None
     analysis_record_id: Optional[int] = None
     predict_record_id: Optional[int] = None
