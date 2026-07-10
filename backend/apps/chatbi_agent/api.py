@@ -5,8 +5,8 @@ from sqlmodel import Session
 from apps.chat.models.chat_model import ChatRecord
 from apps.chatbi_agent import crud
 from apps.chatbi_agent.loop import AgentLoop
-from apps.chatbi_agent.models import AgentRunStatus
-from apps.chatbi_agent.schemas import AgentConfig, AgentQuestionRequest
+from apps.chatbi_agent.models import AgentClarificationStatus, AgentRunStatus
+from apps.chatbi_agent.schemas import AgentClarificationRequest, AgentConfig, AgentQuestionRequest
 from common.core.config import settings
 from common.core.db import engine
 from common.core.deps import CurrentUser, SessionDep
@@ -25,9 +25,12 @@ def get_agent_config() -> AgentConfig:
         datasource_allowlist=allowlist,
         max_steps=settings.CHAT_AGENT_MAX_STEPS,
         max_sql_retries=settings.CHAT_AGENT_MAX_SQL_RETRIES,
+        max_clarifications=settings.CHAT_AGENT_MAX_CLARIFICATIONS,
         timeout_seconds=settings.CHAT_AGENT_TIMEOUT_SECONDS,
         token_budget=settings.CHAT_AGENT_TOKEN_BUDGET,
         default_limit=settings.CHAT_AGENT_DEFAULT_LIMIT,
+        history_rounds=settings.CHAT_AGENT_HISTORY_ROUNDS,
+        context_fold_chars=settings.CHAT_AGENT_CONTEXT_FOLD_CHARS,
     )
 
 
@@ -54,6 +57,50 @@ async def agent_question(current_user: CurrentUser, request: AgentQuestionReques
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/record/{record_id}/clarification")
+async def agent_clarification(current_user: CurrentUser, record_id: int, request: AgentClarificationRequest):
+    try:
+        config = get_agent_config()
+        answer_text = _clarification_answer_text(request)
+        if not answer_text:
+            raise HTTPException(status_code=400, detail="Clarification answer is empty")
+
+        def stream():
+            # 恢复流由 generator 自己持有 session，与提问流一致。
+            with Session(engine) as stream_session:
+                record = stream_session.get(ChatRecord, record_id)
+                if not record or record.create_by != current_user.id:
+                    raise RuntimeError("Chat record not found")
+                run = crud.get_latest_run_by_record(stream_session, record_id)
+                clarification = crud.get_pending_clarification(stream_session, record_id)
+                if not run or not clarification or run.status != AgentRunStatus.WAITING_USER.value:
+                    raise RuntimeError("No pending clarification")
+                clarification.status = AgentClarificationStatus.ANSWERED.value
+                clarification.answer = {"selections": request.selections, "text": request.text}
+                clarification.answered_at = crud.now()
+                stream_session.add(clarification)
+                stream_session.commit()
+                loop = AgentLoop(stream_session, current_user, config)
+                yield from loop.resume(run, record, clarification, answer_text)
+
+        return StreamingResponse(stream(), media_type="text/event-stream")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _clarification_answer_text(request: AgentClarificationRequest) -> str:
+    parts = []
+    for item in request.selections:
+        label = item.get("label") or item.get("value")
+        if label:
+            parts.append(str(label))
+    if request.text and request.text.strip():
+        parts.append(request.text.strip())
+    return "用户澄清回答：" + "；".join(parts) if parts else ""
 
 
 @router.get("/record/{record_id}/trace")

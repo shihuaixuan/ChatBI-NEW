@@ -35,6 +35,8 @@ class AgentConfig(BaseModel):
     default_limit: int = 100
     sample_rows: int = 10
     summary_max_chars: int = 4000
+    history_rounds: int = 3
+    context_fold_chars: int = 30000
 
 
 class AgentEventPayload(BaseModel):

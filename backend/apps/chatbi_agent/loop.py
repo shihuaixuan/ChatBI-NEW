@@ -1,6 +1,6 @@
 """AgentLoop：LLM 自主规划 + 受控工具循环。
 
-LLM 拥有：选择工具、组织参数、决定顺序与何时结束。
+LLM 拥有：选择工具、组织参数、决定顺序、决定何时澄清与结束。
 LLM 没有：越出白名单、绕过守护、超出预算（BudgetGuard 硬上限）。
 状态即消息历史：run.messages 持久化除 system 外的全部消息，恢复=反序列化继续。
 """
@@ -24,14 +24,24 @@ from apps.chat.models.chat_model import ChatRecord
 from apps.chatbi_agent import crud
 from apps.chatbi_agent.budget import BudgetGuard
 from apps.chatbi_agent.events import sse_event
-from apps.chatbi_agent.models import AgentErrorClass, AgentRunStatus, ChatbiAgentRun
+from apps.chatbi_agent.models import (
+    AgentErrorClass,
+    AgentRunStatus,
+    ChatbiAgentClarification,
+    ChatbiAgentRun,
+)
 from apps.chatbi_agent.prompts import build_system_prompt
 from apps.chatbi_agent.schemas import AgentConfig, AgentEventPayload
 from apps.chatbi_agent.tools.base import AgentToolContext, ToolOutput
 from apps.chatbi_agent.tools.core import build_default_tools
+from apps.chatbi_agent.tools.interaction import (
+    ClarifyTool,
+    GetSqlExamplesTool,
+    SearchTerminologyTool,
+)
 from apps.chatbi_agent.tools.registry import ToolRegistry
 
-TERMINAL_TOOLS = {"finish"}
+FOLDED_PLACEHOLDER = "（此前的工具结果已折叠归档，如需请重新调用工具）"
 
 
 class DefaultAgentModelClient:
@@ -76,30 +86,18 @@ class AgentLoop:
         registry = ToolRegistry()
         for tool in build_default_tools():
             registry.register(tool)
+        registry.register(ClarifyTool())
+        registry.register(SearchTerminologyTool())
+        registry.register(GetSqlExamplesTool())
         return registry
 
     # ---- 入口 ----
 
     def run(self, run: ChatbiAgentRun, record: ChatRecord) -> Iterator[str]:
-        budget = BudgetGuard(
-            max_steps=self.config.max_steps,
-            token_budget=self.config.token_budget,
-            repeat_fuse_threshold=self.config.repeat_fuse_threshold,
-            max_sql_retries=self.config.max_sql_retries,
-            timeout_seconds=self.config.timeout_seconds,
-        )
-        ctx = AgentToolContext(
-            session=self.session,
-            oid=run.oid,
-            user_id=self.current_user.id,
-            datasource_id=record.datasource,
-            config=self.config,
-            state={"question": record.question or ""},
-        )
-        if run.messages:
-            messages = messages_from_dict(run.messages)
-        else:
-            messages = [HumanMessage(content=record.question or "")]
+        budget = self._new_budget()
+        ctx = self._new_ctx(run, record)
+        messages = [HumanMessage(content=record.question or "")]
+        system = self._build_system(run, record)
 
         crud.update_run(self.session, run, status=AgentRunStatus.RUNNING.value)
         crud.finish_record(self.session, record, AgentRunStatus.RUNNING.value)
@@ -108,21 +106,96 @@ class AgentLoop:
         yield self._emit(run, "run-started", {"record_id": record.id, "run_id": run.id})
 
         try:
-            yield from self._loop(run, record, ctx, messages, budget)
+            yield from self._loop(run, record, ctx, system, messages, budget)
         except Exception as exc:  # 任意未预期异常收敛为失败事件，避免 SSE 静默中断。
             message = str(exc) or exc.__class__.__name__
             yield from self._fail(run, record, messages, budget, message, AgentErrorClass.UNEXPECTED.value)
 
+    def resume(
+        self,
+        run: ChatbiAgentRun,
+        record: ChatRecord,
+        clarification: ChatbiAgentClarification,
+        answer_text: str,
+    ) -> Iterator[str]:
+        """澄清回答后恢复：答案以 ToolMessage 回填，预算从快照恢复，继续循环。"""
+
+        budget = self._new_budget()
+        budget.restore(run.budget_snapshot)
+        ctx = self._new_ctx(run, record)
+        messages = messages_from_dict(run.messages)
+        messages.append(ToolMessage(content=answer_text, tool_call_id=clarification.tool_call_id or ""))
+        system = self._build_system(run, record)
+
+        crud.update_run(self.session, run, status=AgentRunStatus.RUNNING.value, messages=_serialize_messages(messages))
+        crud.finish_record(self.session, record, AgentRunStatus.RUNNING.value)
+        self.session.commit()
+        yield self._emit(run, "clarification-accepted", {"record_id": record.id, "run_id": run.id})
+
+        try:
+            yield from self._loop(run, record, ctx, system, messages, budget)
+        except Exception as exc:
+            message = str(exc) or exc.__class__.__name__
+            yield from self._fail(run, record, messages, budget, message, AgentErrorClass.UNEXPECTED.value)
+
+    # ---- 组装 ----
+
+    def _new_budget(self) -> BudgetGuard:
+        return BudgetGuard(
+            max_steps=self.config.max_steps,
+            token_budget=self.config.token_budget,
+            repeat_fuse_threshold=self.config.repeat_fuse_threshold,
+            max_sql_retries=self.config.max_sql_retries,
+            timeout_seconds=self.config.timeout_seconds,
+            max_clarifications=self.config.max_clarifications,
+        )
+
+    def _new_ctx(self, run: ChatbiAgentRun, record: ChatRecord) -> AgentToolContext:
+        return AgentToolContext(
+            session=self.session,
+            oid=run.oid,
+            user_id=self.current_user.id,
+            datasource_id=record.datasource,
+            config=self.config,
+            state={"question": record.question or ""},
+        )
+
+    def _build_system(self, run: ChatbiAgentRun, record: ChatRecord) -> SystemMessage:
+        history = crud.recent_qa_summaries(self.session, run.chat_id, record.id, limit=self.config.history_rounds)
+        history_summary = None
+        if history:
+            history_summary = "\n".join(
+                f"- 问：{item['question']}\n  SQL：{item['sql'] or '（无）'}\n  答（摘要）：{item['answer_brief']}"
+                for item in history
+            )
+        pending = None
+        found = crud.find_chat_pending_clarification(self.session, run.chat_id, record.id)
+        if found:
+            _, pending_clarification = found
+            pending = {
+                "question": pending_clarification.question,
+                "options": pending_clarification.options or [],
+            }
+        return SystemMessage(
+            content=build_system_prompt(
+                datasource_id=record.datasource,
+                oid=run.oid,
+                max_clarifications=self.config.max_clarifications,
+                history_summary=history_summary,
+                pending_clarification=pending,
+            )
+        )
+
     # ---- 主循环 ----
 
-    def _loop(self, run, record, ctx, messages, budget) -> Iterator[str]:
-        system = SystemMessage(content=build_system_prompt(datasource_id=record.datasource, oid=run.oid))
+    def _loop(self, run, record, ctx, system, messages, budget) -> Iterator[str]:
         while True:
             verdict = budget.check_before_step()
             if not verdict.allowed:
                 yield from self._fail(run, record, messages, budget, verdict.reason, verdict.error_class)
                 return
 
+            _fold_messages(messages, self.config.context_fold_chars)
             step_index = budget.steps + 1
             step = crud.start_step(self.session, run, step_index, None, {})
             self.session.commit()
@@ -166,6 +239,23 @@ class AgentLoop:
                     return
 
                 output = self.registry.execute(tool_name, ctx, raw_args)
+
+                if tool_name == "clarify" and output.success:
+                    clarify_verdict = budget.record_clarification()
+                    if not clarify_verdict.allowed:
+                        # 超出澄清预算不挂起：告知模型基于现有信息收敛。
+                        messages.append(
+                            ToolMessage(
+                                content="澄清次数已达上限，请基于现有信息继续，或如实说明无法完成。",
+                                tool_call_id=call_id,
+                            )
+                        )
+                        crud.finish_step(self.session, step, {"tool": "clarify", "rejected": "budget"}, usage)
+                        continue
+                    crud.finish_step(self.session, step, {"tool": "clarify"}, usage)
+                    yield from self._suspend_for_clarification(run, record, messages, budget, output, call_id, step.id)
+                    return
+
                 messages.append(ToolMessage(content=output.summary, tool_call_id=call_id))
 
                 if tool_name == "finish" and output.success:
@@ -206,7 +296,36 @@ class AgentLoop:
             )
             self.session.commit()
 
-    # ---- 终态 ----
+    # ---- 终态与挂起 ----
+
+    def _suspend_for_clarification(self, run, record, messages, budget, output: ToolOutput, call_id: str, step_id) -> Iterator[str]:
+        clarification = crud.create_clarification(
+            self.session,
+            run,
+            question=output.payload["question"],
+            options=output.payload.get("options") or [],
+            tool_call_id=call_id,
+            user_id=self.current_user.id,
+        )
+        crud.finish_record(self.session, record, AgentRunStatus.WAITING_USER.value)
+        crud.update_run(
+            self.session, run,
+            status=AgentRunStatus.WAITING_USER.value,
+            messages=_serialize_messages(messages),
+            budget_snapshot=budget.snapshot(),
+        )
+        self.session.commit()
+        yield self._emit(
+            run,
+            "clarification",
+            {
+                "record_id": record.id,
+                "clarification_id": clarification.id,
+                "question": clarification.question,
+                "options": clarification.options or [],
+            },
+            step_id,
+        )
 
     def _finish(self, run, record, messages, budget, *, answer, chart, sql, step_id=None, full_data=None, execution=None) -> Iterator[str]:
         record.sql_answer = answer
@@ -263,6 +382,19 @@ def _serialize_messages(messages: list) -> list[dict]:
     return [message_to_dict(message) for message in messages]
 
 
+def _fold_messages(messages: list, max_chars: int, keep_recent: int = 6) -> None:
+    """消息历史超过阈值时，把较早的工具结果折叠为占位符（就地修改，持久化同步收缩）。"""
+
+    if max_chars <= 0:
+        return
+    total = sum(len(str(getattr(message, "content", ""))) for message in messages)
+    if total <= max_chars:
+        return
+    for message in messages[:-keep_recent]:
+        if isinstance(message, ToolMessage) and message.content != FOLDED_PLACEHOLDER:
+            message.content = FOLDED_PLACEHOLDER
+
+
 def _content_text(message: AIMessage) -> str:
     content = message.content
     if isinstance(content, str):
@@ -297,6 +429,8 @@ def _result_summary(tool_name: str, output: ToolOutput) -> dict:
         }
     if tool_name == "get_dataset_schema":
         return {"success": True, "table_count": payload.get("table_count")}
+    if tool_name in {"search_terminology", "get_sql_examples"}:
+        return {"success": True, "count": payload.get("count")}
     return {"success": True}
 
 

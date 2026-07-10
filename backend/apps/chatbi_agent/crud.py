@@ -218,6 +218,58 @@ def get_pending_clarification(session, record_id: int) -> ChatbiAgentClarificati
     return session.exec(stmt).scalars().first()
 
 
+def recent_qa_summaries(session, chat_id: int, exclude_record_id: int, limit: int = 3) -> list[dict]:
+    """最近 K 轮已完成问答的摘要（question + SQL + 概要），供多轮上下文注入。"""
+
+    stmt = (
+        select(ChatRecord)
+        .where(
+            and_(
+                ChatRecord.chat_id == chat_id,
+                ChatRecord.id != exclude_record_id,
+                ChatRecord.finish.is_(True),
+            )
+        )
+        .order_by(desc(ChatRecord.id))
+        .limit(limit)
+    )
+    records = session.exec(stmt).scalars().all()
+    summaries = []
+    for record in reversed(records):
+        summaries.append(
+            {
+                "question": record.question,
+                "sql": record.sql,
+                "answer_brief": (record.sql_answer or "")[:200],
+            }
+        )
+    return summaries
+
+
+def find_chat_pending_clarification(session, chat_id: int, exclude_record_id: int) -> tuple[ChatbiAgentRun, ChatbiAgentClarification] | None:
+    """chat 内最近一个挂起澄清的 run（跨轮澄清判别的上下文来源）。"""
+
+    stmt = (
+        select(ChatbiAgentRun)
+        .where(
+            and_(
+                ChatbiAgentRun.chat_id == chat_id,
+                ChatbiAgentRun.record_id != exclude_record_id,
+                ChatbiAgentRun.status == AgentRunStatus.WAITING_USER.value,
+            )
+        )
+        .order_by(desc(ChatbiAgentRun.created_at))
+        .limit(1)
+    )
+    run = session.exec(stmt).scalars().first()
+    if not run:
+        return None
+    clarification = get_pending_clarification(session, run.record_id)
+    if not clarification:
+        return None
+    return run, clarification
+
+
 def build_trace_response(session, record_id: int) -> dict:
     run = get_latest_run_by_record(session, record_id)
     if not run:

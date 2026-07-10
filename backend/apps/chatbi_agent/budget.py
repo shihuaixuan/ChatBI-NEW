@@ -22,13 +22,25 @@ class BudgetGuard:
     repeat_fuse_threshold: int = 3
     max_sql_retries: int = 2
     timeout_seconds: int = 120
+    max_clarifications: int = 2
 
     steps: int = 0
     tokens_used: int = 0
     sql_failures: int = 0
+    clarifications: int = 0
     started_at: float = field(default_factory=time.monotonic)
     _last_call_key: str | None = None
     _repeat_count: int = 0
+
+    def restore(self, snapshot: dict | None) -> None:
+        """从持久化快照恢复累计量（澄清恢复续跑时使用；墙钟重新计时）。"""
+
+        if not snapshot:
+            return
+        self.steps = int(snapshot.get("steps") or 0)
+        self.tokens_used = int(snapshot.get("tokens_used") or 0)
+        self.sql_failures = int(snapshot.get("sql_failures") or 0)
+        self.clarifications = int(snapshot.get("clarifications") or 0)
 
     def check_before_step(self) -> BudgetVerdict:
         if self.steps >= self.max_steps:
@@ -69,6 +81,16 @@ class BudgetGuard:
             )
         return BudgetVerdict(True)
 
+    def record_clarification(self) -> BudgetVerdict:
+        self.clarifications += 1
+        if self.clarifications > self.max_clarifications:
+            return BudgetVerdict(
+                False,
+                f"澄清次数已达上限 {self.max_clarifications} 次",
+                "budget_exhausted",
+            )
+        return BudgetVerdict(True)
+
     def snapshot(self) -> dict:
         return {
             "steps": self.steps,
@@ -76,5 +98,6 @@ class BudgetGuard:
             "tokens_used": self.tokens_used,
             "token_budget": self.token_budget,
             "sql_failures": self.sql_failures,
+            "clarifications": self.clarifications,
             "elapsed_seconds": round(time.monotonic() - self.started_at, 2),
         }
