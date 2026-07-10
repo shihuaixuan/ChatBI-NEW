@@ -1,0 +1,6 @@
+"""Agentic ChatBI v2：LLM 自主规划 + 受控工具循环。
+
+依赖规则：只 import apps.chatbi_capabilities 与底层资产包
+（headless/terminology/data_training/template/db/datasource/chat）；
+禁止 import apps.chatbi_workflow 与 apps.agentic_chat。
+"""
