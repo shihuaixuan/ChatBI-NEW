@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 
 from apps.workflow_engine.api.schemas import (
     ControlResponse,
+    GraphChatQueryRequest,
     GraphEventListResponse,
     GraphQueryRequest,
     GraphRunResponse,
@@ -24,6 +25,33 @@ def create_query(session: SessionDep, current_user: CurrentUser, request: GraphQ
 def stream_query(session: SessionDep, current_user: CurrentUser, request: GraphQueryRequest):
     return StreamingResponse(
         GraphApiService(session).stream_query(current_user, request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/chats/{chat_id}/queries", response_model=GraphRunResponse)
+def create_chat_query(
+    session: SessionDep,
+    current_user: CurrentUser,
+    chat_id: int,
+    request: GraphChatQueryRequest,
+):
+    return GraphApiService(session).create_chat_query(current_user, chat_id, request)
+
+
+@router.post("/chats/{chat_id}/queries/stream")
+def stream_chat_query(
+    session: SessionDep,
+    current_user: CurrentUser,
+    chat_id: int,
+    request: GraphChatQueryRequest,
+):
+    return StreamingResponse(
+        GraphApiService(session).stream_chat_query(current_user, chat_id, request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -4,20 +4,26 @@ from pydantic import BaseModel, Field
 
 
 class GraphQueryRequest(BaseModel):
-    """创建 Graph Run 的请求体。"""
+    """独立 Graph Run 请求，不创建聊天历史。"""
 
     question: str = Field(min_length=1)
     dataset_id: int = Field(gt=0)
     definition_version: Literal["minimal-v1", "v1"] = "minimal-v1"
     request_id: str | None = None
     run_id: str | None = None
-    chat_id: int | None = Field(default=None, gt=0)
+
+
+class GraphChatQueryRequest(GraphQueryRequest):
+    """交互式聊天 Graph 请求，chat_id 只由路径提供。"""
+
+    definition_version: Literal["v1"] = "v1"
 
 
 class GraphRunResponse(BaseModel):
     """Run 对外摘要，不暴露私有 Artifact 和内部控制字段。"""
 
     run_id: str
+    record_id: int | None = None
     status: str
     current_node: str | None = None
     output: dict[str, Any] = Field(default_factory=dict)

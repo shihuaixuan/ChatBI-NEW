@@ -93,12 +93,16 @@ def _fake_chatbi_v1_question_model(monkeypatch, tmp_path):
         def __call__(self, prompt):
             raise RuntimeError("answer model unavailable")
 
-    def build_runtime(session, commit_events: bool = False):
+    def build_runtime(session, commit_events: bool = False, run_store=None):
+        runtime_options = {}
+        if run_store is not None:
+            runtime_options["run_store"] = run_store
         return chatbi_runtime.build_real_chatbi_v1_runtime(
             session,
             question_model_client=FakeQuestionModelClient(),
             answer_model_client=FailingAnswerModelClient(),
             commit_events=commit_events,
+            **runtime_options,
         )
 
     monkeypatch.setenv("SQLBOT_WORKFLOW_ARTIFACT_DIR", str(tmp_path / "artifacts"))
@@ -118,7 +122,10 @@ def _client(user=None) -> TestClient:
 
 def _cleanup(session: Session) -> None:
     chat_ids = session.exec(
-        select(Chat.id).where(Chat.oid == 9501, Chat.brief.in_(["api_graph_context_chat"]))
+        select(Chat.id).where(
+            Chat.oid == 9501,
+            Chat.brief.in_(["api_graph_context_chat", "api_graph_owned_chat"]),
+        )
     ).all()
     if chat_ids:
         session.execute(delete(ChatRecord).where(ChatRecord.chat_id.in_(chat_ids)))
@@ -223,6 +230,46 @@ def _seed_v1_headless_dataset(session: Session, oid: int = 9501) -> int:
     return dataset.id or 0
 
 
+def _seed_graph_chat() -> tuple[int, int]:
+    now = datetime.now()
+    with Session(engine) as session:
+        _cleanup(session)
+        dataset_id = _seed_v1_headless_dataset(session)
+        chat = Chat(
+            oid=9501,
+            create_time=now,
+            create_by=501,
+            brief="api_graph_owned_chat",
+            chat_type="chat",
+            dataset_id=dataset_id,
+            datasource=7001,
+            engine_type="PostgreSQL",
+        )
+        session.add(chat)
+        session.commit()
+        session.refresh(chat)
+        return chat.id or 0, dataset_id
+
+
+def _load_pending_interaction_id(run_id: str) -> str:
+    with Session(engine) as session:
+        interaction = session.exec(
+            select(InteractionRequestModel).where(
+                InteractionRequestModel.run_id == run_id,
+                InteractionRequestModel.status == "pending",
+            )
+        ).one()
+        return interaction.interaction_id
+
+
+def _load_chat_record(record_id: int) -> ChatRecord:
+    with Session(engine) as session:
+        record = session.get(ChatRecord, record_id)
+        assert record is not None
+        session.expunge(record)
+        return record
+
+
 def test_graph_routes_are_registered_and_included_by_apps_api():
     app = FastAPI()
     app.include_router(graph_router.router)
@@ -232,6 +279,8 @@ def test_graph_routes_are_registered_and_included_by_apps_api():
     expected_routes = {
         "/graph/queries",
         "/graph/queries/stream",
+        "/graph/chats/{chat_id}/queries",
+        "/graph/chats/{chat_id}/queries/stream",
         "/graph/runs/{run_id}",
         "/graph/runs/{run_id}/events",
         "/graph/runs/{run_id}/events/stream",
@@ -290,6 +339,8 @@ def test_graph_query_creates_run_and_executes_placeholder_chatbi_graph():
         ).all()
         assert stored.oid == 9501
         assert stored.user_id == 501
+        assert stored.chat_id is None
+        assert stored.record_id is None
         assert stored.request == {
             "tenant_id": 9501,
             "user_id": 501,
@@ -305,6 +356,150 @@ def test_graph_query_creates_run_and_executes_placeholder_chatbi_graph():
         assert "node.succeeded" in event_types
         assert event_types[-1] == "run.succeeded"
         assert events[0].public_payload == {"status": "created", "question": "最近 7 天销售额"}
+        _cleanup(session)
+
+
+def test_graph_chat_query_creates_owned_record_and_run():
+    chat_id, dataset_id = _seed_graph_chat()
+
+    response = _client().post(
+        f"/graph/chats/{chat_id}/queries",
+        json={
+            "question": "本月销售额",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "run_id": "api-chat-owned-run",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["record_id"] is not None
+
+    with Session(engine) as session:
+        run = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-owned-run")).one()
+        record = session.get(ChatRecord, body["record_id"])
+        assert record is not None
+        assert run.chat_id == chat_id
+        assert run.record_id == record.id
+        assert record.trace_id == run.run_id
+        assert record.execution_type == "graph"
+        _cleanup(session)
+
+
+def test_standalone_graph_query_ignores_body_chat_id_and_remains_unowned():
+    chat_id, dataset_id = _seed_graph_chat()
+
+    response = _client().post(
+        "/graph/queries",
+        json={
+            "question": "今日访问人数",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "run_id": "api-standalone-body-chat-run",
+            "chat_id": chat_id,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["record_id"] is None
+    with Session(engine) as session:
+        run = session.exec(
+            select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-standalone-body-chat-run")
+        ).one()
+        assert run.chat_id is None
+        assert run.record_id is None
+        assert (
+            session.exec(select(ChatRecord).where(ChatRecord.trace_id == "api-standalone-body-chat-run")).one_or_none()
+            is None
+        )
+        assert "last_question" not in run.context["conversation"]
+        _cleanup(session)
+
+
+def test_graph_chat_query_rejects_unowned_chat_without_creating_history():
+    chat_id, dataset_id = _seed_graph_chat()
+
+    response = _client(user=_user(user_id=502)).post(
+        f"/graph/chats/{chat_id}/queries",
+        json={
+            "question": "本月销售额",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "run_id": "api-chat-unowned-run",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "CHAT_NOT_FOUND"
+    with Session(engine) as session:
+        assert (
+            session.exec(
+                select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-unowned-run")
+            ).one_or_none()
+            is None
+        )
+        assert (
+            session.exec(select(ChatRecord).where(ChatRecord.trace_id == "api-chat-unowned-run")).one_or_none() is None
+        )
+        _cleanup(session)
+
+
+def test_graph_chat_query_rejects_dataset_mismatch_without_creating_history():
+    chat_id, _ = _seed_graph_chat()
+
+    response = _client().post(
+        f"/graph/chats/{chat_id}/queries",
+        json={
+            "question": "本月销售额",
+            "dataset_id": 999999,
+            "definition_version": "v1",
+            "run_id": "api-chat-dataset-mismatch-run",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "CHAT_DATASET_MISMATCH"
+    with Session(engine) as session:
+        assert (
+            session.exec(
+                select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-dataset-mismatch-run")
+            ).one_or_none()
+            is None
+        )
+        assert (
+            session.exec(select(ChatRecord).where(ChatRecord.trace_id == "api-chat-dataset-mismatch-run")).one_or_none()
+            is None
+        )
+        _cleanup(session)
+
+
+def test_graph_chat_query_stream_creates_owned_record_and_run():
+    chat_id, dataset_id = _seed_graph_chat()
+
+    with _client().stream(
+        "POST",
+        f"/graph/chats/{chat_id}/queries/stream",
+        json={
+            "question": "今日访问人数",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "run_id": "api-chat-owned-stream-run",
+        },
+    ) as response:
+        text = response.read().decode("utf-8")
+
+    assert response.status_code == 200
+    assert "event: run.created\n" in text
+    assert "event: run.succeeded\n" in text
+    with Session(engine) as session:
+        run = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-owned-stream-run")).one()
+        assert run.chat_id == chat_id
+        assert run.record_id is not None
+        record = session.get(ChatRecord, run.record_id)
+        assert record is not None
+        assert record.trace_id == run.run_id
+        assert record.execution_type == "graph"
         _cleanup(session)
 
 
@@ -562,7 +757,7 @@ def test_graph_query_can_execute_chatbi_v1_graph():
         _cleanup(session)
 
 
-def test_graph_query_with_chat_id_loads_previous_semantic_context():
+def test_graph_chat_query_loads_previous_semantic_context():
     now = datetime.now()
     with Session(engine) as session:
         _cleanup(session)
@@ -635,14 +830,13 @@ def test_graph_query_with_chat_id_loads_previous_semantic_context():
         chat_id = chat.id
 
     response = _client().post(
-        "/graph/queries",
+        f"/graph/chats/{chat_id}/queries",
         json={
             "question": "那订单数呢",
             "dataset_id": dataset_id,
             "definition_version": "v1",
             "request_id": "api-context-request",
             "run_id": "api-context-run",
-            "chat_id": chat_id,
         },
     )
 

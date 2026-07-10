@@ -23,8 +23,13 @@ from apps.headless.models import (
     HeadlessDataSetModelConfig,
     HeadlessModel,
 )
+from apps.workflow_engine.api.chat_history import (
+    ChatProjectingRunStore,
+    GraphChatRecordProjector,
+)
 from apps.workflow_engine.api.schemas import (
     ControlResponse,
+    GraphChatQueryRequest,
     GraphEventListResponse,
     GraphEventResponse,
     GraphPendingInteractionResponse,
@@ -46,6 +51,7 @@ from apps.workflow_engine.infrastructure.persistence.models import (
     WorkflowEventModel,
     WorkflowRunModel,
 )
+from apps.workflow_engine.infrastructure.persistence.run_repository import RunRepository
 from apps.workflow_engine.runtime.public_projection import (
     node_display_label,
     node_trace_output_path,
@@ -70,16 +76,10 @@ class GraphApiService:
         request: GraphQueryRequest,
         commit_events: bool = False,
     ) -> GraphRunResponse:
+        """创建不关联聊天历史的独立 Graph Run。"""
+
         run_id = request.run_id or f"graph-{uuid4().hex}"
         dataset_id = self._resolve_dataset_id(current_user.oid, request.dataset_id)
-        chat_record = self._create_chat_record_for_query(
-            current_user=current_user,
-            chat_id=request.chat_id,
-            question=request.question,
-            run_id=run_id,
-            dataset_id=dataset_id,
-            source_dataset_id=request.dataset_id,
-        )
         request_context = {
             "tenant_id": current_user.oid,
             "user_id": current_user.id,
@@ -88,71 +88,94 @@ class GraphApiService:
             "source_dataset_id": request.dataset_id,
             "request_id": request.request_id,
         }
-        if request.chat_id is not None:
-            request_context["chat_id"] = request.chat_id
-        if chat_record is not None and chat_record.id is not None:
-            request_context["record_id"] = chat_record.id
         if request.definition_version == "minimal-v1":
             # minimal-v1 仍使用 datasource_id 字段；v1 主链路已切到 dataset_id。
             request_context["datasource_id"] = request.dataset_id
-        conversation = self._build_conversation_context(
-            current_user=current_user,
-            question=request.question,
-            dataset_id=dataset_id,
-            chat_record=chat_record,
-        )
         runtime = self._build_runtime(request.definition_version, commit_events=commit_events)
-        try:
-            created = runtime.create_run(
-                run_id=run_id,
-                definition_name="chatbi",
-                definition_version=request.definition_version,
-                context=WorkflowContext(request=request_context, conversation=conversation),
-            )
-            runtime.execute(created.run_id)
-            self._sync_chat_record_from_run(chat_record, created.run_id)
-            self._session.commit()
-        except Exception:
-            self._mark_chat_record_failed(chat_record)
-            self._session.commit()
-            raise
+        created = runtime.create_run(
+            run_id=run_id,
+            definition_name="chatbi",
+            definition_version=request.definition_version,
+            context=WorkflowContext(
+                request=request_context,
+                conversation={"question": request.question},
+            ),
+        )
+        runtime.execute(created.run_id)
+        self._session.commit()
         return self._to_run_response(self._load_owned_run(current_user, created.run_id))
 
-    def _create_chat_record_for_query(
+    def create_chat_query(
         self,
-        *,
         current_user: Any,
-        chat_id: int | None,
-        question: str,
-        run_id: str,
-        dataset_id: int,
-        source_dataset_id: int,
-    ) -> ChatRecord | None:
-        if chat_id is None:
-            return None
+        chat_id: int,
+        request: GraphChatQueryRequest,
+        commit_events: bool = False,
+    ) -> GraphRunResponse:
+        """创建绑定聊天记录并同步投影执行状态的交互式 Graph Run。"""
 
+        run_id = request.run_id or f"graph-{uuid4().hex}"
+        dataset_id = self._resolve_dataset_id(current_user.oid, request.dataset_id)
         chat = self._session.get(Chat, chat_id)
         if chat is None or chat.oid != current_user.oid or chat.create_by != current_user.id:
             raise HTTPException(status_code=404, detail="CHAT_NOT_FOUND")
-        if chat.dataset_id is not None and int(chat.dataset_id) != int(dataset_id):
+        if chat.dataset_id is None or int(chat.dataset_id) != dataset_id:
             raise HTTPException(status_code=400, detail="CHAT_DATASET_MISMATCH")
 
-        now = datetime.now()
         record = ChatRecord(
             chat_id=chat_id,
-            create_time=now,
+            create_time=datetime.now(),
             create_by=current_user.id,
             dataset_id=dataset_id,
-            datasource=chat.datasource or source_dataset_id,
+            datasource=chat.datasource,
             engine_type=chat.engine_type,
-            question=question,
+            execution_type="graph",
+            question=request.question,
             finish=False,
-            status=RunStatus.RUNNING.value,
+            status=RunStatus.CREATED.value,
             trace_id=run_id,
         )
         self._session.add(record)
         self._session.flush()
-        return record
+        if record.id is None:
+            raise RuntimeError("GRAPH_CHAT_RECORD_ID_MISSING")
+
+        request_context = {
+            "tenant_id": current_user.oid,
+            "user_id": current_user.id,
+            "question": request.question,
+            "dataset_id": dataset_id,
+            "source_dataset_id": request.dataset_id,
+            "request_id": request.request_id,
+            "chat_id": chat_id,
+            "record_id": record.id,
+        }
+        run_store = ChatProjectingRunStore(
+            RunRepository(self._session),
+            GraphChatRecordProjector(self._session),
+        )
+        runtime = build_real_chatbi_v1_runtime(
+            self._session,
+            commit_events=commit_events,
+            run_store=run_store,
+        )
+        created = runtime.create_run(
+            run_id=run_id,
+            definition_name="chatbi",
+            definition_version=request.definition_version,
+            context=WorkflowContext(
+                request=request_context,
+                conversation=self._build_conversation_context(
+                    current_user=current_user,
+                    question=request.question,
+                    dataset_id=dataset_id,
+                    chat_record=record,
+                ),
+            ),
+        )
+        runtime.execute(created.run_id)
+        self._session.commit()
+        return self._to_run_response(self._load_owned_run(current_user, created.run_id))
 
     def _build_conversation_context(
         self,
@@ -249,30 +272,6 @@ class GraphApiService:
         # 只向下一轮暴露语义摘要，避免把内部资产绑定或大对象塞进 prompt。
         return {key: intent[key] for key in allowed_keys if key in intent}
 
-    def _sync_chat_record_from_run(self, record: ChatRecord | None, run_id: str) -> None:
-        if record is None:
-            return
-        run = self._session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == run_id)).one_or_none()
-        if run is None:
-            return
-        record.status = run.status
-        record.finish = run.status in {
-            RunStatus.SUCCEEDED.value,
-            RunStatus.FAILED.value,
-            RunStatus.CANCELLED.value,
-        }
-        if record.finish:
-            record.finish_time = datetime.now()
-        self._session.add(record)
-
-    def _mark_chat_record_failed(self, record: ChatRecord | None) -> None:
-        if record is None:
-            return
-        record.status = RunStatus.FAILED.value
-        record.finish = True
-        record.finish_time = datetime.now()
-        self._session.add(record)
-
     def _resolve_dataset_id(self, oid: int, dataset_or_datasource_id: int) -> int:
         """兼容旧前端传入 datasource_id，优先返回真实 Headless dataset_id。"""
 
@@ -343,6 +342,42 @@ class GraphApiService:
                         commit_events=True,
                     )
                 except Exception as exc:  # pragma: no cover - 失败路径通过 SSE 错误帧兜底
+                    session.rollback()
+                    errors.append(exc)
+
+        worker = threading.Thread(target=execute_query, daemon=True)
+        worker.start()
+        async for frame in self._stream_run_events(
+            current_user,
+            run_id,
+            after_sequence=0,
+            worker=worker,
+            errors=errors,
+        ):
+            yield frame
+
+    async def stream_chat_query(
+        self,
+        current_user: Any,
+        chat_id: int,
+        request: GraphChatQueryRequest,
+    ) -> AsyncIterator[str]:
+        """创建交互式 Run，并通过现有 SSE 协议推送执行事件。"""
+
+        run_id = request.run_id or f"graph-{uuid4().hex}"
+        stream_request = request.model_copy(update={"run_id": run_id})
+        errors: list[Exception] = []
+
+        def execute_query() -> None:
+            with Session(engine) as session:
+                try:
+                    GraphApiService(session).create_chat_query(
+                        current_user,
+                        chat_id,
+                        stream_request,
+                        commit_events=True,
+                    )
+                except Exception as exc:  # pragma: no cover - 原异常由 SSE 错误帧传递
                     session.rollback()
                     errors.append(exc)
 
@@ -609,6 +644,7 @@ class GraphApiService:
         )
         return GraphRunResponse(
             run_id=run.run_id,
+            record_id=run.record_id,
             status=run.status,
             current_node=run.current_node,
             output=run.output or {},

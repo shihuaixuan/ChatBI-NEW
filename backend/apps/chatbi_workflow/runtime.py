@@ -47,6 +47,7 @@ from apps.workflow_engine.infrastructure.persistence.node_execution_repository i
     NodeExecutionRepository,
 )
 from apps.workflow_engine.infrastructure.persistence.run_repository import RunRepository
+from apps.workflow_engine.ports.run_store import RunStore
 from apps.workflow_engine.registry.condition_registry import ConditionRegistry
 from apps.workflow_engine.registry.definition_validator import DefinitionValidator
 from apps.workflow_engine.registry.handler_registry import HandlerRegistry
@@ -98,6 +99,7 @@ def build_real_chatbi_v1_runtime(
     question_model_client: QuestionClassificationModelClient | None = None,
     answer_model_client: AnswerModelClient | None = None,
     commit_events: bool = False,
+    run_store: RunStore | None = None,
 ) -> GraphRuntime:
     """组装真实 classify_question + 其他占位能力回退的 ChatBI v1 运行时。"""
 
@@ -136,10 +138,20 @@ def build_real_chatbi_v1_runtime(
         ),
         fallback_gateway=PlaceholderChatBICapabilityGateway(),
     )
-    return _build_chatbi_v1_runtime(session, gateway, commit_events=commit_events)
+    return _build_chatbi_v1_runtime(
+        session,
+        gateway,
+        commit_events=commit_events,
+        run_store=run_store,
+    )
 
 
-def _build_chatbi_v1_runtime(session: Session, gateway, commit_events: bool = False) -> GraphRuntime:
+def _build_chatbi_v1_runtime(
+    session: Session,
+    gateway,
+    commit_events: bool = False,
+    run_store: RunStore | None = None,
+) -> GraphRuntime:
     """组装 ChatBI v1 图运行时。"""
 
     handlers = HandlerRegistry()
@@ -150,15 +162,16 @@ def _build_chatbi_v1_runtime(session: Session, gateway, commit_events: bool = Fa
     registry = WorkflowRegistry(DefinitionValidator(handlers, conditions))
     registry.publish(build_chatbi_v1_definition())
 
-    run_store = RunRepository(session)
+    # 应用层可注入带聊天历史投影的仓储，独立执行仍使用默认仓储。
+    effective_run_store = run_store if run_store is not None else RunRepository(session)
     events = DatabaseEventPublisher(session, commit_on_publish=commit_events)
     return GraphRuntime(
         registry=registry,
-        run_store=run_store,
+        run_store=effective_run_store,
         scheduler=NodeScheduler(handlers),
         router=ConditionRouter(conditions),
         context_patcher=ContextPatcher(),
-        checkpoint_manager=CheckpointManager(run_store, events),
+        checkpoint_manager=CheckpointManager(effective_run_store, events),
         lease=InMemoryRunLease(),
         interaction_manager=DatabaseInteractionManager(session),
         node_execution_recorder=NodeExecutionRepository(session),
