@@ -172,13 +172,27 @@ def test_run_repository_get_rejects_persisted_ownership_conflict():
         _cleanup(session)
 
 
-def test_run_repository_to_domain_rejects_string_integer_ownership_mismatch():
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("chat_id", None),
+        ("record_id", "1"),
+        ("chat_id", True),
+        ("record_id", 1.0),
+    ],
+)
+def test_run_repository_to_domain_rejects_non_integer_context_ownership(
+    field: str,
+    invalid_value,
+):
     with Session(engine) as session:
         repo = RunRepository(session)
+        context_request = {"chat_id": 1, "record_id": 1}
+        context_request[field] = invalid_value
         model = _orm_run(
-            chat_id=100,
-            record_id=200,
-            context_request={"chat_id": "100", "record_id": 200},
+            chat_id=1,
+            record_id=1,
+            context_request=context_request,
         )
 
         with pytest.raises(

@@ -37,9 +37,17 @@ def _merge_run_ownership(
         type(chat_id) is not int or type(record_id) is not int
     ):
         raise RunOwnershipConflictError("GRAPH_CHAT_OWNERSHIP_CONFLICT")
+    # Context 一旦显式提供归属，必须同时满足精确整数类型和值一致。
     if (
-        ("chat_id" in request and request["chat_id"] != chat_id)
-        or ("record_id" in request and request["record_id"] != record_id)
+        "chat_id" in request
+        and (
+            type(request["chat_id"]) is not int or request["chat_id"] != chat_id
+        )
+        or "record_id" in request
+        and (
+            type(request["record_id"]) is not int
+            or request["record_id"] != record_id
+        )
     ):
         raise RunOwnershipConflictError("GRAPH_CHAT_OWNERSHIP_CONFLICT")
 
