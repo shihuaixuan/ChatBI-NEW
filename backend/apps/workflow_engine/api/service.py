@@ -3,7 +3,7 @@ import json
 import threading
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, NoReturn
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -26,6 +26,7 @@ from apps.headless.models import (
 from apps.workflow_engine.api.chat_history import (
     ChatProjectingRunStore,
     GraphChatRecordProjector,
+    GraphResultNotProjectableError,
 )
 from apps.workflow_engine.api.schemas import (
     ControlResponse,
@@ -154,22 +155,25 @@ class GraphApiService:
             commit_events=commit_events,
             run_store=run_store,
         )
-        created = runtime.create_run(
-            run_id=run_id,
-            definition_name="chatbi",
-            definition_version=request.definition_version,
-            context=WorkflowContext(
-                request=request_context,
-                conversation=self._build_conversation_context(
-                    current_user=current_user,
-                    question=request.question,
-                    dataset_id=dataset_id,
-                    chat_record=record,
+        try:
+            created = runtime.create_run(
+                run_id=run_id,
+                definition_name="chatbi",
+                definition_version=request.definition_version,
+                context=WorkflowContext(
+                    request=request_context,
+                    conversation=self._build_conversation_context(
+                        current_user=current_user,
+                        question=request.question,
+                        dataset_id=dataset_id,
+                        chat_record=record,
+                    ),
                 ),
-            ),
-        )
-        runtime.execute(created.run_id)
-        self._session.commit()
+            )
+            runtime.execute(created.run_id)
+            self._session.commit()
+        except GraphResultNotProjectableError as exc:
+            self._raise_projection_http_error(exc)
         return self._to_run_response(self._load_owned_run(current_user, created.run_id))
 
     def _resolve_chat_query_context(
@@ -220,6 +224,10 @@ class GraphApiService:
             .where(
                 ChatRecord.chat_id == chat_record.chat_id,
                 ChatRecord.id != chat_record.id,
+                ChatRecord.create_by == current_user.id,
+                ChatRecord.dataset_id == dataset_id,
+                ChatRecord.execution_type == "graph",
+                ChatRecord.status == RunStatus.SUCCEEDED.value,
                 col(ChatRecord.finish).is_(True),
                 col(ChatRecord.trace_id).is_not(None),
             )
@@ -232,6 +240,8 @@ class GraphApiService:
                     WorkflowRunModel.run_id == record.trace_id,
                     WorkflowRunModel.oid == current_user.oid,
                     WorkflowRunModel.user_id == current_user.id,
+                    WorkflowRunModel.chat_id == chat_record.chat_id,
+                    WorkflowRunModel.record_id == record.id,
                     WorkflowRunModel.status == RunStatus.SUCCEEDED.value,
                 )
             ).one_or_none()
@@ -321,6 +331,34 @@ class GraphApiService:
         if definition_version == "v1":
             return build_real_chatbi_v1_runtime(self._session, commit_events=commit_events)
         raise HTTPException(status_code=400, detail="UNSUPPORTED_GRAPH_DEFINITION_VERSION")
+
+    def _build_runtime_for_run(
+        self,
+        run: WorkflowRunModel,
+        *,
+        commit_events: bool = False,
+    ):
+        """关联聊天的 Run 使用投影型仓储，独立 Run 保持通用 Runtime。"""
+
+        if run.record_id is not None:
+            if run.definition_version != "v1":
+                raise HTTPException(status_code=400, detail="GRAPH_CHAT_DEFINITION_UNSUPPORTED")
+            run_store = ChatProjectingRunStore(
+                RunRepository(self._session),
+                GraphChatRecordProjector(self._session),
+            )
+            return build_real_chatbi_v1_runtime(
+                self._session,
+                commit_events=commit_events,
+                run_store=run_store,
+            )
+        return self._build_runtime(run.definition_version, commit_events=commit_events)
+
+    def _raise_projection_http_error(self, exc: GraphResultNotProjectableError) -> NoReturn:
+        """只在应用边界映射明确的历史投影错误。"""
+
+        self._session.rollback()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     def get_run(self, current_user: Any, run_id: str) -> GraphRunResponse:
         return self._to_run_response(self._load_owned_run(current_user, run_id))
@@ -478,15 +516,18 @@ class GraphApiService:
         if run.status != RunStatus.WAITING_INPUT.value:
             raise HTTPException(status_code=409, detail="RUN_NOT_WAITING_INPUT")
         if run.definition_version == "v1" and run.status == RunStatus.WAITING_INPUT.value:
-            runtime = self._build_runtime(run.definition_version, commit_events=commit_events)
-            resumed = runtime.resume(
-                run_id=run_id,
-                interaction_id=interaction_id,
-                response=request.response,
-                tenant_id=current_user.oid,
-                user_id=current_user.id,
-            )
-            self._session.commit()
+            runtime = self._build_runtime_for_run(run, commit_events=commit_events)
+            try:
+                resumed = runtime.resume(
+                    run_id=run_id,
+                    interaction_id=interaction_id,
+                    response=request.response,
+                    tenant_id=current_user.oid,
+                    user_id=current_user.id,
+                )
+                self._session.commit()
+            except GraphResultNotProjectableError as exc:
+                self._raise_projection_http_error(exc)
             return ControlResponse(run_id=run_id, status=resumed.status.value)
 
         interaction = self._session.exec(
@@ -558,7 +599,11 @@ class GraphApiService:
             interaction.status = "cancelled"
             self._session.add(interaction)
         self._append_control_event(run_id, "run.cancelled", {"status": "cancelled"})
-        self._session.commit()
+        try:
+            GraphChatRecordProjector(self._session).project_model(run)
+            self._session.commit()
+        except GraphResultNotProjectableError as exc:
+            self._raise_projection_http_error(exc)
         return ControlResponse(run_id=run_id, status=RunStatus.CANCELLED.value)
 
     def retry(self, current_user: Any, run_id: str) -> ControlResponse:
@@ -566,12 +611,16 @@ class GraphApiService:
         if run.status != RunStatus.FAILED.value:
             raise HTTPException(status_code=409, detail="RUN_NOT_FAILED")
         if run.definition_version == "v1":
-            self._restore_v1_run_for_retry(run)
-            self._append_control_event(run_id, "run.retry_requested", {"status": "created"})
-            self._session.flush()
-            runtime = self._build_runtime(run.definition_version)
-            retried = runtime.execute(run_id)
-            self._session.commit()
+            runtime = self._build_runtime_for_run(run)
+            try:
+                self._restore_v1_run_for_retry(run)
+                GraphChatRecordProjector(self._session).project_model(run)
+                self._append_control_event(run_id, "run.retry_requested", {"status": "created"})
+                self._session.flush()
+                retried = runtime.execute(run_id)
+                self._session.commit()
+            except GraphResultNotProjectableError as exc:
+                self._raise_projection_http_error(exc)
             return ControlResponse(run_id=run_id, status=retried.status.value)
         run.status = RunStatus.CREATED.value
         run.current_node = "start"

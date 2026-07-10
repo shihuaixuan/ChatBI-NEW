@@ -6,7 +6,7 @@ import json
 import threading
 import time
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from inspect import signature
 from pathlib import Path
 from types import SimpleNamespace
@@ -554,6 +554,97 @@ def test_graph_chat_query_stream_creates_owned_record_and_run():
         _cleanup(session)
 
 
+def test_graph_chat_interaction_resume_updates_same_record():
+    chat_id, dataset_id = _seed_graph_chat()
+    created = _client().post(
+        f"/graph/chats/{chat_id}/queries",
+        json={
+            "question": "需要澄清 今日访问人数",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "run_id": "api-chat-clarify",
+        },
+    )
+    assert created.status_code == 200
+    record_id = created.json()["record_id"]
+    interaction_id = _load_pending_interaction_id("api-chat-clarify")
+
+    answered = _client().post(
+        f"/graph/runs/api-chat-clarify/interactions/{interaction_id}/responses",
+        json={"response": {"metric": "sales_amount"}},
+    )
+
+    assert answered.status_code == 200
+    record = _load_chat_record(record_id)
+    assert record.id == record_id
+    assert record.status == "succeeded"
+    assert record.finish is True
+    assert record.sql_answer
+    with Session(engine) as session:
+        _cleanup(session)
+
+
+def test_graph_chat_cancel_projects_cancelled_status():
+    chat_id, dataset_id = _seed_graph_chat()
+    created = _client().post(
+        f"/graph/chats/{chat_id}/queries",
+        json={
+            "question": "需要澄清 今日访问人数",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "run_id": "api-chat-cancel",
+        },
+    )
+    assert created.status_code == 200
+    record_id = created.json()["record_id"]
+
+    cancelled = _client().post("/graph/runs/api-chat-cancel/cancel")
+
+    assert cancelled.status_code == 200
+    record = _load_chat_record(record_id)
+    assert record.id == record_id
+    assert record.status == "cancelled"
+    assert record.finish is True
+    with Session(engine) as session:
+        _cleanup(session)
+
+
+def test_graph_chat_retry_reuses_record_and_clears_error():
+    chat_id, dataset_id = _seed_graph_chat()
+    created = _client().post(
+        f"/graph/chats/{chat_id}/queries",
+        json={
+            "question": "今日访问人数",
+            "dataset_id": dataset_id,
+            "definition_version": "v1",
+            "run_id": "api-chat-retry",
+        },
+    )
+    assert created.status_code == 200
+    record_id = created.json()["record_id"]
+    with Session(engine) as session:
+        run = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-retry")).one()
+        record = session.get(ChatRecord, record_id)
+        assert record is not None
+        run.status = "failed"
+        record.status = "failed"
+        record.finish = True
+        record.error = "OLD_ERROR"
+        session.add(run)
+        session.add(record)
+        session.commit()
+
+    retried = _client().post("/graph/runs/api-chat-retry/retry")
+
+    assert retried.status_code == 200
+    record = _load_chat_record(record_id)
+    assert record.id == record_id
+    assert record.status == "succeeded"
+    assert record.error is None
+    with Session(engine) as session:
+        _cleanup(session)
+
+
 def test_graph_event_stream_returns_sse_frames_and_closes_for_completed_run():
     with Session(engine) as session:
         _cleanup(session)
@@ -833,12 +924,14 @@ def test_graph_chat_query_loads_previous_semantic_context():
             dataset_id=dataset_id,
             datasource=7001,
             engine_type="PostgreSQL",
+            execution_type="graph",
             question="今天店铺的访问人数",
             finish=True,
             status="succeeded",
             trace_id="api-prev-context",
         )
         session.add(previous_record)
+        session.flush()
         session.add(
             WorkflowRunModel(
                 run_id="api-prev-context",
@@ -850,6 +943,8 @@ def test_graph_chat_query_loads_previous_semantic_context():
                 definition_digest="test",
                 status="succeeded",
                 current_node="finish",
+                chat_id=chat.id,
+                record_id=previous_record.id,
                 context={
                     "request": {
                         "tenant_id": 9501,
@@ -875,6 +970,79 @@ def test_graph_chat_query_loads_previous_semantic_context():
                 version=1,
                 created_at=now,
                 updated_at=now,
+            )
+        )
+        legacy_record = ChatRecord(
+            chat_id=chat.id or 0,
+            create_time=now + timedelta(seconds=1),
+            finish_time=now + timedelta(seconds=1),
+            create_by=501,
+            dataset_id=dataset_id,
+            datasource=7001,
+            engine_type="PostgreSQL",
+            execution_type="legacy",
+            question="不应进入 Graph 上下文的传统问题",
+            finish=True,
+            status="succeeded",
+            trace_id="api-legacy-context",
+        )
+        session.add(legacy_record)
+        session.flush()
+        session.add(
+            WorkflowRunModel(
+                run_id="api-legacy-context",
+                oid=9501,
+                user_id=501,
+                definition_name="chatbi",
+                definition_version="v1",
+                definition_digest="test",
+                status="succeeded",
+                chat_id=chat.id,
+                record_id=legacy_record.id,
+                context={
+                    "request": {"dataset_id": dataset_id},
+                    "variables": {"intent": {"metric_mentions": ["传统指标"]}},
+                },
+                request={"dataset_id": dataset_id},
+                output={},
+                version=1,
+                created_at=now + timedelta(seconds=1),
+                updated_at=now + timedelta(seconds=1),
+            )
+        )
+        failed_record = ChatRecord(
+            chat_id=chat.id or 0,
+            create_time=now + timedelta(seconds=2),
+            finish_time=now + timedelta(seconds=2),
+            create_by=501,
+            dataset_id=dataset_id,
+            datasource=7001,
+            engine_type="PostgreSQL",
+            execution_type="graph",
+            question="失败的后续问题",
+            finish=True,
+            status="failed",
+            trace_id="api-failed-context",
+        )
+        session.add(failed_record)
+        session.flush()
+        session.add(
+            WorkflowRunModel(
+                run_id="api-failed-context",
+                oid=9501,
+                user_id=501,
+                definition_name="chatbi",
+                definition_version="v1",
+                definition_digest="test",
+                status="failed",
+                chat_id=chat.id,
+                record_id=failed_record.id,
+                context={"request": {"dataset_id": dataset_id}},
+                request={"dataset_id": dataset_id},
+                output={},
+                version=1,
+                created_at=now + timedelta(seconds=2),
+                updated_at=now + timedelta(seconds=2),
             )
         )
         session.commit()
