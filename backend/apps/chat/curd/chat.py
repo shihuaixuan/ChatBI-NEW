@@ -355,7 +355,8 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                    ChatRecord.datasource_select_answer, ChatRecord.analysis_record_id, ChatRecord.predict_record_id,
                    ChatRecord.regenerate_record_id,
                    ChatRecord.recommended_question, ChatRecord.first_chat,
-                   ChatRecord.finish, ChatRecord.error,
+                   ChatRecord.finish, ChatRecord.error, ChatRecord.execution_type,
+                   ChatRecord.status, ChatRecord.trace_id,
                    sql_alias_log.reasoning_content.label('sql_reasoning_content'),
                    chart_alias_log.reasoning_content.label('chart_reasoning_content'),
                    analysis_alias_log.reasoning_content.label('analysis_reasoning_content'),
@@ -383,7 +384,9 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                       ChatRecord.datasource_select_answer, ChatRecord.analysis_record_id, ChatRecord.predict_record_id,
                       ChatRecord.regenerate_record_id,
                       ChatRecord.recommended_question, ChatRecord.first_chat,
-                      ChatRecord.finish, ChatRecord.error, ChatRecord.data, ChatRecord.predict_data).where(
+                      ChatRecord.finish, ChatRecord.error, ChatRecord.execution_type,
+                      ChatRecord.status, ChatRecord.trace_id,
+                      ChatRecord.data, ChatRecord.predict_data).where(
             and_(ChatRecord.create_by == current_user.id, ChatRecord.chat_id == chart_id)).order_by(
             ChatRecord.create_time)
 
@@ -453,6 +456,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  regenerate_record_id=row.regenerate_record_id,
                                  recommended_question=row.recommended_question, first_chat=row.first_chat,
                                  finish=row.finish, error=row.error,
+                                 execution_type=row.execution_type, status=row.status, trace_id=row.trace_id,
                                  sql_reasoning_content=row.sql_reasoning_content,
                                  chart_reasoning_content=row.chart_reasoning_content,
                                  analysis_reasoning_content=row.analysis_reasoning_content,
@@ -472,7 +476,9 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  analysis_record_id=row.analysis_record_id, predict_record_id=row.predict_record_id,
                                  regenerate_record_id=row.regenerate_record_id,
                                  recommended_question=row.recommended_question, first_chat=row.first_chat,
-                                 finish=row.finish, error=row.error, data=row.data, predict_data=row.predict_data))
+                                 finish=row.finish, error=row.error,
+                                 execution_type=row.execution_type, status=row.status, trace_id=row.trace_id,
+                                 data=row.data, predict_data=row.predict_data))
 
     result = list(map(format_record, record_list))
 
@@ -753,6 +759,8 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
 
     if require_datasource and binding:
         record = ChatRecord()
+        # 传统 Chat 链路的历史记录统一标记为 legacy。
+        record.execution_type = "legacy"
         record.chat_id = chat.id
         apply_binding_to_record(record, binding)
         record.first_chat = True
@@ -792,6 +800,8 @@ def save_question(session: SessionDep, current_user: CurrentUser, question: Chat
         raise Exception(f"Chat with id {question.chat_id} not found")
 
     record = ChatRecord()
+    # 传统问数入口显式写入 legacy，避免依赖模型默认值隐式表达业务类型。
+    record.execution_type = "legacy"
     record.question = question.question
     record.chat_id = chat.id
     record.create_time = datetime.datetime.now()
@@ -815,6 +825,8 @@ def save_question(session: SessionDep, current_user: CurrentUser, question: Chat
 
 def save_analysis_predict_record(session: SessionDep, base_record: ChatRecord, action_type: str) -> ChatRecord:
     record = ChatRecord()
+    # 分析和预测仍属于传统执行链路，沿用 legacy 展示组件。
+    record.execution_type = "legacy"
     record.question = base_record.question
     record.chat_id = base_record.chat_id
     record.dataset_id = base_record.dataset_id

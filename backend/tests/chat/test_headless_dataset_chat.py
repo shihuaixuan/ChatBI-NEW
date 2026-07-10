@@ -171,6 +171,43 @@ def test_save_question_copies_dataset_and_datasource_from_chat(monkeypatch):
     assert session.committed is True
 
 
+def test_save_question_marks_legacy_execution_type(monkeypatch):
+    """传统问数创建的记录必须显式标记为 legacy。"""
+
+    chat_crud = import_chat_crud(monkeypatch)
+    from apps.chat.models.chat_model import ChatQuestion
+
+    chat = Chat(id=77, create_by=10, oid=1, dataset_id=20, datasource=40, engine_type="MySQL")
+    session = FakeSession(chat)
+
+    record = chat_crud.save_question(
+        session,
+        make_user(),
+        ChatQuestion(chat_id=77, question="销售额是多少"),
+    )
+
+    assert record.execution_type == "legacy"
+
+
+def test_agentic_create_marks_agentic_execution_type():
+    """Agentic 问数创建的记录必须显式标记为 agentic。"""
+
+    from apps.agentic_chat.crud import create_record_and_run
+    from apps.agentic_chat.schemas import AgenticQuestionRequest
+
+    chat = Chat(id=78, create_by=10, oid=1, datasource=40, engine_type="MySQL")
+    session = FakeSession(chat)
+
+    record, _run = create_record_and_run(
+        session,
+        make_user(),
+        AgenticQuestionRequest(chat_id=78, question="销售额是多少"),
+        config={},
+    )
+
+    assert record.execution_type == "agentic"
+
+
 def test_sql_compiler_uses_none_aggregation_for_measure_metric():
     schema = DataSetSchema(
         data_set=SchemaElement(data_set_id=20, data_set_name="档口经营分析", id=20, name="档口经营分析", biz_name="stall_bi", type="DATASET"),
