@@ -67,6 +67,12 @@ class ChatbiAgentRun(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     )
+    # 工具执行的派生状态（语义资产集合、白名单表、最近执行摘要等，不含全量数据），
+    # 澄清挂起后恢复时回填 AgentToolContext.state，避免恢复后被迫重新检索。
+    derived_state: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    )
     config: dict = Field(
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),

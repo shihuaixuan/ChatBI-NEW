@@ -123,6 +123,8 @@ class AgentLoop:
         budget = self._new_budget()
         budget.restore(run.budget_snapshot)
         ctx = self._new_ctx(run, record)
+        # 回填挂起前的派生状态（语义资产集合、白名单表等），避免恢复后被迫重新检索。
+        ctx.state.update(run.derived_state or {})
         messages = messages_from_dict(run.messages)
         messages.append(ToolMessage(content=answer_text, tool_call_id=clarification.tool_call_id or ""))
         system = self._build_system(run, record)
@@ -253,7 +255,7 @@ class AgentLoop:
                         crud.finish_step(self.session, step, {"tool": "clarify", "rejected": "budget"}, usage)
                         continue
                     crud.finish_step(self.session, step, {"tool": "clarify"}, usage)
-                    yield from self._suspend_for_clarification(run, record, messages, budget, output, call_id, step.id)
+                    yield from self._suspend_for_clarification(run, record, ctx, messages, budget, output, call_id, step.id)
                     return
 
                 messages.append(ToolMessage(content=output.summary, tool_call_id=call_id))
@@ -293,12 +295,13 @@ class AgentLoop:
                 self.session, run,
                 messages=_serialize_messages(messages),
                 budget_snapshot=budget.snapshot(),
+                derived_state=_persistable_state(ctx.state),
             )
             self.session.commit()
 
     # ---- 终态与挂起 ----
 
-    def _suspend_for_clarification(self, run, record, messages, budget, output: ToolOutput, call_id: str, step_id) -> Iterator[str]:
+    def _suspend_for_clarification(self, run, record, ctx, messages, budget, output: ToolOutput, call_id: str, step_id) -> Iterator[str]:
         clarification = crud.create_clarification(
             self.session,
             run,
@@ -313,6 +316,7 @@ class AgentLoop:
             status=AgentRunStatus.WAITING_USER.value,
             messages=_serialize_messages(messages),
             budget_snapshot=budget.snapshot(),
+            derived_state=_persistable_state(ctx.state),
         )
         self.session.commit()
         yield self._emit(
@@ -380,6 +384,12 @@ class AgentLoop:
 
 def _serialize_messages(messages: list) -> list[dict]:
     return [message_to_dict(message) for message in messages]
+
+
+def _persistable_state(state: dict) -> dict:
+    """可持久化的派生状态：排除全量数据这类大对象。"""
+
+    return {key: value for key, value in state.items() if key != "full_data"}
 
 
 def _fold_messages(messages: list, max_chars: int, keep_recent: int = 6) -> None:

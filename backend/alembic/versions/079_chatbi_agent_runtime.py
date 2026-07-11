@@ -28,6 +28,7 @@ def upgrade():
         sa.Column("status", sqlmodel.sql.sqltypes.AutoString(length=32), server_default="created", nullable=False),
         sa.Column("messages", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'[]'::jsonb"), nullable=False),
         sa.Column("budget_snapshot", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
+        sa.Column("derived_state", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
         sa.Column("config", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
         sa.Column("error_class", sqlmodel.sql.sqltypes.AutoString(length=64), nullable=True),
         sa.Column("error", sa.Text(), nullable=True),

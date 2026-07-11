@@ -50,7 +50,8 @@ def _loop(model, config=None):
 
 def test_clarify_suspends_run_and_persists_messages():
     model = ScriptedModel([
-        _tool_message("clarify", {"question": "你要查哪种额度？", "options": [{"label": "授信额度", "value": "credit"}]}),
+        _tool_message("probe", {"value": "warm"}),
+        _tool_message("clarify", {"question": "你要查哪种额度？", "options": [{"label": "授信额度", "value": "credit"}]}, "c2"),
     ])
     run, record = _run_and_record()
     events = list(_loop(model).run(run, record))
@@ -64,6 +65,38 @@ def test_clarify_suspends_run_and_persists_messages():
     assert run.budget_snapshot["clarifications"] == 1
     # 消息历史保留了带未回填 tool_call 的 assistant 消息
     assert run.messages[-1]["type"] == "ai"
+    # 派生状态随挂起持久化（不含全量数据），恢复后回填避免重复检索
+    assert run.derived_state["last_execution"]["sql"] == "select 1"
+    assert "full_data" not in run.derived_state
+
+
+def test_resume_restores_derived_state_into_tool_context():
+    run, record = _run_and_record()
+    run.messages = [{"type": "human", "data": {"content": "q", "type": "human"}}]
+    run.derived_state = {"semantic_asset_ids": [7, 8], "allowed_tables": ["t1"], "question": "q"}
+    captured = {}
+
+    class StateProbeTool(ProbeTool):
+        name = "probe"
+
+        def execute(self, ctx, args):
+            captured.update(ctx.state)
+            return super().execute(ctx, args)
+
+    registry = ToolRegistry()
+    registry.register(StateProbeTool())
+    registry.register(FinishProbeTool())
+    registry.register(ClarifyTool())
+    model = ScriptedModel([
+        _tool_message("probe", {"value": "x"}),
+        _tool_message("finish", {"value": ""}, "c9"),
+    ])
+    loop = AgentLoop(FakeSession(), SimpleNamespace(id=1, oid=1), AgentConfig(max_steps=6), model_client=model, registry=registry)
+    clarification = SimpleNamespace(tool_call_id="prev")
+    list(loop.resume(run, record, clarification, "答"))
+
+    assert captured["semantic_asset_ids"] == [7, 8]
+    assert captured["allowed_tables"] == ["t1"]
 
 
 def test_resume_continues_from_clarification_to_finish():

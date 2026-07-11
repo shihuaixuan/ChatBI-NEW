@@ -112,6 +112,7 @@ def update_run(
     status: str | None = None,
     messages: list | None = None,
     budget_snapshot: dict | None = None,
+    derived_state: dict | None = None,
     error_class: str | None = None,
     error: str | None = None,
 ) -> None:
@@ -121,6 +122,8 @@ def update_run(
         run.messages = messages
     if budget_snapshot is not None:
         run.budget_snapshot = budget_snapshot
+    if derived_state is not None:
+        run.derived_state = derived_state
     if error_class is not None:
         run.error_class = error_class
     if error is not None:
