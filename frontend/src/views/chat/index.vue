@@ -446,6 +446,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { Chat, chatApi, ChatInfo, type ChatMessage, ChatRecord } from '@/api/chat'
 import ChatRow from './ChatRow.vue'
 import ChartAnswer from './answer/ChartAnswer.vue'
+import AgentAnswer from './answer/AgentAnswer.vue'
 import AgenticAnswer from './answer/AgenticAnswer.vue'
 import GraphWorkflowAnswer from './answer/GraphWorkflowAnswer.vue'
 import AnalysisAnswer from './answer/AnalysisAnswer.vue'
@@ -517,12 +518,18 @@ const useGraphChatFlow = computed(
 const useAgenticChatFlow = computed(
   () => import.meta.env.VITE_AGENTIC_CHATBI_ENABLED === 'true'
 )
+// 智能体模式（Agentic v2，LLM 自主规划），优先级低于 graph、高于 agentic v1。
+const useAgentChatFlow = computed(
+  () => import.meta.env.VITE_AGENT_CHATBI_ENABLED === 'true'
+)
 function answerComponentForRecord(record?: ChatRecord) {
   // 历史记录由自身执行类型决定组件，避免切换全局开关后错误渲染旧消息。
   if (record?.execution_type === 'graph') return GraphWorkflowAnswer
+  if (record?.execution_type === 'agent') return AgentAnswer
   if (record?.execution_type === 'agentic') return AgenticAnswer
   if (record?.execution_type === 'legacy') return ChartAnswer
   if (useGraphChatFlow.value) return GraphWorkflowAnswer
+  if (useAgentChatFlow.value) return AgentAnswer
   return useAgenticChatFlow.value ? AgenticAnswer : ChartAnswer
 }
 
@@ -833,9 +840,11 @@ const sendMessage = async (
   currentRecord.chat_id = currentChatId.value
   currentRecord.execution_type = useGraphChatFlow.value
     ? 'graph'
-    : useAgenticChatFlow.value
-      ? 'agentic'
-      : 'legacy'
+    : useAgentChatFlow.value
+      ? 'agent'
+      : useAgenticChatFlow.value
+        ? 'agentic'
+        : 'legacy'
   currentRecord.question = inputMessage.value
   currentRecord.regenerate_record_id = regenerate_record_id
   currentRecord.sql_answer = ''

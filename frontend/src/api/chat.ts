@@ -62,7 +62,7 @@ export class ChatRecord {
   status?: string
   trace_id?: string
   // 每条历史记录独立决定回答组件，不能依赖当前全局流程开关。
-  execution_type?: 'legacy' | 'agentic' | 'graph'
+  execution_type?: 'legacy' | 'agentic' | 'graph' | 'agent'
   agentic_run_id?: number
   agentic_trace?: any
   clarification?: any
