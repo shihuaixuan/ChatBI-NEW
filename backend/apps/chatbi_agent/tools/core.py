@@ -113,6 +113,8 @@ class SearchSemanticAssetsTool(AgentTool):
             dataset_id=dataset_id,
             question=question,
             intent=intent,
+            actor_id=ctx.user_id,
+            request_id=str(ctx.state.get("run_id") or "") or None,
         )
         # 语义包与合法资产集合入 state，供 compile 校验"只接受出现过的资产"。
         ctx.state["semantic_package"] = package

@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     HEADLESS_METRIC_EMBEDDING_MODEL: str = "BAAI/bge-m3"
     HEADLESS_METRIC_EMBEDDING_DIMENSION: int = 1024
     HEADLESS_METRIC_EMBEDDING_TOP_K: int = 20
+    HEADLESS_METRIC_EMBEDDING_ALLOW_LEXICAL_FALLBACK: bool = True
 
     SEMANTIC_LAYER_ENABLED: bool = False
     SEMANTIC_APPROVED_ONLY: bool = True
@@ -191,6 +192,7 @@ class Settings(BaseSettings):
                      'PG_POOL_PRE_PING',
                      'TABLE_EMBEDDING_ENABLED',
                      'HEADLESS_METRIC_EMBEDDING_ENABLED',
+                     'HEADLESS_METRIC_EMBEDDING_ALLOW_LEXICAL_FALLBACK',
                      'SEMANTIC_LAYER_ENABLED',
                      'SEMANTIC_APPROVED_ONLY',
                      'SEMANTIC_ASSET_RUNTIME_ENABLED',

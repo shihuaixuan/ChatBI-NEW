@@ -1,28 +1,25 @@
-"""检索垫片契约测试：入参组装与语义包裁剪。
+"""能力层检索入口契约测试：统一请求组装与语义包裁剪。"""
 
-垫片当前包装 HeadlessKnowledgeAdapter；Step 4 下沉后实现替换，本测试不变，
-用于保证签名与语义包结构是稳定契约。
-"""
-
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from apps.chatbi_capabilities.semantic.retrieval import _to_semantic_package, retrieve_semantic_assets
+from apps.chatbi_capabilities.semantic.retrieval import (
+    _to_semantic_package,
+    retrieve_semantic_assets,
+)
 
 
-def test_shim_builds_minimal_graph_context_and_passes_intent():
+def test_capability_builds_unified_retrieval_request_and_passes_intent():
     captured = {}
 
-    class FakeAdapter:
-        def __init__(self, **kwargs):
-            pass
-
+    class FakeService:
         def retrieve(self, request):
-            captured.update(request)
-            return {"hit": False, "status": "missed"}
+            captured["request"] = request
+            return SimpleNamespace(legacy_payload={"hit": False, "status": "missed"})
 
-    with (
-        patch("apps.chatbi_workflow.capabilities.adapters.knowledge.HeadlessKnowledgeAdapter", FakeAdapter),
-        patch("apps.headless.service.HeadlessSchemaBuilder"),
+    with patch(
+        "apps.chatbi_capabilities.semantic.retrieval.build_retrieval_service",
+        return_value=FakeService(),
     ):
         package = retrieve_semantic_assets(
             session=None,
@@ -32,8 +29,11 @@ def test_shim_builds_minimal_graph_context_and_passes_intent():
             intent={"metric_mentions": ["销售额"]},
         )
 
-    assert captured["request"] == {"question": "上月销售额", "dataset_id": 3, "tenant_id": 7}
-    assert captured["variables"]["intent"] == {"metric_mentions": ["销售额"]}
+    request = captured["request"]
+    assert request.tenant_id == 7
+    assert request.scope.dataset_ids == [3]
+    assert request.rewritten_question == "上月销售额"
+    assert request.intent.metric_mentions == ["销售额"]
     assert package["hit"] is False
     assert package["status"] == "missed"
 

@@ -9,7 +9,6 @@ from apps.chatbi_workflow.capabilities.adapters.interaction import (
     InteractionAdapter,
 )
 from apps.chatbi_workflow.capabilities.adapters.knowledge import (
-    HeadlessDocumentRetriever,
     HeadlessKnowledgeAdapter,
 )
 from apps.chatbi_workflow.capabilities.adapters.question import (
@@ -32,6 +31,7 @@ from apps.chatbi_workflow.definitions.chatbi_v1 import (
     register_chatbi_v1_handlers,
 )
 from apps.headless.service import HeadlessSchemaBuilder
+from apps.retrieval.service import build_retrieval_service
 from apps.workflow_engine.infrastructure.artifacts.file_store import (
     FileArtifactStore,
     SessionArtifactMetadataStore,
@@ -102,6 +102,7 @@ def build_real_chatbi_v1_runtime(
     """组装真实 classify_question + 其他占位能力回退的 ChatBI v1 运行时。"""
 
     schema_builder = HeadlessSchemaBuilder(session)
+    retrieval_service = build_retrieval_service(session, schema_builder=schema_builder)
 
     def session_factory() -> Session:
         """为并行执行与 artifact 元数据写入创建独立会话。"""
@@ -117,7 +118,7 @@ def build_real_chatbi_v1_runtime(
         answer_adapter=AnswerAdapter(model_client=answer_model_client),
         knowledge_adapter=HeadlessKnowledgeAdapter(
             schema_builder=schema_builder,
-            document_retriever=HeadlessDocumentRetriever(metric_embedding_session=session),
+            retrieval_service=retrieval_service,
         ),
         interaction_adapter=InteractionAdapter(schema_builder=schema_builder),
         sql_adapter=SqlAdapter(

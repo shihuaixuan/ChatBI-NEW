@@ -1,29 +1,27 @@
-"""语义资产检索（Agentic `search_semantic_assets` 工具的领域实现）。
-
-当前形态：翻译垫片——组装最小图节点上下文，只读复用
-`chatbi_workflow.capabilities.adapters.knowledge.HeadlessKnowledgeAdapter`，
-不改图侧任何代码。
-
-长期契约：`retrieve_semantic_assets` 的签名与返回结构（语义包）不变；
-解耦分析 Step 4（检索核心下沉本包）完成后，仅替换内部实现，调用方无感。
-
-依赖说明：本模块是能力层内**唯一**允许 import chatbi_workflow 的例外（垫片期），
-Step 4 完成后该 import 必须移除。
-"""
+"""Agentic `search_semantic_assets` 的稳定能力层入口。"""
 
 from __future__ import annotations
 
 from typing import Any
 
+from apps.retrieval.service import (
+    RetrievalService,
+    build_retrieval_service,
+    build_semantic_binding_request,
+)
+
 
 def retrieve_semantic_assets(
-    session,
+    session: Any,
     *,
     oid: int,
     dataset_id: int,
     question: str,
     intent: dict[str, Any] | None = None,
     max_candidates_per_group: int = 5,
+    actor_id: int | None = None,
+    request_id: str | None = None,
+    retrieval_service: RetrievalService | None = None,
 ) -> dict[str, Any]:
     """检索语义资产，返回语义包。
 
@@ -32,22 +30,18 @@ def retrieve_semantic_assets(
     没有时按整句问题检索。
     """
 
-    # 垫片期例外 import（见模块 docstring），延迟导入避免包加载期依赖。
-    from apps.chatbi_workflow.capabilities.adapters.knowledge import HeadlessKnowledgeAdapter
-    from apps.headless.service import HeadlessSchemaBuilder
-
-    adapter = HeadlessKnowledgeAdapter(schema_builder=HeadlessSchemaBuilder(session))
-    raw = adapter.retrieve(
-        {
-            "request": {
-                "question": question,
-                "dataset_id": dataset_id,
-                "tenant_id": oid,
-            },
-            "variables": {"intent": intent or {}},
-        }
+    service = retrieval_service or build_retrieval_service(session)
+    request = build_semantic_binding_request(
+        request_id=request_id,
+        tenant_id=oid,
+        actor_id=actor_id or 1,
+        dataset_id=dataset_id,
+        original_question=question,
+        rewritten_question=question,
+        intent=intent,
     )
-    return _to_semantic_package(raw, max_candidates_per_group)
+    result = service.retrieve(request)
+    return _to_semantic_package(result.legacy_payload, max_candidates_per_group)
 
 
 def _to_semantic_package(raw: dict[str, Any], max_per_group: int) -> dict[str, Any]:
@@ -75,6 +69,8 @@ def _to_semantic_package(raw: dict[str, Any], max_per_group: int) -> dict[str, A
         "ambiguities": raw.get("ambiguities") or [],
         "decision": raw.get("decision") or {},
         "multi_query_plans": raw.get("multi_query_plans") or [],
+        "retrieval_strategy_version": raw.get("retrieval_strategy_version"),
+        "retrieval_diagnostics": raw.get("retrieval_diagnostics") or {},
         "truncated": truncated,
     }
 

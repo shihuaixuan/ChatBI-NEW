@@ -1,0 +1,405 @@
+# ChatBI 统一检索平台实施计划
+
+> 关联设计：[RETRIEVAL_PLATFORM_DESIGN.md](./RETRIEVAL_PLATFORM_DESIGN.md)
+>
+> 计划原则：先统一契约和入口，再迁移索引，随后升级检索算法，最后接入新知识源。
+
+## 0. 当前状态
+
+截至 2026-07-14，P0 与 P1-1 已经完成。Graph 与 Agent 已统一到
+`RetrievalService`，旧排序、门控和现有对外 payload 保持兼容；统一检索存储
+已具备 generation 双写、租户隔离和可回滚 migration。
+
+已交付：
+
+- `apps/retrieval` 严格请求、结果、profile、错误和诊断契约。
+- `allowed_asset_ids` 必须同时来自语义绑定候选和槽位最终选中资产。
+- 9 条基于数据集 243 真实资产 ID 的语义绑定 Gold Set。
+- Graph/Agent 旧结果转换器、基线采集脚本和离线评测脚本。
+- 契约、依赖方向、安全边界、Gold Set 和评测指标自动测试。
+- 独立于 Workflow/Agent 的 Headless 检索核心和统一服务入口。
+- Graph/Agent 共用的 `semantic-binding-v1` 请求、结果和应用组装工厂。
+- dense 通道启动配置检查，以及关闭、配置缺失、超时、维度不一致、索引不可用和查询错误诊断。
+- 已知 dense 故障允许显式词法降级，未知异常不再被静默吞掉。
+- `HEADLESS_METRIC_EMBEDDING_ALLOW_LEXICAL_FALLBACK` 统一控制生产降级策略。
+- 六张统一存储表：source、resource、unit、embedding、index job、query trace。
+- `vector(1024)` 物理 profile、GIN 词法索引、scope 普通索引和 generation 部分唯一索引。
+- 复合外键在数据库层阻止跨租户、跨来源和 embedding generation 错配。
+
+当前基线：
+
+| 实现 | Precision@1 | Recall@5 | 状态准确率 | P95 | Dense 通道 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 当前 Graph | 1.0000 | 1.0000 | 1.0000 | 142.8ms | 9/9 `unavailable`，`EMBEDDING_API_KEY_MISSING` |
+| 当前 Agent | 1.0000 | 0.9531 | 1.0000 | 40.0ms | 9/9 `unavailable`，`EMBEDDING_API_KEY_MISSING` |
+
+基线报告：
+
+- `backend/tests/retrieval/baselines/current_graph_report.json`
+- `backend/tests/retrieval/baselines/current_agent_report.json`
+
+该结果说明两条链路已经对齐：当前都因缺少 provider API key 明确进入词法降级，
+不再出现 Graph 尝试 dense、Agent 静默跳过的差异。下一阶段从 P1-1 开始建设统一存储，
+配置真实向量服务仍应作为独立部署动作执行。
+
+## 1. 优先级定义
+
+| 优先级 | 含义 | 进入条件 |
+| --- | --- | --- |
+| P0 | 当前行为一致性与后续建设的阻塞项 | 立即执行 |
+| P1 | Headless 生产级统一检索能力 | P0 验收完成 |
+| P2 | SQL 示例与知识库扩展 | P1 质量和稳定性达标 |
+| P3 | 规模化与高级检索能力 | 真实容量或质量数据证明有必要 |
+
+以下工期按一名熟悉项目的后端工程师估算，只用于排依赖和容量，不作为发布日期承诺。前端展示不在本计划范围内。
+
+## 2. 总体执行顺序
+
+```mermaid
+flowchart LR
+    P00["P0-1 基线与评测集"] --> P01["P0-2 统一契约"] --> P02["P0-3 统一服务入口"] --> P03["P0-4 Graph/Agent 对齐"]
+    P03 --> P10["P1-1 检索存储模型"] --> P11["P1-2 Headless Projector"] --> P12["P1-3 增量索引与 Generation"]
+    P12 --> P13["P1-4 混合召回"] --> P14["P1-5 重排与决策门控"] --> P15["P1-6 Shadow/灰度切换"]
+    P15 --> P20["P2-1 SQL 示例"] --> P21["P2-2 知识库"]
+    P21 --> P30["P3 外部向量库/稀疏与多向量"]
+```
+
+强制顺序约束：
+
+1. 不在统一契约完成前改数据库模型。
+2. 不在 Graph/Agent 统一入口前扩展新的向量资产类型。
+3. 不同时切换新存储和新排序算法；先证明存储等价，再 shadow 新算法。
+4. 不在离线评测集和回滚路径存在之前执行正式流量切换。
+
+## 3. P0：统一事实、契约与入口
+
+目标：消除“Graph 使用向量、Agent 未使用向量”和“异常静默退化”的入口差异，同时保持当前业务结果不变。
+
+预计总工作量：10～15 人日。
+
+### P0-1 建立基线与 Gold Set
+
+状态：已完成；优先级：最高；预计 2～3 人日；无前置依赖。
+
+任务：
+
+- 从现有测试、trace 和澄清案例中整理第一版语义绑定评测集。
+- 每条样本标注原问题、重写问题、指标/维度槽位、正确候选、应澄清、应未命中和模型兼容性。
+- 至少覆盖精确别名、同义表达、同名多口径、多指标、多维度、维值、跨模型、无结果和越权。
+- 编写可重复执行的离线 runner，分别记录当前 Graph 和 Agent 结果。
+- 固化当前 Precision@1、Recall@5、歧义识别率、未命中准确率和 P50/P95 延迟。
+
+主要测试资产：
+
+- `backend/tests/chatbi_workflow/test_headless_knowledge_adapter.py`
+- `backend/tests/chatbi_workflow/test_headless_metric_embedding_retrieval.py`
+- `backend/tests/chatbi_agent/test_core_tools.py`
+- 新增 `backend/tests/retrieval/golden/` 和评测 runner
+
+退出条件：
+
+- Graph/Agent 的差异可以被测试稳定复现。
+- 每个核心业务状态至少有正例和反例。
+- 评测结果保存策略版本和测试数据版本。
+
+### P0-2 固化统一契约
+
+状态：已完成；优先级：最高；预计 2～3 人日；依赖 P0-1 的状态样本。
+
+任务：
+
+- 定义 `RetrievalRequest`、`RetrievalSubQuery`、`RetrievalHit`、`RetrievalBundle`。
+- 固化 profile：`semantic_binding`、`sql_exemplar`、`knowledge_evidence`、`schema_fallback`。
+- 固化状态：`resolved`、`ambiguous`、`partial`、`missed`、`cross_model`、`degraded`。
+- 明确机器状态与前端文案分离；`missed` 的默认展示语义为“未找到可直接使用的指标/维度定义”。
+- 在结果中强制包含 `strategy_version`、`index_generation`、通道状态和耗时。
+- `allowed_asset_ids` 成为可执行资产唯一白名单入口。
+
+拟新增模块：
+
+```text
+backend/apps/retrieval/
+  __init__.py
+  schemas.py
+  profiles.py
+  errors.py
+```
+
+退出条件：
+
+- Pydantic 契约测试覆盖所有状态和额外字段拒绝规则。
+- Graph/Agent 能在不依赖具体检索实现的情况下消费同一个 fixture。
+- 文档、SQL 示例不能进入 `allowed_asset_ids`，并有反向测试。
+
+### P0-3 建立统一 RetrievalService
+
+状态：已完成；优先级：最高；预计 3～5 人日；依赖 P0-2。
+
+任务：
+
+- 新增 `apps.retrieval.RetrievalService`，第一版内部包装当前 Headless 检索算法，不改变排序。
+- 将 `HeadlessKnowledgeAdapter` 中的检索核心和 `CandidateGate` 下沉到检索域。
+- 将 `HeadlessAssetDocumentBuilder` 作为第一版 `HeadlessSourceProjector` 的兼容实现。
+- 删除 `chatbi_capabilities.semantic.retrieval` 对 `chatbi_workflow` 的反向 import。
+- 保留现有 Agent 工具函数签名和 Graph gateway 结果结构，通过兼容 adapter 转换。
+- 依赖方向加入自动测试：`apps.retrieval` 不得 import Agent、Workflow 或 API 层。
+
+主要改动位置：
+
+- `backend/apps/chatbi_capabilities/semantic/retrieval.py`
+- `backend/apps/chatbi_workflow/capabilities/adapters/knowledge.py`
+- `backend/apps/headless/asset_document.py`
+- 新增 `backend/apps/retrieval/service.py`
+- 新增 `backend/apps/retrieval/headless.py`
+
+退出条件：
+
+- 现有 Graph、Agent、Headless 单元测试全部通过。
+- Gold Set 候选和决策与基线完全等价；差异必须逐条评审。
+- 检索核心不存在对编排域的 import。
+
+### P0-4 对齐 Graph/Agent 与错误语义
+
+状态：已完成；优先级：最高；预计 3～4 人日；依赖 P0-3。
+
+任务：
+
+- Graph 和 Agent 在应用组装层注入同一个 `RetrievalService`。
+- 移除“是否传入 `metric_embedding_session` 决定是否启用向量”的隐式行为。
+- Provider 启动健康检查覆盖 URL、密钥、模型和维度配置。
+- 用明确错误类型区分配置错误、provider 超时、维度不一致、索引不可用和查询错误。
+- 配置允许词法降级时保留业务决策，并在 `diagnostics.degraded_reason` 记录失败通道；未知异常直接失败并保留 trace。
+- 向 SSE/trace 发布统一检索状态，但不改变当前前端展示协议。
+
+主要改动位置：
+
+- `backend/apps/chatbi_workflow/runtime.py`
+- `backend/apps/chatbi_agent/tools/core.py`
+- `backend/apps/chatbi_workflow/capabilities/adapters/knowledge.py`
+- `backend/apps/headless/metric_embedding.py`
+
+退出条件：
+
+- 相同请求经 Graph/Agent 返回相同候选、决策、策略版本和通道状态。
+- 关闭 embedding、配置错误和 provider 超时分别有测试，且都不会显示为正常向量命中。
+- P0 路径 P95 不高于当前基线 20%，不存在额外 LLM 调用。
+
+## 4. P1：Headless 生产级检索
+
+目标：把指标向量试验升级为指标、维度、术语和选择性维值的可增量、可回滚混合检索。
+
+预计总工作量：24～36 人日。
+
+### P1-1 落地检索存储模型
+
+状态：已完成；优先级：高；预计 4～6 人日；依赖 P0 全部完成。
+
+任务：
+
+- 新建 `retrieval_source/resource/unit/embedding/index_job/query_trace` 模型与 Alembic migration。
+- 普通列承载租户、namespace、资源类型、scope、状态和 generation；JSONB 只放低频扩展信息。
+- 第一版 pgvector 物理 profile 固定为 BGE-M3 dense 1024 维。
+- 添加资源、检索单元和 embedding 的 generation 唯一约束。
+- 增加租户、数据集、资源类型、状态和 scope 索引。
+- 保留现有 `headless_asset_embedding` 只读，不立即删除。
+
+退出条件：
+
+- migration upgrade/downgrade 测试通过。
+- 同一资源可写多个 unit，同一 unit 可并存两个 generation。
+- 数据库约束阻止跨租户引用、重复 active generation 和维度不匹配。
+
+验收记录（2026-07-14）：
+
+- `080_retrieval_storage_p1` 已完成 `079 -> 080 -> 079 -> 080` 往返验证。
+- downgrade 后六张新表全部删除，重新 upgrade 后全部恢复。
+- PostgreSQL 集成测试验证双 pending generation 可并存；跨租户引用、重复 active、
+  embedding generation 错配和非 1024 维记录均被数据库拒绝。
+- 旧 `headless_asset_embedding` 保留不变，P1-2 projector 接入前不切换在线读写。
+
+### P1-2 实现 Headless Projector
+
+优先级：高；预计 4～6 人日；依赖 P1-1。
+
+任务：
+
+- 指标生成 `identity/definition/usage` 检索单元。
+- 维度生成 `identity/definition/role` 检索单元。
+- 术语生成定义与关联资产检索单元。
+- 维值只接入已治理别名、常用值和配置允许的中低基数集合。
+- Join、模型兼容和资产关系保存为结构化 metadata/relationship，不交给向量判断。
+- 使用 `content_hash` 保证未变化资产不重复 embedding。
+
+退出条件：
+
+- 每类 projector 有 snapshot 测试，文本字段、metadata 和 ACL 稳定。
+- 敏感字段、SQL 表达式和权限条件不进入 embedding 文本。
+- 更新别名只重建受影响的 unit。
+
+### P1-3 建立增量索引与 Generation
+
+优先级：高；预计 5～8 人日；依赖 P1-2。
+
+任务：
+
+- 建立检索域自己的 index outbox/job，不直接依赖 Workflow EventOutbox。
+- 来源变更与索引事件同事务写入；worker 按资源版本和 content hash 幂等执行。
+- embedding 改为批量接口，支持可重试错误、不可重试错误和失败明细。
+- 新 generation 全部达到可用条件后原子激活，旧 generation 保留回滚窗口。
+- 实现全量 rebuild、增量 update/delete、tombstone 和周期 reconciliation。
+- 增加积压、失败率、源/索引版本差监控。
+
+退出条件：
+
+- 重建期间线上查询持续读取旧 generation，不出现空窗。
+- 重复事件不产生重复 unit/vector。
+- 单资源失败不激活不完整 generation，错误可查询、可重试。
+- 删除或停用资产在 SLA 内不可被检索。
+
+### P1-4 实现分槽 QueryPlanner 与混合召回
+
+优先级：高；预计 5～7 人日；依赖 P1-3。
+
+任务：
+
+- 从 `QuestionUnderstandingOutput` 确定性生成指标、维度、维值和术语子查询。
+- 精确名称/别名、中文词法和 dense 向量并行召回。
+- 先做中文词法技术验证：对比现有别名匹配、`pg_trgm`、分词后 `tsvector`；以 Gold Set 结果选型。
+- 所有通道在召回前应用 tenant、dataset、asset type、status 和权限过滤。
+- 按资源 ID 去重并使用 RRF 融合，记录各通道 rank 和命中字段。
+- 唯一精确别名命中时提供快速路径，避免无意义的 embedding 调用。
+
+退出条件：
+
+- 每个 required slot 独立返回候选，不依赖整句单向量结果。
+- 无跨租户、跨 scope 和停用资产泄漏。
+- 混合 Recall@5 不低于单独最佳通道。
+- 中文词法方案有可重复 benchmark，不凭组件偏好选型。
+
+### P1-5 重排、决策门控与编译白名单
+
+优先级：高；预计 4～6 人日；依赖 P1-4。
+
+任务：
+
+- 将当前 slot-aware rerank 和 `CandidateGate` 迁移为版本化 `semantic_binding` policy。
+- 基于绝对置信度、top1/top2 gap、槽位覆盖和模型兼容性决策。
+- 可选 cross-encoder 只重排已有候选，不能生成资产 ID 或覆盖硬过滤。
+- 统一生成 `allowed_asset_ids`，Graph/Agent 编译链路都从该字段校验。
+- 为 `partial/missed/cross_model/degraded` 增加可解释 reason codes。
+
+首版发布门槛：
+
+- Gold Set `Precision@1 >= 95%`。
+- required slot `Recall@5 >= 95%`。
+- 错误自动 `resolved` 比例不超过 1%，且不能劣于基线。
+- 越权候选和未放行资产进入 SQL 编译均为 0。
+- 具体阈值若与业务数据不匹配，必须根据标注结果调整并记录原因，不能为了过线修改样本。
+
+### P1-6 Shadow、灰度与切换
+
+优先级：高；预计 2～3 人日；依赖 P1-5。
+
+任务：
+
+- 线上主结果继续使用旧 policy，新 policy 异步 shadow，记录候选和决策差异。
+- 按租户/数据集灰度，先内部数据集，再低风险真实流量。
+- 切换只修改 active strategy/index generation，不发布新的业务代码。
+- 保留一键回退旧 strategy 和旧 generation 的能力。
+
+退出条件：
+
+- Shadow 差异完成归类：质量提升、数据问题、策略问题或真实歧义。
+- 语义绑定 P95 暂定不超过 1.5 秒；最终值以 P0 基线和产品预算评审为准。
+- 连续观察窗口内无权限事故、索引空窗和错误率异常后才全量。
+
+## 5. P2：扩展检索来源
+
+P2 的两个子阶段共享平台，但结果必须分组，不能混入同一个资产候选列表。
+
+### P2-1 SQL 示例检索
+
+优先级：中；预计 5～8 人日；依赖 P1 全量稳定。
+
+任务：
+
+- 只收录执行成功、审核通过、脱敏并引用稳定资产 ID 的示例。
+- 检索文本使用规范化问题、intent 和 query shape；SQL 放 payload。
+- 按数据模型、schema 版本、权限和资产状态过滤。
+- 示例只进入 `exemplars`，编译前重新校验当前 `allowed_asset_ids`。
+- A/B 评估编译成功率、SQL 正确率和延迟变化，无增益则不扩大收录范围。
+
+退出条件：
+
+- 过期、越权和引用失效资产的示例无法参与规划。
+- SQL 正确率有统计显著增益，且无错误资产绕过。
+
+### P2-2 Youtu 类知识库
+
+优先级：中；预计 10～15 人日；依赖 P1 平台稳定，可与 P2-1 后半段并行。
+
+任务：
+
+- 接入 knowledge base/file source adapter。
+- 按标题、段落、FAQ、表格、OCR 等内容类型实现 projector/chunker。
+- 建立文档级路由、chunk 级混合检索、rerank 和引用结构。
+- ACL、知识库、文件、有效期在召回前过滤。
+- 结果只进入 `evidence`，不进入 `allowed_asset_ids`。
+- 建立独立知识证据 Gold Set 和 Recall/nDCG/引用完整率指标。
+
+退出条件：
+
+- 回答中的每段证据能回溯文件、章节、页码或表格位置。
+- 删除文件或撤销权限后，缓存与索引在 SLA 内失效。
+- 知识库结果不会改变语义资产白名单。
+
+## 6. P3：规模化与高级能力
+
+优先级：低；没有量化触发条件时不实施。
+
+候选事项：
+
+- 外部 VectorStore：Qdrant、Milvus 或 OpenSearch。
+- BGE-M3 sparse/multi-vector 通道。
+- 多模态图像向量、复杂表格检索。
+- 学习排序、个性化和在线反馈训练。
+- 多区域索引、独立检索集群和资源隔离。
+
+触发条件至少满足一项：
+
+- 向量达到千万级并持续增长。
+- pgvector 在真实过滤条件下无法满足已确定的 P95/QPS/Recall@K。
+- embedding/indexing 负载影响主业务数据库稳定性。
+- P1/P2 评测证明 sparse/multi-vector 对目标查询有明确增益。
+
+## 7. 交付批次与评审点
+
+| 批次 | 包含任务 | 评审重点 | 可独立上线 |
+| --- | --- | --- | --- |
+| M0 | P0-1、P0-2 | 契约、状态语义、评测样本 | 否 |
+| M1 | P0-3、P0-4 | 依赖方向、Graph/Agent 一致性、显式降级 | 是 |
+| M2 | P1-1～P1-3 | 数据模型、增量一致性、generation 回滚 | 影子索引 |
+| M3 | P1-4、P1-5 | 混合检索质量、门控安全性、编译白名单 | Shadow |
+| M4 | P1-6 | 灰度指标和回滚演练 | 是 |
+| M5 | P2-1 | SQL 示例真实增益 | 是 |
+| M6 | P2-2 | 知识引用、ACL、删除一致性 | 是 |
+
+每个批次必须提供：
+
+- 变更设计和依赖方向说明。
+- migration 与回滚步骤。
+- Gold Set 前后对比。
+- P50/P95、错误率和 provider 成本。
+- 已知风险、灰度范围和回退条件。
+
+## 8. 下一执行批次
+
+M0 已完成。下一批只执行 M1（P0-3、P0-4），不并行建设 P1 存储模型：
+
+1. 建立 `RetrievalService`，先包装当前算法并保持 Gold Set 结果等价。
+2. 下沉 Headless 检索核心，移除 capabilities 对 Workflow 的反向 import。
+3. Graph/Agent 在应用组装层注入同一个 service。
+4. 将 dense 的 `skipped/unavailable/failed/succeeded` 统一写入结果和 trace。
+5. 重新采集两条链路基线，要求候选、决策和通道状态一致。
+
+M1 仍不修改召回排序算法，也不创建新向量表。只有 M1 验收完成后，才进入 P1 的索引存储和混合检索建设。
