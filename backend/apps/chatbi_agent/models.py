@@ -58,7 +58,7 @@ class ChatbiAgentRun(SQLModel, table=True):
     chat_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     record_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     status: str = Field(default=AgentRunStatus.CREATED.value, max_length=32, nullable=False)
-    # LLM 消息历史（不含 system），是恢复与回放的唯一事实源；工具结果以 summary 形态入内。
+    # Agent 原生消息历史（不含 system）；工作流前置澄清保存在 clarification 与 derived_state 中。
     messages: list = Field(
         default_factory=list,
         sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
@@ -147,7 +147,7 @@ class ChatbiAgentClarification(SQLModel, table=True):
     run_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     record_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     status: str = Field(default=AgentClarificationStatus.PENDING.value, max_length=32, nullable=False)
-    # clarify 工具调用 id，恢复时以 ToolMessage 回填答案。
+    # 模型主动澄清时保存工具调用 id；工作流前置澄清为空，恢复时不进入工具消息协议。
     tool_call_id: str | None = Field(default=None, max_length=128, nullable=True)
     question: str = Field(sa_column=Column(Text, nullable=False))
     options: list = Field(

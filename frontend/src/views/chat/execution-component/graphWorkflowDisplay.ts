@@ -332,7 +332,7 @@ function graphNodeSummary(
       listText(output.selected_assets?.metrics) ||
       listText(output.slot_bindings?.metrics) ||
       output.decision?.reason ||
-      output.status ||
+      knowledgeStatusText(output.status) ||
       ''
     )
   }
@@ -529,6 +529,18 @@ function queryPlanSummary(output: Record<string, any>) {
       : '',
   ].filter(Boolean)
   return parts.join('；') || output.strategy || output.status || ''
+}
+
+function knowledgeStatusText(status: any) {
+  const labels: Record<string, string> = {
+    hit: '已匹配可用指标/维度定义',
+    missed: '检索完成，未找到可直接使用的指标/维度定义。',
+    miss: '检索完成，未找到可直接使用的指标/维度定义。',
+    metric_ambiguous: '指标口径待确认',
+    dimension_ambiguous: '维度口径待确认',
+    cross_model: '存在跨模型资产匹配',
+  }
+  return labels[String(status)] || (status ? String(status) : '')
 }
 
 function planFilterText(filters: any, label = '筛选') {

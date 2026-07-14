@@ -80,6 +80,24 @@ test('构建查询计划展示指标维度筛选摘要', () => {
   assert.equal(steps[0].summary, '指标：客户数；维度：档口；筛选：档口ID=1')
 })
 
+test('知识检索未命中时展示用户可理解的完成态文案', () => {
+  const steps = buildGraphWorkflowSteps({
+    run_id: 'run-knowledge-missed',
+    status: 'succeeded',
+    current_node: 'finish',
+    nodes: [
+      {
+        name: 'retrieve_knowledge',
+        label: '检索语义资产',
+        status: 'succeeded',
+        output: { status: 'missed' },
+      },
+    ],
+  })
+
+  assert.equal(steps[0].summary, '检索完成，未找到可直接使用的指标/维度定义。')
+})
+
 test('生成查询展示 SQL 明细', () => {
   const sql = 'select count(*) as customer_count from customers where stall_id = 1'
   const steps = buildGraphWorkflowSteps({

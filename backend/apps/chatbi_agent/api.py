@@ -6,7 +6,14 @@ from apps.chat.models.chat_model import ChatRecord
 from apps.chatbi_agent import crud
 from apps.chatbi_agent.loop import AgentLoop
 from apps.chatbi_agent.models import AgentClarificationStatus, AgentRunStatus
-from apps.chatbi_agent.schemas import AgentClarificationRequest, AgentConfig, AgentQuestionRequest
+from apps.chatbi_agent.schemas import (
+    AgentClarificationRequest,
+    AgentConfig,
+    AgentQuestionRequest,
+    AgentResumeStreamRequest,
+    AgentStartStreamRequest,
+    AgentStreamRequest,
+)
 from common.core.config import settings
 from common.core.db import engine
 from common.core.deps import CurrentUser, SessionDep
@@ -34,62 +41,88 @@ def get_agent_config() -> AgentConfig:
     )
 
 
-@router.post("/question")
-async def agent_question(current_user: CurrentUser, request: AgentQuestionRequest):
-    try:
-        config = get_agent_config()
-        if not config.enabled:
-            raise HTTPException(status_code=400, detail="Agent ChatBI is not enabled")
-        if request.datasource_id and config.datasource_allowlist and request.datasource_id not in config.datasource_allowlist:
+@router.post("/stream")
+async def agent_stream(current_user: CurrentUser, request: AgentStreamRequest):
+    """Agent 唯一实时入口；start 与 resume 共享同一套 SSE 事件协议。"""
+
+    config = get_agent_config()
+    if not config.enabled:
+        raise HTTPException(status_code=400, detail="Agent ChatBI is not enabled")
+
+    if isinstance(request, AgentStartStreamRequest):
+        if (
+            request.datasource_id
+            and config.datasource_allowlist
+            and request.datasource_id not in config.datasource_allowlist
+        ):
             raise HTTPException(status_code=400, detail="Datasource is not enabled for Agent ChatBI")
 
-        def stream():
+        def stream_start():
             # SSE 流由 generator 自己持有 session，避免跨生命周期传递 ORM 对象。
             with Session(engine) as stream_session:
                 record, run = crud.create_record_and_run(
-                    stream_session, current_user, request, config.model_dump()
+                    stream_session,
+                    current_user,
+                    AgentQuestionRequest(**request.model_dump(exclude={"action"})),
+                    config.model_dump(),
                 )
                 loop = AgentLoop(stream_session, current_user, config)
                 yield from loop.run(run, record)
 
-        return StreamingResponse(stream(), media_type="text/event-stream")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        return StreamingResponse(stream_start(), media_type="text/event-stream")
+
+    answer = request.clarification
+    answer_text = _clarification_answer_text(answer)
+    if not answer_text:
+        raise HTTPException(status_code=400, detail="Clarification answer is empty")
+
+    def stream_resume():
+        # resume 复用同一入口和事件格式，但会开启新的 HTTP 响应流。
+        with Session(engine) as stream_session:
+            record = stream_session.get(ChatRecord, request.record_id)
+            if not record or record.create_by != current_user.id:
+                raise RuntimeError("Chat record not found")
+            run = crud.get_latest_run_by_record(stream_session, request.record_id)
+            clarification = crud.get_pending_clarification(stream_session, request.record_id)
+            if not run or not clarification or run.status != AgentRunStatus.WAITING_USER.value:
+                raise RuntimeError("No pending clarification")
+            clarification.status = AgentClarificationStatus.ANSWERED.value
+            clarification.answer = {"selections": answer.selections, "text": answer.text}
+            clarification.answered_at = crud.now()
+            stream_session.add(clarification)
+            stream_session.commit()
+            loop = AgentLoop(stream_session, current_user, config)
+            yield from loop.resume(run, record, clarification, answer_text)
+
+    return StreamingResponse(stream_resume(), media_type="text/event-stream")
 
 
-@router.post("/record/{record_id}/clarification")
-async def agent_clarification(current_user: CurrentUser, record_id: int, request: AgentClarificationRequest):
-    try:
-        config = get_agent_config()
-        answer_text = _clarification_answer_text(request)
-        if not answer_text:
-            raise HTTPException(status_code=400, detail="Clarification answer is empty")
+@router.post("/question", deprecated=True)
+async def agent_question(current_user: CurrentUser, request: AgentQuestionRequest):
+    """兼容旧客户端；新接入统一使用 /stream。"""
 
-        def stream():
-            # 恢复流由 generator 自己持有 session，与提问流一致。
-            with Session(engine) as stream_session:
-                record = stream_session.get(ChatRecord, record_id)
-                if not record or record.create_by != current_user.id:
-                    raise RuntimeError("Chat record not found")
-                run = crud.get_latest_run_by_record(stream_session, record_id)
-                clarification = crud.get_pending_clarification(stream_session, record_id)
-                if not run or not clarification or run.status != AgentRunStatus.WAITING_USER.value:
-                    raise RuntimeError("No pending clarification")
-                clarification.status = AgentClarificationStatus.ANSWERED.value
-                clarification.answer = {"selections": request.selections, "text": request.text}
-                clarification.answered_at = crud.now()
-                stream_session.add(clarification)
-                stream_session.commit()
-                loop = AgentLoop(stream_session, current_user, config)
-                yield from loop.resume(run, record, clarification, answer_text)
+    return await agent_stream(
+        current_user,
+        AgentStartStreamRequest(action="start", **request.model_dump()),
+    )
 
-        return StreamingResponse(stream(), media_type="text/event-stream")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+
+@router.post("/record/{record_id}/clarification", deprecated=True)
+async def agent_clarification(
+    current_user: CurrentUser,
+    record_id: int,
+    request: AgentClarificationRequest,
+):
+    """兼容旧客户端；新接入统一使用 /stream。"""
+
+    return await agent_stream(
+        current_user,
+        AgentResumeStreamRequest(
+            action="resume",
+            record_id=record_id,
+            clarification=request,
+        ),
+    )
 
 
 def _clarification_answer_text(request: AgentClarificationRequest) -> str:

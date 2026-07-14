@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from apps.chatbi_agent.tools.base import (
     AgentTool,
@@ -19,12 +19,40 @@ from apps.chatbi_capabilities.semantic.compile import (
 from apps.chatbi_capabilities.semantic.retrieval import retrieve_semantic_assets
 from apps.chatbi_capabilities.sql.executor import GuardedSqlExecutor
 from apps.chatbi_capabilities.sql.validator import SqlValidateTool
+from apps.chatbi_capabilities.time_slots import normalize_time_range
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
 
 
 def _summary_limit(ctx: AgentToolContext) -> int:
     return getattr(ctx.config, "summary_max_chars", SUMMARY_MAX_CHARS_DEFAULT)
+
+
+def _execution_gate(ctx: AgentToolContext) -> ToolOutput | None:
+    """统一阻止未完成问题理解或仍需澄清的意图进入 SQL 阶段。"""
+
+    understanding = ctx.state.get("question_understanding")
+    if not isinstance(understanding, dict):
+        return ToolOutput(
+            success=False,
+            summary="缺少已确认的问题理解，禁止生成或执行 SQL。",
+            error_code="question_understanding_required",
+        )
+    validation = understanding.get("validation")
+    if not isinstance(validation, dict):
+        return ToolOutput(
+            success=False,
+            summary="问题理解缺少校验结果，禁止生成或执行 SQL。",
+            error_code="question_understanding_invalid",
+        )
+    if validation.get("status") != "valid":
+        slots = validation.get("clarification_slots") or []
+        return ToolOutput(
+            success=False,
+            summary=f"当前问题仍需澄清槽位 {slots}，禁止生成或执行 SQL。请先调用 clarify。",
+            error_code="question_clarification_required",
+        )
+    return None
 
 
 def _ensure_dataset_id(ctx: AgentToolContext) -> int | None:
@@ -43,18 +71,15 @@ def _ensure_dataset_id(ctx: AgentToolContext) -> int | None:
 
 
 class SearchSemanticAssetsArgs(BaseModel):
-    """检索语义层资产（指标/维度/术语/表）。"""
+    """检索语义层资产；问题与意图统一从运行状态读取。"""
 
-    keywords: list[str] = Field(default_factory=list, description="从问题中提取的检索线索，如指标名、维度名、口语说法")
-    metric_mentions: list[str] = Field(default_factory=list, description="疑似指标的提法")
-    dimension_mentions: list[str] = Field(default_factory=list, description="疑似维度的提法")
-    question: str = Field(default="", description="检索用的完整问题，缺省时用当前用户问题")
+    model_config = ConfigDict(extra="forbid")
 
 
 class SearchSemanticAssetsTool(AgentTool):
     name = "search_semantic_assets"
     description = (
-        "在语义层检索候选指标、维度、术语与数据表。回答问数问题前必须先调用，"
+        "按上游已确认的问题理解检索候选指标、维度、术语与数据表，无需传入参数。回答问数问题前必须先调用，"
         "返回的语义包（asset_id、口径、置信度、歧义提示）是后续编译 SQL 的唯一合法依据。"
     )
     args_model = SearchSemanticAssetsArgs
@@ -67,20 +92,27 @@ class SearchSemanticAssetsTool(AgentTool):
                 summary="当前数据源未绑定可用的语义数据集，无法进行语义检索。可改用 get_dataset_schema 查看物理表结构。",
                 error_code="headless_dataset_not_found",
             )
-        intent: dict[str, Any] = {}
-        if args.metric_mentions:
-            intent["metric_mentions"] = args.metric_mentions
-        if args.dimension_mentions:
-            intent["dimension_mentions"] = args.dimension_mentions
-        question = args.question or ctx.state.get("question") or ""
-        if args.keywords and not question:
-            question = " ".join(args.keywords)
+        understanding = ctx.state.get("question_understanding")
+        if not isinstance(understanding, dict):
+            return ToolOutput(
+                success=False,
+                summary="缺少已确认的问题理解，禁止在工具选择阶段重新生成检索意图。",
+                error_code="question_understanding_required",
+            )
+        intent = understanding.get("intent")
+        question = understanding.get("rewritten_question")
+        if not isinstance(intent, dict) or not isinstance(question, str) or not question.strip():
+            return ToolOutput(
+                success=False,
+                summary="已确认的问题理解结构不完整，无法执行语义检索。",
+                error_code="question_understanding_invalid",
+            )
         package = retrieve_semantic_assets(
             ctx.session,
             oid=ctx.oid,
             dataset_id=dataset_id,
             question=question,
-            intent=intent or None,
+            intent=intent,
         )
         # 语义包与合法资产集合入 state，供 compile 校验"只接受出现过的资产"。
         ctx.state["semantic_package"] = package
@@ -156,7 +188,12 @@ class GetDatasetSchemaTool(AgentTool):
 class CompileFilter(BaseModel):
     asset_id: int = Field(description="过滤维度的 asset_id，必须来自语义包")
     operator: str = Field(default="=", description="过滤操作符，如 = / != / > / >= / < / <= / in / like")
-    value: Any = Field(description="过滤值")
+    value: str | int | float | bool | dict[str, Any] = Field(
+        description=(
+            "过滤值。普通筛选传标量；时间筛选必须使用已确认问题理解中的 time_range.normalized，"
+            "不得把 today/今天作为普通字符串，也不得替换成数据最大日期。"
+        )
+    )
 
 
 class CompileOrderBy(BaseModel):
@@ -186,6 +223,9 @@ class CompileSemanticSqlTool(AgentTool):
     args_model = CompileSemanticSqlArgs
 
     def execute(self, ctx: AgentToolContext, args: CompileSemanticSqlArgs) -> ToolOutput:
+        blocked = _execution_gate(ctx)
+        if blocked:
+            return blocked
         dataset_id = _ensure_dataset_id(ctx)
         if dataset_id is None:
             return ToolOutput(success=False, summary="当前数据源未绑定语义数据集，无法编译。", error_code="headless_dataset_not_found")
@@ -206,13 +246,38 @@ class CompileSemanticSqlTool(AgentTool):
                 summary=f"以下 asset_id 未出现在语义包中，禁止编造口径: {unknown}。请只使用检索结果里的资产。",
                 error_code="asset_not_in_package",
             )
+        filters = [filter_item.model_dump(mode="json") for filter_item in args.filters]
+        understanding = ctx.state.get("question_understanding") or {}
+        intent = understanding.get("intent") if isinstance(understanding, dict) else {}
+        time_range = intent.get("time_range") if isinstance(intent, dict) else {}
+        if isinstance(time_range, dict) and time_range.get("value_status") == "provided":
+            normalized_time = time_range.get("normalized")
+            if not isinstance(normalized_time, dict) or normalized_time.get("kind") == "unsupported":
+                return ToolOutput(
+                    success=False,
+                    summary="已确认时间范围尚未归一化，禁止生成 SQL。请先澄清为系统支持的时间表达。",
+                    error_code="time_range_unsupported",
+                )
+            matched_time_filter = False
+            for filter_item in filters:
+                value = filter_item["value"]
+                candidate = normalize_time_range(value) if isinstance(value, str) else None
+                if value == normalized_time or candidate == normalized_time:
+                    filter_item["value"] = normalized_time
+                    matched_time_filter = True
+            if not matched_time_filter:
+                return ToolOutput(
+                    success=False,
+                    summary=(
+                        f"时间筛选与已确认问题不一致。必须原样使用 time_range.normalized={normalized_time}，"
+                        "禁止省略时间或替换成数据最大日期。"
+                    ),
+                    error_code="time_filter_mismatch",
+                )
         slots: dict[str, Any] = {
             "metrics": [{"asset_id": i, "asset_type": "METRIC"} for i in args.metric_asset_ids],
             "dimensions": [{"asset_id": i, "asset_type": "DIMENSION"} for i in args.dimension_asset_ids],
-            "filters": [
-                {"asset_id": f.asset_id, "asset_type": "DIMENSION", "operator": f.operator, "value": f.value}
-                for f in args.filters
-            ],
+            "filters": [{**filter_item, "asset_type": "DIMENSION"} for filter_item in filters],
         }
         result = compile_semantic_sql(
             ctx.session,
@@ -244,6 +309,9 @@ class ValidateSqlTool(AgentTool):
     args_model = ValidateSqlArgs
 
     def execute(self, ctx: AgentToolContext, args: ValidateSqlArgs) -> ToolOutput:
+        blocked = _execution_gate(ctx)
+        if blocked:
+            return blocked
         validator = SqlValidateTool(default_limit=getattr(ctx.config, "default_limit", 100))
         result = validator.run({"sql": args.sql, "allowed_tables": ctx.state.get("allowed_tables") or []})
         if not result.success:
@@ -264,6 +332,9 @@ class ExecuteSqlTool(AgentTool):
     args_model = ExecuteSqlArgs
 
     def execute(self, ctx: AgentToolContext, args: ExecuteSqlArgs) -> ToolOutput:
+        blocked = _execution_gate(ctx)
+        if blocked:
+            return blocked
         if not ctx.datasource_id:
             return ToolOutput(success=False, summary="缺少数据源，无法执行。", error_code="datasource_required")
         executor = GuardedSqlExecutor(
@@ -326,7 +397,7 @@ class FinishTool(AgentTool):
             chart = {
                 "type": args.chart_type,
                 "x": args.x_field or (execution.get("fields") or [None])[0],
-                "y": args.y_fields or [field for field in (execution.get("fields") or [])[1:2]],
+                "y": args.y_fields or list((execution.get("fields") or [])[1:2]),
             }
         payload = {
             "answer": answer,

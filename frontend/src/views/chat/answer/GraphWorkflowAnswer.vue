@@ -77,6 +77,7 @@ const streamController = ref<AbortController>()
 const submittingInteraction = ref(false)
 const answeredInteractionIds = new Set<string>()
 const noReasoningName: Array<'sql_answer' | 'chart_answer'> = []
+let liveEventDelayVersion = 0
 const pendingInteraction = computed<GraphPendingInteraction | undefined>(() => {
   const interaction = props.message?.record?.clarification as GraphPendingInteraction | undefined
   return interaction?.status === 'pending' ? interaction : undefined
@@ -184,7 +185,7 @@ function queueLiveEvent(event: GraphEventResponse) {
 }
 
 function queueOptimisticResumeEvent(interaction: GraphPendingInteraction, afterSequence: number) {
-  queueLiveEvent({
+  appendLiveEvent({
     sequence: afterSequence + 0.001,
     event_type: 'run.resumed',
     node_name: interaction.node_name,
@@ -194,6 +195,7 @@ function queueOptimisticResumeEvent(interaction: GraphPendingInteraction, afterS
       node_name: interaction.node_name,
     },
   })
+  nextTick(() => emits('scrollBottom'))
 }
 
 function applyPendingInteractionFromEvent(event: GraphEventResponse) {
@@ -213,16 +215,26 @@ function applyPendingInteractionFromEvent(event: GraphEventResponse) {
 async function processLiveEvents() {
   if (processingLiveEvents.value) return
   processingLiveEvents.value = true
+  const delayVersion = liveEventDelayVersion
   while (pendingLiveEvents.length) {
     const event = pendingLiveEvents.shift()
     if (!event) continue
     appendLiveEvent(event)
     await nextTick()
-    if (event.event_type === 'node.succeeded') {
+    if (event.event_type === 'node.succeeded' && delayVersion === liveEventDelayVersion) {
       await new Promise((resolve) => setTimeout(resolve, 260))
     }
   }
   processingLiveEvents.value = false
+}
+
+function fastForwardPendingLiveEvents() {
+  // 用户已完成澄清时，旧步骤动画不能继续阻塞“恢复执行”的即时反馈。
+  liveEventDelayVersion++
+  while (pendingLiveEvents.length) {
+    const event = pendingLiveEvents.shift()
+    if (event) appendLiveEvent(event)
+  }
 }
 
 async function waitLiveEventQueue() {
@@ -302,6 +314,7 @@ async function submitInteraction(response: Record<string, any>) {
   if (!currentRecord.trace_id || !interactionId) return
   submittingInteraction.value = true
   answeredInteractionIds.add(interactionId)
+  fastForwardPendingLiveEvents()
   const afterSequence = lastEventSequence.value
   currentRecord.status = 'running'
   currentRecord.clarification = undefined

@@ -88,8 +88,7 @@ class AgenticOrchestrator:
                     yield self._emit(run.id, "error", {"record_id": record.id, "content": message})
                     break
                 if decision.action == "ask_clarification":
-                    target_slots = self._clarification_slots(state)
-                    question, options = self._clarification_payload(state)
+                    question, options, target_slots = self._clarification_payload(state)
                     clarification = crud.create_clarification(
                         self.session,
                         run,
@@ -211,50 +210,51 @@ class AgenticOrchestrator:
             return "请先选择本次问数使用的数据源。"
         return "请补充问题中的关键信息：" + "、".join(slots)
 
-    @staticmethod
-    def _clarification_slots(state: AgenticState) -> list[str]:
-        slots = list(state.missing_slots)
-        for issue in [*state.low_confidence_slots, *state.ambiguous_slots, *state.conflict_slots]:
-            slot = issue.get("slot")
-            if slot and slot not in slots:
-                slots.append(slot)
-        return slots
-
     @classmethod
-    def _clarification_payload(cls, state: AgenticState) -> tuple[str, list[dict]]:
-        if state.ambiguous_slots:
-            issue = state.ambiguous_slots[0]
-            if issue.get("slot") == "metrics":
-                options = cls._metric_clarification_options(issue)
-                return "你想查询哪种额度？" if issue.get("raw_text") == "额度" else "你想查询哪个指标？", options
-            return issue.get("reason") or "请确认你的查询口径。", []
-        if state.low_confidence_slots:
-            issue = state.low_confidence_slots[0]
-            if issue.get("slot") == "metrics":
-                options = cls._metric_clarification_options(issue, include_other=bool(issue.get("candidates")))
-                if options:
-                    return "我不确定你要查询哪个指标，请确认。", options
-            return issue.get("reason") or "请确认问题中的关键信息。", []
-        if state.conflict_slots:
-            issue = state.conflict_slots[0]
-            return issue.get("reason") or "当前问题与已确认信息存在冲突，请确认。", []
-        return cls._clarification_question(state.missing_slots), []
+    def _clarification_payload(cls, state: AgenticState) -> tuple[str, list[dict], list[str]]:
+        # question/options/target_slots 必须指向同一批槽位，避免“问指标却让用户填维度”的表单。
+        for kind, issues in (
+            ("ambiguous", state.ambiguous_slots),
+            ("low_confidence", state.low_confidence_slots),
+            ("conflict", state.conflict_slots),
+        ):
+            if not issues:
+                continue
+            issue = issues[0]
+            slot = issue.get("slot") or "metrics"
+            options = cls._issue_clarification_options(slot, issue)
+            return cls._issue_question(kind, slot, issue, options), options, [slot]
+        return cls._clarification_question(state.missing_slots), [], list(state.missing_slots)
 
     @staticmethod
-    def _metric_clarification_options(issue: dict, include_other: bool = True) -> list[dict]:
+    def _issue_question(kind: str, slot: str, issue: dict, options: list[dict]) -> str:
+        if slot == "metrics":
+            if kind == "ambiguous":
+                return "你想查询哪种额度？" if issue.get("raw_text") == "额度" else "你想查询哪个指标？"
+            if kind == "low_confidence" and options:
+                return "我不确定你要查询哪个指标，请确认。"
+        defaults = {
+            "ambiguous": "请确认你的查询口径。",
+            "low_confidence": "请确认问题中的关键信息。",
+            "conflict": "当前问题与已确认信息存在冲突，请确认。",
+        }
+        return issue.get("reason") or defaults[kind]
+
+    @staticmethod
+    def _issue_clarification_options(slot: str, issue: dict) -> list[dict]:
         options = [
             {
-                "slot": "metrics",
-                "label": candidate.get("display_name"),
-                "value": candidate.get("display_name"),
+                "slot": slot,
+                "label": candidate.get("display_name") or candidate.get("raw_text"),
+                "value": candidate.get("display_name") or candidate.get("raw_text"),
                 "asset_type": candidate.get("asset_type"),
                 "asset_id": candidate.get("asset_id"),
             }
             for candidate in issue.get("candidates", [])
-            if candidate.get("display_name")
+            if candidate.get("display_name") or candidate.get("raw_text")
         ]
-        if include_other:
-            options.append({"slot": "metrics", "label": "其他，请补充", "value": "__other__"})
+        if options:
+            options.append({"slot": slot, "label": "其他，请补充", "value": "__other__"})
         return options
 
     @staticmethod

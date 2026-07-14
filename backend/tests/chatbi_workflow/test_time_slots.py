@@ -33,6 +33,7 @@ def test_normalizes_single_day_and_recent_days():
         "include_current": True,
         "timezone": "Asia/Shanghai",
     }
+    assert normalize_time_range("today") == normalize_time_range("今天")
 
 
 def test_normalizes_explicit_month_as_left_closed_right_open_range():
@@ -40,6 +41,15 @@ def test_normalizes_explicit_month_as_left_closed_right_open_range():
         "kind": "absolute_range",
         "start": "2026-06-01",
         "end_exclusive": "2026-07-01",
+        "timezone": "Asia/Shanghai",
+    }
+
+
+def test_normalizes_explicit_date_as_one_day_range():
+    assert normalize_time_range("2026-07-13") == {
+        "kind": "absolute_range",
+        "start": "2026-07-13",
+        "end_exclusive": "2026-07-14",
         "timezone": "Asia/Shanghai",
     }
 

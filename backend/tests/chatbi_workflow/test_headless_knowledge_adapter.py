@@ -1199,6 +1199,100 @@ def test_headless_knowledge_adapter_routes_close_metric_candidates_to_ambiguity(
     assert [item["asset_id"] for item in result["ambiguities"][0]["candidates"]] == [100, 101]
 
 
+def test_valueless_filter_slot_does_not_mask_metric_ambiguity_as_missing_dimension():
+    first_metric = SchemaElement(
+        data_set_id=20,
+        data_set_name="经营分析",
+        model=10,
+        id=100,
+        name="销售客户数",
+        biz_name="customer_cnt_sale",
+        type="METRIC",
+        alias=["客户数"],
+        fields=["customer_cnt_sale"],
+    )
+    second_metric = SchemaElement(
+        data_set_id=20,
+        data_set_name="经营分析",
+        model=10,
+        id=101,
+        name="下单客户数",
+        biz_name="customer_cnt_order",
+        type="METRIC",
+        alias=["客户数"],
+        fields=["customer_cnt_order"],
+    )
+    stat_date = SchemaElement(
+        data_set_id=20,
+        data_set_name="经营分析",
+        model=10,
+        id=200,
+        name="统计日期",
+        biz_name="stat_date",
+        type="DIMENSION",
+        fields=["stat_date"],
+        ext_info={
+            "dimension_type": "partition_time",
+            "dimension_data_type": "DATE",
+            "is_default_time": True,
+        },
+    )
+    schema = DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="经营分析",
+            id=20,
+            name="经营分析",
+            biz_name="business_bi",
+            type="DATASET",
+        ),
+        models=[{"id": 10, "name": "客户模型", "biz_name": "customer_model", "tableQuery": "customer_daily"}],
+        metrics=[first_metric, second_metric],
+        dimensions=[stat_date],
+    )
+    adapter = HeadlessKnowledgeAdapter(
+        schema_builder=FakeHeadlessSchemaBuilder(schema),
+        schema_mapper=TextAwareSchemaMapper(
+            {
+                "客户数": [
+                    SchemaElementMatch(element=first_metric, similarity=0.82, detect_word="客户数", word="客户数"),
+                    SchemaElementMatch(element=second_metric, similarity=0.80, detect_word="客户数", word="客户数"),
+                ]
+            }
+        ),
+        document_retriever=EmptyDocumentRetriever(),
+    )
+
+    result = adapter.retrieve(
+        {
+            "request": {"question": "今天店铺的客户数", "dataset_id": 20, "tenant_id": 10},
+            "variables": {
+                "intent": {
+                    "intent_type": "metric_query",
+                    "metric_mentions": ["客户数"],
+                    "dimension_mentions": ["店铺"],
+                    "dimension_slots": [
+                        {
+                            "name": "店铺",
+                            "role": "filter",
+                            "value": None,
+                            "value_status": "not_provided",
+                        }
+                    ],
+                    "time_mentions": ["今天"],
+                    "time_range": {"raw": "今天", "value_status": "provided"},
+                    "required_slot_types": ["filter"],
+                }
+            },
+        }
+    )
+
+    assert result["status"] == "metric_ambiguous"
+    assert result["decision"]["status"] == "ambiguous"
+    assert result["ambiguities"][0]["type"] == "metric"
+    assert "missing_required_slots" not in result["decision"]
+
+
 def test_headless_knowledge_adapter_retrieves_metric_from_asset_document_search_text():
     metric = SchemaElement(
         data_set_id=20,

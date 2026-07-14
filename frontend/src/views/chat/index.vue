@@ -234,6 +234,7 @@
                     :loading="isTyping"
                     :message="message"
                     :reasoning-name="['sql_answer', 'chart_answer']"
+                    @update:loading="onAnswerLoadingChange"
                     @scroll-bottom="scrollToBottom"
                     @finish="onChartAnswerFinish"
                     @error="onChartAnswerError"
@@ -381,7 +382,23 @@
         v-if="computedMessages.length > 0 || (!isCompletePage && !selectAssistantDs)"
         class="chat-footer"
       >
-        <div class="input-wrapper" @click="clickInput">
+        <div v-if="pendingClarificationRecord" class="input-wrapper clarify-takeover">
+          <ClarificationCard
+            v-if="pendingClarificationRecord.execution_type === 'agentic'"
+            :clarification="pendingClarificationRecord.clarification"
+            :disabled="isTyping"
+            @submit="onFooterClarificationSubmit"
+            @cancel="onFooterClarificationSkip"
+          />
+          <AgentClarificationCard
+            v-else
+            :clarification="pendingClarificationRecord.clarification"
+            :disabled="isTyping"
+            @submit="onFooterClarificationSubmit"
+            @cancel="onFooterClarificationSkip"
+          />
+        </div>
+        <div v-else class="input-wrapper" @click="clickInput">
           <div v-if="isCompletePage || selectAssistantDs" class="datasource">
             <template v-if="currentChat.dataset_id && currentChat.dataset_name">
               已选数据集:
@@ -389,6 +406,23 @@
                 {{ currentChat.dataset_name }}
               </span>
             </template>
+            <div v-if="chatFlowSelectorEnabled" class="flow-selector" @click.stop>
+              <span class="flow-label">{{ t('qa.flow_mode') }}</span>
+              <el-select
+                :model-value="chatFlowStore.getMode"
+                :disabled="isTyping"
+                size="small"
+                class="flow-select"
+                @update:model-value="onChatFlowChange"
+              >
+                <el-option
+                  v-for="mode in chatFlowStore.getAvailableModes"
+                  :key="mode"
+                  :value="mode"
+                  :label="t(`qa.flow_${mode}`)"
+                />
+              </el-select>
+            </div>
           </div>
           <div v-if="computedMessages.length > 0 && currentChat.dataset_id" class="quick_question">
             <quick-question
@@ -453,6 +487,8 @@ import AnalysisAnswer from './answer/AnalysisAnswer.vue'
 import PredictAnswer from './answer/PredictAnswer.vue'
 import UserChat from './chat-block/UserChat.vue'
 import RecommendQuestion from './RecommendQuestion.vue'
+import ClarificationCard from './clarification/ClarificationCard.vue'
+import AgentClarificationCard from './clarification/AgentClarificationCard.vue'
 import ChatListContainer from './ChatListContainer.vue'
 import ChatCreator from '@/views/chat/ChatCreator.vue'
 import ChatTokenTime from '@/views/chat/ChatTokenTime.vue'
@@ -478,6 +514,7 @@ import { isMobile } from '@/utils/utils'
 import router from '@/router'
 import QuickQuestion from '@/views/chat/QuickQuestion.vue'
 import { useChatConfigStore } from '@/stores/chatConfig.ts'
+import { useChatFlowStore, type ChatFlowMode } from '@/stores/chatFlow.ts'
 const userStore = useUserStore()
 const props = defineProps<{
   startChatDsId?: number
@@ -512,25 +549,27 @@ const customName = computed(() => {
 const { t } = useI18n()
 
 const chatConfig = useChatConfigStore()
-const useGraphChatFlow = computed(
-  () => import.meta.env.VITE_GRAPH_CHATBI_ENABLED === 'true'
-)
-const useAgenticChatFlow = computed(
-  () => import.meta.env.VITE_AGENTIC_CHATBI_ENABLED === 'true'
-)
-// 智能体模式（Agentic v2，LLM 自主规划），优先级低于 graph、高于 agentic v1。
-const useAgentChatFlow = computed(
-  () => import.meta.env.VITE_AGENT_CHATBI_ENABLED === 'true'
-)
+const chatFlowStore = useChatFlowStore()
+const chatFlowSelectorEnabled = computed(() => chatFlowStore.getSelectorEnabled)
+
+const flowComponents: Record<ChatFlowMode, any> = {
+  graph: GraphWorkflowAnswer,
+  agent: AgentAnswer,
+  agentic: AgenticAnswer,
+  legacy: ChartAnswer,
+}
+
 function answerComponentForRecord(record?: ChatRecord) {
-  // 历史记录由自身执行类型决定组件，避免切换全局开关后错误渲染旧消息。
-  if (record?.execution_type === 'graph') return GraphWorkflowAnswer
-  if (record?.execution_type === 'agent') return AgentAnswer
-  if (record?.execution_type === 'agentic') return AgenticAnswer
-  if (record?.execution_type === 'legacy') return ChartAnswer
-  if (useGraphChatFlow.value) return GraphWorkflowAnswer
-  if (useAgentChatFlow.value) return AgentAnswer
-  return useAgenticChatFlow.value ? AgenticAnswer : ChartAnswer
+  // 历史记录由自身执行类型决定组件，避免切换链路后错误渲染旧消息。
+  if (record?.execution_type && flowComponents[record.execution_type]) {
+    return flowComponents[record.execution_type]
+  }
+  // 无执行类型的旧记录沿用构建期默认链路，不随选择器变化。
+  return flowComponents[chatFlowStore.getDefaultMode]
+}
+
+function onChatFlowChange(mode: ChatFlowMode) {
+  chatFlowStore.setMode(mode)
 }
 
 const isPhone = computed(() => {
@@ -805,6 +844,57 @@ function onChatStop() {
   isTyping.value = false
   console.debug('onChatStop')
 }
+
+// 子回答组件在澄清暂停/恢复时回传 loading，父级同步 isTyping 才能解锁输入区。
+function onAnswerLoadingChange(value: boolean) {
+  isTyping.value = value
+  if (!value) {
+    loading.value = false
+  }
+}
+
+// 仅最后一条 agentic/agent 记录的待澄清会接管输入框；graph 的交互卡片仍在消息内。
+const pendingClarificationRecord = computed<ChatRecord | undefined>(() => {
+  const records = currentChat.value.records
+  if (!records.length) return undefined
+  const last = records[records.length - 1]
+  if (
+    (last.execution_type === 'agentic' || last.execution_type === 'agent') &&
+    last.status === 'waiting_user' &&
+    last.clarification
+  ) {
+    return last
+  }
+  return undefined
+})
+
+function answerComponentAt(recordIndex: number) {
+  const refs = chartAnswerRef.value
+  if (!refs) return undefined
+  const list = refs instanceof Array ? refs : [refs]
+  return list.find((comp: any) => comp?.index?.() === recordIndex)
+}
+
+async function onFooterClarificationSubmit(payload: any) {
+  const record = pendingClarificationRecord.value
+  if (!record) return
+  const component = answerComponentAt(currentChat.value.records.indexOf(record))
+  if (!component?.submitClarification) return
+  loading.value = true
+  isTyping.value = true
+  await component.submitClarification(payload)
+}
+
+function onFooterClarificationSkip() {
+  const record = pendingClarificationRecord.value
+  if (!record) return
+  const component = answerComponentAt(currentChat.value.records.indexOf(record))
+  if (component?.cancelClarification) {
+    component.cancelClarification()
+  } else {
+    record.clarification = undefined
+  }
+}
 const assistantPrepareSend = async () => {
   if (
     !isCompletePage.value &&
@@ -838,13 +928,7 @@ const sendMessage = async (
   const currentRecord = new ChatRecord()
   currentRecord.create_time = new Date()
   currentRecord.chat_id = currentChatId.value
-  currentRecord.execution_type = useGraphChatFlow.value
-    ? 'graph'
-    : useAgentChatFlow.value
-      ? 'agent'
-      : useAgenticChatFlow.value
-        ? 'agentic'
-        : 'legacy'
+  currentRecord.execution_type = chatFlowStore.getMode
   currentRecord.question = inputMessage.value
   currentRecord.regenerate_record_id = regenerate_record_id
   currentRecord.sql_answer = ''
@@ -1257,6 +1341,10 @@ onMounted(() => {
       position: relative;
       max-width: 800px;
 
+      &.clarify-takeover {
+        display: flex;
+      }
+
       .datasource {
         width: calc(100% - 2px);
         position: absolute;
@@ -1279,6 +1367,24 @@ onMounted(() => {
 
         .name {
           color: rgba(31, 35, 41, 1);
+        }
+
+        .flow-selector {
+          margin-left: auto;
+          margin-right: 12px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+
+          .flow-label {
+            font-size: 12px;
+            color: rgba(143, 149, 158, 1);
+            white-space: nowrap;
+          }
+
+          .flow-select {
+            width: 150px;
+          }
         }
       }
 

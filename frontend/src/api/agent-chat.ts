@@ -18,6 +18,19 @@ export interface AgentClarificationAnswer {
   text?: string
 }
 
+export type AgentStreamRequest =
+  | {
+      action: 'start'
+      chat_id: number
+      question: string
+      datasource_id?: number
+    }
+  | {
+      action: 'resume'
+      record_id: number
+      clarification: AgentClarificationAnswer
+    }
+
 export interface AgentTraceStep {
   index: number
   tool_name?: string
@@ -40,11 +53,10 @@ export interface AgentTraceResponse {
 }
 
 export const agentQuestionApi = {
-  add: (data: any, controller?: AbortController) =>
-    request.fetchStream('/chat/agent/question', data, controller),
-  clarification: (recordId: number, answer: AgentClarificationAnswer, controller?: AbortController) =>
-    request.fetchStream(`/chat/agent/record/${recordId}/clarification`, answer, controller),
-  trace: (recordId: number) => request.get<AgentTraceResponse>(`/chat/agent/record/${recordId}/trace`),
+  stream: (data: AgentStreamRequest, controller?: AbortController) =>
+    request.fetchStream('/chat/agent/stream', data, controller),
+  trace: (recordId: number) =>
+    request.get<AgentTraceResponse>(`/chat/agent/record/${recordId}/trace`),
   events: (runId: number, afterSequence: number = 0) =>
     request.get(`/chat/agent/runs/${runId}/events?after_sequence=${afterSequence}`),
   cancel: (runId: number) => request.post(`/chat/agent/runs/${runId}/cancel`),

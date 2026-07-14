@@ -16,9 +16,9 @@ from langchain_core.messages import (
     HumanMessage,
     SystemMessage,
     ToolMessage,
+    message_to_dict,
     messages_from_dict,
 )
-from langchain_core.messages import message_to_dict
 
 from apps.chat.models.chat_model import ChatRecord
 from apps.chatbi_agent import crud
@@ -40,6 +40,10 @@ from apps.chatbi_agent.tools.interaction import (
     SearchTerminologyTool,
 )
 from apps.chatbi_agent.tools.registry import ToolRegistry
+from apps.chatbi_capabilities.question_understanding import (
+    QuestionUnderstandingError,
+    QuestionUnderstandingService,
+)
 
 FOLDED_PLACEHOLDER = "（此前的工具结果已折叠归档，如需请重新调用工具）"
 
@@ -75,12 +79,14 @@ class AgentLoop:
         config: AgentConfig | None = None,
         model_client=None,
         registry: ToolRegistry | None = None,
+        understanding_service: QuestionUnderstandingService | None = None,
     ):
         self.session = session
         self.current_user = current_user
         self.config = config or AgentConfig()
         self.model_client = model_client or DefaultAgentModelClient()
         self.registry = registry or self._build_registry()
+        self.understanding_service = understanding_service or QuestionUnderstandingService()
 
     def _build_registry(self) -> ToolRegistry:
         registry = ToolRegistry()
@@ -97,7 +103,6 @@ class AgentLoop:
         budget = self._new_budget()
         ctx = self._new_ctx(run, record)
         messages = [HumanMessage(content=record.question or "")]
-        system = self._build_system(run, record)
 
         crud.update_run(self.session, run, status=AgentRunStatus.RUNNING.value)
         crud.finish_record(self.session, record, AgentRunStatus.RUNNING.value)
@@ -106,7 +111,79 @@ class AgentLoop:
         yield self._emit(run, "run-started", {"record_id": record.id, "run_id": run.id})
 
         try:
+            conversation_context = self._load_conversation_context(run, record)
+            understanding_context = {
+                "history": [
+                    {
+                        "question": item.get("question") or "",
+                        "answer_brief": item.get("answer_brief") or "",
+                    }
+                    for item in conversation_context.get("history") or []
+                ],
+                "pending_clarification": conversation_context.get("pending_clarification"),
+            }
+            outcome = self.understanding_service.understand(
+                question=record.question or "",
+                datasource_id=record.datasource,
+                conversation_context=understanding_context,
+            )
+            budget.record_llm_usage(outcome.usage_metadata)
+            understanding = outcome.output.model_dump(mode="json")
+            ctx.state.update(
+                {
+                    "original_question": record.question or "",
+                    "question": outcome.output.rewritten_question,
+                    "question_understanding": understanding,
+                }
+            )
+            messages = [HumanMessage(content=outcome.output.rewritten_question)]
+            system = self._build_system(
+                run,
+                record,
+                conversation_context=conversation_context,
+                question_understanding=understanding,
+            )
+            crud.update_run(
+                self.session,
+                run,
+                messages=_serialize_messages(messages),
+                budget_snapshot=budget.snapshot(),
+                derived_state=_persistable_state(ctx.state),
+            )
+            self.session.commit()
+            yield self._emit(
+                run,
+                "question-understood",
+                {
+                    "record_id": record.id,
+                    "message_type": outcome.output.message_type,
+                    "rewritten_question": outcome.output.rewritten_question,
+                    "intent_type": outcome.output.intent.intent_type,
+                    "confidence": outcome.output.intent.confidence,
+                    "validation": outcome.output.validation.model_dump(mode="json"),
+                },
+            )
+            preflight = self._understanding_preflight_clarification(understanding)
+            if preflight is not None:
+                yield from self._suspend_for_preflight_clarification(
+                    run,
+                    record,
+                    ctx,
+                    messages,
+                    budget,
+                    preflight,
+                )
+                return
             yield from self._loop(run, record, ctx, system, messages, budget)
+        except QuestionUnderstandingError as exc:
+            yield from self._fail(
+                run,
+                record,
+                messages,
+                budget,
+                str(exc),
+                AgentErrorClass.UNDERSTANDING.value,
+            )
         except Exception as exc:  # 任意未预期异常收敛为失败事件，避免 SSE 静默中断。
             message = str(exc) or exc.__class__.__name__
             yield from self._fail(run, record, messages, budget, message, AgentErrorClass.UNEXPECTED.value)
@@ -118,7 +195,7 @@ class AgentLoop:
         clarification: ChatbiAgentClarification,
         answer_text: str,
     ) -> Iterator[str]:
-        """澄清回答后恢复：答案以 ToolMessage 回填，预算从快照恢复，继续循环。"""
+        """澄清回答后恢复：先更新统一问题理解，再回填消息并继续工具循环。"""
 
         budget = self._new_budget()
         budget.restore(run.budget_snapshot)
@@ -126,16 +203,110 @@ class AgentLoop:
         # 回填挂起前的派生状态（语义资产集合、白名单表等），避免恢复后被迫重新检索。
         ctx.state.update(run.derived_state or {})
         messages = messages_from_dict(run.messages)
-        messages.append(ToolMessage(content=answer_text, tool_call_id=clarification.tool_call_id or ""))
-        system = self._build_system(run, record)
-
-        crud.update_run(self.session, run, status=AgentRunStatus.RUNNING.value, messages=_serialize_messages(messages))
-        crud.finish_record(self.session, record, AgentRunStatus.RUNNING.value)
-        self.session.commit()
-        yield self._emit(run, "clarification-accepted", {"record_id": record.id, "run_id": run.id})
+        tool_call_id = clarification.tool_call_id or ""
+        # 兼容修复前生成的 preflight id；工作流澄清不是模型工具调用，不回填 ToolMessage。
+        workflow_clarification = not tool_call_id or tool_call_id.startswith("preflight-clarify-")
+        if not workflow_clarification:
+            messages.append(ToolMessage(content=answer_text, tool_call_id=tool_call_id))
+        conversation_context = self._load_conversation_context(run, record)
 
         try:
+            crud.update_run(
+                self.session,
+                run,
+                status=AgentRunStatus.RUNNING.value,
+                messages=_serialize_messages(messages),
+                budget_snapshot=budget.snapshot(),
+                derived_state=_persistable_state(ctx.state),
+            )
+            crud.finish_record(self.session, record, AgentRunStatus.RUNNING.value)
+            self.session.commit()
+            yield self._emit(run, "clarification-accepted", {"record_id": record.id, "run_id": run.id})
+
+            previous_understanding = ctx.state.get("question_understanding")
+            previous_understanding = previous_understanding if isinstance(previous_understanding, dict) else {}
+            understanding_context = {
+                "history": [
+                    {
+                        "question": item.get("question") or "",
+                        "answer_brief": item.get("answer_brief") or "",
+                    }
+                    for item in conversation_context.get("history") or []
+                ],
+                "pending_clarification": {
+                    "original_question": previous_understanding.get("rewritten_question") or record.question or "",
+                    "question": clarification.question,
+                    "options": clarification.options or [],
+                    "question_understanding": previous_understanding,
+                },
+            }
+            outcome = self.understanding_service.understand(
+                question=answer_text,
+                datasource_id=record.datasource,
+                conversation_context=understanding_context,
+            )
+            budget.record_llm_usage(outcome.usage_metadata)
+            understanding = outcome.output.model_dump(mode="json")
+            # 澄清回复属于同一个用户问题，保留首轮原问题用于审计。
+            understanding["original_question"] = previous_understanding.get("original_question") or record.question or ""
+            ctx.state.update(
+                {
+                    "question": outcome.output.rewritten_question,
+                    "question_understanding": understanding,
+                }
+            )
+            if workflow_clarification:
+                # 前置澄清尚未进入 Agent 工具循环，直接从规范化后的完整问题开始规划。
+                messages = [HumanMessage(content=outcome.output.rewritten_question)]
+            system = self._build_system(
+                run,
+                record,
+                conversation_context=conversation_context,
+                question_understanding=understanding,
+            )
+            crud.update_run(
+                self.session,
+                run,
+                status=AgentRunStatus.RUNNING.value,
+                messages=_serialize_messages(messages),
+                budget_snapshot=budget.snapshot(),
+                derived_state=_persistable_state(ctx.state),
+            )
+            crud.finish_record(self.session, record, AgentRunStatus.RUNNING.value)
+            self.session.commit()
+            yield self._emit(
+                run,
+                "question-understood",
+                {
+                    "record_id": record.id,
+                    "message_type": outcome.output.message_type,
+                    "rewritten_question": outcome.output.rewritten_question,
+                    "intent_type": outcome.output.intent.intent_type,
+                    "confidence": outcome.output.intent.confidence,
+                    "validation": outcome.output.validation.model_dump(mode="json"),
+                },
+            )
+            preflight = self._understanding_preflight_clarification(understanding)
+            if preflight is not None:
+                yield from self._suspend_for_preflight_clarification(
+                    run,
+                    record,
+                    ctx,
+                    messages,
+                    budget,
+                    preflight,
+                )
+                return
             yield from self._loop(run, record, ctx, system, messages, budget)
+        except QuestionUnderstandingError as exc:
+            yield from self._fail(
+                run,
+                record,
+                messages,
+                budget,
+                str(exc),
+                AgentErrorClass.UNDERSTANDING.value,
+            )
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__
             yield from self._fail(run, record, messages, budget, message, AgentErrorClass.UNEXPECTED.value)
@@ -162,29 +333,43 @@ class AgentLoop:
             state={"question": record.question or ""},
         )
 
-    def _build_system(self, run: ChatbiAgentRun, record: ChatRecord) -> SystemMessage:
+    def _load_conversation_context(self, run: ChatbiAgentRun, record: ChatRecord) -> dict:
         history = crud.recent_qa_summaries(self.session, run.chat_id, record.id, limit=self.config.history_rounds)
+        pending = None
+        found = crud.find_chat_pending_clarification(self.session, run.chat_id, record.id)
+        if found:
+            pending_run, pending_clarification = found
+            pending_record = self.session.get(ChatRecord, pending_run.record_id)
+            pending = {
+                "original_question": pending_record.question if pending_record else "",
+                "question": pending_clarification.question,
+                "options": pending_clarification.options or [],
+                "question_understanding": (pending_run.derived_state or {}).get("question_understanding"),
+            }
+        return {"history": history, "pending_clarification": pending}
+
+    def _build_system(
+        self,
+        run: ChatbiAgentRun,
+        record: ChatRecord,
+        *,
+        conversation_context: dict,
+        question_understanding: dict | None,
+    ) -> SystemMessage:
+        history = conversation_context.get("history") or []
         history_summary = None
         if history:
             history_summary = "\n".join(
                 f"- 问：{item['question']}\n  SQL：{item['sql'] or '（无）'}\n  答（摘要）：{item['answer_brief']}"
                 for item in history
             )
-        pending = None
-        found = crud.find_chat_pending_clarification(self.session, run.chat_id, record.id)
-        if found:
-            _, pending_clarification = found
-            pending = {
-                "question": pending_clarification.question,
-                "options": pending_clarification.options or [],
-            }
         return SystemMessage(
             content=build_system_prompt(
                 datasource_id=record.datasource,
                 oid=run.oid,
                 max_clarifications=self.config.max_clarifications,
                 history_summary=history_summary,
-                pending_clarification=pending,
+                question_understanding=question_understanding,
             )
         )
 
@@ -230,9 +415,18 @@ class AgentLoop:
                 raw_args = tool_call.get("args") or {}
                 call_id = tool_call.get("id") or ""
                 step.tool_name = tool_name
-                step.args_summary = _args_summary(raw_args)
+                step.args_summary = _tool_args_summary(tool_name, raw_args, ctx)
                 self.session.add(step)
-                yield self._emit(run, "tool-called", {"record_id": record.id, "tool_name": tool_name}, step.id)
+                yield self._emit(
+                    run,
+                    "tool-called",
+                    {
+                        "record_id": record.id,
+                        "tool_name": tool_name,
+                        "args_summary": step.args_summary,
+                    },
+                    step.id,
+                )
 
                 fuse = budget.check_tool_call(tool_name, raw_args)
                 if not fuse.allowed:
@@ -301,7 +495,147 @@ class AgentLoop:
 
     # ---- 终态与挂起 ----
 
-    def _suspend_for_clarification(self, run, record, ctx, messages, budget, output: ToolOutput, call_id: str, step_id) -> Iterator[str]:
+    @staticmethod
+    def _understanding_preflight_clarification(understanding: dict) -> ToolOutput | None:
+        """自然语言层已明确发现的维度歧义必须先澄清，不能被资产检索改变顺序。"""
+
+        validation = understanding.get("validation") if isinstance(understanding, dict) else {}
+        if not isinstance(validation, dict) or validation.get("status") != "clarification_required":
+            return None
+        reason_codes = set(validation.get("reason_codes") or [])
+        intent = understanding.get("intent") if isinstance(understanding.get("intent"), dict) else {}
+        dimension_slots = [
+            slot
+            for slot in intent.get("dimension_slots") or []
+            if isinstance(slot, dict)
+        ]
+        if "dimension_role_ambiguous" in reason_codes:
+            slot = next(
+                (item for item in dimension_slots if str(item.get("role") or "").lower() == "ambiguous"),
+                None,
+            )
+            if slot is None:
+                return None
+            name = str(slot.get("name") or "维度").strip() or "维度"
+            options = [
+                {"label": f"按{name}分组查看", "value": f"group_by:{name}"},
+                {"label": f"筛选某个具体{name}", "value": f"filter:{name}"},
+                {"label": f"不使用{name}维度，查看汇总结果", "value": f"ignore:{name}"},
+            ]
+            return ToolOutput(
+                success=True,
+                summary="clarify dimension role",
+                payload={
+                    "question": f"请确认“{name}”在本次查询中的使用方式。",
+                    "options": options,
+                    "reason": f"“{name}”可能表示分组维度、筛选条件或业务对象，需要先确认后再检索指标口径。",
+                },
+            )
+        if "dimension_filter_value_missing" in reason_codes:
+            slot = next(
+                (item for item in dimension_slots if str(item.get("role") or "").lower() == "filter"),
+                None,
+            )
+            if slot is None:
+                return None
+            name = str(slot.get("name") or "维度").strip() or "维度"
+            return ToolOutput(
+                success=True,
+                summary="clarify dimension filter value",
+                payload={
+                    "question": f"请补充需要筛选的具体{name}。",
+                    "options": [],
+                    "reason": f"已确认{name}用于筛选，但还缺少具体筛选值。",
+                },
+            )
+        return None
+
+    def _suspend_for_preflight_clarification(
+        self,
+        run,
+        record,
+        ctx,
+        messages,
+        budget,
+        output: ToolOutput,
+    ) -> Iterator[str]:
+        """把确定性澄清记录成完整步骤，并在任何资产检索前挂起。"""
+
+        verdict = budget.check_before_step()
+        if not verdict.allowed:
+            yield from self._fail(run, record, messages, budget, verdict.reason, verdict.error_class)
+            return
+        clarify_verdict = budget.record_clarification()
+        if not clarify_verdict.allowed:
+            yield from self._fail(
+                run,
+                record,
+                messages,
+                budget,
+                clarify_verdict.reason,
+                clarify_verdict.error_class,
+            )
+            return
+
+        budget.record_system_step()
+        step_index = budget.steps
+        args_summary = {
+            "question": output.payload["question"],
+            "options": output.payload.get("options") or [],
+            "source": "question_understanding",
+        }
+        reasoning_content = output.payload.get("reason") or "需要先澄清问题。"
+        step = crud.start_step(self.session, run, step_index, "understanding_clarification", args_summary)
+        crud.finish_step(
+            self.session,
+            step,
+            {"action": "understanding_clarification", "source": "question_understanding"},
+        )
+        self.session.commit()
+        yield self._emit(
+            run,
+            "step-started",
+            {"record_id": record.id, "step_index": step_index},
+            step.id,
+        )
+        yield self._emit(
+            run,
+            "thinking",
+            {"record_id": record.id, "content": reasoning_content},
+            step.id,
+        )
+        yield self._emit(
+            run,
+            "workflow-step",
+            {
+                "record_id": record.id,
+                "action": "understanding_clarification",
+                "args_summary": args_summary,
+            },
+            step.id,
+        )
+        yield from self._suspend_for_clarification(
+            run,
+            record,
+            ctx,
+            messages,
+            budget,
+            output,
+            None,
+            step.id,
+        )
+
+    def _suspend_for_clarification(
+        self,
+        run,
+        record,
+        ctx,
+        messages,
+        budget,
+        output: ToolOutput,
+        call_id: str | None,
+        step_id,
+    ) -> Iterator[str]:
         clarification = crud.create_clarification(
             self.session,
             run,
@@ -419,6 +753,22 @@ def _args_summary(args: dict) -> dict:
     if len(encoded) > 2000:
         return {"_truncated": encoded[:2000]}
     return args
+
+
+def _tool_args_summary(tool_name: str, raw_args: dict, ctx: AgentToolContext) -> dict:
+    """记录工具真正消费的业务输入，避免无参工具在轨迹中显示成空输入。"""
+
+    if tool_name != "search_semantic_assets":
+        return _args_summary(raw_args)
+    understanding = ctx.state.get("question_understanding")
+    if not isinstance(understanding, dict):
+        return {}
+    return _args_summary(
+        {
+            "rewritten_question": understanding.get("rewritten_question"),
+            "intent": understanding.get("intent") or {},
+        }
+    )
 
 
 def _result_summary(tool_name: str, output: ToolOutput) -> dict:

@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -21,6 +21,26 @@ class AgentClarificationRequest(BaseModel):
     # 结构化选项回答或自由文本，二者至少其一。
     selections: list[dict[str, Any]] = Field(default_factory=list)
     text: str | None = None
+
+
+class AgentStartStreamRequest(AgentQuestionRequest):
+    """统一 SSE 入口的首次提问请求。"""
+
+    action: Literal["start"] = "start"
+
+
+class AgentResumeStreamRequest(BaseModel):
+    """统一 SSE 入口的澄清恢复请求。"""
+
+    action: Literal["resume"] = "resume"
+    record_id: int = Field(gt=0)
+    clarification: AgentClarificationRequest
+
+
+AgentStreamRequest = Annotated[
+    AgentStartStreamRequest | AgentResumeStreamRequest,
+    Field(discriminator="action"),
+]
 
 
 class AgentConfig(BaseModel):

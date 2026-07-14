@@ -18,7 +18,21 @@
       "Bash(npx vitest *)",
       "Bash(npx tsx *)",
       "Bash(python -m pytest tests/chatbi_workflow tests/workflow_engine tests/headless -q)",
-      "Bash(python -m pytest tests/chatbi_workflow -q)"
+      "Bash(python -m pytest tests/chatbi_workflow -q)",
+      "Bash(python3 -)",
+      "Bash(npx vite *)",
+      "Bash(python -m alembic current)",
+      "Bash(python -m alembic upgrade head)",
+      "Bash(python -c ' *)",
+      "Bash(python -m pytest tests/chatbi_agent -q)",
+      "Bash(python -m alembic downgrade 078_graph_chat_history)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'fix: persist agent derived state across clarification suspend *)",
+      "Bash(git -C /Users/twenty/LLM/ChatBI/SQLBot log --oneline -15)",
+      "Bash(git -C /Users/twenty/LLM/ChatBI/SQLBot show --stat b6c0297f)",
+      "Bash(python3 *)",
+      "Bash(npx eslint *)",
+      "Bash(uv run *)"
     ]
   }
 }

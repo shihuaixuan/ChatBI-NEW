@@ -529,17 +529,21 @@ class HeadlessKnowledgeAdapter:
         if not isinstance(intent, dict):
             return []
         mentions: list[str] = []
-        for slot in intent.get("dimension_slots") or []:
+        dimension_slots = intent.get("dimension_slots")
+        dimension_slots = dimension_slots if isinstance(dimension_slots, list) else []
+        for slot in dimension_slots:
             if not isinstance(slot, dict):
                 continue
-            if str(slot.get("role") or "").lower() not in {"group_by", "display", "filter"}:
+            if not cls._is_executable_dimension_slot(slot):
                 continue
             name = str(slot.get("name") or "").strip()
             if name and name not in mentions:
                 mentions.append(name)
-        for mention in cls._text_list(intent.get("dimension_mentions")):
-            if mention not in mentions:
-                mentions.append(mention)
+        # 兼容没有结构化槽位的旧意图；存在槽位时以槽位角色和值为唯一事实源。
+        if not dimension_slots:
+            for mention in cls._text_list(intent.get("dimension_mentions")):
+                if mention not in mentions:
+                    mentions.append(mention)
         return mentions
 
     @classmethod
@@ -760,7 +764,7 @@ class HeadlessKnowledgeAdapter:
         for slot in intent.get("dimension_slots") or []:
             if not isinstance(slot, dict):
                 continue
-            if str(slot.get("role") or "").lower() not in {"group_by", "display", "filter"}:
+            if not cls._is_executable_dimension_slot(slot):
                 continue
             candidate = cls._match_dimension_candidate(str(slot.get("name") or ""), dimensions)
             if candidate is not None:
@@ -893,7 +897,7 @@ class HeadlessKnowledgeAdapter:
             has_intent_mentions = True
             self._merge_allowed_groups(candidate_groups, self._retrieve_for_texts(metric_texts, schema, oid), {"metrics"})
 
-        dimension_texts = self._text_list(intent.get("dimension_mentions"))
+        dimension_texts = self._required_dimension_mentions(intent)
         if dimension_texts:
             has_intent_mentions = True
             self._merge_allowed_groups(
@@ -969,8 +973,8 @@ class HeadlessKnowledgeAdapter:
                 )
             )
 
-    @staticmethod
-    def _requires_dimension_assets(intent: dict[str, Any]) -> bool:
+    @classmethod
+    def _requires_dimension_assets(cls, intent: dict[str, Any]) -> bool:
         """以维度槽位角色作为是否必须绑定维度资产的事实来源。"""
 
         dimension_slots = intent.get("dimension_slots")
@@ -979,9 +983,21 @@ class HeadlessKnowledgeAdapter:
         for slot in dimension_slots:
             if not isinstance(slot, dict):
                 continue
-            if str(slot.get("role") or "").lower() in {"group_by", "display", "filter"}:
+            if cls._is_executable_dimension_slot(slot):
                 return True
         return False
+
+    @staticmethod
+    def _is_executable_dimension_slot(slot: dict[str, Any]) -> bool:
+        """分组/展示维度可直接绑定；筛选维度只有在值完整时才可执行。"""
+
+        role = str(slot.get("role") or "").lower()
+        if role in {"group_by", "display"}:
+            return True
+        if role != "filter" or str(slot.get("value_status") or "").lower() != "provided":
+            return False
+        value = slot.get("value")
+        return value is not None and (not isinstance(value, str) or bool(value.strip()))
 
     @classmethod
     def _has_required_dimension_candidates(
@@ -994,7 +1010,7 @@ class HeadlessKnowledgeAdapter:
         executable_slots = [
             slot
             for slot in intent.get("dimension_slots") or []
-            if isinstance(slot, dict) and str(slot.get("role") or "").lower() in {"group_by", "display", "filter"}
+            if isinstance(slot, dict) and cls._is_executable_dimension_slot(slot)
         ]
         if executable_slots:
             return any(cls._match_dimension_candidate(str(slot.get("name") or ""), candidates) for slot in executable_slots)

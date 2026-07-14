@@ -52,7 +52,17 @@ class BudgetGuard:
         return BudgetVerdict(True)
 
     def record_llm_turn(self, usage: dict | None) -> None:
+        self.record_system_step()
+        self.record_llm_usage(usage)
+
+    def record_system_step(self) -> None:
+        """记录不经过规划模型的确定性步骤，例如问题理解后的立即澄清。"""
+
         self.steps += 1
+
+    def record_llm_usage(self, usage: dict | None) -> None:
+        """累计不占 Agent 规划步数的模型调用，例如前置问题理解。"""
+
         if usage:
             self.tokens_used += int(usage.get("total_tokens") or 0)
 
