@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from apps.chatbi_workflow.capabilities.context import ChatBIRunContext
 from apps.chatbi_workflow.schemas.v1 import RecommendationOutput
 
 
@@ -11,15 +12,12 @@ class RecommendationAdapter:
     def recommend(self, request: dict[str, Any]) -> dict[str, Any]:
         """基于当前查询上下文生成可继续追问的问题。"""
 
-        variables = request.get("variables", {})
-        if not isinstance(variables, dict):
-            variables = {}
-        raw_request = request.get("request", {})
-        current_question = str(raw_request.get("question") or "").strip()
-        knowledge = variables.get("knowledge") if isinstance(variables.get("knowledge"), dict) else {}
+        ctx = ChatBIRunContext(request)
+        current_question = ctx.raw_question
+        knowledge = ctx.knowledge
         metric_name = self._first_asset_name(knowledge, "metrics") or "该指标"
         dimension_name = self._first_asset_name(knowledge, "dimensions")
-        sql_execution = variables.get("sql_execution") if isinstance(variables.get("sql_execution"), dict) else {}
+        sql_execution = ctx.sql_execution
 
         questions = [
             f"查看{metric_name}最近 7 天趋势",

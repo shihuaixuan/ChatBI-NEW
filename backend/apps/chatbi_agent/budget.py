@@ -1,0 +1,113 @@
+"""预算与熔断：步数、token、重复调用、SQL 重试、墙钟超时。"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+import orjson
+
+
+@dataclass
+class BudgetVerdict:
+    allowed: bool
+    reason: str | None = None
+    error_class: str | None = None
+
+
+@dataclass
+class BudgetGuard:
+    max_steps: int = 12
+    token_budget: int = 100_000
+    repeat_fuse_threshold: int = 3
+    max_sql_retries: int = 2
+    timeout_seconds: int = 120
+    max_clarifications: int = 2
+
+    steps: int = 0
+    tokens_used: int = 0
+    sql_failures: int = 0
+    clarifications: int = 0
+    started_at: float = field(default_factory=time.monotonic)
+    _last_call_key: str | None = None
+    _repeat_count: int = 0
+
+    def restore(self, snapshot: dict | None) -> None:
+        """从持久化快照恢复累计量（澄清恢复续跑时使用；墙钟重新计时）。"""
+
+        if not snapshot:
+            return
+        self.steps = int(snapshot.get("steps") or 0)
+        self.tokens_used = int(snapshot.get("tokens_used") or 0)
+        self.sql_failures = int(snapshot.get("sql_failures") or 0)
+        self.clarifications = int(snapshot.get("clarifications") or 0)
+
+    def check_before_step(self) -> BudgetVerdict:
+        if self.steps >= self.max_steps:
+            return BudgetVerdict(False, f"已达最大步数 {self.max_steps}", "budget_exhausted")
+        if self.token_budget and self.tokens_used >= self.token_budget:
+            return BudgetVerdict(False, f"已达 token 预算 {self.token_budget}", "budget_exhausted")
+        if time.monotonic() - self.started_at > self.timeout_seconds:
+            return BudgetVerdict(False, f"已超时（>{self.timeout_seconds}s）", "budget_exhausted")
+        return BudgetVerdict(True)
+
+    def record_llm_turn(self, usage: dict | None) -> None:
+        self.record_system_step()
+        self.record_llm_usage(usage)
+
+    def record_system_step(self) -> None:
+        """记录不经过规划模型的确定性步骤，例如问题理解后的立即澄清。"""
+
+        self.steps += 1
+
+    def record_llm_usage(self, usage: dict | None) -> None:
+        """累计不占 Agent 规划步数的模型调用，例如前置问题理解。"""
+
+        if usage:
+            self.tokens_used += int(usage.get("total_tokens") or 0)
+
+    def check_tool_call(self, tool_name: str, args: dict) -> BudgetVerdict:
+        key = tool_name + ":" + orjson.dumps(args, option=orjson.OPT_SORT_KEYS).decode()
+        if key == self._last_call_key:
+            self._repeat_count += 1
+        else:
+            self._last_call_key = key
+            self._repeat_count = 1
+        if self._repeat_count >= self.repeat_fuse_threshold:
+            return BudgetVerdict(
+                False,
+                f"工具 {tool_name} 以相同参数连续调用 {self._repeat_count} 次，触发重复熔断",
+                "budget_exhausted",
+            )
+        return BudgetVerdict(True)
+
+    def record_sql_failure(self) -> BudgetVerdict:
+        self.sql_failures += 1
+        if self.sql_failures > self.max_sql_retries:
+            return BudgetVerdict(
+                False,
+                f"SQL 执行失败重试已达上限 {self.max_sql_retries} 次",
+                "sql_failed",
+            )
+        return BudgetVerdict(True)
+
+    def record_clarification(self) -> BudgetVerdict:
+        self.clarifications += 1
+        if self.clarifications > self.max_clarifications:
+            return BudgetVerdict(
+                False,
+                f"澄清次数已达上限 {self.max_clarifications} 次",
+                "budget_exhausted",
+            )
+        return BudgetVerdict(True)
+
+    def snapshot(self) -> dict:
+        return {
+            "steps": self.steps,
+            "max_steps": self.max_steps,
+            "tokens_used": self.tokens_used,
+            "token_budget": self.token_budget,
+            "sql_failures": self.sql_failures,
+            "clarifications": self.clarifications,
+            "elapsed_seconds": round(time.monotonic() - self.started_at, 2),
+        }

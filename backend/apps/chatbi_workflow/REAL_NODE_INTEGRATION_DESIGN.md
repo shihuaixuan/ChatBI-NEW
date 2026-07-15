@@ -44,8 +44,8 @@ ChatBIV1CapabilityNode
 | `draw_image_profile` | `question.draw_image_profile` | 固定图表候选 | 需要基于 intent、metric、dimension、result schema 推断展示类型 |
 | `recognize_intent` | `intent.recognize` | 已接入 `QuestionAdapter`：大模型结构化意图识别，失败时规则兜底 | 后续可接 `QueryUnderstandingService` 的 intent、confidence、slot issues |
 | `ask_intent_clarification` | `interaction.ask_intent_clarification` | 已接入 `InteractionAdapter`：根据低置信度/歧义/冲突生成意图澄清选项 | 后续可根据数据集能力动态裁剪意图选项 |
-| `retrieve_knowledge` | `knowledge.retrieve` | 已接入 `HeadlessKnowledgeAdapter`：基于 `dataset_id` 加载 Headless schema，做 schema mapper + asset document top-k 检索 + `CandidateGate` 判定 | 已能输出真实候选、slot bindings、metric ambiguity；异常不再 fallback 到 placeholder |
-| `ask_metric_selection` | `interaction.ask_metric_selection` | 已接入 `InteractionAdapter`：从 knowledge ambiguity 或 candidate groups 生成指标选择项 | 已和 interaction response patcher 打通，用户选择可合并回 knowledge |
+| `retrieve_knowledge` | `knowledge.retrieve` | 已接入统一 `RetrievalService`：按已确认槽位执行 exact、alias、中文词法和 dense 混合召回，再由 `SemanticBindingPolicy` 决策 | Graph/Agent 共用候选、slot bindings、决策和诊断；异常不再 fallback 到旧检索 |
+| `ask_metric_selection` | `interaction.ask_metric_selection` | 已接入 `InteractionAdapter`：从 knowledge ambiguity 或 candidate groups 生成指标选择项 | 用户回答写入标准 `interactions` 域，由 `QueryPlanBinder` 收敛为 plan |
 | `generate_sql` | `sql.generate` | 已接入 `SqlAdapter.generate()`：基于 `dataset_id` 加载 Headless schema，并复用 `SemanticSQLCompiler` 生成 SQL | 后续补 SQL validator、fallback schema generator、生成失败分支 |
 | `execute_sql` | `sql.execute` | 已接入 `SqlAdapter.execute()`：复用 `SqlExecuteTool` 执行 SQL，并只保留 sample rows、row_count、fields | 后续补真实 artifact 存储和更细错误分类 |
 | `handle_sql_error` | `sql.handle_error` | 已接入 `SqlAdapter.handle_error()`：归一化 SQL 执行错误，并通过 `SQLRepairStrategy` 输出 repair hint/plan | `regenerate_sql` 计划已通过图边回到 `generate_sql`，由 `max_loop_iterations` 控制重试上限 |
@@ -476,28 +476,16 @@ question.recommend -> RecommendationAdapter
    - `request.tenant_id` / `request.oid`
    - `variables.rewrite.rewritten_question`
    - `variables.intent`
-2. 使用 `HeadlessSchemaBuilder(session).build_dataset_schema(oid, dataset_id)` 加载最新 Headless dataset schema。
-3. 优先读取 `variables.intent` 的自然语言槽位：
+2. 适配器应用已提交的澄清回答，并通过 `build_semantic_binding_request()` 构造唯一检索请求。
+3. `SemanticBindingQueryPlanner` 按 `variables.intent` 的自然语言槽位分别生成子查询：
    - `metric_mentions` 只召回 metrics。
    - `dimension_mentions` 只召回 dimensions。
    - `filter_mentions` 召回 values / dimensions。
-   - `time_mentions` 召回时间相关 dimensions / values，并补充默认时间维度候选。
-4. `variables.rewrite.rewritten_question` 只做补漏：当意图要求的槽位没有候选时，再用整句 fallback 补充对应候选，不再作为主检索文本。
-5. 每个 mention 内部使用两类召回：
-   - `HeadlessSchemaMapper.map_schema(text, schema)` 做 schema name/alias 匹配。
-   - `HeadlessAssetDocumentBuilder.build_from_schema()` 构建运行时 asset documents，并用 `HeadlessDocumentRetriever` 做轻量 top-k 检索。
-6. 合并 schema mapper 和 asset document 两类候选。
-7. 在 `CandidateGate` 前执行 slot-aware rerank：
-   - 完整短语命中强加分，例如“访问人数”完整命中指标名或别名。
-   - 关键词覆盖加分，例如同时覆盖“访问”和“人数”高于只覆盖“人数”。
-   - 缺少完整短语时降权，避免“关注人数/转化人数”仅因包含“人数”打平。
-   - 字段权重区分 `name/alias/description/biz_name/field`。
-   - 输出 `base_score`、`rerank_strategy`、`rerank_reason`，便于 trace 排查。
-8. 使用 `CandidateGate` 判定：
-   - `hit`
-   - `missed`
-   - `metric_ambiguous`
-9. 输出写入 `variables.knowledge`，包括：
+   - `time_mentions` 与 `time_range` 绑定时间维度和时间过滤。
+4. 每个子查询在同一 active generation 和 ACL 硬过滤下执行 exact、批准 alias、`pg_trgm` 和可用的 dense 召回。
+5. 候选按资源折叠并使用 RRF 融合；各通道原始分数、排名、命中字段和 generation provenance 保留在诊断中。
+6. `SemanticBindingPolicy` 按槽位覆盖、绝对阈值、top gap 和模型兼容性输出 `resolved/ambiguous/partial/missed/cross_model/degraded`。
+7. `bundle_to_semantic_payload()` 以最新 Headless schema 作为执行事实，输出写入 `variables.knowledge`，包括：
    - `dataset_id`
    - `schema_version`
    - `index_version`
@@ -548,14 +536,10 @@ question.recommend -> RecommendationAdapter
 - 已由 `InteractionAdapter.ask_metric_selection()` 接入。
 - 从 `variables.knowledge.ambiguities` 生成 options，优先使用 `display_name/name/biz_name/title` 展示，值使用 `asset_id/biz_name`。
 - 当 ambiguity candidates 为空但 `variables.knowledge.candidate_groups.metrics` 有候选时，回退使用 candidate groups 前 5 个指标候选。
-- 回答写入 `variables.metric_selection`。
-- 恢复时通过 ChatBI v1 的 interaction response patcher 把用户选择合并回 `variables.knowledge`：
-  - `status` 改为 `hit`，`ambiguities` 清空。
-  - `metrics` 改为用户确认的单一指标。
-  - `selected_assets.metrics` 写入用户确认的指标资产。
-  - `slot_bindings.metrics` 写入 `source=user_selected`、`confidence=1.0` 的绑定结果。
-  - `decision.status` 改为 `user_selected`。
-- 恢复后直接进入 `generate_sql`，不必重新检索知识，除非用户选择了“其他，请补充”。
+- 回答同时写入 `variables.interactions.ask_metric_selection.response` 与旧兼容字段 `variables.metric_selection`。
+- `variables.knowledge` 保持检索节点输出，不在恢复阶段改写。
+- 恢复后直接进入 `bind_query_plan`，由 `QueryPlanBinder` 根据用户选择把单一指标绑定到 `variables.plan.metrics`。
+- 除非用户选择了“其他，请补充”，否则不必重新检索知识。
 
 ### 5.11 `generate_sql`
 
@@ -765,18 +749,16 @@ question.recommend -> RecommendationAdapter
 - `knowledge.retrieve`
 - metric ambiguity detection
 - 基于 Headless dataset schema 的候选检索
-- schema mapper 与 asset document candidate 合并
-- 基于 intent mention 的分槽位召回
-- `rewritten_question` 仅作为缺槽位时的 fallback，不再主导知识检索
-- 候选进入 `CandidateGate` 前执行可解释 rerank，输出 `base_score`、`rerank_strategy`、`rerank_reason`
-- `CandidateGate` 判定 hit/missed/metric_ambiguous
-- runtime 注入 `HeadlessSchemaBuilder(session)`
-- 真实 knowledge 异常不 fallback 到 placeholder
-- 用户完成 `ask_metric_selection` 后，已通过 v1 interaction response patcher 合并回 `selected_assets.metrics`
+- 基于 intent mention 的确定性分槽位混合召回
+- exact、alias、中文词法和 dense 通道共用 active generation 与权限硬过滤
+- `SemanticBindingPolicy` 统一输出槽位决策、reason codes 与 `allowed_asset_ids`
+- runtime 注入唯一 `RetrievalService`
+- 真实 knowledge 异常不 fallback 到旧检索或 placeholder
+- 用户完成 `ask_metric_selection` 后，由 `QueryPlanBinder` 将回答收敛为 `plan.metrics`
 
 下一步目标能力：
 
-- 接入更强的检索实现，例如 BM25 / embedding / hybrid score。
+- 配置真实 embedding provider，启动 index worker 并持续采集 Gold Set 质量数据。
 - 补充更完整的同义词/别名治理，例如“访问人数/访客数/UV/访问量”。
 - 补充 dataset schema/index version 的可观测字段与 rebuild 时机。
 

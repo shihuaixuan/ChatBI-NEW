@@ -23,8 +23,17 @@
 - `recognize_intent` 输出自然语言槽位线索：`metric_mentions`、`dimension_mentions`、`time_mentions`、`filter_mentions`、`required_slot_types`、`query_shape`。
 - `knowledge.retrieve` 已改为优先按上述 mention 分槽位召回 Headless 候选。
 - `rewritten_question` 只在必需槽位缺候选时作为 fallback。
-- 候选进入 `CandidateGate` 前会执行可解释 rerank，输出 `base_score`、`rerank_strategy`、`rerank_reason`。
+- 候选经过 `SemanticBindingPolicy` 门控，并保留通道分数、排名和 reason codes。
 - 已通过单元测试验证：“访问人数”优先于“转化人数/关注人数”等仅部分重叠候选；只有“人数”这种弱词时仍保留 `metric_ambiguous`。
+
+2026-07-06 完成 Step 3 执行域重构：
+
+- 单查询与拆分查询统一输出 `variables.execution.queries[]/results[]`。
+- 迁移期继续镜像 `variables.sql_execution`，旧消费端可平滑回退。
+- 拆分子查询改为有界并行，每个真实查询使用独立数据库 Session。
+- 完整结果正文写入文件 artifact，`workflow_artifact` 保存元数据；上下文仅保留引用、统计和样本行。
+- 答案模型改读白名单投影视图，不再接收 SQL、候选 payload 与全量 variables。
+- Trace 与前端优先消费统一结果结构，保留旧结果形状回退。
 
 当前流程阻塞在：
 
@@ -105,7 +114,7 @@ ask_metric_selection
 原因：
 
 - `retrieve_knowledge` 命中多个“人数”类指标。
-- `CandidateGate` 判断 Top 指标候选分数接近，无法安全绑定唯一指标。
+- `SemanticBindingPolicy` 判断 Top 指标候选分数接近，无法安全绑定唯一指标。
 - 图路由进入 `ask_metric_selection`，等待用户选择指标。
 - 该问题已推动后续优化：当前 `knowledge.retrieve` 会先根据 `metric_mentions=["访问人数"]` 对候选做 slot-aware rerank，完整短语命中的候选会优先于只命中“人数”的候选。
 
@@ -348,7 +357,8 @@ POST /graph/runs/flow-test-v1-current-1/interactions/515aff47-cfcb-4472-aff3-2dd
 }
 ```
 
-恢复后，`ChatBIV1InteractionResponsePatcher` 把用户选择合并回 `variables.knowledge`。
+恢复后，用户选择写入 `variables.interactions.ask_metric_selection.response` 与旧兼容字段
+`variables.metric_selection`；指标绑定由 `QueryPlanBinder` 收敛到 `variables.plan`。
 
 合并后的关键上下文：
 
@@ -504,7 +514,7 @@ apps.datasource.crud.datasource
 - 指标歧义识别。
 - 指标选择交互。
 - 用户回答恢复。
-- 用户选择合并回 knowledge。
+- 用户选择由 QueryPlanBinder 绑定到 plan。
 - SQL 生成。
 - 第一阶段知识检索 rerank 单元测试：
   - “访问人数”完整短语优先。
@@ -562,3 +572,10 @@ execute_sql
 ```
 
 这样即使真实 datasource 当前不可用，v1 图也能形成稳定的生产闭环，而不是 run failed。
+
+## Step 4 交互子系统定稿记录
+
+- 用户回答同时写入标准 `variables.interactions.<ask_node>` 域和旧 response 字段。
+- ChatBI v1 runtime 不再使用业务级交互回答补丁器。
+- 槽位澄清由 knowledge 节点构造本地 intent 视图消费；指标选择由 QueryPlanBinder 绑定为 plan。
+- 作用域条件继续兼容旧 response 字段，保证历史 run 可读。

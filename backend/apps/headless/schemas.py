@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -52,6 +53,7 @@ class DataSetSchema(HeadlessBaseDTO):
     database_type: str | None = None
     database_version: str | None = None
     data_set: SchemaElement
+    subject_domains: list[dict[str, Any]] = Field(default_factory=list)
     models: list[dict[str, Any]] = Field(default_factory=list)
     model_relations: list[JoinRelation] = Field(default_factory=list)
     metrics: list[SchemaElement] = Field(default_factory=list)
@@ -226,3 +228,30 @@ class TermPayload(HeadlessBaseDTO):
 class SchemaMapRequest(HeadlessBaseDTO):
     query_text: str
     dataset_ids: list[int]
+
+
+class MetricEmbeddingRebuildResponse(HeadlessBaseDTO):
+    dataset_id: int
+    asset_type: str = "METRIC"
+    deleted: bool = True
+    processed: int = 0
+    succeeded: int = 0
+    failed: int = 0
+    batch_id: str
+
+
+class MetricEmbeddingStatusResponse(HeadlessBaseDTO):
+    id: int | None = None
+    dataset_id: int
+    asset_type: str = "METRIC"
+    asset_id: int
+    document_id: int | None = None
+    embedding_text_hash: str
+    embedding_provider: str
+    embedding_model: str
+    embedding_dim: int
+    embedding_batch_id: str | None = None
+    status: str
+    error_message: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None

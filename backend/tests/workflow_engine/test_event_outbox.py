@@ -65,7 +65,7 @@ def test_event_outbox_publishes_pending_events_and_retains_failed_for_retry():
         outbox.append(_event("outbox-fail", sequence=2))
         session.commit()
 
-        result = outbox.publish_pending(publisher=publisher)
+        result = outbox.publish_pending(publisher=publisher, run_id="outbox-run")
         session.commit()
 
         ok = session.exec(select(WorkflowEventModel).where(WorkflowEventModel.event_id == "outbox-ok")).one()

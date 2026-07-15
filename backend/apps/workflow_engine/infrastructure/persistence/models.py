@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Identity,
@@ -56,12 +57,23 @@ class WorkflowRunModel(SQLModel, table=True):
         Index("idx_workflow_run_status", "oid", "status", text("updated_at DESC")),
         Index("idx_workflow_run_definition", "definition_name", "definition_version"),
         Index("idx_workflow_run_request", "request_id"),
+        Index("idx_workflow_run_chat", "chat_id", text("created_at DESC")),
+        Index("ux_workflow_run_record", "record_id", unique=True),
+        # 交互式 Run 必须完整绑定会话和记录；独立 Run 则两者都不绑定。
+        CheckConstraint(
+            "(chat_id IS NULL AND record_id IS NULL) "
+            "OR (chat_id IS NOT NULL AND record_id IS NOT NULL)",
+            name="ck_workflow_run_chat_ownership",
+        ),
     )
 
     id: int | None = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
     run_id: str = Field(sa_column=Column(String(64), nullable=False, unique=True))
     oid: int = Field(sa_column=Column(BigInteger, nullable=False))
     user_id: int = Field(sa_column=Column(BigInteger, nullable=False))
+    # 新增归属字段只记录后续显式绑定，不从既有 Run 的 JSON 上下文推断回填。
+    chat_id: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
+    record_id: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     request_id: str | None = Field(default=None, sa_column=Column(String(128), nullable=True))
     definition_name: str = Field(sa_column=Column(String(128), nullable=False))
     definition_version: str = Field(sa_column=Column(String(64), nullable=False))
@@ -197,3 +209,25 @@ class WorkflowArtifactModel(SQLModel, table=True):
     metadata_json: dict = Field(sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")))
     temporary: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default=text("true")))
     created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+
+
+class WorkflowArtifactCleanupModel(SQLModel, table=True):
+    """记录会话删除后需要清理的 Artifact 正文。"""
+
+    __tablename__ = "workflow_artifact_cleanup"
+    __table_args__ = (
+        Index("idx_workflow_artifact_cleanup_status", "status", "updated_at"),
+    )
+
+    id: int | None = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
+    artifact_id: str = Field(sa_column=Column(String(64), nullable=False, unique=True))
+    storage_uri: str = Field(sa_column=Column(String(512), nullable=False))
+    # 状态与尝试次数持久化，保证正文清理失败后可以显式重试。
+    status: str = Field(
+        default="pending",
+        sa_column=Column(String(32), nullable=False, server_default=text("'pending'")),
+    )
+    attempts: int = Field(default=0, sa_column=Column(Integer, nullable=False, server_default=text("0")))
+    last_error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    updated_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))

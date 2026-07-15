@@ -1,12 +1,5 @@
-from apps.agentic_chat.schemas import ToolResult
+# 实现已下沉到共享能力层；本文件仅保持既有 import 路径兼容（graph 与 v1 均引用此路径）。
+# deprecated：新代码一律 from apps.chatbi_capabilities.sql.permission import PermissionTool。
+from apps.chatbi_capabilities.sql.permission import PermissionTool
 
-
-class PermissionTool:
-    name = "permission.apply"
-
-    def run(self, payload: dict) -> ToolResult:
-        sql = payload.get("sql")
-        if not sql:
-            return ToolResult(success=False, error_code="empty_sql", message="SQL 不能为空")
-        # 当前先透传，保留接入行列权限改写的位置。
-        return ToolResult(success=True, payload={"sql": sql})
+__all__ = ["PermissionTool"]

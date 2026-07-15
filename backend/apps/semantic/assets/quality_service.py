@@ -114,7 +114,7 @@ class AssetQualityService:
         if example.example_type == "SQL_EXAMPLE" and not example.sql:
             issues.append(_issue("warning", "example.sql_missing", "SQL 示例缺少 SQL", "补充可参考的 SQL"))
         if example.example_type == "SQL_EXAMPLE" and example.sql and not _looks_like_select_sql(example.sql):
-            issues.append(_issue("warning", "example.sql_unparseable", "SQL 示例无法识别为查询 SQL", "补充 SELECT 或 WITH 开头的可参考 SQL"))
+            issues.append(_issue("warning", "example.sql_unparsable", "SQL 示例无法识别为查询 SQL", "补充 SELECT 或 WITH 开头的可参考 SQL"))
         if example.dataset_id is None and example.datasource is None:
             issues.append(_issue("warning", "example.scope_missing", "样例缺少数据集或数据源范围", "补充 dataset_id 或 datasource"))
         return AssetQualityResult(

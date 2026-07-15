@@ -13,9 +13,11 @@ PUBLIC_PAYLOAD_ALLOWLIST = frozenset(
         "answer",
         "error_code",
         "interaction_id",
+        "label",
         "message",
         "node",
         "node_name",
+        "pending_interaction",
         "progress",
         "question",
         "reason_code",
@@ -70,12 +72,20 @@ class EventOutbox:
         self._session.flush()
         return self._to_public_event(model)
 
-    def publish_pending(self, publisher: Callable[[WorkflowEvent], None], limit: int = 100) -> PublishResult:
+    def publish_pending(
+        self,
+        publisher: Callable[[WorkflowEvent], None],
+        limit: int = 100,
+        run_id: str | None = None,
+    ) -> PublishResult:
+        statement = select(WorkflowEventModel).where(
+            WorkflowEventModel.publish_status == "pending"
+        )
+        if run_id is not None:
+            # 测试、补偿任务可限定单个 Run，避免消费其他运行的待发布事件。
+            statement = statement.where(WorkflowEventModel.run_id == run_id)
         models = self._session.exec(
-            select(WorkflowEventModel)
-            .where(WorkflowEventModel.publish_status == "pending")
-            .order_by(WorkflowEventModel.sequence)
-            .limit(limit)
+            statement.order_by(WorkflowEventModel.sequence).limit(limit)
         ).all()
         published = 0
         failed = 0

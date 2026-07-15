@@ -87,7 +87,9 @@ const MenuItem = defineComponent({
             title: () => titleWithIcon({ title, icon }),
             default: () => [
               h(MenuItem, { menu: { meta: { title } }, class: 'subTitleMenu' }),
-              children.map((ele: any) => h(MenuItem, { menu: ele })),
+              children
+                .filter((ele: any) => !ele.meta?.hiddenInSubMenu)
+                .map((ele: any) => h(MenuItem, { menu: ele })),
             ],
           }
         )

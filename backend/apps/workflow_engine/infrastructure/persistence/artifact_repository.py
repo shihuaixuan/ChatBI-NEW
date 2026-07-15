@@ -30,6 +30,27 @@ class ArtifactRepository:
         self._session.flush()
         return artifact.model_copy(deep=True)
 
+    def get(self, artifact_id: str) -> WorkflowArtifact:
+        """按公开 artifact_id 读取完整元数据。"""
+
+        model = self._session.exec(
+            select(WorkflowArtifactModel).where(
+                WorkflowArtifactModel.artifact_id == artifact_id
+            )
+        ).one()
+        return WorkflowArtifact(
+            artifact_id=model.artifact_id,
+            run_id=model.run_id,
+            kind=model.kind,
+            content_type=model.content_type,
+            size=model.size,
+            digest=model.digest,
+            storage_uri=model.storage_uri,
+            metadata=model.metadata_json,
+            temporary=model.temporary,
+            created_at=model.created_at,
+        )
+
     def mark_referenced(self, artifact_id: str) -> None:
         model = self._session.exec(
             select(WorkflowArtifactModel).where(WorkflowArtifactModel.artifact_id == artifact_id)

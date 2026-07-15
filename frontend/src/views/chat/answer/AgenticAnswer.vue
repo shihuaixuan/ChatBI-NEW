@@ -1,14 +1,10 @@
 <script setup lang="ts">
 import BaseAnswer from './BaseAnswer.vue'
 import { chatApi, ChatInfo, type ChatMessage, ChatRecord } from '@/api/chat.ts'
-import {
-  agenticQuestionApi,
-  type AgenticClarificationAnswerItem,
-} from '@/api/agentic-chat'
+import { agenticQuestionApi, type AgenticClarificationAnswerItem } from '@/api/agentic-chat'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ChartBlock from '@/views/chat/chat-block/ChartBlock.vue'
-import ClarificationCard from '@/views/chat/clarification/ClarificationCard.vue'
-import AgenticTrace from '@/views/chat/execution-component/AgenticTrace.vue'
+import AgenticLiveTrace from '@/views/chat/execution-component/AgenticLiveTrace.vue'
 import JSONBig from 'json-bigint'
 
 const props = withDefaults(
@@ -65,9 +61,18 @@ const _loading = computed({
 
 const stopFlag = ref(false)
 const loadingData = ref(false)
-const traceRefreshKey = ref(0)
 
-async function consumeStream(response: Response, currentRecord: ChatRecord, controller: AbortController) {
+// 单调递增的时间戳用于时间线计算步骤耗时；避免依赖 Date.now 以外的顺序信息。
+function pushTraceEvent(currentRecord: ChatRecord, event: Record<string, any>) {
+  currentRecord.agentic_trace = currentRecord.agentic_trace || []
+  currentRecord.agentic_trace.push({ ...event, _ts: Date.now() })
+}
+
+async function consumeStream(
+  response: Response,
+  currentRecord: ChatRecord,
+  controller: AbortController
+) {
   const reader = response.body?.getReader()
   if (!reader) return
   const decoder = new TextDecoder('utf-8')
@@ -89,15 +94,21 @@ async function consumeStream(response: Response, currentRecord: ChatRecord, cont
     for (const str of split) {
       const data = JSONBig.parse(str.replace('data:{', '{'))
       handleEvent(data, currentRecord)
-      await nextTick()
-      emits('scrollBottom')
+      try {
+        await nextTick()
+        emits('scrollBottom')
+      } catch (renderError) {
+        // 展示层异常（如时间线渲染问题）不应中断 SSE 事件消费，否则会丢失澄清/结束事件。
+        console.error(renderError)
+      }
     }
   }
 }
 
 function handleEvent(data: any, currentRecord: ChatRecord) {
   const payload = data.content || {}
-  currentRecord.agentic_trace = currentRecord.agentic_trace || []
+  // 所有事件按到达顺序进入 trace，交由时间线组件重建步骤视图。
+  pushTraceEvent(currentRecord, { type: data.type, ...payload })
   switch (data.type) {
     case 'record-created':
       currentRecord.id = payload.id || payload.record_id
@@ -106,23 +117,14 @@ function handleEvent(data: any, currentRecord: ChatRecord) {
     case 'run-started':
       currentRecord.status = 'running'
       break
-    case 'understanding':
-    case 'tool-result':
-    case 'route-selected':
-      currentRecord.agentic_trace.push({ type: data.type, ...payload })
-      break
     case 'step-finished':
       if (payload.summary?.sql) currentRecord.sql = payload.summary.sql
-      currentRecord.agentic_trace.push({ type: data.type, ...payload })
-      traceRefreshKey.value++
       break
     case 'sql-generated':
     case 'sql-validated':
       currentRecord.sql = payload.sql
-      currentRecord.agentic_trace.push({ type: data.type, ...payload })
       break
     case 'sql-executed':
-      currentRecord.agentic_trace.push({ type: data.type, ...payload })
       getChatData(currentRecord.id)
       break
     case 'chart-generated':
@@ -189,15 +191,29 @@ async function submitClarification(answers: AgenticClarificationAnswerItem[]) {
   if (index.value < 0) return
   const currentRecord: ChatRecord = _currentChat.value.records[index.value]
   if (!currentRecord.id) return
+  stopFlag.value = false
   _loading.value = true
+  currentRecord.status = 'running'
   currentRecord.clarification = undefined
   const controller = new AbortController()
   try {
     const response = await agenticQuestionApi.clarification(currentRecord.id, answers, controller)
     await consumeStream(response, currentRecord, controller)
+  } catch (error) {
+    currentRecord.error = `Error:${error}`
+    emits('error', currentRecord.id)
   } finally {
     _loading.value = false
   }
+}
+
+function cancelClarification() {
+  // 跳过澄清：仅本地收起卡片并解锁输入框；后端 run 仍处于等待态，用户可直接重新提问。
+  if (index.value < 0) return
+  const currentRecord: ChatRecord = _currentChat.value.records[index.value]
+  currentRecord.clarification = undefined
+  _loading.value = false
+  emits('stop')
 }
 
 async function restorePendingClarification() {
@@ -208,7 +224,6 @@ async function restorePendingClarification() {
   if (trace.clarification?.status === 'pending') {
     currentRecord.clarification = trace.clarification
   }
-  traceRefreshKey.value++
 }
 
 function getChatData(recordId?: number) {
@@ -242,23 +257,24 @@ onMounted(() => {
   restorePendingClarification()
 })
 
-defineExpose({ sendMessage, index: () => index.value, stop })
+defineExpose({
+  sendMessage,
+  index: () => index.value,
+  stop,
+  submitClarification,
+  cancelClarification,
+})
 </script>
 
 <template>
   <BaseAnswer v-if="message" :message="message" :reasoning-name="reasoningName" :loading="_loading">
+    <AgenticLiveTrace :record="message.record" />
     <ChartBlock
       style="margin-top: 6px"
       :message="message"
       :record-id="recordId"
       :loading-data="loadingData"
     />
-    <ClarificationCard
-      :clarification="message.record?.clarification"
-      :disabled="_loading"
-      @submit="submitClarification"
-    />
-    <AgenticTrace :record-id="message.record?.id" :refresh-key="traceRefreshKey" />
     <slot></slot>
     <template #tool>
       <slot name="tool"></slot>

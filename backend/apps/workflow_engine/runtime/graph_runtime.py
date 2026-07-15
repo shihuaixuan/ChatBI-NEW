@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -7,7 +6,7 @@ from apps.workflow_engine.domain.context import (
     ControlContext,
     WorkflowContext,
 )
-from apps.workflow_engine.domain.definition import NodeType
+from apps.workflow_engine.domain.definition import NodeDefinition, NodeType
 from apps.workflow_engine.domain.execution import NodeExecutionResult, NodeResultStatus
 from apps.workflow_engine.domain.interaction import (
     InteractionRequest,
@@ -23,11 +22,13 @@ from apps.workflow_engine.runtime.interaction import (
     InteractionManager,
 )
 from apps.workflow_engine.runtime.lease import InMemoryRunLease
+from apps.workflow_engine.runtime.public_projection import (
+    node_display_label,
+    public_node_summary,
+)
 from apps.workflow_engine.runtime.retry import RetryController
 from apps.workflow_engine.runtime.router import ConditionRouter
 from apps.workflow_engine.runtime.scheduler import NodeScheduler
-
-InteractionResponsePatcher = Callable[[WorkflowRun, InteractionRequest, dict[str, Any]], ContextPatch | None]
 
 
 class GraphRuntime:
@@ -44,7 +45,6 @@ class GraphRuntime:
         lease: InMemoryRunLease,
         retry_controller: RetryController | None = None,
         interaction_manager: InteractionManager | None = None,
-        interaction_response_patcher: InteractionResponsePatcher | None = None,
         node_execution_recorder: Any | None = None,
     ) -> None:
         self._registry = registry
@@ -56,7 +56,6 @@ class GraphRuntime:
         self._lease = lease
         self._retry = retry_controller or RetryController()
         self._interactions = interaction_manager
-        self._interaction_response_patcher = interaction_response_patcher
         self._node_executions = node_execution_recorder
 
     def create_run(
@@ -107,8 +106,9 @@ class GraphRuntime:
                 self._checkpoints.publish_event(run, "run.started")
 
             while run.status is RunStatus.RUNNING:
-                elapsed_ms = (datetime.now(timezone.utc) - run.created_at).total_seconds() * 1000
-                if elapsed_ms > definition.policies.run_timeout_ms:
+                # 超时预算只统计活跃执行时间；等待用户输入的时间不计入，
+                # 否则用户在澄清卡片上停留超过预算就会导致恢复后立即失败。
+                if run.context.control.active_ms > definition.policies.run_timeout_ms:
                     run.status = RunStatus.FAILED
                     return self._checkpoints.fail(run, "RUN_TIMEOUT_EXCEEDED")
                 if run.context.control.executed_nodes >= definition.policies.max_nodes_per_run:
@@ -126,19 +126,33 @@ class GraphRuntime:
                         run,
                         "LOOP_ITERATION_LIMIT_EXCEEDED",
                         node_name=node.name,
+                        node_label=node_display_label(node),
                     )
-                self._checkpoints.publish_event(run, "node.started", node_name=node.name)
+                self._checkpoints.publish_event(
+                    run,
+                    "node.started",
+                    node_name=node.name,
+                    public_payload={"label": node_display_label(node)},
+                )
+                node_started_at = datetime.now(timezone.utc)
                 result = self._execute_with_retry(run, node, definition.policies.default_retry_policy)
+                node_active_ms = int((datetime.now(timezone.utc) - node_started_at).total_seconds() * 1000)
+                run.context.control.active_ms += node_active_ms
 
                 if result.status is NodeResultStatus.FAILED:
                     self._record_node_execution(run, node, result)
                     run.status = RunStatus.FAILED
                     error_code = result.error.code if result.error is not None else "NODE_FAILED"
-                    return self._checkpoints.fail(run, error_code, node_name=node.name)
+                    return self._checkpoints.fail(
+                        run,
+                        error_code,
+                        node_name=node.name,
+                        node_label=node_display_label(node),
+                    )
 
                 if result.status is NodeResultStatus.WAITING_INPUT:
                     self._record_node_execution(run, node, result)
-                    return self._pause_for_interaction(run, node.name, result)
+                    return self._pause_for_interaction(run, node, result)
 
                 updated_context = self._context_patcher.apply(run.context, result.patch)
                 updated_context.control.executed_nodes += 1
@@ -155,13 +169,21 @@ class GraphRuntime:
                         run,
                         node_name=node.name,
                         completed=True,
+                        summary=public_node_summary(result, node),
+                        node_label=node_display_label(node),
                     )
 
                 route = self._router.select(definition, node, run.context, result)
                 self._record_node_execution(run, node, result, route)
                 run.current_node = route.target
                 run.context.control.current_node = route.target
-                run = self._checkpoints.save_progress(run, node_name=node.name, route=route)
+                run = self._checkpoints.save_progress(
+                    run,
+                    node_name=node.name,
+                    route=route,
+                    summary=public_node_summary(result, node),
+                    node_label=node_display_label(node),
+                )
 
             return run
 
@@ -194,15 +216,22 @@ class GraphRuntime:
                 raise InteractionError("INTERACTION_NOT_FOUND", interaction_id)
 
             answered = self._interactions.answer(interaction_id, response)
-            patch_values = dict.fromkeys(answered.allowed_update_paths, response)
+            answered_at = datetime.now(timezone.utc)
+            round_count = int(run.context.control.loop_iterations.get(answered.node_name, 0) or 1)
+            patch_values = {
+                path: self._interaction_update_value(
+                    path=path,
+                    interaction=answered,
+                    response=response,
+                    round_count=round_count,
+                    answered_at=answered_at,
+                )
+                for path in answered.allowed_update_paths
+            }
             run.context = self._context_patcher.apply(
                 run.context,
                 ContextPatch(set_values=patch_values),
             )
-            if self._interaction_response_patcher is not None:
-                extra_patch = self._interaction_response_patcher(run, answered, response)
-                if extra_patch is not None:
-                    run.context = self._context_patcher.apply(run.context, extra_patch)
             definition = self._registry.get(run.definition_name, run.definition_version)
             current_node = definition.nodes[run.current_node]
             route = self._router.select(
@@ -220,6 +249,27 @@ class GraphRuntime:
 
         # 释放恢复事务的 Lease 后再进入标准执行循环，避免同一进程自锁。
         return self.execute(run_id)
+
+    @staticmethod
+    def _interaction_update_value(
+        *,
+        path: str,
+        interaction: InteractionRequest,
+        response: dict[str, Any],
+        round_count: int,
+        answered_at: datetime,
+    ) -> dict[str, Any]:
+        """标准交互域写结构化记录；旧兼容路径继续写原始回答。"""
+
+        if not path.startswith("variables.interactions."):
+            return response
+        return {
+            "node_name": interaction.node_name,
+            "round": max(1, round_count),
+            "response": response,
+            "skipped": response.get("skipped") is True,
+            "answered_at": answered_at.isoformat(),
+        }
 
     def _execute_with_retry(self, run, node, default_policy) -> NodeExecutionResult:
         policy = node.retry_policy or default_policy
@@ -249,15 +299,36 @@ class GraphRuntime:
     def _pause_for_interaction(
         self,
         run: WorkflowRun,
-        node_name: str,
+        node: NodeDefinition,
         result: NodeExecutionResult,
     ) -> WorkflowRun:
         if self._interactions is None or result.interaction is None:
             run.status = RunStatus.FAILED
-            return self._checkpoints.fail(run, "INTERACTION_NOT_SUPPORTED", node_name=node_name)
-        interaction = self._interactions.create(run.run_id, node_name, result.interaction)
+            return self._checkpoints.fail(
+                run,
+                "INTERACTION_NOT_SUPPORTED",
+                node_name=node.name,
+                node_label=node_display_label(node),
+            )
+        interaction = self._interactions.create(run.run_id, node.name, result.interaction)
+        pending_summary = {
+            "interaction_id": interaction.interaction_id,
+            "run_id": interaction.run_id,
+            "node_name": interaction.node_name,
+            "label": node_display_label(node),
+            "status": interaction.status.value,
+            "prompt": interaction.prompt,
+            "options": interaction.options,
+            "response_schema": interaction.response_schema,
+            "allowed_update_paths": interaction.allowed_update_paths,
+        }
         run.context.control.executed_nodes += 1
-        run.context.control.previous_node = node_name
+        run.context.control.previous_node = node.name
         run.context.control.pending_interaction_id = interaction.interaction_id
         run.status = RunStatus.WAITING_INPUT
-        return self._checkpoints.pause(run, node_name=node_name)
+        return self._checkpoints.pause(
+            run,
+            node_name=node.name,
+            summary=pending_summary,
+            node_label=node_display_label(node),
+        )

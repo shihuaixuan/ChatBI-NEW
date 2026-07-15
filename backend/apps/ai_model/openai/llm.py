@@ -1,8 +1,9 @@
 from collections.abc import Iterator, Mapping
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import (
+    AIMessage,
     AIMessageChunk,
     BaseMessage,
     BaseMessageChunk,
@@ -91,18 +92,31 @@ class BaseChatOpenAI(ChatOpenAI):
         if max_tokens:
             params["max_tokens"] = max_tokens
         return params
-    
+
     def _get_request_payload(
         self,
         input_: LanguageModelInput,
         *,
-        stop: Optional[list[str]] = None,
+        stop: list[str] | None = None,
         **kwargs: Any,
     ) -> dict:
         max_tokens = self.max_tokens
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         if max_tokens:
             payload["max_tokens"] = max_tokens
+        source_messages = self._convert_input(input_).to_messages()
+        payload_messages = payload.get("messages")
+        if isinstance(payload_messages, list):
+            for index, source_message in enumerate(source_messages):
+                if not isinstance(source_message, AIMessage):
+                    continue
+                reasoning_content = source_message.additional_kwargs.get("reasoning_content")
+                if not reasoning_content:
+                    continue
+                if index >= len(payload_messages) or payload_messages[index].get("role") != "assistant":
+                    raise ValueError("无法将 reasoning_content 对齐到 OpenAI 助手消息")
+                # langchain-openai 会过滤非标准字段，thinking 模型的多轮工具调用需要在统一出口补回。
+                payload_messages[index]["reasoning_content"] = reasoning_content
         return payload
     usage_metadata: dict = {}
 

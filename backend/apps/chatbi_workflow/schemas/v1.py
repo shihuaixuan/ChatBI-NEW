@@ -73,12 +73,28 @@ class IntentRecognitionOutput(BaseModel):
     confidence: float = Field(ge=0, le=1)
     metric_mentions: list[str] = Field(default_factory=list)
     dimension_mentions: list[str] = Field(default_factory=list)
+    dimension_slots: list[dict[str, Any]] = Field(default_factory=list)
     time_mentions: list[str] = Field(default_factory=list)
+    time_range: dict[str, Any] = Field(default_factory=dict)
     filter_mentions: list[dict[str, Any]] = Field(default_factory=list)
     required_slot_types: list[str] = Field(default_factory=list)
     query_shape: dict[str, Any] = Field(default_factory=dict)
+    subject_domain: dict[str, Any] = Field(default_factory=dict)
     ambiguous_slots: list[str] = Field(default_factory=list)
     conflict_slots: list[str] = Field(default_factory=list)
+    validation: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntentValidationOutput(BaseModel):
+    """意图语义校验节点输出。"""
+
+    status: Literal["valid", "invalid"]
+    reason_code: str
+    repair_hint: str | None = None
+    retryable: bool = False
+    retry_count: int = Field(default=0, ge=0)
+    max_retry_count: int = Field(default=2, ge=1)
+    violations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class KnowledgeRetrieveInput(BaseModel):
@@ -94,7 +110,7 @@ class KnowledgeRetrieveOutput(BaseModel):
     """知识检索节点输出。"""
 
     hit: bool
-    status: Literal["hit", "missed", "metric_ambiguous"]
+    status: Literal["hit", "missed", "metric_ambiguous", "cross_model"]
     dataset_id: int | None = None
     schema_version: int | None = None
     index_version: int | None = None
@@ -107,8 +123,10 @@ class KnowledgeRetrieveOutput(BaseModel):
     candidate_groups: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     selected_assets: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     slot_bindings: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    subject_domain: dict[str, Any] = Field(default_factory=dict)
     decision: dict[str, Any] = Field(default_factory=dict)
     ambiguities: list[dict[str, Any]] = Field(default_factory=list)
+    multi_query_plans: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class InteractionAskInput(BaseModel):
@@ -118,6 +136,29 @@ class InteractionAskInput(BaseModel):
     prompt: str
     candidates: list[dict[str, Any]] = Field(default_factory=list)
     allowed_update_paths: list[str] = Field(default_factory=list)
+
+
+class QueryPlanOutput(BaseModel):
+    """语义查询计划：SQL 生成的唯一事实源。
+
+    由 bind_query_plan 节点产出；检索证据、意图槽位、用户选择在此收敛。
+    metrics/group_bys/filters/order 沿用编译槽位结构
+    （asset_type/asset_id/display_name/operator/value）。
+    """
+
+    status: Literal["ready", "infeasible"]
+    strategy: str = "semantic_compiler"
+    select_mode: str = "aggregate"
+    metrics: list[dict[str, Any]] = Field(default_factory=list)
+    group_bys: list[dict[str, Any]] = Field(default_factory=list)
+    filters: list[dict[str, Any]] = Field(default_factory=list)
+    having: list[dict[str, Any]] = Field(default_factory=list)
+    time: dict[str, Any] = Field(default_factory=dict)
+    order: list[dict[str, Any]] = Field(default_factory=list)
+    limit: int | None = None
+    sub_plans: list[dict[str, Any]] = Field(default_factory=list)
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    infeasible_reason: str | None = None
 
 
 class SqlGenerateInput(BaseModel):
@@ -139,6 +180,14 @@ class SqlGenerateOutput(BaseModel):
     used_assets: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class SplitSqlGenerateOutput(BaseModel):
+    """跨模型 SQL 生成节点输出。"""
+
+    queries: list[dict[str, Any]] = Field(default_factory=list)
+    strategy: str = "placeholder"
+    explanation: str | None = None
+
+
 class SqlExecuteInput(BaseModel):
     """SQL 执行节点输入。"""
 
@@ -151,6 +200,8 @@ class SqlExecuteOutput(BaseModel):
     """SQL 执行节点输出。"""
 
     status: Literal["succeeded", "failed"]
+    queries: list[dict[str, Any]] = Field(default_factory=list)
+    results: list[dict[str, Any]] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
     row_count: int = Field(default=0, ge=0)
     fields: list[str] = Field(default_factory=list)
@@ -158,8 +209,17 @@ class SqlExecuteOutput(BaseModel):
     sampled_row_count: int = Field(default=0, ge=0)
     result_truncated: bool = False
     artifact_ref: dict[str, Any] | None = None
+    artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     error_code: str | None = None
     message: str | None = None
+
+
+class ResultValidationOutput(BaseModel):
+    """执行结果校验节点输出。"""
+
+    status: Literal["passed", "empty", "failed", "suspicious"]
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
 
 
 class SqlErrorInput(BaseModel):
@@ -217,8 +277,12 @@ CHATBI_V1_OUTPUT_MODELS = {
     "question.draw_image_profile": ImageProfileOutput,
     "intent.recognize": IntentRecognitionOutput,
     "knowledge.retrieve": KnowledgeRetrieveOutput,
+    "plan.bind": QueryPlanOutput,
     "sql.generate": SqlGenerateOutput,
+    "sql.generate_split": SplitSqlGenerateOutput,
     "sql.execute": SqlExecuteOutput,
+    "sql.execute_split": SqlExecuteOutput,
+    "execution.validate": ResultValidationOutput,
     "sql.handle_error": SqlErrorOutput,
     "answer.generate": AnswerOutput,
     "question.recommend": RecommendationOutput,

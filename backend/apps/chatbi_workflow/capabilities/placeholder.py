@@ -1,6 +1,7 @@
 from typing import Any
 
 from apps.chatbi_workflow.capabilities.adapters.interaction import InteractionAdapter
+from apps.chatbi_workflow.capabilities.execution import validate_execution_output
 
 
 class PlaceholderChatBICapabilityGateway:
@@ -19,8 +20,34 @@ class PlaceholderChatBICapabilityGateway:
             return {"normalized_question": request["question"]}
         if capability == "schema.retrieve":
             return {"tables": ["placeholder_table"], "fields": ["placeholder_metric"]}
+        if capability == "plan.bind":
+            knowledge = request.get("variables", {}).get("knowledge", {})
+            if not knowledge.get("hit"):
+                return {"status": "infeasible", "infeasible_reason": "knowledge_missed"}
+            return {"status": "ready", "strategy": "placeholder"}
         if capability == "sql.generate":
             return {"sql": "select 1 as placeholder_value"}
+        if capability == "sql.generate_split":
+            return {
+                "queries": [
+                    {
+                        "model_id": 1,
+                        "metrics": ["占位指标一"],
+                        "dimensions": [],
+                        "sql": "select 1 as placeholder_value",
+                        "datasource_id": 1,
+                    },
+                    {
+                        "model_id": 2,
+                        "metrics": ["占位指标二"],
+                        "dimensions": [],
+                        "sql": "select 2 as placeholder_value",
+                        "datasource_id": 1,
+                    },
+                ],
+                "strategy": "placeholder",
+                "explanation": "占位跨模型 SQL",
+            }
         if capability == "sql.validate":
             return {"valid": True, "reason": "placeholder_valid"}
         if capability == "permission.apply":
@@ -105,6 +132,17 @@ class PlaceholderChatBICapabilityGateway:
                 "query_shape": {"select_mode": "aggregate"},
                 "ambiguous_slots": ["metric"] if ambiguous else [],
                 "conflict_slots": [],
+                "validation": {
+                    "status": "valid",
+                    "reason_code": "INTENT_VALID",
+                    "repair_hint": None,
+                    "retryable": False,
+                    "retry_count": 0,
+                    "max_retry_count": 2,
+                    "violations": [],
+                    "clarification_required": False,
+                    "slot_issues": [],
+                },
             }
         if capability == "knowledge.retrieve":
             question = self._question_from_v1_request(request)
@@ -143,10 +181,14 @@ class PlaceholderChatBICapabilityGateway:
             }
         if capability == "interaction.ask_metric_selection":
             return self._interaction().ask_metric_selection(request)
+        if capability == "interaction.ask_cross_model_split":
+            return self._interaction().ask_cross_model_split(request)
         if capability == "interaction.ask_rewrite_clarification":
             return self._interaction().ask_rewrite_clarification(request)
         if capability == "interaction.ask_intent_clarification":
             return self._interaction().ask_intent_clarification(request)
+        if capability == "interaction.ask_slot_clarification":
+            return self._interaction().ask_slot_clarification(request)
         if capability == "sql.handle_error":
             execution = request.get("variables", {}).get("sql_execution", {})
             return {
@@ -155,6 +197,21 @@ class PlaceholderChatBICapabilityGateway:
                 "retryable": False,
                 "repair_hint": "placeholder_repair_hint",
             }
+        if capability == "sql.execute_split":
+            return {
+                "status": "succeeded",
+                "rows": [],
+                "row_count": 0,
+                "fields": [],
+                "execution_ms": 0,
+                "sampled_row_count": 0,
+                "result_truncated": False,
+                "artifact_ref": None,
+                "error_code": None,
+                "message": None,
+            }
+        if capability == "execution.validate":
+            return validate_execution_output(request.get("variables", {}).get("execution", {}))
         if capability == "question.recommend":
             return {"questions": ["按月查看销售额趋势", "查看销售额最高的商品"]}
         if capability == "answer.compose":

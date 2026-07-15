@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import icon_quick_question from '@/assets/svg/icon_quick_question.svg'
 import icon_replace_outlined from '@/assets/svg/icon_replace_outlined.svg'
 import { ChatInfo } from '@/api/chat.ts'
@@ -50,6 +50,7 @@ defineExpose({ getRecommendQuestions, id: () => props.recordId, stop })
 const props = withDefaults(
   defineProps<{
     recordId?: number
+    datasetId?: number
     datasourceId?: number
     currentChat?: ChatInfo
     firstChat?: boolean
@@ -57,12 +58,16 @@ const props = withDefaults(
   }>(),
   {
     recordId: undefined,
+    datasetId: undefined,
     datasourceId: undefined,
     currentChat: () => new ChatInfo(),
     firstChat: false,
     disabled: false,
   }
 )
+
+const effectiveDatasetId = computed(() => props.datasetId || props.datasourceId)
+const effectiveDatasourceId = computed(() => props.datasourceId || props.currentChat?.datasource)
 </script>
 
 <template>
@@ -104,7 +109,7 @@ const props = withDefaults(
         :current-chat="currentChat"
         :record-id="recordId"
         :questions="questions"
-        :datasource="datasourceId"
+        :datasource="effectiveDatasourceId"
         :disabled="disabled"
         :first-chat="firstChat"
         position="input"
@@ -116,7 +121,7 @@ const props = withDefaults(
         v-show="activeName == 'recently'"
         ref="recentQuestionRef"
         :disabled="disabled"
-        :datasource-id="datasourceId"
+        :dataset-id="effectiveDatasetId"
         @click-question="quickAsk"
       >
       </RecentQuestion>

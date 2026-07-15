@@ -18,6 +18,32 @@ from apps.workflow_engine.domain.definition import (
 from apps.workflow_engine.registry.handler_registry import HandlerRegistry
 
 
+def _trace_metadata(label: str, output_path: tuple[str, ...], *, redaction: str = "none") -> dict:
+    return {
+        "display": {"label": label},
+        "trace": {
+            "output_path": list(output_path),
+            "redaction": redaction,
+        },
+    }
+
+
+def _capability_node(
+    name: str,
+    handler: str,
+    label: str,
+    output_path: tuple[str, ...],
+    *,
+    redaction: str = "none",
+) -> NodeDefinition:
+    return NodeDefinition(
+        name=name,
+        type=NodeType.CAPABILITY,
+        handler=handler,
+        metadata=_trace_metadata(label, output_path, redaction=redaction),
+    )
+
+
 def build_chatbi_minimal_definition() -> WorkflowDefinition:
     """构造最小 ChatBI 问数图。
 
@@ -26,42 +52,55 @@ def build_chatbi_minimal_definition() -> WorkflowDefinition:
     """
 
     nodes = {
-        "understand_question": NodeDefinition(
-            name="understand_question",
-            type=NodeType.CAPABILITY,
-            handler="query.understand",
+        "understand_question": _capability_node(
+            "understand_question",
+            "query.understand",
+            "理解问题",
+            ("variables", "understanding"),
         ),
-        "retrieve_schema": NodeDefinition(
-            name="retrieve_schema",
-            type=NodeType.CAPABILITY,
-            handler="schema.retrieve",
+        "retrieve_schema": _capability_node(
+            "retrieve_schema",
+            "schema.retrieve",
+            "读取数据结构",
+            ("variables", "schema"),
         ),
-        "generate_sql": NodeDefinition(
-            name="generate_sql",
-            type=NodeType.CAPABILITY,
-            handler="sql.generate",
+        "generate_sql": _capability_node(
+            "generate_sql",
+            "sql.generate",
+            "生成查询",
+            ("variables", "sql"),
+            redaction="sql_summary",
         ),
-        "validate_sql": NodeDefinition(
-            name="validate_sql",
-            type=NodeType.CAPABILITY,
-            handler="sql.validate",
+        "validate_sql": _capability_node(
+            "validate_sql",
+            "sql.validate",
+            "校验查询",
+            ("variables", "sql_validation"),
         ),
-        "apply_permission": NodeDefinition(
-            name="apply_permission",
-            type=NodeType.CAPABILITY,
-            handler="permission.apply",
+        "apply_permission": _capability_node(
+            "apply_permission",
+            "permission.apply",
+            "应用权限",
+            ("variables", "permission"),
         ),
-        "execute_sql": NodeDefinition(
-            name="execute_sql",
-            type=NodeType.CAPABILITY,
-            handler="sql.execute",
+        "execute_sql": _capability_node(
+            "execute_sql",
+            "sql.execute",
+            "查询数据",
+            ("variables", "sql_result"),
         ),
-        "generate_answer": NodeDefinition(
-            name="generate_answer",
-            type=NodeType.CAPABILITY,
-            handler="answer.generate",
+        "generate_answer": _capability_node(
+            "generate_answer",
+            "answer.generate",
+            "生成答案",
+            ("variables", "answer"),
         ),
-        "finish": NodeDefinition(name="finish", type=NodeType.TERMINAL, handler="answer.finish"),
+        "finish": NodeDefinition(
+            name="finish",
+            type=NodeType.TERMINAL,
+            handler="answer.finish",
+            metadata=_trace_metadata("结束", ("variables", "completed")),
+        ),
     }
     return WorkflowDefinition(
         name="chatbi",

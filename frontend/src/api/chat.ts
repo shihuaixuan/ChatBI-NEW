@@ -39,6 +39,7 @@ export class ChatRecord {
   question?: string
   sql_answer?: string
   sql?: string
+  dataset_id?: number
   datasource?: number
   data?: string | any
   chart_answer?: string
@@ -60,6 +61,8 @@ export class ChatRecord {
   total_tokens?: number
   status?: string
   trace_id?: string
+  // 每条历史记录独立决定回答组件，不能依赖当前全局流程开关。
+  execution_type?: 'legacy' | 'agentic' | 'graph' | 'agent'
   agentic_run_id?: number
   agentic_trace?: any
   clarification?: any
@@ -73,6 +76,7 @@ export class ChatRecord {
     question: string,
     sql_answer: string | undefined,
     sql: string | undefined,
+    dataset_id: number | undefined,
     datasource: number | undefined,
     data: string | any | undefined,
     chart_answer: string | undefined,
@@ -101,6 +105,7 @@ export class ChatRecord {
     question?: string,
     sql_answer?: string,
     sql?: string,
+    dataset_id?: number | undefined,
     datasource?: number | undefined,
     data?: string | any,
     chart_answer?: string,
@@ -128,6 +133,7 @@ export class ChatRecord {
     this.question = question
     this.sql_answer = sql_answer
     this.sql = sql
+    this.dataset_id = dataset_id
     this.datasource = datasource
     this.data = data
     this.chart_answer = chart_answer
@@ -156,6 +162,7 @@ export class Chat {
   create_by?: number
   brief?: string
   chat_type?: string
+  dataset_id?: number
   datasource?: number
   engine_type?: string
   ds_type?: string
@@ -169,6 +176,7 @@ export class Chat {
     create_by: number,
     brief: string,
     chat_type: string,
+    dataset_id: number,
     datasource: number,
     engine_type: string
   )
@@ -178,6 +186,7 @@ export class Chat {
     create_by?: number,
     brief?: string,
     chat_type?: string,
+    dataset_id?: number,
     datasource?: number,
     engine_type?: string
   ) {
@@ -186,12 +195,15 @@ export class Chat {
     this.create_by = create_by
     this.brief = brief
     this.chat_type = chat_type
+    this.dataset_id = dataset_id
     this.datasource = datasource
     this.engine_type = engine_type
   }
 }
 
 export class ChatInfo extends Chat {
+  dataset_name?: string
+  dataset_exists: boolean = true
   datasource_name?: string
   datasource_exists: boolean = true
   records: Array<ChatRecord> = []
@@ -204,9 +216,12 @@ export class ChatInfo extends Chat {
     create_by: number,
     brief: string,
     chat_type: string,
+    dataset_id: number,
     datasource: number,
     engine_type: string,
     ds_type: string,
+    dataset_name: string,
+    dataset_exists: boolean,
     datasource_name: string,
     datasource_exists: boolean,
     records: Array<ChatRecord>,
@@ -219,9 +234,12 @@ export class ChatInfo extends Chat {
     create_by?: number,
     brief?: string,
     chat_type?: string,
+    dataset_id?: number,
     datasource?: number,
     engine_type?: string,
     ds_type?: string,
+    dataset_name?: string,
+    dataset_exists: boolean = true,
     datasource_name?: string,
     datasource_exists: boolean = true,
     records: Array<ChatRecord> = [],
@@ -236,6 +254,7 @@ export class ChatInfo extends Chat {
         this.create_by = param1.create_by
         this.brief = param1.brief
         this.chat_type = param1.chat_type
+        this.dataset_id = param1.dataset_id
         this.datasource = param1.datasource
         this.engine_type = param1.engine_type
         this.ds_type = param1.ds_type
@@ -247,6 +266,7 @@ export class ChatInfo extends Chat {
         this.create_by = create_by
         this.brief = brief
         this.chat_type = chat_type
+        this.dataset_id = dataset_id
         this.datasource = datasource
         this.engine_type = engine_type
         this.ds_type = ds_type
@@ -254,6 +274,8 @@ export class ChatInfo extends Chat {
         this.recommended_generate = recommended_generate
       }
     }
+    this.dataset_name = dataset_name
+    this.dataset_exists = dataset_exists
     this.datasource_name = datasource_name
     this.datasource_exists = datasource_exists
     this.records = records
@@ -272,6 +294,7 @@ const toChatRecord = (data?: any): ChatRecord | undefined => {
     data.question,
     data.sql_answer,
     data.sql,
+    data.dataset_id,
     data.datasource,
     data.data,
     data.chart_answer,
@@ -294,6 +317,7 @@ const toChatRecord = (data?: any): ChatRecord | undefined => {
   )
   record.status = data.status
   record.trace_id = data.trace_id
+  record.execution_type = data.execution_type
   record.agentic_run_id = data.agentic_run_id
   record.agentic_trace = data.agentic_trace
   record.clarification = data.clarification
@@ -422,9 +446,12 @@ export const chatApi = {
       data.create_by,
       data.brief,
       data.chat_type,
+      data.dataset_id,
       data.datasource,
       data.engine_type,
       data.ds_type,
+      data.dataset_name,
+      data.dataset_exists,
       data.datasource_name,
       data.datasource_exists,
       toChatRecordList(data.records),
@@ -500,8 +527,8 @@ export const chatApi = {
   ) => {
     return request.fetchStream(`/chat/recommend_questions/${record_id}${params}`, {}, controller)
   },
-  recentQuestions: (datasource_id?: number): Promise<any> => {
-    return request.get(`/chat/recent_questions/${datasource_id}`)
+  recentQuestions: (dataset_id?: number): Promise<any> => {
+    return request.get(`/chat/recent_questions/${dataset_id}`)
   },
   checkLLMModel: () => request.get('/system/aimodel/default', { requestOptions: { silent: true } }),
   export2Excel: (record_id: number | undefined, chat_id: any) =>

@@ -146,6 +146,7 @@ function adaptorChartInfoList(chatInfo: ChatInfo) {
         const recordeInfo = {
           id: chatInfo.id + '_' + record.id,
           sql: record.sql,
+          dataset_id: record.dataset_id,
           datasource: record.datasource,
           data: data,
           chart: {},

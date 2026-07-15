@@ -9,13 +9,19 @@ from sqlalchemy.orm import aliased
 
 from apps.chat.models.chat_model import Chat, ChatRecord, CreateChat, ChatInfo, RenameChat, ChatQuestion, ChatLog, \
     TypeEnum, OperationEnum, ChatRecordResult, ChatLogHistory, ChatLogHistoryItem
+from apps.chat.services.headless_binding import (
+    DatasetBindingError,
+    apply_binding_to_chat,
+    apply_binding_to_record,
+    resolve_dataset_chat_binding,
+)
+from apps.chat.services.deletion import ChatDeletionService
 from apps.datasource.crud.datasource import get_ds
 from apps.datasource.crud.recommended_problem import get_datasource_recommended_chart
 from apps.datasource.models.datasource import CoreDatasource
-from apps.db.constant import DB
 from apps.db.db import exec_sql
-from apps.system.crud.assistant import AssistantOutDs, AssistantOutDsFactory
-from apps.system.schemas.system_schema import AssistantOutDsSchema
+from apps.headless.models import HeadlessDataSet
+from apps.system.crud.assistant import AssistantOutDsFactory
 from common.core.deps import CurrentAssistant, SessionDep, CurrentUser, Trans
 from common.utils.data_format import DataFormat
 from common.utils.utils import extract_nested_json, SQLBotLogUtil
@@ -24,13 +30,14 @@ from common.utils.utils import extract_nested_json, SQLBotLogUtil
 def get_chat_record_by_id(session: SessionDep, record_id: int):
     record: ChatRecord | None = None
 
-    stmt = select(ChatRecord.id, ChatRecord.question, ChatRecord.chat_id, ChatRecord.datasource, ChatRecord.engine_type,
-                  ChatRecord.ai_modal_id, ChatRecord.create_by).where(
+    stmt = select(ChatRecord.id, ChatRecord.question, ChatRecord.chat_id, ChatRecord.dataset_id, ChatRecord.datasource,
+                  ChatRecord.engine_type, ChatRecord.ai_modal_id, ChatRecord.create_by).where(
         and_(ChatRecord.id == record_id))
     result = session.execute(stmt)
     for r in result:
-        record = ChatRecord(id=r.id, question=r.question, chat_id=r.chat_id, datasource=r.datasource,
-                            engine_type=r.engine_type, ai_modal_id=r.ai_modal_id, create_by=r.create_by)
+        record = ChatRecord(id=r.id, question=r.question, chat_id=r.chat_id, dataset_id=r.dataset_id,
+                            datasource=r.datasource, engine_type=r.engine_type, ai_modal_id=r.ai_modal_id,
+                            create_by=r.create_by)
     return record
 
 
@@ -47,14 +54,14 @@ def list_chats(session: SessionDep, current_user: CurrentUser) -> List[Chat]:
     return chart_list
 
 
-def list_recent_questions(session: SessionDep, current_user: CurrentUser, datasource_id: int) -> List[str]:
+def list_recent_questions(session: SessionDep, current_user: CurrentUser, dataset_id: int) -> List[str]:
     chat_records = (
         session.query(
             ChatRecord.question
         )
         .join(Chat, ChatRecord.chat_id == Chat.id)  # 关联Chat表
         .filter(
-            Chat.datasource == datasource_id,  # 使用Chat表的datasource字段
+            Chat.dataset_id == dataset_id,
             ChatRecord.question.isnot(None),
             ChatRecord.create_by == current_user.id
         )
@@ -111,15 +118,9 @@ def delete_chat(session, chart_id) -> str:
 
 
 def delete_chat_with_user(session, current_user: CurrentUser, chart_id) -> str:
-    chat = session.query(Chat).filter(Chat.id == chart_id).first()
-    if not chat:
-        return f'Chat with id {chart_id} has been deleted'
-    if chat.create_by != current_user.id:
-        raise Exception(f"Chat with id {chart_id} not Owned by the current user")
-    session.delete(chat)
-    session.commit()
+    """删除会话及其关联的 Graph 执行数据。"""
 
-    return f'Chat with id {chart_id} has been deleted'
+    return ChatDeletionService(session).delete_for_user(current_user, chart_id)
 
 
 def get_chart_config(session: SessionDep, chart_record_id: int):
@@ -315,6 +316,14 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
         raise Exception(f"Chat with id {chart_id} not Owned by the current user")
     chat_info = ChatInfo(**chat.model_dump())
 
+    dataset = session.get(HeadlessDataSet, chat.dataset_id) if chat.dataset_id else None
+    if not dataset:
+        chat_info.dataset_exists = False
+        chat_info.dataset_name = 'Dataset not exist'
+    else:
+        chat_info.dataset_exists = True
+        chat_info.dataset_name = dataset.name
+
     if current_assistant and current_assistant.type in dynamic_ds_types:
         out_ds_instance = AssistantOutDsFactory.get_instance(current_assistant)
         ds = out_ds_instance.get_ds(chat.datasource, trans)
@@ -335,12 +344,14 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
     predict_alias_log = aliased(ChatLog)
 
     stmt = (select(ChatRecord.id, ChatRecord.chat_id, ChatRecord.create_time, ChatRecord.finish_time,
-                   ChatRecord.question, ChatRecord.sql_answer, ChatRecord.sql,ChatRecord.datasource,
+                   ChatRecord.question, ChatRecord.sql_answer, ChatRecord.sql, ChatRecord.dataset_id,
+                   ChatRecord.datasource,
                    ChatRecord.chart_answer, ChatRecord.chart, ChatRecord.analysis, ChatRecord.predict,
                    ChatRecord.datasource_select_answer, ChatRecord.analysis_record_id, ChatRecord.predict_record_id,
                    ChatRecord.regenerate_record_id,
                    ChatRecord.recommended_question, ChatRecord.first_chat,
-                   ChatRecord.finish, ChatRecord.error,
+                   ChatRecord.finish, ChatRecord.error, ChatRecord.execution_type,
+                   ChatRecord.status, ChatRecord.trace_id,
                    sql_alias_log.reasoning_content.label('sql_reasoning_content'),
                    chart_alias_log.reasoning_content.label('chart_reasoning_content'),
                    analysis_alias_log.reasoning_content.label('analysis_reasoning_content'),
@@ -362,12 +373,15 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
         ChatRecord.create_time))
     if with_data:
         stmt = select(ChatRecord.id, ChatRecord.chat_id, ChatRecord.create_time, ChatRecord.finish_time,
-                      ChatRecord.question, ChatRecord.sql_answer, ChatRecord.sql,ChatRecord.datasource,
+                      ChatRecord.question, ChatRecord.sql_answer, ChatRecord.sql, ChatRecord.dataset_id,
+                      ChatRecord.datasource,
                       ChatRecord.chart_answer, ChatRecord.chart, ChatRecord.analysis, ChatRecord.predict,
                       ChatRecord.datasource_select_answer, ChatRecord.analysis_record_id, ChatRecord.predict_record_id,
                       ChatRecord.regenerate_record_id,
                       ChatRecord.recommended_question, ChatRecord.first_chat,
-                      ChatRecord.finish, ChatRecord.error, ChatRecord.data, ChatRecord.predict_data).where(
+                      ChatRecord.finish, ChatRecord.error, ChatRecord.execution_type,
+                      ChatRecord.status, ChatRecord.trace_id,
+                      ChatRecord.data, ChatRecord.predict_data).where(
             and_(ChatRecord.create_by == current_user.id, ChatRecord.chat_id == chart_id)).order_by(
             ChatRecord.create_time)
 
@@ -428,7 +442,8 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  finish_time=row.finish_time,
                                  duration=duration,
                                  total_tokens=total_tokens,
-                                 question=row.question, sql_answer=row.sql_answer, sql=row.sql, datasource=row.datasource,
+                                 question=row.question, sql_answer=row.sql_answer, sql=row.sql,
+                                 dataset_id=row.dataset_id, datasource=row.datasource,
                                  chart_answer=row.chart_answer, chart=row.chart,
                                  analysis=row.analysis, predict=row.predict,
                                  datasource_select_answer=row.datasource_select_answer,
@@ -436,6 +451,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  regenerate_record_id=row.regenerate_record_id,
                                  recommended_question=row.recommended_question, first_chat=row.first_chat,
                                  finish=row.finish, error=row.error,
+                                 execution_type=row.execution_type, status=row.status, trace_id=row.trace_id,
                                  sql_reasoning_content=row.sql_reasoning_content,
                                  chart_reasoning_content=row.chart_reasoning_content,
                                  analysis_reasoning_content=row.analysis_reasoning_content,
@@ -447,14 +463,17 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
                                  finish_time=row.finish_time,
                                  duration=duration,
                                  total_tokens=total_tokens,
-                                 question=row.question, sql_answer=row.sql_answer, sql=row.sql, datasource=row.datasource,
+                                 question=row.question, sql_answer=row.sql_answer, sql=row.sql,
+                                 dataset_id=row.dataset_id, datasource=row.datasource,
                                  chart_answer=row.chart_answer, chart=row.chart,
                                  analysis=row.analysis, predict=row.predict,
                                  datasource_select_answer=row.datasource_select_answer,
                                  analysis_record_id=row.analysis_record_id, predict_record_id=row.predict_record_id,
                                  regenerate_record_id=row.regenerate_record_id,
                                  recommended_question=row.recommended_question, first_chat=row.first_chat,
-                                 finish=row.finish, error=row.error, data=row.data, predict_data=row.predict_data))
+                                 finish=row.finish, error=row.error,
+                                 execution_type=row.execution_type, status=row.status, trace_id=row.trace_id,
+                                 data=row.data, predict_data=row.predict_data))
 
     result = list(map(format_record, record_list))
 
@@ -698,34 +717,22 @@ def list_generate_chart_logs(session: SessionDep, chart_id: int) -> List[ChatLog
 
 
 def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj: CreateChat,
-                require_datasource: bool = True, current_assistant: CurrentAssistant = None) -> ChatInfo:
-    if not create_chat_obj.datasource and require_datasource:
-        raise Exception("Datasource cannot be None")
+                require_datasource: bool = True, _current_assistant: CurrentAssistant = None) -> ChatInfo:
+    if not create_chat_obj.dataset_id and require_datasource:
+        raise DatasetBindingError("请选择数据集")
 
     if not create_chat_obj.question or create_chat_obj.question.strip() == '':
         create_chat_obj.question = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    binding = None
     chat = Chat(create_time=datetime.datetime.now(),
                 create_by=current_user.id,
                 oid=current_user.oid if current_user.oid is not None else 1,
                 brief=create_chat_obj.question.strip()[:20],
                 origin=create_chat_obj.origin if create_chat_obj.origin is not None else 0)
-    ds: CoreDatasource | AssistantOutDsSchema | None = None
-    if create_chat_obj.datasource:
-        chat.datasource = create_chat_obj.datasource
-        if current_assistant and current_assistant.type == 1:
-            out_ds_instance: AssistantOutDs = AssistantOutDsFactory.get_instance(current_assistant)
-            ds = out_ds_instance.get_ds(chat.datasource)
-            ds.type_name = DB.get_db(ds.type)
-        else:
-            ds = session.get(CoreDatasource, create_chat_obj.datasource)
-            if ds.oid != current_user.oid:
-                raise Exception(f"Datasource with id {create_chat_obj.datasource} does not belong to current workspace")
-
-        if not ds:
-            raise Exception(f"Datasource with id {create_chat_obj.datasource} not found")
-
-        chat.engine_type = ds.type_name
+    if create_chat_obj.dataset_id:
+        binding = resolve_dataset_chat_binding(session, current_user, create_chat_obj.dataset_id)
+        apply_binding_to_chat(chat, binding)
     else:
         chat.engine_type = ''
 
@@ -737,21 +744,25 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
     chat_info.id = chat.id
     session.commit()
 
-    if ds:
+    if binding:
+        chat_info.dataset_id = binding.dataset_id
+        chat_info.dataset_name = binding.dataset_name
+        chat_info.dataset_exists = True
         chat_info.datasource_exists = True
-        chat_info.datasource_name = ds.name
-        chat_info.ds_type = ds.type
+        chat_info.datasource_name = binding.datasource_name
+        chat_info.ds_type = binding.datasource_type
 
-    if require_datasource and ds:
-        # generate first empty record
+    if require_datasource and binding:
         record = ChatRecord()
+        # 传统 Chat 链路的历史记录统一标记为 legacy。
+        record.execution_type = "legacy"
         record.chat_id = chat.id
-        record.datasource = ds.id
-        record.engine_type = ds.type_name
+        apply_binding_to_record(record, binding)
         record.first_chat = True
         record.finish = True
         record.create_time = datetime.datetime.now()
         record.create_by = current_user.id
+        ds = session.get(CoreDatasource, binding.datasource_id)
         if isinstance(ds, CoreDatasource) and ds.recommended_config == 2:
             questions = get_datasource_recommended_chart(session, ds.id)
             record.recommended_question = orjson.dumps(questions).decode()
@@ -784,10 +795,13 @@ def save_question(session: SessionDep, current_user: CurrentUser, question: Chat
         raise Exception(f"Chat with id {question.chat_id} not found")
 
     record = ChatRecord()
+    # 传统问数入口显式写入 legacy，避免依赖模型默认值隐式表达业务类型。
+    record.execution_type = "legacy"
     record.question = question.question
     record.chat_id = chat.id
     record.create_time = datetime.datetime.now()
     record.create_by = current_user.id
+    record.dataset_id = chat.dataset_id
     record.datasource = chat.datasource
     record.engine_type = chat.engine_type
     record.ai_modal_id = question.ai_modal_id
@@ -806,8 +820,11 @@ def save_question(session: SessionDep, current_user: CurrentUser, question: Chat
 
 def save_analysis_predict_record(session: SessionDep, base_record: ChatRecord, action_type: str) -> ChatRecord:
     record = ChatRecord()
+    # 分析和预测仍属于传统执行链路，沿用 legacy 展示组件。
+    record.execution_type = "legacy"
     record.question = base_record.question
     record.chat_id = base_record.chat_id
+    record.dataset_id = base_record.dataset_id
     record.datasource = base_record.datasource
     record.engine_type = base_record.engine_type
     record.ai_modal_id = base_record.ai_modal_id

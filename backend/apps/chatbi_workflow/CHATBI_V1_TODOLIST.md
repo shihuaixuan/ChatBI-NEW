@@ -62,7 +62,7 @@
   - 写入：`variables.knowledge`
   - 验收：未命中、多指标歧义、命中三种结果可路由到不同节点。
   - 验收：优先使用 `metric_mentions/dimension_mentions/time_mentions/filter_mentions` 分槽位召回，`rewritten_question` 仅作为缺槽位 fallback。
-  - 验收：候选进入 `CandidateGate` 前执行可解释 rerank，并输出 `base_score`、`rerank_strategy`、`rerank_reason`。
+  - 验收：统一检索候选经过 `SemanticBindingPolicy` 门控，并输出通道分数、排名和 reason codes。
 
 - [x] 为人机交互节点定义统一 schema。
   - 输入：澄清类型、问题、候选项、允许写回路径。

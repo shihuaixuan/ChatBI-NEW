@@ -1,5 +1,6 @@
 
 from apps.chatbi_workflow.capabilities.gateway import ChatBICapabilityGateway
+from apps.chatbi_workflow.capabilities.interactions import standard_interaction_path
 from apps.workflow_engine.domain.context import ContextPatch
 from apps.workflow_engine.domain.errors import NodeError
 from apps.workflow_engine.domain.execution import (
@@ -10,7 +11,12 @@ from apps.workflow_engine.domain.execution import (
 
 
 class ChatBIV1CapabilityNode:
-    """ChatBI v1 通用能力节点，负责调用网关并把结果写入指定上下文路径。"""
+    """ChatBI v1 通用能力节点，负责调用网关并把结果写入指定上下文路径。
+
+    业务能力抛出的异常不再终止整个 Run：异常被转换为 `variables.node_failure`
+    的结构化失败记录并成功返回，由图定义中的 `node.degraded` 条件边把流程
+    路由到解释性回答节点。只有引擎层错误才应该导致 Run 失败。
+    """
 
     def __init__(
         self,
@@ -18,17 +24,20 @@ class ChatBIV1CapabilityNode:
         capability: str,
         output_path: str,
         output_model: type | None = None,
+        mirror_output_paths: tuple[str, ...] = (),
     ) -> None:
         self._gateway = gateway
         self._capability = capability
         self._output_path = output_path
         self._output_model = output_model
+        self._mirror_output_paths = mirror_output_paths
 
     def execute(self, request: NodeExecutionRequest) -> NodeExecutionResult:
         try:
             result = self._gateway.invoke(
                 self._capability,
                 {
+                    "run_id": request.run_id,
                     "request": request.context_view.get("request", {}),
                     "conversation": request.context_view.get("conversation", {}),
                     "variables": request.context_view.get("variables", {}),
@@ -39,17 +48,26 @@ class ChatBIV1CapabilityNode:
             )
             if self._output_model is not None:
                 result = self._output_model.model_validate(result).model_dump(mode="json")
+            set_values = {self._output_path: result}
+            set_values.update(
+                dict.fromkeys(self._mirror_output_paths, result)
+            )
             return NodeExecutionResult(
                 status=NodeResultStatus.SUCCEEDED,
-                patch=ContextPatch(set_values={self._output_path: result}),
+                patch=ContextPatch(set_values=set_values),
             )
         except Exception as exc:
             return NodeExecutionResult(
-                status=NodeResultStatus.FAILED,
-                error=NodeError(
-                    code=f"{self._capability.upper().replace('.', '_')}_FAILED",
-                    message=str(exc),
-                    retryable=False,
+                status=NodeResultStatus.SUCCEEDED,
+                patch=ContextPatch(
+                    set_values={
+                        "variables.node_failure": {
+                            "node": request.node_name,
+                            "capability": self._capability,
+                            "error_code": f"{self._capability.upper().replace('.', '_')}_FAILED",
+                            "message": str(exc),
+                        }
+                    }
                 ),
             )
 
@@ -67,6 +85,7 @@ class ChatBIV1InteractionNode:
             spec = self._gateway.invoke(
                 self._capability,
                 {
+                    "run_id": request.run_id,
                     "request": request.context_view.get("request", {}),
                     "conversation": request.context_view.get("conversation", {}),
                     "variables": request.context_view.get("variables", {}),
@@ -75,11 +94,16 @@ class ChatBIV1InteractionNode:
                 },
                 request.idempotency_key,
             )
+            legacy_paths = spec.get("allowed_update_paths", [self._response_path])
+            allowed_update_paths = [standard_interaction_path(request.node_name)]
+            for path in legacy_paths:
+                if path not in allowed_update_paths:
+                    allowed_update_paths.append(path)
             interaction = {
                 "prompt": spec.get("prompt"),
                 "options": spec.get("options", []),
                 "response_schema": spec.get("response_schema", {"type": "object"}),
-                "allowed_update_paths": spec.get("allowed_update_paths", [self._response_path]),
+                "allowed_update_paths": allowed_update_paths,
             }
             return NodeExecutionResult(status=NodeResultStatus.WAITING_INPUT, interaction=interaction)
         except Exception as exc:

@@ -47,6 +47,7 @@ def create_record_and_run(
         create_by=current_user.id,
         datasource=datasource_id,
         engine_type=chat.engine_type,
+        execution_type="agentic",
         question=request.question,
         finish=False,
         status=AgenticRunStatus.CREATED.value,

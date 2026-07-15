@@ -15,6 +15,7 @@ from apps.chatbi_workflow.capabilities.adapters.sql import SqlAdapter
 from apps.chatbi_workflow.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
+from apps.chatbi_workflow.capabilities.planning import QueryPlanBinder
 
 
 class RealChatBICapabilityGateway:
@@ -28,6 +29,7 @@ class RealChatBICapabilityGateway:
         interaction_adapter: InteractionAdapter | None = None,
         sql_adapter: SqlAdapter | None = None,
         recommendation_adapter: RecommendationAdapter | None = None,
+        planning_binder: QueryPlanBinder | None = None,
         fallback_gateway: PlaceholderChatBICapabilityGateway | None = None,
     ) -> None:
         self._question_adapter = question_adapter or QuestionAdapter()
@@ -36,6 +38,7 @@ class RealChatBICapabilityGateway:
         self._interaction_adapter = interaction_adapter or InteractionAdapter()
         self._sql_adapter = sql_adapter or SqlAdapter()
         self._recommendation_adapter = recommendation_adapter or RecommendationAdapter()
+        self._planning_binder = planning_binder or QueryPlanBinder()
         self._fallback_gateway = fallback_gateway or PlaceholderChatBICapabilityGateway()
 
     def invoke(
@@ -52,16 +55,28 @@ class RealChatBICapabilityGateway:
             return self._question_adapter.recognize_intent(request)
         if capability == "knowledge.retrieve":
             return self._knowledge_adapter.retrieve(request)
+        if capability == "plan.bind":
+            return self._planning_binder.bind(request)
         if capability == "interaction.ask_rewrite_clarification":
             return self._interaction_adapter.ask_rewrite_clarification(request)
         if capability == "interaction.ask_intent_clarification":
             return self._interaction_adapter.ask_intent_clarification(request)
+        if capability == "interaction.ask_slot_clarification":
+            return self._interaction_adapter.ask_slot_clarification(request)
         if capability == "interaction.ask_metric_selection":
             return self._interaction_adapter.ask_metric_selection(request)
+        if capability == "interaction.ask_cross_model_split":
+            return self._interaction_adapter.ask_cross_model_split(request)
         if capability == "sql.generate":
             return self._sql_adapter.generate(request)
+        if capability == "sql.generate_split":
+            return self._sql_adapter.generate_split(request)
         if capability == "sql.execute":
             return self._sql_adapter.execute(request)
+        if capability == "sql.execute_split":
+            return self._sql_adapter.execute_split(request)
+        if capability == "execution.validate":
+            return self._sql_adapter.validate_result(request)
         if capability == "sql.handle_error":
             return self._sql_adapter.handle_error(request)
         if capability == "answer.reject":
