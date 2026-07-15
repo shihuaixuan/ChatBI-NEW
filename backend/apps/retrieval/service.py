@@ -6,13 +6,14 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from apps.headless.metric_embedding import EmbeddingProvider
 from apps.headless.service import HeadlessSchemaBuilder
+from apps.retrieval.embedding import EmbeddingProvider
 from apps.retrieval.errors import RetrievalQueryError
-from apps.retrieval.headless import MetricEmbeddingRuntimeConfig
+from apps.retrieval.headless import RetrievalEmbeddingRuntimeConfig
 from apps.retrieval.profiles import get_retrieval_profile
 from apps.retrieval.schemas import (
     RetrievalBundle,
+    RetrievalDimensionSlot,
     RetrievalIntent,
     RetrievalProfileName,
     RetrievalRequest,
@@ -40,7 +41,7 @@ class RetrievalService:
         *,
         schema_builder: HeadlessSchemaBuilder | None = None,
         embedding_provider: EmbeddingProvider | None = None,
-        embedding_config: MetricEmbeddingRuntimeConfig | None = None,
+        embedding_config: RetrievalEmbeddingRuntimeConfig | None = None,
         semantic_binding_runner: SemanticBindingRunner | None = None,
         query_timeout_ms: int | None = None,
     ) -> None:
@@ -113,6 +114,32 @@ def build_semantic_binding_request(
     intent_payload = {
         key: value for key, value in source_intent.items() if key in intent_fields
     }
+    raw_dimension_slots = source_intent.get("dimension_slots")
+    if isinstance(raw_dimension_slots, list):
+        retrieval_slot_fields = set(RetrievalDimensionSlot.model_fields)
+        source_slot_fields = retrieval_slot_fields | {"value_confidence"}
+        projected_slots: list[dict[str, Any]] = []
+        for index, slot in enumerate(raw_dimension_slots):
+            if not isinstance(slot, dict):
+                raise RetrievalQueryError(
+                    "dimension_slots 必须包含对象",
+                    details={"reason_code": "DIMENSION_SLOT_INVALID", "slot_index": index},
+                )
+            unknown_fields = set(slot) - source_slot_fields
+            if unknown_fields:
+                raise RetrievalQueryError(
+                    "dimension_slots 包含检索边界未定义的字段",
+                    details={
+                        "reason_code": "DIMENSION_SLOT_FIELDS_UNSUPPORTED",
+                        "slot_index": index,
+                        "fields": sorted(unknown_fields),
+                    },
+                )
+            # value_confidence 属于问题理解诊断，不参与检索规划和门控。
+            projected_slots.append(
+                {key: value for key, value in slot.items() if key in retrieval_slot_fields}
+            )
+        intent_payload["dimension_slots"] = projected_slots
     intent_payload.setdefault(
         "intent_type",
         str(source_intent.get("intent_type") or "metric_query"),
@@ -142,7 +169,7 @@ def build_retrieval_service(
     *,
     schema_builder: HeadlessSchemaBuilder | None = None,
     embedding_provider: EmbeddingProvider | None = None,
-    embedding_config: MetricEmbeddingRuntimeConfig | None = None,
+    embedding_config: RetrievalEmbeddingRuntimeConfig | None = None,
 ) -> RetrievalService:
     """应用组装层共用的 RetrievalService 工厂。"""
 

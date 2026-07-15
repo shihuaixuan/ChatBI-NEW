@@ -22,11 +22,11 @@ resource/unit 投影契约和可增量、可重试、可回滚的索引生命周
 - Graph/Agent 共用的 `semantic-binding` 请求、结果和应用组装工厂；旧策略请求会被明确拒绝。
 - dense 通道启动配置检查，以及关闭、配置缺失、超时、维度不一致、索引不可用和查询错误诊断。
 - 已知 dense 故障允许显式词法降级，未知异常不再被静默吞掉。
-- `HEADLESS_METRIC_EMBEDDING_ALLOW_LEXICAL_FALLBACK` 统一控制生产降级策略。
+- `RETRIEVAL_EMBEDDING_ALLOW_LEXICAL_FALLBACK` 统一控制生产降级策略。
 - 七张统一存储表：source、index generation、resource、unit、embedding、index job、query trace。
 - `vector(1024)` 物理 profile、GIN 词法索引、scope 普通索引和 generation 部分唯一索引。
 - 复合外键在数据库层阻止跨租户、跨来源和 embedding generation 错配。
-- 指标、维度、术语和受控维值的细粒度 Headless Projector。
+- 数据集主题域、模型、指标、维度、术语和受控维值的细粒度 Headless Projector。
 - Join、模型兼容和资产关系只保存结构化 metadata，不把执行关系交给向量判断。
 - `content_hash` 与 `embedding_text_hash` 分离，metadata 更新不会触发无意义的向量重算。
 - SQL、字段、权限条件和敏感资产不会进入 embedding 文本。
@@ -65,7 +65,7 @@ resource/unit 投影契约和可增量、可重试、可回滚的索引生命周
 flowchart LR
     P00["P0-1 基线与评测集"] --> P01["P0-2 统一契约"] --> P02["P0-3 统一服务入口"] --> P03["P0-4 Graph/Agent 对齐"]
     P03 --> P10["P1-1 检索存储模型"] --> P11["P1-2 Headless Projector"] --> P12["P1-3 增量索引与 Generation"]
-    P12 --> P13["P1-4 混合召回"] --> P14["P1-5 重排与决策门控"] --> P15["P1-6 Shadow/灰度切换"]
+    P12 --> P13["P1-4 混合召回"] --> P14["P1-5 重排与决策门控"] --> P15["P1-6 直接切换"]
     P15 --> P20["P2-1 SQL 示例"] --> P21["P2-2 知识库"]
     P21 --> P30["P3 外部向量库/稀疏与多向量"]
 ```
@@ -98,7 +98,7 @@ flowchart LR
 主要测试资产：
 
 - `backend/tests/chatbi_workflow/test_headless_knowledge_adapter.py`
-- `backend/tests/chatbi_workflow/test_headless_metric_embedding_retrieval.py`
+- `backend/tests/retrieval/test_semantic_binding.py`
 - `backend/tests/chatbi_agent/test_core_tools.py`
 - 新增 `backend/tests/retrieval/golden/` 和评测 runner
 
@@ -171,7 +171,7 @@ backend/apps/retrieval/
 任务：
 
 - Graph 和 Agent 在应用组装层注入同一个 `RetrievalService`。
-- 移除“是否传入 `metric_embedding_session` 决定是否启用向量”的隐式行为。
+- 移除由调用方是否注入数据库会话决定向量通道是否启用的隐式行为。
 - Provider 启动健康检查覆盖 URL、密钥、模型和维度配置。
 - 用明确错误类型区分配置错误、provider 超时、维度不一致、索引不可用和查询错误。
 - 配置允许词法降级时保留业务决策，并在 `diagnostics.degraded_reason` 记录失败通道；未知异常直接失败并保留 trace。
@@ -182,7 +182,7 @@ backend/apps/retrieval/
 - `backend/apps/chatbi_workflow/runtime.py`
 - `backend/apps/chatbi_agent/tools/core.py`
 - `backend/apps/chatbi_workflow/capabilities/adapters/knowledge.py`
-- `backend/apps/headless/metric_embedding.py`
+- `backend/apps/retrieval/embedding.py`
 
 退出条件：
 
@@ -207,7 +207,7 @@ backend/apps/retrieval/
 - 第一版 pgvector 物理 profile 固定为 BGE-M3 dense 1024 维。
 - 添加资源、检索单元和 embedding 的 generation 唯一约束。
 - 增加租户、数据集、资源类型、状态和 scope 索引。
-- 保留现有 `headless_asset_embedding` 只读，不立即删除。
+- 统一索引验证完成后通过独立迁移删除旧指标专用向量表。
 
 退出条件：
 
@@ -221,7 +221,7 @@ backend/apps/retrieval/
 - downgrade 后六张新表全部删除，重新 upgrade 后全部恢复。
 - PostgreSQL 集成测试验证双 pending generation 可并存；跨租户引用、重复 active、
   embedding generation 错配和非 1024 维记录均被数据库拒绝。
-- 旧 `headless_asset_embedding` 保留不变，P1-2 projector 接入前不切换在线读写。
+- `083_remove_legacy_embedding` 已删除旧指标专用向量表，只保留统一检索存储。
 
 ### P1-2 实现 Headless Projector
 
@@ -231,6 +231,7 @@ backend/apps/retrieval/
 
 - 指标生成 `identity/definition/usage` 检索单元。
 - 维度生成 `identity/definition/role` 检索单元。
+- 数据集生成 `identity/definition/subject_domain` 检索单元，模型生成 `identity/scope` 检索单元。
 - 术语生成定义与关联资产检索单元。
 - 维值只接入已治理别名、常用值和配置允许的中低基数集合。
 - Join、模型兼容和资产关系保存为结构化 metadata/relationship，不交给向量判断。
@@ -244,7 +245,8 @@ backend/apps/retrieval/
 
 验收记录（2026-07-14）：
 
-- 指标、维度、术语和维值分别生成稳定 resource/unit，旧 `build_from_schema()` 入口保持兼容。
+- 数据集主题域、模型、指标、维度、术语和维值分别生成稳定 resource/unit，旧
+  `build_from_schema()` 入口保持兼容。
 - Projector snapshot 固化文本、metadata、ACL、模型关系和受控维值策略；显式治理、常用标记
   或配置允许且未超过基数上限的维值才进入投影。
 - Headless Schema 统一携带指标/维度 `sensitive_level`，敏感资产在 Projector 入口排除。
@@ -280,6 +282,8 @@ backend/apps/retrieval/
   active generation 约束；index job 通过复合外键绑定同 tenant/source/generation。
 - Headless rebuild 在调用方事务内创建或锁定 source、完成安全投影并写 durable job；此阶段不
   调用外部 provider，因此业务变更与索引事件可以原子提交或一起回滚。
+- Headless rebuild 提交后由后台 worker 消费本次 durable job；应用启动时异步恢复遗留 pending
+  job，每个任务独立提交，避免单个失败回滚已经完成的 generation 进度。
 - 增量 generation 克隆未触碰的 active unit/vector；文本 hash 不变时复制向量，metadata-only
   更新不调用 provider，delete 使用 tombstone 并在完整快照中移除对应 unit。
 - Worker 使用真正的批量 embedding 接口和 `FOR UPDATE SKIP LOCKED` 领取任务；超时、传输错误、
@@ -392,7 +396,7 @@ backend/apps/retrieval/
 - PostgreSQL statement timeout 与默认 embedding HTTP provider 共用 1.5 秒查询预算。
 - embedding 配置异常且允许词法降级时，dense diagnostics 明确记录 unavailable reason code；
   禁止降级时直接抛出配置错误。
-- 已移除专用于双策略灰度的 `083` migration，并把本地数据库安全回退到 `082`。
+- `083_remove_legacy_embedding` 已清理旧指标专用向量表，不保留双写或旧表回退。
 
 ## 5. P2：扩展检索来源
 
@@ -471,7 +475,7 @@ P2 的两个子阶段共享平台，但结果必须分组，不能混入同一�
 - migration 与回滚步骤。
 - Gold Set 前后对比。
 - P50/P95、错误率和 provider 成本。
-- 已知风险、灰度范围和回退条件。
+- 已知风险、索引 generation 回退条件和恢复步骤。
 
 ## 8. 下一执行批次
 

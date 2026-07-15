@@ -31,6 +31,15 @@ def _schema() -> DataSetSchema:
     )
     return DataSetSchema(
         data_set=dataset,
+        subject_domains=[
+            {
+                "domain_id": 7,
+                "name": "商城店铺主题",
+                "biz_name": "store_domain",
+                "description": "商城店铺经营与交易分析",
+                "model_ids": [10, 11],
+            }
+        ],
         models=[
             {
                 "id": 10,
@@ -207,6 +216,38 @@ def _unit_snapshot(resource: ProjectedResource) -> list[dict]:
         }
         for unit in resource.units
     ]
+
+
+def test_dataset_and_models_are_projected_with_subject_domain_content():
+    resources = _project()
+    dataset = _by_type(resources, RetrievalResourceType.DATASET)
+    models = [resource for resource in resources if resource.resource_type == RetrievalResourceType.MODEL]
+
+    assert dataset.source_resource_id == "DATASET:20"
+    assert dataset.metadata == {
+        "asset_type": "DATASET",
+        "asset_id": 20,
+        "dataset_id": 20,
+        "biz_name": "business_analysis",
+        "subject_domain_ids": [7],
+        "model_ids": [10, 11],
+    }
+    domain_unit = next(unit for unit in dataset.units if unit.unit_key == "subject-domain:7")
+    assert domain_unit.title == "商城店铺主题"
+    assert domain_unit.embedding_text == (
+        "商城店铺主题\n"
+        "主题域名称：商城店铺主题\n"
+        "主题域定义：商城店铺经营与交易分析\n"
+        "数据集：经营分析"
+    )
+    assert [(model.source_resource_id, model.title) for model in models] == [
+        ("MODEL:10", "交易模型"),
+        ("MODEL:11", "门店模型"),
+    ]
+    trade_scope = next(unit for unit in models[0].units if unit.unit_key == "scope")
+    assert "所属主题域：商城店铺主题" in trade_scope.content
+    assert "可用指标：销售额" in trade_scope.content
+    assert "可用维度：下单日期" in trade_scope.content
 
 
 def test_metric_projector_snapshot_keeps_relationships_structured():
@@ -467,12 +508,16 @@ def test_schema_builder_exposes_sensitive_level_to_the_single_projection_gate():
 
     assert schema.metrics[0].ext_info["sensitive_level"] == 2
     assert schema.dimensions[0].ext_info["sensitive_level"] == 1
-    assert HeadlessSourceProjector().project(
+    resources = HeadlessSourceProjector().project(
         schema,
         tenant_id=1,
         namespace="headless:dataset:20",
         source_version="schema-1",
-    ) == []
+    )
+    assert {resource.resource_type for resource in resources} == {
+        RetrievalResourceType.DATASET,
+        RetrievalResourceType.MODEL,
+    }
 
 
 def test_content_hash_is_deterministic_and_alias_change_only_rebuilds_identity_unit():

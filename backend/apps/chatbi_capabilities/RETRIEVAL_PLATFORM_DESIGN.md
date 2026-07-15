@@ -45,11 +45,11 @@ SQL 示例属于第三类“过程经验”：它帮助规划和编译，但既�
 
 ## 2. M0 实现评估与 M1 进展
 
-M0 评估时，项目已经具备 pgvector 表、指标文本构造、向量生成和余弦检索能力，
-但仍属于局部验证版本：
+M0 评估时，项目曾具备指标专用 pgvector 表、文本构造、向量生成和余弦检索能力，
+但属于已经退役的局部验证版本：
 
-1. `HeadlessAssetEmbedding` 目前只写入 `METRIC`，唯一键也只允许每个资产保留一份向量，无法自然支持多视图和双模型切换。
-2. Graph 运行时注入了 `metric_embedding_session`，Agent 的语义检索垫片没有注入，因此两个入口行为不同。
+1. 指标专用向量表只写入 `METRIC`，唯一键也只允许每个资产保留一份向量，无法自然支持多视图和多代索引。
+2. Graph 与 Agent 曾通过不同依赖注入方式启用向量通道，导致两个入口行为不同。
 3. 向量检索使用宽泛异常捕获并静默退回关键词，调用方无法判断向量通道是否真实工作。
 4. 重建逻辑先删除旧向量再逐条生成，重建期间没有原子切换，也缺少批处理、增量索引和失败重试状态机。
 5. 当前召回是字符串相似度与指标向量结果追加，不是完整的混合召回、融合、重排和决策链路。
@@ -58,8 +58,9 @@ M0 评估时，项目已经具备 pgvector 表、指标文本构造、向量生�
 M1 已完成前 2、3、6 项的入口治理：检索核心已下沉到 `apps.retrieval`，Graph 与 Agent
 共用 `RetrievalService`，通道状态通过统一 diagnostics 输出，已知故障显式词法降级，
 未知异常直接失败。P1-1 进一步新增独立 source/resource/unit/embedding/index job/query trace
-存储和 `080_retrieval_storage_p1` migration。P1-2 已实现 Headless 指标、维度、术语和受控
-维值的细粒度 Projector，SQL、字段、Join condition 和权限条件不会进入 embedding 文本。
+存储和 `080_retrieval_storage_p1` migration。P1-2 已实现 Headless 数据集主题域、模型、指标、
+维度、术语和受控维值的细粒度 Projector，SQL、字段、Join condition 和权限条件不会进入
+embedding 文本。
 P1-3 新增 generation 状态表、批量 embedding 端口和统一 IndexingService：每次增量构建形成
 完整快照，未变化 unit/向量直接复用，全部任务成功后才原子激活；已知失败可重试，旧 active
 generation 始终保留并可回滚。P1-4 已新增确定性 QueryPlanner、active-generation 硬过滤、多通道召回
@@ -107,6 +108,9 @@ P1-2 的投影契约使用两类 hash 表达不同不变量：
 
 指标别名只属于 `identity`，定义只属于 `definition`，聚合与模型关系只属于 `usage`；维度和
 术语采用同样的单元隔离。敏感级别大于 0 的 Headless 资产在统一 Projector 入口直接排除。
+数据集以 `identity/definition/subject_domain` 单元承载名称、范围和主题域摘要；模型以
+`identity/scope` 单元承载业务名称、所属主题域及安全的指标/维度名称摘要。物理表名、字段、
+SQL 和 Join 条件均不进入这两类文本。
 
 ### 3.2 SQL 示例与成功经验
 
@@ -567,7 +571,7 @@ flowchart LR
 ### 项目内参考
 
 - `apps/chatbi_capabilities/question_understanding.py`：共享问题理解与槽位结构。
-- `apps/headless/metric_embedding.py`：当前指标 embedding 构造、生成与查询。
+- `apps/retrieval/embedding.py`：统一索引和查询共用的 embedding provider。
 - `apps/chatbi_workflow/capabilities/adapters/knowledge.py`：当前文档召回和决策逻辑。
 - `extra/supersonic`：元数据事件更新、周期重载、元数据过滤和 SQL 示例召回。
 - `extra/youtu-rag/utu/rag`：Document/Chunk/Retriever/VectorStore 抽象与知识库构建流程。

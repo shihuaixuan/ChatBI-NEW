@@ -199,7 +199,7 @@ def test_generation_is_idempotent_and_incremental_update_only_reembeds_changed_t
     session.refresh(source)
     assert source.active_generation == "generation-1"
     assert source.source_version == "schema-1"
-    assert sum(len(call) for call in provider.calls) == 6
+    assert sum(len(call) for call in provider.calls) == 8
 
     changed = next(
         resource
@@ -234,10 +234,10 @@ def test_generation_is_idempotent_and_incremental_update_only_reembeds_changed_t
             )
         ).all()
     )
-    assert len(active_units) == 6
+    assert len(active_units) == 8
     assert {unit.index_generation for unit in active_units} == {"generation-2"}
     assert service.reconcile_source(source_id).issues == ()
-    assert service.queue_stats(source_id).succeeded == 3
+    assert service.queue_stats(source_id).succeeded == 4
 
 
 def test_retryable_failure_keeps_old_generation_until_explicit_retry_succeeds(session: Session):
@@ -384,12 +384,12 @@ def test_generation_status_and_vectors_are_complete_after_activation(session: Se
     assert generation.embedding_provider == "static"
     assert generation.embedding_model == "static-bge-m3"
     assert generation.embedding_dimension == 1024
-    assert generation.expected_jobs == 2
-    assert generation.succeeded_jobs == 2
+    assert generation.expected_jobs == 3
+    assert generation.succeeded_jobs == 3
     assert generation.failed_jobs == 0
-    assert generation.resource_count == 2
-    assert generation.unit_count == 6
-    assert generation.embedding_count == 6
+    assert generation.resource_count == 3
+    assert generation.unit_count == 8
+    assert generation.embedding_count == 8
     assert all(embedding.status == "active" for embedding in embeddings)
     assert all(embedding.embedding is not None and len(embedding.embedding) == 1024 for embedding in embeddings)
 
@@ -446,7 +446,7 @@ def test_headless_coordinator_writes_source_projection_and_jobs_in_caller_transa
     assert source.status == "rebuilding"
     assert result.source_version == "schema:3:index:7"
     assert result.generation.generation == f"dataset-{dataset.id}-index-7"
-    assert len(result.generation.job_ids) == 1
+    assert len(result.generation.job_ids) == 3
     resources = list(
         session.exec(
             select(RetrievalResourceModel).where(
@@ -455,5 +455,7 @@ def test_headless_coordinator_writes_source_projection_and_jobs_in_caller_transa
         ).all()
     )
     assert [(resource.resource_type, resource.source_resource_id) for resource in resources] == [
-        ("METRIC", f"METRIC:{metric.id}")
+        ("DATASET", f"DATASET:{dataset.id}"),
+        ("METRIC", f"METRIC:{metric.id}"),
+        ("MODEL", f"MODEL:{model.id}"),
     ]

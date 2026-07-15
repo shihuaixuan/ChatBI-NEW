@@ -68,7 +68,11 @@ class HeadlessSourceProjector:
             permission_version=permission_version,
         )
         relationships = _RelationshipIndex(schema)
-        resources: list[ProjectedResource] = []
+        resources: list[ProjectedResource] = [self._project_dataset(schema, context)]
+        for model in schema.models:
+            projected_model = self._project_model(schema, model, context)
+            if projected_model is not None:
+                resources.append(projected_model)
         for metric in schema.metrics:
             if not _is_sensitive(metric):
                 resources.append(self._project_metric(schema, metric, context, relationships))
@@ -84,6 +88,150 @@ class HeadlessSourceProjector:
                 if resource is not None:
                     resources.append(resource)
         return sorted(resources, key=lambda item: (item.resource_type.value, item.source_resource_id))
+
+    def _project_dataset(
+        self,
+        schema: DataSetSchema,
+        context: _ProjectionContext,
+    ) -> ProjectedResource:
+        dataset = schema.data_set
+        aliases = _normalized_texts(dataset.alias)
+        domains = _subject_domains(schema)
+        model_ids = sorted(
+            model_id
+            for model in schema.models
+            if isinstance((model_id := model.get("id")), int) and model_id > 0
+        )
+        common_metadata = {
+            "asset_type": "DATASET",
+            "asset_id": dataset.id,
+            "dataset_id": dataset.data_set_id,
+            "biz_name": dataset.biz_name,
+            "subject_domain_ids": [domain["domain_id"] for domain in domains],
+            "model_ids": model_ids,
+        }
+        units = [
+            ProjectedUnit.create(
+                unit_key="identity",
+                content_kind="identity",
+                title=dataset.name,
+                content=_lines(
+                    ("数据集名称", dataset.name),
+                    ("数据集别名", "、".join(aliases)),
+                ),
+                metadata={**common_metadata, "aliases": aliases},
+            ),
+            ProjectedUnit.create(
+                unit_key="definition",
+                content_kind="definition",
+                title=f"{dataset.name}定义",
+                content=_lines(("数据集定义", dataset.description or dataset.name)),
+                metadata=common_metadata,
+            ),
+        ]
+        for domain in domains:
+            domain_metadata = {
+                **common_metadata,
+                "domain_id": domain["domain_id"],
+                "domain_biz_name": domain["biz_name"],
+                "domain_model_ids": domain["model_ids"],
+            }
+            units.append(
+                ProjectedUnit.create(
+                    unit_key=f"subject-domain:{domain['domain_id']}",
+                    content_kind="subject_domain",
+                    title=domain["name"],
+                    content=_lines(
+                        ("主题域名称", domain["name"]),
+                        ("主题域定义", domain["description"] or domain["name"]),
+                    ),
+                    contextual_text=_dataset_context(schema),
+                    metadata=domain_metadata,
+                )
+            )
+        return _resource(
+            context=context,
+            resource_type=RetrievalResourceType.DATASET,
+            element=dataset,
+            title=dataset.name,
+            metadata=common_metadata,
+            units=tuple(units),
+        )
+
+    def _project_model(
+        self,
+        schema: DataSetSchema,
+        model: dict[str, Any],
+        context: _ProjectionContext,
+    ) -> ProjectedResource | None:
+        model_id = model.get("id")
+        if not isinstance(model_id, int) or model_id <= 0:
+            return None
+        name = _safe_string(model.get("name")) or _safe_string(model.get("biz_name"))
+        biz_name = _safe_string(model.get("biz_name")) or name
+        if name is None or biz_name is None:
+            return None
+
+        domains = [domain for domain in _subject_domains(schema) if model_id in domain["model_ids"]]
+        domain_names = [domain["name"] for domain in domains]
+        safe_metrics = [metric for metric in schema.metrics if metric.model == model_id and not _is_sensitive(metric)]
+        safe_dimensions = [
+            dimension
+            for dimension in schema.dimensions
+            if dimension.model == model_id and not _is_sensitive(dimension)
+        ]
+        metric_ids = sorted(metric.id for metric in safe_metrics)
+        dimension_ids = sorted(dimension.id for dimension in safe_dimensions)
+        metric_names = _normalized_texts(metric.name for metric in safe_metrics)
+        dimension_names = _normalized_texts(
+            dimension.name for dimension in safe_dimensions
+        )
+        common_metadata = {
+            "asset_type": "MODEL",
+            "asset_id": model_id,
+            "dataset_id": schema.data_set.id,
+            "biz_name": biz_name,
+            "subject_domain_ids": [domain["domain_id"] for domain in domains],
+            "related_metric_ids": metric_ids,
+            "related_dimension_ids": dimension_ids,
+        }
+        element = SchemaElement(
+            data_set_id=schema.data_set.id,
+            data_set_name=schema.data_set.name,
+            model=model_id,
+            id=model_id,
+            name=name,
+            biz_name=biz_name,
+            type="MODEL",
+        )
+        identity = ProjectedUnit.create(
+            unit_key="identity",
+            content_kind="identity",
+            title=name,
+            content=_lines(("数据模型名称", name)),
+            contextual_text=_dataset_context(schema),
+            metadata=common_metadata,
+        )
+        scope = ProjectedUnit.create(
+            unit_key="scope",
+            content_kind="scope",
+            title=f"{name}分析范围",
+            content=_lines(
+                ("所属主题域", "、".join(domain_names)),
+                ("可用指标", "、".join(metric_names)),
+                ("可用维度", "、".join(dimension_names)),
+            ),
+            contextual_text=_dataset_context(schema),
+            metadata=common_metadata,
+        )
+        return _resource(
+            context=context,
+            resource_type=RetrievalResourceType.MODEL,
+            element=element,
+            title=name,
+            metadata=common_metadata,
+            units=(identity, scope),
+        )
 
     def _project_metric(
         self,
@@ -464,6 +612,31 @@ def _lines(*items: tuple[str, Any]) -> str:
 
 def _dataset_context(schema: DataSetSchema) -> str:
     return f"数据集：{schema.data_set.name}"
+
+
+def _subject_domains(schema: DataSetSchema) -> list[dict[str, Any]]:
+    domains: list[dict[str, Any]] = []
+    for item in schema.subject_domains:
+        domain_id = item.get("domain_id")
+        name = _safe_string(item.get("name") or item.get("domain_name"))
+        if not isinstance(domain_id, int) or domain_id <= 0 or name is None:
+            continue
+        raw_model_ids = item.get("model_ids") or []
+        model_ids = sorted(
+            model_id
+            for model_id in raw_model_ids
+            if isinstance(model_id, int) and model_id > 0
+        )
+        domains.append(
+            {
+                "domain_id": domain_id,
+                "name": name,
+                "biz_name": _safe_string(item.get("biz_name") or item.get("domain_biz_name")) or name,
+                "description": _safe_string(item.get("description")),
+                "model_ids": model_ids,
+            }
+        )
+    return sorted(domains, key=lambda item: item["domain_id"])
 
 
 def _safe_string(value: Any) -> str | None:

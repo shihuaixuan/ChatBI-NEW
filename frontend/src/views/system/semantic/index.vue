@@ -46,7 +46,7 @@ const loading = ref(false)
 const saveLoading = ref(false)
 const schemaLoading = ref(false)
 const mapperLoading = ref(false)
-const metricEmbeddingLoading = ref(false)
+const knowledgeRebuildLoading = ref(false)
 const tablesLoading = ref(false)
 const fieldsLoading = ref(false)
 
@@ -120,7 +120,6 @@ const datasetForm = reactive({
 const datasetConfigs = reactive<Record<string, any>>({})
 const datasetMetricOptions = reactive<Record<string, any[]>>({})
 const datasetDimensionOptions = reactive<Record<string, any[]>>({})
-const metricEmbeddingSucceededByDataset = reactive<Record<string, boolean>>({})
 
 const currentDomain = computed(() => domains.value.find((item) => `${item.id}` === `${selectedDomainId.value}`))
 const currentDataset = computed(() => datasets.value.find((item) => `${item.id}` === `${selectedDatasetId.value}`))
@@ -231,7 +230,7 @@ const loadScopedAssets = async () => {
   if (!datasets.value.some((item) => `${item.id}` === `${selectedDatasetId.value}`)) {
     selectedDatasetId.value = datasets.value[0]?.id || ''
   }
-  await Promise.all([loadModelAssets(), loadMetricEmbeddingStatuses()])
+  await loadModelAssets()
 }
 
 const loadModelAssets = async () => {
@@ -240,30 +239,6 @@ const loadModelAssets = async () => {
   metrics.value = Array.isArray(metricRes) ? metricRes.filter((item) => scopedModelIds.has(String(item.model_id))) : []
   dimensions.value = Array.isArray(dimensionRes) ? dimensionRes.filter((item) => scopedModelIds.has(String(item.model_id))) : []
 }
-
-const hasSucceededMetricEmbedding = (records: any) =>
-  Array.isArray(records) && records.some((item) => item?.status === 'SUCCEEDED')
-
-const loadMetricEmbeddingStatus = async (datasetId: number | string) => {
-  try {
-    const records = await headlessApi.metricEmbeddingList(datasetId)
-    metricEmbeddingSucceededByDataset[String(datasetId)] = hasSucceededMetricEmbedding(records)
-  } catch {
-    metricEmbeddingSucceededByDataset[String(datasetId)] = false
-  }
-}
-
-const loadMetricEmbeddingStatuses = async () => {
-  const datasetIds = datasets.value.map((item) => item.id).filter((id) => id !== undefined && id !== null)
-  const visibleIds = new Set(datasetIds.map((id) => String(id)))
-  Object.keys(metricEmbeddingSucceededByDataset).forEach((id) => {
-    if (!visibleIds.has(id)) delete metricEmbeddingSucceededByDataset[id]
-  })
-  await Promise.all(datasetIds.map((datasetId) => loadMetricEmbeddingStatus(datasetId)))
-}
-
-const metricEmbeddingActionLabel = (datasetId?: number | string) =>
-  metricEmbeddingSucceededByDataset[String(datasetId || '')] ? '重新向量化' : '向量化'
 
 const handleDomainChange = async () => {
   selectedModelId.value = ''
@@ -1072,42 +1047,27 @@ const runMapper = async () => {
   }
 }
 
-const rebuildKnowledge = async () => {
-  if (!selectedDatasetId.value) {
-    ElMessage.warning('请选择数据集')
-    return
-  }
-  await headlessApi.knowledgeRebuild(selectedDatasetId.value)
-  ElMessage.success('知识索引已重建')
-}
-
-const rebuildMetricEmbeddings = async (datasetId?: number | string) => {
+const rebuildKnowledge = async (datasetId?: number | string) => {
   const targetDatasetId = datasetId || selectedDatasetId.value
   if (!targetDatasetId) {
     ElMessage.warning('请选择数据集')
     return
   }
-  const hasVectorized = metricEmbeddingSucceededByDataset[String(targetDatasetId)]
-  const actionLabel = hasVectorized ? '重新向量化' : '向量化'
-  const confirmMessage = hasVectorized
-    ? '重新向量化会删除当前数据集已有指标向量并重新生成，是否继续？'
-    : '向量化会为当前数据集生成指标向量，是否继续？'
   try {
-    await ElMessageBox.confirm(confirmMessage, `${actionLabel}指标`, {
-      confirmButtonText: actionLabel,
+    await ElMessageBox.confirm('将为当前数据集重建全部语义资产的向量索引，是否继续？', '重建向量索引', {
+      confirmButtonText: '重建',
       cancelButtonText: '取消',
       confirmButtonType: 'primary',
     })
   } catch {
     return
   }
-  metricEmbeddingLoading.value = true
+  knowledgeRebuildLoading.value = true
   try {
-    const result = await headlessApi.metricEmbeddingRebuild(targetDatasetId)
-    await loadMetricEmbeddingStatus(targetDatasetId)
-    ElMessage.success(`指标向量化完成：成功 ${result.succeeded || 0}，失败 ${result.failed || 0}`)
+    await headlessApi.knowledgeRebuild(targetDatasetId)
+    ElMessage.success('向量索引重建任务已提交')
   } finally {
-    metricEmbeddingLoading.value = false
+    knowledgeRebuildLoading.value = false
   }
 }
 
@@ -1334,11 +1294,11 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
           </el-table-column>
           <el-table-column label="别名" min-width="180"><template #default="{ row }">{{ aliasText(row) }}</template></el-table-column>
           <el-table-column prop="description" label="描述" min-width="240" />
-          <el-table-column label="操作" width="300" fixed="right">
+          <el-table-column label="操作" width="320" fixed="right">
             <template #default="{ row }">
               <div class="row-actions dataset-row-actions">
                 <el-button link type="primary" :icon="Edit" @click="openDatasetEditDialog(row)">编辑</el-button>
-                <el-button link type="primary" :icon="Refresh" :loading="metricEmbeddingLoading" @click="rebuildMetricEmbeddings(row.id)">{{ metricEmbeddingActionLabel(row.id) }}</el-button>
+                <el-button link type="primary" :icon="Refresh" :loading="knowledgeRebuildLoading" @click="rebuildKnowledge(row.id)">重建向量索引</el-button>
                 <el-button link type="danger" :icon="Delete" @click="deleteEntity('dataset', row)">删除</el-button>
               </div>
             </template>
@@ -1380,8 +1340,7 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
             />
           </div>
           <div class="toolbar-right">
-            <el-button :icon="MagicStick" @click="rebuildKnowledge">重建知识索引</el-button>
-            <el-button type="primary" :icon="Refresh" :loading="metricEmbeddingLoading" @click="rebuildMetricEmbeddings">{{ metricEmbeddingActionLabel(selectedDatasetId) }}</el-button>
+            <el-button type="primary" :icon="MagicStick" :loading="knowledgeRebuildLoading" @click="rebuildKnowledge()">重建向量索引</el-button>
           </div>
         </div>
         <div v-if="runtimeTab === 'schema'" class="runtime-panel">

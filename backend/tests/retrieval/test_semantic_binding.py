@@ -6,7 +6,7 @@ import pytest
 
 from apps.headless.schemas import DataSetSchema, SchemaElement
 from apps.retrieval.errors import RetrievalConfigurationError
-from apps.retrieval.headless import MetricEmbeddingRuntimeConfig
+from apps.retrieval.headless import RetrievalEmbeddingRuntimeConfig
 from apps.retrieval.schemas import (
     RetrievalBindings,
     RetrievalBundle,
@@ -98,7 +98,7 @@ def test_semantic_binding_connects_recall_policy_schema_and_payload_projection(m
         "apps.retrieval.semantic_binding.HeadlessSchemaBuilder",
         _SchemaBuilder,
     )
-    config = MetricEmbeddingRuntimeConfig(
+    config = RetrievalEmbeddingRuntimeConfig(
         enabled=True,
         provider="openai_compatible",
         api_base_url="https://embedding.example/v1",
@@ -131,7 +131,7 @@ def test_semantic_binding_connects_recall_policy_schema_and_payload_projection(m
 
 
 def test_semantic_binding_rejects_invalid_embedding_config_when_fallback_is_disabled():
-    config = MetricEmbeddingRuntimeConfig(
+    config = RetrievalEmbeddingRuntimeConfig(
         enabled=True,
         provider="openai_compatible",
         api_base_url="https://embedding.example/v1",
@@ -146,3 +146,47 @@ def test_semantic_binding_rejects_invalid_embedding_config_when_fallback_is_disa
         SemanticBindingRunner(embedding_config=config)
 
     assert exc_info.value.details["reason_code"] == "EMBEDDING_API_KEY_MISSING"
+
+
+def test_sentence_transformer_embedding_config_does_not_require_remote_credentials():
+    config = RetrievalEmbeddingRuntimeConfig(
+        enabled=True,
+        provider="sentence_transformers",
+        api_base_url="",
+        api_key="",
+        model="BAAI/bge-m3",
+        dimension=1024,
+        top_k=20,
+        allow_lexical_fallback=False,
+    )
+
+    config.validate()
+    runner = SemanticBindingRunner(embedding_config=config)
+
+    assert runner._embedding_startup_error is None
+
+
+def test_retrieval_embedding_config_reads_unified_setting_names():
+    runtime_settings = SimpleNamespace(
+        RETRIEVAL_EMBEDDING_ENABLED=True,
+        RETRIEVAL_EMBEDDING_PROVIDER="sentence_transformers",
+        RETRIEVAL_EMBEDDING_API_BASE_URL="",
+        RETRIEVAL_EMBEDDING_API_KEY="",
+        RETRIEVAL_EMBEDDING_MODEL="BAAI/bge-m3",
+        RETRIEVAL_EMBEDDING_DIMENSION=1024,
+        RETRIEVAL_EMBEDDING_TOP_K=20,
+        RETRIEVAL_EMBEDDING_ALLOW_LEXICAL_FALLBACK=False,
+    )
+
+    config = RetrievalEmbeddingRuntimeConfig.from_settings(runtime_settings)
+
+    assert config == RetrievalEmbeddingRuntimeConfig(
+        enabled=True,
+        provider="sentence_transformers",
+        api_base_url="",
+        api_key="",
+        model="BAAI/bge-m3",
+        dimension=1024,
+        top_k=20,
+        allow_lexical_fallback=False,
+    )

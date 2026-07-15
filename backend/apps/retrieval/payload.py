@@ -76,7 +76,7 @@ def semantic_payload_to_bundle(
         1
         for items in candidates.values()
         for item in items
-        if str(item.get("source") or "") == "headless_metric_embedding"
+        if _uses_dense_channel(item)
     )
 
     diagnostics = RetrievalDiagnostics(
@@ -729,11 +729,7 @@ def _candidate_to_hit(
         raise ValueError("语义检索候选缺少有效 asset_id")
     model_id = _positive_int(item.get("model_id"))
     source = str(item.get("source") or "semantic_binding")
-    channel = (
-        RetrievalChannel.DENSE
-        if source == "headless_metric_embedding"
-        else RetrievalChannel.LEXICAL
-    )
+    channel = RetrievalChannel.DENSE if _uses_dense_channel(item) else RetrievalChannel.LEXICAL
     title = str(
         item.get("name")
         or item.get("display_name")
@@ -762,6 +758,11 @@ def _candidate_to_hit(
             model_id=model_id,
         ),
     )
+
+
+def _uses_dense_channel(item: dict[str, Any]) -> bool:
+    scores = item.get("retrieval_scores")
+    return isinstance(scores, dict) and scores.get("dense") is not None
 
 
 def _slot_decisions(

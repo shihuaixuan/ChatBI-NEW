@@ -33,9 +33,9 @@ def build_headless_index_profile() -> IndexEmbeddingProfile:
 
     return IndexEmbeddingProfile(
         name="bge-m3-1024",
-        provider=settings.HEADLESS_METRIC_EMBEDDING_PROVIDER,
-        model=settings.HEADLESS_METRIC_EMBEDDING_MODEL,
-        dimension=settings.HEADLESS_METRIC_EMBEDDING_DIMENSION,
+        provider=settings.RETRIEVAL_EMBEDDING_PROVIDER,
+        model=settings.RETRIEVAL_EMBEDDING_MODEL,
+        dimension=settings.RETRIEVAL_EMBEDDING_DIMENSION,
     )
 
 

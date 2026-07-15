@@ -17,6 +17,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from alembic import command
 from apps.api import api_router
+from apps.retrieval.headless_worker import submit_pending_headless_index_jobs
 from apps.semantic.services.semantic_embedding import submit_missing_approved_embeddings
 from apps.swagger.i18n import (
     DEFAULT_LANG,
@@ -90,6 +91,7 @@ async def lifespan(app: FastAPI):
     init_data_training_embedding_data()
     init_table_and_ds_embedding()
     init_semantic_embedding()
+    submit_pending_headless_index_jobs()
     SQLBotLogUtil.info("✅ SQLBot 初始化完成")
     await sqlbot_xpack.core.clean_xpack_cache()
     await async_model_info()  # 异步加密已有模型的密钥和地址

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from sqlalchemy import delete, select
 
 from apps.datasource.models.datasource import CoreDatasource, CoreField, CoreTable
@@ -15,11 +15,9 @@ from apps.headless.asset_relation import (
     build_metric_relations,
     build_term_relations,
 )
-from apps.headless.metric_embedding import rebuild_dataset_metric_embeddings
 from apps.headless.models import (
     HeadlessAssetAlias,
     HeadlessAssetDocument,
-    HeadlessAssetEmbedding,
     HeadlessAssetRelation,
     HeadlessDataSet,
     HeadlessDataSetAsset,
@@ -42,8 +40,6 @@ from apps.headless.schemas import (
     HeadlessColumnMeta,
     HeadlessTableMeta,
     MetricBatchCreateFromMeasuresPayload,
-    MetricEmbeddingRebuildResponse,
-    MetricEmbeddingStatusResponse,
     MetricPayload,
     ModelBuildSchemaPayload,
     ModelCreateWithAssetsPayload,
@@ -71,6 +67,7 @@ from apps.headless.storage_sync import (
     normalize_model_storage_fields,
 )
 from apps.retrieval.headless_indexing import HeadlessIndexCoordinator
+from apps.retrieval.headless_worker import process_headless_index_jobs
 from common.core.deps import CurrentUser, SessionDep
 
 router = APIRouter(tags=["Headless"], prefix="/headless")
@@ -643,7 +640,12 @@ async def map_schema(session: SessionDep, current_user: CurrentUser, payload: Sc
 
 
 @router.post("/knowledge/rebuild")
-async def rebuild_knowledge(session: SessionDep, current_user: CurrentUser, dataset_id: int):
+async def rebuild_knowledge(
+    session: SessionDep,
+    current_user: CurrentUser,
+    background_tasks: BackgroundTasks,
+    dataset_id: int,
+):
     dataset = _get_active(session, HeadlessDataSet, current_user.oid, dataset_id, "HEADLESS_DATASET_NOT_FOUND")
     dataset.index_version = (dataset.index_version or 0) + 1
     schema = HeadlessSchemaBuilder(session).build_dataset_schema(current_user.oid, dataset_id)
@@ -684,6 +686,10 @@ async def rebuild_knowledge(session: SessionDep, current_user: CurrentUser, data
     )
     session.add(dataset)
     session.commit()
+    background_tasks.add_task(
+        process_headless_index_jobs,
+        index_enqueue.generation.job_ids,
+    )
     return {
         "dataset_id": dataset_id,
         "rebuilt": True,
@@ -693,6 +699,7 @@ async def rebuild_knowledge(session: SessionDep, current_user: CurrentUser, data
         "retrieval_source_id": index_enqueue.source_id,
         "retrieval_generation": index_enqueue.generation.generation,
         "retrieval_job_ids": list(index_enqueue.generation.job_ids),
+        "retrieval_status": "queued",
     }
 
 
@@ -714,34 +721,6 @@ async def list_asset_documents(
     if asset_id is not None:
         conditions.append(HeadlessAssetDocument.asset_id == asset_id)
     return _all(session.exec(select(HeadlessAssetDocument).where(*conditions).order_by(HeadlessAssetDocument.id)))
-
-
-@router.post(
-    "/datasets/{dataset_id}/metric-embeddings/rebuild",
-    response_model=MetricEmbeddingRebuildResponse,
-)
-async def rebuild_metric_embeddings(session: SessionDep, current_user: CurrentUser, dataset_id: int):
-    try:
-        return rebuild_dataset_metric_embeddings(session, current_user.oid, dataset_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.get("/datasets/{dataset_id}/metric-embeddings", response_model=list[MetricEmbeddingStatusResponse])
-async def list_metric_embeddings(session: SessionDep, current_user: CurrentUser, dataset_id: int):
-    _get_active(session, HeadlessDataSet, current_user.oid, dataset_id, "HEADLESS_DATASET_NOT_FOUND")
-    records = _all(
-        session.exec(
-            select(HeadlessAssetEmbedding)
-            .where(
-                HeadlessAssetEmbedding.oid == current_user.oid,
-                HeadlessAssetEmbedding.dataset_id == dataset_id,
-                HeadlessAssetEmbedding.asset_type == "METRIC",
-            )
-            .order_by(HeadlessAssetEmbedding.id)
-        )
-    )
-    return [MetricEmbeddingStatusResponse.model_validate(record) for record in records]
 
 
 def _ensure_domain(session: SessionDep, oid: int, domain_id: int) -> None:

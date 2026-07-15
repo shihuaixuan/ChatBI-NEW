@@ -8,15 +8,16 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
-from apps.headless.metric_embedding import (
+from apps.headless.service import HeadlessSchemaBuilder
+from apps.retrieval.embedding import (
     EmbeddingProvider,
     OpenAICompatibleEmbeddingProvider,
+    SentenceTransformerEmbeddingProvider,
 )
-from apps.headless.service import HeadlessSchemaBuilder
 from apps.retrieval.errors import RetrievalConfigurationError
 from apps.retrieval.headless import (
-    MetricEmbeddingRuntimeConfig,
     ObservedEmbeddingProvider,
+    RetrievalEmbeddingRuntimeConfig,
 )
 from apps.retrieval.hybrid import HybridRetrievalConfig, SemanticBindingHybridRetriever
 from apps.retrieval.payload import bundle_to_semantic_payload
@@ -49,13 +50,13 @@ class SemanticBindingRunner:
         self,
         *,
         embedding_provider: EmbeddingProvider | None = None,
-        embedding_config: MetricEmbeddingRuntimeConfig | None = None,
+        embedding_config: RetrievalEmbeddingRuntimeConfig | None = None,
         hybrid_config: HybridRetrievalConfig | None = None,
         policy: SemanticBindingPolicy | None = None,
         schema_builder: HeadlessSchemaBuilder | None = None,
     ) -> None:
         self._embedding_provider = embedding_provider
-        self._embedding_config = embedding_config or MetricEmbeddingRuntimeConfig.from_settings(
+        self._embedding_config = embedding_config or RetrievalEmbeddingRuntimeConfig.from_settings(
             settings
         )
         self._embedding_startup_error: RetrievalConfigurationError | None = None
@@ -64,7 +65,8 @@ class SemanticBindingRunner:
                 self._embedding_config.validate()
                 if (
                     self._embedding_provider is None
-                    and self._embedding_config.provider != "openai_compatible"
+                    and self._embedding_config.provider
+                    not in {"openai_compatible", "sentence_transformers"}
                 ):
                     raise RetrievalConfigurationError(
                         "不支持的语义绑定 embedding provider",
@@ -157,19 +159,25 @@ class SemanticBindingRunner:
             return None
         provider = self._embedding_provider
         if provider is None:
-            if self._embedding_config.provider != "openai_compatible":
+            if self._embedding_config.provider == "openai_compatible":
+                provider = OpenAICompatibleEmbeddingProvider(
+                    api_base_url=self._embedding_config.api_base_url,
+                    api_key=self._embedding_config.api_key,
+                    model=self._embedding_config.model,
+                    dimension=self._embedding_config.dimension,
+                    provider=self._embedding_config.provider,
+                    timeout=max(timeout_ms / 1000, 0.1),
+                )
+            elif self._embedding_config.provider == "sentence_transformers":
+                provider = SentenceTransformerEmbeddingProvider(
+                    model=self._embedding_config.model,
+                    dimension=self._embedding_config.dimension,
+                )
+            else:
                 raise RetrievalConfigurationError(
                     "不支持的语义绑定 embedding provider",
                     details={"reason_code": "EMBEDDING_PROVIDER_UNSUPPORTED"},
                 )
-            provider = OpenAICompatibleEmbeddingProvider(
-                api_base_url=self._embedding_config.api_base_url,
-                api_key=self._embedding_config.api_key,
-                model=self._embedding_config.model,
-                dimension=self._embedding_config.dimension,
-                provider=self._embedding_config.provider,
-                timeout=max(timeout_ms / 1000, 0.1),
-            )
         return ObservedEmbeddingProvider(provider, self._hybrid_config.embedding_dimension)
 
     @staticmethod

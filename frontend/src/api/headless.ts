@@ -48,8 +48,4 @@ export const headlessApi = {
   schemaMap: (data: SchemaMapPayload) => request.post('/headless/schema/map', data),
   knowledgeRebuild: (datasetId: number | string) =>
     request.post('/headless/knowledge/rebuild', null, { params: { dataset_id: datasetId } }),
-  metricEmbeddingRebuild: (datasetId: number | string) =>
-    request.post(`/headless/datasets/${datasetId}/metric-embeddings/rebuild`),
-  metricEmbeddingList: (datasetId: number | string) =>
-    request.get(`/headless/datasets/${datasetId}/metric-embeddings`),
 }

@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from apps.headless.metric_embedding import EmbeddingProvider
+from apps.retrieval.embedding import EmbeddingProvider
 from apps.retrieval.errors import (
     RetrievalConfigurationError,
     RetrievalDimensionMismatchError,
@@ -24,8 +24,8 @@ from apps.retrieval.schemas import RetrievalChannelStatus
 
 
 @dataclass(frozen=True, slots=True)
-class MetricEmbeddingRuntimeConfig:
-    """指标向量通道的显式运行配置。"""
+class RetrievalEmbeddingRuntimeConfig:
+    """统一检索向量通道的显式运行配置。"""
 
     enabled: bool
     provider: str
@@ -37,18 +37,18 @@ class MetricEmbeddingRuntimeConfig:
     allow_lexical_fallback: bool = True
 
     @classmethod
-    def from_settings(cls, runtime_settings: Any) -> MetricEmbeddingRuntimeConfig:
+    def from_settings(cls, runtime_settings: Any) -> RetrievalEmbeddingRuntimeConfig:
         """从应用配置构造稳定快照，避免请求中途读取到不同配置。"""
 
         return cls(
-            enabled=runtime_settings.HEADLESS_METRIC_EMBEDDING_ENABLED,
-            provider=runtime_settings.HEADLESS_METRIC_EMBEDDING_PROVIDER,
-            api_base_url=runtime_settings.HEADLESS_METRIC_EMBEDDING_API_BASE_URL,
-            api_key=runtime_settings.HEADLESS_METRIC_EMBEDDING_API_KEY,
-            model=runtime_settings.HEADLESS_METRIC_EMBEDDING_MODEL,
-            dimension=runtime_settings.HEADLESS_METRIC_EMBEDDING_DIMENSION,
-            top_k=runtime_settings.HEADLESS_METRIC_EMBEDDING_TOP_K,
-            allow_lexical_fallback=runtime_settings.HEADLESS_METRIC_EMBEDDING_ALLOW_LEXICAL_FALLBACK,
+            enabled=runtime_settings.RETRIEVAL_EMBEDDING_ENABLED,
+            provider=runtime_settings.RETRIEVAL_EMBEDDING_PROVIDER,
+            api_base_url=runtime_settings.RETRIEVAL_EMBEDDING_API_BASE_URL,
+            api_key=runtime_settings.RETRIEVAL_EMBEDDING_API_KEY,
+            model=runtime_settings.RETRIEVAL_EMBEDDING_MODEL,
+            dimension=runtime_settings.RETRIEVAL_EMBEDDING_DIMENSION,
+            top_k=runtime_settings.RETRIEVAL_EMBEDDING_TOP_K,
+            allow_lexical_fallback=runtime_settings.RETRIEVAL_EMBEDDING_ALLOW_LEXICAL_FALLBACK,
         )
 
     def validate(self) -> None:
@@ -57,18 +57,24 @@ class MetricEmbeddingRuntimeConfig:
         if not self.enabled:
             return
         if not self.provider.strip():
-            self._raise_configuration_error("EMBEDDING_PROVIDER_MISSING", "指标 embedding provider 未配置")
-        parsed_url = urlparse(self.api_base_url.strip())
-        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-            self._raise_configuration_error("EMBEDDING_API_URL_INVALID", "指标 embedding API URL 无效")
-        if not self.api_key.strip():
-            self._raise_configuration_error("EMBEDDING_API_KEY_MISSING", "指标 embedding API key 未配置")
+            self._raise_configuration_error("EMBEDDING_PROVIDER_MISSING", "检索 embedding provider 未配置")
+        if self.provider == "openai_compatible":
+            parsed_url = urlparse(self.api_base_url.strip())
+            if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+                self._raise_configuration_error("EMBEDDING_API_URL_INVALID", "检索 embedding API URL 无效")
+            if not self.api_key.strip():
+                self._raise_configuration_error("EMBEDDING_API_KEY_MISSING", "检索 embedding API key 未配置")
+        elif self.provider != "sentence_transformers":
+            self._raise_configuration_error(
+                "EMBEDDING_PROVIDER_UNSUPPORTED",
+                f"不支持的 embedding provider: {self.provider}",
+            )
         if not self.model.strip():
-            self._raise_configuration_error("EMBEDDING_MODEL_MISSING", "指标 embedding model 未配置")
+            self._raise_configuration_error("EMBEDDING_MODEL_MISSING", "检索 embedding model 未配置")
         if self.dimension <= 0:
-            self._raise_configuration_error("EMBEDDING_DIMENSION_INVALID", "指标 embedding 维度必须大于 0")
+            self._raise_configuration_error("EMBEDDING_DIMENSION_INVALID", "检索 embedding 维度必须大于 0")
         if self.top_k <= 0:
-            self._raise_configuration_error("EMBEDDING_TOP_K_INVALID", "指标 embedding top_k 必须大于 0")
+            self._raise_configuration_error("EMBEDDING_TOP_K_INVALID", "检索 embedding top_k 必须大于 0")
 
     @staticmethod
     def _raise_configuration_error(reason_code: str, message: str) -> None:
@@ -116,7 +122,7 @@ class ObservedEmbeddingProvider:
             vector = self._delegate.embed_query(text)
         except httpx.TimeoutException as exc:
             raise RetrievalProviderUnavailableError(
-                "指标 embedding provider 请求超时",
+                "检索 embedding provider 请求超时",
                 details={
                     "reason_code": "EMBEDDING_PROVIDER_TIMEOUT",
                     "latency_ms": (perf_counter() - started) * 1000,
@@ -124,7 +130,7 @@ class ObservedEmbeddingProvider:
             ) from exc
         except httpx.HTTPError as exc:
             raise RetrievalProviderUnavailableError(
-                "指标 embedding provider 请求失败",
+                "检索 embedding provider 请求失败",
                 details={
                     "reason_code": "EMBEDDING_PROVIDER_REQUEST_FAILED",
                     "latency_ms": (perf_counter() - started) * 1000,
@@ -147,7 +153,7 @@ class ObservedEmbeddingProvider:
             vectors = self._delegate.embed_documents(texts)
         except httpx.TimeoutException as exc:
             raise RetrievalProviderUnavailableError(
-                "指标 embedding provider 批量请求超时",
+                "检索 embedding provider 批量请求超时",
                 details={
                     "reason_code": "EMBEDDING_PROVIDER_TIMEOUT",
                     "latency_ms": (perf_counter() - started) * 1000,
@@ -155,7 +161,7 @@ class ObservedEmbeddingProvider:
             ) from exc
         except httpx.HTTPError as exc:
             raise RetrievalProviderUnavailableError(
-                "指标 embedding provider 批量请求失败",
+                "检索 embedding provider 批量请求失败",
                 details={
                     "reason_code": "EMBEDDING_PROVIDER_REQUEST_FAILED",
                     "latency_ms": (perf_counter() - started) * 1000,
@@ -163,7 +169,7 @@ class ObservedEmbeddingProvider:
             ) from exc
         if len(vectors) != len(texts):
             raise RetrievalProviderUnavailableError(
-                "指标 embedding provider 批量结果数量不一致",
+                "检索 embedding provider 批量结果数量不一致",
                 details={
                     "reason_code": "EMBEDDING_BATCH_COUNT_MISMATCH",
                     "expected_count": len(texts),

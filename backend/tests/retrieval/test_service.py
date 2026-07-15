@@ -94,6 +94,65 @@ def test_request_factory_defaults_to_semantic_binding_and_carries_acl_context():
     assert request.scope.source_ids == ["dataset:20"]
 
 
+def test_request_factory_projects_question_understanding_dimension_slot():
+    request = build_semantic_binding_request(
+        request_id="request-dimension-slot",
+        tenant_id=1,
+        actor_id=2,
+        dataset_id=20,
+        original_question="按店铺看 GMV",
+        rewritten_question="按店铺看 GMV",
+        intent={
+            "intent_type": "metric_query",
+            "metric_mentions": ["GMV"],
+            "dimension_slots": [
+                {
+                    "name": "店铺",
+                    "role": "group_by",
+                    "value": None,
+                    "value_status": "not_provided",
+                    "value_confidence": 0.0,
+                }
+            ],
+        },
+    )
+
+    assert request.intent.dimension_slots[0].model_dump() == {
+        "name": "店铺",
+        "role": "group_by",
+        "value": None,
+        "value_status": "not_provided",
+    }
+
+
+def test_request_factory_rejects_unknown_dimension_slot_fields():
+    with pytest.raises(RetrievalQueryError) as exc_info:
+        build_semantic_binding_request(
+            request_id="request-invalid-dimension-slot",
+            tenant_id=1,
+            actor_id=2,
+            dataset_id=20,
+            original_question="按店铺看 GMV",
+            rewritten_question="按店铺看 GMV",
+            intent={
+                "intent_type": "metric_query",
+                "dimension_slots": [
+                    {
+                        "name": "店铺",
+                        "role": "group_by",
+                        "unexpected_field": "unexpected",
+                    }
+                ],
+            },
+        )
+
+    assert exc_info.value.details == {
+        "reason_code": "DIMENSION_SLOT_FIELDS_UNSUPPORTED",
+        "slot_index": 0,
+        "fields": ["unexpected_field"],
+    }
+
+
 def test_v1_request_is_rejected_instead_of_falling_back():
     service = RetrievalService(object(), semantic_binding_runner=_Runner())
 

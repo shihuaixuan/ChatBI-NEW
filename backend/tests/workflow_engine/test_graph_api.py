@@ -21,7 +21,6 @@ from sqlmodel import Session, select
 from apps.chat.models.chat_model import Chat, ChatRecord
 from apps.chatbi_workflow import runtime as chatbi_runtime
 from apps.chatbi_workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
-from apps.headless.metric_embedding import StaticEmbeddingProvider
 from apps.headless.models import (
     HeadlessAssetDocument,
     HeadlessDataSet,
@@ -33,6 +32,7 @@ from apps.headless.models import (
     HeadlessModel,
     HeadlessSchemaIndex,
 )
+from apps.retrieval.embedding import StaticEmbeddingProvider
 from apps.retrieval.headless_indexing import (
     HeadlessIndexCoordinator,
     build_headless_index_profile,
