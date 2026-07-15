@@ -249,28 +249,44 @@ def recent_qa_summaries(session, chat_id: int, exclude_record_id: int, limit: in
     return summaries
 
 
-def find_chat_pending_clarification(session, chat_id: int, exclude_record_id: int) -> tuple[ChatbiAgentRun, ChatbiAgentClarification] | None:
-    """chat 内最近一个挂起澄清的 run（跨轮澄清判别的上下文来源）。"""
+def latest_successful_rewritten_question(
+    session,
+    *,
+    chat_id: int,
+    exclude_record_id: int,
+    datasource_id: int | None,
+) -> str | None:
+    """读取同会话、同数据源最近一次成功执行后的完整重写问题。"""
+
+    conditions = [
+        ChatbiAgentRun.chat_id == chat_id,
+        ChatbiAgentRun.record_id != exclude_record_id,
+        ChatbiAgentRun.status == AgentRunStatus.FINISHED.value,
+        ChatRecord.finish.is_(True),
+        ChatRecord.execution_type == "agent",
+    ]
+    if datasource_id is not None:
+        conditions.append(ChatRecord.datasource == datasource_id)
 
     stmt = (
         select(ChatbiAgentRun)
-        .where(
-            and_(
-                ChatbiAgentRun.chat_id == chat_id,
-                ChatbiAgentRun.record_id != exclude_record_id,
-                ChatbiAgentRun.status == AgentRunStatus.WAITING_USER.value,
-            )
+        .join(ChatRecord, ChatRecord.id == ChatbiAgentRun.record_id)
+        .where(and_(*conditions))
+        .order_by(
+            desc(ChatRecord.create_time),
+            desc(ChatRecord.id),
+            desc(ChatbiAgentRun.created_at),
         )
-        .order_by(desc(ChatbiAgentRun.created_at))
-        .limit(1)
+        .limit(10)
     )
-    run = session.exec(stmt).scalars().first()
-    if not run:
-        return None
-    clarification = get_pending_clarification(session, run.record_id)
-    if not clarification:
-        return None
-    return run, clarification
+    for previous_run in session.exec(stmt).scalars().all():
+        understanding = (previous_run.derived_state or {}).get("question_understanding")
+        if not isinstance(understanding, dict):
+            continue
+        rewritten_question = understanding.get("rewritten_question")
+        if isinstance(rewritten_question, str) and rewritten_question.strip():
+            return rewritten_question.strip()
+    return None
 
 
 def build_trace_response(session, record_id: int) -> dict:

@@ -260,6 +260,51 @@ def test_happy_path_tool_then_finish():
     assert "时间筛选必须原样使用 `time_range.normalized`" in model.calls[0][0].content
 
 
+def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
+    captured_context = {}
+
+    class CapturingUnderstandingService(StaticUnderstandingService):
+        def understand(self, *, question, datasource_id, conversation_context=None):
+            captured_context.update(conversation_context or {})
+            return super().understand(
+                question=question,
+                datasource_id=datasource_id,
+                conversation_context=conversation_context,
+            )
+
+    monkeypatch.setattr(
+        "apps.chatbi_agent.loop.crud.recent_qa_summaries",
+        lambda session, chat_id, exclude_record_id, limit: [
+            {
+                "question": "今天店铺的客户数",
+                "sql": "select previous_month",
+                "answer_brief": "上个月各店铺的销售下单客户数",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "apps.chatbi_agent.loop.crud.latest_successful_rewritten_question",
+        lambda session, **kwargs: "今天按店铺分组的销售下单客户数",
+    )
+
+    model = ScriptedModel([AIMessage(content="完成")])
+    run, record = _run_and_record()
+    loop = AgentLoop(
+        FakeSession(),
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=5),
+        model_client=model,
+        registry=_registry(),
+        understanding_service=CapturingUnderstandingService(),
+    )
+
+    list(loop.run(run, record))
+
+    assert captured_context == {
+        "last_rewritten_question": "今天按店铺分组的销售下单客户数"
+    }
+
+
 def test_search_semantic_assets_trace_records_effective_understanding_input():
     model = ScriptedModel(
         [
@@ -348,7 +393,7 @@ def test_understanding_rewrites_followup_before_recognizing_intent():
     outcome = QuestionUnderstandingService(model).understand(
         question="那上个月呢",
         datasource_id=5,
-        conversation_context={"history": [{"question": "按城市统计本月销售额"}]},
+        conversation_context={"last_rewritten_question": "按城市统计本月销售额"},
     )
 
     assert outcome.output.rewritten_question == "按城市统计上个月销售额"

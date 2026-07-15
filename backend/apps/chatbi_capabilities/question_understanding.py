@@ -211,7 +211,9 @@ REWRITE_SYSTEM_PROMPT = """
 
 规则：
 - 当前输入本身构成完整问题时，message_type=new_question，不得被历史问题覆盖。
-- “那上个月呢”“换成订单数”等依赖上文的表达属于 followup，只继承上文中稳定且未被本轮替换的语义。
+- conversation_context.last_rewritten_question 只表示最近一次成功执行后的完整问题，只能用于补全真正依赖上文的追问。
+- “那上个月呢”“换成订单数”等依赖上文的表达属于 followup；只从 last_rewritten_question 继承本轮缺失的语义，并保留本轮明确表达的全部内容。
+- 当前输入可以独立理解时，必须忽略 last_rewritten_question，rewritten_question 必须保持当前输入原文。
 - 当前输入明显在回答挂起澄清时，message_type=clarification_reply，并将回答合并到挂起问题对应的原问题中。
 - 无法可靠衔接上下文或存在多个合理解释时，不要强行补全；need_user_input=true，并列出 missing_slots。
 - rewritten_question 必须保留原始修饰关系、并列关系、筛选关系和业务短语边界。

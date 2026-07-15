@@ -113,14 +113,7 @@ class AgentLoop:
         try:
             conversation_context = self._load_conversation_context(run, record)
             understanding_context = {
-                "history": [
-                    {
-                        "question": item.get("question") or "",
-                        "answer_brief": item.get("answer_brief") or "",
-                    }
-                    for item in conversation_context.get("history") or []
-                ],
-                "pending_clarification": conversation_context.get("pending_clarification"),
+                "last_rewritten_question": conversation_context.get("last_rewritten_question"),
             }
             outcome = self.understanding_service.understand(
                 question=record.question or "",
@@ -226,13 +219,6 @@ class AgentLoop:
             previous_understanding = ctx.state.get("question_understanding")
             previous_understanding = previous_understanding if isinstance(previous_understanding, dict) else {}
             understanding_context = {
-                "history": [
-                    {
-                        "question": item.get("question") or "",
-                        "answer_brief": item.get("answer_brief") or "",
-                    }
-                    for item in conversation_context.get("history") or []
-                ],
                 "pending_clarification": {
                     "original_question": previous_understanding.get("rewritten_question") or record.question or "",
                     "question": clarification.question,
@@ -335,18 +321,16 @@ class AgentLoop:
 
     def _load_conversation_context(self, run: ChatbiAgentRun, record: ChatRecord) -> dict:
         history = crud.recent_qa_summaries(self.session, run.chat_id, record.id, limit=self.config.history_rounds)
-        pending = None
-        found = crud.find_chat_pending_clarification(self.session, run.chat_id, record.id)
-        if found:
-            pending_run, pending_clarification = found
-            pending_record = self.session.get(ChatRecord, pending_run.record_id)
-            pending = {
-                "original_question": pending_record.question if pending_record else "",
-                "question": pending_clarification.question,
-                "options": pending_clarification.options or [],
-                "question_understanding": (pending_run.derived_state or {}).get("question_understanding"),
-            }
-        return {"history": history, "pending_clarification": pending}
+        previous_rewritten_question = crud.latest_successful_rewritten_question(
+            self.session,
+            chat_id=run.chat_id,
+            exclude_record_id=record.id,
+            datasource_id=record.datasource,
+        )
+        return {
+            "history": history,
+            "last_rewritten_question": previous_rewritten_question,
+        }
 
     def _build_system(
         self,
