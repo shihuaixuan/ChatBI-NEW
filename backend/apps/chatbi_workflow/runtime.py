@@ -117,7 +117,6 @@ def build_real_chatbi_v1_runtime(
         question_adapter=QuestionAdapter(model_client=question_model_client, schema_builder=schema_builder),
         answer_adapter=AnswerAdapter(model_client=answer_model_client),
         knowledge_adapter=HeadlessKnowledgeAdapter(
-            schema_builder=schema_builder,
             retrieval_service=retrieval_service,
         ),
         interaction_adapter=InteractionAdapter(schema_builder=schema_builder),

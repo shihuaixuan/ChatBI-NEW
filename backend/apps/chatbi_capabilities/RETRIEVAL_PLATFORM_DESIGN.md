@@ -2,13 +2,13 @@
 
 > 状态：方案评审稿
 >
-> 日期：2026-07-14
+> 日期：2026-07-15
 >
 > 范围：Headless 语义资产、SQL 示例、未来 Youtu 类知识库，以及 Graph/Agent 的统一检索入口
 >
 > 实施计划：[RETRIEVAL_PLATFORM_IMPLEMENTATION_PLAN.md](./RETRIEVAL_PLATFORM_IMPLEMENTATION_PLAN.md)
 >
-> 实施状态：P0、P1-1～P1-4 已完成；分槽混合召回以 `semantic-binding-v2-shadow` 独立运行
+> 实施状态：P0、P1-1～P1-5 已完成；`semantic-binding` 是 Graph/Agent 唯一检索策略，旧实现已移除
 
 ## 1. 需求理解
 
@@ -62,10 +62,10 @@ M1 已完成前 2、3、6 项的入口治理：检索核心已下沉到 `apps.re
 维值的细粒度 Projector，SQL、字段、Join condition 和权限条件不会进入 embedding 文本。
 P1-3 新增 generation 状态表、批量 embedding 端口和统一 IndexingService：每次增量构建形成
 完整快照，未变化 unit/向量直接复用，全部任务成功后才原子激活；已知失败可重试，旧 active
-generation 始终保留并可回滚。旧指标向量表与线上读取仍保留，混合召回与读流量切换按
-P1-4～P1-6 实施。P1-4 已新增确定性 QueryPlanner、active-generation 硬过滤、多通道召回
-和资源级 RRF，但仅以 `semantic-binding-v2-shadow` 暴露；P1-5 完成决策门控、P1-6 完成
-shadow 对比后才切换 Graph/Agent 正式读取。
+generation 始终保留并可回滚。P1-4 已新增确定性 QueryPlanner、active-generation 硬过滤、多通道召回
+和资源级 RRF；P1-5 已新增版本化重排、按槽位门控、跨模型判定和统一编译白名单校验。
+Graph 与 Agent 现已直接使用 `semantic-binding`；旧策略不再保留为 fallback，索引仍通过
+active generation 保留数据级回滚能力。
 
 ## 3. 哪些数据应该被向量化
 
@@ -194,7 +194,7 @@ RetrievalSubQuery
 
 P1-4 的实现只读取 `RetrievalRequest.intent`：每个显式指标、维度槽位和已提供维值形成独立
 required subquery，术语只接受 `subject_domain.terms` 中的显式输入；缺少 mention 时不会用整句
-猜测资产。计划包含稳定 fingerprint，便于 shadow 结果复现。
+猜测资产。计划包含稳定 fingerprint，便于结果复现和问题定位。
 
 ### 4.3 Graph 与 Agent 的使用方式
 
@@ -259,7 +259,7 @@ RRF(resource) = sum(1 / (k + rank_channel(resource)))，初始 k = 60
 
 检索单元先按资源 ID 折叠，保留每个通道的 rank、原始 score、命中字段和命中文本，用于解释和离线分析。
 
-`chinese-lexical-v1` PostgreSQL 基准的 Recall@3：exact/alias `0.4`、
+`chinese-lexical` PostgreSQL 基准的 Recall@3：exact/alias `0.4`、
 `tsvector(simple)` `0.4`、`pg_trgm` `1.0`、dense `1.0`、RRF `1.0`。该基准同时实际执行
 `pg_trgm` 与 pgvector `<=>`，因此首版词法选择和“融合不低于最佳单通道”均有可重复记录。
 
@@ -550,7 +550,7 @@ flowchart LR
 | RRF k | 60 | 常用稳定初值，不作为永久常量 |
 | HNSW 启用阈值 | 由压测决定 | 小规模保留精确扫描基线 |
 
-上述参数必须进入版本化 profile 配置，并通过 gold set、线上 shadow 和延迟预算调整，不能散落为代码常量。
+上述参数必须进入版本化 profile 配置，并通过 gold set、线上反馈和延迟预算调整，不能散落为代码常量。
 
 ## 11. 明确结论
 

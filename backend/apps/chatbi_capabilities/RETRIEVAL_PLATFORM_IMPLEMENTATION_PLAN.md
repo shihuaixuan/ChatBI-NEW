@@ -6,8 +6,8 @@
 
 ## 0. 当前状态
 
-截至 2026-07-14，P0、P1-1～P1-4 已经完成。Graph 与 Agent 已统一到
-`RetrievalService`，旧排序、门控和现有对外 payload 保持兼容；统一检索存储
+截至 2026-07-15，P0、P1-1～P1-5 已经完成。Graph 与 Agent 已统一到
+`RetrievalService`，并直接使用唯一的 `semantic-binding`；现有对外 payload 保持兼容。统一检索存储
 已具备 generation 双写、租户隔离和可回滚 migration，Headless 资产也已具备安全的
 resource/unit 投影契约和可增量、可重试、可回滚的索引生命周期。
 
@@ -19,7 +19,7 @@ resource/unit 投影契约和可增量、可重试、可回滚的索引生命周
 - Graph/Agent 旧结果转换器、基线采集脚本和离线评测脚本。
 - 契约、依赖方向、安全边界、Gold Set 和评测指标自动测试。
 - 独立于 Workflow/Agent 的 Headless 检索核心和统一服务入口。
-- Graph/Agent 共用的 `semantic-binding-v1` 请求、结果和应用组装工厂。
+- Graph/Agent 共用的 `semantic-binding` 请求、结果和应用组装工厂；旧策略请求会被明确拒绝。
 - dense 通道启动配置检查，以及关闭、配置缺失、超时、维度不一致、索引不可用和查询错误诊断。
 - 已知 dense 故障允许显式词法降级，未知异常不再被静默吞掉。
 - `HEADLESS_METRIC_EMBEDDING_ALLOW_LEXICAL_FALLBACK` 统一控制生产降级策略。
@@ -34,27 +34,19 @@ resource/unit 投影契约和可增量、可重试、可回滚的索引生命周
 - 增量 generation 自动复制未变化快照和向量，只重新计算文本发生变化的 unit。
 - generation 完整性检查、并发安全原子激活、显式重试、保留代际回滚和 reconciliation 诊断。
 - Headless `/knowledge/rebuild` 在同一业务事务内注册 source、投影资源并写入索引任务。
-- `semantic-binding-v2-shadow` 确定性分槽 QueryPlanner，不使用整句兜底猜测缺失资产。
+- `semantic-binding` 确定性分槽 QueryPlanner，不使用整句兜底猜测缺失资产。
 - exact、批准 alias、`pg_trgm` 和 pgvector dense 通道共用 active-generation 与 ACL 硬过滤。
 - 按资源折叠 unit、记录通道原始分数/rank 的 RRF，以及唯一名称/别名快速路径。
 - 版本化中文词法 gold set、PostgreSQL benchmark 脚本和固定基线报告。
+- `semantic-binding-policy` 按资产类型配置 lexical、dense、rerank 绝对阈值和 top gap。
+- exact/alias 身份优先、可选 reranker 封闭候选集以及不同分数量纲不直接比较的门控规则。
+- 按必需槽位生成 `resolved/ambiguous/partial/missed/cross_model/degraded` 和可解释 reason codes。
+- 模型关系摘要提升到 resource metadata，跨模型判断不依赖某个召回通道恰好命中的 unit。
+- `allowed_asset_ids` 统一生成和 SQL 编译前白名单校验入口。
 
-当前基线：
-
-| 实现 | Precision@1 | Recall@5 | 状态准确率 | P95 | Dense 通道 |
-| --- | ---: | ---: | ---: | ---: | --- |
-| 当前 Graph | 1.0000 | 1.0000 | 1.0000 | 142.8ms | 9/9 `unavailable`，`EMBEDDING_API_KEY_MISSING` |
-| 当前 Agent | 1.0000 | 0.9531 | 1.0000 | 40.0ms | 9/9 `unavailable`，`EMBEDDING_API_KEY_MISSING` |
-
-基线报告：
-
-- `backend/tests/retrieval/baselines/current_graph_report.json`
-- `backend/tests/retrieval/baselines/current_agent_report.json`
-
-该结果说明两条链路已经对齐：当前都因缺少 provider API key 明确进入词法降级，
-不再出现 Graph 尝试 dense、Agent 静默跳过的差异。P1-4 新算法当前只以 shadow 版本独立
-运行；下一阶段从 P1-5 建设重排与决策门控。配置真实向量服务和启动独立 index worker
-仍是部署动作，线上读取在 P1-6 前不切换。
+旧实现的 Graph/Agent 基线文件已经删除，避免继续作为当前质量事实。当前基线必须通过
+`capture_retrieval_baseline.py` 使用 `semantic-binding` Gold Set 重新采集。缺少 provider API key
+时，dense 通道明确标记为 unavailable 并按配置使用词法通道，不会回退旧策略。
 
 ## 1. 优先级定义
 
@@ -82,7 +74,7 @@ flowchart LR
 
 1. 不在统一契约完成前改数据库模型。
 2. 不在 Graph/Agent 统一入口前扩展新的向量资产类型。
-3. 不同时切换新存储和新排序算法；先证明存储等价，再 shadow 新算法。
+3. 新存储和新排序算法必须分别通过测试与 Gold Set，不在未验证时同时变更。
 4. 不在离线评测集和回滚路径存在之前执行正式流量切换。
 
 ## 3. P0：统一事实、契约与入口
@@ -151,11 +143,11 @@ backend/apps/retrieval/
 
 任务：
 
-- 新增 `apps.retrieval.RetrievalService`，第一版内部包装当前 Headless 检索算法，不改变排序。
-- 将 `HeadlessKnowledgeAdapter` 中的检索核心和 `CandidateGate` 下沉到检索域。
-- 将 `HeadlessAssetDocumentBuilder` 作为第一版 `HeadlessSourceProjector` 的兼容实现。
+- 新增 `apps.retrieval.RetrievalService`，作为 Graph 与 Agent 的唯一检索入口。
+- 将 Workflow 内的检索、门控和业务 payload 投影统一下沉到检索域。
+- 使用 `HeadlessSourceProjector.project()` 生成统一检索资源，不保留旧文档构建入口。
 - 删除 `chatbi_capabilities.semantic.retrieval` 对 `chatbi_workflow` 的反向 import。
-- 保留现有 Agent 工具函数签名和 Graph gateway 结果结构，通过兼容 adapter 转换。
+- 保留 Agent 工具函数签名和 Graph gateway 结果结构，由统一 payload 投影器转换。
 - 依赖方向加入自动测试：`apps.retrieval` 不得 import Agent、Workflow 或 API 层。
 
 主要改动位置：
@@ -332,7 +324,7 @@ backend/apps/retrieval/
 - `082_retrieval_hybrid_p1` 启用 `pg_trgm`，为资源标题与 unit 文本建立 active 部分 GIN 索引；
   已完成 `081 -> 082 -> 081 -> 082` 往返验证。首次发现 `concat_ws` 非 IMMUTABLE 后改用不可变
   文本连接表达式，查询与索引表达式保持一致。
-- `chinese-lexical-v1` 在 PostgreSQL 实际算子上的 Recall@3 为 exact/alias `0.4`、
+- `chinese-lexical` 在 PostgreSQL 实际算子上的 Recall@3 为 exact/alias `0.4`、
   `tsvector(simple)` `0.4`、`pg_trgm` `1.0`、dense `1.0`、RRF `1.0`，因此首版选择
   `pg_trgm`，且融合结果不低于最佳单通道。
 - PostgreSQL 集成测试确认四通道读取同一 active generation，并阻止跨租户、跨数据集、停用、
@@ -340,11 +332,11 @@ backend/apps/retrieval/
 
 ### P1-5 重排、决策门控与编译白名单
 
-优先级：高；预计 4～6 人日；依赖 P1-4。
+状态：已完成；优先级：高；预计 4～6 人日；依赖 P1-4。
 
 任务：
 
-- 将当前 slot-aware rerank 和 `CandidateGate` 迁移为版本化 `semantic_binding` policy。
+- 使用 `SemanticBindingPolicy` 统一执行 slot-aware rerank、决策门控和编译白名单生成。
 - 基于绝对置信度、top1/top2 gap、槽位覆盖和模型兼容性决策。
 - 可选 cross-encoder 只重排已有候选，不能生成资产 ID 或覆盖硬过滤。
 - 统一生成 `allowed_asset_ids`，Graph/Agent 编译链路都从该字段校验。
@@ -358,22 +350,49 @@ backend/apps/retrieval/
 - 越权候选和未放行资产进入 SQL 编译均为 0。
 - 具体阈值若与业务数据不匹配，必须根据标注结果调整并记录原因，不能为了过线修改样本。
 
-### P1-6 Shadow、灰度与切换
+实现记录：
+
+- 新增 `SemanticBindingPolicy`，对每个 subquery 独立执行确定性重排、绝对阈值、同量纲
+  top1/top2 gap 和必需槽位覆盖门控；RRF 只负责排序，不被伪装为绝对置信度。
+- exact/批准 alias 保持身份优先；不同分数量纲的两个强候选在无 reranker 时判为歧义，
+  不直接比较 lexical 与 dense 原始值。
+- 可选 `CandidateReranker` 只接收检索层生成的候选 ID；重复 ID 或集合外 ID 明确失败，
+  provider 不可用时输出 `degraded`，不静默伪装为正常重排。
+- 按资源类型配置首版阈值并通过 policy version 固化；这些参数仍需使用 Gold Set 和真实流量校准。
+- 模型兼容性读取 Headless resource metadata：不同指标模型要求拆分，同一指标模型下的
+  维度/维值必须对每个已选指标兼容。
+- policy 一次生成 `RetrievalBundle.decision.allowed_asset_ids`；新增统一编译校验入口，同时
+  拒绝不可执行状态和白名单外资产。
+- 聚焦策略、projector 与 schema 测试 30 项通过；统一检索 PostgreSQL 集成测试 17 项通过，
+  Ruff 和 Mypy 通过。
+
+### P1-6 语义绑定直接切换与旧策略移除
 
 优先级：高；预计 2～3 人日；依赖 P1-5。
 
 任务：
 
-- 线上主结果继续使用旧 policy，新 policy 异步 shadow，记录候选和决策差异。
-- 按租户/数据集灰度，先内部数据集，再低风险真实流量。
-- 切换只修改 active strategy/index generation，不发布新的业务代码。
-- 保留一键回退旧 strategy 和旧 generation 的能力。
+- Graph/Agent 统一请求默认改为 `semantic-binding`。
+- 删除旧执行分支、shadow 线程池、策略灰度表和策略 fallback。
+- 统一检索结果继续投影为现有业务 payload，调用方不维护两套消费逻辑。
+- 保留 active index generation 的数据级回滚能力，不保留旧检索算法回滚。
 
 退出条件：
 
-- Shadow 差异完成归类：质量提升、数据问题、策略问题或真实歧义。
-- 语义绑定 P95 暂定不超过 1.5 秒；最终值以 P0 基线和产品预算评审为准。
-- 连续观察窗口内无权限事故、索引空窗和错误率异常后才全量。
+- 生产代码中不存在旧策略运行路径。
+- 显式旧策略请求返回明确错误，不能静默 fallback。
+- Graph/Agent 回归一致，diagnostics 能区分 dense unavailable 与正常检索。
+- 语义绑定 P95 暂定不超过 1.5 秒；最终值以真实流量观察为准。
+
+实现记录：
+
+- `RetrievalService` 只组装和执行 `SemanticBindingRunner`，不再读取策略路由配置。
+- 检索结果通过 Headless schema 投影为现有 Graph/Agent payload；索引 metadata 不作为
+  SQL 执行事实。
+- PostgreSQL statement timeout 与默认 embedding HTTP provider 共用 1.5 秒查询预算。
+- embedding 配置异常且允许词法降级时，dense diagnostics 明确记录 unavailable reason code；
+  禁止降级时直接抛出配置错误。
+- 已移除专用于双策略灰度的 `083` migration，并把本地数据库安全回退到 `082`。
 
 ## 5. P2：扩展检索来源
 
@@ -441,8 +460,8 @@ P2 的两个子阶段共享平台，但结果必须分组，不能混入同一�
 | M0 | P0-1、P0-2 | 契约、状态语义、评测样本 | 否 |
 | M1 | P0-3、P0-4 | 依赖方向、Graph/Agent 一致性、显式降级 | 是 |
 | M2 | P1-1～P1-3 | 数据模型、增量一致性、generation 回滚 | 影子索引 |
-| M3 | P1-4、P1-5 | 混合检索质量、门控安全性、编译白名单 | Shadow |
-| M4 | P1-6 | 灰度指标和回滚演练 | 是 |
+| M3 | P1-4、P1-5 | 混合检索质量、门控安全性、编译白名单 | 是 |
+| M4 | P1-6 | 直接切换、旧策略移除和兼容回归 | 是 |
 | M5 | P2-1 | SQL 示例真实增益 | 是 |
 | M6 | P2-2 | 知识引用、ACL、删除一致性 | 是 |
 
@@ -456,12 +475,11 @@ P2 的两个子阶段共享平台，但结果必须分组，不能混入同一�
 
 ## 8. 下一执行批次
 
-M0 已完成。下一批只执行 M1（P0-3、P0-4），不并行建设 P1 存储模型：
+下一批执行语义绑定部署验证，不提前接入 P2 数据源：
 
-1. 建立 `RetrievalService`，先包装当前算法并保持 Gold Set 结果等价。
-2. 下沉 Headless 检索核心，移除 capabilities 对 Workflow 的反向 import。
-3. Graph/Agent 在应用组装层注入同一个 service。
-4. 将 dense 的 `skipped/unavailable/failed/succeeded` 统一写入结果和 trace。
-5. 重新采集两条链路基线，要求候选、决策和通道状态一致。
+1. 配置真实 embedding provider，启动 index worker 并完成试点数据集 generation 构建。
+2. 使用 Gold Set 和真实请求校准各资产类型阈值，记录每次参数版本与原因。
+3. 验证 P95、错误率、权限和索引空窗指标。
+4. 演练 generation 回退；完整观察窗口通过后再进入 P2。
 
-M1 仍不修改召回排序算法，也不创建新向量表。只有 M1 验收完成后，才进入 P1 的索引存储和混合检索建设。
+Graph/Agent 已正式读取 `semantic-binding`，不再提供旧策略回退。

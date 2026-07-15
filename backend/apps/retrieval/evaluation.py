@@ -49,7 +49,7 @@ class GoldenSlotExpectation(_StrictModel):
 
 
 class RetrievalGoldenCase(_StrictModel):
-    """一条可被 Graph、Agent 和 shadow 实现共同执行的评测样本。"""
+    """一条可被 Graph、Agent 和候选策略共同执行的评测样本。"""
 
     case_id: str = Field(min_length=1)
     request: RetrievalRequest
@@ -93,7 +93,7 @@ class RecordedRetrievalResult(_StrictModel):
 
 
 class RetrievalBaseline(_StrictModel):
-    """Graph、Agent 或 shadow 策略的一次完整基线快照。"""
+    """Graph、Agent 或候选策略的一次完整基线快照。"""
 
     implementation: str = Field(min_length=1)
     captured_at: datetime

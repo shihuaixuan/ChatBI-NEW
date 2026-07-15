@@ -28,6 +28,17 @@ class HeadlessIndexEnqueueResult:
     generation: GenerationEnqueueResult
 
 
+def build_headless_index_profile() -> IndexEmbeddingProfile:
+    """统一构造 Headless 索引与 worker 共用的物理 embedding profile。"""
+
+    return IndexEmbeddingProfile(
+        name="bge-m3-1024",
+        provider=settings.HEADLESS_METRIC_EMBEDDING_PROVIDER,
+        model=settings.HEADLESS_METRIC_EMBEDDING_MODEL,
+        dimension=settings.HEADLESS_METRIC_EMBEDDING_DIMENSION,
+    )
+
+
 class HeadlessIndexCoordinator:
     """把 Headless Schema 投影和通用 IndexingService 连接在一个事务内。"""
 
@@ -37,12 +48,7 @@ class HeadlessIndexCoordinator:
         profile: IndexEmbeddingProfile | None = None,
     ) -> None:
         self._session = session
-        self._profile = profile or IndexEmbeddingProfile(
-            name="bge-m3-1024",
-            provider=settings.HEADLESS_METRIC_EMBEDDING_PROVIDER,
-            model=settings.HEADLESS_METRIC_EMBEDDING_MODEL,
-            dimension=settings.HEADLESS_METRIC_EMBEDDING_DIMENSION,
-        )
+        self._profile = profile or build_headless_index_profile()
 
     def enqueue_dataset_rebuild(
         self,
@@ -130,4 +136,8 @@ class HeadlessIndexCoordinator:
         )
 
 
-__all__ = ["HeadlessIndexCoordinator", "HeadlessIndexEnqueueResult"]
+__all__ = [
+    "HeadlessIndexCoordinator",
+    "HeadlessIndexEnqueueResult",
+    "build_headless_index_profile",
+]

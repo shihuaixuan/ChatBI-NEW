@@ -7,7 +7,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from apps.headless.asset_document import HeadlessAssetDocumentBuilder
 from apps.headless.schemas import DataSetSchema, JoinRelation, SchemaElement
 from apps.retrieval.projection import (
     ProjectedResource,
@@ -34,7 +33,7 @@ class HeadlessProjectionPolicy:
             raise ValueError("维值投影的最大基数必须大于 0")
 
 
-class HeadlessSourceProjector(HeadlessAssetDocumentBuilder):
+class HeadlessSourceProjector:
     """把 Headless 业务资产投影为细粒度、安全且可增量更新的检索单元。"""
 
     def __init__(self, policy: HeadlessProjectionPolicy | None = None) -> None:
@@ -94,7 +93,9 @@ class HeadlessSourceProjector(HeadlessAssetDocumentBuilder):
         relationships: _RelationshipIndex,
     ) -> ProjectedResource:
         aliases = _normalized_texts(metric.alias)
+        relationship_metadata = relationships.for_model(metric.model, schema.dimensions)
         common_metadata = _asset_metadata(metric)
+        resource_metadata = {**common_metadata, **relationship_metadata}
         identity_metadata = {**common_metadata, "aliases": aliases}
         identity = ProjectedUnit.create(
             unit_key="identity",
@@ -119,7 +120,7 @@ class HeadlessSourceProjector(HeadlessAssetDocumentBuilder):
             **common_metadata,
             "default_agg": metric.default_agg,
             "related_dimension_ids": _related_asset_ids(metric, "DIMENSION"),
-            **relationships.for_model(metric.model, schema.dimensions),
+            **relationship_metadata,
         }
         usage = ProjectedUnit.create(
             unit_key="usage",
@@ -137,7 +138,7 @@ class HeadlessSourceProjector(HeadlessAssetDocumentBuilder):
             resource_type=RetrievalResourceType.METRIC,
             element=metric,
             title=metric.name,
-            metadata=common_metadata,
+            metadata=resource_metadata,
             units=(identity, definition, usage),
         )
 
@@ -149,7 +150,9 @@ class HeadlessSourceProjector(HeadlessAssetDocumentBuilder):
         relationships: _RelationshipIndex,
     ) -> ProjectedResource:
         aliases = _normalized_texts(dimension.alias)
+        relationship_metadata = relationships.for_model(dimension.model, schema.dimensions)
         common_metadata = _asset_metadata(dimension)
+        resource_metadata = {**common_metadata, **relationship_metadata}
         identity = ProjectedUnit.create(
             unit_key="identity",
             content_kind="identity",
@@ -176,7 +179,7 @@ class HeadlessSourceProjector(HeadlessAssetDocumentBuilder):
             "is_primary_key": bool(dimension.ext_info.get("is_primary_key")),
             "is_default_time": bool(dimension.ext_info.get("is_default_time")),
             "time_granularities": _normalized_texts(dimension.ext_info.get("time_granularities") or []),
-            **relationships.for_model(dimension.model, schema.dimensions),
+            **relationship_metadata,
         }
         role = ProjectedUnit.create(
             unit_key="role",
@@ -195,7 +198,7 @@ class HeadlessSourceProjector(HeadlessAssetDocumentBuilder):
             resource_type=RetrievalResourceType.DIMENSION,
             element=dimension,
             title=dimension.name,
-            metadata=common_metadata,
+            metadata=resource_metadata,
             units=(identity, definition, role),
         )
 
@@ -298,6 +301,7 @@ class HeadlessSourceProjector(HeadlessAssetDocumentBuilder):
 
         common_metadata = {
             "asset_type": "VALUE",
+            "asset_id": value_dictionary.id,
             "dimension_id": value_dictionary.id,
             "model_id": value_dictionary.model,
             "dataset_id": value_dictionary.data_set_id,

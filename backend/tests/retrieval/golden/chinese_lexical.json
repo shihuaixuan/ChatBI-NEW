@@ -1,5 +1,5 @@
 {
-  "version": "chinese-lexical-v1",
+  "version": "chinese-lexical",
   "corpus": [
     {
       "id": "metric:1",

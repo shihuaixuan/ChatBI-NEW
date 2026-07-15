@@ -18,7 +18,7 @@ from apps.retrieval.evaluation import (
     RetrievalGoldenCase,
     load_gold_set,
 )
-from apps.retrieval.evaluation_legacy import legacy_semantic_result_to_bundle
+from apps.retrieval.payload import semantic_payload_to_bundle
 from apps.retrieval.schemas import RetrievalChannel, RetrievalChannelStatus
 from apps.retrieval.service import build_retrieval_service
 from common.core.db import engine
@@ -44,7 +44,7 @@ def _agent_result(session: Session, case: RetrievalGoldenCase) -> RecordedRetrie
     )
     latency_ms = (time.perf_counter() - started) * 1000
     dense = _channel_diagnostic(raw, RetrievalChannel.DENSE)
-    bundle = legacy_semantic_result_to_bundle(
+    bundle = semantic_payload_to_bundle(
         case.request,
         raw,
         dense_status=RetrievalChannelStatus(dense.get("status") or RetrievalChannelStatus.SKIPPED),
@@ -84,20 +84,20 @@ def main() -> None:
         agent_results = [_agent_result(session, case) for case in cases]
 
     _write_baseline(
-        args.output_dir / "current_graph.json",
+        args.output_dir / "graph_baseline.json",
         RetrievalBaseline(
-            implementation="current_graph",
+            implementation="graph",
             captured_at=captured_at,
-            strategy_version="semantic-binding-v1",
+            strategy_version="semantic-binding",
             results=graph_results,
         ),
     )
     _write_baseline(
-        args.output_dir / "current_agent.json",
+        args.output_dir / "agent_baseline.json",
         RetrievalBaseline(
-            implementation="current_agent",
+            implementation="agent",
             captured_at=captured_at,
-            strategy_version="semantic-binding-v1",
+            strategy_version="semantic-binding",
             results=agent_results,
         ),
     )

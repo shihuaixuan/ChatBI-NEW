@@ -64,11 +64,12 @@ class SemanticBindingRecallStore(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class HybridRetrievalConfig:
-    """一次 shadow 检索使用的不可变运行配置。"""
+    """一次语义绑定检索使用的不可变运行配置。"""
 
     embedding_profile: str = "bge-m3-1024"
     embedding_dimension: int = 1024
     dense_enabled: bool = True
+    dense_unavailable_error_code: str | None = None
     lexical_threshold: float = 0.3
 
     def __post_init__(self) -> None:
@@ -101,7 +102,7 @@ class SubQueryRecallResult(BaseModel):
 
 
 class HybridRecallResult(BaseModel):
-    """P1-4 shadow 输出；P1-5 才负责决策和编译白名单。"""
+    """P1-4 召回输出；P1-5 负责决策和编译白名单。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -356,7 +357,10 @@ class SemanticBindingHybridRetriever:
                 RetrievalChannelDiagnostic(
                     channel=RetrievalChannel.DENSE,
                     status=RetrievalChannelStatus.UNAVAILABLE,
-                    error_code="EMBEDDING_PROVIDER_MISSING",
+                    error_code=(
+                        self._config.dense_unavailable_error_code
+                        or "EMBEDDING_PROVIDER_MISSING"
+                    ),
                 )
             )
         else:
@@ -493,6 +497,9 @@ def reciprocal_rank_fusion(
 def _candidate_from_row(row: dict[str, Any], channel: RetrievalChannel) -> RecallCandidate:
     resource_type = RetrievalResourceType(str(row["resource_type"]))
     metadata = dict(row.get("resource_metadata") or {})
+    unit_metadata = dict(row.get("unit_metadata") or {})
+    if unit_metadata:
+        metadata["matched_unit"] = unit_metadata
     asset_id = metadata.get("asset_id")
     model_id = metadata.get("model_id")
     asset_ref = None

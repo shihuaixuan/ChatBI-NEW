@@ -23,7 +23,7 @@
 - `recognize_intent` 输出自然语言槽位线索：`metric_mentions`、`dimension_mentions`、`time_mentions`、`filter_mentions`、`required_slot_types`、`query_shape`。
 - `knowledge.retrieve` 已改为优先按上述 mention 分槽位召回 Headless 候选。
 - `rewritten_question` 只在必需槽位缺候选时作为 fallback。
-- 候选进入 `CandidateGate` 前会执行可解释 rerank，输出 `base_score`、`rerank_strategy`、`rerank_reason`。
+- 候选经过 `SemanticBindingPolicy` 门控，并保留通道分数、排名和 reason codes。
 - 已通过单元测试验证：“访问人数”优先于“转化人数/关注人数”等仅部分重叠候选；只有“人数”这种弱词时仍保留 `metric_ambiguous`。
 
 2026-07-06 完成 Step 3 执行域重构：
@@ -114,7 +114,7 @@ ask_metric_selection
 原因：
 
 - `retrieve_knowledge` 命中多个“人数”类指标。
-- `CandidateGate` 判断 Top 指标候选分数接近，无法安全绑定唯一指标。
+- `SemanticBindingPolicy` 判断 Top 指标候选分数接近，无法安全绑定唯一指标。
 - 图路由进入 `ask_metric_selection`，等待用户选择指标。
 - 该问题已推动后续优化：当前 `knowledge.retrieve` 会先根据 `metric_mentions=["访问人数"]` 对候选做 slot-aware rerank，完整短语命中的候选会优先于只命中“人数”的候选。
 

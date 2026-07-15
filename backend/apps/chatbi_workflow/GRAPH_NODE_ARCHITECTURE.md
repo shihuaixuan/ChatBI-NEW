@@ -223,10 +223,9 @@ gateway.invoke(capability: str, request: dict, idempotency_key: str) -> dict
   - `dimension_mentions` 只召回维度候选。
   - `time_mentions` 补充时间维度和时间值候选。
   - `rewritten_question` 只在缺少必需槽位候选时作为 fallback。
-- 候选进入 `CandidateGate` 前先做 slot-aware rerank。
-  - 完整短语和关键词覆盖优先。
-  - 只命中“人数/次数/率”等弱词时保留歧义，不强行绑定。
-  - 候选输出 `base_score`、`rerank_strategy`、`rerank_reason`，供 trace 排查。
+- 统一检索服务按 exact、alias、中文词法和 dense 通道召回候选。
+  - `SemanticBindingPolicy` 根据绝对阈值、top gap、槽位覆盖和模型兼容性决策。
+  - 候选保留通道分数、排名、命中字段和 reason codes，供 trace 排查。
 
 ### 4.5 Condition Evaluator 只做判断
 

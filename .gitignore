@@ -16,8 +16,8 @@ backend/tests
 backend/tests/*
 !backend/tests/retrieval/
 !backend/tests/retrieval/**
-backend/tests/retrieval/baselines/current_graph.json
-backend/tests/retrieval/baselines/current_agent.json
+backend/tests/retrieval/baselines/graph_baseline.json
+backend/tests/retrieval/baselines/agent_baseline.json
 backend/alembic
 !backend/alembic/
 backend/alembic/*

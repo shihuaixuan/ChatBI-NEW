@@ -40,7 +40,7 @@
         "dataset_ids": [243]
       },
       "profiles": ["semantic_binding"],
-      "strategy_version": "semantic-binding-v1"
+      "strategy_version": "semantic-binding"
     },
     "expected_status": "resolved",
     "expected_allowed_assets": [
@@ -116,7 +116,7 @@
       },
       "scope": {"dataset_ids": [243]},
       "profiles": ["semantic_binding"],
-      "strategy_version": "semantic-binding-v1"
+      "strategy_version": "semantic-binding"
     },
     "expected_status": "ambiguous",
     "expected_allowed_assets": [],
@@ -172,7 +172,7 @@
       },
       "scope": {"dataset_ids": [243]},
       "profiles": ["semantic_binding"],
-      "strategy_version": "semantic-binding-v1"
+      "strategy_version": "semantic-binding"
     },
     "expected_status": "resolved",
     "expected_allowed_assets": [
@@ -208,7 +208,7 @@
       },
       "scope": {"dataset_ids": [243]},
       "profiles": ["semantic_binding"],
-      "strategy_version": "semantic-binding-v1"
+      "strategy_version": "semantic-binding"
     },
     "expected_status": "resolved",
     "expected_allowed_assets": [
@@ -247,7 +247,7 @@
       },
       "scope": {"dataset_ids": [243]},
       "profiles": ["semantic_binding"],
-      "strategy_version": "semantic-binding-v1"
+      "strategy_version": "semantic-binding"
     },
     "expected_status": "missed",
     "expected_allowed_assets": [],
@@ -287,7 +287,7 @@
       },
       "scope": {"dataset_ids": [243]},
       "profiles": ["semantic_binding"],
-      "strategy_version": "semantic-binding-v1"
+      "strategy_version": "semantic-binding"
     },
     "expected_status": "cross_model",
     "expected_allowed_assets": [
@@ -360,7 +360,7 @@
       },
       "scope": {"dataset_ids": [243]},
       "profiles": ["semantic_binding"],
-      "strategy_version": "semantic-binding-v1"
+      "strategy_version": "semantic-binding"
     },
     "expected_status": "resolved",
     "expected_allowed_assets": [
@@ -420,7 +420,7 @@
       },
       "scope": {"dataset_ids": [243]},
       "profiles": ["semantic_binding"],
-      "strategy_version": "semantic-binding-v1"
+      "strategy_version": "semantic-binding"
     },
     "expected_status": "resolved",
     "expected_allowed_assets": [
@@ -458,7 +458,7 @@
       },
       "scope": {"dataset_ids": [243]},
       "profiles": ["semantic_binding"],
-      "strategy_version": "semantic-binding-v1"
+      "strategy_version": "semantic-binding"
     },
     "expected_status": "ambiguous",
     "expected_allowed_assets": [],

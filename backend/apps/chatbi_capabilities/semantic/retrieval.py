@@ -41,7 +41,7 @@ def retrieve_semantic_assets(
         intent=intent,
     )
     result = service.retrieve(request)
-    return _to_semantic_package(result.legacy_payload, max_candidates_per_group)
+    return _to_semantic_package(result.payload, max_candidates_per_group)
 
 
 def _to_semantic_package(raw: dict[str, Any], max_per_group: int) -> dict[str, Any]:
