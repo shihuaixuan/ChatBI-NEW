@@ -449,6 +449,105 @@ class QuestionUnderstandingService:
         )
 
 
+def apply_question_understanding_clarification(
+    *,
+    understanding: dict[str, Any],
+    resume_payload: dict[str, Any],
+    answer: dict[str, Any],
+) -> QuestionUnderstandingOutput:
+    """将用户回答定点写回既有问题理解，不重新调用问题理解模型。"""
+
+    try:
+        previous = QuestionUnderstandingOutput.model_validate(understanding)
+    except ValidationError as exc:
+        raise QuestionUnderstandingError(f"CLARIFICATION_CHECKPOINT_INVALID: {exc}") from exc
+
+    operation = str(resume_payload.get("operation") or "")
+    slot_name = str(resume_payload.get("slot_name") or "").strip()
+    if operation not in {"set_dimension_role", "set_dimension_filter_value"} or not slot_name:
+        raise QuestionUnderstandingError("CLARIFICATION_RESUME_TARGET_INVALID")
+
+    intent = previous.intent
+    slots = list(intent.dimension_slots)
+    matching_indexes = [index for index, slot in enumerate(slots) if slot.name == slot_name]
+    if len(matching_indexes) != 1:
+        raise QuestionUnderstandingError("CLARIFICATION_DIMENSION_SLOT_NOT_FOUND")
+    slot_index = matching_indexes[0]
+    slot = slots[slot_index]
+    ambiguous_slots = [item for item in intent.ambiguous_slots if item != slot_name]
+
+    if operation == "set_dimension_role":
+        selected_value = _single_clarification_selection(answer)
+        expected_values = {
+            f"group_by:{slot_name}": "group_by",
+            f"filter:{slot_name}": "filter",
+            f"ignore:{slot_name}": "ignore",
+        }
+        selected_role = expected_values.get(selected_value)
+        if selected_role is None:
+            raise QuestionUnderstandingError("CLARIFICATION_DIMENSION_ROLE_INVALID")
+        if selected_role == "ignore":
+            slots.pop(slot_index)
+            dimension_mentions = [item for item in intent.dimension_mentions if item != slot_name]
+        else:
+            slots[slot_index] = slot.model_copy(
+                update={
+                    "role": selected_role,
+                    "value": None,
+                    "value_status": "not_provided",
+                    "value_confidence": 0.0,
+                }
+            )
+            dimension_mentions = intent.dimension_mentions
+    else:
+        filter_value = _clarification_answer_value(answer)
+        slots[slot_index] = slot.model_copy(
+            update={
+                "role": "filter",
+                "value": filter_value,
+                "value_status": "provided",
+                "value_confidence": 1.0,
+            }
+        )
+        dimension_mentions = intent.dimension_mentions
+
+    updated_intent = intent.model_copy(
+        update={
+            "dimension_mentions": dimension_mentions,
+            "dimension_slots": slots,
+            "ambiguous_slots": ambiguous_slots,
+        }
+    )
+    # 重写结果已经在挂起前确定；这里只重新执行无模型副作用的业务校验。
+    rewrite = QuestionRewriteOutput(
+        message_type=previous.message_type,
+        rewritten_question=previous.rewritten_question,
+        inherited_context=previous.inherited_context,
+        confidence=1.0,
+    )
+    validation = QuestionUnderstandingService._validate(rewrite, updated_intent)
+    return previous.model_copy(update={"intent": updated_intent, "validation": validation})
+
+
+def _single_clarification_selection(answer: dict[str, Any]) -> str:
+    selections = answer.get("selections")
+    values = [
+        str(item.get("value") or "").strip()
+        for item in selections or []
+        if isinstance(item, dict) and str(item.get("value") or "").strip()
+    ]
+    if len(values) != 1:
+        raise QuestionUnderstandingError("CLARIFICATION_SINGLE_SELECTION_REQUIRED")
+    return values[0]
+
+
+def _clarification_answer_value(answer: dict[str, Any]) -> str:
+    text = str(answer.get("text") or "").strip()
+    if text:
+        return text
+    return _single_clarification_selection(answer)
+
+
 ModelType = TypeVar("ModelType", bound=BaseModel)
 
 

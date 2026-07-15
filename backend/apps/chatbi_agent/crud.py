@@ -177,6 +177,8 @@ def create_clarification(
     question: str,
     options: list[dict],
     tool_call_id: str | None,
+    resume_kind: str,
+    resume_payload: dict,
     user_id: int | None,
     expire_hours: int = 24,
 ) -> ChatbiAgentClarification:
@@ -187,6 +189,8 @@ def create_clarification(
         question=question,
         options=options,
         tool_call_id=tool_call_id,
+        resume_kind=resume_kind,
+        resume_payload=resume_payload,
         created_at=now(),
         expires_at=now() + timedelta(hours=expire_hours),
         created_by=user_id,

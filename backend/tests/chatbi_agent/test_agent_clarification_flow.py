@@ -8,7 +8,12 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from apps.ai_model.openai.llm import BaseChatOpenAI
 from apps.chat.models.chat_model import ChatRecord
 from apps.chatbi_agent.loop import FOLDED_PLACEHOLDER, AgentLoop, _fold_messages
-from apps.chatbi_agent.models import AgentRunStatus, ChatbiAgentRun
+from apps.chatbi_agent.models import (
+    AgentClarificationResumeKind,
+    AgentRunStatus,
+    ChatbiAgentClarification,
+    ChatbiAgentRun,
+)
 from apps.chatbi_agent.prompts import build_system_prompt
 from apps.chatbi_agent.schemas import AgentConfig
 from apps.chatbi_agent.tools.interaction import ClarifyTool
@@ -39,6 +44,38 @@ def _run_and_record():
     record = ChatRecord(chat_id=1, question="额度趋势", datasource=5)
     record.id = 2
     return run, record
+
+
+def _ambiguous_store_understanding_state():
+    return {
+        "question": "今天店铺的客户数",
+        "question_understanding": {
+            "original_question": "今天店铺的客户数",
+            "message_type": "new_question",
+            "rewritten_question": "今天店铺的客户数",
+            "inherited_context": {},
+            "intent": {
+                "intent_type": "metric_query",
+                "confidence": 0.95,
+                "metric_mentions": ["客户数"],
+                "dimension_mentions": ["店铺"],
+                "dimension_slots": [
+                    {
+                        "name": "店铺",
+                        "role": "ambiguous",
+                        "value": None,
+                        "value_status": "ambiguous",
+                    }
+                ],
+                "ambiguous_slots": ["店铺"],
+            },
+            "validation": {
+                "status": "clarification_required",
+                "reason_codes": ["intent_ambiguous", "dimension_role_ambiguous"],
+                "clarification_slots": ["dimension"],
+            },
+        },
+    }
 
 
 def _loop(model, config=None):
@@ -114,8 +151,9 @@ def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval()
     model = ScriptedModel([])
     run, record = _run_and_record()
     record.question = "今天店铺的客户数"
+    session = FakeSession()
     loop = AgentLoop(
-        FakeSession(),
+        session,
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=6),
         model_client=model,
@@ -141,6 +179,9 @@ def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval()
         "filter:店铺",
         "ignore:店铺",
     ]
+    clarification = next(item for item in session.added if isinstance(item, ChatbiAgentClarification))
+    assert clarification.resume_kind == AgentClarificationResumeKind.QUESTION_UNDERSTANDING.value
+    assert clarification.resume_payload == {"operation": "set_dimension_role", "slot_name": "店铺"}
 
 
 def test_openai_payload_preserves_reasoning_content_for_tool_call_history():
@@ -205,7 +246,14 @@ def test_resume_restores_derived_state_into_tool_context():
         registry=registry,
         understanding_service=StaticUnderstandingService(),
     )
-    clarification = SimpleNamespace(tool_call_id="prev", question="请补充信息", options=[])
+    clarification = SimpleNamespace(
+        tool_call_id="prev",
+        resume_kind=AgentClarificationResumeKind.AGENT_TOOL.value,
+        resume_payload={},
+        answer={"selections": [], "text": "答"},
+        question="请补充信息",
+        options=[],
+    )
     list(loop.resume(run, record, clarification, "答"))
 
     assert captured["semantic_asset_ids"] == [7, 8]
@@ -224,7 +272,14 @@ def test_resume_continues_from_clarification_to_finish():
         _tool_message("probe", {"value": "x"}),
         _tool_message("finish", {"value": ""}, "c9"),
     ])
-    clarification = SimpleNamespace(tool_call_id="call_clarify", question="哪种额度？", options=[])
+    clarification = SimpleNamespace(
+        tool_call_id="call_clarify",
+        resume_kind=AgentClarificationResumeKind.AGENT_TOOL.value,
+        resume_payload={},
+        answer={"selections": [], "text": "授信额度"},
+        question="哪种额度？",
+        options=[],
+    )
     events = list(_loop(resume_model).resume(run, record, clarification, "用户澄清回答：授信额度"))
     types = _event_types(events)
 
@@ -240,7 +295,7 @@ def test_resume_continues_from_clarification_to_finish():
     assert run.budget_snapshot["clarifications"] == 1
 
 
-def test_resume_emits_acceptance_before_reunderstanding():
+def test_resume_emits_acceptance_without_reunderstanding():
     class TrackingUnderstandingService(StaticUnderstandingService):
         def __init__(self):
             super().__init__(rewritten_question="用户澄清后的完整问题")
@@ -257,6 +312,7 @@ def test_resume_emits_acceptance_before_reunderstanding():
     run, record = _run_and_record()
     run.status = AgentRunStatus.WAITING_USER.value
     run.messages = [{"type": "human", "data": {"content": "今天店铺的客户数", "type": "human"}}]
+    run.derived_state = _ambiguous_store_understanding_state()
     understanding_service = TrackingUnderstandingService()
     loop = AgentLoop(
         FakeSession(),
@@ -266,7 +322,14 @@ def test_resume_emits_acceptance_before_reunderstanding():
         registry=_registry_with_clarify(),
         understanding_service=understanding_service,
     )
-    clarification = SimpleNamespace(tool_call_id=None, question="请确认店铺用法", options=[])
+    clarification = SimpleNamespace(
+        tool_call_id=None,
+        resume_kind=AgentClarificationResumeKind.QUESTION_UNDERSTANDING.value,
+        resume_payload={"operation": "set_dimension_role", "slot_name": "店铺"},
+        answer={"selections": [{"label": "按店铺分组", "value": "group_by:店铺"}], "text": None},
+        question="请确认店铺用法",
+        options=[],
+    )
 
     events = loop.resume(run, record, clarification, "按店铺分组")
     first_event = next(events)
@@ -275,11 +338,79 @@ def test_resume_emits_acceptance_before_reunderstanding():
     assert not understanding_service.called
 
 
+def test_filter_role_clarification_resumes_to_targeted_value_clarification():
+    run, record = _run_and_record()
+    run.status = AgentRunStatus.WAITING_USER.value
+    run.messages = [{"type": "human", "data": {"content": "今天店铺的客户数", "type": "human"}}]
+    run.derived_state = _ambiguous_store_understanding_state()
+    session = FakeSession()
+    understanding_service = StaticUnderstandingService()
+    loop = AgentLoop(
+        session,
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=6),
+        model_client=ScriptedModel([]),
+        registry=_registry_with_clarify(),
+        understanding_service=understanding_service,
+    )
+    clarification = SimpleNamespace(
+        tool_call_id=None,
+        resume_kind=AgentClarificationResumeKind.QUESTION_UNDERSTANDING.value,
+        resume_payload={"operation": "set_dimension_role", "slot_name": "店铺"},
+        answer={"selections": [{"label": "筛选具体店铺", "value": "filter:店铺"}], "text": None},
+        question="请确认店铺用法",
+        options=[],
+    )
+
+    events = list(loop.resume(run, record, clarification, "用户澄清回答：筛选具体店铺"))
+
+    assert _event_types(events)[-1] == "clarification"
+    assert run.status == AgentRunStatus.WAITING_USER.value
+    updated_slot = run.derived_state["question_understanding"]["intent"]["dimension_slots"][0]
+    assert updated_slot["role"] == "filter"
+    assert updated_slot["value_status"] == "not_provided"
+    next_clarification = [
+        item for item in session.added if isinstance(item, ChatbiAgentClarification)
+    ][-1]
+    assert next_clarification.resume_payload == {
+        "operation": "set_dimension_filter_value",
+        "slot_name": "店铺",
+    }
+    next_clarification.answer = {"selections": [], "text": "1号店铺"}
+    finish_model = ScriptedModel([AIMessage(content="查询完成")])
+    finish_loop = AgentLoop(
+        session,
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=6),
+        model_client=finish_model,
+        registry=_registry_with_clarify(),
+        understanding_service=understanding_service,
+    )
+
+    finish_events = list(
+        finish_loop.resume(run, record, next_clarification, "用户澄清回答：1号店铺")
+    )
+
+    assert _event_types(finish_events)[:2] == ["clarification-accepted", "question-understood"]
+    assert run.status == AgentRunStatus.FINISHED.value
+    confirmed = run.derived_state["question_understanding"]
+    assert confirmed["rewritten_question"] == "今天店铺的客户数"
+    assert confirmed["intent"]["dimension_slots"][0]["value"] == "1号店铺"
+    assert confirmed["validation"]["status"] == "valid"
+
+
 def test_clarify_over_budget_rejected_and_loop_continues():
     run, record = _run_and_record()
     # 快照造成澄清已达上限
     run.budget_snapshot = {"clarifications": 2}
-    clarification = SimpleNamespace(tool_call_id="prev", question="请补充信息", options=[])
+    clarification = SimpleNamespace(
+        tool_call_id="prev",
+        resume_kind=AgentClarificationResumeKind.AGENT_TOOL.value,
+        resume_payload={},
+        answer={"selections": [], "text": "回答"},
+        question="请补充信息",
+        options=[],
+    )
     run.messages = [
         {"type": "human", "data": {"content": "额度趋势", "type": "human"}},
     ]
@@ -296,68 +427,25 @@ def test_clarify_over_budget_rejected_and_loop_continues():
     assert rejected
 
 
-def test_resume_rebuilds_confirmed_understanding_from_clarification_answer():
+def test_resume_updates_target_slot_without_rewriting_or_reunderstanding():
     run, record = _run_and_record()
     run.messages = [{"type": "human", "data": {"content": "今天店铺的客户数", "type": "human"}}]
-    run.derived_state = {
-        "semantic_asset_ids": [272, 276],
-        "question_understanding": {
-            "original_question": "今天店铺的客户数",
-            "rewritten_question": "今天店铺的客户数",
-            "intent": {
-                "intent_type": "metric_query",
-                "metric_mentions": ["客户数"],
-                "dimension_mentions": ["店铺"],
-                "dimension_slots": [
-                    {
-                        "name": "店铺",
-                        "role": "ambiguous",
-                        "value": None,
-                        "value_status": "ambiguous",
-                    }
-                ],
-            },
-            "validation": {"status": "clarification_required", "clarification_slots": ["dimension"]},
-        },
-    }
+    run.derived_state = _ambiguous_store_understanding_state()
+    run.derived_state["semantic_asset_ids"] = [272, 276]
     captured_state = {}
-    understanding_calls = []
 
-    class ClarificationUnderstandingService(StaticUnderstandingService):
+    class TrackingUnderstandingService(StaticUnderstandingService):
+        def __init__(self):
+            super().__init__()
+            self.called = False
+
         def understand(self, *, question, datasource_id, conversation_context=None):
-            understanding_calls.append(
-                {
-                    "question": question,
-                    "datasource_id": datasource_id,
-                    "conversation_context": conversation_context,
-                }
-            )
-            outcome = super().understand(
+            self.called = True
+            return super().understand(
                 question=question,
                 datasource_id=datasource_id,
                 conversation_context=conversation_context,
             )
-            output = outcome.output.model_copy(
-                update={
-                    "message_type": "clarification_reply",
-                    "rewritten_question": "今天按店铺查看客户数",
-                    "intent": outcome.output.intent.model_copy(
-                        update={
-                            "metric_mentions": ["客户数"],
-                            "dimension_mentions": ["店铺"],
-                            "dimension_slots": [
-                                DimensionSlot(
-                                    name="店铺",
-                                    role="group_by",
-                                    value=None,
-                                    value_status="not_provided",
-                                )
-                            ],
-                        }
-                    ),
-                }
-            )
-            return outcome.__class__(output=output, usage_metadata=outcome.usage_metadata)
 
     class StateProbeTool(ProbeTool):
         name = "probe"
@@ -376,35 +464,41 @@ def test_resume_rebuilds_confirmed_understanding_from_clarification_answer():
             _tool_message("finish", {"value": ""}, "c9"),
         ]
     )
+    understanding_service = TrackingUnderstandingService()
     loop = AgentLoop(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=6),
         model_client=model,
         registry=registry,
-        understanding_service=ClarificationUnderstandingService(),
+        understanding_service=understanding_service,
     )
     clarification = SimpleNamespace(
         tool_call_id=None,
+        resume_kind=AgentClarificationResumeKind.QUESTION_UNDERSTANDING.value,
+        resume_payload={"operation": "set_dimension_role", "slot_name": "店铺"},
+        answer={
+            "selections": [{"label": "按店铺分组", "value": "group_by:店铺"}],
+            "text": None,
+        },
         question="请确认店铺维度的使用方式",
-        options=[{"label": "按店铺分组", "value": "group_by_store"}],
+        options=[{"label": "按店铺分组", "value": "group_by:店铺"}],
     )
 
     events = list(loop.resume(run, record, clarification, "用户澄清回答：按店铺分组"))
 
     assert _event_types(events)[:2] == ["clarification-accepted", "question-understood"]
+    assert not understanding_service.called
     assert not any(isinstance(message, ToolMessage) for message in model.calls[0])
     assert any(
-        isinstance(message, HumanMessage) and message.content == "今天按店铺查看客户数"
+        isinstance(message, HumanMessage) and message.content == "今天店铺的客户数"
         for message in model.calls[0]
     )
     updated = captured_state["question_understanding"]
     assert updated["validation"]["status"] == "valid"
     assert updated["intent"]["dimension_slots"][0]["role"] == "group_by"
-    assert run.derived_state["question_understanding"]["rewritten_question"] == "今天按店铺查看客户数"
-    pending = understanding_calls[0]["conversation_context"]["pending_clarification"]
-    assert pending["question"] == "请确认店铺维度的使用方式"
-    assert pending["question_understanding"]["validation"]["status"] == "clarification_required"
+    assert updated["rewritten_question"] == "今天店铺的客户数"
+    assert run.derived_state["semantic_asset_ids"] == [272, 276]
 
 
 def test_fold_messages_folds_old_tool_results_only():

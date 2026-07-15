@@ -31,8 +31,10 @@ from apps.chatbi_capabilities.question_understanding import (
 class FakeSession:
     def __init__(self):
         self.trace_count = 0
+        self.added = []
 
     def add(self, obj):
+        self.added.append(obj)
         if isinstance(obj, ChatbiAgentTraceEvent):
             self.trace_count += 1
 

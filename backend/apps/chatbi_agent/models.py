@@ -45,6 +45,13 @@ class AgentClarificationStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class AgentClarificationResumeKind(str, Enum):
+    """澄清回答应回填到的确定性恢复边界。"""
+
+    QUESTION_UNDERSTANDING = "question_understanding"
+    AGENT_TOOL = "agent_tool"
+
+
 class ChatbiAgentRun(SQLModel, table=True):
     __tablename__ = "chatbi_agent_run"
     __table_args__ = (
@@ -147,8 +154,13 @@ class ChatbiAgentClarification(SQLModel, table=True):
     run_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     record_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     status: str = Field(default=AgentClarificationStatus.PENDING.value, max_length=32, nullable=False)
-    # 模型主动澄清时保存工具调用 id；工作流前置澄清为空，恢复时不进入工具消息协议。
+    # 模型主动澄清时保存工具调用 id；问题理解澄清不进入工具消息协议。
     tool_call_id: str | None = Field(default=None, max_length=128, nullable=True)
+    resume_kind: str = Field(max_length=64, nullable=False)
+    resume_payload: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    )
     question: str = Field(sa_column=Column(Text, nullable=False))
     options: list = Field(
         default_factory=list,
