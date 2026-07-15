@@ -8,7 +8,7 @@
 >
 > 实施计划：[RETRIEVAL_PLATFORM_IMPLEMENTATION_PLAN.md](./RETRIEVAL_PLATFORM_IMPLEMENTATION_PLAN.md)
 >
-> 实施状态：P0 与 P1-1 已完成；统一服务、显式通道诊断及 generation 存储已落地
+> 实施状态：P0、P1-1～P1-4 已完成；分槽混合召回以 `semantic-binding-v2-shadow` 独立运行
 
 ## 1. 需求理解
 
@@ -58,8 +58,14 @@ M0 评估时，项目已经具备 pgvector 表、指标文本构造、向量生�
 M1 已完成前 2、3、6 项的入口治理：检索核心已下沉到 `apps.retrieval`，Graph 与 Agent
 共用 `RetrievalService`，通道状态通过统一 diagnostics 输出，已知故障显式词法降级，
 未知异常直接失败。P1-1 进一步新增独立 source/resource/unit/embedding/index job/query trace
-存储和 `080_retrieval_storage_p1` migration；旧指标向量表仍保留。Projector、增量索引服务与
-混合召回继续按 P1-2 之后的计划实施。
+存储和 `080_retrieval_storage_p1` migration。P1-2 已实现 Headless 指标、维度、术语和受控
+维值的细粒度 Projector，SQL、字段、Join condition 和权限条件不会进入 embedding 文本。
+P1-3 新增 generation 状态表、批量 embedding 端口和统一 IndexingService：每次增量构建形成
+完整快照，未变化 unit/向量直接复用，全部任务成功后才原子激活；已知失败可重试，旧 active
+generation 始终保留并可回滚。旧指标向量表与线上读取仍保留，混合召回与读流量切换按
+P1-4～P1-6 实施。P1-4 已新增确定性 QueryPlanner、active-generation 硬过滤、多通道召回
+和资源级 RRF，但仅以 `semantic-binding-v2-shadow` 暴露；P1-5 完成决策门控、P1-6 完成
+shadow 对比后才切换 Graph/Agent 正式读取。
 
 ## 3. 哪些数据应该被向量化
 
@@ -92,6 +98,15 @@ metric:{asset_id}:definition
 ```
 
 名称和别名同时进入词法索引；定义视图进入词法与向量索引。聚合表达式、真实 SQL 和权限信息放在结构化 payload 中，不作为主要 embedding 文本。
+
+P1-2 的投影契约使用两类 hash 表达不同不变量：
+
+- `content_hash` 覆盖 unit 文本和结构化 metadata，用于判断 unit 是否需要持久化更新。
+- `embedding_text_hash` 只覆盖实际送入 provider 的 `title + content + contextual_text`，后续写入
+  `retrieval_embedding.text_hash`；ACL、Join 或关系 metadata 单独变化时不重复计算向量。
+
+指标别名只属于 `identity`，定义只属于 `definition`，聚合与模型关系只属于 `usage`；维度和
+术语采用同样的单元隔离。敏感级别大于 0 的 Headless 资产在统一 Projector 入口直接排除。
 
 ### 3.2 SQL 示例与成功经验
 
@@ -177,6 +192,10 @@ RetrievalSubQuery
 
 不要把所有槽位和历史上下文拼成一个超长向量查询。它会让指标和维度互相稀释，也无法判断哪个必填槽位未命中。
 
+P1-4 的实现只读取 `RetrievalRequest.intent`：每个显式指标、维度槽位和已提供维值形成独立
+required subquery，术语只接受 `subject_domain.terms` 中的显式输入；缺少 mention 时不会用整句
+猜测资产。计划包含稳定 fingerprint，便于 shadow 结果复现。
+
 ### 4.3 Graph 与 Agent 的使用方式
 
 ```mermaid
@@ -222,7 +241,8 @@ flowchart LR
 #### 阶段二：并行多路召回
 
 1. 精确名称和批准别名：最高优先级，但同名多资产仍需判歧义。
-2. 词法召回：PostgreSQL FTS/BM25 类通道，保留名称、别名、标题的字段权重。
+2. 词法召回：中文首版选择 PostgreSQL `pg_trgm`，资源标题与 unit 文本分别使用部分 GIN
+   索引；`tsvector(simple)` 保留为基准，不作为连续中文主通道。
 3. Dense 向量召回：处理同义表达和描述级语义。
 4. 关系扩展：对已命中的指标扩展其允许维度、所属模型和关联术语。
 5. 示例召回：独立通道，不和资产分数混排。
@@ -238,6 +258,10 @@ RRF(resource) = sum(1 / (k + rank_channel(resource)))，初始 k = 60
 ```
 
 检索单元先按资源 ID 折叠，保留每个通道的 rank、原始 score、命中字段和命中文本，用于解释和离线分析。
+
+`chinese-lexical-v1` PostgreSQL 基准的 Recall@3：exact/alias `0.4`、
+`tsvector(simple)` `0.4`、`pg_trgm` `1.0`、dense `1.0`、RRF `1.0`。该基准同时实际执行
+`pg_trgm` 与 pgvector `<=>`，因此首版词法选择和“融合不低于最佳单通道”均有可重复记录。
 
 #### 阶段四：领域重排
 
@@ -367,6 +391,10 @@ RetrievalBundle
 retrieval_source
   id, tenant_id, source_type, source_key, config, acl_policy, source_version, status
 
+retrieval_index_generation
+  id, tenant_id, source_id, generation, source_version, previous_generation
+  embedding_profile/provider/model/dimension, status, job/resource/unit/embedding counts
+
 retrieval_resource
   id, tenant_id, namespace, resource_type, source_id, source_resource_id
   parent_resource_id, title, metadata, acl, source_version, content_hash, status
@@ -416,10 +444,15 @@ flowchart LR
 
 1. 来源变更与 outbox 事件在同一事务提交，避免直接双写向量库。
 2. Indexer 按 `source_version + content_hash` 幂等处理新增、更新、删除和发布状态变化。
-3. 文档、词法索引和向量先写入新 generation；全部达到可用条件后再切换 active generation。
-4. 模型升级采用影子 generation：双写、离线评测、少量流量验证、切换、保留回滚窗口。
-5. 定时 reconciliation 对比源版本和索引版本，修复漏事件，参考 Supersonic 的事件监听加周期重载思路。
-6. 删除先标记 tombstone 并立即从查询过滤，再异步清理旧向量。
+3. 新 generation 必须是来源的完整快照：增量更新时复制未触碰的 active unit 和向量，只对
+   `embedding_text_hash` 变化的 unit 调用 provider，避免“增量 generation 只有半份数据”。
+4. 文档、词法索引和向量先以 pending 状态写入；generation 行锁串行化并发任务的最终检查，
+   全部任务成功且 unit/vector 数量完整后才原子切换 active generation。
+5. 构建中或构建失败时，存在旧 active generation 的 source 仍保持可服务；失败 generation
+   独立记录错误和任务明细，不污染旧 active 状态。
+6. 模型升级采用影子 generation：双写、离线评测、少量流量验证、切换、保留回滚窗口。
+7. 定时 reconciliation 对比源版本、active 指针和 unit/vector 数量，发现漏事件后统一触发 full rebuild。
+8. 删除先标记 tombstone 并立即从查询过滤，新 generation 激活后再按保留策略清理旧向量。
 
 ## 8. 评测、监控与安全
 

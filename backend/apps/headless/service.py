@@ -550,6 +550,8 @@ class HeadlessSchemaBuilder:
 
     def _metric_element(self, dataset: HeadlessDataSet, metric: HeadlessMetric) -> SchemaElement:
         normalize_model_storage_fields(metric)
+        # 检索投影必须在统一入口识别敏感资产，不能依赖下游猜测。
+        ext_info = {**(metric.ext or {}), "sensitive_level": metric.sensitive_level}
         return SchemaElement(
             data_set_id=dataset.id or 0,
             data_set_name=dataset.name,
@@ -564,7 +566,7 @@ class HeadlessSchemaBuilder:
             data_format_type=metric.data_format_type,
             is_tag=metric.is_tag,
             description=metric.description,
-            ext_info=metric.ext or {},
+            ext_info=ext_info,
             type_params=_metric_type_params_for_runtime(metric),
             fields=metric.fields or _metric_fields(metric),
         )
@@ -575,7 +577,11 @@ class HeadlessSchemaBuilder:
         dimension: HeadlessDimension,
         model: HeadlessModel | None,
     ) -> SchemaElement:
-        ext_info = {**(dimension.ext or {}), "dimension_type": dimension.type}
+        ext_info = {
+            **(dimension.ext or {}),
+            "dimension_type": dimension.type,
+            "sensitive_level": dimension.sensitive_level,
+        }
         if dimension.field_id is not None:
             ext_info["field_id"] = dimension.field_id
         if dimension.field_name:

@@ -60,6 +60,36 @@ def _seed_resource(connection: Connection, *, tenant_id: int, source_id: int, re
     ).scalar_one()
 
 
+def _seed_generation(
+    connection: Connection,
+    *,
+    tenant_id: int,
+    source_id: int,
+    generation: str,
+    status: str = "building",
+) -> int:
+    return connection.execute(
+        text(
+            """
+            INSERT INTO retrieval_index_generation (
+                tenant_id, source_id, generation, source_version, embedding_profile,
+                embedding_provider, embedding_model, embedding_dimension, status
+            ) VALUES (
+                :tenant_id, :source_id, :generation, 'v1', 'bge-m3-1024',
+                'test', 'BAAI/bge-m3', 1024, :status
+            )
+            RETURNING id
+            """
+        ),
+        {
+            "tenant_id": tenant_id,
+            "source_id": source_id,
+            "generation": generation,
+            "status": status,
+        },
+    ).scalar_one()
+
+
 def _seed_unit(
     connection: Connection,
     *,
@@ -219,4 +249,50 @@ def test_embedding_dimension_mismatch_is_rejected(connection: Connection):
                 """
             ),
             {"tenant_id": tenant_id, "unit_id": unit_id, "text_hash": "d" * 64},
+        )
+
+
+def test_only_one_active_index_generation_is_allowed_per_source(connection: Connection):
+    tenant_id = 9_910_007
+    source_id = _seed_source(connection, tenant_id=tenant_id, source_key="active-index-generation")
+    _seed_generation(
+        connection,
+        tenant_id=tenant_id,
+        source_id=source_id,
+        generation="generation-a",
+        status="active",
+    )
+
+    with pytest.raises(IntegrityError):
+        _seed_generation(
+            connection,
+            tenant_id=tenant_id,
+            source_id=source_id,
+            generation="generation-b",
+            status="active",
+        )
+
+
+def test_index_job_must_reference_same_tenant_generation(connection: Connection):
+    tenant_id = 9_910_008
+    source_id = _seed_source(connection, tenant_id=tenant_id, source_key="job-generation-source")
+    _seed_generation(
+        connection,
+        tenant_id=tenant_id,
+        source_id=source_id,
+        generation="generation-a",
+    )
+
+    with pytest.raises(IntegrityError):
+        connection.execute(
+            text(
+                """
+                INSERT INTO retrieval_index_job (
+                    tenant_id, source_id, operation, target_generation, status
+                ) VALUES (
+                    :tenant_id, :source_id, 'rebuild', 'generation-missing', 'pending'
+                )
+                """
+            ),
+            {"tenant_id": tenant_id, "source_id": source_id},
         )

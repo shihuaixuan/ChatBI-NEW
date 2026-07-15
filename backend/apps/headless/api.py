@@ -70,6 +70,7 @@ from apps.headless.storage_sync import (
     normalize_model_source,
     normalize_model_storage_fields,
 )
+from apps.retrieval.headless_indexing import HeadlessIndexCoordinator
 from common.core.deps import CurrentUser, SessionDep
 
 router = APIRouter(tags=["Headless"], prefix="/headless")
@@ -677,6 +678,10 @@ async def rebuild_knowledge(session: SessionDep, current_user: CurrentUser, data
     for document in documents:
         document.updated_at = datetime.now()
         session.add(document)
+    index_enqueue = HeadlessIndexCoordinator(session).enqueue_dataset_rebuild(
+        tenant_id=current_user.oid,
+        dataset=dataset,
+    )
     session.add(dataset)
     session.commit()
     return {
@@ -685,6 +690,9 @@ async def rebuild_knowledge(session: SessionDep, current_user: CurrentUser, data
         "document_count": len(documents),
         "schema_index_count": len([*schema.metrics, *schema.dimensions, *schema.dimension_values, *schema.terms]),
         "index_version": dataset.index_version,
+        "retrieval_source_id": index_enqueue.source_id,
+        "retrieval_generation": index_enqueue.generation.generation,
+        "retrieval_job_ids": list(index_enqueue.generation.job_ids),
     }
 
 

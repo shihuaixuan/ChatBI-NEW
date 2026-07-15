@@ -1,0 +1,50 @@
+{
+  "version": "chinese-lexical-v1",
+  "top_k": 3,
+  "case_count": 5,
+  "recall_at_k": {
+    "exact_alias": 0.4,
+    "tsvector_simple": 0.4,
+    "pg_trgm": 1.0,
+    "dense": 1.0,
+    "rrf": 1.0
+  },
+  "selected_lexical_strategy": "pg_trgm",
+  "case_results": {
+    "approved_alias": {
+      "exact_alias": ["metric:1"],
+      "tsvector_simple": ["metric:1"],
+      "pg_trgm": ["metric:1"],
+      "dense": ["metric:1", "metric:2", "metric:3"],
+      "rrf": ["metric:1", "metric:2", "metric:3"]
+    },
+    "definition_phrase": {
+      "exact_alias": [],
+      "tsvector_simple": [],
+      "pg_trgm": ["metric:2", "metric:1", "metric:5"],
+      "dense": ["metric:1", "metric:2", "metric:3"],
+      "rrf": ["metric:1", "metric:2", "metric:3"]
+    },
+    "customer_paraphrase": {
+      "exact_alias": [],
+      "tsvector_simple": [],
+      "pg_trgm": ["metric:3"],
+      "dense": ["metric:3", "metric:4", "metric:1"],
+      "rrf": ["metric:3", "metric:4", "metric:1"]
+    },
+    "order_paraphrase": {
+      "exact_alias": [],
+      "tsvector_simple": [],
+      "pg_trgm": ["metric:2", "metric:4"],
+      "dense": ["metric:2", "metric:1", "metric:3"],
+      "rrf": ["metric:2", "metric:1", "metric:4"]
+    },
+    "average_amount": {
+      "exact_alias": ["metric:5"],
+      "tsvector_simple": ["metric:5"],
+      "pg_trgm": ["metric:5"],
+      "dense": ["metric:5", "metric:4", "metric:1"],
+      "rrf": ["metric:5", "metric:4", "metric:1"]
+    }
+  }
+}

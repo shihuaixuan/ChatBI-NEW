@@ -23,6 +23,7 @@ from apps.retrieval.legacy_headless import (
     HeadlessDocumentRetriever,
     HeadlessKnowledgeAdapter,
 )
+from apps.retrieval.profiles import get_retrieval_profile
 from apps.retrieval.schemas import (
     RetrievalBundle,
     RetrievalIntent,
@@ -136,6 +137,8 @@ class RetrievalService:
     def _validate_request(request: RetrievalRequest) -> None:
         if request.profiles != [RetrievalProfileName.SEMANTIC_BINDING]:
             raise RetrievalQueryError("M1 RetrievalService 仅支持 semantic_binding profile")
+        if request.strategy_version != "semantic-binding-v1":
+            raise RetrievalQueryError("旧 RetrievalService 仅支持 semantic-binding-v1")
         if len(request.scope.dataset_ids) != 1:
             raise RetrievalQueryError("semantic_binding 检索必须且只能指定一个 dataset_id")
 
@@ -149,6 +152,11 @@ def build_semantic_binding_request(
     rewritten_question: str,
     intent: dict[str, Any] | None,
     request_id: str | None = None,
+    principal_roles: list[str] | None = None,
+    principal_role_ids: list[int] | None = None,
+    permission_version: str | None = None,
+    source_ids: list[str] | None = None,
+    strategy_version: str = "semantic-binding-v1",
 ) -> RetrievalRequest:
     """把已确认问题理解投影为统一检索请求。"""
 
@@ -163,9 +171,48 @@ def build_semantic_binding_request(
         original_question=original_question,
         rewritten_question=rewritten_question,
         intent=RetrievalIntent.model_validate(intent_payload),
-        scope=RetrievalScope(dataset_ids=[dataset_id]),
+        scope=RetrievalScope(
+            dataset_ids=[dataset_id],
+            source_ids=source_ids or [],
+            principal_roles=principal_roles or [],
+            principal_role_ids=principal_role_ids or [],
+            permission_version=permission_version,
+        ),
         profiles=[RetrievalProfileName.SEMANTIC_BINDING],
-        strategy_version="semantic-binding-v1",
+        strategy_version=strategy_version,
+    )
+
+
+def build_semantic_binding_shadow_request(
+    *,
+    tenant_id: int,
+    actor_id: int,
+    dataset_id: int,
+    original_question: str,
+    rewritten_question: str,
+    intent: dict[str, Any] | None,
+    request_id: str | None = None,
+    principal_roles: list[str] | None = None,
+    principal_role_ids: list[int] | None = None,
+    permission_version: str | None = None,
+    source_ids: list[str] | None = None,
+) -> RetrievalRequest:
+    """构造 P1-4 shadow 请求，不改变现有 Graph/Agent 默认 v1 行为。"""
+
+    profile = get_retrieval_profile(RetrievalProfileName.SEMANTIC_BINDING)
+    return build_semantic_binding_request(
+        tenant_id=tenant_id,
+        actor_id=actor_id,
+        dataset_id=dataset_id,
+        original_question=original_question,
+        rewritten_question=rewritten_question,
+        intent=intent,
+        request_id=request_id,
+        principal_roles=principal_roles,
+        principal_role_ids=principal_role_ids,
+        permission_version=permission_version,
+        source_ids=source_ids,
+        strategy_version=profile.version,
     )
 
 

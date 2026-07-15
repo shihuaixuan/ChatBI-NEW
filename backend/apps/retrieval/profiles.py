@@ -51,7 +51,7 @@ class RetrievalProfileDefinition(BaseModel):
 PROFILE_REGISTRY: dict[RetrievalProfileName, RetrievalProfileDefinition] = {
     RetrievalProfileName.SEMANTIC_BINDING: RetrievalProfileDefinition(
         name=RetrievalProfileName.SEMANTIC_BINDING,
-        version="semantic-binding-v1",
+        version="semantic-binding-v2-shadow",
         allowed_sources=(RetrievalSourceType.HEADLESS,),
         allowed_resource_types=(
             RetrievalResourceType.METRIC,

@@ -26,6 +26,9 @@ class EmbeddingProvider(Protocol):
     def embed_query(self, text: str) -> list[float]:
         """将文本转换为向量。"""
 
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """批量将文本转换为向量，并保持输入顺序。"""
+
 
 @dataclass
 class StaticEmbeddingProvider:
@@ -40,6 +43,9 @@ class StaticEmbeddingProvider:
     def embed_query(self, text: str) -> list[float]:
         # 测试专用 provider，避免单元测试访问外部网络。
         return list(self.vector)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [list(self.vector) for _ in texts]
 
 
 class OpenAICompatibleEmbeddingProvider:
@@ -60,17 +66,32 @@ class OpenAICompatibleEmbeddingProvider:
         self.timeout = timeout
 
     def embed_query(self, text: str) -> list[float]:
+        vectors = self.embed_documents([text])
+        if not vectors:
+            raise ValueError("EMBEDDING_PROVIDER_EMPTY_RESULT")
+        return vectors[0]
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
         # 兼容硅基流动等 OpenAI embeddings 协议服务。
         response = httpx.post(
             f"{self.api_base_url}/embeddings",
             headers={"Authorization": f"Bearer {self.api_key}"},
-            json={"model": self.model, "input": text},
+            json={"model": self.model, "input": texts},
             timeout=self.timeout,
         )
         response.raise_for_status()
         payload = response.json()
-        vector = payload["data"][0]["embedding"]
-        return [float(value) for value in vector]
+        data = payload["data"]
+        if not isinstance(data, list) or len(data) != len(texts):
+            raise ValueError("EMBEDDING_PROVIDER_BATCH_COUNT_MISMATCH")
+        if all(isinstance(item, dict) and isinstance(item.get("index"), int) for item in data):
+            data = sorted(data, key=lambda item: item["index"])
+        return [
+            [float(value) for value in item["embedding"]]
+            for item in data
+        ]
 
 
 def default_metric_embedding_provider() -> EmbeddingProvider:

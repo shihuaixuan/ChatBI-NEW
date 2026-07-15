@@ -66,6 +66,83 @@ class RetrievalSourceModel(SQLModel, table=True):
     updated_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
 
 
+class RetrievalIndexGenerationModel(SQLModel, table=True):
+    """一次可原子激活、失败隔离和回滚的完整来源索引快照。"""
+
+    __tablename__ = "retrieval_index_generation"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "source_id",
+            "generation",
+            name="ux_retrieval_index_generation_key",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_id"],
+            ["retrieval_source.tenant_id", "retrieval_source.id"],
+            name="fk_retrieval_index_generation_source_tenant",
+        ),
+        CheckConstraint(
+            "status IN ('building', 'ready', 'active', 'superseded', 'failed', 'cancelled')",
+            name="ck_retrieval_index_generation_status",
+        ),
+        CheckConstraint(
+            "expected_jobs >= 0 AND succeeded_jobs >= 0 AND failed_jobs >= 0",
+            name="ck_retrieval_index_generation_job_counts",
+        ),
+        CheckConstraint(
+            "resource_count >= 0 AND unit_count >= 0 AND embedding_count >= 0",
+            name="ck_retrieval_index_generation_asset_counts",
+        ),
+        CheckConstraint(
+            "embedding_dimension = 1024",
+            name="ck_retrieval_index_generation_dimension",
+        ),
+        Index(
+            "ux_retrieval_index_generation_active",
+            "source_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index(
+            "idx_retrieval_index_generation_source",
+            "tenant_id",
+            "source_id",
+            "status",
+            "created_at",
+        ),
+    )
+
+    id: int | None = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
+    tenant_id: int = Field(sa_column=Column(BigInteger, nullable=False))
+    source_id: int = Field(sa_column=Column(BigInteger, nullable=False))
+    generation: str = Field(sa_column=Column(String(64), nullable=False))
+    source_version: str = Field(sa_column=Column(String(128), nullable=False))
+    previous_generation: str | None = Field(default=None, sa_column=Column(String(64), nullable=True))
+    embedding_profile: str = Field(sa_column=Column(String(64), nullable=False))
+    embedding_provider: str = Field(sa_column=Column(String(64), nullable=False))
+    embedding_model: str = Field(sa_column=Column(String(128), nullable=False))
+    embedding_dimension: int = Field(
+        default=1024,
+        sa_column=Column(Integer, nullable=False, server_default=text("1024")),
+    )
+    status: str = Field(
+        default="building",
+        sa_column=Column(String(32), nullable=False, server_default=text("'building'")),
+    )
+    expected_jobs: int = Field(default=0, sa_column=Column(Integer, nullable=False, server_default=text("0")))
+    succeeded_jobs: int = Field(default=0, sa_column=Column(Integer, nullable=False, server_default=text("0")))
+    failed_jobs: int = Field(default=0, sa_column=Column(Integer, nullable=False, server_default=text("0")))
+    resource_count: int = Field(default=0, sa_column=Column(Integer, nullable=False, server_default=text("0")))
+    unit_count: int = Field(default=0, sa_column=Column(Integer, nullable=False, server_default=text("0")))
+    embedding_count: int = Field(default=0, sa_column=Column(Integer, nullable=False, server_default=text("0")))
+    error_code: str | None = Field(default=None, sa_column=Column(String(128), nullable=True))
+    error_message: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    activated_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    finished_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+
+
 class RetrievalResourceModel(SQLModel, table=True):
     """可返回给调用方的稳定业务资源。"""
 
@@ -124,6 +201,12 @@ class RetrievalResourceModel(SQLModel, table=True):
             "status",
         ),
         Index("idx_retrieval_resource_source", "tenant_id", "source_id", "status"),
+        Index(
+            "idx_retrieval_resource_title_trgm",
+            text("title gin_trgm_ops"),
+            postgresql_using="gin",
+            postgresql_where=text("status = 'active'"),
+        ),
     )
 
     id: int | None = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
@@ -202,6 +285,12 @@ class RetrievalUnitModel(SQLModel, table=True):
         Index(
             "idx_retrieval_unit_lexical",
             "lexical_vector",
+            postgresql_using="gin",
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index(
+            "idx_retrieval_unit_trgm",
+            text("((title || ' ' || content || ' ' || contextual_text)) gin_trgm_ops"),
             postgresql_using="gin",
             postgresql_where=text("status = 'active'"),
         ),
@@ -315,6 +404,15 @@ class RetrievalIndexJobModel(SQLModel, table=True):
             ],
             name="fk_retrieval_index_job_resource_source",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_id", "target_generation"],
+            [
+                "retrieval_index_generation.tenant_id",
+                "retrieval_index_generation.source_id",
+                "retrieval_index_generation.generation",
+            ],
+            name="fk_retrieval_index_job_generation",
+        ),
         CheckConstraint("attempts >= 0", name="ck_retrieval_index_job_attempts"),
         CheckConstraint(
             "status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')",
@@ -419,6 +517,7 @@ class RetrievalQueryTraceModel(SQLModel, table=True):
 
 __all__ = [
     "RetrievalEmbeddingModel",
+    "RetrievalIndexGenerationModel",
     "RetrievalIndexJobModel",
     "RetrievalQueryTraceModel",
     "RetrievalResourceModel",

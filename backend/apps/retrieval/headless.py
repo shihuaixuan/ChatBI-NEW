@@ -1,4 +1,4 @@
-"""Headless 检索源的运行配置、provider 观测与兼容投影。"""
+"""Headless 检索源的运行配置、provider 观测与安全投影。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from urllib.parse import urlparse
 
 import httpx
 
-from apps.headless.asset_document import HeadlessAssetDocumentBuilder
 from apps.headless.metric_embedding import EmbeddingProvider
 from apps.retrieval.errors import (
     RetrievalConfigurationError,
@@ -17,6 +16,9 @@ from apps.retrieval.errors import (
     RetrievalError,
     RetrievalIndexUnavailableError,
     RetrievalProviderUnavailableError,
+)
+from apps.retrieval.headless_projector import (
+    HeadlessSourceProjector as HeadlessSourceProjector,
 )
 from apps.retrieval.schemas import RetrievalChannelStatus
 
@@ -139,6 +141,43 @@ class ObservedEmbeddingProvider:
             )
         return vector
 
-
-class HeadlessSourceProjector(HeadlessAssetDocumentBuilder):
-    """M1 兼容投影器；保持当前 HeadlessAssetDocument 构建规则不变。"""
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        started = perf_counter()
+        try:
+            vectors = self._delegate.embed_documents(texts)
+        except httpx.TimeoutException as exc:
+            raise RetrievalProviderUnavailableError(
+                "指标 embedding provider 批量请求超时",
+                details={
+                    "reason_code": "EMBEDDING_PROVIDER_TIMEOUT",
+                    "latency_ms": (perf_counter() - started) * 1000,
+                },
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise RetrievalProviderUnavailableError(
+                "指标 embedding provider 批量请求失败",
+                details={
+                    "reason_code": "EMBEDDING_PROVIDER_REQUEST_FAILED",
+                    "latency_ms": (perf_counter() - started) * 1000,
+                },
+            ) from exc
+        if len(vectors) != len(texts):
+            raise RetrievalProviderUnavailableError(
+                "指标 embedding provider 批量结果数量不一致",
+                details={
+                    "reason_code": "EMBEDDING_BATCH_COUNT_MISMATCH",
+                    "expected_count": len(texts),
+                    "actual_count": len(vectors),
+                },
+            )
+        for vector in vectors:
+            if len(vector) != self.dimension:
+                raise RetrievalDimensionMismatchError(
+                    "批量向量维度与索引配置不一致",
+                    details={
+                        "reason_code": "EMBEDDING_DIMENSION_MISMATCH",
+                        "expected_dimension": self.dimension,
+                        "actual_dimension": len(vector),
+                    },
+                )
+        return vectors

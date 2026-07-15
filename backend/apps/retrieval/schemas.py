@@ -122,12 +122,19 @@ class RetrievalScope(_StrictModel):
     dataset_ids: list[int] = Field(default_factory=list)
     knowledge_base_ids: list[int] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
+    principal_roles: list[str] = Field(default_factory=list)
+    principal_role_ids: list[int] = Field(default_factory=list)
     permission_version: str | None = None
 
     @model_validator(mode="after")
     def validate_positive_ids(self) -> RetrievalScope:
-        if any(value <= 0 for value in [*self.dataset_ids, *self.knowledge_base_ids]):
+        if any(
+            value <= 0
+            for value in [*self.dataset_ids, *self.knowledge_base_ids, *self.principal_role_ids]
+        ):
             raise ValueError("检索 scope 中的 ID 必须为正整数")
+        if any(not value.strip() for value in [*self.source_ids, *self.principal_roles]):
+            raise ValueError("检索 scope 中的来源和角色不能为空字符串")
         return self
 
 

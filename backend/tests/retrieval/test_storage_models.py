@@ -4,6 +4,7 @@ from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint
 
 from apps.retrieval.models import (
     RetrievalEmbeddingModel,
+    RetrievalIndexGenerationModel,
     RetrievalIndexJobModel,
     RetrievalQueryTraceModel,
     RetrievalResourceModel,
@@ -20,12 +21,13 @@ def _constraint_columns(table, constraint_type):
     }
 
 
-def test_retrieval_storage_defines_all_six_logical_tables():
+def test_retrieval_storage_defines_all_logical_tables():
     assert {
         RetrievalSourceModel.__table__.name,
         RetrievalResourceModel.__table__.name,
         RetrievalUnitModel.__table__.name,
         RetrievalEmbeddingModel.__table__.name,
+        RetrievalIndexGenerationModel.__table__.name,
         RetrievalIndexJobModel.__table__.name,
         RetrievalQueryTraceModel.__table__.name,
     } == {
@@ -33,6 +35,7 @@ def test_retrieval_storage_defines_all_six_logical_tables():
         "retrieval_resource",
         "retrieval_unit",
         "retrieval_embedding",
+        "retrieval_index_generation",
         "retrieval_index_job",
         "retrieval_query_trace",
     }
@@ -75,6 +78,10 @@ def test_composite_foreign_keys_carry_tenant_and_generation_boundaries():
         RetrievalIndexJobModel.__table__,
         ForeignKeyConstraint,
     )
+    assert ("tenant_id", "source_id", "target_generation") in _constraint_columns(
+        RetrievalIndexJobModel.__table__,
+        ForeignKeyConstraint,
+    )
 
 
 def test_generation_uniqueness_supports_shadow_writes_without_duplicate_active_rows():
@@ -113,3 +120,43 @@ def test_embedding_profile_is_physically_fixed_to_1024_dimensions():
     assert checks["ck_retrieval_embedding_dimension"] == "dimension = 1024"
     assert "embedding IS NOT NULL" in checks["ck_retrieval_embedding_active_vector"]
 
+
+def test_chinese_lexical_channel_has_partial_trigram_index():
+    trigram_index = next(
+        index
+        for index in RetrievalUnitModel.__table__.indexes
+        if index.name == "idx_retrieval_unit_trgm"
+    )
+    assert trigram_index.dialect_options["postgresql"]["using"] == "gin"
+    assert str(trigram_index.dialect_options["postgresql"]["where"]) == "status = 'active'"
+    assert "gin_trgm_ops" in str(next(iter(trigram_index.expressions)))
+    resource_index = next(
+        index
+        for index in RetrievalResourceModel.__table__.indexes
+        if index.name == "idx_retrieval_resource_title_trgm"
+    )
+    assert resource_index.dialect_options["postgresql"]["using"] == "gin"
+    assert "gin_trgm_ops" in str(next(iter(resource_index.expressions)))
+
+
+def test_generation_snapshots_profile_and_allows_only_one_active_row_per_source():
+    columns = RetrievalIndexGenerationModel.__table__.c
+    assert {
+        "tenant_id",
+        "source_id",
+        "generation",
+        "source_version",
+        "previous_generation",
+        "embedding_profile",
+        "embedding_provider",
+        "embedding_model",
+        "embedding_dimension",
+        "status",
+    }.issubset(columns.keys())
+    active_index = next(
+        index
+        for index in RetrievalIndexGenerationModel.__table__.indexes
+        if index.name == "ux_retrieval_index_generation_active"
+    )
+    assert active_index.unique is True
+    assert str(active_index.dialect_options["postgresql"]["where"]) == "status = 'active'"

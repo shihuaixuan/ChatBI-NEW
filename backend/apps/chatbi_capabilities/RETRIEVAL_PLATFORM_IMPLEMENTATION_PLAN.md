@@ -6,9 +6,10 @@
 
 ## 0. 当前状态
 
-截至 2026-07-14，P0 与 P1-1 已经完成。Graph 与 Agent 已统一到
+截至 2026-07-14，P0、P1-1～P1-4 已经完成。Graph 与 Agent 已统一到
 `RetrievalService`，旧排序、门控和现有对外 payload 保持兼容；统一检索存储
-已具备 generation 双写、租户隔离和可回滚 migration。
+已具备 generation 双写、租户隔离和可回滚 migration，Headless 资产也已具备安全的
+resource/unit 投影契约和可增量、可重试、可回滚的索引生命周期。
 
 已交付：
 
@@ -22,9 +23,21 @@
 - dense 通道启动配置检查，以及关闭、配置缺失、超时、维度不一致、索引不可用和查询错误诊断。
 - 已知 dense 故障允许显式词法降级，未知异常不再被静默吞掉。
 - `HEADLESS_METRIC_EMBEDDING_ALLOW_LEXICAL_FALLBACK` 统一控制生产降级策略。
-- 六张统一存储表：source、resource、unit、embedding、index job、query trace。
+- 七张统一存储表：source、index generation、resource、unit、embedding、index job、query trace。
 - `vector(1024)` 物理 profile、GIN 词法索引、scope 普通索引和 generation 部分唯一索引。
 - 复合外键在数据库层阻止跨租户、跨来源和 embedding generation 错配。
+- 指标、维度、术语和受控维值的细粒度 Headless Projector。
+- Join、模型兼容和资产关系只保存结构化 metadata，不把执行关系交给向量判断。
+- `content_hash` 与 `embedding_text_hash` 分离，metadata 更新不会触发无意义的向量重算。
+- SQL、字段、权限条件和敏感资产不会进入 embedding 文本。
+- 检索域独立 durable job、批量 embedding、错误分类、退避重试和 `SKIP LOCKED` 任务领取。
+- 增量 generation 自动复制未变化快照和向量，只重新计算文本发生变化的 unit。
+- generation 完整性检查、并发安全原子激活、显式重试、保留代际回滚和 reconciliation 诊断。
+- Headless `/knowledge/rebuild` 在同一业务事务内注册 source、投影资源并写入索引任务。
+- `semantic-binding-v2-shadow` 确定性分槽 QueryPlanner，不使用整句兜底猜测缺失资产。
+- exact、批准 alias、`pg_trgm` 和 pgvector dense 通道共用 active-generation 与 ACL 硬过滤。
+- 按资源折叠 unit、记录通道原始分数/rank 的 RRF，以及唯一名称/别名快速路径。
+- 版本化中文词法 gold set、PostgreSQL benchmark 脚本和固定基线报告。
 
 当前基线：
 
@@ -39,8 +52,9 @@
 - `backend/tests/retrieval/baselines/current_agent_report.json`
 
 该结果说明两条链路已经对齐：当前都因缺少 provider API key 明确进入词法降级，
-不再出现 Graph 尝试 dense、Agent 静默跳过的差异。下一阶段从 P1-1 开始建设统一存储，
-配置真实向量服务仍应作为独立部署动作执行。
+不再出现 Graph 尝试 dense、Agent 静默跳过的差异。P1-4 新算法当前只以 shadow 版本独立
+运行；下一阶段从 P1-5 建设重排与决策门控。配置真实向量服务和启动独立 index worker
+仍是部署动作，线上读取在 P1-6 前不切换。
 
 ## 1. 优先级定义
 
@@ -219,7 +233,7 @@ backend/apps/retrieval/
 
 ### P1-2 实现 Headless Projector
 
-优先级：高；预计 4～6 人日；依赖 P1-1。
+状态：已完成；优先级：高；预计 4～6 人日；依赖 P1-1。
 
 任务：
 
@@ -228,7 +242,7 @@ backend/apps/retrieval/
 - 术语生成定义与关联资产检索单元。
 - 维值只接入已治理别名、常用值和配置允许的中低基数集合。
 - Join、模型兼容和资产关系保存为结构化 metadata/relationship，不交给向量判断。
-- 使用 `content_hash` 保证未变化资产不重复 embedding。
+- 使用 `content_hash` 判断完整 unit 是否变化，使用 `embedding_text_hash` 保证文本未变化时不重复 embedding。
 
 退出条件：
 
@@ -236,9 +250,21 @@ backend/apps/retrieval/
 - 敏感字段、SQL 表达式和权限条件不进入 embedding 文本。
 - 更新别名只重建受影响的 unit。
 
+验收记录（2026-07-14）：
+
+- 指标、维度、术语和维值分别生成稳定 resource/unit，旧 `build_from_schema()` 入口保持兼容。
+- Projector snapshot 固化文本、metadata、ACL、模型关系和受控维值策略；显式治理、常用标记
+  或配置允许且未超过基数上限的维值才进入投影。
+- Headless Schema 统一携带指标/维度 `sensitive_level`，敏感资产在 Projector 入口排除。
+- 安全测试确认模型 SQL、过滤条件、字段名、Join condition、权限条件和维值技术值均不进入
+  `embedding_text`。
+- 别名更新只产生 `identity` unit 的 upsert/re-embed；关系 metadata 更新只 upsert 对应 unit，
+  `reembed_unit_keys` 为空；仅 `source_version` 更新不重建任何 unit。
+- 391 个受影响单元/兼容测试与 5 个 PostgreSQL 约束测试通过；Ruff、mypy 通过。
+
 ### P1-3 建立增量索引与 Generation
 
-优先级：高；预计 5～8 人日；依赖 P1-2。
+状态：已完成；优先级：高；预计 5～8 人日；依赖 P1-2。
 
 任务：
 
@@ -256,9 +282,26 @@ backend/apps/retrieval/
 - 单资源失败不激活不完整 generation，错误可查询、可重试。
 - 删除或停用资产在 SLA 内不可被检索。
 
+验收记录（2026-07-14）：
+
+- `081_retrieval_generation_p1` 新增 generation 状态、profile 快照、任务计数和单 source 唯一
+  active generation 约束；index job 通过复合外键绑定同 tenant/source/generation。
+- Headless rebuild 在调用方事务内创建或锁定 source、完成安全投影并写 durable job；此阶段不
+  调用外部 provider，因此业务变更与索引事件可以原子提交或一起回滚。
+- 增量 generation 克隆未触碰的 active unit/vector；文本 hash 不变时复制向量，metadata-only
+  更新不调用 provider，delete 使用 tombstone 并在完整快照中移除对应 unit。
+- Worker 使用真正的批量 embedding 接口和 `FOR UPDATE SKIP LOCKED` 领取任务；超时、传输错误、
+  429/5xx 可重试，4xx、响应结构和维度错误进入明确的终态失败，未知异常直接抛出。
+- generation 行锁解决并发最后任务都无法激活的竞态；只有 job 全成功且 unit/vector 完整时才
+  原子切换。构建失败时旧 active generation 和 source 可用状态保持不变。
+- 提供失败 generation 显式重试、保留完整 generation 回滚、active 指针/版本/数量对账和队列
+  积压统计；调度器可按部署频率调用 `process_next()` 与 `reconcile_source()`。
+- PostgreSQL 集成测试覆盖幂等、增量向量复用、失败重试、delete、rollback、完整性计数、任务
+  领取和 Headless 事务接入；migration 已完成 `080 -> 081 -> 080 -> 081` 往返验证。
+
 ### P1-4 实现分槽 QueryPlanner 与混合召回
 
-优先级：高；预计 5～7 人日；依赖 P1-3。
+状态：已完成；优先级：高；预计 5～7 人日；依赖 P1-3。
 
 任务：
 
@@ -275,6 +318,25 @@ backend/apps/retrieval/
 - 无跨租户、跨 scope 和停用资产泄漏。
 - 混合 Recall@5 不低于单独最佳通道。
 - 中文词法方案有可重复 benchmark，不凭组件偏好选型。
+
+验收记录（2026-07-14）：
+
+- `SemanticBindingQueryPlanner` 为每个指标 mention、维度槽位、已提供维值和显式术语分别生成
+  subquery，携带 tenant/scope/type/status/permission 过滤和稳定 fingerprint；不调用模型，
+  不生成资产 ID，也不把整句作为缺槽 fallback。
+- PostgreSQL Store 的 exact、批准 alias、`pg_trgm` 和 pgvector dense 查询共用同一 active
+  generation CTE；tenant、dataset/knowledge base、source、资源状态、permission version 和
+  private actor/role ACL 全部在通道召回前过滤。
+- 唯一名称或批准别名命中走快速路径并跳过 lexical/dense；非快速路径按资源 ID 折叠多个 unit，
+  使用 RRF 融合并保留每个通道的原始 score、rank、matched field/text 和 generation provenance。
+- `082_retrieval_hybrid_p1` 启用 `pg_trgm`，为资源标题与 unit 文本建立 active 部分 GIN 索引；
+  已完成 `081 -> 082 -> 081 -> 082` 往返验证。首次发现 `concat_ws` 非 IMMUTABLE 后改用不可变
+  文本连接表达式，查询与索引表达式保持一致。
+- `chinese-lexical-v1` 在 PostgreSQL 实际算子上的 Recall@3 为 exact/alias `0.4`、
+  `tsvector(simple)` `0.4`、`pg_trgm` `1.0`、dense `1.0`、RRF `1.0`，因此首版选择
+  `pg_trgm`，且融合结果不低于最佳单通道。
+- PostgreSQL 集成测试确认四通道读取同一 active generation，并阻止跨租户、跨数据集、停用、
+  permission version 不匹配和未授权 private 资产泄漏；正式 Graph/Agent 读流量尚未切换。
 
 ### P1-5 重排、决策门控与编译白名单
 

@@ -1,0 +1,47 @@
+{
+  "version": "chinese-lexical-v1",
+  "corpus": [
+    {
+      "id": "metric:1",
+      "name": "销售额",
+      "aliases": ["GMV", "成交额"],
+      "document": "销售额 GMV 成交额 销售订单实付金额汇总",
+      "embedding": [1.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "id": "metric:2",
+      "name": "订单量",
+      "aliases": ["订单数", "单量"],
+      "document": "订单量 订单数 单量 支付成功订单总数量",
+      "embedding": [0.0, 1.0, 0.0, 0.0]
+    },
+    {
+      "id": "metric:3",
+      "name": "销售下单客户数",
+      "aliases": ["下单客户数", "购买客户数"],
+      "document": "销售下单客户数 下单客户数 购买客户数 产生销售订单的去重客户数",
+      "embedding": [0.0, 0.0, 1.0, 0.0]
+    },
+    {
+      "id": "metric:4",
+      "name": "预订客户数",
+      "aliases": ["预约客户数"],
+      "document": "预订客户数 预约客户数 提交预订的去重客户数量",
+      "embedding": [0.0, 0.0, 0.8, 0.2]
+    },
+    {
+      "id": "metric:5",
+      "name": "客单价",
+      "aliases": ["ATV", "平均订单金额"],
+      "document": "客单价 ATV 平均订单金额 每个支付订单的平均实付金额",
+      "embedding": [0.0, 0.0, 0.0, 1.0]
+    }
+  ],
+  "cases": [
+    {"case_id": "approved_alias", "query": "GMV", "relevant_ids": ["metric:1"], "query_embedding": [1.0, 0.0, 0.0, 0.0]},
+    {"case_id": "definition_phrase", "query": "订单实付金额", "relevant_ids": ["metric:1"], "query_embedding": [1.0, 0.0, 0.0, 0.0]},
+    {"case_id": "customer_paraphrase", "query": "下单客户人数", "relevant_ids": ["metric:3"], "query_embedding": [0.0, 0.0, 1.0, 0.0]},
+    {"case_id": "order_paraphrase", "query": "订单总数量", "relevant_ids": ["metric:2"], "query_embedding": [0.0, 1.0, 0.0, 0.0]},
+    {"case_id": "average_amount", "query": "平均订单金额", "relevant_ids": ["metric:5"], "query_embedding": [0.0, 0.0, 0.0, 1.0]}
+  ]
+}

@@ -24,6 +24,8 @@ backend/alembic/*
 !backend/alembic/versions/
 backend/alembic/versions/*
 !backend/alembic/versions/080_retrieval_storage_p1.py
+!backend/alembic/versions/081_retrieval_generation_p1.py
+!backend/alembic/versions/082_retrieval_hybrid_p1.py
 .codex_run_logs
 .idea
 data/sqlbot

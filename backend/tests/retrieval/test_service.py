@@ -14,10 +14,14 @@ from apps.chatbi_workflow.capabilities.adapters.knowledge import (
 )
 from apps.headless.metric_embedding import StaticEmbeddingProvider
 from apps.headless.schemas import DataSetSchema, SchemaElement
-from apps.retrieval.errors import RetrievalConfigurationError
+from apps.retrieval.errors import RetrievalConfigurationError, RetrievalQueryError
 from apps.retrieval.headless import MetricEmbeddingRuntimeConfig
 from apps.retrieval.schemas import RetrievalChannel, RetrievalChannelStatus
-from apps.retrieval.service import RetrievalService, build_semantic_binding_request
+from apps.retrieval.service import (
+    RetrievalService,
+    build_semantic_binding_request,
+    build_semantic_binding_shadow_request,
+)
 
 
 def _element(asset_type: str, asset_id: int, name: str, biz_name: str, **kwargs) -> SchemaElement:
@@ -123,6 +127,36 @@ def _dense_diagnostic(result):
         for item in result.bundle.diagnostics.channels
         if item.channel == RetrievalChannel.DENSE
     )
+
+
+def test_shadow_request_factory_keeps_v1_default_and_carries_acl_context():
+    legacy = _request()
+    shadow = build_semantic_binding_shadow_request(
+        request_id="shadow-1",
+        tenant_id=1,
+        actor_id=2,
+        dataset_id=20,
+        original_question="GMV",
+        rewritten_question="GMV",
+        intent={"intent_type": "metric_query", "metric_mentions": ["GMV"]},
+        principal_roles=["analyst"],
+        principal_role_ids=[10],
+        permission_version="permission-3",
+        source_ids=["dataset:20"],
+    )
+
+    assert legacy.strategy_version == "semantic-binding-v1"
+    assert shadow.strategy_version == "semantic-binding-v2-shadow"
+    assert shadow.scope.principal_roles == ["analyst"]
+    assert shadow.scope.principal_role_ids == [10]
+    assert shadow.scope.permission_version == "permission-3"
+    assert shadow.scope.source_ids == ["dataset:20"]
+    with pytest.raises(RetrievalQueryError, match="仅支持 semantic-binding-v1"):
+        RetrievalService(
+            _EmbeddingSession(),
+            schema_builder=_SchemaBuilder(),
+            embedding_config=_embedding_config(enabled=False),
+        ).retrieve(shadow)
 
 
 def test_embedding_disabled_is_reported_as_skipped():
