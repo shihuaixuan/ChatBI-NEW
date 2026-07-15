@@ -278,7 +278,15 @@ def test_retryable_failure_keeps_old_generation_until_explicit_retry_succeeds(se
     assert {
         unit.index_generation
         for unit in session.exec(
-            select(RetrievalUnitModel).where(RetrievalUnitModel.status == "active")
+            select(RetrievalUnitModel)
+            .join(
+                RetrievalResourceModel,
+                col(RetrievalResourceModel.id) == col(RetrievalUnitModel.resource_id),
+            )
+            .where(
+                RetrievalResourceModel.source_id == source_id,
+                RetrievalUnitModel.status == "active",
+            )
         ).all()
     } == {"generation-1"}
 
@@ -318,7 +326,15 @@ def test_delete_uses_tombstone_filter_and_retained_generation_can_rollback(sessi
     active_resource_ids = {
         unit.resource_id
         for unit in session.exec(
-            select(RetrievalUnitModel).where(RetrievalUnitModel.status == "active")
+            select(RetrievalUnitModel)
+            .join(
+                RetrievalResourceModel,
+                col(RetrievalResourceModel.id) == col(RetrievalUnitModel.resource_id),
+            )
+            .where(
+                RetrievalResourceModel.source_id == source_id,
+                RetrievalUnitModel.status == "active",
+            )
         ).all()
     }
     assert deleted_resource.id not in active_resource_ids

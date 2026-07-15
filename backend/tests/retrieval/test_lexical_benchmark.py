@@ -11,8 +11,8 @@ from apps.retrieval.lexical_benchmark import (
 )
 from common.core.db import engine
 
-GOLD_SET = Path(__file__).parent / "golden" / "chinese_lexical_v1.json"
-BASELINE = Path(__file__).parent / "baselines" / "chinese_lexical_v1_report.json"
+GOLD_SET = Path(__file__).parent / "golden" / "chinese_lexical.json"
+BASELINE = Path(__file__).parent / "baselines" / "chinese_lexical_report.json"
 
 
 def test_pg_trgm_outperforms_simple_fts_and_rrf_is_not_worse_than_best_channel():

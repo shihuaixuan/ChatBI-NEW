@@ -21,6 +21,7 @@ from sqlmodel import Session, select
 from apps.chat.models.chat_model import Chat, ChatRecord
 from apps.chatbi_workflow import runtime as chatbi_runtime
 from apps.chatbi_workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
+from apps.headless.metric_embedding import StaticEmbeddingProvider
 from apps.headless.models import (
     HeadlessAssetDocument,
     HeadlessDataSet,
@@ -32,6 +33,11 @@ from apps.headless.models import (
     HeadlessModel,
     HeadlessSchemaIndex,
 )
+from apps.retrieval.headless_indexing import (
+    HeadlessIndexCoordinator,
+    build_headless_index_profile,
+)
+from apps.retrieval.indexing import RetrievalIndexingService
 from apps.workflow_engine.api import router as graph_router
 from apps.workflow_engine.api import service as graph_service
 from apps.workflow_engine.domain.event import WorkflowEvent
@@ -87,7 +93,22 @@ def _fake_chatbi_v1_question_model(monkeypatch, tmp_path):
                     '"missing_slots":[],"image_profile_hint":null}'
                 )
             if "intent_type" in system_prompt:
-                return '{"intent_type":"metric_query","confidence":0.9,"ambiguous_slots":[],"conflict_slots":[]}'
+                return (
+                    '{"intent_type":"metric_query","confidence":0.9,'
+                    '"required_slot_types":["metric"],"query_shape":{"select_mode":"aggregate"},'
+                    '"ambiguous_slots":[],"conflict_slots":[]}'
+                )
+            if "metric_mentions" in system_prompt:
+                return (
+                    '{"metric_mentions":["访问人数"],"time_mentions":["今日"],'
+                    '"time_range":{"raw":"今日","value_status":"provided"},'
+                    '"ambiguous_slots":[],"conflict_slots":[]}'
+                )
+            if "dimension_slots" in system_prompt:
+                return (
+                    '{"dimension_mentions":[],"dimension_slots":[],'
+                    '"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}'
+                )
             return '{"category":"data","reason":"测试模型分类为数据问题","risk_level":"low","confidence":0.9}'
 
     class FailingAnswerModelClient:
@@ -227,6 +248,19 @@ def _seed_v1_headless_dataset(session: Session, oid: int = 9501) -> int:
     )
     session.add(dataset)
     session.flush()
+    profile = build_headless_index_profile()
+    queued = HeadlessIndexCoordinator(session, profile).enqueue_dataset_rebuild(
+        tenant_id=oid,
+        dataset=dataset,
+    )
+    provider = StaticEmbeddingProvider(
+        vector=[0.0] * profile.dimension,
+        provider=profile.provider,
+        model=profile.model,
+    )
+    indexing = RetrievalIndexingService(session, profile)
+    for job_id in queued.generation.job_ids:
+        indexing.process_job(job_id, provider)
     session.commit()
     return dataset.id or 0
 

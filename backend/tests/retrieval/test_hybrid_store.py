@@ -181,7 +181,7 @@ def _request(text: str) -> RetrievalRequest:
             permission_version="permission-1",
         ),
         profiles=[RetrievalProfileName.SEMANTIC_BINDING],
-        strategy_version="semantic-binding-v2-shadow",
+        strategy_version="semantic-binding",
     )
 
 

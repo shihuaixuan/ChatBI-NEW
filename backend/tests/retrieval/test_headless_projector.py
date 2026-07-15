@@ -227,6 +227,17 @@ def test_metric_projector_snapshot_keeps_relationships_structured():
             "dataset_id": 20,
             "biz_name": "sales_amount",
             "model_id": 10,
+            "same_model_dimension_ids": [201],
+            "joinable_model_ids": [11],
+            "compatible_dimension_ids": [200, 201],
+            "model_relations": [
+                {
+                    "relation_id": 300,
+                    "left_model_id": 10,
+                    "right_model_id": 11,
+                    "join_type": "left join",
+                }
+            ],
         },
         "acl": {"roles": ["analyst"], "row_filter": "secret_acl_condition"},
         "visibility": "private",
@@ -370,6 +381,7 @@ def test_dimension_term_and_value_projector_snapshots():
     ]
     assert values.metadata == {
         "asset_type": "VALUE",
+        "asset_id": 200,
         "dimension_id": 200,
         "model_id": 11,
         "dataset_id": 20,
@@ -461,20 +473,6 @@ def test_schema_builder_exposes_sensitive_level_to_the_single_projection_gate():
         namespace="headless:dataset:20",
         source_version="schema-1",
     ) == []
-
-
-def test_projector_keeps_legacy_asset_document_builder_entrypoint():
-    documents = HeadlessSourceProjector().build_from_schema(_schema(), oid=1, index_version=7)
-
-    assert {document.doc_key for document in documents} == {
-        "METRIC:100",
-        "METRIC:101",
-        "DIMENSION:200",
-        "DIMENSION:201",
-        "VALUE:200",
-        "TERM:300",
-    }
-    assert {document.index_version for document in documents} == {7}
 
 
 def test_content_hash_is_deterministic_and_alias_change_only_rebuilds_identity_unit():

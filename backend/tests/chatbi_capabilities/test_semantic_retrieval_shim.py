@@ -15,7 +15,7 @@ def test_capability_builds_unified_retrieval_request_and_passes_intent():
     class FakeService:
         def retrieve(self, request):
             captured["request"] = request
-            return SimpleNamespace(legacy_payload={"hit": False, "status": "missed"})
+            return SimpleNamespace(payload={"hit": False, "status": "missed"})
 
     with patch(
         "apps.chatbi_capabilities.semantic.retrieval.build_retrieval_service",

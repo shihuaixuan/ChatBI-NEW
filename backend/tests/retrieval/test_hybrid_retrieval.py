@@ -48,7 +48,7 @@ def _request() -> RetrievalRequest:
         intent=RetrievalIntent(intent_type="metric_query", metric_mentions=["GMV"]),
         scope=RetrievalScope(dataset_ids=[20]),
         profiles=[RetrievalProfileName.SEMANTIC_BINDING],
-        strategy_version="semantic-binding-v2-shadow",
+        strategy_version="semantic-binding",
     )
 
 

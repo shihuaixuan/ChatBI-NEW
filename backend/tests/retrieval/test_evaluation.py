@@ -11,7 +11,7 @@ from apps.retrieval.evaluation import (
     evaluate_baseline,
     load_gold_set,
 )
-from apps.retrieval.evaluation_legacy import legacy_semantic_result_to_bundle
+from apps.retrieval.payload import semantic_payload_to_bundle
 from apps.retrieval.schemas import (
     AssetReference,
     ExecutableAssetReference,
@@ -32,7 +32,7 @@ from apps.retrieval.schemas import (
     RetrievalSourceType,
 )
 
-GOLD_SET_PATH = Path(__file__).parent / "golden" / "semantic_binding_v1.json"
+GOLD_SET_PATH = Path(__file__).parent / "golden" / "semantic_binding.json"
 
 
 def _asset(asset_id: int) -> AssetReference:
@@ -53,7 +53,7 @@ def _request() -> RetrievalRequest:
         intent=RetrievalIntent(intent_type="metric_query", metric_mentions=["销售额"]),
         scope=RetrievalScope(dataset_ids=[3]),
         profiles=[RetrievalProfileName.SEMANTIC_BINDING],
-        strategy_version="semantic-binding-v1",
+        strategy_version="semantic-binding",
     )
 
 
@@ -133,7 +133,7 @@ def _bundle(status: RetrievalDecisionStatus = RetrievalDecisionStatus.RESOLVED) 
             allowed_asset_ids=allowed,
         ),
         diagnostics=RetrievalDiagnostics(
-            strategy_version="semantic-binding-v1",
+            strategy_version="semantic-binding",
             index_generation="test-1",
             total_latency_ms=20,
         ),
@@ -144,7 +144,7 @@ def _baseline(bundle: RetrievalBundle) -> RetrievalBaseline:
     return RetrievalBaseline(
         implementation="test",
         captured_at=datetime(2026, 7, 14),
-        strategy_version="semantic-binding-v1",
+        strategy_version="semantic-binding",
         results=[RecordedRetrievalResult(case_id="case-1", bundle=bundle)],
     )
 
@@ -180,7 +180,7 @@ def test_evaluator_keeps_missing_results_visible():
     baseline = RetrievalBaseline(
         implementation="empty",
         captured_at=datetime(2026, 7, 14),
-        strategy_version="semantic-binding-v1",
+        strategy_version="semantic-binding",
         results=[],
     )
 
@@ -204,7 +204,7 @@ def test_real_semantic_binding_gold_set_is_valid_and_covers_core_states():
     assert len({case.case_id for case in cases}) == len(cases)
 
 
-def test_legacy_converter_does_not_assign_all_selected_metrics_to_each_slot():
+def test_payload_converter_does_not_assign_all_selected_metrics_to_each_slot():
     request = _request().model_copy(
         update={
             "rewritten_question": "客户GMV和客户订单数",
@@ -264,7 +264,7 @@ def test_legacy_converter_does_not_assign_all_selected_metrics_to_each_slot():
         },
     }
 
-    bundle = legacy_semantic_result_to_bundle(
+    bundle = semantic_payload_to_bundle(
         request,
         raw,
         dense_status=RetrievalChannelStatus.SKIPPED,

@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+from typing import Any, cast
+
 from apps.chatbi_workflow import runtime as chatbi_runtime
 from apps.chatbi_workflow.capabilities.adapters.knowledge import (
     HeadlessKnowledgeAdapter,
@@ -16,12 +19,7 @@ from apps.chatbi_workflow.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
     register_chatbi_v1_handlers,
 )
-from apps.headless.schemas import (
-    DataSetSchema,
-    SchemaElement,
-    SchemaElementMatch,
-    SchemaMapInfo,
-)
+from apps.retrieval.service import RetrievalService
 from apps.workflow_engine.domain.context import WorkflowContext
 from apps.workflow_engine.domain.run import RunStatus
 from apps.workflow_engine.infrastructure.memory import (
@@ -50,27 +48,64 @@ class TrackingGateway(PlaceholderChatBICapabilityGateway):
         return super().invoke(capability, request, idempotency_key)
 
 
-class FakeHeadlessSchemaBuilder:
-    def __init__(self, schema: DataSetSchema) -> None:
-        self.schema = schema
-        self.calls: list[tuple[int, int]] = []
+class FakeRetrievalService:
+    """记录 Workflow 发出的统一检索请求，并返回当前语义载荷。"""
 
-    def build_dataset_schema(self, oid: int, dataset_id: int) -> DataSetSchema:
-        self.calls.append((oid, dataset_id))
-        return self.schema
+    def __init__(self) -> None:
+        self.requests: list[Any] = []
+
+    def retrieve(self, request):
+        self.requests.append(request)
+        dimension_filters = [
+            {
+                "asset_type": "DIMENSION",
+                "asset_id": 200,
+                "name": slot.name,
+                "biz_name": "stall_id",
+                "operator": "=",
+                "value": slot.value,
+            }
+            for slot in request.intent.dimension_slots
+            if slot.role == "filter" and slot.value_status == "provided"
+        ]
+        metric = {
+            "asset_type": "METRIC",
+            "asset_id": 100,
+            "model_id": 10,
+            "name": "访问量",
+            "biz_name": "visit_uv",
+            "source": "semantic_binding",
+        }
+        return SimpleNamespace(
+            payload={
+                "hit": True,
+                "status": "hit",
+                "candidate_groups": {
+                    "metrics": [metric],
+                    "dimensions": [],
+                    "values": [],
+                    "terms": [],
+                },
+                "selected_assets": {
+                    "metrics": [metric],
+                    "dimensions": [],
+                    "values": [],
+                    "terms": [],
+                },
+                "slot_bindings": {
+                    "metrics": [metric],
+                    "group_dimensions": [],
+                    "dimension_filters": dimension_filters,
+                    "value_filters": [],
+                    "time_filters": [],
+                },
+            }
+        )
 
 
-class FakeSchemaMapper:
-    def __init__(self, matches: list[SchemaElementMatch]) -> None:
-        self.matches = matches
-
-    def map_schema(self, query_text: str, schema: DataSetSchema) -> SchemaMapInfo:
-        return SchemaMapInfo(data_set_element_matches={schema.data_set.id: self.matches})
-
-
-class EmptyDocumentRetriever:
-    def retrieve(self, query_text: str, schema: DataSetSchema, oid: int) -> dict[str, list[dict]]:
-        return {"metrics": [], "dimensions": [], "values": [], "terms": []}
+def _knowledge_adapter(service: FakeRetrievalService) -> HeadlessKnowledgeAdapter:
+    # 测试替身只实现适配器使用的 retrieve 协议。
+    return HeadlessKnowledgeAdapter(cast(RetrievalService, service))
 
 
 def _dimension_value_issue(dimension: str) -> dict:
@@ -651,58 +686,8 @@ def test_chatbi_v1_slot_clarification_can_resume_to_success():
 
 
 def test_chatbi_v1_slot_clarification_filter_response_feeds_knowledge_and_plan():
-    metric = SchemaElement(
-        data_set_id=20,
-        data_set_name="档口经营分析",
-        model=10,
-        id=100,
-        name="访问人数",
-        biz_name="visit_uv",
-        type="METRIC",
-        fields=["visit_uv"],
-    )
-    stall = SchemaElement(
-        data_set_id=20,
-        data_set_name="档口经营分析",
-        model=10,
-        id=200,
-        name="店铺",
-        biz_name="stall_id",
-        type="DIMENSION",
-    )
-    stat_date = SchemaElement(
-        data_set_id=20,
-        data_set_name="档口经营分析",
-        model=10,
-        id=201,
-        name="日期",
-        biz_name="stat_date",
-        type="DIMENSION",
-        ext_info={"is_default_time": True, "dimension_data_type": "date"},
-    )
-    schema = DataSetSchema(
-        data_set=SchemaElement(
-            data_set_id=20,
-            data_set_name="档口经营分析",
-            id=20,
-            name="档口经营分析",
-            biz_name="stall_bi",
-            type="DATASET",
-        ),
-        models=[{"id": 10, "name": "档口流量模型", "biz_name": "stall_traffic", "tableQuery": "stall_traffic_1d"}],
-        metrics=[metric],
-        dimensions=[stall, stat_date],
-    )
-    knowledge_adapter = HeadlessKnowledgeAdapter(
-        schema_builder=FakeHeadlessSchemaBuilder(schema),
-        schema_mapper=FakeSchemaMapper(
-            [
-                SchemaElementMatch(element=metric, similarity=0.96, detect_word="访问人数", word="访问人数"),
-                SchemaElementMatch(element=stall, similarity=0.96, detect_word="店铺", word="店铺"),
-            ]
-        ),
-        document_retriever=EmptyDocumentRetriever(),
-    )
+    retrieval_service = FakeRetrievalService()
+    knowledge_adapter = _knowledge_adapter(retrieval_service)
     gateway = DimensionAmbiguityKnowledgePlanningGateway(knowledge_adapter)
     runtime = _runtime(gateway)
     run = runtime.create_run(
@@ -727,7 +712,9 @@ def test_chatbi_v1_slot_clarification_filter_response_feeds_knowledge_and_plan()
         "店铺": "店铺为1"
     }
     assert outcome.context.variables["intent"]["dimension_slots"][0]["value"] is None
-    assert outcome.context.variables["knowledge"]["slot_bindings"]["filters"][0]["value"] == "1"
+    request_intent = retrieval_service.requests[0].intent
+    assert request_intent.dimension_slots[0].value == "1"
+    assert outcome.context.variables["knowledge"]["slot_bindings"]["dimension_filters"][0]["value"] == "1"
     assert any(item.get("value") == "1" for item in outcome.context.variables["plan"]["filters"])
 
 
@@ -1013,46 +1000,9 @@ def test_slot_interaction_response_accepts_multiple_dimension_values():
     ]
 
 
-def test_chatbi_v1_graph_passes_user_question_to_real_headless_knowledge_node():
-    traffic_metric = SchemaElement(
-        data_set_id=20,
-        data_set_name="经营分析",
-        model=10,
-        id=100,
-        name="访问量",
-        biz_name="visit_uv",
-        type="METRIC",
-        description="店铺流量 访问人数 核心指标",
-        default_agg="SUM",
-        fields=["visit_uv"],
-    )
-    trade_metric = SchemaElement(
-        data_set_id=20,
-        data_set_name="经营分析",
-        model=10,
-        id=101,
-        name="成交订单数",
-        biz_name="order_cnt",
-        type="METRIC",
-        description="店铺交易 订单成交 指标",
-        default_agg="SUM",
-        fields=["order_cnt"],
-    )
-    schema = DataSetSchema(
-        data_set=SchemaElement(
-            data_set_id=20,
-            data_set_name="经营分析",
-            id=20,
-            name="经营分析",
-            biz_name="business_bi",
-            type="DATASET",
-        ),
-        models=[{"id": 10, "name": "经营模型", "biz_name": "business_model", "tableQuery": "business_daily"}],
-        metrics=[traffic_metric, trade_metric],
-        dimensions=[],
-    )
-    schema_builder = FakeHeadlessSchemaBuilder(schema)
-    gateway = RealKnowledgeGateway(HeadlessKnowledgeAdapter(schema_builder=schema_builder))
+def test_chatbi_v1_graph_passes_user_question_to_unified_retrieval_node():
+    retrieval_service = FakeRetrievalService()
+    gateway = RealKnowledgeGateway(_knowledge_adapter(retrieval_service))
     runtime = _runtime(gateway)
     run = runtime.create_run(
         "chatbi-v1-real-knowledge-from-user-question",
@@ -1072,11 +1022,12 @@ def test_chatbi_v1_graph_passes_user_question_to_real_headless_knowledge_node():
         "intent.recognize",
         "knowledge.retrieve",
     ]
-    assert schema_builder.calls == [(10, 20)]
+    assert retrieval_service.requests[0].original_question == "今日店铺流量"
+    assert retrieval_service.requests[0].scope.dataset_ids == [20]
     assert knowledge["status"] == "hit"
     assert knowledge["selected_assets"]["metrics"][0]["asset_id"] == 100
     assert knowledge["selected_assets"]["metrics"][0]["biz_name"] == "visit_uv"
-    assert knowledge["candidate_groups"]["metrics"][0]["source"] == "headless_asset_document"
+    assert knowledge["candidate_groups"]["metrics"][0]["source"] == "semantic_binding"
     assert "sql.generate" in gateway.calls
 
 
@@ -1096,4 +1047,4 @@ def test_real_chatbi_v1_runtime_injects_session_backed_knowledge_adapter(monkeyp
 
     knowledge_adapter = captured["knowledge_adapter"]
     assert isinstance(knowledge_adapter, HeadlessKnowledgeAdapter)
-    assert knowledge_adapter._schema_builder.session is not None
+    assert knowledge_adapter._retrieval_service is not None

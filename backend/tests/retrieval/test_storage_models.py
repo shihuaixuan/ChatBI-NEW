@@ -84,7 +84,7 @@ def test_composite_foreign_keys_carry_tenant_and_generation_boundaries():
     )
 
 
-def test_generation_uniqueness_supports_shadow_writes_without_duplicate_active_rows():
+def test_generation_uniqueness_supports_replacement_builds_without_duplicate_active_rows():
     assert ("resource_id", "unit_key", "index_generation") in _constraint_columns(
         RetrievalUnitModel.__table__,
         UniqueConstraint,
