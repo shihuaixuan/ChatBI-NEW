@@ -1,4 +1,4 @@
-<p align="center"><img src="https://resource-fit2cloud-com.oss-cn-hangzhou.aliyuncs.com/sqlbot/sqlbot.png" alt="SQLBot" width="300" /></p>
+<p align="center"><img src="https://resource-fit2cloud-com.oss-cn-hangzhou.aliyuncs.com/sqlbot/sqlbot.png" alt="Numora" width="300" /></p>
 <h3 align="center">基于大模型和 RAG 的智能问数系统</h3>
 
 <p align="center">
@@ -18,7 +18,7 @@
 <hr/>
 
 
-SQLBot 是一款基于大语言模型和 RAG 的智能问数系统，由 DataEase 开源项目组匠心出品。借助 SQLBot，用户可以实现对话式数据分析（ChatBI），快速提炼获取所需的数据信息及可视化图表，并且支持进一步开展智能分析。
+Numora 是一款基于大语言模型和 RAG 的智能问数系统，由 DataEase 开源项目组匠心出品。借助 Numora，用户可以实现对话式数据分析（ChatBI），快速提炼获取所需的数据信息及可视化图表，并且支持进一步开展智能分析。
 
 ## 工作原理
 
@@ -69,15 +69,15 @@ docker run -d \
   dataease/sqlbot
 ```
 
-你也可以通过 [1Panel 应用商店](https://apps.fit2cloud.com/1panel) 快速部署 SQLBot。
+你也可以通过 [1Panel 应用商店](https://apps.fit2cloud.com/1panel) 快速部署 Numora。
 
-如果是内网环境，你可以通过 [离线安装包方式](https://community.fit2cloud.com/#/products/sqlbot/downloads) 部署 SQLBot。
+如果是内网环境，你可以通过 [离线安装包方式](https://community.fit2cloud.com/#/products/sqlbot/downloads) 部署 Numora。
 
 ### 访问方式
 
 - 在浏览器中打开: http://<你的服务器IP>:8000/
 - 用户名: admin
-- 密码: SQLBot@123456
+- 密码: Numora@123456
 
 ### 联系我们
 
@@ -109,9 +109,9 @@ docker run -d \
 
 本仓库遵循 [FIT2CLOUD Open Source License](LICENSE) 开源协议，该许可证本质上是 GPLv3，但有一些额外的限制。
 
-你可以基于 SQLBot 的源代码进行二次开发，但是需要遵守以下规定：
+你可以基于 Numora 的源代码进行二次开发，但是需要遵守以下规定：
 
-- 不能替换和修改 SQLBot 的 Logo 和版权信息；
+- 不能替换和修改根目录 LICENSE 要求保留的 Logo 和版权信息；
 - 二次开发后的衍生作品必须遵守 GPL V3 的开源义务。
 
 如需商业授权，请联系 support@fit2cloud.com 。

@@ -283,7 +283,7 @@ onMounted(() => {
   .warn-template {
     display: flex;
     align-items: center;
-    background: #d2f1e9;
+    background: #d6e4ff;
     // border: 1px solid #ffe7ba;
     border-radius: 6px;
     padding: 9px 16px;

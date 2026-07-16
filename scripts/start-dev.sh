@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 本脚本用于本地开发环境一键启动 SQLBot 后端和前端。
+# 本脚本用于本地开发环境一键启动 Numora 后端和前端。
 # 默认会释放 8000/5173 端口上的旧进程，再重新后台启动服务。
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

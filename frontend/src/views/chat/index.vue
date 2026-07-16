@@ -120,7 +120,7 @@
                   ><custom_small v-if="appearanceStore.themeColor !== 'default'"></custom_small>
                   <LOGO_fold v-else></LOGO_fold
                 ></el-icon>
-                {{ appearanceStore.pc_welcome ?? '你好，我是 SQLBot' }}
+                {{ appearanceStore.pc_welcome ?? '你好，我是 Numora' }}
               </div>
               <div class="sub">
                 {{
@@ -1584,15 +1584,15 @@ onMounted(() => {
       line-height: 24px;
       font-weight: 500;
 
-      --ed-button-text-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
-      --ed-button-hover-text-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
-      --ed-button-active-text-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
+      --ed-button-text-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
+      --ed-button-hover-text-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
+      --ed-button-active-text-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
       --ed-button-bg-color: rgba(248, 249, 250, 1);
-      --ed-button-hover-bg-color: var(--ed-color-primary-1a, #1cba901a);
+      --ed-button-hover-bg-color: var(--ed-color-primary-1a, #3370ff1a);
       --ed-button-border-color: rgba(217, 220, 223, 1);
-      --ed-button-hover-border-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
-      --ed-button-active-bg-color: var(--ed-color-primary-33, #1cba9033);
-      --ed-button-active-border-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
+      --ed-button-hover-border-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
+      --ed-button-active-bg-color: var(--ed-color-primary-33, #3370ff33);
+      --ed-button-active-border-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
     }
   }
 }

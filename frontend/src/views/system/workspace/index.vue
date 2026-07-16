@@ -638,7 +638,7 @@ const handleCurrentChange = (val: number) => {
           position: absolute;
           width: 26px;
           height: 26px;
-          background: var(--ed-color-primary-1a, #1cba901a);
+          background: var(--ed-color-primary-1a, #3370ff1a);
           top: 50%;
           left: 50%;
           transform: translate(-50%, -50%);
@@ -724,7 +724,7 @@ const handleCurrentChange = (val: number) => {
         }
 
         &.isActive {
-          background: var(--ed-color-primary-1a, #1cba901a);
+          background: var(--ed-color-primary-1a, #3370ff1a);
           color: var(--ed-color-primary);
         }
       }

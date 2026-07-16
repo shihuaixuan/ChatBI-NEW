@@ -92,12 +92,12 @@ async def lifespan(app: FastAPI):
     init_table_and_ds_embedding()
     init_semantic_embedding()
     submit_pending_headless_index_jobs()
-    SQLBotLogUtil.info("✅ SQLBot 初始化完成")
+    SQLBotLogUtil.info("✅ Numora 初始化完成")
     await sqlbot_xpack.core.clean_xpack_cache()
     await async_model_info()  # 异步加密已有模型的密钥和地址
     await sqlbot_xpack.core.monitor_app(app)
     yield
-    SQLBotLogUtil.info("SQLBot 应用关闭")
+    SQLBotLogUtil.info("Numora 应用关闭")
 
 
 def custom_generate_unique_id(route: APIRoute) -> str:
@@ -167,7 +167,7 @@ def generate_openapi_for_lang(lang: str) -> dict[str, Any]:
 
     # 1. create OpenAPI
     openapi_schema = get_openapi(
-        title="SQLBot API Document" if lang == "en" else "SQLBot API 文档",
+        title="Numora API Document" if lang == "en" else "Numora API 文档",
         version="1.0.0",
         routes=app.routes,
         tags=localized_tags
@@ -202,7 +202,7 @@ async def custom_swagger_ui(request: Request):
     from fastapi.openapi.docs import get_swagger_ui_html
     return get_swagger_ui_html(
         openapi_url=f"./openapi.json?lang={lang}",
-        title="SQLBot API Docs",
+        title="Numora API Docs",
         swagger_favicon_url="https://fastapi.tiangolo.com/img/favicon.png",
         swagger_js_url="./swagger-ui-bundle.js",
         swagger_css_url="./swagger-ui.css",
@@ -217,8 +217,8 @@ mcp_app.mount("/images", StaticFiles(directory=images_path), name="images")
 
 mcp = FastApiMCP(
     app,
-    name="SQLBot MCP Server",
-    description="SQLBot MCP Server",
+    name="Numora MCP Server",
+    description="Numora MCP Server",
     describe_all_responses=True,
     describe_full_response_schema=True,
     include_operations=["mcp_datasource_list", "get_model_list", "mcp_question", "mcp_start", "mcp_assistant", "mcp_ws_list"]

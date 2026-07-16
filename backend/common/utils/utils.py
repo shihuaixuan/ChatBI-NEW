@@ -194,7 +194,7 @@ try:
     setup_logging()
 except Exception as exc:
     # logging 是基础设施，import 阶段不能因为日志配置问题拖垮业务模块。
-    print(f"[SQLBot] logging setup failed: {exc}", file=sys.stderr)
+    print(f"[Numora] logging setup failed: {exc}", file=sys.stderr)
 
 
 class CallerLogger(logging.Logger):

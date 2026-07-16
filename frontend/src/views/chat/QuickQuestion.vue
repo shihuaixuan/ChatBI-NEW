@@ -160,7 +160,7 @@ const effectiveDatasourceId = computed(() => props.datasourceId || props.current
   }
   .title-active {
     color: rgba(24, 158, 122, 1);
-    background: rgba(28, 186, 144, 0.2);
+    background: rgba(51, 112, 255, 0.2);
   }
   .quick_question_content {
     height: 168px;

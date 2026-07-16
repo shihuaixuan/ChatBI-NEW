@@ -132,7 +132,7 @@ watch(
     color: #0c296e;
     font-size: 14px;
     line-height: 22px;
-    background: var(--ed-color-primary-1a, #1cba901a);
+    background: var(--ed-color-primary-1a, #3370ff1a);
     border-radius: 2px;
     margin: 0;
     margin-right: 8px;

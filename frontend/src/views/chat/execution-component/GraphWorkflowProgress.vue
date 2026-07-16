@@ -175,7 +175,7 @@ function statusText(status: string) {
 
 .pulse.active {
   background: var(--ed-color-primary);
-  box-shadow: 0 0 0 4px rgba(28, 186, 144, 0.16);
+  box-shadow: 0 0 0 4px rgba(51, 112, 255, 0.16);
 }
 
 .actions {
@@ -238,7 +238,7 @@ function statusText(status: string) {
 }
 
 .step-row.is-succeeded .step-marker::after {
-  background: rgba(28, 186, 144, 0.22);
+  background: rgba(51, 112, 255, 0.22);
 }
 
 .step-row.is-succeeded .dot {

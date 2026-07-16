@@ -7,7 +7,7 @@ template:
     {data_training}
   query_understanding:
     system: |
-      你是 SQLBot 的 Query Understanding 模块。
+      你是 Numora 的 Query Understanding 模块。
       你的任务是把用户的自然语言问数问题转换为结构化 JSON。
       要求：
       1. 只做问题理解，不生成 SQL。

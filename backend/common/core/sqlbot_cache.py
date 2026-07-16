@@ -128,7 +128,7 @@ def init_sqlbot_cache():
     cache_type: str = settings.CACHE_TYPE
     if cache_type == "memory":
         FastAPICache.init(InMemoryBackend())
-        SQLBotLogUtil.info("SQLBot 使用内存缓存, 仅支持单进程模式")
+        SQLBotLogUtil.info("Numora 使用内存缓存, 仅支持单进程模式")
     elif cache_type == "redis":
         from fastapi_cache.backends.redis import RedisBackend
         import redis.asyncio as redis
@@ -137,9 +137,9 @@ def init_sqlbot_cache():
         pool = ConnectionPool.from_url(url=redis_url)
         redis_client = redis.Redis(connection_pool=pool)
         FastAPICache.init(RedisBackend(redis_client), prefix="sqlbot-cache")
-        SQLBotLogUtil.info(f"SQLBot 使用Redis缓存, 可使用多进程模式")
+        SQLBotLogUtil.info("Numora 使用Redis缓存, 可使用多进程模式")
     else:
-        SQLBotLogUtil.warning("SQLBot 未启用缓存, 可使用多进程模式")
+        SQLBotLogUtil.warning("Numora 未启用缓存, 可使用多进程模式")
     
 
 def is_cache_initialized() -> bool:

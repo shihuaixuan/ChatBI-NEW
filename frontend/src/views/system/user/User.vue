@@ -572,7 +572,7 @@ import { useClipboard } from '@vueuse/core'
 const { copy } = useClipboard({ legacy: true })
 
 const { t } = useI18n()
-const defaultPwd = ref('SQLBot@123456')
+const defaultPwd = ref('Numora@123456')
 const keyword = ref('')
 const dialogFormVisible = ref(false)
 const termFormRef = ref()
@@ -1591,7 +1591,7 @@ const showTips = (successCount: any, errorCount: any, dataKey: any) => {
     height: 40px;
     align-items: center;
     line-height: 40px;
-    background: var(--ed-color-primary-80, #d2f1e9);
+    background: var(--ed-color-primary-80, #d6e4ff);
     border-radius: 4px;
     padding-left: 10px;
     .icon-span {

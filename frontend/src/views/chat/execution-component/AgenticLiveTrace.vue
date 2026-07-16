@@ -340,7 +340,7 @@ onMounted(async () => {
 </template>
 
 <style scoped lang="less">
-@primary: var(--ed-color-primary, rgba(28, 186, 144, 1));
+@primary: var(--ed-color-primary, rgba(51, 112, 255, 1));
 
 .agentic-live-trace {
   margin-top: 8px;
@@ -394,7 +394,7 @@ onMounted(async () => {
 .spinner {
   width: 12px;
   height: 12px;
-  border: 2px solid var(--ed-color-primary-1a, rgba(28, 186, 144, 0.2));
+  border: 2px solid var(--ed-color-primary-1a, rgba(51, 112, 255, 0.2));
   border-top-color: @primary;
   border-radius: 50%;
   animation: trace-spin 0.8s linear infinite;
@@ -515,7 +515,7 @@ onMounted(async () => {
       font-size: 12px;
       line-height: 18px;
       color: @primary;
-      background: var(--ed-color-primary-1a, rgba(28, 186, 144, 0.1));
+      background: var(--ed-color-primary-1a, rgba(51, 112, 255, 0.1));
     }
 
     .chip-row {

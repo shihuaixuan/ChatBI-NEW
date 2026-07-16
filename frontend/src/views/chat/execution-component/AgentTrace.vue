@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowRight,
   ChatDotRound,
+  CircleCheck,
   CircleCheckFilled,
   Clock,
   Loading,
@@ -294,7 +295,7 @@ watch(currentRecordId, () => loadTrace())
             <el-icon v-else-if="step.status === 'running'" class="spinning"><Loading /></el-icon>
             <el-icon v-else-if="step.status === 'failed'"><WarningFilled /></el-icon>
             <el-icon v-else-if="step.status === 'waiting'"><Clock /></el-icon>
-            <el-icon v-else><CircleCheckFilled /></el-icon>
+            <el-icon v-else><CircleCheck /></el-icon>
           </span>
           <span v-if="index < flow.steps.length - 1" class="step-line"></span>
         </div>
@@ -392,7 +393,7 @@ watch(currentRecordId, () => loadTrace())
 </template>
 
 <style scoped lang="less">
-@primary: var(--ed-color-primary, rgba(28, 186, 144, 1));
+@primary: var(--ed-color-primary, rgba(51, 112, 255, 1));
 @text: rgba(31, 35, 41, 1);
 @secondary: rgba(100, 106, 115, 1);
 @muted: rgba(143, 149, 158, 1);
@@ -507,7 +508,7 @@ watch(currentRecordId, () => loadTrace())
   flex: 1;
   width: 1px;
   min-height: 14px;
-  background: rgba(28, 186, 144, 0.24);
+  background: rgba(51, 112, 255, 0.24);
 }
 
 .is-running .step-line {
@@ -648,8 +649,8 @@ watch(currentRecordId, () => loadTrace())
 }
 
 .filter-chip {
-  background: rgba(28, 186, 144, 0.1);
-  color: rgba(15, 126, 96, 1);
+  background: rgba(51, 112, 255, 0.1);
+  color: rgba(36, 91, 219, 1);
 }
 
 .issue-row span {

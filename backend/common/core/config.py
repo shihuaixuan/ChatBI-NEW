@@ -27,7 +27,7 @@ class Settings(BaseSettings):
         env_ignore_empty=True,
         extra="ignore",
     )
-    PROJECT_NAME: str = "SQLBot"
+    PROJECT_NAME: str = "Numora"
     #CONTEXT_PATH: str = "/sqlbot"
     CONTEXT_PATH: str = ""
     SECRET_KEY: str = secrets.token_urlsafe(32)
@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # SQLBOT_DB_URL: str = 'mysql+pymysql://root:Password123%40mysql@127.0.0.1:3306/sqlbot'
 
     TOKEN_KEY: str = "X-SQLBOT-TOKEN"
-    DEFAULT_PWD: str = "SQLBot@123456"
+    DEFAULT_PWD: str = "Numora@123456"
     ASSISTANT_TOKEN_KEY: str = "X-SQLBOT-ASSISTANT-TOKEN"
 
     CACHE_TYPE: Literal["redis", "memory", "None"] = "memory"

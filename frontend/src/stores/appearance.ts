@@ -60,7 +60,7 @@ export const useAppearanceStore = defineStore('appearanceStore', {
       login: '',
       slogan: '',
       web: '',
-      name: 'SQLBot',
+      name: 'Numora',
       foot: 'false',
       footContent: '',
       loaded: false,
@@ -255,15 +255,15 @@ export const useAppearanceStore = defineStore('appearanceStore', {
       // }
       const obj = LicenseGenerator.getLicense()
       if (obj?.status !== 'valid') {
-        setCurrentColor('#1CBA90')
-        document.title = 'SQLBot'
+        setCurrentColor('#3370FF')
+        document.title = 'Numora'
         setLinkIcon()
         return
       }
       const resData = await request.get('/system/appearance/ui')
       this.loaded = true
       if (!resData?.length) {
-        setCurrentColor('#1CBA90')
+        setCurrentColor('#3370FF')
         setLinkIcon()
         return
       }
@@ -285,11 +285,7 @@ export const useAppearanceStore = defineStore('appearanceStore', {
       this.pc_welcome = data.pc_welcome
       this.pc_welcome_desc = data.pc_welcome_desc
       const currentColor =
-        this.themeColor === 'custom' && this.customColor
-          ? this.customColor
-          : this.isBlue
-            ? '#3370ff'
-            : '#1CBA90'
+        this.themeColor === 'custom' && this.customColor ? this.customColor : '#3370FF'
       setCurrentColor(currentColor)
       this.bg = data.bg
       this.login = data.login
@@ -301,8 +297,8 @@ export const useAppearanceStore = defineStore('appearanceStore', {
         document.title = this.name
         setTitle(this.name)
       } else {
-        document.title = 'SQLBot'
-        setTitle('SQLBot')
+        document.title = 'Numora'
+        setTitle('Numora')
       }
       setLinkIcon(this.web)
     },

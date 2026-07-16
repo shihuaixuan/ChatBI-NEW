@@ -27,7 +27,7 @@ def build_query_understanding_prompts(
     terminology_candidates: list[dict[str, Any]],
     schema_summary: list[dict[str, Any]],
 ) -> tuple[str, str]:
-    system_prompt = """你是 SQLBot 的 Query Understanding 模块。
+    system_prompt = """你是 Numora 的 Query Understanding 模块。
 要求：
 1. 只做问题理解，不生成 SQL。
 2. 只输出 JSON，不输出 Markdown、解释或额外文本。

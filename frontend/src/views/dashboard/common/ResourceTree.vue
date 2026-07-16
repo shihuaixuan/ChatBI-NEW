@@ -482,11 +482,11 @@ defineExpose({
 
     &:hover,
     &:focus {
-      background: var(--ed-color-primary-80, #d2f1e9);
+      background: var(--ed-color-primary-80, #d6e4ff);
     }
 
     &:active {
-      background: var(--ed-color-primary-60, #a4e3d3);
+      background: var(--ed-color-primary-60, #adc6ff);
     }
   }
 }

@@ -728,8 +728,8 @@ watch(
     }
 
     .chart-active {
-      background: var(--ed-color-primary-1a, rgba(28, 186, 144, 0.1));
-      color: var(--ed-color-primary, rgba(28, 186, 144, 1));
+      background: var(--ed-color-primary-1a, rgba(51, 112, 255, 0.1));
+      color: var(--ed-color-primary, rgba(51, 112, 255, 1));
       border-radius: 6px;
 
       :deep(.ed-select__wrapper) {
@@ -737,15 +737,15 @@ watch(
       }
 
       :deep(.ed-select__input) {
-        color: var(--ed-color-primary, rgba(28, 186, 144, 1));
+        color: var(--ed-color-primary, rgba(51, 112, 255, 1));
       }
 
       :deep(.ed-select__placeholder) {
-        color: var(--ed-color-primary, rgba(28, 186, 144, 1));
+        color: var(--ed-color-primary, rgba(51, 112, 255, 1));
       }
 
       :deep(.ed-select__caret) {
-        color: var(--ed-color-primary, rgba(28, 186, 144, 1));
+        color: var(--ed-color-primary, rgba(51, 112, 255, 1));
       }
     }
 

@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_connection_config(datasource_id: int) -> dict:
-    """从 SQLBot 元数据库读取外部数据源配置，但不输出敏感信息。"""
+    """从 Numora 元数据库读取外部数据源配置，但不输出敏感信息。"""
 
     with Session(engine) as session:
         datasource = session.get(CoreDatasource, datasource_id)

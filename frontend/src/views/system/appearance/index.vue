@@ -76,7 +76,7 @@
                   <div class="tips-page">
                     {{
                       t('system.screen_customization_supported', {
-                        msg: loginForm.name || 'SQLBot',
+                        msg: loginForm.name || 'Numora',
                       })
                     }}
                   </div>
@@ -204,7 +204,7 @@
                   <div class="tips-page">
                     {{
                       t('system.screen_customization_settings', {
-                        msg: loginForm.name || 'SQLBot',
+                        msg: loginForm.name || 'Numora',
                       })
                     }}
                   </div>
@@ -333,7 +333,7 @@ const baseUrl = basePath + '/system/appearance/picture/'
 const fileList = ref<(UploadUserFile & { flag: string })[]>([])
 const navigateBg = ref('dark')
 const themeColor = ref('default')
-const customColor = ref('#1CBA90')
+const customColor = ref('#3370FF')
 const web = ref('')
 const bg = ref('')
 const login = ref('')
@@ -346,7 +346,7 @@ const changedItemArray = ref<ConfigItem[]>([])
 
 const loginFormRef = ref<FormInstance>()
 const defaultLoginForm = reactive<LoginForm>({
-  name: 'SQLBot',
+  name: 'Numora',
   slogan: t('common.intelligent_questioning_platform'),
   foot: 'false',
   showSlogan: '0',
@@ -514,7 +514,7 @@ const init = () => {
         if (themeColor.value === 'custom') {
           setPageCustomColor(customColor.value)
         } else {
-          setPageCustomColor(isBlue.value ? '#3370FF' : '#1CBA90')
+          setPageCustomColor('#3370FF')
         }
       })
     })
@@ -550,7 +550,7 @@ const themeColorChange = (val: any) => {
   if (themeColor.value === 'custom') {
     setPageCustomColor(customColor.value)
   } else {
-    setPageCustomColor(isBlue.value ? '#3370FF' : '#1CBA90')
+    setPageCustomColor('#3370FF')
   }
 }
 const customColorChange = (val: any) => {
@@ -812,7 +812,7 @@ onUnmounted(() => {
           border-radius: 6px;
 
           .is-active {
-            background: var(--ed-color-primary-1a, #1cba901a);
+            background: var(--ed-color-primary-1a, #3370ff1a);
             font-weight: 500;
           }
 
@@ -951,15 +951,15 @@ onUnmounted(() => {
                   line-height: 24px;
                   font-weight: 500;
 
-                  --ed-button-text-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
-                  --ed-button-hover-text-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
-                  --ed-button-active-text-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
+                  --ed-button-text-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
+                  --ed-button-hover-text-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
+                  --ed-button-active-text-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
                   --ed-button-bg-color: rgba(248, 249, 250, 1);
-                  --ed-button-hover-bg-color: var(--ed-color-primary-1a, #1cba901a);
+                  --ed-button-hover-bg-color: var(--ed-color-primary-1a, #3370ff1a);
                   --ed-button-border-color: rgba(217, 220, 223, 1);
-                  --ed-button-hover-border-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
-                  --ed-button-active-bg-color: var(--ed-color-primary-33, #1cba9033);
-                  --ed-button-active-border-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
+                  --ed-button-hover-border-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
+                  --ed-button-active-bg-color: var(--ed-color-primary-33, #3370ff33);
+                  --ed-button-active-border-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
                 }
               }
             }

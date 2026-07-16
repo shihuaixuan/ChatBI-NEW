@@ -169,9 +169,9 @@ watch(
 .interaction-card {
   margin-top: 10px;
   padding: 12px;
-  border: 1px solid rgba(28, 186, 144, 0.35);
+  border: 1px solid rgba(51, 112, 255, 0.35);
   border-radius: 8px;
-  background: rgba(28, 186, 144, 0.08);
+  background: rgba(51, 112, 255, 0.08);
 }
 
 .card-title {
@@ -214,9 +214,9 @@ watch(
 }
 
 .option-btn.selected {
-  background: rgba(28, 186, 144, 0.12);
+  background: rgba(51, 112, 255, 0.12);
   font-weight: 600;
-  box-shadow: inset 0 0 0 1px rgba(28, 186, 144, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(51, 112, 255, 0.18);
 }
 
 .option-btn:disabled {

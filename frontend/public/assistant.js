@@ -38,31 +38,19 @@
 <div class="sqlbot-assistant-chat-button">
   <img style="height:30px;width:30px;display:none;" src="${data.float_icon}">
   <svg style="display:none;" data-v-39a51454="" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg" width="30" height="30" fill="none">
-    <path fill="#149CC5" d="M28.333 13.669h-.231c.138.758.207 1.527.206 2.298.005.946-.107 1.89-.335 2.808h.65a1.05 1.05 0 0 0 1.05-1.05V15.01a1.343 1.343 0 0 0-1.34-1.341"></path>
-    <path fill="#69CAA4" d="M1.692 15.967c0-.77.068-1.54.206-2.298h-.23a1.34 1.34 0 0 0-1.342 1.34v2.716a1.05 1.05 0 0 0 1.05 1.05h.651a11.4 11.4 0 0 1-.335-2.808"></path>
-    <path fill="url(#a)" d="M15 3.795c-6.89 0-12.474 5.282-12.474 12.171 0 6.89 5.585 10.239 12.474 10.239s12.474-3.35 12.474-10.238c0-6.89-5.585-12.172-12.474-12.172m3.026 17.33h-6.052a6 6 0 0 1-2.484-.535c-.564-.256-2.208.282-2.663-.127-.551-.495.117-1.969-.221-2.636a6.014 6.014 0 0 1 5.368-8.73h6.052a6.014 6.014 0 0 1 0 12.029"></path>
-    <path fill="url(#b)" d="M15 3.795c-6.89 0-12.474 5.282-12.474 12.171 0 6.89 5.585 10.239 12.474 10.239s12.474-3.35 12.474-10.238c0-6.89-5.585-12.172-12.474-12.172m3.026 17.33h-6.052a6 6 0 0 1-2.484-.535c-.564-.256-2.208.282-2.663-.127-.551-.495.117-1.969-.221-2.636a6.014 6.014 0 0 1 5.368-8.73h6.052a6.014 6.014 0 0 1 0 12.029"></path>
-    <path fill="#75CCCC" d="M10.546 14.915h-1.78v3.88h1.78zM14.12 13.193h-1.78v5.602h1.78zM17.694 15.438h-1.78v3.357h1.78zM21.233 12.452h-1.779v6.343h1.78z"></path>
     <defs>
-      <linearGradient id="a" x1="6.65" x2="25.099" y1="4.441" y2="29.249" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#B2F288"></stop>
-        <stop offset=".181" stop-color="#80D79C"></stop>
-        <stop offset=".371" stop-color="#52BEAD"></stop>
-        <stop offset=".554" stop-color="#2FAABB"></stop>
-        <stop offset=".724" stop-color="#159CC5"></stop>
-        <stop offset=".878" stop-color="#0594CB"></stop>
-        <stop offset="1" stop-color="#0091CD"></stop>
-      </linearGradient>
-      <linearGradient id="b" x1="6.65" x2="25.099" y1="4.441" y2="29.249" gradientUnits="userSpaceOnUse">
-        <stop stop-color="#B2F288"></stop>
-        <stop offset=".181" stop-color="#80D79C"></stop>
-        <stop offset=".371" stop-color="#52BEAD"></stop>
-        <stop offset=".554" stop-color="#2FAABB"></stop>
-        <stop offset=".724" stop-color="#159CC5"></stop>
-        <stop offset=".878" stop-color="#0594CB"></stop>
-        <stop offset="1" stop-color="#0091CD"></stop>
+      <linearGradient id="numora-assistant-bg" x1="4" y1="3" x2="27" y2="28" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#174E8A"></stop>
+        <stop offset=".52" stop-color="#2563EB"></stop>
+        <stop offset="1" stop-color="#38BDF8"></stop>
       </linearGradient>
     </defs>
+    <rect x="2" y="2" width="26" height="26" rx="7" fill="url(#numora-assistant-bg)"></rect>
+    <path d="M8.7 21.2V8.8L21.3 21.2V8.8" stroke="#FFFFFF" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round"></path>
+    <path d="M8.7 21.2V8.8L21.3 21.2V8.8" stroke="#BFDBFE" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" opacity=".9"></path>
+    <circle cx="8.7" cy="8.8" r="2" fill="#DBEAFE"></circle>
+    <circle cx="15" cy="15" r="1.7" fill="#FFFFFF"></circle>
+    <circle cx="21.3" cy="21.2" r="2" fill="#7DD3FC"></circle>
   </svg>
 </div>`
 

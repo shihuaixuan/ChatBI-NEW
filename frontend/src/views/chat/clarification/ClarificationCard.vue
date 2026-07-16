@@ -184,7 +184,7 @@ watch(
 .clarification-card {
   width: 100%;
   padding: 16px;
-  border: 1px solid var(--ed-color-primary, rgba(28, 186, 144, 1));
+  border: 1px solid var(--ed-color-primary, rgba(51, 112, 255, 1));
   border-radius: 16px;
   background: #fff;
   box-shadow: 0 4px 12px rgba(31, 35, 41, 0.06);
@@ -201,8 +201,8 @@ watch(
     border-radius: 4px;
     font-size: 12px;
     line-height: 20px;
-    color: var(--ed-color-primary, rgba(28, 186, 144, 1));
-    background: var(--ed-color-primary-1a, rgba(28, 186, 144, 0.1));
+    color: var(--ed-color-primary, rgba(51, 112, 255, 1));
+    background: var(--ed-color-primary-1a, rgba(51, 112, 255, 0.1));
   }
 
   .clarify-question {
@@ -251,13 +251,13 @@ watch(
       background 0.15s;
 
     &:hover:not(:disabled) {
-      border-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
+      border-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
     }
 
     &.active {
-      border-color: var(--ed-color-primary, rgba(28, 186, 144, 1));
-      color: var(--ed-color-primary, rgba(28, 186, 144, 1));
-      background: var(--ed-color-primary-1a, rgba(28, 186, 144, 0.1));
+      border-color: var(--ed-color-primary, rgba(51, 112, 255, 1));
+      color: var(--ed-color-primary, rgba(51, 112, 255, 1));
+      background: var(--ed-color-primary-1a, rgba(51, 112, 255, 0.1));
     }
 
     &:disabled {

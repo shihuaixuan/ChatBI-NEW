@@ -1,4 +1,4 @@
-<p align="center"><img src="https://resource-fit2cloud-com.oss-cn-hangzhou.aliyuncs.com/sqlbot/sqlbot.png" alt="SQLBot" width="300" /></p>
+<p align="center"><img src="https://resource-fit2cloud-com.oss-cn-hangzhou.aliyuncs.com/sqlbot/sqlbot.png" alt="Numora" width="300" /></p>
 <h3 align="center">Intelligent Questioning System Based on Large Models and RAG</h3>
 <p align="center">
   <a href="https://trendshift.io/repositories/14540" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14540" alt="dataease%2FSQLBot | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
@@ -16,7 +16,7 @@
 </p>
 <hr/>
 
-SQLBot is an intelligent data query system based on large language models and RAG, meticulously crafted by the DataEase open-source project team. With SQLBot, users can perform conversational data analysis (ChatBI), quickly extracting the necessary data information and visualizations, and supporting further intelligent analysis.
+Numora is an intelligent data query system based on large language models and RAG, meticulously crafted by the DataEase open-source project team. With Numora, users can perform conversational data analysis (ChatBI), quickly extracting the necessary data information and visualizations, and supporting further intelligent analysis.
 
 ## How It Works
 
@@ -68,16 +68,16 @@ docker run -d \
   dataease/sqlbot
 ```
 
-You can also quickly deploy SQLBot through the [1Panel app store](https://apps.fit2cloud.com/1panel).
+You can also quickly deploy Numora through the [1Panel app store](https://apps.fit2cloud.com/1panel).
 
-If you are in an intranet environment, you can deploy SQLBot via the [offline installation package](https://community.fit2cloud.com/#/products/sqlbot/downloads).
+If you are in an intranet environment, you can deploy Numora via the [offline installation package](https://community.fit2cloud.com/#/products/sqlbot/downloads).
 
 
 ### Access methods
 
 - Open in your browser: http://<your server IP>:8000/
 - Username: admin
-- Password: SQLBot@123456
+- Password: Numora@123456
 
 
 ## UI Display
@@ -106,9 +106,9 @@ If you are in an intranet environment, you can deploy SQLBot via the [offline in
 
 This repository is licensed under the [FIT2CLOUD Open Source License](LICENSE), which is essentially GPLv3 but with some additional restrictions.
 
-You may conduct secondary development based on the SQLBot source code, but you must adhere to the following:
+You may conduct secondary development based on the Numora source code, but you must adhere to the following:
 
-- You cannot replace or modify the SQLBot logo and copyright information;
+- You cannot replace or modify the logo and copyright information required by the root LICENSE file;
 
 - Derivative works resulting from secondary development must comply with the open-source obligations of GPL v3.
 

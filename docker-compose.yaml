@@ -17,8 +17,8 @@ services:
       POSTGRES_USER: root
       POSTGRES_PASSWORD: Password123@pg
       # Project basic settings
-      PROJECT_NAME: "SQLBot"
-      DEFAULT_PWD: "SQLBot@123456"
+      PROJECT_NAME: "Numora"
+      DEFAULT_PWD: "Numora@123456"
       # MCP settings
       SERVER_IMAGE_HOST: http://YOUR_SERVE_IP:MCP_PORT/images/
       # Auth & Security

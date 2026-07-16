@@ -138,7 +138,7 @@ defineExpose({ showErrorMask })
     }
     .default {
       margin-left: auto;
-      background: var(--ed-color-primary-33, #1cba9033);
+      background: var(--ed-color-primary-33, #3370ff33);
       padding: 0 4px;
       border-radius: 4px;
       color: var(--ed-color-primary-dark-2);
