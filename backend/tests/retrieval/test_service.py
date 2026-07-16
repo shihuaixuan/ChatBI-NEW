@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from apps.chatbi_capabilities.semantic.retrieval import retrieve_semantic_assets
+from apps.chatbi_capabilities.semantic.retrieval import (
+    _agent_semantic_status,
+    retrieve_semantic_assets,
+)
 from apps.chatbi_workflow.capabilities.adapters.knowledge import (
     HeadlessKnowledgeAdapter,
 )
@@ -208,3 +211,39 @@ def test_graph_and_agent_consume_the_same_semantic_binding_result():
     assert graph["status"] == agent["status"] == "missed"
     assert graph["decision"] == agent["decision"]
     assert graph["retrieval_strategy_version"] == SEMANTIC_BINDING_STRATEGY_VERSION
+
+
+@pytest.mark.parametrize(
+    ("ambiguity_type", "expected_status"),
+    [("metric", "metric_ambiguous"), ("dimension", "dimension_ambiguous")],
+)
+def test_agent_semantic_status_identifies_ambiguous_slot_type(
+    ambiguity_type: str,
+    expected_status: str,
+):
+    status = _agent_semantic_status(
+        {
+            "status": "metric_ambiguous",
+            "decision": {"status": "ambiguous"},
+            "ambiguities": [{"type": ambiguity_type}],
+        }
+    )
+
+    assert status == expected_status
+
+
+def test_agent_semantic_status_reports_missing_time_dimension_configuration():
+    status = _agent_semantic_status(
+        {
+            "status": "missed",
+            "decision": {
+                "status": "partial",
+                "reason_codes": [
+                    "SEMANTIC_BINDING_PARTIAL",
+                    "TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL",
+                ],
+            },
+        }
+    )
+
+    assert status == "time_dimension_not_configured"

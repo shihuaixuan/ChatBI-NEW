@@ -58,13 +58,14 @@ def _to_semantic_package(raw: dict[str, Any], max_per_group: int) -> dict[str, A
 
     return {
         "hit": bool(raw.get("hit")),
-        "status": raw.get("status"),
+        "status": _agent_semantic_status(raw),
         "dataset_id": raw.get("dataset_id"),
         "tables": raw.get("tables") or [],
         "metrics": raw.get("metrics") or [],
         "dimensions": raw.get("dimensions") or [],
         "terms": raw.get("terms") or [],
         "selected_assets": raw.get("selected_assets") or {},
+        "slot_bindings": raw.get("slot_bindings") or {},
         "candidate_groups": trimmed_groups,
         "ambiguities": raw.get("ambiguities") or [],
         "decision": raw.get("decision") or {},
@@ -78,3 +79,30 @@ def _to_semantic_package(raw: dict[str, Any], max_per_group: int) -> dict[str, A
 def _public_candidate(item: dict[str, Any]) -> dict[str, Any]:
     keep = ("asset_type", "asset_id", "biz_name", "display_name", "score", "source", "model_id", "description")
     return {key: item.get(key) for key in keep if item.get(key) is not None}
+
+
+def _agent_semantic_status(raw: dict[str, Any]) -> str | None:
+    """Agent 需要知道具体歧义槽位，不能把维度歧义统一描述成指标歧义。"""
+
+    decision = raw.get("decision")
+    if not isinstance(decision, dict):
+        return raw.get("status")
+    reason_codes = {
+        str(code)
+        for code in decision.get("reason_codes") or []
+        if code
+    }
+    if "TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL" in reason_codes:
+        return "time_dimension_not_configured"
+    if decision.get("status") != "ambiguous":
+        return raw.get("status")
+    ambiguity_types = {
+        str(item.get("type") or "")
+        for item in raw.get("ambiguities") or []
+        if isinstance(item, dict) and item.get("type")
+    }
+    if ambiguity_types == {"metric"}:
+        return "metric_ambiguous"
+    if ambiguity_types == {"dimension"}:
+        return "dimension_ambiguous"
+    return "semantic_ambiguous"

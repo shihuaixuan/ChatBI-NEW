@@ -48,6 +48,15 @@ def test_semantic_package_trims_candidates_and_reports_truncation():
         "dimensions": [],
         "terms": [],
         "selected_assets": {"metrics": [{"biz_name": "gmv"}]},
+        "slot_bindings": {
+            "time_filters": [
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": 9,
+                    "value": {"kind": "single_date", "anchor": "today"},
+                }
+            ]
+        },
         "candidate_groups": {
             "metrics": [
                 {"biz_name": f"m{i}", "score": 1 - i * 0.1, "asset_type": "METRIC", "internal_field": "x"}
@@ -65,3 +74,4 @@ def test_semantic_package_trims_candidates_and_reports_truncation():
     # 只保留公开字段
     assert "internal_field" not in package["candidate_groups"]["metrics"][0]
     assert package["candidate_groups"]["metrics"][0]["biz_name"] == "m0"
+    assert package["slot_bindings"]["time_filters"][0]["asset_id"] == 9

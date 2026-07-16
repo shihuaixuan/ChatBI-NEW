@@ -24,6 +24,7 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
         "fct_stall_order_daily": {
             "grain": ["stat_date", "stall_id"],
             "default_time": "stat_date",
+            "dimension_aliases": {"stall_id": ["店铺", "档口", "门店"]},
             "metrics": [
                 _metric(
                     "aov_sale",
@@ -48,6 +49,7 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
         "snap_unshipped_order": {
             "grain": ["snapshot_date", "order_no"],
             "default_time": "snapshot_date",
+            "dimension_aliases": {"stall_id": ["店铺", "档口", "门店"]},
             "obsolete_metrics": ["overtime_unshipped_order_cnt"],
             "metrics": [
                 _metric("unshipped_order_cnt", "未发订单数", "COUNT(DISTINCT order_no)", ["未发订单笔数"]),
@@ -62,6 +64,7 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
         "snap_product_inventory": {
             "grain": ["snapshot_date", "stall_id", "product_id"],
             "default_time": "snapshot_date",
+            "dimension_aliases": {"stall_id": ["店铺", "档口", "门店"]},
             "obsolete_metrics": ["dormant_product_cnt_30d"],
             "metric_aliases": {"stock_qty": ["库存总量", "库存量"]},
             "metrics": [
@@ -82,6 +85,7 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
         "fct_customer_trade_daily": {
             "grain": ["stat_date", "customer_id", "stall_id"],
             "default_time": "stat_date",
+            "dimension_aliases": {"stall_id": ["店铺", "档口", "门店"]},
             "obsolete_metrics": ["new_deal_customer_cnt"],
             "metric_aliases": {
                 "customer_gmv": ["消费金额", "客户GMV", "GMV"],
@@ -99,6 +103,7 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
         "snap_customer_arrears": {
             "grain": ["snapshot_date", "customer_id", "stall_id"],
             "default_time": "snapshot_date",
+            "dimension_aliases": {"stall_id": ["店铺", "档口", "门店"]},
             "metric_aliases": {
                 "arrears_amt": ["欠款金额", "客户欠款总金额"],
                 "overdue_amt": ["逾期金额"],
@@ -173,6 +178,10 @@ def configure_assets(session: Session, dataset_id: int, oid: int, dry_run: bool)
         for dimension in dimensions:
             should_default = dimension.biz_name == target["default_time"]
             _update_value(dimension, "is_default_time", should_default, summary)
+            aliases = (target.get("dimension_aliases") or {}).get(dimension.biz_name, [])
+            if aliases:
+                merged_aliases = list(dict.fromkeys([*(dimension.alias or []), *aliases]))
+                _update_value(dimension, "alias", merged_aliases, summary)
 
         existing_metrics = {
             metric.biz_name: metric

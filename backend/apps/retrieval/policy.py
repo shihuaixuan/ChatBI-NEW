@@ -7,6 +7,8 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apps.chatbi_capabilities.time_slots import normalize_time_range_payload
+from apps.headless.schemas import DataSetSchema, SchemaElement
 from apps.retrieval.errors import (
     RetrievalProviderUnavailableError,
     RetrievalQueryError,
@@ -30,8 +32,12 @@ from apps.retrieval.schemas import (
     RetrievalDiagnostics,
     RetrievalHit,
     RetrievalProfileName,
+    RetrievalPurpose,
+    RetrievalRequest,
     RetrievalResourceType,
+    RetrievalScores,
     RetrievalSlotDecision,
+    RetrievalSourceType,
 )
 
 
@@ -117,6 +123,7 @@ class SemanticBindingPolicy:
             )
             for slot in recall.slots
         ]
+        slot_results = _resolve_identity_dimensions_by_metric_compatibility(slot_results)
         decisions = [item.decision for item in slot_results]
         ambiguities = [
             item.ambiguity for item in slot_results if item.ambiguity is not None
@@ -479,6 +486,101 @@ def _is_cross_model(resolved: list[_SlotPolicyResult]) -> bool:
     return False
 
 
+def _resolve_identity_dimensions_by_metric_compatibility(
+    slot_results: list[_SlotPolicyResult],
+) -> list[_SlotPolicyResult]:
+    """同义维度身份命中不唯一时，用已选指标的可执行模型关系确定唯一资产。"""
+
+    metric_hits = [
+        hit
+        for item in slot_results
+        if item.decision.status == RetrievalDecisionStatus.RESOLVED
+        for hit in item.hits
+        if hit.resource_type == RetrievalResourceType.METRIC
+        and hit.asset_ref is not None
+        and hit.asset_ref in item.decision.selected_assets
+    ]
+    if not metric_hits:
+        return slot_results
+
+    resolved_results: list[_SlotPolicyResult] = []
+    for item in slot_results:
+        if (
+            item.slot.subquery.purpose != RetrievalPurpose.DIMENSION
+            or item.decision.status != RetrievalDecisionStatus.AMBIGUOUS
+        ):
+            resolved_results.append(item)
+            continue
+        compatible_identity_hits = [
+            hit
+            for hit in item.hits
+            if hit.asset_ref is not None
+            and (hit.scores.exact is not None or hit.scores.alias is not None)
+            and _dimension_is_compatible_with_metrics(hit, metric_hits)
+        ]
+        unique_hits = _unique_hits_by_asset(compatible_identity_hits)
+        if len(unique_hits) != 1:
+            resolved_results.append(item)
+            continue
+        selected = unique_hits[0]
+        assert selected.asset_ref is not None
+        resolved_results.append(
+            item.model_copy(
+                update={
+                    "decision": item.decision.model_copy(
+                        update={
+                            "status": RetrievalDecisionStatus.RESOLVED,
+                            "selected_assets": [selected.asset_ref],
+                            "reason_codes": [
+                                "IDENTITY_DISAMBIGUATED_BY_METRIC_MODEL_COMPATIBILITY"
+                            ],
+                        }
+                    ),
+                    "ambiguity": None,
+                }
+            )
+        )
+    return resolved_results
+
+
+def _dimension_is_compatible_with_metrics(
+    dimension_hit: RetrievalHit,
+    metric_hits: list[RetrievalHit],
+) -> bool:
+    assert dimension_hit.asset_ref is not None
+    dimension = dimension_hit.asset_ref
+    for metric_hit in metric_hits:
+        assert metric_hit.asset_ref is not None
+        metric = metric_hit.asset_ref
+        if dimension.model_id is not None and dimension.model_id == metric.model_id:
+            continue
+        compatible_ids = {
+            int(value)
+            for value in metric_hit.metadata.get("compatible_dimension_ids", [])
+            if isinstance(value, int) and value > 0
+        }
+        if dimension.asset_id not in compatible_ids:
+            return False
+    return True
+
+
+def _unique_hits_by_asset(hits: list[RetrievalHit]) -> list[RetrievalHit]:
+    unique: list[RetrievalHit] = []
+    seen: set[tuple[str, int, int | None]] = set()
+    for hit in hits:
+        assert hit.asset_ref is not None
+        key = (
+            hit.asset_ref.asset_type.value,
+            hit.asset_ref.asset_id,
+            hit.asset_ref.model_id,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(hit)
+    return unique
+
+
 def _allowed_executable_assets(
     decisions: list[RetrievalSlotDecision],
 ) -> list[ExecutableAssetReference]:
@@ -608,10 +710,323 @@ def _skipped_rerank_diagnostic() -> RetrievalChannelDiagnostic:
     )
 
 
+def bind_default_time_dimensions(
+    request: RetrievalRequest,
+    bundle: RetrievalBundle,
+    schema: DataSetSchema,
+) -> RetrievalBundle:
+    """为已选指标确定性绑定同模型默认时间维度。"""
+
+    time_range = request.intent.time_range
+    if str(time_range.get("value_status") or "").lower() != "provided":
+        return bundle
+    normalized = normalize_time_range_payload(time_range).get("normalized")
+    if not isinstance(normalized, dict) or normalized.get("kind") == "unsupported":
+        return bundle
+
+    metric_by_id = {metric.id: metric for metric in schema.metrics}
+    dimension_by_id = {dimension.id: dimension for dimension in schema.dimensions}
+    selected_metrics = [
+        asset
+        for decision in bundle.decision.slot_decisions
+        for asset in decision.selected_assets
+        if asset.asset_type == RetrievalResourceType.METRIC
+    ]
+    metric_model_ids = sorted(
+        {
+            model_id
+            for asset in selected_metrics
+            if (
+                model_id := asset.model_id
+                or getattr(metric_by_id.get(asset.asset_id), "model", None)
+            )
+            is not None
+        }
+    )
+    if not metric_model_ids:
+        return bundle
+
+    selected_dimension_ids = {
+        asset.asset_id
+        for decision in bundle.decision.slot_decisions
+        for asset in decision.selected_assets
+        if asset.asset_type == RetrievalResourceType.DIMENSION
+    }
+    bound_time_models = {
+        dimension.model
+        for dimension_id in selected_dimension_ids
+        if (dimension := dimension_by_id.get(dimension_id)) is not None
+        and _is_time_dimension(dimension)
+    }
+
+    dimensions = list(bundle.bindings.dimensions)
+    decisions = list(bundle.decision.slot_decisions)
+    ambiguities = list(bundle.decision.ambiguities)
+    allowed_assets = list(bundle.decision.allowed_asset_ids)
+    reason_codes: list[str] = []
+    relation_candidate_count = 0
+    has_ambiguity = False
+    has_missing = False
+    existing_binding_keys = {
+        _reference_key(hit.asset_ref)
+        for hit in dimensions
+        if hit.asset_ref is not None
+    }
+    existing_allowed_keys = {_reference_key(asset) for asset in allowed_assets}
+
+    for model_id in metric_model_ids:
+        if model_id in bound_time_models:
+            continue
+        candidates = _default_time_candidates(schema, model_id)
+        references = [
+            AssetReference(
+                asset_type=RetrievalResourceType.DIMENSION,
+                asset_id=dimension.id,
+                model_id=model_id,
+            )
+            for dimension in candidates
+        ]
+        relation_candidate_count += len(references)
+        for rank, (dimension, reference) in enumerate(
+            zip(candidates, references, strict=True),
+            start=1,
+        ):
+            if _reference_key(reference) in existing_binding_keys:
+                continue
+            dimensions.append(_default_time_dimension_hit(schema, dimension, reference, rank))
+            existing_binding_keys.add(_reference_key(reference))
+
+        subquery_id = f"time_dimension:model:{model_id}"
+        if len(references) == 1:
+            reference = references[0]
+            decisions.append(
+                RetrievalSlotDecision(
+                    subquery_id=subquery_id,
+                    purpose=RetrievalPurpose.DIMENSION,
+                    status=RetrievalDecisionStatus.RESOLVED,
+                    candidate_assets=references,
+                    selected_assets=references,
+                    reason_codes=["DEFAULT_TIME_DIMENSION_BOUND_BY_METRIC_MODEL"],
+                )
+            )
+            executable = ExecutableAssetReference(
+                asset_type=RetrievalResourceType.DIMENSION,
+                asset_id=reference.asset_id,
+                model_id=reference.model_id,
+            )
+            if _reference_key(executable) not in existing_allowed_keys:
+                allowed_assets.append(executable)
+                existing_allowed_keys.add(_reference_key(executable))
+            reason_codes.append("DEFAULT_TIME_DIMENSION_BOUND_BY_METRIC_MODEL")
+        elif len(references) > 1:
+            has_ambiguity = True
+            decisions.append(
+                RetrievalSlotDecision(
+                    subquery_id=subquery_id,
+                    purpose=RetrievalPurpose.DIMENSION,
+                    status=RetrievalDecisionStatus.AMBIGUOUS,
+                    candidate_assets=references,
+                    reason_codes=["MULTIPLE_DEFAULT_TIME_DIMENSIONS_FOR_METRIC_MODEL"],
+                )
+            )
+            ambiguities.append(
+                RetrievalAmbiguity(
+                    subquery_id=subquery_id,
+                    reason_code="MULTIPLE_DEFAULT_TIME_DIMENSIONS_FOR_METRIC_MODEL",
+                    candidate_assets=references,
+                )
+            )
+            reason_codes.append("MULTIPLE_DEFAULT_TIME_DIMENSIONS_FOR_METRIC_MODEL")
+        else:
+            has_missing = True
+            decisions.append(
+                RetrievalSlotDecision(
+                    subquery_id=subquery_id,
+                    purpose=RetrievalPurpose.DIMENSION,
+                    status=RetrievalDecisionStatus.MISSED,
+                    reason_codes=["TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL"],
+                )
+            )
+            reason_codes.append("TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL")
+
+    if not reason_codes:
+        return bundle
+
+    status = bundle.decision.status
+    if has_ambiguity:
+        status = RetrievalDecisionStatus.AMBIGUOUS
+    elif has_missing and status not in {
+        RetrievalDecisionStatus.MISSED,
+        RetrievalDecisionStatus.AMBIGUOUS,
+    }:
+        status = RetrievalDecisionStatus.PARTIAL
+    decision_reason_codes = [
+        code
+        for code in bundle.decision.reason_codes
+        if not code.startswith("SEMANTIC_BINDING_")
+    ]
+    decision_reason_codes = list(
+        dict.fromkeys(
+            [
+                f"SEMANTIC_BINDING_{status.value.upper()}",
+                *decision_reason_codes,
+                *reason_codes,
+            ]
+        )
+    )
+    diagnostics = _with_relation_diagnostic(
+        bundle.diagnostics,
+        candidate_count=relation_candidate_count,
+    )
+    # 重新构造严格 DTO，让新增关系命中继续经过白名单与候选集合校验。
+    return RetrievalBundle(
+        request_id=bundle.request_id,
+        bindings=RetrievalBindings(
+            metrics=bundle.bindings.metrics,
+            dimensions=dimensions,
+            values=bundle.bindings.values,
+            terms=bundle.bindings.terms,
+            models=bundle.bindings.models,
+            schema_hits=bundle.bindings.schema_hits,
+        ),
+        exemplars=bundle.exemplars,
+        evidence=bundle.evidence,
+        decision=RetrievalDecision(
+            status=status,
+            slot_decisions=decisions,
+            ambiguities=ambiguities,
+            allowed_asset_ids=allowed_assets,
+            reason_codes=decision_reason_codes,
+        ),
+        diagnostics=diagnostics,
+    )
+
+
+def _default_time_dimension_hit(
+    schema: DataSetSchema,
+    dimension: SchemaElement,
+    reference: AssetReference,
+    rank: int,
+) -> RetrievalHit:
+    """把 Headless 默认时间关系记录为可追踪的确定性命中。"""
+
+    return RetrievalHit(
+        resource_id=f"relation:default-time:{dimension.id}",
+        resource_type=RetrievalResourceType.DIMENSION,
+        source_type=RetrievalSourceType.HEADLESS,
+        source_id=f"headless:dataset:{schema.data_set.id}",
+        source_resource_id=f"DIMENSION:{dimension.id}",
+        unit_id=f"DIMENSION:{dimension.id}:role",
+        content_kind="role",
+        title=dimension.name,
+        snippet=dimension.description or dimension.name,
+        scores=RetrievalScores(final=1.0),
+        ranks_by_channel={RetrievalChannel.RELATION: rank},
+        matched_field="is_default_time",
+        matched_text=dimension.name,
+        metadata={
+            "asset_id": dimension.id,
+            "model_id": dimension.model,
+            "is_default_time": True,
+        },
+        provenance={"binding": "metric_model_default_time"},
+        source_version=str(schema.data_set.ext_info.get("schema_version") or "headless-schema"),
+        asset_ref=reference,
+    )
+
+
+def _default_time_candidates(
+    schema: DataSetSchema,
+    model_id: int,
+) -> list[SchemaElement]:
+    """模型显式默认字段优先；未配置时使用同模型默认时间维度标记。"""
+
+    model = next(
+        (item for item in schema.models if item.get("id") == model_id),
+        None,
+    )
+    default_field = str((model or {}).get("default_time_field") or "").strip().casefold()
+    model_dimensions = [
+        dimension for dimension in schema.dimensions if dimension.model == model_id
+    ]
+    if default_field:
+        return sorted(
+            (
+                dimension
+                for dimension in model_dimensions
+                if default_field
+                in {
+                    dimension.name.strip().casefold(),
+                    dimension.biz_name.strip().casefold(),
+                    str(dimension.ext_info.get("field_name") or "").strip().casefold(),
+                }
+            ),
+            key=lambda item: item.id,
+        )
+    return sorted(
+        (
+            dimension
+            for dimension in model_dimensions
+            if bool(dimension.ext_info.get("is_default_time"))
+        ),
+        key=lambda item: item.id,
+    )
+
+
+def _is_time_dimension(dimension: SchemaElement) -> bool:
+    ext_info = dimension.ext_info
+    dimension_type = str(ext_info.get("dimension_type") or "").lower()
+    semantic_type = str(ext_info.get("semantic_type") or "").lower()
+    data_type = str(ext_info.get("dimension_data_type") or "").lower()
+    return bool(
+        ext_info.get("is_default_time")
+        or ext_info.get("time_granularities")
+        or dimension_type in {"time", "partition_time"}
+        or semantic_type == "time"
+        or any(token in data_type for token in ("date", "time", "timestamp"))
+    )
+
+
+def _with_relation_diagnostic(
+    diagnostics: RetrievalDiagnostics,
+    *,
+    candidate_count: int,
+) -> RetrievalDiagnostics:
+    channels = list(diagnostics.channels)
+    existing_index = next(
+        (
+            index
+            for index, item in enumerate(channels)
+            if item.channel == RetrievalChannel.RELATION
+        ),
+        None,
+    )
+    relation = RetrievalChannelDiagnostic(
+        channel=RetrievalChannel.RELATION,
+        status=RetrievalChannelStatus.SUCCEEDED,
+        candidate_count=candidate_count,
+    )
+    if existing_index is None:
+        channels.append(relation)
+    else:
+        existing = channels[existing_index]
+        channels[existing_index] = existing.model_copy(
+            update={"candidate_count": existing.candidate_count + candidate_count}
+        )
+    return diagnostics.model_copy(update={"channels": channels})
+
+
+def _reference_key(
+    asset: AssetReference | ExecutableAssetReference,
+) -> tuple[str, int, int | None]:
+    return (asset.asset_type.value, asset.asset_id, asset.model_id)
+
+
 __all__ = [
     "CandidateReranker",
     "RerankCandidate",
     "RerankScore",
     "SemanticBindingPolicy",
     "SemanticBindingPolicyResult",
+    "bind_default_time_dimensions",
 ]

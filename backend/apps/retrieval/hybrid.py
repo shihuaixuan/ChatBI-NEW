@@ -585,8 +585,8 @@ WITH scoped AS (
         u.content,
         u.contextual_text,
         u.metadata AS unit_metadata,
-        (u.title || ' ' || u.content || ' ' || u.contextual_text) AS unit_search_document,
-        (r.title || ' ' || u.title || ' ' || u.content || ' ' || u.contextual_text) AS search_document
+        (u.title || ' ' || u.content) AS unit_lexical_document,
+        (r.title || ' ' || u.title || ' ' || u.content) AS lexical_document
     FROM retrieval_source AS s
     JOIN retrieval_index_generation AS g
       ON g.tenant_id = s.tenant_id
@@ -698,18 +698,18 @@ _LEXICAL_SQL = text(
     SELECT scoped.*,
            GREATEST(
                similarity(resource_title, :query_text),
-               similarity(unit_search_document, :query_text),
-               CASE WHEN position(:normalized_query IN lower(search_document)) > 0 THEN 0.99 ELSE 0 END
+               similarity(unit_lexical_document, :query_text),
+               CASE WHEN position(:normalized_query IN lower(lexical_document)) > 0 THEN 0.99 ELSE 0 END
            )::double precision AS score,
            'text'::text AS matched_field,
            CAST(:query_text AS text) AS matched_text
     FROM scoped
-    WHERE position(:normalized_query IN lower(search_document)) > 0
+    WHERE position(:normalized_query IN lower(lexical_document)) > 0
        OR (
-           (resource_title % :query_text OR unit_search_document % :query_text)
+           (resource_title % :query_text OR unit_lexical_document % :query_text)
            AND GREATEST(
                similarity(resource_title, :query_text),
-               similarity(unit_search_document, :query_text)
+               similarity(unit_lexical_document, :query_text)
            ) >= :lexical_threshold
        )
 ), collapsed AS (

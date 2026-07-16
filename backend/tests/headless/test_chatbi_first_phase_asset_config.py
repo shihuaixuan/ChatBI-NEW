@@ -34,3 +34,10 @@ def test_asset_plan_contains_required_derived_metrics():
         "new_deal_customer_cnt"
     ]
     assert "消费金额" in build_asset_plan()["fct_customer_trade_daily"]["metric_aliases"]["customer_gmv"]
+
+
+def test_asset_plan_registers_store_synonyms_for_stall_dimension():
+    plan = build_asset_plan()
+
+    for model in plan.values():
+        assert model["dimension_aliases"]["stall_id"] == ["店铺", "档口", "门店"]

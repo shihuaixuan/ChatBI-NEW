@@ -21,7 +21,7 @@ from apps.retrieval.headless import (
 )
 from apps.retrieval.hybrid import HybridRetrievalConfig, SemanticBindingHybridRetriever
 from apps.retrieval.payload import bundle_to_semantic_payload
-from apps.retrieval.policy import SemanticBindingPolicy
+from apps.retrieval.policy import SemanticBindingPolicy, bind_default_time_dimensions
 from apps.retrieval.profiles import get_retrieval_profile
 from apps.retrieval.schemas import (
     RetrievalBundle,
@@ -128,13 +128,18 @@ class SemanticBindingRunner:
             request.tenant_id,
             request.scope.dataset_ids[0],
         )
-        payload = bundle_to_semantic_payload(
+        bundle = bind_default_time_dimensions(
             strategy_request,
             policy_result.bundle,
             schema,
         )
+        payload = bundle_to_semantic_payload(
+            strategy_request,
+            bundle,
+            schema,
+        )
         return SemanticBindingExecutionResult(
-            bundle=policy_result.bundle,
+            bundle=bundle,
             payload=payload,
             filters={
                 "plan_fingerprint": recall.plan.fingerprint,

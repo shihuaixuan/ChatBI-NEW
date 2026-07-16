@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from apps.headless.schemas import DataSetSchema, SchemaElement
 from apps.retrieval.compilation import validate_compilation_assets
 from apps.retrieval.errors import (
     RetrievalPermissionError,
@@ -11,11 +12,13 @@ from apps.retrieval.errors import (
     RetrievalQueryError,
 )
 from apps.retrieval.hybrid import HybridRecallResult, SubQueryRecallResult
+from apps.retrieval.payload import bundle_to_semantic_payload
 from apps.retrieval.planner import RetrievalQueryPlan
 from apps.retrieval.policy import (
     RerankCandidate,
     RerankScore,
     SemanticBindingPolicy,
+    bind_default_time_dimensions,
 )
 from apps.retrieval.schemas import (
     AssetReference,
@@ -24,13 +27,17 @@ from apps.retrieval.schemas import (
     RetrievalChannelStatus,
     RetrievalDecisionStatus,
     RetrievalHit,
+    RetrievalIntent,
     RetrievalProfileName,
     RetrievalPurpose,
+    RetrievalRequest,
     RetrievalResourceType,
+    RetrievalScope,
     RetrievalScores,
     RetrievalSourceType,
     RetrievalSubQuery,
 )
+from apps.retrieval.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
 
 
 def _hit(
@@ -119,6 +126,84 @@ def _recall(*slots: SubQueryRecallResult) -> HybridRecallResult:
     )
 
 
+def _time_request() -> RetrievalRequest:
+    return RetrievalRequest(
+        request_id="time-binding",
+        tenant_id=1,
+        actor_id=2,
+        original_question="今天的销售额",
+        rewritten_question="今天的销售额",
+        intent=RetrievalIntent(
+            intent_type="metric_query",
+            metric_mentions=["销售额"],
+            time_mentions=["今天"],
+            time_range={
+                "raw": "今天",
+                "value_status": "provided",
+                "normalized": {
+                    "kind": "single_date",
+                    "anchor": "today",
+                    "offset_days": 0,
+                    "timezone": "Asia/Shanghai",
+                },
+            },
+        ),
+        scope=RetrievalScope(dataset_ids=[20]),
+        profiles=[RetrievalProfileName.SEMANTIC_BINDING],
+        strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
+    )
+
+
+def _time_schema(
+    *,
+    default_dimension_count: int = 1,
+    default_time_field: str | None = None,
+) -> DataSetSchema:
+    return DataSetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="经营分析",
+            model=None,
+            id=20,
+            name="经营分析",
+            biz_name="business",
+            type="DATASET",
+        ),
+        models=[
+            {
+                "id": 10,
+                "name": "销售模型",
+                "biz_name": "sales_model",
+                "default_time_field": default_time_field,
+            }
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="经营分析",
+                model=10,
+                id=100,
+                name="销售额",
+                biz_name="sales_amount",
+                type="METRIC",
+            )
+        ],
+        dimensions=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="经营分析",
+                model=10,
+                id=200 + index,
+                name=f"统计日期{index + 1}",
+                biz_name=f"stat_date_{index + 1}",
+                type="DIMENSION",
+                ext_info={"dimension_type": "partition_time", "is_default_time": True},
+            )
+            for index in range(default_dimension_count)
+        ],
+    )
+
+
 def test_unique_exact_match_resolves_and_generates_compilation_allowlist():
     result = SemanticBindingPolicy().apply(
         _recall(
@@ -140,6 +225,111 @@ def test_unique_exact_match_resolves_and_generates_compilation_allowlist():
     ) == tuple(result.bundle.decision.allowed_asset_ids)
 
 
+def test_time_range_binds_metric_model_default_time_dimension():
+    request = _time_request()
+    schema = _time_schema()
+    retrieval = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [_hit(100, "销售额", exact=1.0)],
+                fast_path=True,
+            )
+        )
+    )
+
+    bundle = bind_default_time_dimensions(request, retrieval.bundle, schema)
+    payload = bundle_to_semantic_payload(request, bundle, schema)
+
+    assert bundle.decision.status == RetrievalDecisionStatus.RESOLVED
+    assert [item.asset_id for item in bundle.decision.allowed_asset_ids] == [100, 200]
+    assert bundle.decision.slot_decisions[-1].reason_codes == [
+        "DEFAULT_TIME_DIMENSION_BOUND_BY_METRIC_MODEL"
+    ]
+    assert payload["selected_assets"]["time_dimensions"][0]["asset_id"] == 200
+    assert payload["slot_bindings"]["time_filters"] == [
+        {
+            "asset_type": "DIMENSION",
+            "asset_id": 200,
+            "display_name": "统计日期1",
+            "biz_name": "stat_date_1",
+            "confidence": 1.0,
+            "source": "intent_time_range",
+            "operator": "=",
+            "value": request.intent.time_range["normalized"],
+        }
+    ]
+
+
+def test_multiple_default_time_dimensions_require_semantic_clarification():
+    request = _time_request()
+    schema = _time_schema(default_dimension_count=2)
+    retrieval = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [_hit(100, "销售额", exact=1.0)],
+                fast_path=True,
+            )
+        )
+    )
+
+    bundle = bind_default_time_dimensions(request, retrieval.bundle, schema)
+
+    assert bundle.decision.status == RetrievalDecisionStatus.AMBIGUOUS
+    assert [item.asset_id for item in bundle.decision.allowed_asset_ids] == [100]
+    assert bundle.decision.ambiguities[-1].reason_code == (
+        "MULTIPLE_DEFAULT_TIME_DIMENSIONS_FOR_METRIC_MODEL"
+    )
+
+
+def test_model_default_time_field_disambiguates_multiple_time_dimensions():
+    request = _time_request()
+    schema = _time_schema(
+        default_dimension_count=2,
+        default_time_field="stat_date_2",
+    )
+    retrieval = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [_hit(100, "销售额", exact=1.0)],
+                fast_path=True,
+            )
+        )
+    )
+
+    bundle = bind_default_time_dimensions(request, retrieval.bundle, schema)
+
+    assert bundle.decision.status == RetrievalDecisionStatus.RESOLVED
+    assert [item.asset_id for item in bundle.decision.allowed_asset_ids] == [100, 201]
+
+
+def test_missing_default_time_dimension_blocks_semantic_execution():
+    request = _time_request()
+    schema = _time_schema(default_dimension_count=0)
+    retrieval = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [_hit(100, "销售额", exact=1.0)],
+                fast_path=True,
+            )
+        )
+    )
+
+    bundle = bind_default_time_dimensions(request, retrieval.bundle, schema)
+
+    assert bundle.decision.status == RetrievalDecisionStatus.PARTIAL
+    assert bundle.decision.slot_decisions[-1].reason_codes == [
+        "TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL"
+    ]
+
+
 def test_multiple_identity_matches_are_ambiguous_and_not_auto_bound():
     result = SemanticBindingPolicy().apply(
         _recall(
@@ -159,6 +349,87 @@ def test_multiple_identity_matches_are_ambiguous_and_not_auto_bound():
     assert (
         result.bundle.decision.ambiguities[0].reason_code == "MULTIPLE_IDENTITY_MATCHES"
     )
+
+
+def test_dimension_identity_matches_use_selected_metric_model_to_resolve():
+    metric = _hit(
+        100,
+        "销售下单客户数",
+        exact=1.0,
+        model_id=10,
+        metadata={"model_id": 10, "compatible_dimension_ids": [200]},
+    )
+    same_model_dimension = _hit(
+        200,
+        "档口ID",
+        resource_type=RetrievalResourceType.DIMENSION,
+        model_id=10,
+        alias=1.0,
+        final=0.03,
+    )
+    other_model_dimension = _hit(
+        201,
+        "档口ID",
+        resource_type=RetrievalResourceType.DIMENSION,
+        model_id=11,
+        alias=1.0,
+        final=0.02,
+    )
+
+    result = SemanticBindingPolicy().apply(
+        _recall(
+            _slot("metric:1", RetrievalPurpose.METRIC, [metric]),
+            _slot(
+                "dimension:1",
+                RetrievalPurpose.DIMENSION,
+                [same_model_dimension, other_model_dimension],
+            ),
+        )
+    )
+
+    assert result.bundle.decision.status == RetrievalDecisionStatus.RESOLVED
+    dimension_decision = result.bundle.decision.slot_decisions[1]
+    assert [item.asset_id for item in dimension_decision.selected_assets] == [200]
+    assert dimension_decision.reason_codes == [
+        "IDENTITY_DISAMBIGUATED_BY_METRIC_MODEL_COMPATIBILITY"
+    ]
+
+
+def test_model_compatibility_does_not_resolve_lexical_only_ambiguity():
+    result = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [_hit(100, "销售下单客户数", exact=1.0, model_id=10)],
+            ),
+            _slot(
+                "dimension:1",
+                RetrievalPurpose.DIMENSION,
+                [
+                    _hit(
+                        200,
+                        "档口ID",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        model_id=10,
+                        lexical=0.9,
+                        final=0.03,
+                    ),
+                    _hit(
+                        201,
+                        "商家ID",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        model_id=11,
+                        lexical=0.9,
+                        final=0.02,
+                    ),
+                ],
+            ),
+        )
+    )
+
+    assert result.bundle.decision.status == RetrievalDecisionStatus.AMBIGUOUS
+    assert result.bundle.decision.slot_decisions[1].selected_assets == []
 
 
 def test_partial_and_below_absolute_threshold_have_explicit_reasons():

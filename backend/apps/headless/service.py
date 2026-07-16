@@ -537,6 +537,7 @@ class HeadlessSchemaBuilder:
             "biz_name": model.biz_name,
             "datasource_id": model.datasource_id,
             "source_type": model.source_type,
+            "default_time_field": model.default_time_field,
             "queryType": detail.get("queryType") or ("sql_query" if model.source_type.upper() == "SQL" else "table_query"),
             "tableQuery": table_query,
             "sqlQuery": sql_query,

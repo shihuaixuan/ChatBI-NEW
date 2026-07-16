@@ -107,13 +107,14 @@ def _metric(
     visibility: str = "tenant",
     acl: dict | None = None,
     permission_version: str = "permission-1",
+    contextual_text: str | None = None,
 ) -> ProjectedResource:
     unit = ProjectedUnit.create(
         unit_key="identity",
         content_kind="identity",
         title=title,
         content=f"指标名称：{title}\n指标别名：{'、'.join(aliases)}\n业务定义：{description}",
-        contextual_text=f"数据集：{dataset_id}",
+        contextual_text=contextual_text or f"数据集：{dataset_id}",
         metadata={"asset_id": asset_id, "asset_type": "METRIC", "aliases": aliases},
     )
     metadata = {"asset_id": asset_id, "asset_type": "METRIC", "model_id": 10}
@@ -244,6 +245,15 @@ def indexed_store(session: Session) -> tuple[SemanticBindingSearchStore, _Semant
             aliases=["停用测试"],
             description="不应参与召回",
         ),
+        _metric(
+            primary,
+            dataset_id=20,
+            asset_id=105,
+            title="客户名称",
+            aliases=[],
+            description="客户的展示名称",
+            contextual_text="数据集：商城店铺数据集",
+        ),
     ]
     _activate(session, primary, primary_resources, provider)
     inactive = session.exec(
@@ -304,6 +314,17 @@ def test_exact_alias_lexical_and_dense_channels_read_active_generation(indexed_s
     assert lexical[0].hit.asset_ref is not None and lexical[0].hit.asset_ref.asset_id == 100
     assert dense[0].hit.asset_ref is not None and dense[0].hit.asset_ref.asset_id == 100
     assert all(item.hit.provenance["index_generation"] for item in [*exact, *alias, *lexical, *dense])
+
+
+def test_lexical_channel_does_not_treat_dataset_context_as_asset_identity(indexed_store):
+    store, _ = indexed_store
+
+    lexical = store.search_lexical(_request("店铺"), _subquery("店铺"), 20)
+
+    assert all(
+        item.hit.asset_ref is None or item.hit.asset_ref.asset_id != 105
+        for item in lexical
+    )
 
 
 def test_hard_filters_run_before_channel_recall(indexed_store):
