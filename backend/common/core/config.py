@@ -147,7 +147,7 @@ class Settings(BaseSettings):
     AGENTIC_SQL_REPAIR_MAX_ATTEMPTS: int = 2
     AGENTIC_CLARIFICATION_EXPIRE_HOURS: int = 24
     AGENTIC_TRACE_PRIVATE_RETENTION_DAYS: int = 30
-    # Agentic ChatBI v2（apps.chatbi_agent，LLM 自主规划）
+    # Agentic ChatBI v2（apps.agent，LLM 自主规划）
     CHAT_AGENT_ENABLED: bool = False
     CHAT_AGENT_DATASOURCE_ALLOWLIST: str = ""
     CHAT_AGENT_MAX_STEPS: int = 12

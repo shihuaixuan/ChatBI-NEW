@@ -22,28 +22,28 @@
 
 ## 文件职责
 
-- Create `backend/apps/chatbi_workflow/capabilities/interactions.py`：交互节点规格、标准路径、兼容路径、标准记录构造、标准/旧字段读取、slot/metric 选择纯函数。
-- Modify `backend/apps/chatbi_workflow/capabilities/context.py`：新增标准交互域 accessor，旧 response 属性改为标准域优先、旧字段回退。
+- Create `backend/apps/workflow/capabilities/interactions.py`：交互节点规格、标准路径、兼容路径、标准记录构造、标准/旧字段读取、slot/metric 选择纯函数。
+- Modify `backend/apps/workflow/capabilities/context.py`：新增标准交互域 accessor，旧 response 属性改为标准域优先、旧字段回退。
 - Modify `backend/apps/workflow_engine/runtime/graph_runtime.py`：resume 写入时对 `variables.interactions.*` 生成结构化交互记录，不再需要 ChatBI patcher。
-- Modify `backend/apps/chatbi_workflow/nodes/v1.py`：交互节点返回标准路径 + 旧路径的 `allowed_update_paths`。
-- Modify `backend/apps/chatbi_workflow/definitions/chatbi_v1.py`：交互节点 metadata 声明 standard/legacy path、response key、max_rounds；handler 注册使用统一交互规格。
-- Modify `backend/apps/chatbi_workflow/conditions/core.py`：作用域化 answered/skipped 和 clarify round gate 从交互规格读取，兼容旧字段。
-- Modify `backend/apps/chatbi_workflow/runtime.py`：移除 `ChatBIV1InteractionResponsePatcher` 类与注入。
-- Modify `backend/apps/chatbi_workflow/capabilities/adapters/knowledge.py`：在 retrieve 内使用 slot clarification response 构造本地 intent 视图。
-- Modify `backend/apps/chatbi_workflow/capabilities/planning.py`：在 QueryPlanBinder 内消费 metric selection response。
+- Modify `backend/apps/workflow/nodes/v1.py`：交互节点返回标准路径 + 旧路径的 `allowed_update_paths`。
+- Modify `backend/apps/workflow/definitions/chatbi_v1.py`：交互节点 metadata 声明 standard/legacy path、response key、max_rounds；handler 注册使用统一交互规格。
+- Modify `backend/apps/workflow/conditions/core.py`：作用域化 answered/skipped 和 clarify round gate 从交互规格读取，兼容旧字段。
+- Modify `backend/apps/workflow/runtime.py`：移除 `ChatBIV1InteractionResponsePatcher` 类与注入。
+- Modify `backend/apps/workflow/capabilities/adapters/knowledge.py`：在 retrieve 内使用 slot clarification response 构造本地 intent 视图。
+- Modify `backend/apps/workflow/capabilities/planning.py`：在 QueryPlanBinder 内消费 metric selection response。
 - Modify `backend/apps/semantic/assets/quality_service.py`：修正 typos 命中的 `unparsable` 拼写。
 - Modify `docs/chatbi-v1-graph-refactor-analysis-and-design.md`：实现完成后标记 Step 4 完成。
-- Tests under `backend/tests/chatbi_workflow` and `backend/tests/workflow_engine`：覆盖标准域、条件、resume、slot/metric 消费、runtime 不再注入 patcher。
+- Tests under `backend/tests/workflow` and `backend/tests/workflow_engine`：覆盖标准域、条件、resume、slot/metric 消费、runtime 不再注入 patcher。
 
 ---
 
 ### Task 1: 交互域 helper 与 ChatBIRunContext 读取器
 
 **Files:**
-- Create: `backend/apps/chatbi_workflow/capabilities/interactions.py`
-- Modify: `backend/apps/chatbi_workflow/capabilities/context.py`
-- Test: `backend/tests/chatbi_workflow/test_run_context.py`
-- Test: `backend/tests/chatbi_workflow/test_interactions_domain.py`
+- Create: `backend/apps/workflow/capabilities/interactions.py`
+- Modify: `backend/apps/workflow/capabilities/context.py`
+- Test: `backend/tests/workflow/test_run_context.py`
+- Test: `backend/tests/workflow/test_interactions_domain.py`
 
 **Interfaces:**
 - Produces:
@@ -60,7 +60,7 @@
 
 - [ ] **Step 1: 写标准交互读取失败测试**
 
-Append to `backend/tests/chatbi_workflow/test_run_context.py`:
+Append to `backend/tests/workflow/test_run_context.py`:
 
 ```python
 def test_run_context_prefers_standard_interaction_response_over_legacy_key():
@@ -84,12 +84,12 @@ def test_run_context_prefers_standard_interaction_response_over_legacy_key():
     assert ctx.metric_selection == {"metric": 239}
 ```
 
-Create `backend/tests/chatbi_workflow/test_interactions_domain.py`:
+Create `backend/tests/workflow/test_interactions_domain.py`:
 
 ```python
 from datetime import datetime, timezone
 
-from apps.chatbi_workflow.capabilities.interactions import (
+from apps.workflow.capabilities.interactions import (
     build_interaction_record,
     legacy_interaction_path,
     read_interaction_response,
@@ -139,14 +139,14 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_run_context.py::test_run_context_prefers_standard_interaction_response_over_legacy_key tests/chatbi_workflow/test_interactions_domain.py -q
+uv run pytest tests/workflow/test_run_context.py::test_run_context_prefers_standard_interaction_response_over_legacy_key tests/workflow/test_interactions_domain.py -q
 ```
 
-Expected: FAIL，提示 `apps.chatbi_workflow.capabilities.interactions` 或 `ChatBIRunContext.interaction` 不存在。
+Expected: FAIL，提示 `apps.workflow.capabilities.interactions` 或 `ChatBIRunContext.interaction` 不存在。
 
 - [ ] **Step 3: 实现交互 helper 与 context accessor**
 
-Create `backend/apps/chatbi_workflow/capabilities/interactions.py`:
+Create `backend/apps/workflow/capabilities/interactions.py`:
 
 ```python
 from __future__ import annotations
@@ -258,10 +258,10 @@ def read_interaction_response(
     return {}
 ```
 
-Modify `backend/apps/chatbi_workflow/capabilities/context.py`:
+Modify `backend/apps/workflow/capabilities/context.py`:
 
 ```python
-from apps.chatbi_workflow.capabilities.interactions import read_interaction_record, read_interaction_response
+from apps.workflow.capabilities.interactions import read_interaction_record, read_interaction_response
 ```
 
 Add methods and update properties:
@@ -300,7 +300,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_run_context.py tests/chatbi_workflow/test_interactions_domain.py -q
+uv run pytest tests/workflow/test_run_context.py tests/workflow/test_interactions_domain.py -q
 ```
 
 Expected: PASS。
@@ -308,7 +308,7 @@ Expected: PASS。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/capabilities/interactions.py backend/apps/chatbi_workflow/capabilities/context.py backend/tests/chatbi_workflow/test_run_context.py backend/tests/chatbi_workflow/test_interactions_domain.py
+git add backend/apps/workflow/capabilities/interactions.py backend/apps/workflow/capabilities/context.py backend/tests/workflow/test_run_context.py backend/tests/workflow/test_interactions_domain.py
 git commit -m "feat: add chatbi interaction domain accessors"
 ```
 
@@ -318,9 +318,9 @@ git commit -m "feat: add chatbi interaction domain accessors"
 
 **Files:**
 - Modify: `backend/apps/workflow_engine/runtime/graph_runtime.py`
-- Modify: `backend/apps/chatbi_workflow/nodes/v1.py`
+- Modify: `backend/apps/workflow/nodes/v1.py`
 - Test: `backend/tests/workflow_engine/test_runtime_interactions.py`
-- Test: `backend/tests/chatbi_workflow/test_v1_flow.py`
+- Test: `backend/tests/workflow/test_v1_flow.py`
 
 **Interfaces:**
 - Consumes: `build_interaction_record()` and `standard_interaction_path()`
@@ -395,7 +395,7 @@ Modify `backend/apps/workflow_engine/runtime/graph_runtime.py` imports:
 ```python
 from datetime import datetime, timezone
 
-from apps.chatbi_workflow.capabilities.interactions import build_interaction_record
+from apps.workflow.capabilities.interactions import build_interaction_record
 ```
 
 Replace resume patch creation:
@@ -421,10 +421,10 @@ The existing `interaction_response_patcher` block stays for this task; Task 6 re
 
 - [ ] **Step 4: 交互节点返回标准路径 + 旧路径**
 
-Modify `backend/apps/chatbi_workflow/nodes/v1.py` imports:
+Modify `backend/apps/workflow/nodes/v1.py` imports:
 
 ```python
-from apps.chatbi_workflow.capabilities.interactions import standard_interaction_path
+from apps.workflow.capabilities.interactions import standard_interaction_path
 ```
 
 Inside `ChatBIV1InteractionNode.execute()`:
@@ -445,7 +445,7 @@ Inside `ChatBIV1InteractionNode.execute()`:
 
 - [ ] **Step 5: 更新 ChatBI flow 断言**
 
-In `backend/tests/chatbi_workflow/test_v1_flow.py`, add after a metric selection resume:
+In `backend/tests/workflow/test_v1_flow.py`, add after a metric selection resume:
 
 ```python
     interaction_record = resumed.context.variables["interactions"]["ask_metric_selection"]
@@ -459,7 +459,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/workflow_engine/test_runtime_interactions.py tests/chatbi_workflow/test_v1_flow.py::test_chatbi_v1_placeholder_metric_selection_can_resume_to_success -q
+uv run pytest tests/workflow_engine/test_runtime_interactions.py tests/workflow/test_v1_flow.py::test_chatbi_v1_placeholder_metric_selection_can_resume_to_success -q
 ```
 
 Expected: PASS。
@@ -467,7 +467,7 @@ Expected: PASS。
 - [ ] **Step 7: 提交**
 
 ```bash
-git add backend/apps/workflow_engine/runtime/graph_runtime.py backend/apps/chatbi_workflow/nodes/v1.py backend/tests/workflow_engine/test_runtime_interactions.py backend/tests/chatbi_workflow/test_v1_flow.py
+git add backend/apps/workflow_engine/runtime/graph_runtime.py backend/apps/workflow/nodes/v1.py backend/tests/workflow_engine/test_runtime_interactions.py backend/tests/workflow/test_v1_flow.py
 git commit -m "feat: persist scoped interaction responses"
 ```
 
@@ -476,10 +476,10 @@ git commit -m "feat: persist scoped interaction responses"
 ### Task 3: 交互节点 metadata 与条件读取标准域
 
 **Files:**
-- Modify: `backend/apps/chatbi_workflow/definitions/chatbi_v1.py`
-- Modify: `backend/apps/chatbi_workflow/conditions/core.py`
-- Test: `backend/tests/chatbi_workflow/test_interaction_conditions.py`
-- Test: `backend/tests/chatbi_workflow/test_v1_definition.py`
+- Modify: `backend/apps/workflow/definitions/chatbi_v1.py`
+- Modify: `backend/apps/workflow/conditions/core.py`
+- Test: `backend/tests/workflow/test_interaction_conditions.py`
+- Test: `backend/tests/workflow/test_v1_definition.py`
 
 **Interfaces:**
 - Consumes: `InteractionSpec`, `CHATBI_V1_INTERACTION_SPECS`, `read_interaction_response()`
@@ -491,10 +491,10 @@ git commit -m "feat: persist scoped interaction responses"
 
 - [ ] **Step 1: 写条件读取标准域失败测试**
 
-Append to `backend/tests/chatbi_workflow/test_interaction_conditions.py`:
+Append to `backend/tests/workflow/test_interaction_conditions.py`:
 
 ```python
-from apps.chatbi_workflow.conditions.core import (
+from apps.workflow.conditions.core import (
     InteractionResponseAnsweredCondition,
     InteractionResponseSkippedCondition,
 )
@@ -531,7 +531,7 @@ def test_scoped_interaction_condition_prefers_standard_domain():
     assert skipped.matched is False
 ```
 
-Append to `backend/tests/chatbi_workflow/test_v1_definition.py`:
+Append to `backend/tests/workflow/test_v1_definition.py`:
 
 ```python
 def test_interaction_nodes_declare_standard_and_legacy_paths():
@@ -551,17 +551,17 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_interaction_conditions.py::test_scoped_interaction_condition_prefers_standard_domain tests/chatbi_workflow/test_v1_definition.py::test_interaction_nodes_declare_standard_and_legacy_paths -q
+uv run pytest tests/workflow/test_interaction_conditions.py::test_scoped_interaction_condition_prefers_standard_domain tests/workflow/test_v1_definition.py::test_interaction_nodes_declare_standard_and_legacy_paths -q
 ```
 
 Expected: FAIL，condition 构造参数或 metadata 不存在。
 
 - [ ] **Step 3: 给交互节点添加 metadata**
 
-Modify `backend/apps/chatbi_workflow/definitions/chatbi_v1.py`:
+Modify `backend/apps/workflow/definitions/chatbi_v1.py`:
 
 ```python
-from apps.chatbi_workflow.capabilities.interactions import CHATBI_V1_INTERACTION_SPECS
+from apps.workflow.capabilities.interactions import CHATBI_V1_INTERACTION_SPECS
 
 
 def _interaction_node(name: str, handler: str) -> NodeDefinition:
@@ -584,10 +584,10 @@ def _interaction_node(name: str, handler: str) -> NodeDefinition:
 
 - [ ] **Step 4: 更新作用域条件读取标准域**
 
-Modify `backend/apps/chatbi_workflow/conditions/core.py`:
+Modify `backend/apps/workflow/conditions/core.py`:
 
 ```python
-from apps.chatbi_workflow.capabilities.interactions import (
+from apps.workflow.capabilities.interactions import (
     CHATBI_V1_INTERACTION_SPECS,
     read_interaction_response,
 )
@@ -645,7 +645,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_interaction_conditions.py tests/chatbi_workflow/test_v1_definition.py -q
+uv run pytest tests/workflow/test_interaction_conditions.py tests/workflow/test_v1_definition.py -q
 ```
 
 Expected: PASS。
@@ -653,7 +653,7 @@ Expected: PASS。
 - [ ] **Step 6: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/definitions/chatbi_v1.py backend/apps/chatbi_workflow/conditions/core.py backend/tests/chatbi_workflow/test_interaction_conditions.py backend/tests/chatbi_workflow/test_v1_definition.py
+git add backend/apps/workflow/definitions/chatbi_v1.py backend/apps/workflow/conditions/core.py backend/tests/workflow/test_interaction_conditions.py backend/tests/workflow/test_v1_definition.py
 git commit -m "refactor: derive chatbi interaction routing metadata"
 ```
 
@@ -662,10 +662,10 @@ git commit -m "refactor: derive chatbi interaction routing metadata"
 ### Task 4: slot clarification 消费迁移到 knowledge adapter
 
 **Files:**
-- Modify: `backend/apps/chatbi_workflow/capabilities/interactions.py`
-- Modify: `backend/apps/chatbi_workflow/capabilities/adapters/knowledge.py`
-- Test: `backend/tests/chatbi_workflow/test_headless_knowledge_adapter.py`
-- Test: `backend/tests/chatbi_workflow/test_v1_flow.py`
+- Modify: `backend/apps/workflow/capabilities/interactions.py`
+- Modify: `backend/apps/workflow/capabilities/adapters/knowledge.py`
+- Test: `backend/tests/workflow/test_headless_knowledge_adapter.py`
+- Test: `backend/tests/workflow/test_v1_flow.py`
 
 **Interfaces:**
 - Produces:
@@ -676,10 +676,10 @@ git commit -m "refactor: derive chatbi interaction routing metadata"
 
 - [ ] **Step 1: 写 slot response 纯函数失败测试**
 
-Append to `backend/tests/chatbi_workflow/test_headless_knowledge_adapter.py`:
+Append to `backend/tests/workflow/test_headless_knowledge_adapter.py`:
 
 ```python
-from apps.chatbi_workflow.capabilities.interactions import apply_slot_response_to_intent
+from apps.workflow.capabilities.interactions import apply_slot_response_to_intent
 
 
 def test_apply_slot_response_to_intent_sets_dimension_filter_value():
@@ -723,19 +723,19 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_headless_knowledge_adapter.py::test_apply_slot_response_to_intent_sets_dimension_filter_value tests/chatbi_workflow/test_headless_knowledge_adapter.py::test_apply_slot_response_to_intent_sets_subject_domain -q
+uv run pytest tests/workflow/test_headless_knowledge_adapter.py::test_apply_slot_response_to_intent_sets_dimension_filter_value tests/workflow/test_headless_knowledge_adapter.py::test_apply_slot_response_to_intent_sets_subject_domain -q
 ```
 
 Expected: FAIL，提示 `apply_slot_response_to_intent` 不存在。
 
 - [ ] **Step 3: 实现 slot response 纯函数**
 
-Add to `backend/apps/chatbi_workflow/capabilities/interactions.py`:
+Add to `backend/apps/workflow/capabilities/interactions.py`:
 
 ```python
 from copy import deepcopy
 
-from apps.chatbi_workflow.capabilities.context import int_or_none
+from apps.workflow.capabilities.context import int_or_none
 
 
 def apply_slot_response_to_intent(intent: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
@@ -792,10 +792,10 @@ def _normalize_dimension_value(dimension_name: str, raw_value: Any) -> str | Non
 
 - [ ] **Step 4: 在 knowledge adapter 使用增强 intent 视图**
 
-Modify `backend/apps/chatbi_workflow/capabilities/adapters/knowledge.py`:
+Modify `backend/apps/workflow/capabilities/adapters/knowledge.py`:
 
 ```python
-from apps.chatbi_workflow.capabilities.interactions import apply_slot_response_to_intent
+from apps.workflow.capabilities.interactions import apply_slot_response_to_intent
 ```
 
 In `retrieve()`:
@@ -829,7 +829,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_headless_knowledge_adapter.py tests/chatbi_workflow/test_v1_flow.py::test_slot_clarification_patcher_uses_structured_dimension_values tests/chatbi_workflow/test_v1_flow.py::test_slot_clarification_patcher_accepts_multiple_dimension_values -q
+uv run pytest tests/workflow/test_headless_knowledge_adapter.py tests/workflow/test_v1_flow.py::test_slot_clarification_patcher_uses_structured_dimension_values tests/workflow/test_v1_flow.py::test_slot_clarification_patcher_accepts_multiple_dimension_values -q
 ```
 
 Expected: PASS after renaming the two patcher tests to interaction-consumption tests.
@@ -837,7 +837,7 @@ Expected: PASS after renaming the two patcher tests to interaction-consumption t
 - [ ] **Step 7: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/capabilities/interactions.py backend/apps/chatbi_workflow/capabilities/adapters/knowledge.py backend/tests/chatbi_workflow/test_headless_knowledge_adapter.py backend/tests/chatbi_workflow/test_v1_flow.py
+git add backend/apps/workflow/capabilities/interactions.py backend/apps/workflow/capabilities/adapters/knowledge.py backend/tests/workflow/test_headless_knowledge_adapter.py backend/tests/workflow/test_v1_flow.py
 git commit -m "refactor: consume slot clarifications in knowledge retrieval"
 ```
 
@@ -846,10 +846,10 @@ git commit -m "refactor: consume slot clarifications in knowledge retrieval"
 ### Task 5: metric selection 消费迁移到 QueryPlanBinder
 
 **Files:**
-- Modify: `backend/apps/chatbi_workflow/capabilities/interactions.py`
-- Modify: `backend/apps/chatbi_workflow/capabilities/planning.py`
-- Test: `backend/tests/chatbi_workflow/test_query_plan_binding.py`
-- Test: `backend/tests/chatbi_workflow/test_v1_flow.py`
+- Modify: `backend/apps/workflow/capabilities/interactions.py`
+- Modify: `backend/apps/workflow/capabilities/planning.py`
+- Test: `backend/tests/workflow/test_query_plan_binding.py`
+- Test: `backend/tests/workflow/test_v1_flow.py`
 
 **Interfaces:**
 - Produces:
@@ -861,7 +861,7 @@ git commit -m "refactor: consume slot clarifications in knowledge retrieval"
 
 - [ ] **Step 1: 写 metric selection plan 失败测试**
 
-Append to `backend/tests/chatbi_workflow/test_query_plan_binding.py`:
+Append to `backend/tests/workflow/test_query_plan_binding.py`:
 
 ```python
 def test_binder_uses_metric_selection_response_without_mutating_knowledge():
@@ -915,14 +915,14 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_query_plan_binding.py::test_binder_uses_metric_selection_response_without_mutating_knowledge -q
+uv run pytest tests/workflow/test_query_plan_binding.py::test_binder_uses_metric_selection_response_without_mutating_knowledge -q
 ```
 
 Expected: FAIL，当前 binder 未消费 `metric_selection`，计划不可用或 metrics 为空。
 
 - [ ] **Step 3: 实现 metric selection helper**
 
-Add to `backend/apps/chatbi_workflow/capabilities/interactions.py`:
+Add to `backend/apps/workflow/capabilities/interactions.py`:
 
 ```python
 def selected_metric_from_response(
@@ -961,10 +961,10 @@ def _metric_candidates(knowledge: dict[str, Any]) -> list[Any]:
 
 - [ ] **Step 4: 在 QueryPlanBinder 中优先使用用户选中指标**
 
-Modify `backend/apps/chatbi_workflow/capabilities/planning.py`:
+Modify `backend/apps/workflow/capabilities/planning.py`:
 
 ```python
-from apps.chatbi_workflow.capabilities.interactions import selected_metric_from_response
+from apps.workflow.capabilities.interactions import selected_metric_from_response
 ```
 
 In `QueryPlanBinder.bind()` after `slots = derive_semantic_slots(...)`:
@@ -1004,7 +1004,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_query_plan_binding.py tests/chatbi_workflow/test_v1_flow.py::test_chatbi_v1_placeholder_metric_selection_can_resume_to_success -q
+uv run pytest tests/workflow/test_query_plan_binding.py tests/workflow/test_v1_flow.py::test_chatbi_v1_placeholder_metric_selection_can_resume_to_success -q
 ```
 
 Expected: PASS。
@@ -1012,7 +1012,7 @@ Expected: PASS。
 - [ ] **Step 7: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/capabilities/interactions.py backend/apps/chatbi_workflow/capabilities/planning.py backend/tests/chatbi_workflow/test_query_plan_binding.py backend/tests/chatbi_workflow/test_v1_flow.py
+git add backend/apps/workflow/capabilities/interactions.py backend/apps/workflow/capabilities/planning.py backend/tests/workflow/test_query_plan_binding.py backend/tests/workflow/test_v1_flow.py
 git commit -m "refactor: bind metric selection in query plan"
 ```
 
@@ -1021,11 +1021,11 @@ git commit -m "refactor: bind metric selection in query plan"
 ### Task 6: 退役 ChatBIV1InteractionResponsePatcher
 
 **Files:**
-- Modify: `backend/apps/chatbi_workflow/runtime.py`
+- Modify: `backend/apps/workflow/runtime.py`
 - Modify: `backend/apps/workflow_engine/runtime/graph_runtime.py`
-- Modify: `backend/tests/chatbi_workflow/test_v1_flow.py`
-- Modify: `backend/tests/chatbi_workflow/test_v1_clarification_regressions.py`
-- Modify: `backend/tests/chatbi_workflow/test_v1_degradation.py`
+- Modify: `backend/tests/workflow/test_v1_flow.py`
+- Modify: `backend/tests/workflow/test_v1_clarification_regressions.py`
+- Modify: `backend/tests/workflow/test_v1_degradation.py`
 
 **Interfaces:**
 - Consumes: Task 4 and Task 5 node-level consumption.
@@ -1033,7 +1033,7 @@ git commit -m "refactor: bind metric selection in query plan"
 
 - [ ] **Step 1: 写 runtime 不再注入 patcher 的失败测试**
 
-Append to `backend/tests/chatbi_workflow/test_v1_flow.py`:
+Append to `backend/tests/workflow/test_v1_flow.py`:
 
 ```python
 def test_chatbi_v1_runtime_does_not_install_interaction_response_patcher():
@@ -1050,14 +1050,14 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_v1_flow.py::test_chatbi_v1_runtime_does_not_install_interaction_response_patcher -q
+uv run pytest tests/workflow/test_v1_flow.py::test_chatbi_v1_runtime_does_not_install_interaction_response_patcher -q
 ```
 
 Expected: FAIL，runtime still has `ChatBIV1InteractionResponsePatcher`.
 
 - [ ] **Step 3: 删除 ChatBIV1InteractionResponsePatcher 类与注入**
 
-Modify `backend/apps/chatbi_workflow/runtime.py`:
+Modify `backend/apps/workflow/runtime.py`:
 
 ```python
 # 删除 ChatBIV1InteractionResponsePatcher 类和不再使用的 deepcopy / ContextPatch / InteractionRequest / WorkflowRun import。
@@ -1112,7 +1112,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_v1_flow.py tests/chatbi_workflow/test_v1_clarification_regressions.py tests/chatbi_workflow/test_v1_degradation.py tests/workflow_engine/test_runtime_interactions.py -q
+uv run pytest tests/workflow/test_v1_flow.py tests/workflow/test_v1_clarification_regressions.py tests/workflow/test_v1_degradation.py tests/workflow_engine/test_runtime_interactions.py -q
 ```
 
 Expected: PASS。
@@ -1120,7 +1120,7 @@ Expected: PASS。
 - [ ] **Step 7: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/runtime.py backend/apps/workflow_engine/runtime/graph_runtime.py backend/tests/chatbi_workflow/test_v1_flow.py backend/tests/chatbi_workflow/test_v1_clarification_regressions.py backend/tests/chatbi_workflow/test_v1_degradation.py backend/tests/workflow_engine/test_runtime_interactions.py
+git add backend/apps/workflow/runtime.py backend/apps/workflow_engine/runtime/graph_runtime.py backend/tests/workflow/test_v1_flow.py backend/tests/workflow/test_v1_clarification_regressions.py backend/tests/workflow/test_v1_degradation.py backend/tests/workflow_engine/test_runtime_interactions.py
 git commit -m "refactor: retire chatbi interaction response patcher"
 ```
 
@@ -1131,7 +1131,7 @@ git commit -m "refactor: retire chatbi interaction response patcher"
 **Files:**
 - Modify: `backend/apps/semantic/assets/quality_service.py`
 - Modify: `docs/chatbi-v1-graph-refactor-analysis-and-design.md`
-- Modify: `backend/apps/chatbi_workflow/CHATBI_V1_FLOW_TEST_RECORD.md`
+- Modify: `backend/apps/workflow/CHATBI_V1_FLOW_TEST_RECORD.md`
 - Test: backend target test suites
 
 **Interfaces:**
@@ -1169,7 +1169,7 @@ Modify `docs/chatbi-v1-graph-refactor-analysis-and-design.md` Step 4 row to:
 | **Step 4** 交互子系统定稿 | `interactions` 域 + 条件工厂 + ResponsePatcher 退役；澄清轮次进节点 metadata。**（已完成：标准 `variables.interactions.<ask_node>` 域、旧 response 字段兼容、slot/metric 回答改由消费节点处理、ChatBI runtime 不再注入 ResponsePatcher；见 `test_interactions_domain.py`、`test_interaction_conditions.py`、`test_v1_flow.py`。）** | 五类澄清 + 跳过 + 多轮组合的端到端测试 |
 ```
 
-Append to `backend/apps/chatbi_workflow/CHATBI_V1_FLOW_TEST_RECORD.md` a short Step 4 note:
+Append to `backend/apps/workflow/CHATBI_V1_FLOW_TEST_RECORD.md` a short Step 4 note:
 
 ```markdown
 ## Step 4 交互子系统定稿记录
@@ -1186,7 +1186,7 @@ Run:
 
 ```bash
 cd backend
-uv run ruff check apps/chatbi_workflow apps/workflow_engine tests/chatbi_workflow tests/workflow_engine
+uv run ruff check apps/workflow apps/workflow_engine tests/workflow tests/workflow_engine
 ```
 
 Expected: `All checks passed!`
@@ -1197,7 +1197,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow tests/workflow_engine tests/headless/test_semantic_sql_compiler.py tests/headless/test_sql_compiler_time_filters.py -q
+uv run pytest tests/workflow tests/workflow_engine tests/headless/test_semantic_sql_compiler.py tests/headless/test_sql_compiler_time_filters.py -q
 ```
 
 Expected: all tests pass. If unrelated flaky or environment failure occurs, capture exact failure and inspect root cause before changing code.
@@ -1217,7 +1217,7 @@ Expected: both pass.
 - [ ] **Step 6: 提交**
 
 ```bash
-git add backend/apps/semantic/assets/quality_service.py docs/chatbi-v1-graph-refactor-analysis-and-design.md backend/apps/chatbi_workflow/CHATBI_V1_FLOW_TEST_RECORD.md
+git add backend/apps/semantic/assets/quality_service.py docs/chatbi-v1-graph-refactor-analysis-and-design.md backend/apps/workflow/CHATBI_V1_FLOW_TEST_RECORD.md
 git commit -m "docs: mark chatbi v1 step 4 complete"
 ```
 

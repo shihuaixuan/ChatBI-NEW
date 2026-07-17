@@ -19,8 +19,8 @@ from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from apps.chat.models.chat_model import Chat, ChatRecord
-from apps.chatbi_workflow import runtime as chatbi_runtime
-from apps.chatbi_workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
+from apps.workflow import runtime as chatbi_runtime
+from apps.workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
 from apps.headless.models import (
     HeadlessAssetDocument,
     HeadlessDataSet,

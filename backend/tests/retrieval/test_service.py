@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from apps.chatbi_capabilities.semantic.retrieval import (
+from apps.capabilities.semantic.retrieval import (
     _agent_semantic_status,
     retrieve_semantic_assets,
 )
-from apps.chatbi_workflow.capabilities.adapters.knowledge import (
+from apps.workflow.capabilities.adapters.knowledge import (
     HeadlessKnowledgeAdapter,
 )
 from apps.retrieval.errors import RetrievalQueryError

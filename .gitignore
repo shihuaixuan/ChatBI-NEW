@@ -14,8 +14,14 @@ backend/data/workflow_artifacts/
 backend/tests
 !backend/tests/
 backend/tests/*
+!backend/tests/agent/
+!backend/tests/agent/**
+!backend/tests/capabilities/
+!backend/tests/capabilities/**
 !backend/tests/retrieval/
 !backend/tests/retrieval/**
+!backend/tests/workflow/
+!backend/tests/workflow/**
 backend/tests/retrieval/baselines/graph_baseline.json
 backend/tests/retrieval/baselines/agent_baseline.json
 backend/alembic

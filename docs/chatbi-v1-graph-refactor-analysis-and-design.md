@@ -354,7 +354,7 @@ trace 的节点→输出路径表 `V1_TRACE_OUTPUT_PATHS`（`api/service.py:55-7
 
 ### 5.1 设计原则
 
-1. **不 big-bang**：每一步独立可合入、可回滚，现有 chatbi_workflow/workflow_engine/headless 测试始终绿。
+1. **不 big-bang**：每一步独立可合入、可回滚，现有 workflow/workflow_engine/headless 测试始终绿。
 2. **引擎最小侵入**：引擎只改超时语义、交互作用域两点，其余全部在业务层完成。
 3. **先修正确性，再动结构**：A 类缺陷的修复不依赖新上下文模型，先行落地。
 4. **确定性优先**：能用计划+编译器表达的绝不用 LLM 写 SQL；LLM 回退是带开关、带标识的末位通道。

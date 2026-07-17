@@ -13,8 +13,8 @@ from sqlmodel import select
 
 from apps.chat.api.chat import create_chat
 from apps.chat.models.chat_model import ChatStart, CreateChat, McpDs, McpQuestion
-from apps.chatbi_agent.schemas import AgentStartStreamRequest
-from apps.chatbi_agent.service import (
+from apps.agent.schemas import AgentStartStreamRequest
+from apps.agent.service import (
     AgentDatasourceNotAllowedError,
     AgentNotEnabledError,
     create_agent_start_stream,

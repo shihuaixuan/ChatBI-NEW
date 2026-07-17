@@ -7,7 +7,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from apps.chatbi_capabilities.time_slots import normalize_time_range_payload
+from apps.capabilities.time_slots import normalize_time_range_payload
 from apps.headless.schemas import DataSetSchema, SchemaElement
 from apps.retrieval.errors import (
     RetrievalProviderUnavailableError,

@@ -6,8 +6,8 @@ from pathlib import Path
 RETRIEVAL_DIR = Path(__file__).resolve().parents[2] / "apps" / "retrieval"
 FORBIDDEN = (
     "apps.workflow_engine",
-    "apps.chatbi_workflow",
-    "apps.chatbi_agent",
+    "apps.workflow",
+    "apps.agent",
     "apps.agentic_chat",
 )
 GENERIC_RETRIEVAL_MODULES = ("projection.py", "indexing.py", "models.py")

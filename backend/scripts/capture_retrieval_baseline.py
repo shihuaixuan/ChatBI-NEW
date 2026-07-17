@@ -11,7 +11,7 @@ from typing import Any, cast
 
 from sqlmodel import Session
 
-from apps.chatbi_capabilities.semantic.retrieval import retrieve_semantic_assets
+from apps.capabilities.semantic.retrieval import retrieve_semantic_assets
 from apps.retrieval.evaluation import (
     RecordedRetrievalResult,
     RetrievalBaseline,

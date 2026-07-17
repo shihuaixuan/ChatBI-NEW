@@ -159,8 +159,8 @@ def test_apply_dataset_binding_to_chat_and_record():
 def test_agent_create_marks_agent_execution_type():
     """Agent 问数创建的记录必须显式标记为 agent。"""
 
-    from apps.chatbi_agent.crud import create_record_and_run
-    from apps.chatbi_agent.schemas import AgentQuestionRequest
+    from apps.agent.crud import create_record_and_run
+    from apps.agent.schemas import AgentQuestionRequest
 
     chat = Chat(id=78, create_by=10, oid=1, datasource=40, engine_type="MySQL")
     session = FakeSession(chat)

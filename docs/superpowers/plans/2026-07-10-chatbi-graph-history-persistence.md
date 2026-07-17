@@ -48,7 +48,7 @@
 - `backend/apps/workflow_engine/infrastructure/persistence/models.py`：增加 Run 关联列和清理任务模型。
 - `backend/apps/workflow_engine/infrastructure/persistence/run_repository.py`：从 Context request 写入 Run 的物理关联列。
 - `backend/apps/workflow_engine/infrastructure/artifacts/file_store.py`：统一 Artifact 根目录和安全文件删除逻辑。
-- `backend/apps/chatbi_workflow/runtime.py`：允许应用层注入 RunStore，不改变 Graph Runtime 领域协议。
+- `backend/apps/workflow/runtime.py`：允许应用层注入 RunStore，不改变 Graph Runtime 领域协议。
 - `backend/apps/workflow_engine/api/schemas.py`：拆分交互式请求契约并返回 `record_id`。
 - `backend/apps/workflow_engine/api/router.py`：增加 `/graph/chats/{chat_id}/queries` 及流式入口。
 - `backend/apps/workflow_engine/api/service.py`：区分独立与交互式创建，统一接入投影和生命周期同步。
@@ -562,7 +562,7 @@ git commit -m "feat: project graph runs into chat history"
 - Modify: `backend/apps/workflow_engine/api/schemas.py`
 - Modify: `backend/apps/workflow_engine/api/router.py`
 - Modify: `backend/apps/workflow_engine/api/service.py`
-- Modify: `backend/apps/chatbi_workflow/runtime.py`
+- Modify: `backend/apps/workflow/runtime.py`
 - Modify: `backend/apps/workflow_engine/infrastructure/persistence/run_repository.py`
 - Modify: `backend/tests/workflow_engine/test_graph_api.py`
 
@@ -977,7 +977,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit interactive API**
 
 ```bash
-git add backend/apps/workflow_engine/api/schemas.py backend/apps/workflow_engine/api/router.py backend/apps/workflow_engine/api/service.py backend/apps/chatbi_workflow/runtime.py backend/apps/workflow_engine/infrastructure/persistence/run_repository.py
+git add backend/apps/workflow_engine/api/schemas.py backend/apps/workflow_engine/api/router.py backend/apps/workflow_engine/api/service.py backend/apps/workflow/runtime.py backend/apps/workflow_engine/infrastructure/persistence/run_repository.py
 git add -f backend/tests/workflow_engine/test_graph_api.py
 git commit -m "feat: add owned graph chat query api"
 ```
@@ -1804,7 +1804,7 @@ def delete_artifact_body(storage_uri: str, root: Path | None = None) -> None:
     path.unlink(missing_ok=True)
 ```
 
-Make `FileArtifactStore` and `chatbi_workflow/runtime.py` use `workflow_artifact_root()` instead of duplicating root resolution.
+Make `FileArtifactStore` and `workflow/runtime.py` use `workflow_artifact_root()` instead of duplicating root resolution.
 
 - [ ] **Step 4: Implement retryable Artifact cleanup service**
 
@@ -2043,8 +2043,8 @@ Run:
 
 ```bash
 cd backend
-uv run ruff check apps/chat apps/agentic_chat apps/workflow_engine apps/chatbi_workflow tests/chat tests/workflow_engine
-uv run pytest tests/chat tests/workflow_engine tests/chatbi_workflow -q
+uv run ruff check apps/chat apps/agentic_chat apps/workflow_engine apps/workflow tests/chat tests/workflow_engine
+uv run pytest tests/chat tests/workflow_engine tests/workflow -q
 ```
 
 Expected: Ruff exits 0; pytest reports zero failures.

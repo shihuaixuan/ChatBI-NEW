@@ -4,7 +4,7 @@ from sqlbot_xpack.config import api as xpack_config
 from sqlbot_xpack.license import api as xpack_license
 
 from apps.chat.api import chat
-from apps.chatbi_agent import api as chatbi_agent
+from apps.agent import api as agent
 from apps.dashboard.api import dashboard_api
 from apps.data_training.api import data_training
 from apps.datasource.api import datasource, recommended_problem, table_relation
@@ -40,7 +40,7 @@ api_router.include_router(terminology.router)
 api_router.include_router(data_training.router)
 api_router.include_router(datasource.router)
 api_router.include_router(chat.router)
-api_router.include_router(chatbi_agent.router)
+api_router.include_router(agent.router)
 api_router.include_router(dashboard_api.router)
 api_router.include_router(mcp.router)
 api_router.include_router(table_relation.router)

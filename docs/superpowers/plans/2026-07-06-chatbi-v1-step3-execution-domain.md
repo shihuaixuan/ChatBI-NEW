@@ -16,19 +16,19 @@
 - Create `backend/apps/workflow_engine/infrastructure/artifacts/file_store.py`：文件正文原子写入、摘要校验及元数据持久化。
 - Modify `backend/apps/workflow_engine/infrastructure/persistence/artifact_repository.py`：补齐按 ID 读取元数据。
 - Create `backend/tests/workflow_engine/test_file_artifact_store.py`：artifact 文件与元数据契约测试。
-- Create `backend/apps/chatbi_workflow/capabilities/execution.py`：统一 query/result 构造、执行聚合和线程安全 SQL 执行网关。
-- Modify `backend/apps/chatbi_workflow/capabilities/adapters/sql.py`：单/拆分统一执行、artifact 写入与并行调度。
-- Modify `backend/apps/chatbi_workflow/schemas/v1.py`：标准执行域 Pydantic 契约。
-- Modify `backend/apps/chatbi_workflow/nodes/v1.py`：支持能力输出镜像到兼容路径，并传递 `run_id`。
-- Modify `backend/apps/chatbi_workflow/definitions/chatbi_v1.py`：执行节点主写 `variables.execution`，镜像 `variables.sql_execution`。
-- Modify `backend/apps/chatbi_workflow/capabilities/context.py`：标准执行域优先读取。
-- Modify `backend/apps/chatbi_workflow/conditions/core.py`：执行路由读取标准域并兼容旧域。
-- Modify `backend/apps/chatbi_workflow/capabilities/adapters/recommendation.py`：读取统一执行域。
-- Modify `backend/apps/chatbi_workflow/runtime.py`：注入线程安全执行网关与文件 artifact store。
-- Modify `backend/apps/chatbi_workflow/capabilities/adapters/answer.py`：构造并使用答案投影视图。
+- Create `backend/apps/workflow/capabilities/execution.py`：统一 query/result 构造、执行聚合和线程安全 SQL 执行网关。
+- Modify `backend/apps/workflow/capabilities/adapters/sql.py`：单/拆分统一执行、artifact 写入与并行调度。
+- Modify `backend/apps/workflow/schemas/v1.py`：标准执行域 Pydantic 契约。
+- Modify `backend/apps/workflow/nodes/v1.py`：支持能力输出镜像到兼容路径，并传递 `run_id`。
+- Modify `backend/apps/workflow/definitions/chatbi_v1.py`：执行节点主写 `variables.execution`，镜像 `variables.sql_execution`。
+- Modify `backend/apps/workflow/capabilities/context.py`：标准执行域优先读取。
+- Modify `backend/apps/workflow/conditions/core.py`：执行路由读取标准域并兼容旧域。
+- Modify `backend/apps/workflow/capabilities/adapters/recommendation.py`：读取统一执行域。
+- Modify `backend/apps/workflow/runtime.py`：注入线程安全执行网关与文件 artifact store。
+- Modify `backend/apps/workflow/capabilities/adapters/answer.py`：构造并使用答案投影视图。
 - Modify `backend/apps/workflow_engine/api/service.py`：Trace 统一投影单/拆分执行摘要。
 - Modify `frontend/src/views/chat/execution-component/graphWorkflowDisplay.ts`：前端优先消费 `results[]`。
-- Modify/add corresponding tests under `backend/tests/chatbi_workflow`、`backend/tests/workflow_engine` and `frontend/src/views/chat/execution-component`.
+- Modify/add corresponding tests under `backend/tests/workflow`、`backend/tests/workflow_engine` and `frontend/src/views/chat/execution-component`.
 
 ### Task 1: 文件 Artifact Store
 
@@ -131,9 +131,9 @@ git commit -m "feat: persist workflow result artifacts"
 ### Task 2: 标准执行域模型
 
 **Files:**
-- Create: `backend/apps/chatbi_workflow/capabilities/execution.py`
-- Modify: `backend/apps/chatbi_workflow/schemas/v1.py`
-- Test: `backend/tests/chatbi_workflow/test_execution_domain.py`
+- Create: `backend/apps/workflow/capabilities/execution.py`
+- Modify: `backend/apps/workflow/schemas/v1.py`
+- Test: `backend/tests/workflow/test_execution_domain.py`
 
 - [ ] **Step 1: 写 query/result 同构与聚合失败测试**
 
@@ -166,7 +166,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_execution_domain.py -q
+uv run pytest tests/workflow/test_execution_domain.py -q
 ```
 
 Expected: import 失败，提示执行域类型尚不存在。
@@ -206,7 +206,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_execution_domain.py tests/chatbi_workflow/test_v1_schemas.py -q
+uv run pytest tests/workflow/test_execution_domain.py tests/workflow/test_v1_schemas.py -q
 ```
 
 Expected: PASS。
@@ -214,16 +214,16 @@ Expected: PASS。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/capabilities/execution.py backend/apps/chatbi_workflow/schemas/v1.py backend/tests/chatbi_workflow/test_execution_domain.py
+git add backend/apps/workflow/capabilities/execution.py backend/apps/workflow/schemas/v1.py backend/tests/workflow/test_execution_domain.py
 git commit -m "feat: define unified chatbi execution domain"
 ```
 
 ### Task 3: 单查询执行与 Artifact 接入
 
 **Files:**
-- Modify: `backend/apps/chatbi_workflow/capabilities/adapters/sql.py`
-- Modify: `backend/apps/chatbi_workflow/capabilities/context.py`
-- Test: `backend/tests/chatbi_workflow/test_sql_adapter.py`
+- Modify: `backend/apps/workflow/capabilities/adapters/sql.py`
+- Modify: `backend/apps/workflow/capabilities/context.py`
+- Test: `backend/tests/workflow/test_sql_adapter.py`
 
 - [ ] **Step 1: 写单查询统一输出失败测试**
 
@@ -256,7 +256,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_sql_adapter.py -q
+uv run pytest tests/workflow/test_sql_adapter.py -q
 ```
 
 Expected: 新断言失败，因为当前输出没有 `queries/results` 且没有真实 artifact 写入。
@@ -287,7 +287,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_sql_adapter.py tests/chatbi_workflow/test_execution_domain.py -q
+uv run pytest tests/workflow/test_sql_adapter.py tests/workflow/test_execution_domain.py -q
 ```
 
 Expected: PASS。
@@ -295,17 +295,17 @@ Expected: PASS。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/capabilities/adapters/sql.py backend/apps/chatbi_workflow/capabilities/context.py backend/tests/chatbi_workflow/test_sql_adapter.py
+git add backend/apps/workflow/capabilities/adapters/sql.py backend/apps/workflow/capabilities/context.py backend/tests/workflow/test_sql_adapter.py
 git commit -m "feat: store single query results as artifacts"
 ```
 
 ### Task 4: 拆分查询并行执行
 
 **Files:**
-- Modify: `backend/apps/chatbi_workflow/capabilities/execution.py`
-- Modify: `backend/apps/chatbi_workflow/capabilities/adapters/sql.py`
-- Modify: `backend/apps/chatbi_workflow/runtime.py`
-- Test: `backend/tests/chatbi_workflow/test_sql_adapter.py`
+- Modify: `backend/apps/workflow/capabilities/execution.py`
+- Modify: `backend/apps/workflow/capabilities/adapters/sql.py`
+- Modify: `backend/apps/workflow/runtime.py`
+- Test: `backend/tests/workflow/test_sql_adapter.py`
 
 - [ ] **Step 1: 写并行和部分失败测试**
 
@@ -338,7 +338,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_sql_adapter.py -q
+uv run pytest tests/workflow/test_sql_adapter.py -q
 ```
 
 Expected: 并行断言失败，当前实现串行且失败时提前返回。
@@ -369,7 +369,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_sql_adapter.py tests/chatbi_workflow/test_v1_flow.py -q
+uv run pytest tests/workflow/test_sql_adapter.py tests/workflow/test_v1_flow.py -q
 ```
 
 Expected: PASS。
@@ -377,22 +377,22 @@ Expected: PASS。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/capabilities/execution.py backend/apps/chatbi_workflow/capabilities/adapters/sql.py backend/apps/chatbi_workflow/runtime.py backend/tests/chatbi_workflow/test_sql_adapter.py
+git add backend/apps/workflow/capabilities/execution.py backend/apps/workflow/capabilities/adapters/sql.py backend/apps/workflow/runtime.py backend/tests/workflow/test_sql_adapter.py
 git commit -m "feat: execute split chatbi queries in parallel"
 ```
 
 ### Task 5: 执行域双写与旧消费者兼容
 
 **Files:**
-- Modify: `backend/apps/chatbi_workflow/nodes/v1.py`
-- Modify: `backend/apps/chatbi_workflow/definitions/chatbi_v1.py`
-- Modify: `backend/apps/chatbi_workflow/capabilities/context.py`
-- Modify: `backend/apps/chatbi_workflow/conditions/core.py`
-- Modify: `backend/apps/chatbi_workflow/capabilities/adapters/recommendation.py`
-- Modify: `backend/apps/chatbi_workflow/capabilities/adapters/sql.py`
-- Test: `backend/tests/chatbi_workflow/test_v1_flow.py`
-- Test: `backend/tests/chatbi_workflow/test_conditions.py`
-- Test: `backend/tests/chatbi_workflow/test_run_context.py`
+- Modify: `backend/apps/workflow/nodes/v1.py`
+- Modify: `backend/apps/workflow/definitions/chatbi_v1.py`
+- Modify: `backend/apps/workflow/capabilities/context.py`
+- Modify: `backend/apps/workflow/conditions/core.py`
+- Modify: `backend/apps/workflow/capabilities/adapters/recommendation.py`
+- Modify: `backend/apps/workflow/capabilities/adapters/sql.py`
+- Test: `backend/tests/workflow/test_v1_flow.py`
+- Test: `backend/tests/workflow/test_conditions.py`
+- Test: `backend/tests/workflow/test_run_context.py`
 
 - [ ] **Step 1: 写双写与标准域优先测试**
 
@@ -420,7 +420,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_v1_flow.py tests/chatbi_workflow/test_conditions.py tests/chatbi_workflow/test_run_context.py -q
+uv run pytest tests/workflow/test_v1_flow.py tests/workflow/test_conditions.py tests/workflow/test_run_context.py -q
 ```
 
 Expected: 缺少 `variables.execution` 或条件仍只读旧域。
@@ -446,7 +446,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_v1_flow.py tests/chatbi_workflow/test_conditions.py tests/chatbi_workflow/test_run_context.py tests/chatbi_workflow/test_v1_definition.py -q
+uv run pytest tests/workflow/test_v1_flow.py tests/workflow/test_conditions.py tests/workflow/test_run_context.py tests/workflow/test_v1_definition.py -q
 ```
 
 Expected: PASS。
@@ -454,15 +454,15 @@ Expected: PASS。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/nodes/v1.py backend/apps/chatbi_workflow/definitions/chatbi_v1.py backend/apps/chatbi_workflow/capabilities/context.py backend/apps/chatbi_workflow/conditions/core.py backend/apps/chatbi_workflow/capabilities/adapters/recommendation.py backend/apps/chatbi_workflow/capabilities/adapters/sql.py backend/tests/chatbi_workflow
+git add backend/apps/workflow/nodes/v1.py backend/apps/workflow/definitions/chatbi_v1.py backend/apps/workflow/capabilities/context.py backend/apps/workflow/conditions/core.py backend/apps/workflow/capabilities/adapters/recommendation.py backend/apps/workflow/capabilities/adapters/sql.py backend/tests/workflow
 git commit -m "refactor: route chatbi consumers through execution domain"
 ```
 
 ### Task 6: 答案投影视图
 
 **Files:**
-- Modify: `backend/apps/chatbi_workflow/capabilities/adapters/answer.py`
-- Test: `backend/tests/chatbi_workflow/test_question_rewrite_and_answer_adapters.py`
+- Modify: `backend/apps/workflow/capabilities/adapters/answer.py`
+- Test: `backend/tests/workflow/test_question_rewrite_and_answer_adapters.py`
 
 - [ ] **Step 1: 写敏感字段排除失败测试**
 
@@ -486,7 +486,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_question_rewrite_and_answer_adapters.py -q
+uv run pytest tests/workflow/test_question_rewrite_and_answer_adapters.py -q
 ```
 
 Expected: prompt 仍包含全量 variables 和 SQL 原文。
@@ -525,7 +525,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_question_rewrite_and_answer_adapters.py tests/chatbi_workflow/test_v1_degradation.py -q
+uv run pytest tests/workflow/test_question_rewrite_and_answer_adapters.py tests/workflow/test_v1_degradation.py -q
 ```
 
 Expected: PASS。
@@ -533,7 +533,7 @@ Expected: PASS。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/capabilities/adapters/answer.py backend/tests/chatbi_workflow/test_question_rewrite_and_answer_adapters.py
+git add backend/apps/workflow/capabilities/adapters/answer.py backend/tests/workflow/test_question_rewrite_and_answer_adapters.py
 git commit -m "refactor: project chatbi answer model context"
 ```
 
@@ -617,7 +617,7 @@ git commit -m "feat: display unified chatbi execution results"
 
 **Files:**
 - Modify: `docs/chatbi-v1-graph-refactor-analysis-and-design.md`
-- Modify: `backend/apps/chatbi_workflow/CHATBI_V1_FLOW_TEST_RECORD.md`
+- Modify: `backend/apps/workflow/CHATBI_V1_FLOW_TEST_RECORD.md`
 
 - [ ] **Step 1: 更新 Step 3 状态与测试记录**
 
@@ -637,8 +637,8 @@ Run:
 
 ```bash
 cd backend
-uv run ruff check apps/chatbi_workflow apps/workflow_engine tests/chatbi_workflow tests/workflow_engine
-uv run pytest tests/chatbi_workflow tests/workflow_engine tests/headless/test_semantic_sql_compiler.py tests/headless/test_sql_compiler_time_filters.py -q
+uv run ruff check apps/workflow apps/workflow_engine tests/workflow tests/workflow_engine
+uv run pytest tests/workflow tests/workflow_engine tests/headless/test_semantic_sql_compiler.py tests/headless/test_sql_compiler_time_filters.py -q
 ```
 
 Expected: 0 lint errors；0 test failures。若 outbox 共享数据库测试仍受历史 pending 事件影响，必须先修复测试隔离并重新运行完整命令。
@@ -671,7 +671,7 @@ Expected: 没有测试 artifact 残留；Git 状态只包含本阶段预期文�
 
 ```bash
 git add -f docs/chatbi-v1-graph-refactor-analysis-and-design.md
-git add backend/apps/chatbi_workflow/CHATBI_V1_FLOW_TEST_RECORD.md
+git add backend/apps/workflow/CHATBI_V1_FLOW_TEST_RECORD.md
 git commit -m "docs: mark chatbi v1 step 3 complete"
 ```
 

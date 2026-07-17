@@ -12,10 +12,10 @@
 
 ## 文件结构
 
-- 修改 `backend/apps/chatbi_workflow/capabilities/adapters/question.py`：补齐绝对月份、业务谓词、多指标、排序和限制的结构化意图。
-- 修改 `backend/apps/chatbi_workflow/capabilities/adapters/knowledge.py`：按用户指标提及保留多指标，锁定主模型并按维度角色裁剪资产。
-- 修改 `backend/apps/chatbi_workflow/capabilities/adapters/interaction.py`：指标交互支持一次选择多个指标。
-- 修改 `backend/apps/chatbi_workflow/capabilities/adapters/sql.py`：把查询计划中的排序、限制和严格槽位传递给编译器。
+- 修改 `backend/apps/workflow/capabilities/adapters/question.py`：补齐绝对月份、业务谓词、多指标、排序和限制的结构化意图。
+- 修改 `backend/apps/workflow/capabilities/adapters/knowledge.py`：按用户指标提及保留多指标，锁定主模型并按维度角色裁剪资产。
+- 修改 `backend/apps/workflow/capabilities/adapters/interaction.py`：指标交互支持一次选择多个指标。
+- 修改 `backend/apps/workflow/capabilities/adapters/sql.py`：把查询计划中的排序、限制和严格槽位传递给编译器。
 - 修改 `backend/apps/headless/sql_compiler.py`：支持排序、派生表达式、单模型约束和编译后语义校验。
 - 创建 `backend/scripts/configure_chatbi_first_phase_assets.py`：幂等修正数据集 243 的首期 Headless 资产。
 - 修改 `backend/scripts/evaluate_chatbi_first_phase.py`：保留回归基线并输出修复前后差异。
@@ -24,10 +24,10 @@
 ### Task 1: 完整 QueryPlan 意图
 
 **Files:**
-- Modify: `backend/apps/chatbi_workflow/capabilities/adapters/question.py`
-- Test: `backend/tests/chatbi_workflow/test_question_understanding_flow.py`
-- Test: `backend/tests/chatbi_workflow/test_question_rewrite_and_answer_adapters.py`
-- Test: `backend/tests/chatbi_workflow/test_time_slots.py`
+- Modify: `backend/apps/workflow/capabilities/adapters/question.py`
+- Test: `backend/tests/workflow/test_question_understanding_flow.py`
+- Test: `backend/tests/workflow/test_question_rewrite_and_answer_adapters.py`
+- Test: `backend/tests/workflow/test_time_slots.py`
 
 - [ ] **Step 1: 写绝对月份、多指标和 TopN 的失败测试**
 
@@ -72,9 +72,9 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_question_understanding_flow.py \
-  tests/chatbi_workflow/test_question_rewrite_and_answer_adapters.py \
-  tests/chatbi_workflow/test_time_slots.py -q
+uv run pytest tests/workflow/test_question_understanding_flow.py \
+  tests/workflow/test_question_rewrite_and_answer_adapters.py \
+  tests/workflow/test_time_slots.py -q
 ```
 
 Expected: 新增断言失败，现有测试保持通过。
@@ -118,9 +118,9 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_question_understanding_flow.py \
-  tests/chatbi_workflow/test_question_rewrite_and_answer_adapters.py \
-  tests/chatbi_workflow/test_time_slots.py -q
+uv run pytest tests/workflow/test_question_understanding_flow.py \
+  tests/workflow/test_question_rewrite_and_answer_adapters.py \
+  tests/workflow/test_time_slots.py -q
 ```
 
 Expected: 全部通过。
@@ -128,19 +128,19 @@ Expected: 全部通过。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/capabilities/adapters/question.py \
-  backend/tests/chatbi_workflow/test_question_understanding_flow.py \
-  backend/tests/chatbi_workflow/test_question_rewrite_and_answer_adapters.py \
-  backend/tests/chatbi_workflow/test_time_slots.py
+git add backend/apps/workflow/capabilities/adapters/question.py \
+  backend/tests/workflow/test_question_understanding_flow.py \
+  backend/tests/workflow/test_question_rewrite_and_answer_adapters.py \
+  backend/tests/workflow/test_time_slots.py
 git commit -m "feat: complete chatbi query plan intent"
 ```
 
 ### Task 2: 多指标门控与主模型锁定
 
 **Files:**
-- Modify: `backend/apps/chatbi_workflow/capabilities/adapters/knowledge.py`
-- Test: `backend/tests/chatbi_workflow/test_headless_knowledge_adapter.py`
-- Test: `backend/tests/chatbi_workflow/test_headless_domain_routing.py`
+- Modify: `backend/apps/workflow/capabilities/adapters/knowledge.py`
+- Test: `backend/tests/workflow/test_headless_knowledge_adapter.py`
+- Test: `backend/tests/workflow/test_headless_domain_routing.py`
 
 - [ ] **Step 1: 写多指标和模型隔离的失败测试**
 
@@ -173,8 +173,8 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_headless_knowledge_adapter.py \
-  tests/chatbi_workflow/test_headless_domain_routing.py -q
+uv run pytest tests/workflow/test_headless_knowledge_adapter.py \
+  tests/workflow/test_headless_domain_routing.py -q
 ```
 
 Expected: 多指标断言得到一个指标；模型隔离测试包含无关维度。
@@ -222,8 +222,8 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_headless_knowledge_adapter.py \
-  tests/chatbi_workflow/test_headless_domain_routing.py -q
+uv run pytest tests/workflow/test_headless_knowledge_adapter.py \
+  tests/workflow/test_headless_domain_routing.py -q
 ```
 
 Expected: 全部通过。
@@ -231,18 +231,18 @@ Expected: 全部通过。
 - [ ] **Step 6: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/capabilities/adapters/knowledge.py \
-  backend/tests/chatbi_workflow/test_headless_knowledge_adapter.py \
-  backend/tests/chatbi_workflow/test_headless_domain_routing.py
+git add backend/apps/workflow/capabilities/adapters/knowledge.py \
+  backend/tests/workflow/test_headless_knowledge_adapter.py \
+  backend/tests/workflow/test_headless_domain_routing.py
 git commit -m "feat: lock headless assets to query model"
 ```
 
 ### Task 3: 多指标用户交互
 
 **Files:**
-- Modify: `backend/apps/chatbi_workflow/capabilities/adapters/interaction.py`
-- Modify: `backend/apps/chatbi_workflow/runtime.py`
-- Test: `backend/tests/chatbi_workflow/test_interaction_adapter.py`
+- Modify: `backend/apps/workflow/capabilities/adapters/interaction.py`
+- Modify: `backend/apps/workflow/runtime.py`
+- Test: `backend/tests/workflow/test_interaction_adapter.py`
 - Test: `backend/tests/workflow_engine/test_runtime_interactions.py`
 
 - [ ] **Step 1: 写多选交互失败测试**
@@ -265,7 +265,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_interaction_adapter.py \
+uv run pytest tests/workflow/test_interaction_adapter.py \
   tests/workflow_engine/test_runtime_interactions.py -q
 ```
 
@@ -290,7 +290,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow/test_interaction_adapter.py \
+uv run pytest tests/workflow/test_interaction_adapter.py \
   tests/workflow_engine/test_runtime_interactions.py -q
 ```
 
@@ -299,9 +299,9 @@ Expected: 全部通过。
 - [ ] **Step 5: 提交**
 
 ```bash
-git add backend/apps/chatbi_workflow/capabilities/adapters/interaction.py \
-  backend/apps/chatbi_workflow/runtime.py \
-  backend/tests/chatbi_workflow/test_interaction_adapter.py \
+git add backend/apps/workflow/capabilities/adapters/interaction.py \
+  backend/apps/workflow/runtime.py \
+  backend/tests/workflow/test_interaction_adapter.py \
   backend/tests/workflow_engine/test_runtime_interactions.py
 git commit -m "feat: support multi metric interaction"
 ```
@@ -310,10 +310,10 @@ git commit -m "feat: support multi metric interaction"
 
 **Files:**
 - Modify: `backend/apps/headless/sql_compiler.py`
-- Modify: `backend/apps/chatbi_workflow/capabilities/adapters/sql.py`
+- Modify: `backend/apps/workflow/capabilities/adapters/sql.py`
 - Test: `backend/tests/headless/test_semantic_sql_compiler.py`
 - Test: `backend/tests/headless/test_sql_compiler_time_filters.py`
-- Test: `backend/tests/chatbi_workflow/test_sql_adapter.py`
+- Test: `backend/tests/workflow/test_sql_adapter.py`
 
 - [ ] **Step 1: 写排序、TopN、派生指标和单模型校验的失败测试**
 
@@ -351,7 +351,7 @@ Run:
 cd backend
 uv run pytest tests/headless/test_semantic_sql_compiler.py \
   tests/headless/test_sql_compiler_time_filters.py \
-  tests/chatbi_workflow/test_sql_adapter.py -q
+  tests/workflow/test_sql_adapter.py -q
 ```
 
 Expected: 新测试失败；现有测试保持通过。
@@ -396,7 +396,7 @@ Run:
 cd backend
 uv run pytest tests/headless/test_semantic_sql_compiler.py \
   tests/headless/test_sql_compiler_time_filters.py \
-  tests/chatbi_workflow/test_sql_adapter.py -q
+  tests/workflow/test_sql_adapter.py -q
 ```
 
 Expected: 全部通过。
@@ -405,10 +405,10 @@ Expected: 全部通过。
 
 ```bash
 git add backend/apps/headless/sql_compiler.py \
-  backend/apps/chatbi_workflow/capabilities/adapters/sql.py \
+  backend/apps/workflow/capabilities/adapters/sql.py \
   backend/tests/headless/test_semantic_sql_compiler.py \
   backend/tests/headless/test_sql_compiler_time_filters.py \
-  backend/tests/chatbi_workflow/test_sql_adapter.py
+  backend/tests/workflow/test_sql_adapter.py
 git commit -m "feat: compile deterministic single model sql"
 ```
 
@@ -527,7 +527,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow tests/headless -q
+uv run pytest tests/workflow tests/headless -q
 ```
 
 Expected: 全部通过，无新增失败。
@@ -539,10 +539,10 @@ Run:
 ```bash
 cd backend
 uv run ruff check \
-  apps/chatbi_workflow/capabilities/adapters/question.py \
-  apps/chatbi_workflow/capabilities/adapters/knowledge.py \
-  apps/chatbi_workflow/capabilities/adapters/interaction.py \
-  apps/chatbi_workflow/capabilities/adapters/sql.py \
+  apps/workflow/capabilities/adapters/question.py \
+  apps/workflow/capabilities/adapters/knowledge.py \
+  apps/workflow/capabilities/adapters/interaction.py \
+  apps/workflow/capabilities/adapters/sql.py \
   apps/headless/sql_compiler.py \
   scripts/configure_chatbi_first_phase_assets.py \
   scripts/evaluate_chatbi_first_phase.py
@@ -591,8 +591,8 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/chatbi_workflow tests/headless -q
-uv run ruff check apps/chatbi_workflow apps/headless scripts/configure_chatbi_first_phase_assets.py scripts/evaluate_chatbi_first_phase.py
+uv run pytest tests/workflow tests/headless -q
+uv run ruff check apps/workflow apps/headless scripts/configure_chatbi_first_phase_assets.py scripts/evaluate_chatbi_first_phase.py
 git diff --check
 ```
 

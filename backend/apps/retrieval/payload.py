@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, cast
 
-from apps.chatbi_capabilities.time_slots import normalize_time_range_payload
+from apps.capabilities.time_slots import normalize_time_range_payload
 from apps.headless.schemas import DataSetSchema, SchemaElement
 from apps.retrieval.schemas import (
     AssetReference,

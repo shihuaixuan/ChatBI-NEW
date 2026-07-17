@@ -10,11 +10,11 @@ from fastapi import HTTPException
 from sqlmodel import Session, col, func, select
 
 from apps.chat.models.chat_model import Chat, ChatRecord
-from apps.chatbi_workflow.definitions.chatbi_minimal_v1 import (
+from apps.workflow.definitions.chatbi_minimal_v1 import (
     build_chatbi_minimal_definition,
 )
-from apps.chatbi_workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
-from apps.chatbi_workflow.runtime import (
+from apps.workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
+from apps.workflow.runtime import (
     build_placeholder_chatbi_runtime,
     build_real_chatbi_v1_runtime,
 )
@@ -65,7 +65,7 @@ class GraphApiService:
     """Graph API 应用服务。
 
     当前阶段只负责独立 Run 的创建、查询、事件续传和控制语义。业务图执行会在
-    `chatbi_workflow` 接入后由 Runtime 推进，API 层不依赖旧 Agentic 编排。
+    `workflow` 接入后由 Runtime 推进，API 层不依赖旧 Agentic 编排。
     """
 
     def __init__(self, session: Session) -> None:
