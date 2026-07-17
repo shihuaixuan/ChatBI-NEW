@@ -29,7 +29,6 @@ class ResponseMiddleware(BaseHTTPMiddleware):
 
         direct_paths = [
             f"{settings.API_V1_STR}/mcp/mcp_question",
-            f"{settings.API_V1_STR}/mcp/mcp_assistant",
             f"{settings.CONTEXT_PATH}/openapi.json",
             f"{settings.CONTEXT_PATH}/docs",
             f"{settings.CONTEXT_PATH}/redoc"

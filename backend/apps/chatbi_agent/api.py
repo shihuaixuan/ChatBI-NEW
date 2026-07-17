@@ -8,69 +8,37 @@ from apps.chatbi_agent.loop import AgentLoop
 from apps.chatbi_agent.models import AgentClarificationStatus, AgentRunStatus
 from apps.chatbi_agent.schemas import (
     AgentClarificationRequest,
-    AgentConfig,
     AgentQuestionRequest,
     AgentResumeStreamRequest,
     AgentStartStreamRequest,
     AgentStreamRequest,
 )
-from common.core.config import settings
+from apps.chatbi_agent.service import (
+    AgentDatasourceNotAllowedError,
+    AgentNotEnabledError,
+    create_agent_start_stream,
+    get_agent_config,
+)
 from common.core.db import engine
 from common.core.deps import CurrentUser, SessionDep
 
 router = APIRouter(tags=["Agent Data Q&A"], prefix="/chat/agent")
 
 
-def get_agent_config() -> AgentConfig:
-    allowlist = [
-        int(item.strip())
-        for item in (settings.CHAT_AGENT_DATASOURCE_ALLOWLIST or "").split(",")
-        if item.strip().isdigit()
-    ]
-    return AgentConfig(
-        enabled=settings.CHAT_AGENT_ENABLED,
-        datasource_allowlist=allowlist,
-        max_steps=settings.CHAT_AGENT_MAX_STEPS,
-        max_sql_retries=settings.CHAT_AGENT_MAX_SQL_RETRIES,
-        max_clarifications=settings.CHAT_AGENT_MAX_CLARIFICATIONS,
-        timeout_seconds=settings.CHAT_AGENT_TIMEOUT_SECONDS,
-        token_budget=settings.CHAT_AGENT_TOKEN_BUDGET,
-        default_limit=settings.CHAT_AGENT_DEFAULT_LIMIT,
-        history_rounds=settings.CHAT_AGENT_HISTORY_ROUNDS,
-        context_fold_chars=settings.CHAT_AGENT_CONTEXT_FOLD_CHARS,
-    )
-
-
 @router.post("/stream")
 async def agent_stream(current_user: CurrentUser, request: AgentStreamRequest):
     """Agent 唯一实时入口；start 与 resume 共享同一套 SSE 事件协议。"""
 
+    if isinstance(request, AgentStartStreamRequest):
+        try:
+            stream = create_agent_start_stream(current_user, request)
+        except (AgentNotEnabledError, AgentDatasourceNotAllowedError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return StreamingResponse(stream, media_type="text/event-stream")
+
     config = get_agent_config()
     if not config.enabled:
         raise HTTPException(status_code=400, detail="Agent ChatBI is not enabled")
-
-    if isinstance(request, AgentStartStreamRequest):
-        if (
-            request.datasource_id
-            and config.datasource_allowlist
-            and request.datasource_id not in config.datasource_allowlist
-        ):
-            raise HTTPException(status_code=400, detail="Datasource is not enabled for Agent ChatBI")
-
-        def stream_start():
-            # SSE 流由 generator 自己持有 session，避免跨生命周期传递 ORM 对象。
-            with Session(engine) as stream_session:
-                record, run = crud.create_record_and_run(
-                    stream_session,
-                    current_user,
-                    AgentQuestionRequest(**request.model_dump(exclude={"action"})),
-                    config.model_dump(),
-                )
-                loop = AgentLoop(stream_session, current_user, config)
-                yield from loop.run(run, record)
-
-        return StreamingResponse(stream_start(), media_type="text/event-stream")
-
     answer = request.clarification
     answer_text = _clarification_answer_text(answer)
     if not answer_text:

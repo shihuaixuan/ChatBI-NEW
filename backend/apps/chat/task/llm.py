@@ -25,7 +25,7 @@ from sqlbot_xpack.license.license_manage import SQLBotLicenseUtil
 from sqlmodel import Session
 
 from apps.ai_model.model_factory import LLMConfig, LLMFactory, get_default_config
-from apps.chat.curd.chat import save_question, save_sql_answer, save_sql, \
+from apps.chat.curd.chat import save_sql_answer, save_sql, \
     save_error_message, save_sql_exec_data, save_chart_answer, save_chart, \
     finish_record, save_analysis_answer, save_predict_answer, save_predict_data, \
     save_select_datasource_answer, save_recommend_question_answer, \
@@ -315,10 +315,6 @@ class LLMService:
                 elif _msg_dict.get('type') == 'ai':
                     _msg = AIMessage(content=_msg_dict.get('content'))
                     self.chart_message.append(_msg)
-
-    def init_record(self, session: Session) -> ChatRecord:
-        self.record = save_question(session=session, current_user=self.current_user, question=self.chat_question)
-        return self.record
 
     def get_record(self):
         return self.record

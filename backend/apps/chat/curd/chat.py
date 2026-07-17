@@ -7,7 +7,7 @@ from sqlalchemy import and_, select, update
 from sqlalchemy import desc, func
 from sqlalchemy.orm import aliased
 
-from apps.chat.models.chat_model import Chat, ChatRecord, CreateChat, ChatInfo, RenameChat, ChatQuestion, ChatLog, \
+from apps.chat.models.chat_model import Chat, ChatRecord, CreateChat, ChatInfo, RenameChat, ChatLog, \
     TypeEnum, OperationEnum, ChatRecordResult, ChatLogHistory, ChatLogHistoryItem
 from apps.chat.services.headless_binding import (
     DatasetBindingError,
@@ -754,8 +754,8 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
 
     if require_datasource and binding:
         record = ChatRecord()
-        # 传统 Chat 链路的历史记录统一标记为 legacy。
-        record.execution_type = "legacy"
+        # 首条欢迎记录不触发问数，统一使用默认 Graph 类型。
+        record.execution_type = "graph"
         record.chat_id = chat.id
         apply_binding_to_record(record, binding)
         record.first_chat = True
@@ -783,45 +783,14 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
     return chat_info
 
 
-def save_question(session: SessionDep, current_user: CurrentUser, question: ChatQuestion) -> ChatRecord:
-    if not question.chat_id:
-        raise Exception("ChatId cannot be None")
-    if not question.question or question.question.strip() == '':
-        raise Exception("Question cannot be Empty")
-
-    # chat = session.query(Chat).filter(Chat.id == question.chat_id).first()
-    chat: Chat = session.get(Chat, question.chat_id)
-    if not chat:
-        raise Exception(f"Chat with id {question.chat_id} not found")
-
-    record = ChatRecord()
-    # 传统问数入口显式写入 legacy，避免依赖模型默认值隐式表达业务类型。
-    record.execution_type = "legacy"
-    record.question = question.question
-    record.chat_id = chat.id
-    record.create_time = datetime.datetime.now()
-    record.create_by = current_user.id
-    record.dataset_id = chat.dataset_id
-    record.datasource = chat.datasource
-    record.engine_type = chat.engine_type
-    record.ai_modal_id = question.ai_modal_id
-    record.regenerate_record_id = question.regenerate_record_id
-
-    result = ChatRecord(**record.model_dump())
-
-    session.add(record)
-    session.flush()
-    session.refresh(record)
-    result.id = record.id
-    session.commit()
-
-    return result
-
-
 def save_analysis_predict_record(session: SessionDep, base_record: ChatRecord, action_type: str) -> ChatRecord:
     record = ChatRecord()
-    # 分析和预测仍属于传统执行链路，沿用 legacy 展示组件。
-    record.execution_type = "legacy"
+    # 分析和预测沿用来源记录类型；历史来源统一投影为 Graph。
+    record.execution_type = (
+        base_record.execution_type
+        if base_record.execution_type in {"graph", "agent"}
+        else "graph"
+    )
     record.question = base_record.question
     record.chat_id = base_record.chat_id
     record.dataset_id = base_record.dataset_id

@@ -6,8 +6,8 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from apps.agentic_chat.schemas import ToolResult
-from apps.agentic_chat.tools.sql_executor import SqlExecuteTool
+from apps.chatbi_capabilities.schemas import ToolResult
+from apps.chatbi_capabilities.sql.executor import SqlExecuteTool
 from apps.workflow_engine.domain.artifact import ArtifactRef
 
 

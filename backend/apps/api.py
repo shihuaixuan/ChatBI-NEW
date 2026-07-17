@@ -3,7 +3,6 @@ from sqlbot_xpack.authentication import api as xpack_authentication
 from sqlbot_xpack.config import api as xpack_config
 from sqlbot_xpack.license import api as xpack_license
 
-from apps.agentic_chat import api as agentic_chat
 from apps.chat.api import chat
 from apps.chatbi_agent import api as chatbi_agent
 from apps.dashboard.api import dashboard_api
@@ -41,7 +40,6 @@ api_router.include_router(terminology.router)
 api_router.include_router(data_training.router)
 api_router.include_router(datasource.router)
 api_router.include_router(chat.router)
-api_router.include_router(agentic_chat.router)
 api_router.include_router(chatbi_agent.router)
 api_router.include_router(dashboard_api.router)
 api_router.include_router(mcp.router)

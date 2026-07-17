@@ -4,21 +4,7 @@ import { i18n } from '@/i18n'
 
 const { t } = i18n.global
 
-export const questionApi = {
-  pager: (pageNumber: number, pageSize: number) =>
-    request.get(`/chat/question/pager/${pageNumber}/${pageSize}`),
-  /* add: (data: any) => new Promise((resolve, reject) => {
-      request.post('/chat/question', data, { responseType: 'stream', timeout: 0, onDownloadProgress: p => {
-        resolve(p)
-      }}).catch(e => reject(e))
-    }), */
-  // add: (data: any) => request.post('/chat/question', data),
-  add: (data: any, controller?: AbortController) =>
-    request.fetchStream('/chat/question', data, controller),
-  edit: (data: any) => request.put('/chat/question', data),
-  delete: (id: number) => request.delete(`/chat/question/${id}`),
-  query: (id: number) => request.get(`/chat/question/${id}`),
-}
+export type ChatExecutionType = 'graph' | 'agent'
 
 export interface ChatMessage {
   role: 'user' | 'assistant'
@@ -62,9 +48,8 @@ export class ChatRecord {
   status?: string
   trace_id?: string
   // 每条历史记录独立决定回答组件，不能依赖当前全局流程开关。
-  execution_type?: 'legacy' | 'agentic' | 'graph' | 'agent'
-  agentic_run_id?: number
-  agentic_trace?: any
+  execution_type?: ChatExecutionType
+  execution_trace?: any
   clarification?: any
 
   constructor()
@@ -317,9 +302,10 @@ const toChatRecord = (data?: any): ChatRecord | undefined => {
   )
   record.status = data.status
   record.trace_id = data.trace_id
-  record.execution_type = data.execution_type
-  record.agentic_run_id = data.agentic_run_id
-  record.agentic_trace = data.agentic_trace
+  record.execution_type = ['graph', 'agent'].includes(data.execution_type)
+    ? data.execution_type
+    : undefined
+  record.execution_trace = data.execution_trace
   record.clarification = data.clarification
   return record
 }

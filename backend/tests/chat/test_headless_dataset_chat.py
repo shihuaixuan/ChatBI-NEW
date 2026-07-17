@@ -156,44 +156,11 @@ def test_apply_dataset_binding_to_chat_and_record():
     assert record.engine_type == "MySQL"
 
 
-def test_save_question_copies_dataset_and_datasource_from_chat(monkeypatch):
-    chat_crud = import_chat_crud(monkeypatch)
-    from apps.chat.models.chat_model import ChatQuestion
+def test_agent_create_marks_agent_execution_type():
+    """Agent 问数创建的记录必须显式标记为 agent。"""
 
-    chat = Chat(id=77, create_by=10, oid=1, dataset_id=20, datasource=40, engine_type="MySQL")
-    session = FakeSession(chat)
-
-    record = chat_crud.save_question(session, make_user(), ChatQuestion(chat_id=77, question="销售额是多少"))
-
-    assert record.dataset_id == 20
-    assert record.datasource == 40
-    assert record.engine_type == "MySQL"
-    assert session.committed is True
-
-
-def test_save_question_marks_legacy_execution_type(monkeypatch):
-    """传统问数创建的记录必须显式标记为 legacy。"""
-
-    chat_crud = import_chat_crud(monkeypatch)
-    from apps.chat.models.chat_model import ChatQuestion
-
-    chat = Chat(id=77, create_by=10, oid=1, dataset_id=20, datasource=40, engine_type="MySQL")
-    session = FakeSession(chat)
-
-    record = chat_crud.save_question(
-        session,
-        make_user(),
-        ChatQuestion(chat_id=77, question="销售额是多少"),
-    )
-
-    assert record.execution_type == "legacy"
-
-
-def test_agentic_create_marks_agentic_execution_type():
-    """Agentic 问数创建的记录必须显式标记为 agentic。"""
-
-    from apps.agentic_chat.crud import create_record_and_run
-    from apps.agentic_chat.schemas import AgenticQuestionRequest
+    from apps.chatbi_agent.crud import create_record_and_run
+    from apps.chatbi_agent.schemas import AgentQuestionRequest
 
     chat = Chat(id=78, create_by=10, oid=1, datasource=40, engine_type="MySQL")
     session = FakeSession(chat)
@@ -201,11 +168,11 @@ def test_agentic_create_marks_agentic_execution_type():
     record, _run = create_record_and_run(
         session,
         make_user(),
-        AgenticQuestionRequest(chat_id=78, question="销售额是多少"),
+        AgentQuestionRequest(chat_id=78, question="销售额是多少"),
         config={},
     )
 
-    assert record.execution_type == "agentic"
+    assert record.execution_type == "agent"
 
 
 def test_sql_compiler_uses_none_aggregation_for_measure_metric():

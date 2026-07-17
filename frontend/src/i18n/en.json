@@ -278,8 +278,6 @@
     "flow_mode": "Pipeline",
     "flow_graph": "Graph workflow",
     "flow_agent": "Agent",
-    "flow_agentic": "Agentic v1",
-    "flow_legacy": "Legacy",
     "start_sqlbot": "New Chat",
     "title": "Data Q&A",
     "placeholder": "Please enter your question",

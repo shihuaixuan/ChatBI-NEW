@@ -108,7 +108,7 @@ function applyRunToRecord(run: GraphRunResponse, currentRecord: ChatRecord) {
   currentRecord.trace_id = run.run_id
   currentRecord.execution_type = 'graph'
   currentRecord.status = run.status
-  currentRecord.agentic_trace = run.context_summary?.variables
+  currentRecord.execution_trace = run.context_summary?.variables
   currentRecord.clarification =
     run.context_summary?.pending_interaction?.status === 'pending'
       ? run.context_summary.pending_interaction

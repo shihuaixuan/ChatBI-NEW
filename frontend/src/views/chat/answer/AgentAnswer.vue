@@ -65,8 +65,8 @@ const loadingData = ref(false)
 const runtimeLoading = ref(false)
 
 function pushTraceEvent(currentRecord: ChatRecord, data: any, payload: Record<string, any>) {
-  currentRecord.agentic_trace = currentRecord.agentic_trace || []
-  currentRecord.agentic_trace.push({
+  currentRecord.execution_trace = currentRecord.execution_trace || []
+  currentRecord.execution_trace.push({
     type: data.type,
     sequence: data.sequence,
     ...payload,
@@ -75,7 +75,7 @@ function pushTraceEvent(currentRecord: ChatRecord, data: any, payload: Record<st
 }
 
 function latestTraceSequence(currentRecord: ChatRecord) {
-  const events = Array.isArray(currentRecord.agentic_trace) ? currentRecord.agentic_trace : []
+  const events = Array.isArray(currentRecord.execution_trace) ? currentRecord.execution_trace : []
   return events.reduce((max, event: any) => Math.max(max, Number(event.sequence || 0)), 0)
 }
 
@@ -190,7 +190,12 @@ async function sendMessage() {
     return
   }
   const currentRecord: ChatRecord = _currentChat.value.records[index.value]
-  currentRecord.agentic_trace = []
+  if (!currentRecord.question?.trim()) {
+    runtimeLoading.value = false
+    _loading.value = false
+    return
+  }
+  currentRecord.execution_trace = []
   const controller = new AbortController()
   try {
     const response = await agentQuestionApi.stream(
@@ -260,7 +265,7 @@ async function restorePendingClarification() {
   const currentRecord = props.message?.record
   if (!currentRecord?.id || currentRecord.status !== 'waiting_user') return
   const trace = await agentQuestionApi.trace(currentRecord.id)
-  currentRecord.agentic_trace = trace.events
+  currentRecord.execution_trace = trace.events
   if (trace.clarification?.status === 'pending') {
     currentRecord.clarification = trace.clarification
   }

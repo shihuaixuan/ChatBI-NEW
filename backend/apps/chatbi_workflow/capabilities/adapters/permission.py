@@ -5,8 +5,8 @@ from typing import Any, Protocol
 import sqlglot
 from sqlglot import exp
 
-from apps.agentic_chat.schemas import ToolResult
-from apps.agentic_chat.tools.permission import PermissionTool
+from apps.chatbi_capabilities.schemas import ToolResult
+from apps.chatbi_capabilities.sql.permission import PermissionTool
 
 
 class PermissionPolicyProvider(Protocol):

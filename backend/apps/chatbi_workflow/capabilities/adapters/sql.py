@@ -3,9 +3,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from apps.agentic_chat.strategies.sql_repair import SQLRepairStrategy
-from apps.agentic_chat.tools.sql_executor import SqlExecuteTool
-from apps.agentic_chat.tools.sql_validator import SqlValidateTool
+from apps.chatbi_capabilities.sql.executor import SqlExecuteTool
+from apps.chatbi_capabilities.sql.repair import SQLRepairStrategy
+from apps.chatbi_capabilities.sql.validator import SqlValidateTool
 from apps.chatbi_workflow.capabilities import planning
 from apps.chatbi_workflow.capabilities.adapters.permission import PermissionAdapter
 from apps.chatbi_workflow.capabilities.config import ChatBIConfig

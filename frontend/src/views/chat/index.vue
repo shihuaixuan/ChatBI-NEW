@@ -383,15 +383,7 @@
         class="chat-footer"
       >
         <div v-if="pendingClarificationRecord" class="input-wrapper clarify-takeover">
-          <ClarificationCard
-            v-if="pendingClarificationRecord.execution_type === 'agentic'"
-            :clarification="pendingClarificationRecord.clarification"
-            :disabled="isTyping"
-            @submit="onFooterClarificationSubmit"
-            @cancel="onFooterClarificationSkip"
-          />
           <AgentClarificationCard
-            v-else
             :clarification="pendingClarificationRecord.clarification"
             :disabled="isTyping"
             @submit="onFooterClarificationSubmit"
@@ -481,13 +473,11 @@ import { Chat, chatApi, ChatInfo, type ChatMessage, ChatRecord } from '@/api/cha
 import ChatRow from './ChatRow.vue'
 import ChartAnswer from './answer/ChartAnswer.vue'
 import AgentAnswer from './answer/AgentAnswer.vue'
-import AgenticAnswer from './answer/AgenticAnswer.vue'
 import GraphWorkflowAnswer from './answer/GraphWorkflowAnswer.vue'
 import AnalysisAnswer from './answer/AnalysisAnswer.vue'
 import PredictAnswer from './answer/PredictAnswer.vue'
 import UserChat from './chat-block/UserChat.vue'
 import RecommendQuestion from './RecommendQuestion.vue'
-import ClarificationCard from './clarification/ClarificationCard.vue'
 import AgentClarificationCard from './clarification/AgentClarificationCard.vue'
 import ChatListContainer from './ChatListContainer.vue'
 import ChatCreator from '@/views/chat/ChatCreator.vue'
@@ -555,17 +545,14 @@ const chatFlowSelectorEnabled = computed(() => chatFlowStore.getSelectorEnabled)
 const flowComponents: Record<ChatFlowMode, any> = {
   graph: GraphWorkflowAnswer,
   agent: AgentAnswer,
-  agentic: AgenticAnswer,
-  legacy: ChartAnswer,
 }
 
 function answerComponentForRecord(record?: ChatRecord) {
-  // 历史记录由自身执行类型决定组件，避免切换链路后错误渲染旧消息。
+  // 新记录只允许 graph/agent；无有效类型的旧记录仅保留只读展示。
   if (record?.execution_type && flowComponents[record.execution_type]) {
     return flowComponents[record.execution_type]
   }
-  // 无执行类型的旧记录沿用构建期默认链路，不随选择器变化。
-  return flowComponents[chatFlowStore.getDefaultMode]
+  return ChartAnswer
 }
 
 function onChatFlowChange(mode: ChatFlowMode) {
@@ -853,13 +840,13 @@ function onAnswerLoadingChange(value: boolean) {
   }
 }
 
-// 仅最后一条 agentic/agent 记录的待澄清会接管输入框；graph 的交互卡片仍在消息内。
+// 仅 Agent 的待澄清会接管输入框；Graph 的交互卡片仍在消息内。
 const pendingClarificationRecord = computed<ChatRecord | undefined>(() => {
   const records = currentChat.value.records
   if (!records.length) return undefined
   const last = records[records.length - 1]
   if (
-    (last.execution_type === 'agentic' || last.execution_type === 'agent') &&
+    last.execution_type === 'agent' &&
     last.status === 'waiting_user' &&
     last.clarification
   ) {

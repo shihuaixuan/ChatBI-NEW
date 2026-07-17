@@ -278,8 +278,6 @@
     "flow_mode": "問答鏈路",
     "flow_graph": "圖工作流 (Graph)",
     "flow_agent": "智能體 (Agent)",
-    "flow_agentic": "Agentic v1",
-    "flow_legacy": "經典鏈路",
     "start_sqlbot": "開啟問數",
     "title": "智慧問數",
     "placeholder": "請輸入您的問題",

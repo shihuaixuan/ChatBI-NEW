@@ -1,30 +1,33 @@
 # Author: Junjun
 # Date: 2025/7/1
-import json
+import asyncio
 from datetime import timedelta
-from typing import Optional
 
 import jwt
-from fastapi import HTTPException, status, APIRouter
-# from fastapi.security import OAuth2PasswordBearer
+import orjson
+from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 from jwt.exceptions import InvalidTokenError
 from pydantic import ValidationError
 from sqlmodel import select
 
-from apps.chat.api.chat import create_chat, question_answer_inner
-from apps.chat.models.chat_model import ChatMcp, CreateChat, ChatStart, McpQuestion, McpAssistant, ChatQuestion, \
-    ChatFinishStep, McpDs
+from apps.chat.api.chat import create_chat
+from apps.chat.models.chat_model import ChatStart, CreateChat, McpDs, McpQuestion
+from apps.chatbi_agent.schemas import AgentStartStreamRequest
+from apps.chatbi_agent.service import (
+    AgentDatasourceNotAllowedError,
+    AgentNotEnabledError,
+    create_agent_start_stream,
+)
 from apps.datasource.crud.datasource import get_datasource_list
-from apps.system.crud.user import authenticate, user_ws_options
-from apps.system.crud.user import get_db_user
+from apps.system.crud.user import authenticate, get_db_user, user_ws_options
 from apps.system.models.system_model import UserWsModel
 from apps.system.models.user import UserModel
-from apps.system.schemas.system_schema import BaseUserDTO, AssistantHeader
-from apps.system.schemas.system_schema import UserInfoDTO
+from apps.system.schemas.system_schema import BaseUserDTO, UserInfoDTO
 from common.core import security
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
-from common.core.schemas import TokenPayload, XOAuth2PasswordBearer, Token
+from common.core.schemas import Token, TokenPayload, XOAuth2PasswordBearer
 from common.core.security import create_access_token
 
 reusable_oauth2 = XOAuth2PasswordBearer(
@@ -136,7 +139,7 @@ async def mcp_question(session: SessionDep, chat: McpQuestion):
         session_user.language = lang
     if chat.oid:
         session_user.oid = int(chat.oid)
-    ds_id: Optional[int] = None
+    ds_id: int | None = None
     if chat.datasource_id:
         if isinstance(chat.datasource_id, str):
             if chat.datasource_id.strip() == "":
@@ -151,34 +154,53 @@ async def mcp_question(session: SessionDep, chat: McpQuestion):
         else:
             raise HTTPException(status_code=400, detail="Invalid datasource ID")
 
-    mcp_chat = ChatMcp(token=chat.token, chat_id=chat.chat_id, question=chat.question, datasource_id=ds_id)
+    request = AgentStartStreamRequest(
+        action="start",
+        chat_id=chat.chat_id,
+        question=chat.question,
+        datasource_id=ds_id,
+    )
+    try:
+        events = create_agent_start_stream(session_user, request)
+    except (AgentNotEnabledError, AgentDatasourceNotAllowedError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return await question_answer_inner(session=session, current_user=session_user, request_question=mcp_chat,
-                                       in_chat=False, stream=chat.stream, return_img=chat.return_img)
+    if chat.stream:
+        return StreamingResponse(
+            events,
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    try:
+        return await asyncio.to_thread(_collect_agent_result, events)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-# Cordys crm
-@router.post("/mcp_assistant", operation_id="mcp_assistant")
-async def mcp_assistant(session: SessionDep, chat: McpAssistant):
-    session_user = BaseUserDTO(**{
-        "id": -1, "account": 'sqlbot-mcp-assistant', "oid": 1, "assistant_id": -1, "password": '', "language": "zh-CN"
-    })
-    # session_user: UserModel = get_db_user(session=session, user_id=1)
-    # session_user.oid = 1
-    c = create_chat(session, session_user, CreateChat(origin=1), False)
+def _collect_agent_result(events) -> dict:
+    """将 Agent SSE 收敛为 MCP 非流式响应。"""
 
-    # build assistant param
-    configuration = {"endpoint": chat.url}
-    # authorization = [{"key": "x-de-token",
-    #                 "value": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1aWQiOjEsIm9pZCI6MSwiZXhwIjoxNzU4NTEyMDA2fQ.3NR-pgnADLdXZtI3dXX5-LuxfGYRvYD9kkr2de7KRP0",
-    #                 "target": "header"}]
-    mcp_assistant_header = AssistantHeader(id=1, name='mcp_assist', domain='', type=1,
-                                           configuration=json.dumps(configuration),
-                                           certificate=chat.authorization)
-
-    # assistant question
-    mcp_chat = ChatQuestion(chat_id=c.id, question=chat.question)
-    # ask
-    return await question_answer_inner(session=session, current_user=session_user, request_question=mcp_chat,
-                                       current_assistant=mcp_assistant_header,
-                                       in_chat=False, stream=chat.stream, finish_step=ChatFinishStep.QUERY_DATA)
+    for frame in events:
+        payload = orjson.loads(frame.removeprefix("data:").strip())
+        event_type = payload.get("type")
+        content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
+        if event_type == "clarification":
+            return {
+                "success": True,
+                "status": "waiting_user",
+                "record_id": payload.get("record_id"),
+                "run_id": payload.get("run_id"),
+                "clarification": content,
+            }
+        if event_type == "finish":
+            return {
+                "success": True,
+                "status": "finished",
+                "record_id": payload.get("record_id"),
+                "run_id": payload.get("run_id"),
+                "content": content.get("content"),
+            }
+        if event_type == "error":
+            raise RuntimeError(str(content.get("content") or "AGENT_EXECUTION_FAILED"))
+    raise RuntimeError("AGENT_STREAM_FINISHED_WITHOUT_TERMINAL_EVENT")

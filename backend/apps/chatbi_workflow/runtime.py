@@ -1,6 +1,6 @@
 from sqlmodel import Session
 
-from apps.agentic_chat.tools.sql_executor import SqlExecuteTool
+from apps.chatbi_capabilities.sql.executor import SqlExecuteTool
 from apps.chatbi_workflow.capabilities.adapters.answer import (
     AnswerAdapter,
     AnswerModelClient,

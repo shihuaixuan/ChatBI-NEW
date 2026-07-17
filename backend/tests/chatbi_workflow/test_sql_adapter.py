@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from apps.agentic_chat.schemas import ToolResult
+from apps.chatbi_capabilities.schemas import ToolResult
 from apps.chatbi_workflow.capabilities.adapters.sql import SqlAdapter
 from apps.chatbi_workflow.capabilities.config import ChatBIConfig
 from apps.headless.schemas import DataSetSchema, SchemaElement

@@ -130,8 +130,8 @@ class ChatRecord(SQLModel, table=True):
     finish: bool = Field(sa_column=Column(Boolean, nullable=True, default=False))
     status: str | None = Field(default=None, max_length=32, nullable=True)
     trace_id: str | None = Field(default=None, max_length=64, nullable=True)
-    # 旧记录默认归入 legacy；迁移会把已有 Agentic 记录标记为 agentic。
-    execution_type: str = Field(default="legacy", max_length=32, nullable=False)
+    # 新记录默认进入 Graph；Agent 入口会显式覆盖为 agent。
+    execution_type: str = Field(default="graph", max_length=32, nullable=False)
     error: str = Field(sa_column=Column(Text, nullable=True))
     analysis_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
     predict_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
@@ -396,13 +396,6 @@ class ExcelData(BaseModel):
     axis: list[AxisObj] = []
     data: list[dict] = []
     name: str = 'Excel'
-
-
-class McpAssistant(BaseModel):
-    question: str = Body(description='用户提问')
-    url: str = Body(description='第三方数据接口')
-    authorization: str = Body(description='第三方接口凭证')
-    stream: Optional[bool] = Body(description='是否流式输出，默认为true开启, 关闭false则返回JSON对象', default=True)
 
 
 class SystemPromptMessage(SystemMessage):

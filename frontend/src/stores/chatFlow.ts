@@ -1,29 +1,29 @@
 import { defineStore } from 'pinia'
 import { store } from '@/stores/index.ts'
 
-export type ChatFlowMode = 'graph' | 'agent' | 'agentic' | 'legacy'
+export type ChatFlowMode = 'graph' | 'agent'
 
-const STORAGE_KEY = 'sqlbot_chat_flow_mode'
+const STORAGE_KEY = 'numora_chat_flow_mode'
+const PREVIOUS_STORAGE_KEY = 'sqlbot_chat_flow_mode'
+const AVAILABLE_MODES: ChatFlowMode[] = ['graph', 'agent']
 
-// 各链路是否可用仍由构建时开关决定，选择器只在可用链路中切换。
-const enabledModes = (): ChatFlowMode[] => {
-  const modes: ChatFlowMode[] = []
-  if (import.meta.env.VITE_GRAPH_CHATBI_ENABLED === 'true') modes.push('graph')
-  if (import.meta.env.VITE_AGENT_CHATBI_ENABLED === 'true') modes.push('agent')
-  if (import.meta.env.VITE_AGENTIC_CHATBI_ENABLED === 'true') modes.push('agentic')
-  modes.push('legacy')
-  return modes
-}
-
-// 与原先写死的优先级一致：graph > agent > agentic > legacy。
-const defaultMode = (): ChatFlowMode => enabledModes()[0]
+const isAvailableMode = (value: string | null): value is ChatFlowMode =>
+  value !== null && AVAILABLE_MODES.includes(value as ChatFlowMode)
 
 const restoreMode = (): ChatFlowMode => {
   const saved = localStorage.getItem(STORAGE_KEY) as ChatFlowMode | null
-  if (saved && enabledModes().includes(saved)) {
+  if (isAvailableMode(saved)) {
     return saved
   }
-  return defaultMode()
+
+  // 仅迁移旧存储中仍然有效的 graph/agent，其他值直接废弃。
+  const previousSaved = localStorage.getItem(PREVIOUS_STORAGE_KEY)
+  localStorage.removeItem(PREVIOUS_STORAGE_KEY)
+  if (isAvailableMode(previousSaved)) {
+    localStorage.setItem(STORAGE_KEY, previousSaved)
+    return previousSaved
+  }
+  return 'graph'
 }
 
 interface ChatFlowState {
@@ -41,23 +41,17 @@ export const chatFlowStore = defineStore('chatFlowStore', {
     getMode(): ChatFlowMode {
       return this.mode
     },
-    // 无 execution_type 的旧记录按原有优先级渲染，不随选择器切换。
-    getDefaultMode(): ChatFlowMode {
-      return defaultMode()
-    },
     getAvailableModes(): ChatFlowMode[] {
-      return enabledModes()
+      return AVAILABLE_MODES
     },
-    // 选择器需显式开启（生产默认关闭，保持原有固定链路行为）。
+    // 选择器可由部署配置隐藏，隐藏时固定使用已保存模式或 graph。
     getSelectorEnabled(): boolean {
-      return (
-        import.meta.env.VITE_CHATBI_FLOW_SELECTOR_ENABLED === 'true' && enabledModes().length > 1
-      )
+      return import.meta.env.VITE_CHATBI_FLOW_SELECTOR_ENABLED === 'true'
     },
   },
   actions: {
     setMode(mode: ChatFlowMode) {
-      if (!enabledModes().includes(mode)) {
+      if (!AVAILABLE_MODES.includes(mode)) {
         return
       }
       this.mode = mode
