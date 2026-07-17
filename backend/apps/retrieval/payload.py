@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal, cast
 
 from apps.capabilities.time_slots import normalize_time_range_payload
-from apps.headless.schemas import DataSetSchema, SchemaElement
+from apps.semantic.schemas import DatasetSchema, SchemaElement
 from apps.retrieval.schemas import (
     AssetReference,
     ExecutableAssetReference,
@@ -130,9 +130,9 @@ def semantic_payload_to_bundle(
 def bundle_to_semantic_payload(
     request: RetrievalRequest,
     bundle: RetrievalBundle,
-    schema: DataSetSchema,
+    schema: DatasetSchema,
 ) -> dict[str, Any]:
-    """把 Bundle 投影为 Graph/Agent payload，执行事实始终来自 Headless schema。"""
+    """把 Bundle 投影为 Graph/Agent payload，执行事实始终来自 Semantic schema。"""
 
     elements = _schema_elements_by_asset(schema)
     group_hits = {
@@ -237,7 +237,7 @@ def bundle_to_semantic_payload(
 
 
 def _schema_elements_by_asset(
-    schema: DataSetSchema,
+    schema: DatasetSchema,
 ) -> dict[tuple[str, int], SchemaElement]:
     result: dict[tuple[str, int], SchemaElement] = {}
     for asset_type, elements in (
@@ -295,7 +295,7 @@ def _asset_ref_to_candidate(
     element = elements.get((asset.asset_type.value, asset.asset_id))
     if element is None:
         raise ValueError(
-            f"SELECTED_ASSET_NOT_IN_HEADLESS_SCHEMA:{asset.asset_type.value}:{asset.asset_id}"
+            f"SELECTED_ASSET_NOT_IN_SEMANTIC_SCHEMA:{asset.asset_type.value}:{asset.asset_id}"
         )
     return {
         "source": "semantic_binding",
@@ -490,7 +490,7 @@ def _time_filter_binding(
 def _cross_model_query_plans(
     selected_assets: dict[str, list[dict[str, Any]]],
     intent: dict[str, Any],
-    schema: DataSetSchema,
+    schema: DatasetSchema,
 ) -> list[dict[str, Any]]:
     metrics_by_model: dict[int, list[dict[str, Any]]] = {}
     for metric in selected_assets.get("metrics", []):
@@ -644,7 +644,7 @@ def _is_time_payload(payload: dict[str, Any]) -> bool:
 
 
 def _tables(
-    schema: DataSetSchema,
+    schema: DatasetSchema,
     selected_assets: dict[str, list[dict[str, Any]]],
 ) -> list[str]:
     model_ids = {
@@ -672,11 +672,11 @@ def _fields(selected_assets: dict[str, list[dict[str, Any]]]) -> list[str]:
     )
 
 
-def _schema_version(schema: DataSetSchema) -> int | None:
+def _schema_version(schema: DatasetSchema) -> int | None:
     return _positive_int(schema.data_set.ext_info.get("schema_version"))
 
 
-def _index_version(schema: DataSetSchema) -> int | None:
+def _index_version(schema: DatasetSchema) -> int | None:
     return _positive_int(schema.data_set.ext_info.get("index_version"))
 
 
@@ -739,7 +739,7 @@ def _candidate_to_hit(
     return RetrievalHit(
         resource_id=f"headless:{resource_type.value.lower()}:{asset_id}",
         resource_type=resource_type,
-        source_type=RetrievalSourceType.HEADLESS,
+        source_type=RetrievalSourceType.SEMANTIC,
         source_id=source_id,
         source_resource_id=str(asset_id),
         unit_id=f"semantic:{resource_type.value.lower()}:{asset_id}:{item.get('matched_field') or 'candidate'}",

@@ -14,7 +14,7 @@ import {
   View,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus-secondary'
-import { headlessApi } from '@/api/headless'
+import { semanticApi } from '@/api/semantic'
 
 type ActiveTab = 'domains' | 'models' | 'metrics' | 'dimensions' | 'datasets' | 'terms' | 'runtime'
 type RuntimeTab = 'schema' | 'mapper'
@@ -204,7 +204,7 @@ onMounted(async () => {
 const loadAll = async () => {
   loading.value = true
   try {
-    const [dsRes, domainRes] = await Promise.all([headlessApi.datasourceList(), headlessApi.domainList()])
+    const [dsRes, domainRes] = await Promise.all([semanticApi.datasourceList(), semanticApi.domainList()])
     datasources.value = Array.isArray(dsRes) ? dsRes : []
     domains.value = Array.isArray(domainRes) ? domainRes : []
     if (!selectedDomainId.value && domains.value.length) selectedDomainId.value = domains.value[0].id
@@ -217,9 +217,9 @@ const loadAll = async () => {
 const loadScopedAssets = async () => {
   const domainParams = selectedDomainId.value ? { domain_id: selectedDomainId.value } : undefined
   const [modelRes, datasetRes, termRes] = await Promise.all([
-    headlessApi.modelList(domainParams),
-    headlessApi.datasetList(domainParams),
-    headlessApi.termList(domainParams),
+    semanticApi.modelList(domainParams),
+    semanticApi.datasetList(domainParams),
+    semanticApi.termList(domainParams),
   ])
   models.value = Array.isArray(modelRes) ? modelRes : []
   datasets.value = Array.isArray(datasetRes) ? datasetRes : []
@@ -234,7 +234,7 @@ const loadScopedAssets = async () => {
 }
 
 const loadModelAssets = async () => {
-  const [metricRes, dimensionRes] = await Promise.all([headlessApi.metricList(), headlessApi.dimensionList()])
+  const [metricRes, dimensionRes] = await Promise.all([semanticApi.metricList(), semanticApi.dimensionList()])
   const scopedModelIds = new Set(models.value.map((item) => String(item.id)))
   metrics.value = Array.isArray(metricRes) ? metricRes.filter((item) => scopedModelIds.has(String(item.model_id))) : []
   dimensions.value = Array.isArray(dimensionRes) ? dimensionRes.filter((item) => scopedModelIds.has(String(item.model_id))) : []
@@ -340,7 +340,7 @@ const saveMeasureInitMetrics = async () => {
   }
   saveLoading.value = true
   try {
-    const res = await headlessApi.metricBatchCreateFromMeasures({
+    const res = await semanticApi.metricBatchCreateFromMeasures({
       model_id: Number(measureInitModelId.value),
       measure_biz_names: measureInitSelected.value,
     })
@@ -540,15 +540,15 @@ const saveSimpleEntity = async () => {
   try {
     const payload = buildSimplePayload()
     if (simpleEditingId.value) {
-      if (simpleDialogType.value === 'domain') await headlessApi.domainUpdate(simpleEditingId.value, payload)
-      else if (simpleDialogType.value === 'metric') await headlessApi.metricUpdate(simpleEditingId.value, payload)
-      else if (simpleDialogType.value === 'dimension') await headlessApi.dimensionUpdate(simpleEditingId.value, payload)
-      else await headlessApi.termUpdate(simpleEditingId.value, payload)
+      if (simpleDialogType.value === 'domain') await semanticApi.domainUpdate(simpleEditingId.value, payload)
+      else if (simpleDialogType.value === 'metric') await semanticApi.metricUpdate(simpleEditingId.value, payload)
+      else if (simpleDialogType.value === 'dimension') await semanticApi.dimensionUpdate(simpleEditingId.value, payload)
+      else await semanticApi.termUpdate(simpleEditingId.value, payload)
     } else {
-      if (simpleDialogType.value === 'domain') await headlessApi.domainCreate(payload)
-      else if (simpleDialogType.value === 'metric') await headlessApi.metricCreate(payload)
-      else if (simpleDialogType.value === 'dimension') await headlessApi.dimensionCreate(payload)
-      else await headlessApi.termCreate(payload)
+      if (simpleDialogType.value === 'domain') await semanticApi.domainCreate(payload)
+      else if (simpleDialogType.value === 'metric') await semanticApi.metricCreate(payload)
+      else if (simpleDialogType.value === 'dimension') await semanticApi.dimensionCreate(payload)
+      else await semanticApi.termCreate(payload)
     }
     ElMessage.success('保存成功')
     simpleDialogVisible.value = false
@@ -589,7 +589,7 @@ const fieldsFromModelDetail = (detail: any = {}) => {
     const dimension: any = dimensionsByBizName.get(bizName)
     const identifier: any = identifiersByBizName.get(bizName)
     const asset = measure || dimension || identifier
-    // 按 Headless 模型详情反推字段角色，编辑模型时保留原有指标/维度语义。
+    // 按 Semantic 模型详情反推字段角色，编辑模型时保留原有指标/维度语义。
     const role = measure ? 'MEASURE' : identifier ? 'IDENTIFIER' : dimension ? 'DIMENSION' : 'FIELD'
     return normalizeBuildField({
       field_name: field.fieldName,
@@ -632,7 +632,7 @@ const openModelEditDialog = (row: any) => {
   datasourceTables.value = []
   if (modelForm.datasource_id) {
     tablesLoading.value = true
-    headlessApi
+    semanticApi
       .datasourceTables(modelForm.datasource_id)
       .then((res: any) => {
         datasourceTables.value = Array.isArray(res) ? res : []
@@ -651,7 +651,7 @@ const loadDatasourceTables = async () => {
   if (!modelForm.datasource_id) return
   tablesLoading.value = true
   try {
-    const res = await headlessApi.datasourceTables(modelForm.datasource_id)
+    const res = await semanticApi.datasourceTables(modelForm.datasource_id)
     datasourceTables.value = Array.isArray(res) ? res : []
   } finally {
     tablesLoading.value = false
@@ -665,9 +665,9 @@ const loadTableColumns = async () => {
   }
   fieldsLoading.value = true
   try {
-    const columns = await headlessApi.datasourceColumns(modelForm.datasource_id, modelForm.table_name)
+    const columns = await semanticApi.datasourceColumns(modelForm.datasource_id, modelForm.table_name)
     tableColumns.value = Array.isArray(columns) ? columns : []
-    const schema = await headlessApi.modelBuildSchema({
+    const schema = await semanticApi.modelBuildSchema({
       datasource_id: Number(modelForm.datasource_id),
       source_type: modelForm.source_type,
       table_name: modelForm.table_name,
@@ -884,11 +884,11 @@ const saveModelWizard = async () => {
       model_detail: buildModelDetail(),
     }
     if (modelEditingId.value) {
-      const updated = await headlessApi.modelUpdate(modelEditingId.value, payload)
+      const updated = await semanticApi.modelUpdate(modelEditingId.value, payload)
       selectedModelId.value = updated?.id || selectedModelId.value
       ElMessage.success('模型已更新')
     } else {
-      const res = await headlessApi.modelCreateWithAssets(payload)
+      const res = await semanticApi.modelCreateWithAssets(payload)
       selectedModelId.value = res?.model?.id || selectedModelId.value
       ElMessage.success('模型和维度已生成，指标可在指标页单独定义')
     }
@@ -964,8 +964,8 @@ const loadDatasetModelAssets = async (modelId: number | string) => {
   const key = String(modelId)
   if (datasetMetricOptions[key] && datasetDimensionOptions[key]) return
   const [metricRes, dimensionRes] = await Promise.all([
-    headlessApi.metricList({ model_id: modelId }),
-    headlessApi.dimensionList({ model_id: modelId }),
+    semanticApi.metricList({ model_id: modelId }),
+    semanticApi.dimensionList({ model_id: modelId }),
   ])
   datasetMetricOptions[key] = Array.isArray(metricRes) ? metricRes : []
   datasetDimensionOptions[key] = Array.isArray(dimensionRes) ? dimensionRes : []
@@ -1005,10 +1005,10 @@ const saveDatasetDialog = async () => {
       query_config: {},
     }
     if (datasetEditingId.value) {
-      await headlessApi.datasetUpdate(datasetEditingId.value, payload)
+      await semanticApi.datasetUpdate(datasetEditingId.value, payload)
       ElMessage.success('数据集已更新')
     } else {
-      await headlessApi.datasetCreate(payload)
+      await semanticApi.datasetCreate(payload)
       ElMessage.success('数据集已创建')
     }
     datasetDialogVisible.value = false
@@ -1025,7 +1025,7 @@ const previewSchema = async () => {
   }
   schemaLoading.value = true
   try {
-    datasetSchema.value = await headlessApi.datasetSchema(selectedDatasetId.value)
+    datasetSchema.value = await semanticApi.datasetSchema(selectedDatasetId.value)
   } finally {
     schemaLoading.value = false
   }
@@ -1038,7 +1038,7 @@ const runMapper = async () => {
   }
   mapperLoading.value = true
   try {
-    mapResult.value = await headlessApi.schemaMap({
+    mapResult.value = await semanticApi.schemaMap({
       query_text: mapperQuestion.value,
       dataset_ids: [selectedDatasetId.value],
     })
@@ -1064,7 +1064,7 @@ const rebuildKnowledge = async (datasetId?: number | string) => {
   }
   knowledgeRebuildLoading.value = true
   try {
-    await headlessApi.knowledgeRebuild(targetDatasetId)
+    await semanticApi.knowledgeRebuild(targetDatasetId)
     ElMessage.success('向量索引重建任务已提交')
   } finally {
     knowledgeRebuildLoading.value = false
@@ -1088,12 +1088,12 @@ const deleteEntity = async (type: SimpleDialogType | 'model' | 'dataset', row: a
   }).catch(() => null)
   if (action !== 'confirm') return
 
-  if (type === 'domain') await headlessApi.domainDelete(row.id)
-  else if (type === 'model') await headlessApi.modelDelete(row.id)
-  else if (type === 'metric') await headlessApi.metricDelete(row.id)
-  else if (type === 'dimension') await headlessApi.dimensionDelete(row.id)
-  else if (type === 'dataset') await headlessApi.datasetDelete(row.id)
-  else await headlessApi.termDelete(row.id)
+  if (type === 'domain') await semanticApi.domainDelete(row.id)
+  else if (type === 'model') await semanticApi.modelDelete(row.id)
+  else if (type === 'metric') await semanticApi.metricDelete(row.id)
+  else if (type === 'dimension') await semanticApi.dimensionDelete(row.id)
+  else if (type === 'dataset') await semanticApi.datasetDelete(row.id)
+  else await semanticApi.termDelete(row.id)
 
   ElMessage.success('删除成功')
   if (`${row.id}` === `${selectedDomainId.value}`) selectedDomainId.value = ''
@@ -1112,12 +1112,12 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
 </script>
 
 <template>
-  <div class="headless-page">
-    <div class="headless-header">
+  <div class="semantic-page">
+    <div class="semantic-header">
       <div>
-        <div class="breadcrumb">工作区 / Headless BI</div>
+        <div class="breadcrumb">工作区 / Semantic BI</div>
         <h2>语义资产</h2>
-        <p>Domain -> Model -> Metric / Dimension -> DataSet -> DataSetSchema</p>
+        <p>Domain -> Model -> Metric / Dimension -> Dataset -> DatasetSchema</p>
       </div>
       <div class="header-actions">
         <el-select v-model="selectedDomainId" class="wide-select" clearable placeholder="主题域" @change="handleDomainChange">
@@ -1362,7 +1362,7 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
               <p class="muted">{{ currentDataset?.name || '请选择数据集后生成 Schema。' }}</p>
             </section>
             <section class="schema-section">
-              <div class="section-title"><Document /><span>DataSetSchema JSON</span></div>
+              <div class="section-title"><Document /><span>DatasetSchema JSON</span></div>
               <pre class="json-preview">{{ formatJson(datasetSchema) }}</pre>
             </section>
           </div>
@@ -1724,14 +1724,14 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
 </template>
 
 <style scoped lang="less">
-.headless-page {
+.semantic-page {
   min-height: 100%;
   padding: 24px;
   background: #f4f7fb;
   color: #1f2633;
 }
 
-.headless-header {
+.semantic-header {
   display: flex;
   justify-content: space-between;
   gap: 24px;
@@ -2098,7 +2098,7 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
 }
 
 @media (max-width: 1180px) {
-  .headless-header,
+  .semantic-header,
   .header-actions {
     display: block;
   }

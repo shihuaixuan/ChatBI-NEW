@@ -19,7 +19,7 @@
 
 ## 参考方案
 
-开源 BI 与 Headless BI 项目通常将时间作为专门结构处理：
+开源 BI 与 Semantic BI 项目通常将时间作为专门结构处理：
 
 - Superset 有独立日期解析逻辑，支持 `Last 7 days`、`previous calendar month`、`first day of this month` 等自然语言时间范围。
 - Metabase 将日期列过滤区分为 specific date 与 relative date，并提供 `today()`、`now()`、`relativeDateTime()`、`interval()` 等受控表达。
@@ -94,7 +94,7 @@
 需要严格区分两个概念：
 
 - 时间值：用户自然语言提供，例如“今天”“本月”“最近7天”。如果业务问题必须要时间而用户没说，可以向用户追问。
-- 时间字段：系统从 Headless 资产中绑定，例如 `stat_date`、`created_at`、`pay_time`。用户不应该补数据库字段名。
+- 时间字段：系统从 Semantic 资产中绑定，例如 `stat_date`、`created_at`、`pay_time`。用户不应该补数据库字段名。
 
 因此，用户明确给了时间范围后，知识检索必须绑定一个时间维度：
 

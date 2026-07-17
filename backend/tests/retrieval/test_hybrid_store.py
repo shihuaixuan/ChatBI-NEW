@@ -132,7 +132,7 @@ def _metric(
         tenant_id=source.tenant_id,
         namespace=source.namespace,
         resource_type=RetrievalResourceType.METRIC,
-        source_type=RetrievalSourceType.HEADLESS,
+        source_type=RetrievalSourceType.SEMANTIC,
         source_resource_id=f"METRIC:{asset_id}",
         dataset_id=dataset_id,
         title=title,

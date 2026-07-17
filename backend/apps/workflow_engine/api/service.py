@@ -18,10 +18,10 @@ from apps.workflow.runtime import (
     build_placeholder_chatbi_runtime,
     build_real_chatbi_v1_runtime,
 )
-from apps.headless.models import (
-    HeadlessDataSet,
-    HeadlessDataSetModelConfig,
-    HeadlessModel,
+from apps.semantic.models import (
+    SemanticDataset,
+    SemanticDatasetModelConfig,
+    SemanticModel,
 )
 from apps.workflow_engine.api.chat_history import (
     ChatProjectingRunStore,
@@ -294,29 +294,29 @@ class GraphApiService:
         return {key: intent[key] for key in allowed_keys if key in intent}
 
     def _resolve_dataset_id(self, oid: int, dataset_or_datasource_id: int) -> int:
-        """兼容旧前端传入 datasource_id，优先返回真实 Headless dataset_id。"""
+        """兼容旧前端传入 datasource_id，优先返回真实 Semantic dataset_id。"""
 
-        dataset = self._session.get(HeadlessDataSet, dataset_or_datasource_id)
+        dataset = self._session.get(SemanticDataset, dataset_or_datasource_id)
         if dataset is not None and dataset.oid == oid and dataset.status == 1:
             return dataset_or_datasource_id
         statement = (
-            select(HeadlessDataSet.id)
+            select(SemanticDataset.id)
             .join(
-                HeadlessDataSetModelConfig,
-                HeadlessDataSetModelConfig.dataset_id == HeadlessDataSet.id,
+                SemanticDatasetModelConfig,
+                SemanticDatasetModelConfig.dataset_id == SemanticDataset.id,
             )
-            .join(HeadlessModel, HeadlessModel.id == HeadlessDataSetModelConfig.model_id)
+            .join(SemanticModel, SemanticModel.id == SemanticDatasetModelConfig.model_id)
             .where(
-                HeadlessDataSet.oid == oid,
-                HeadlessDataSet.status == 1,
-                HeadlessDataSetModelConfig.status == 1,
-                HeadlessModel.status == 1,
-                HeadlessModel.datasource_id == dataset_or_datasource_id,
+                SemanticDataset.oid == oid,
+                SemanticDataset.status == 1,
+                SemanticDatasetModelConfig.status == 1,
+                SemanticModel.status == 1,
+                SemanticModel.datasource_id == dataset_or_datasource_id,
             )
             .order_by(
-                col(HeadlessDataSetModelConfig.is_default).desc(),
-                col(HeadlessDataSetModelConfig.sort_order).asc(),
-                col(HeadlessDataSet.id).asc(),
+                col(SemanticDatasetModelConfig.is_default).desc(),
+                col(SemanticDatasetModelConfig.sort_order).asc(),
+                col(SemanticDataset.id).asc(),
             )
             .limit(1)
         )

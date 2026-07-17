@@ -17,19 +17,19 @@ from apps.workflow.capabilities.execution import (
     build_execution_output,
     validate_execution_output,
 )
-from apps.headless.service import HeadlessSchemaBuilder
-from apps.headless.sql_compiler import (
+from apps.semantic.service import SemanticSchemaBuilder
+from apps.semantic.sql_compiler import (
     SemanticSQLCompiler,
     SemanticSQLCompileRequest,
 )
 
 
 class SqlAdapter:
-    """ChatBI v1 SQL 生成适配器，复用 Headless 语义 SQL 编译器。"""
+    """ChatBI v1 SQL 生成适配器，复用 Semantic 语义 SQL 编译器。"""
 
     def __init__(
         self,
-        schema_builder: HeadlessSchemaBuilder | None = None,
+        schema_builder: SemanticSchemaBuilder | None = None,
         compiler: SemanticSQLCompiler | None = None,
         execute_tool: SqlExecuteTool | None = None,
         validate_tool: SqlValidateTool | None = None,
@@ -41,7 +41,7 @@ class SqlAdapter:
         config: ChatBIConfig | None = None,
     ) -> None:
         config = config or ChatBIConfig()
-        self._schema_builder = schema_builder or HeadlessSchemaBuilder()
+        self._schema_builder = schema_builder or SemanticSchemaBuilder()
         self._compiler = compiler or SemanticSQLCompiler()
         self._execute_tool = execute_tool
         self._validate_tool = validate_tool or SqlValidateTool()
@@ -110,7 +110,7 @@ class SqlAdapter:
             "sql": validated_sql,
             "strategy": "semantic_sql_compiler",
             "datasource_id": self._datasource_id(schema, result.metrics, result.dimensions),
-            "explanation": "基于 Headless 语义资产生成 SQL",
+            "explanation": "基于 Semantic 语义资产生成 SQL",
             "used_assets": [
                 *self._used_assets("METRIC", result.metrics, schema.metrics),
                 *self._used_assets("DIMENSION", result.dimensions, schema.dimensions),

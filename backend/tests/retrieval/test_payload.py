@@ -1,6 +1,6 @@
 """RetrievalBundle 到 Graph/Agent 业务契约的投影测试。"""
 
-from apps.headless.schemas import DataSetSchema, SchemaElement
+from apps.semantic.schemas import DatasetSchema, SchemaElement
 from apps.retrieval.payload import bundle_to_semantic_payload
 from apps.retrieval.schemas import (
     AssetReference,
@@ -35,9 +35,9 @@ def _element(asset_type: str, asset_id: int, name: str, biz_name: str) -> Schema
     )
 
 
-def test_bundle_uses_headless_schema_as_execution_fact():
+def test_bundle_uses_semantic_schema_as_execution_fact():
     metric = _element("METRIC", 100, "销售额", "sales_amount")
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=_element("DATASET", 20, "经营分析", "business"),
         metrics=[metric],
     )
@@ -64,7 +64,7 @@ def test_bundle_uses_headless_schema_as_execution_fact():
                 RetrievalHit(
                     resource_id="metric:100",
                     resource_type=RetrievalResourceType.METRIC,
-                    source_type=RetrievalSourceType.HEADLESS,
+                    source_type=RetrievalSourceType.SEMANTIC,
                     source_id="headless:20",
                     source_resource_id="metric:100",
                     unit_id="unit:100",

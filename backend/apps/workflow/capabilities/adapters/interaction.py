@@ -4,13 +4,13 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from apps.workflow.capabilities.context import ChatBIRunContext
-from apps.headless.schemas import DataSetSchema, SchemaElement
+from apps.semantic.schemas import DatasetSchema, SchemaElement
 
 
 class InteractionSchemaBuilder(Protocol):
     """交互节点使用的轻量 schema 构建协议。"""
 
-    def build_dataset_schema(self, oid: int, dataset_id: int) -> DataSetSchema: ...
+    def build_dataset_schema(self, oid: int, dataset_id: int) -> DatasetSchema: ...
 
 
 @dataclass(frozen=True)
@@ -273,7 +273,7 @@ class InteractionAdapter:
 
     def _schema_asset_options(
         self,
-        schema: DataSetSchema | None,
+        schema: DatasetSchema | None,
         group_name: str,
         slot_name: str,
     ) -> list[dict[str, Any]]:
@@ -282,7 +282,7 @@ class InteractionAdapter:
         elements = schema.metrics if group_name == "metrics" else schema.dimensions
         return [self._schema_element_option(element, slot_name) for element in elements[:5]]
 
-    def _load_schema(self, ctx: ChatBIRunContext) -> DataSetSchema | None:
+    def _load_schema(self, ctx: ChatBIRunContext) -> DatasetSchema | None:
         if self._schema_builder is None:
             return None
         if ctx.dataset_id is None:

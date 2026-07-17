@@ -672,7 +672,7 @@ git commit -m "refactor: derive chatbi interaction routing metadata"
   - `apply_slot_response_to_intent(intent: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]`
 - Consumes:
   - `ctx.slot_response`
-  - existing `HeadlessKnowledgeAdapter._schema_scoped_by_subject_domain()`
+  - existing `SemanticKnowledgeAdapter._schema_scoped_by_subject_domain()`
 
 - [ ] **Step 1: 写 slot response 纯函数失败测试**
 
@@ -1197,7 +1197,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/workflow tests/workflow_engine tests/headless/test_semantic_sql_compiler.py tests/headless/test_sql_compiler_time_filters.py -q
+uv run pytest tests/workflow tests/workflow_engine tests/semantic/test_semantic_sql_compiler.py tests/semantic/test_sql_compiler_time_filters.py -q
 ```
 
 Expected: all tests pass. If unrelated flaky or environment failure occurs, capture exact failure and inspect root cause before changing code.

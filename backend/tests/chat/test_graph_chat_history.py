@@ -14,7 +14,7 @@ from common.core.db import engine
 def test_get_chat_with_records_returns_graph_snapshot(monkeypatch, with_data):
     """历史接口应直接返回 Graph 快照及执行归属字段。"""
 
-    from tests.chat.test_headless_dataset_chat import import_chat_crud
+    from tests.chat.test_semantic_dataset_chat import import_chat_crud
 
     chat_crud = import_chat_crud(monkeypatch)
     current_user = SimpleNamespace(id=9101, oid=9201)

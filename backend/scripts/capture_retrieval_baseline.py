@@ -1,4 +1,4 @@
-"""采集当前 Graph/Agent Headless 检索基线，不调用问题理解模型。"""
+"""采集当前 Graph/Agent Semantic 检索基线，不调用问题理解模型。"""
 
 from __future__ import annotations
 

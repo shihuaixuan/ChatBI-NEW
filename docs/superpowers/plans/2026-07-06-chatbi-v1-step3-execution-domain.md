@@ -638,7 +638,7 @@ Run:
 ```bash
 cd backend
 uv run ruff check apps/workflow apps/workflow_engine tests/workflow tests/workflow_engine
-uv run pytest tests/workflow tests/workflow_engine tests/headless/test_semantic_sql_compiler.py tests/headless/test_sql_compiler_time_filters.py -q
+uv run pytest tests/workflow tests/workflow_engine tests/semantic/test_semantic_sql_compiler.py tests/semantic/test_sql_compiler_time_filters.py -q
 ```
 
 Expected: 0 lint errors；0 test failures。若 outbox 共享数据库测试仍受历史 pending 事件影响，必须先修复测试隔离并重新运行完整命令。

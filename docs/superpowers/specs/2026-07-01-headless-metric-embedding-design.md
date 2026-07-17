@@ -1,8 +1,8 @@
-# Headless 指标向量化设计
+# Semantic 指标向量化设计
 
 ## 背景
 
-当前 Headless 语义资产在问答检索中主要依赖关键词和文本重叠匹配。为了提升指标召回能力，第一阶段只对 Headless 指标做 embedding，不处理维度、维值和术语。向量化不在资产创建或更新时自动执行，而是由前端按钮手动触发。
+当前 Semantic 语义资产在问答检索中主要依赖关键词和文本重叠匹配。为了提升指标召回能力，第一阶段只对 Semantic 指标做 embedding，不处理维度、维值和术语。向量化不在资产创建或更新时自动执行，而是由前端按钮手动触发。
 
 ## 目标
 
@@ -30,7 +30,7 @@
 | --- | --- |
 | `id` | 主键 |
 | `oid` | 租户/组织 ID |
-| `dataset_id` | Headless 数据集 ID |
+| `dataset_id` | Semantic 数据集 ID |
 | `asset_type` | 资产类型，第一版只写 `METRIC` |
 | `asset_id` | 原始资产 ID，对应 `headless_metric.id` |
 | `document_id` | 对应 `headless_asset_document.id`，用于追踪检索文档来源 |
@@ -90,12 +90,12 @@ oid + dataset_id + asset_type + status
 
 ## 触发方式
 
-前端在 Headless 数据集或指标管理页面提供“向量化指标”按钮。
+前端在 Semantic 数据集或指标管理页面提供“向量化指标”按钮。
 
 后端提供手动触发接口：
 
 ```text
-POST /api/v1/headless/datasets/{dataset_id}/metric-embeddings/rebuild
+POST /api/v1/semantic/datasets/{dataset_id}/metric-embeddings/rebuild
 ```
 
 接口行为：

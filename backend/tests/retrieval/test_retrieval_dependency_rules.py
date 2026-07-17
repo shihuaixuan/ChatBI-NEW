@@ -33,7 +33,7 @@ def test_generic_projection_and_indexing_modules_do_not_import_headless():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module:
-                assert not node.module.startswith("apps.headless"), f"{path} 反向依赖了 Headless"
+                assert not node.module.startswith("apps.semantic"), f"{path} 反向依赖了 Semantic"
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    assert not alias.name.startswith("apps.headless"), f"{path} 反向依赖了 Headless"
+                    assert not alias.name.startswith("apps.semantic"), f"{path} 反向依赖了 Semantic"

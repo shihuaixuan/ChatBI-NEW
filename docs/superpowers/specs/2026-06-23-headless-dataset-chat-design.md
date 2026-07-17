@@ -1,15 +1,15 @@
-# Headless 数据集绑定智能问数设计
+# Semantic 数据集绑定智能问数设计
 
 ## 背景
 
-当前前端新建智能问数时通过 `ChatCreator` 列出数据源，并向 `/chat/start` 提交 `datasource`。Graph ChatBI v1 已经以 `dataset_id` 作为主输入，`GraphWorkflowAnswer` 目前只是把 `currentChat.datasource` 当成 `dataset_id` 使用。这个过渡态会让会话绑定对象和 Headless 语义数据集不一致。
+当前前端新建智能问数时通过 `ChatCreator` 列出数据源，并向 `/chat/start` 提交 `datasource`。Graph ChatBI v1 已经以 `dataset_id` 作为主输入，`GraphWorkflowAnswer` 目前只是把 `currentChat.datasource` 当成 `dataset_id` 使用。这个过渡态会让会话绑定对象和 Semantic 语义数据集不一致。
 
-本次目标是全量切换智能问数的新建、历史、发问和图表复用链路，使会话绑定 Headless 数据集，而不是直接绑定数据源。
+本次目标是全量切换智能问数的新建、历史、发问和图表复用链路，使会话绑定 Semantic 数据集，而不是直接绑定数据源。
 
 ## 目标
 
-- 新建智能问数选择 Headless `dataset`。
-- 会话和记录持久化 `dataset_id`，以 Headless 数据集作为业务绑定对象。
+- 新建智能问数选择 Semantic `dataset`。
+- 会话和记录持久化 `dataset_id`，以 Semantic 数据集作为业务绑定对象。
 - 保留 `datasource` 字段作为执行兼容字段，由后端从 dataset 模型解析得到。
 - Graph workflow 直接使用 `dataset_id`。
 - 旧 SQL、图表、导出、仪表板复用等仍可使用记录上的 `datasource` 执行。
@@ -19,14 +19,14 @@
 
 - 不为旧 datasource-only 会话做 UI 兼容。
 - 不迁移旧会话到某个推断 dataset。
-- 不重构数据源管理、Headless 数据集管理页面。
+- 不重构数据源管理、Semantic 数据集管理页面。
 - 不一次性移除旧 SQL/图表执行链路对 `datasource` 的依赖。
 
 ## 数据模型
 
 新增字段：
 
-- `chat.dataset_id`: Headless 数据集 ID。
+- `chat.dataset_id`: Semantic 数据集 ID。
 - `chat_record.dataset_id`: 发问记录对应的数据集 ID。
 
 保留字段：
@@ -52,8 +52,8 @@ API DTO 增加：
 `/chat/start` 和 `/chat/assistant/start`：
 
 1. 要求新建智能问数提供 `dataset_id`。
-2. 校验 `HeadlessDataSet.oid == current_user.oid` 且 `status == 1`。
-3. 根据 dataset 的 `default_model_id` 或 `headless_dataset_model_config` 中启用模型解析 `HeadlessModel.datasource_id`。
+2. 校验 `SemanticDataSet.oid == current_user.oid` 且 `status == 1`。
+3. 根据 dataset 的 `default_model_id` 或 `headless_dataset_model_config` 中启用模型解析 `SemanticModel.datasource_id`。
 4. 校验解析到的数据源属于当前工作区。
 5. 写入：
    - `chat.dataset_id = dataset.id`
@@ -161,7 +161,7 @@ API DTO 增加：
 
 - `vue-tsc -b` 通过。
 - `npm run build` 通过。
-- 手动或浏览器验证：新建智能问数弹窗展示 Headless 数据集，创建后聊天页展示已选数据集，发送问题时 Graph workflow 请求体包含 `dataset_id`。
+- 手动或浏览器验证：新建智能问数弹窗展示 Semantic 数据集，创建后聊天页展示已选数据集，发送问题时 Graph workflow 请求体包含 `dataset_id`。
 
 ## 验收标准
 
@@ -169,5 +169,5 @@ API DTO 增加：
 - 新建会话请求体包含 `dataset_id`，不包含业务绑定意义上的 `datasource`。
 - 后端会话持久化 `dataset_id`，并自动写入兼容执行用 `datasource`。
 - 旧会话、旧记录、对应会话日志在迁移后被清空。
-- Graph workflow 使用真实 Headless dataset。
+- Graph workflow 使用真实 Semantic dataset。
 - 旧图表/导出/仪表板复用不因本次切换失效。

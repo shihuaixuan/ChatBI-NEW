@@ -5,7 +5,7 @@ from typing import Any
 from apps.workflow.capabilities.adapters.answer import AnswerAdapter
 from apps.workflow.capabilities.adapters.interaction import InteractionAdapter
 from apps.workflow.capabilities.adapters.knowledge import (
-    HeadlessKnowledgeAdapter,
+    SemanticKnowledgeAdapter,
 )
 from apps.workflow.capabilities.adapters.question import QuestionAdapter
 from apps.workflow.capabilities.adapters.recommendation import (
@@ -25,7 +25,7 @@ class RealChatBICapabilityGateway:
         self,
         question_adapter: QuestionAdapter | None = None,
         answer_adapter: AnswerAdapter | None = None,
-        knowledge_adapter: HeadlessKnowledgeAdapter | None = None,
+        knowledge_adapter: SemanticKnowledgeAdapter | None = None,
         interaction_adapter: InteractionAdapter | None = None,
         sql_adapter: SqlAdapter | None = None,
         recommendation_adapter: RecommendationAdapter | None = None,
@@ -34,7 +34,7 @@ class RealChatBICapabilityGateway:
     ) -> None:
         self._question_adapter = question_adapter or QuestionAdapter()
         self._answer_adapter = answer_adapter or AnswerAdapter()
-        self._knowledge_adapter = knowledge_adapter or HeadlessKnowledgeAdapter()
+        self._knowledge_adapter = knowledge_adapter or SemanticKnowledgeAdapter()
         self._interaction_adapter = interaction_adapter or InteractionAdapter()
         self._sql_adapter = sql_adapter or SqlAdapter()
         self._recommendation_adapter = recommendation_adapter or RecommendationAdapter()

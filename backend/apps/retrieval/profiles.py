@@ -91,7 +91,7 @@ PROFILE_REGISTRY: dict[RetrievalProfileName, RetrievalProfileDefinition] = {
     RetrievalProfileName.SEMANTIC_BINDING: RetrievalProfileDefinition(
         name=RetrievalProfileName.SEMANTIC_BINDING,
         version="semantic-binding",
-        allowed_sources=(RetrievalSourceType.HEADLESS,),
+        allowed_sources=(RetrievalSourceType.SEMANTIC,),
         allowed_resource_types=(
             RetrievalResourceType.METRIC,
             RetrievalResourceType.DIMENSION,

@@ -54,7 +54,7 @@
   - 输出：`intent_type`、`confidence`、`metric_mentions`、`dimension_mentions`、`time_mentions`、`filter_mentions`、`required_slot_types`、`query_shape`、`ambiguous_slots`、`conflict_slots`
   - 写入：`variables.intent`
   - 验收：意图不明确时走澄清分支，明确时进入知识检索。
-  - 验收：意图识别只输出自然语言线索，不选择 Headless `asset_id`、`biz_name` 或数据库字段。
+  - 验收：意图识别只输出自然语言线索，不选择 Semantic `asset_id`、`biz_name` 或数据库字段。
 
 - [x] 为知识库检索节点定义 schema。
   - 输入：重写问题、意图、数据源、租户。
@@ -156,27 +156,27 @@
   - 验收：根据 `missing_slots`、`ambiguous_slots/conflict_slots`、`knowledge.ambiguities` 生成 prompt/options/response_schema。
   - 验收：rewrite 澄清优先使用 `knowledge.candidate_groups.metrics/dimensions` 真实候选；无候选时回退内置示例。
   - 验收：metric selection 在 ambiguity candidates 为空时可回退到 `knowledge.candidate_groups.metrics`。
-  - 验收：没有 knowledge 上下文时，真实 runtime 注入 `HeadlessSchemaBuilder`，可按 `dataset_id` 轻量加载 schema 候选。
+  - 验收：没有 knowledge 上下文时，真实 runtime 注入 `SemanticSchemaBuilder`，可按 `dataset_id` 轻量加载 schema 候选。
   - 后续：按问题文本对 schema 候选排序，而不是直接取前 5 个。
 
 - [x] 实现 `QuestionAdapter`。
   - 复用：`agentic_chat.tools.query_understanding` 和 `agentic_chat.services.query_understanding`
   - 能力：`question.classify`、`question.rewrite`、`intent.recognize`
   - 验收：真实问题理解结果能写入 `variables.classification/rewrite/intent`。
-  - 验收：`intent.recognize` 输出自然语言 mention 和 `query_shape`，不直接确认 Headless 资产。
+  - 验收：`intent.recognize` 输出自然语言 mention 和 `query_shape`，不直接确认 Semantic 资产。
   - 验收：模型失败或输出非法时保留规则兜底。
 
 - [x] 实现 `KnowledgeAdapter`。
   - 复用：`agentic_chat.tools.schema`、`semantic_asset`、`terminology`、`sql_example`
   - 能力：`knowledge.retrieve`
   - 验收：输出 tables、fields、metrics、terms、examples、ambiguities。
-  - 验收：基于 Headless dataset schema 做 schema mapper + asset document 候选召回。
+  - 验收：基于 Semantic dataset schema 做 schema mapper + asset document 候选召回。
   - 验收：按 intent mention 分槽位召回并做可解释 rerank，完整短语优先于弱词重叠。
   - 验收：`访问人数` 可优先命中完整短语资产；只有 `人数` 等弱词时仍保留 `metric_ambiguous`。
   - 后续：接入 BM25 / embedding / hybrid score，并完善同义词/别名治理。
 
 - [x] 实现 `SqlAdapter.generate`。
-  - 复用：`SemanticSQLCompiler`、`HeadlessSchemaBuilder`、`SqlValidateTool`
+  - 复用：`SemanticSQLCompiler`、`SemanticSchemaBuilder`、`SqlValidateTool`
   - 能力：`sql.generate`
   - 验收：真实 SQL 生成和安全校验可由图节点调用，输出 `sql`、`strategy`、`datasource_id`、`explanation`、`used_assets`。
 

@@ -5,22 +5,22 @@ import pytest
 from apps.capabilities.schemas import ToolResult
 from apps.workflow.capabilities.adapters.sql import SqlAdapter
 from apps.workflow.capabilities.config import ChatBIConfig
-from apps.headless.schemas import DataSetSchema, SchemaElement
-from apps.headless.sql_compiler import SemanticSQLCompileResult
+from apps.semantic.schemas import DatasetSchema, SchemaElement
+from apps.semantic.sql_compiler import SemanticSQLCompileResult
 
 
-class FakeHeadlessSchemaBuilder:
-    def __init__(self, schema: DataSetSchema) -> None:
+class FakeSemanticSchemaBuilder:
+    def __init__(self, schema: DatasetSchema) -> None:
         self.schema = schema
         self.calls: list[tuple[int, int]] = []
 
-    def build_dataset_schema(self, oid: int, dataset_id: int) -> DataSetSchema:
+    def build_dataset_schema(self, oid: int, dataset_id: int) -> DatasetSchema:
         self.calls.append((oid, dataset_id))
         return self.schema
 
 
-def test_sql_adapter_generates_sql_from_headless_selected_assets():
-    schema = DataSetSchema(
+def test_sql_adapter_generates_sql_from_semantic_selected_assets():
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=20,
             data_set_name="档口经营分析",
@@ -65,7 +65,7 @@ def test_sql_adapter_generates_sql_from_headless_selected_assets():
             )
         ],
     )
-    schema_builder = FakeHeadlessSchemaBuilder(schema)
+    schema_builder = FakeSemanticSchemaBuilder(schema)
     adapter = SqlAdapter(schema_builder=schema_builder)
 
     result = adapter.generate(
@@ -96,7 +96,7 @@ def test_sql_adapter_generates_sql_from_headless_selected_assets():
         ),
         "strategy": "semantic_sql_compiler",
         "datasource_id": 5,
-        "explanation": "基于 Headless 语义资产生成 SQL",
+        "explanation": "基于 Semantic 语义资产生成 SQL",
         "used_assets": [
             {"asset_type": "METRIC", "asset_id": 100, "biz_name": "visit_uv"},
             {"asset_type": "DIMENSION", "asset_id": 200, "biz_name": "stat_date"},
@@ -105,7 +105,7 @@ def test_sql_adapter_generates_sql_from_headless_selected_assets():
 
 
 def test_sql_adapter_treats_filter_dimensions_as_where_conditions_only():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=20,
             data_set_name="档口经营分析",
@@ -162,7 +162,7 @@ def test_sql_adapter_treats_filter_dimensions_as_where_conditions_only():
             ),
         ],
     )
-    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema))
+    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema))
 
     result = adapter.generate(
         {
@@ -213,7 +213,7 @@ def test_sql_adapter_treats_filter_dimensions_as_where_conditions_only():
 
 
 def test_sql_adapter_does_not_select_dimension_mentions_for_plain_metric_query():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=20,
             data_set_name="店铺经营分析",
@@ -275,7 +275,7 @@ def test_sql_adapter_does_not_select_dimension_mentions_for_plain_metric_query()
     compiler = CapturingCompiler(
         "select stall_traffic.total_customer_cnt_online as total_customer_cnt_online from stall_traffic_1d stall_traffic"
     )
-    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=compiler)
+    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=compiler)
 
     adapter.generate(
         {
@@ -351,7 +351,7 @@ class CapturingCompiler:
 
 
 def test_sql_adapter_uses_separated_group_dimensions_and_time_filters():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=20,
             data_set_name="店铺经营分析",
@@ -397,7 +397,7 @@ def test_sql_adapter_uses_separated_group_dimensions_and_time_filters():
         "select stall_order.stall_id, sum(stall_order.gmv_total) as gmv_total "
         "from stall_traffic_1d stall_order group by stall_order.stall_id"
     )
-    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=compiler)
+    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=compiler)
 
     adapter.generate(
         {
@@ -436,7 +436,7 @@ def test_sql_adapter_uses_separated_group_dimensions_and_time_filters():
 
 
 def test_sql_adapter_passes_ranking_order_and_limit_to_compiler():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=20,
             data_set_name="档口经营分析",
@@ -474,7 +474,7 @@ def test_sql_adapter_passes_ranking_order_and_limit_to_compiler():
         "from stall_traffic_1d stall_order group by stall_order.stall_id "
         "order by gmv_sale desc limit 5"
     )
-    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=compiler)
+    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=compiler)
 
     adapter.generate(
         {
@@ -506,7 +506,7 @@ def test_sql_adapter_passes_ranking_order_and_limit_to_compiler():
 
 
 def test_sql_adapter_rejects_unsafe_generated_sql():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=20,
             data_set_name="档口经营分析",
@@ -529,7 +529,7 @@ def test_sql_adapter_rejects_unsafe_generated_sql():
         ],
         dimensions=[],
     )
-    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=UnsafeCompiler())
+    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=UnsafeCompiler())
 
     with pytest.raises(ValueError, match="unsafe_statement"):
         adapter.generate(
@@ -541,7 +541,7 @@ def test_sql_adapter_rejects_unsafe_generated_sql():
 
 
 def test_sql_adapter_passes_repair_context_to_compiler_on_retry():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=20,
             data_set_name="档口经营分析",
@@ -576,7 +576,7 @@ def test_sql_adapter_passes_repair_context_to_compiler_on_retry():
         dimensions=[],
     )
     compiler = CapturingCompiler("select sum(stall_traffic.visit_uv) as visit_uv from stall_traffic_1d stall_traffic")
-    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=compiler)
+    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=compiler)
 
     adapter.generate(
         {
@@ -612,7 +612,7 @@ def test_sql_adapter_passes_repair_context_to_compiler_on_retry():
 
 
 def test_sql_adapter_rejects_retry_when_regenerated_sql_is_same_as_failed_sql():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=20,
             data_set_name="档口经营分析",
@@ -636,7 +636,7 @@ def test_sql_adapter_rejects_retry_when_regenerated_sql_is_same_as_failed_sql():
         dimensions=[],
     )
     failed_sql = "select sum(visit_uv) as visit_uv from missing_table"
-    adapter = SqlAdapter(schema_builder=FakeHeadlessSchemaBuilder(schema), compiler=CapturingCompiler(failed_sql))
+    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=CapturingCompiler(failed_sql))
 
     with pytest.raises(ValueError, match="SQL_REPAIR_REGENERATED_SAME_SQL"):
         adapter.generate(
@@ -832,7 +832,7 @@ def test_sql_adapter_returns_stable_failure_when_artifact_write_fails():
 
 
 def test_sql_adapter_executes_cross_model_plans_as_independent_queries():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=20,
             data_set_name="经营分析",
@@ -886,7 +886,7 @@ def test_sql_adapter_executes_cross_model_plans_as_independent_queries():
         ToolResult(success=True, payload={"fields": ["value"], "data": [{"value": 10}]})
     )
     adapter = SqlAdapter(
-        schema_builder=FakeHeadlessSchemaBuilder(schema),
+        schema_builder=FakeSemanticSchemaBuilder(schema),
         execute_tool=execute_tool,
     )
 
@@ -1170,7 +1170,7 @@ def test_sql_adapter_marks_repairable_table_error_with_retry_plan():
 
 def test_execute_split_preserves_sub_plan_role_for_share_analysis_e2e():
     """角色丢失就是 G3/G4 静默降级：R1 回归测试。"""
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=30,
             data_set_name="档口经营分析",
@@ -1239,7 +1239,7 @@ def test_execute_split_preserves_sub_plan_role_for_share_analysis_e2e():
             )
 
     adapter = SqlAdapter(
-        schema_builder=FakeHeadlessSchemaBuilder(schema),
+        schema_builder=FakeSemanticSchemaBuilder(schema),
         execute_tool=RoleAwareFakeSqlExecuteTool(),
     )
 

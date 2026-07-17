@@ -8,14 +8,14 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
-from apps.headless.service import HeadlessSchemaBuilder
+from apps.semantic.service import SemanticSchemaBuilder
 from apps.retrieval.embedding import (
     EmbeddingProvider,
     OpenAICompatibleEmbeddingProvider,
     SentenceTransformerEmbeddingProvider,
 )
 from apps.retrieval.errors import RetrievalConfigurationError
-from apps.retrieval.headless import (
+from apps.retrieval.semantic_runtime import (
     ObservedEmbeddingProvider,
     RetrievalEmbeddingRuntimeConfig,
 )
@@ -53,7 +53,7 @@ class SemanticBindingRunner:
         embedding_config: RetrievalEmbeddingRuntimeConfig | None = None,
         hybrid_config: HybridRetrievalConfig | None = None,
         policy: SemanticBindingPolicy | None = None,
-        schema_builder: HeadlessSchemaBuilder | None = None,
+        schema_builder: SemanticSchemaBuilder | None = None,
     ) -> None:
         self._embedding_provider = embedding_provider
         self._embedding_config = embedding_config or RetrievalEmbeddingRuntimeConfig.from_settings(
@@ -123,7 +123,7 @@ class SemanticBindingRunner:
             config=self._hybrid_config,
         ).retrieve(strategy_request)
         policy_result = self._policy.apply(recall)
-        schema_builder = self._schema_builder or HeadlessSchemaBuilder(session)
+        schema_builder = self._schema_builder or SemanticSchemaBuilder(session)
         schema = schema_builder.build_dataset_schema(
             request.tenant_id,
             request.scope.dataset_ids[0],

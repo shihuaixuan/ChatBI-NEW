@@ -4,7 +4,7 @@
 >
 > 日期：2026-07-15
 >
-> 范围：Headless 语义资产、SQL 示例、未来 Youtu 类知识库，以及 Graph/Agent 的统一检索入口
+> 范围：Semantic 语义资产、SQL 示例、未来 Youtu 类知识库，以及 Graph/Agent 的统一检索入口
 >
 > 实施计划：[RETRIEVAL_PLATFORM_IMPLEMENTATION_PLAN.md](./RETRIEVAL_PLATFORM_IMPLEMENTATION_PLAN.md)
 >
@@ -17,7 +17,7 @@
 1. **知识建模**：哪些对象适合转成可检索文档，哪些对象应保留为关系、规则或实时查询。
 2. **查询建模**：用户原问题、上下文重写结果、指标/维度槽位和分析形态如何形成检索请求。
 3. **召回与决策**：精确匹配、关键词、向量、关系扩展和重排如何协作，并能可靠判断命中、歧义和未命中。
-4. **工程边界**：Graph 和 Agent 共享同一个能力层，Headless、知识库等作为数据源接入，避免编排层反向依赖。
+4. **工程边界**：Graph 和 Agent 共享同一个能力层，Semantic、知识库等作为数据源接入，避免编排层反向依赖。
 5. **存储与生命周期**：源数据、检索文档、向量、索引任务、模型版本和查询审计如何分离并保持一致。
 
 ### 1.1 两种不同的检索目标
@@ -58,7 +58,7 @@ M0 评估时，项目曾具备指标专用 pgvector 表、文本构造、向量�
 M1 已完成前 2、3、6 项的入口治理：检索核心已下沉到 `apps.retrieval`，Graph 与 Agent
 共用 `RetrievalService`，通道状态通过统一 diagnostics 输出，已知故障显式词法降级，
 未知异常直接失败。P1-1 进一步新增独立 source/resource/unit/embedding/index job/query trace
-存储和 `080_retrieval_storage_p1` migration。P1-2 已实现 Headless 数据集主题域、模型、指标、
+存储和 `080_retrieval_storage_p1` migration。P1-2 已实现 Semantic 数据集主题域、模型、指标、
 维度、术语和受控维值的细粒度 Projector，SQL、字段、Join condition 和权限条件不会进入
 embedding 文本。
 P1-3 新增 generation 状态表、批量 embedding 端口和统一 IndexingService：每次增量构建形成
@@ -70,7 +70,7 @@ active generation 保留数据级回滚能力。
 
 ## 3. 哪些数据应该被向量化
 
-### 3.1 Headless 语义资产
+### 3.1 Semantic 语义资产
 
 一个业务资产可以投影成多个“检索单元”，检索命中后再折叠回同一个资源。这样比把所有字段拼成一段大文本更容易控制权重和解释命中原因。
 
@@ -107,7 +107,7 @@ P1-2 的投影契约使用两类 hash 表达不同不变量：
   `retrieval_embedding.text_hash`；ACL、Join 或关系 metadata 单独变化时不重复计算向量。
 
 指标别名只属于 `identity`，定义只属于 `definition`，聚合与模型关系只属于 `usage`；维度和
-术语采用同样的单元隔离。敏感级别大于 0 的 Headless 资产在统一 Projector 入口直接排除。
+术语采用同样的单元隔离。敏感级别大于 0 的 Semantic 资产在统一 Projector 入口直接排除。
 数据集以 `identity/definition/subject_domain` 单元承载名称、范围和主题域摘要；模型以
 `identity/scope` 单元承载业务名称、所属主题域及安全的指标/维度名称摘要。物理表名、字段、
 SQL 和 Join 条件均不进入这两类文本。
@@ -293,7 +293,7 @@ RRF(resource) = sum(1 / (k + rank_channel(resource)))，初始 k = 60
 
 ### 6.1 模块边界
 
-建议新增独立 bounded context：`backend/apps/retrieval`。它可以依赖 Headless、知识库等来源适配器，但不得依赖 Graph 或 Agent。
+建议新增独立 bounded context：`backend/apps/retrieval`。它可以依赖 Semantic、知识库等来源适配器，但不得依赖 Graph 或 Agent。
 
 ```mermaid
 flowchart TB
@@ -309,7 +309,7 @@ flowchart TB
         Indexer["IndexingService"]
     end
     subgraph Sources["数据源适配器"]
-        Headless["HeadlessSourceAdapter"]
+        Semantic["SemanticSourceAdapter"]
         KB["KnowledgeBaseSourceAdapter"]
         Example["SqlExemplarSourceAdapter"]
     end
@@ -502,7 +502,7 @@ flowchart LR
 ### Phase 1：统一入口，不改变召回算法
 
 - 建立 `apps.retrieval.RetrievalService`。
-- 把当前 `HeadlessKnowledgeAdapter` 中的检索核心下沉，移除 capabilities 对 workflow 的反向依赖。
+- 把当前 `SemanticKnowledgeAdapter` 中的检索核心下沉，移除 capabilities 对 workflow 的反向依赖。
 - Graph 和 Agent 注入同一个 service；删除“入口是否传 session 决定是否向量检索”的差异。
 - 暂时封装旧关键词/指标向量通道，但补充显式 channel diagnostics。
 
@@ -511,7 +511,7 @@ flowchart LR
 ### Phase 2：统一文档与索引生命周期
 
 - 落地 resource/unit/embedding/job 表。
-- 实现 Headless projector，覆盖指标、维度、术语和选择性维值。
+- 实现 Semantic projector，覆盖指标、维度、术语和选择性维值。
 - 使用 outbox、增量任务、generation 激活和定时对账。
 - 迁移现有指标向量，重建过程不删除在线旧 generation。
 

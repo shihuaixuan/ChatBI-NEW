@@ -14,7 +14,7 @@ from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user,
     list_chats, get_chat_with_records, create_chat, get_chat_chart_data, get_chat_predict_data, get_chat_with_records_with_data, get_chat_record_by_id, \
     format_json_data, format_json_list_data, get_chart_config, list_recent_questions, rename_chat_with_user, get_chat_log_history, get_chart_data_with_user_live
 from apps.chat.models.chat_model import AxisObj, Chat, ChatInfo, ChatQuestion, ChatRecord, CreateChat, RenameChat
-from apps.chat.services.headless_binding import DatasetBindingError
+from apps.chat.services.semantic_binding import DatasetBindingError
 from apps.chat.task.llm import LLMService
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from common.core.deps import CurrentAssistant, SessionDep, CurrentUser, Trans

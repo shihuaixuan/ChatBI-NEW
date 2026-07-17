@@ -27,7 +27,7 @@
 - `waiting_input` Run 可以在重新打开会话后继续处理澄清。
 - Run 与 ChatRecord 的生命周期状态保持一致。
 - 删除会话时清理全部关联 Workflow 数据和 Artifact。
-- 独立 Headless Graph 执行保持可用，并与聊天执行具有明确不同的入口语义。
+- 独立 Semantic Graph 执行保持可用，并与聊天执行具有明确不同的入口语义。
 
 ## 3. 非目标
 
@@ -90,7 +90,7 @@ ChatRecord 是面向用户的稳定读模型，负责保存：
 2. 一个 Graph ChatRecord 最多关联一个 WorkflowRun。
 3. 重试沿用原 Run 和原 ChatRecord，不创建第二条历史。
 4. 终态 ChatRecord 必须能够脱离 Graph Context 独立展示。
-5. 独立 Headless Run 必须通过明确的独立执行入口创建，不能由交互式入口漏传 `chat_id` 后静默产生。
+5. 独立 Semantic Run 必须通过明确的独立执行入口创建，不能由交互式入口漏传 `chat_id` 后静默产生。
 6. Workflow 数据与会话同生命周期。
 
 ## 5. 数据模型
@@ -174,7 +174,7 @@ POST /graph/queries
 POST /graph/queries/stream
 ```
 
-该入口用于 Headless、调试和评估，不创建 ChatRecord，`workflow_run.chat_id` 与 `record_id` 均为空。
+该入口用于 Semantic、调试和评估，不创建 ChatRecord，`workflow_run.chat_id` 与 `record_id` 均为空。
 
 ### 6.3 Run 响应
 
@@ -327,7 +327,7 @@ Chat
 3. 清理执行器删除 Artifact 正文并把任务标记为 `succeeded`；
 4. 删除失败时把任务标记为 `failed`，记录 `last_error`，并按明确的重试策略再次执行。
 
-删除接口必须幂等。独立 Headless Run 不受会话删除影响。
+删除接口必须幂等。独立 Semantic Run 不受会话删除影响。
 
 ## 12. 旧数据策略
 
@@ -365,7 +365,7 @@ Chat
 ### 13.4 删除测试
 
 - 删除会话后全部关联 Workflow 数据消失；
-- 独立 Headless Run 不受影响；
+- 独立 Semantic Run 不受影响；
 - Artifact 删除失败产生可重试任务；
 - 删除接口重复调用保持幂等。
 
@@ -412,5 +412,5 @@ Chat
 2. 刷新、重新登录和切换会话不会丢失历史答案。
 3. WorkflowRun 与 ChatRecord 状态不存在漂移。
 4. 会话删除后不遗留关联 Workflow 数据。
-5. 独立 Headless Graph 能力保持兼容。
+5. 独立 Semantic Graph 能力保持兼容。
 6. 不自动回填或错误关联旧孤立 Run。

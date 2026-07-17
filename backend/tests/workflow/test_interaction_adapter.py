@@ -3,15 +3,15 @@ from apps.workflow.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
 from apps.workflow.capabilities.real import RealChatBICapabilityGateway
-from apps.headless.schemas import DataSetSchema, SchemaElement
+from apps.semantic.schemas import DatasetSchema, SchemaElement
 
 
-class FakeHeadlessSchemaBuilder:
-    def __init__(self, schema: DataSetSchema) -> None:
+class FakeSemanticSchemaBuilder:
+    def __init__(self, schema: DatasetSchema) -> None:
         self.schema = schema
         self.calls: list[tuple[int, int]] = []
 
-    def build_dataset_schema(self, oid: int, dataset_id: int) -> DataSetSchema:
+    def build_dataset_schema(self, oid: int, dataset_id: int) -> DatasetSchema:
         self.calls.append((oid, dataset_id))
         return self.schema
 
@@ -113,7 +113,7 @@ def test_interaction_adapter_prefers_knowledge_candidates_for_rewrite_options():
 
 
 def test_interaction_adapter_loads_schema_candidates_when_knowledge_is_absent():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=30,
             data_set_name="店铺明细数据集",
@@ -143,7 +143,7 @@ def test_interaction_adapter_loads_schema_candidates_when_knowledge_is_absent():
             )
         ],
     )
-    schema_builder = FakeHeadlessSchemaBuilder(schema)
+    schema_builder = FakeSemanticSchemaBuilder(schema)
     adapter = InteractionAdapter(schema_builder=schema_builder)
 
     result = adapter.ask_rewrite_clarification(
@@ -257,7 +257,7 @@ def test_interaction_adapter_builds_dimension_slot_clarification_card():
 
 
 def test_interaction_adapter_builds_subject_domain_slot_clarification_card():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=30,
             data_set_name="经营分析",
@@ -271,7 +271,7 @@ def test_interaction_adapter_builds_subject_domain_slot_clarification_card():
             {"domain_id": 2, "name": "商品", "biz_name": "product", "description": "商品经营主题", "model_ids": [11]},
         ],
     )
-    schema_builder = FakeHeadlessSchemaBuilder(schema)
+    schema_builder = FakeSemanticSchemaBuilder(schema)
     adapter = InteractionAdapter(schema_builder=schema_builder)
 
     result = adapter.ask_slot_clarification(

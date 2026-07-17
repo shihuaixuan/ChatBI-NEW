@@ -1,12 +1,12 @@
-# ChatBI Headless 单表查询 P0 Implementation Plan
+# ChatBI Semantic 单表查询 P0 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 修复首期五张单表模型的资产绑定、查询计划和 SQL 编译，使 20 个标准问题的接口结果与基线答案一致。
 
-**Architecture:** 保留现有 ChatBI v1 工作流节点，在意图结果与 Headless 检索结果之间增加严格的查询计划语义；候选资产先按用户提及和主模型裁剪，再交给 SQL 编译器。SQL 编译器扩展排序、限制、派生指标及单模型校验，当前数据集资产通过幂等脚本同步修正。
+**Architecture:** 保留现有 ChatBI v1 工作流节点，在意图结果与 Semantic 检索结果之间增加严格的查询计划语义；候选资产先按用户提及和主模型裁剪，再交给 SQL 编译器。SQL 编译器扩展排序、限制、派生指标及单模型校验，当前数据集资产通过幂等脚本同步修正。
 
-**Tech Stack:** Python 3.11、FastAPI、SQLModel、Pydantic、PyMySQL、pytest、现有 Headless `SemanticSQLCompiler` 与 ChatBI Workflow Graph API。
+**Tech Stack:** Python 3.11、FastAPI、SQLModel、Pydantic、PyMySQL、pytest、现有 Semantic `SemanticSQLCompiler` 与 ChatBI Workflow Graph API。
 
 ---
 
@@ -16,8 +16,8 @@
 - 修改 `backend/apps/workflow/capabilities/adapters/knowledge.py`：按用户指标提及保留多指标，锁定主模型并按维度角色裁剪资产。
 - 修改 `backend/apps/workflow/capabilities/adapters/interaction.py`：指标交互支持一次选择多个指标。
 - 修改 `backend/apps/workflow/capabilities/adapters/sql.py`：把查询计划中的排序、限制和严格槽位传递给编译器。
-- 修改 `backend/apps/headless/sql_compiler.py`：支持排序、派生表达式、单模型约束和编译后语义校验。
-- 创建 `backend/scripts/configure_chatbi_first_phase_assets.py`：幂等修正数据集 243 的首期 Headless 资产。
+- 修改 `backend/apps/semantic/sql_compiler.py`：支持排序、派生表达式、单模型约束和编译后语义校验。
+- 创建 `backend/scripts/configure_chatbi_first_phase_assets.py`：幂等修正数据集 243 的首期 Semantic 资产。
 - 修改 `backend/scripts/evaluate_chatbi_first_phase.py`：保留回归基线并输出修复前后差异。
 - 修改对应测试文件：覆盖新增行为。
 
@@ -309,10 +309,10 @@ git commit -m "feat: support multi metric interaction"
 ### Task 4: 确定性 SQL 编译
 
 **Files:**
-- Modify: `backend/apps/headless/sql_compiler.py`
+- Modify: `backend/apps/semantic/sql_compiler.py`
 - Modify: `backend/apps/workflow/capabilities/adapters/sql.py`
-- Test: `backend/tests/headless/test_semantic_sql_compiler.py`
-- Test: `backend/tests/headless/test_sql_compiler_time_filters.py`
+- Test: `backend/tests/semantic/test_semantic_sql_compiler.py`
+- Test: `backend/tests/semantic/test_sql_compiler_time_filters.py`
 - Test: `backend/tests/workflow/test_sql_adapter.py`
 
 - [ ] **Step 1: 写排序、TopN、派生指标和单模型校验的失败测试**
@@ -349,8 +349,8 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/headless/test_semantic_sql_compiler.py \
-  tests/headless/test_sql_compiler_time_filters.py \
+uv run pytest tests/semantic/test_semantic_sql_compiler.py \
+  tests/semantic/test_sql_compiler_time_filters.py \
   tests/workflow/test_sql_adapter.py -q
 ```
 
@@ -394,8 +394,8 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/headless/test_semantic_sql_compiler.py \
-  tests/headless/test_sql_compiler_time_filters.py \
+uv run pytest tests/semantic/test_semantic_sql_compiler.py \
+  tests/semantic/test_sql_compiler_time_filters.py \
   tests/workflow/test_sql_adapter.py -q
 ```
 
@@ -404,19 +404,19 @@ Expected: 全部通过。
 - [ ] **Step 7: 提交**
 
 ```bash
-git add backend/apps/headless/sql_compiler.py \
+git add backend/apps/semantic/sql_compiler.py \
   backend/apps/workflow/capabilities/adapters/sql.py \
-  backend/tests/headless/test_semantic_sql_compiler.py \
-  backend/tests/headless/test_sql_compiler_time_filters.py \
+  backend/tests/semantic/test_semantic_sql_compiler.py \
+  backend/tests/semantic/test_sql_compiler_time_filters.py \
   backend/tests/workflow/test_sql_adapter.py
 git commit -m "feat: compile deterministic single model sql"
 ```
 
-### Task 5: 首期 Headless 资产幂等修正
+### Task 5: 首期 Semantic 资产幂等修正
 
 **Files:**
 - Create: `backend/scripts/configure_chatbi_first_phase_assets.py`
-- Test: `backend/tests/headless/test_chatbi_first_phase_asset_config.py`
+- Test: `backend/tests/semantic/test_chatbi_first_phase_asset_config.py`
 
 - [ ] **Step 1: 写资产配置计划的失败测试**
 
@@ -454,7 +454,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/headless/test_chatbi_first_phase_asset_config.py -q
+uv run pytest tests/semantic/test_chatbi_first_phase_asset_config.py -q
 ```
 
 Expected: FAIL，模块无法导入。
@@ -485,7 +485,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/headless/test_chatbi_first_phase_asset_config.py -q
+uv run pytest tests/semantic/test_chatbi_first_phase_asset_config.py -q
 ```
 
 Expected: 全部通过。
@@ -510,7 +510,7 @@ Expected: 第一次预览列出变化；执行成功；第二次预览显示无�
 
 ```bash
 git add backend/scripts/configure_chatbi_first_phase_assets.py \
-  backend/tests/headless/test_chatbi_first_phase_asset_config.py
+  backend/tests/semantic/test_chatbi_first_phase_asset_config.py
 git commit -m "feat: configure first phase headless assets"
 ```
 
@@ -527,7 +527,7 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/workflow tests/headless -q
+uv run pytest tests/workflow tests/semantic -q
 ```
 
 Expected: 全部通过，无新增失败。
@@ -543,7 +543,7 @@ uv run ruff check \
   apps/workflow/capabilities/adapters/knowledge.py \
   apps/workflow/capabilities/adapters/interaction.py \
   apps/workflow/capabilities/adapters/sql.py \
-  apps/headless/sql_compiler.py \
+  apps/semantic/sql_compiler.py \
   scripts/configure_chatbi_first_phase_assets.py \
   scripts/evaluate_chatbi_first_phase.py
 ```
@@ -591,8 +591,8 @@ Run:
 
 ```bash
 cd backend
-uv run pytest tests/workflow tests/headless -q
-uv run ruff check apps/workflow apps/headless scripts/configure_chatbi_first_phase_assets.py scripts/evaluate_chatbi_first_phase.py
+uv run pytest tests/workflow tests/semantic -q
+uv run ruff check apps/workflow apps/semantic scripts/configure_chatbi_first_phase_assets.py scripts/evaluate_chatbi_first_phase.py
 git diff --check
 ```
 

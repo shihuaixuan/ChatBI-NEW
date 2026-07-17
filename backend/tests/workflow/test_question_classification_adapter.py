@@ -25,7 +25,7 @@ class FakeModelClient:
 
 class FailingKnowledgeAdapter:
     def retrieve(self, request):
-        raise RuntimeError("headless failed")
+        raise RuntimeError("semantic failed")
 
 
 class FakeSqlAdapter:
@@ -182,5 +182,5 @@ def test_real_gateway_does_not_fallback_when_real_knowledge_node_fails():
         fallback_gateway=PlaceholderChatBICapabilityGateway(),
     )
 
-    with pytest.raises(RuntimeError, match="headless failed"):
+    with pytest.raises(RuntimeError, match="semantic failed"):
         gateway.invoke("knowledge.retrieve", _v1_request("今日访问人数", dataset_id=3), "run:knowledge")

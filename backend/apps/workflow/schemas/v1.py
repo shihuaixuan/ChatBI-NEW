@@ -66,7 +66,7 @@ class ImageProfileOutput(BaseModel):
 class IntentRecognitionOutput(BaseModel):
     """意图识别节点输出。
 
-    这里只表达自然语言层面的查询意图和检索线索，不确认 Headless 资产 ID。
+    这里只表达自然语言层面的查询意图和检索线索，不确认 Semantic 资产 ID。
     """
 
     intent_type: str

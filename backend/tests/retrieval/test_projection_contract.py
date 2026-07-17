@@ -33,7 +33,7 @@ def _knowledge_resource(**overrides) -> ProjectedResource:
     return ProjectedResource.model_validate(values)
 
 
-def test_projection_contract_supports_non_headless_knowledge_scope():
+def test_projection_contract_supports_non_semantic_knowledge_scope():
     resource = _knowledge_resource()
 
     assert resource.source_type == RetrievalSourceType.KNOWLEDGE_BASE

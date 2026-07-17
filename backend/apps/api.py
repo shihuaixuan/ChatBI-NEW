@@ -8,10 +8,8 @@ from apps.agent import api as agent
 from apps.dashboard.api import dashboard_api
 from apps.data_training.api import data_training
 from apps.datasource.api import datasource, recommended_problem, table_relation
-from apps.headless import api as headless
+from apps.semantic import api as semantic
 from apps.mcp import mcp
-from apps.semantic import api_asset_debug
-from apps.semantic.api import semantic
 from apps.settings.api import base
 from apps.system.api import (
     aimodel,
@@ -50,9 +48,7 @@ api_router.include_router(apikey.router)
 api_router.include_router(recommended_problem.router)
 
 api_router.include_router(variable_api.router)
-api_router.include_router(headless.router)
 api_router.include_router(semantic.router)
-api_router.include_router(api_asset_debug.router)
 api_router.include_router(graph_workflow.router)
 
 # 前端登录加密与授权初始化依赖 xpack 提供的 key/license/status 接口。

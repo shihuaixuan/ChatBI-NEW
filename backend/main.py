@@ -17,8 +17,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from alembic import command
 from apps.api import api_router
-from apps.retrieval.headless_worker import submit_pending_headless_index_jobs
-from apps.semantic.services.semantic_embedding import submit_missing_approved_embeddings
+from apps.retrieval.semantic_worker import submit_pending_semantic_index_jobs
 from apps.swagger.i18n import (
     DEFAULT_LANG,
     PLACEHOLDER_PREFIX,
@@ -68,10 +67,6 @@ def init_table_and_ds_embedding():
     fill_empty_table_and_ds_embeddings()
 
 
-def init_semantic_embedding():
-    submit_missing_approved_embeddings(limit=100)
-
-
 def mount_xpack_static(app: FastAPI):
     static_path = Path(sqlbot_xpack.__file__).resolve().parent / "static"
     app.mount(
@@ -90,8 +85,7 @@ async def lifespan(app: FastAPI):
     init_terminology_embedding_data()
     init_data_training_embedding_data()
     init_table_and_ds_embedding()
-    init_semantic_embedding()
-    submit_pending_headless_index_jobs()
+    submit_pending_semantic_index_jobs()
     SQLBotLogUtil.info("✅ Numora 初始化完成")
     await sqlbot_xpack.core.clean_xpack_cache()
     await async_model_info()  # 异步加密已有模型的密钥和地址

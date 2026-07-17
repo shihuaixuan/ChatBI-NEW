@@ -11,7 +11,7 @@
 - 问题重写。
 - 图表画像节点。
 - 意图识别。
-- Headless knowledge 检索。
+- Semantic knowledge 检索。
 - 指标歧义识别。
 - 进入 `ask_metric_selection` 等待用户选择。
 - 用户回答后恢复 run。
@@ -21,7 +21,7 @@
 当前已完成的知识检索优化：
 
 - `recognize_intent` 输出自然语言槽位线索：`metric_mentions`、`dimension_mentions`、`time_mentions`、`filter_mentions`、`required_slot_types`、`query_shape`。
-- `knowledge.retrieve` 已改为优先按上述 mention 分槽位召回 Headless 候选。
+- `knowledge.retrieve` 已改为优先按上述 mention 分槽位召回 Semantic 候选。
 - `rewritten_question` 只在必需槽位缺候选时作为 fallback。
 - 候选经过 `SemanticBindingPolicy` 门控，并保留通道分数、排名和 reason codes。
 - 已通过单元测试验证：“访问人数”优先于“转化人数/关注人数”等仅部分重叠候选；只有“人数”这种弱词时仍保留 `metric_ambiguous`。
@@ -46,7 +46,7 @@
 
 ```bash
 cd /Users/twenty/LLM/ChatBI/SQLBot/backend
-uv run pytest tests/headless tests/workflow_engine tests/workflow -q
+uv run pytest tests/semantic tests/workflow_engine tests/workflow -q
 ```
 
 结果：
@@ -57,7 +57,7 @@ uv run pytest tests/headless tests/workflow_engine tests/workflow -q
 
 说明：
 
-- Headless 语义资产测试通过。
+- Semantic 语义资产测试通过。
 - Workflow engine 测试通过。
 - ChatBI workflow adapter 和 v1 flow 测试通过。
 - 自动化测试里的图流程、交互恢复、SQL repair、推荐问题、澄清交互均未出现回归。
@@ -219,7 +219,7 @@ ask_metric_selection
 说明：
 
 - 识别为普通指标查询。
-- 新字段只表达自然语言层面的检索线索，不代表已经绑定 Headless 资产。
+- 新字段只表达自然语言层面的检索线索，不代表已经绑定 Semantic 资产。
 - 没有进入 `ask_intent_clarification`。
 
 ### 6.5 `retrieve_knowledge`
@@ -415,7 +415,7 @@ POST /graph/runs/flow-test-v1-current-1/interactions/515aff47-cfcb-4472-aff3-2dd
   "sql": "select sum(stall_traffic_metrics.convert_uv) as convert_uv from stall_traffic_metrics stall_traffic_metrics limit 100",
   "strategy": "semantic_sql_compiler",
   "datasource_id": 10,
-  "explanation": "基于 Headless 语义资产生成 SQL",
+  "explanation": "基于 Semantic 语义资产生成 SQL",
   "used_assets": [
     {
       "asset_type": "METRIC",
@@ -510,7 +510,7 @@ apps.datasource.crud.datasource
 - 真实问题分类降级。
 - 问题重写。
 - 意图识别。
-- Headless 知识检索。
+- Semantic 知识检索。
 - 指标歧义识别。
 - 指标选择交互。
 - 用户回答恢复。
@@ -542,7 +542,7 @@ apps.datasource.crud.datasource
 
 - 第一阶段 slot-aware rerank 已完成。
 - 下一步继续接入 BM25 / embedding / hybrid score，增强候选召回与重排。
-- 补充 Headless 资产同义词/别名治理，例如“访问人数/访客数/UV/访问量”。
+- 补充 Semantic 资产同义词/别名治理，例如“访问人数/访客数/UV/访问量”。
 
 SQL 执行侧：
 

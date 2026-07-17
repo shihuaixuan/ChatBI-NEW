@@ -61,7 +61,7 @@ def _hit(asset_id: int) -> RetrievalHit:
     return RetrievalHit(
         resource_id=f"headless:metric:{asset_id}",
         resource_type=RetrievalResourceType.METRIC,
-        source_type=RetrievalSourceType.HEADLESS,
+        source_type=RetrievalSourceType.SEMANTIC,
         source_id="headless:dataset:3",
         source_resource_id=str(asset_id),
         unit_id=f"headless:metric:{asset_id}:identity",

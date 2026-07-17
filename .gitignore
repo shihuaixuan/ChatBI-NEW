@@ -20,6 +20,8 @@ backend/tests/*
 !backend/tests/capabilities/**
 !backend/tests/retrieval/
 !backend/tests/retrieval/**
+!backend/tests/semantic/
+!backend/tests/semantic/**
 !backend/tests/workflow/
 !backend/tests/workflow/**
 backend/tests/retrieval/baselines/graph_baseline.json

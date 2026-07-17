@@ -21,21 +21,21 @@ from sqlmodel import Session, select
 from apps.chat.models.chat_model import Chat, ChatRecord
 from apps.workflow import runtime as chatbi_runtime
 from apps.workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
-from apps.headless.models import (
-    HeadlessAssetDocument,
-    HeadlessDataSet,
-    HeadlessDataSetAsset,
-    HeadlessDataSetModelConfig,
-    HeadlessDimension,
-    HeadlessDomain,
-    HeadlessMetric,
-    HeadlessModel,
-    HeadlessSchemaIndex,
+from apps.semantic.models import (
+    SemanticAssetDocument,
+    SemanticDataset,
+    SemanticDatasetAsset,
+    SemanticDatasetModelConfig,
+    SemanticDimension,
+    SemanticDomain,
+    SemanticMetric,
+    SemanticModel,
+    SemanticSchemaIndex,
 )
 from apps.retrieval.embedding import StaticEmbeddingProvider
-from apps.retrieval.headless_indexing import (
-    HeadlessIndexCoordinator,
-    build_headless_index_profile,
+from apps.retrieval.semantic_indexing import (
+    SemanticIndexCoordinator,
+    build_semantic_index_profile,
 )
 from apps.retrieval.indexing import RetrievalIndexingService
 from apps.workflow_engine.api import router as graph_router
@@ -157,41 +157,41 @@ def _cleanup(session: Session) -> None:
     session.execute(delete(NodeExecutionModel).where(NodeExecutionModel.run_id.like("api-%")))
     session.execute(delete(WorkflowEventModel).where(WorkflowEventModel.run_id.like("api-%")))
     session.execute(delete(WorkflowRunModel).where(WorkflowRunModel.run_id.like("api-%")))
-    _cleanup_headless_fixture(session)
+    _cleanup_semantic_fixture(session)
     session.commit()
 
 
-def _cleanup_headless_fixture(session: Session, oid: int = 9501) -> None:
+def _cleanup_semantic_fixture(session: Session, oid: int = 9501) -> None:
     dataset_ids = session.exec(
-        select(HeadlessDataSet.id).where(HeadlessDataSet.oid == oid, HeadlessDataSet.biz_name == "api_stall_dataset")
+        select(SemanticDataset.id).where(SemanticDataset.oid == oid, SemanticDataset.biz_name == "api_stall_dataset")
     ).all()
     model_ids = session.exec(
-        select(HeadlessModel.id).where(HeadlessModel.oid == oid, HeadlessModel.biz_name == "api_stall_traffic_model")
+        select(SemanticModel.id).where(SemanticModel.oid == oid, SemanticModel.biz_name == "api_stall_traffic_model")
     ).all()
     domain_ids = session.exec(
-        select(HeadlessDomain.id).where(HeadlessDomain.oid == oid, HeadlessDomain.biz_name == "api_graph_v1_domain")
+        select(SemanticDomain.id).where(SemanticDomain.oid == oid, SemanticDomain.biz_name == "api_graph_v1_domain")
     ).all()
     if dataset_ids:
-        session.execute(delete(HeadlessAssetDocument).where(HeadlessAssetDocument.dataset_id.in_(dataset_ids)))
-        session.execute(delete(HeadlessSchemaIndex).where(HeadlessSchemaIndex.dataset_id.in_(dataset_ids)))
-        session.execute(delete(HeadlessDataSetAsset).where(HeadlessDataSetAsset.dataset_id.in_(dataset_ids)))
-        session.execute(delete(HeadlessDataSetModelConfig).where(HeadlessDataSetModelConfig.dataset_id.in_(dataset_ids)))
-        session.execute(delete(HeadlessDataSet).where(HeadlessDataSet.id.in_(dataset_ids)))
+        session.execute(delete(SemanticAssetDocument).where(SemanticAssetDocument.dataset_id.in_(dataset_ids)))
+        session.execute(delete(SemanticSchemaIndex).where(SemanticSchemaIndex.dataset_id.in_(dataset_ids)))
+        session.execute(delete(SemanticDatasetAsset).where(SemanticDatasetAsset.dataset_id.in_(dataset_ids)))
+        session.execute(delete(SemanticDatasetModelConfig).where(SemanticDatasetModelConfig.dataset_id.in_(dataset_ids)))
+        session.execute(delete(SemanticDataset).where(SemanticDataset.id.in_(dataset_ids)))
     if model_ids:
-        session.execute(delete(HeadlessMetric).where(HeadlessMetric.model_id.in_(model_ids)))
-        session.execute(delete(HeadlessDimension).where(HeadlessDimension.model_id.in_(model_ids)))
-        session.execute(delete(HeadlessModel).where(HeadlessModel.id.in_(model_ids)))
+        session.execute(delete(SemanticMetric).where(SemanticMetric.model_id.in_(model_ids)))
+        session.execute(delete(SemanticDimension).where(SemanticDimension.model_id.in_(model_ids)))
+        session.execute(delete(SemanticModel).where(SemanticModel.id.in_(model_ids)))
     if domain_ids:
-        session.execute(delete(HeadlessDomain).where(HeadlessDomain.id.in_(domain_ids)))
+        session.execute(delete(SemanticDomain).where(SemanticDomain.id.in_(domain_ids)))
 
 
-def _seed_v1_headless_dataset(session: Session, oid: int = 9501) -> int:
-    _cleanup_headless_fixture(session, oid=oid)
-    domain = HeadlessDomain(oid=oid, name="API 测试域", biz_name="api_graph_v1_domain")
+def _seed_v1_semantic_dataset(session: Session, oid: int = 9501) -> int:
+    _cleanup_semantic_fixture(session, oid=oid)
+    domain = SemanticDomain(oid=oid, name="API 测试域", biz_name="api_graph_v1_domain")
     session.add(domain)
     session.flush()
 
-    model = HeadlessModel(
+    model = SemanticModel(
         oid=oid,
         domain_id=domain.id or 0,
         datasource_id=7001,
@@ -209,7 +209,7 @@ def _seed_v1_headless_dataset(session: Session, oid: int = 9501) -> int:
     session.add(model)
     session.flush()
 
-    metric = HeadlessMetric(
+    metric = SemanticMetric(
         oid=oid,
         model_id=model.id or 0,
         name="访问人数",
@@ -219,7 +219,7 @@ def _seed_v1_headless_dataset(session: Session, oid: int = 9501) -> int:
         default_agg="SUM",
         fields=["visit_uv"],
     )
-    dimension = HeadlessDimension(
+    dimension = SemanticDimension(
         oid=oid,
         model_id=model.id or 0,
         name="档口",
@@ -230,7 +230,7 @@ def _seed_v1_headless_dataset(session: Session, oid: int = 9501) -> int:
     session.add(dimension)
     session.flush()
 
-    dataset = HeadlessDataSet(
+    dataset = SemanticDataset(
         oid=oid,
         domain_id=domain.id or 0,
         name="API 店铺数据集",
@@ -248,8 +248,8 @@ def _seed_v1_headless_dataset(session: Session, oid: int = 9501) -> int:
     )
     session.add(dataset)
     session.flush()
-    profile = build_headless_index_profile()
-    queued = HeadlessIndexCoordinator(session, profile).enqueue_dataset_rebuild(
+    profile = build_semantic_index_profile()
+    queued = SemanticIndexCoordinator(session, profile).enqueue_dataset_rebuild(
         tenant_id=oid,
         dataset=dataset,
     )
@@ -269,7 +269,7 @@ def _seed_graph_chat() -> tuple[int, int]:
     now = datetime.now()
     with Session(engine) as session:
         _cleanup(session)
-        dataset_id = _seed_v1_headless_dataset(session)
+        dataset_id = _seed_v1_semantic_dataset(session)
         chat = Chat(
             oid=9501,
             create_time=now,
@@ -828,7 +828,7 @@ def test_graph_query_stream_creates_run_and_streams_execution_events():
 def test_graph_query_stream_waiting_input_event_contains_pending_interaction():
     with Session(engine) as session:
         _cleanup(session)
-        dataset_id = _seed_v1_headless_dataset(session)
+        dataset_id = _seed_v1_semantic_dataset(session)
 
     with _client().stream(
         "POST",
@@ -969,7 +969,7 @@ def test_stream_run_events_waits_for_resume_worker_before_closing_on_old_waiting
 def test_graph_query_can_execute_chatbi_v1_graph():
     with Session(engine) as session:
         _cleanup(session)
-        dataset_id = _seed_v1_headless_dataset(session)
+        dataset_id = _seed_v1_semantic_dataset(session)
 
     response = _client().post(
         "/graph/queries",
@@ -1018,7 +1018,7 @@ def test_graph_chat_query_loads_previous_semantic_context():
     now = datetime.now()
     with Session(engine) as session:
         _cleanup(session)
-        dataset_id = _seed_v1_headless_dataset(session)
+        dataset_id = _seed_v1_semantic_dataset(session)
         chat = Chat(
             oid=9501,
             create_time=now,
@@ -1251,7 +1251,7 @@ def test_graph_v1_classification_model_failure_degrades_to_explanatory_answer(mo
 def test_graph_v1_interaction_response_resumes_runtime_to_final_reply():
     with Session(engine) as session:
         _cleanup(session)
-        dataset_id = _seed_v1_headless_dataset(session)
+        dataset_id = _seed_v1_semantic_dataset(session)
 
     created = _client().post(
         "/graph/queries",
@@ -1318,7 +1318,7 @@ def test_graph_v1_interaction_response_resumes_runtime_to_final_reply():
 def test_graph_trace_returns_node_status_route_reason_and_outputs():
     with Session(engine) as session:
         _cleanup(session)
-        dataset_id = _seed_v1_headless_dataset(session)
+        dataset_id = _seed_v1_semantic_dataset(session)
 
     _client().post(
         "/graph/queries",
@@ -1377,7 +1377,7 @@ def test_graph_trace_returns_node_status_route_reason_and_outputs():
 def test_graph_trace_is_derived_from_v1_node_metadata():
     with Session(engine) as session:
         _cleanup(session)
-        dataset_id = _seed_v1_headless_dataset(session)
+        dataset_id = _seed_v1_semantic_dataset(session)
 
     _client().post(
         "/graph/queries",
@@ -1413,7 +1413,7 @@ def test_graph_trace_is_derived_from_v1_node_metadata():
 def test_graph_node_events_use_v1_metadata_projection_for_public_summary():
     with Session(engine) as session:
         _cleanup(session)
-        dataset_id = _seed_v1_headless_dataset(session)
+        dataset_id = _seed_v1_semantic_dataset(session)
 
     _client().post(
         "/graph/queries",
@@ -1519,7 +1519,7 @@ def test_graph_trace_sanitizes_unified_split_execution_results():
 def test_graph_query_persists_node_execution_summaries_for_trace_and_retry():
     with Session(engine) as session:
         _cleanup(session)
-        dataset_id = _seed_v1_headless_dataset(session)
+        dataset_id = _seed_v1_semantic_dataset(session)
 
     response = _client().post(
         "/graph/queries",
@@ -1617,7 +1617,7 @@ def test_graph_v1_cancelled_waiting_run_cannot_resume_from_interaction():
 def test_graph_v1_retry_resumes_from_latest_context_without_clearing_variables():
     with Session(engine) as session:
         _cleanup(session)
-        dataset_id = _seed_v1_headless_dataset(session)
+        dataset_id = _seed_v1_semantic_dataset(session)
 
     _client().post(
         "/graph/queries",
@@ -1709,7 +1709,7 @@ def test_runnable_graph_flow_demo_can_print_chatbi_v1_nodes():
 
     with Session(engine) as session:
         _cleanup(session)
-        dataset_id = _seed_v1_headless_dataset(session)
+        dataset_id = _seed_v1_semantic_dataset(session)
 
     output = io.StringIO()
     with redirect_stdout(output):

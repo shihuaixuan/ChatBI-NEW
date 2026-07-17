@@ -23,7 +23,7 @@ from apps.workflow.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
 from apps.workflow.capabilities.real import RealChatBICapabilityGateway
-from apps.headless.schemas import DataSetSchema, SchemaElement
+from apps.semantic.schemas import DatasetSchema, SchemaElement
 
 
 class FakeModelClient:
@@ -110,12 +110,12 @@ class FakeSqlAdapter:
         }
 
 
-class FakeHeadlessSchemaBuilder:
-    def __init__(self, schema: DataSetSchema) -> None:
+class FakeSemanticSchemaBuilder:
+    def __init__(self, schema: DatasetSchema) -> None:
         self.schema = schema
         self.calls: list[tuple[int, int]] = []
 
-    def build_dataset_schema(self, oid: int, dataset_id: int) -> DataSetSchema:
+    def build_dataset_schema(self, oid: int, dataset_id: int) -> DatasetSchema:
         self.calls.append((oid, dataset_id))
         return self.schema
 
@@ -690,7 +690,7 @@ def test_question_adapter_parallel_intent_subtask_timeout_uses_fallback_payload(
 
 
 def test_question_adapter_recognizes_subject_domain_from_dataset_schema():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=7001,
             data_set_name="经营分析",
@@ -704,7 +704,7 @@ def test_question_adapter_recognizes_subject_domain_from_dataset_schema():
             {"domain_id": 2, "name": "商品", "biz_name": "product", "description": "商品经营主题", "model_ids": [11]},
         ],
     )
-    schema_builder = FakeHeadlessSchemaBuilder(schema)
+    schema_builder = FakeSemanticSchemaBuilder(schema)
     model_client = SequenceModelClient(
         [
             '{"intent_type":"metric_query","confidence":0.91,'
@@ -967,7 +967,7 @@ def test_question_adapter_keeps_residual_filter_mentions_without_duplicate_dimen
 
 
 def test_question_adapter_preserves_unmatched_dimension_slots_and_normalizes_matched_aliases():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=7001,
             data_set_name="店铺经营分析",
@@ -1016,7 +1016,7 @@ def test_question_adapter_preserves_unmatched_dimension_slots_and_normalizes_mat
             '"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}',
         ]
     )
-    adapter = QuestionAdapter(model_client=model_client, schema_builder=FakeHeadlessSchemaBuilder(schema))
+    adapter = QuestionAdapter(model_client=model_client, schema_builder=FakeSemanticSchemaBuilder(schema))
 
     result = adapter.recognize_intent(
         _v1_request("今天店铺1的线上客户数", variables={"rewrite": {"rewritten_question": "今天店铺1的线上客户数"}})
@@ -1070,7 +1070,7 @@ def test_dimension_slots_normalization_preserves_unmatched_natural_language_ment
 
 
 def test_question_adapter_filters_time_dimensions_from_plain_dimension_slots():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=7001,
             data_set_name="店铺经营分析",
@@ -1119,7 +1119,7 @@ def test_question_adapter_filters_time_dimensions_from_plain_dimension_slots():
             '"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}',
         ]
     )
-    adapter = QuestionAdapter(model_client=model_client, schema_builder=FakeHeadlessSchemaBuilder(schema))
+    adapter = QuestionAdapter(model_client=model_client, schema_builder=FakeSemanticSchemaBuilder(schema))
 
     result = adapter.recognize_intent(
         _v1_request("今天店铺1的档口客户数", variables={"rewrite": {"rewritten_question": "今天店铺1的档口客户数"}})
@@ -1135,7 +1135,7 @@ def test_question_adapter_filters_time_dimensions_from_plain_dimension_slots():
 
 
 def test_question_adapter_retries_dimension_subtask_when_value_contains_dimension_alias():
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=SchemaElement(
             data_set_id=7001,
             data_set_name="店铺经营分析",
@@ -1173,7 +1173,7 @@ def test_question_adapter_retries_dimension_subtask_when_value_contains_dimensio
                 '"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}',
             ]
         ),
-        schema_builder=FakeHeadlessSchemaBuilder(schema),
+        schema_builder=FakeSemanticSchemaBuilder(schema),
     )
 
     result = adapter.recognize_intent(

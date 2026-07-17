@@ -28,7 +28,7 @@ ChatBIV1CapabilityNode
 
 - 已接入真实 adapter 的节点，执行异常必须暴露为节点失败，不能再 fallback 到 placeholder。
 - 只有尚未接入真实 adapter 的节点，才允许临时使用 placeholder 保持图闭环。
-- `knowledge.retrieve` 已接入 Headless adapter，因此不能再和 placeholder knowledge 兜底连在一起。
+- `knowledge.retrieve` 已接入 Semantic adapter，因此不能再和 placeholder knowledge 兜底连在一起。
 
 也就是说，当前节点具备稳定协议和可观察性，真实能力会逐个替换 gateway 后面的 adapter；替换完成的节点要保持真实失败语义，避免 trace 看起来成功但实际使用了假数据。
 
@@ -40,13 +40,13 @@ ChatBIV1CapabilityNode
 | `reject_answer` | `answer.reject` | 已接入 `AnswerAdapter`：大模型生成安全拒绝回复，失败时稳定降级 | 后续可细化权限/安全原因映射 |
 | `chitchat_answer` | `answer.chitchat` | 已接入 `AnswerAdapter`：大模型生成闲聊引导回复，失败时稳定降级 | 后续可补模板兜底和产品能力介绍口径 |
 | `rewrite_question` | `question.rewrite` | 已接入 `QuestionAdapter`：大模型结构化重写，失败时保留原问题；明显澄清场景保留 waiting_input 兜底 | 后续可接 `QueryUnderstandingService` 的 normalized question、confirmed slots |
-| `ask_rewrite_clarification` | `interaction.ask_rewrite_clarification` | 已接入 `InteractionAdapter`：根据缺失槽位生成澄清 prompt/options/schema | 优先使用 `knowledge.candidate_groups`；没有 knowledge 时可轻量加载 Headless schema；失败时回退内置示例 |
+| `ask_rewrite_clarification` | `interaction.ask_rewrite_clarification` | 已接入 `InteractionAdapter`：根据缺失槽位生成澄清 prompt/options/schema | 优先使用 `knowledge.candidate_groups`；没有 knowledge 时可轻量加载 Semantic schema；失败时回退内置示例 |
 | `draw_image_profile` | `question.draw_image_profile` | 固定图表候选 | 需要基于 intent、metric、dimension、result schema 推断展示类型 |
 | `recognize_intent` | `intent.recognize` | 已接入 `QuestionAdapter`：大模型结构化意图识别，失败时规则兜底 | 后续可接 `QueryUnderstandingService` 的 intent、confidence、slot issues |
 | `ask_intent_clarification` | `interaction.ask_intent_clarification` | 已接入 `InteractionAdapter`：根据低置信度/歧义/冲突生成意图澄清选项 | 后续可根据数据集能力动态裁剪意图选项 |
 | `retrieve_knowledge` | `knowledge.retrieve` | 已接入统一 `RetrievalService`：按已确认槽位执行 exact、alias、中文词法和 dense 混合召回，再由 `SemanticBindingPolicy` 决策 | Graph/Agent 共用候选、slot bindings、决策和诊断；异常不再 fallback 到旧检索 |
 | `ask_metric_selection` | `interaction.ask_metric_selection` | 已接入 `InteractionAdapter`：从 knowledge ambiguity 或 candidate groups 生成指标选择项 | 用户回答写入标准 `interactions` 域，由 `QueryPlanBinder` 收敛为 plan |
-| `generate_sql` | `sql.generate` | 已接入 `SqlAdapter.generate()`：基于 `dataset_id` 加载 Headless schema，并复用 `SemanticSQLCompiler` 生成 SQL | 后续补 SQL validator、fallback schema generator、生成失败分支 |
+| `generate_sql` | `sql.generate` | 已接入 `SqlAdapter.generate()`：基于 `dataset_id` 加载 Semantic schema，并复用 `SemanticSQLCompiler` 生成 SQL | 后续补 SQL validator、fallback schema generator、生成失败分支 |
 | `execute_sql` | `sql.execute` | 已接入 `SqlAdapter.execute()`：复用 `SqlExecuteTool` 执行 SQL，并只保留 sample rows、row_count、fields | 后续补真实 artifact 存储和更细错误分类 |
 | `handle_sql_error` | `sql.handle_error` | 已接入 `SqlAdapter.handle_error()`：归一化 SQL 执行错误，并通过 `SQLRepairStrategy` 输出 repair hint/plan | `regenerate_sql` 计划已通过图边回到 `generate_sql`，由 `max_loop_iterations` 控制重试上限 |
 | `generate_question_answer` | `answer.generate` | 已接入 `AnswerAdapter`：大模型生成业务回复，失败时稳定降级 | 后续可补 result artifact/sample rows 的更细粒度摘要 |
@@ -66,7 +66,7 @@ ChatBIV1CapabilityNode
 | `tools/semantic_asset.py` | 当前是空骨架，返回 degraded | 不建议直接复用，应改用 semantic service |
 | `tools/terminology.py` | 当前是空骨架 | 后续可接术语表后并入 KnowledgeAdapter |
 | `tools/sql_example.py` | 当前是空骨架 | 后续接 SQL 示例库后并入 KnowledgeAdapter |
-| `tools/semantic_sql_compiler.py` | 基于 Headless dataset 编译 SQL | `SqlAdapter.generate` 的优先策略 |
+| `tools/semantic_sql_compiler.py` | 基于 Semantic dataset 编译 SQL | `SqlAdapter.generate` 的优先策略 |
 | `tools/sql_generator.py` | 基于 allowed tables 的保守 SQL 生成骨架 | `SqlAdapter.generate` 的 fallback |
 | `tools/sql_validator.py` | 只读 SQL、多语句、安全关键词、allowed tables 校验 | `SqlAdapter.generate` 后置校验 |
 | `tools/permission.py` | 当前透传 SQL，预留权限改写位置 | 已由 `PermissionAdapter` 接入 `SqlAdapter.execute` 前置校验 |
@@ -141,7 +141,7 @@ question.recommend -> RecommendationAdapter
 - 已接入 adapter 的能力，例如 `question.classify`、`question.rewrite`、`intent.recognize`、`knowledge.retrieve`、`answer.*`，由真实 adapter 负责成功或失败。
 - 已接入 adapter 的能力如果抛异常，应该由 `ChatBIV1CapabilityNode` 转换成节点失败，而不是在 gateway 内吞掉异常。
 - 尚未接入的能力，才允许 fallback 到 `PlaceholderChatBICapabilityGateway`；`sql.*`、`question.recommend` 已接入真实 adapter，不应再 fallback。
-- `build_real_chatbi_v1_runtime(session)` 必须给依赖数据库的 adapter 注入 session，例如 `HeadlessKnowledgeAdapter(schema_builder=HeadlessSchemaBuilder(session))`。
+- `build_real_chatbi_v1_runtime(session)` 必须给依赖数据库的 adapter 注入 session，例如 `SemanticKnowledgeAdapter(schema_builder=SemanticSchemaBuilder(session))`。
 
 所有 adapter 输出必须符合 `schemas/v1.py` 中的 output model。这样真实能力上线时，不会污染图上下文结构。
 
@@ -212,7 +212,7 @@ question.recommend -> RecommendationAdapter
 
 - `definition_version="v1"` 使用 `build_real_chatbi_v1_runtime()`。
 - `question.classify`、`question.rewrite`、`intent.recognize`、`knowledge.retrieve`、`answer.*` 走真实 adapter。
-- `knowledge.retrieve` 依赖 DB session，runtime 必须注入 `HeadlessSchemaBuilder(session)`。
+- `knowledge.retrieve` 依赖 DB session，runtime 必须注入 `SemanticSchemaBuilder(session)`。
 - 已接入真实 adapter 的节点异常会导致节点失败，不再回退到 placeholder。
 - `sql.generate`、`sql.execute`、`question.recommend` 已接入真实 adapter；这些节点异常会作为真实节点失败暴露。
 
@@ -342,7 +342,7 @@ question.recommend -> RecommendationAdapter
   - `metric` / `analysis_object`：优先从 `variables.knowledge.candidate_groups.metrics` 生成真实指标选项；无候选时回退访问人数、销售额、订单数等示例选项。
   - `time_range`：生成今天、最近 7 天、本月等时间选项。
   - `dimension`：优先从 `variables.knowledge.candidate_groups.dimensions` 生成真实维度选项；无候选时回退按日期、按店铺、按商品等示例选项。
-- 如果尚未执行 `knowledge.retrieve`，真实 runtime 会给 `InteractionAdapter` 注入 `HeadlessSchemaBuilder(session)`，按 `request.dataset_id` 轻量加载 schema，并从 schema.metrics/schema.dimensions 生成候选。
+- 如果尚未执行 `knowledge.retrieve`，真实 runtime 会给 `InteractionAdapter` 注入 `SemanticSchemaBuilder(session)`，按 `request.dataset_id` 轻量加载 schema，并从 schema.metrics/schema.dimensions 生成候选。
 - schema 加载失败不会让交互节点失败，会继续使用内置示例选项，保证澄清链路可用。
 - 回答写入 `variables.rewrite_response`，恢复后回到 `rewrite_question`。
 
@@ -350,7 +350,7 @@ question.recommend -> RecommendationAdapter
 
 - 当前为本地规则版。
 - 真实候选优先来自上游 `knowledge.retrieve` 已写入的 `candidate_groups`。
-- 当尚未有 knowledge 上下文时，真实 runtime 允许交互节点通过 session-backed `HeadlessSchemaBuilder` 做轻量候选加载。
+- 当尚未有 knowledge 上下文时，真实 runtime 允许交互节点通过 session-backed `SemanticSchemaBuilder` 做轻量候选加载。
 
 输出：
 
@@ -391,7 +391,7 @@ question.recommend -> RecommendationAdapter
   - 不回答用户问题。
   - 不生成 SQL。
   - 不解释业务指标。
-  - 不选择 Headless 资产 ID、`biz_name` 或数据库字段。
+  - 不选择 Semantic 资产 ID、`biz_name` 或数据库字段。
 - prompt 强制模型只返回 JSON 对象，字段固定为：
 
   ```json
@@ -416,7 +416,7 @@ question.recommend -> RecommendationAdapter
   - `filter_mentions`：用户原话里的过滤条件短语，只表达自然语言名称和值。
   - `required_slot_types`：后续必须确认的槽位，例如 `metric`、`dimension`、`time_range`、`time_dimension`。
   - `query_shape`：查询形态线索，例如聚合、分组、排序、limit、时间粒度。
-- 这些字段只作为 `knowledge.retrieve` 的检索线索，不代表已经绑定到真实 Headless 资产。
+- 这些字段只作为 `knowledge.retrieve` 的检索线索，不代表已经绑定到真实 Semantic 资产。
 
 - 当前支持的 `intent_type`：
   - `metric_query`
@@ -467,7 +467,7 @@ question.recommend -> RecommendationAdapter
 
 ### 5.9 `retrieve_knowledge`
 
-职责：根据意图节点输出的自然语言线索确认 Headless 语义资产，并收集生成 SQL 所需的业务知识、schema 和例子。
+职责：根据意图节点输出的自然语言线索确认 Semantic 语义资产，并收集生成 SQL 所需的业务知识、schema 和例子。
 
 当前已落地逻辑：
 
@@ -485,7 +485,7 @@ question.recommend -> RecommendationAdapter
 4. 每个子查询在同一 active generation 和 ACL 硬过滤下执行 exact、批准 alias、`pg_trgm` 和可用的 dense 召回。
 5. 候选按资源折叠并使用 RRF 融合；各通道原始分数、排名、命中字段和 generation provenance 保留在诊断中。
 6. `SemanticBindingPolicy` 按槽位覆盖、绝对阈值、top gap 和模型兼容性输出 `resolved/ambiguous/partial/missed/cross_model/degraded`。
-7. `bundle_to_semantic_payload()` 以最新 Headless schema 作为执行事实，输出写入 `variables.knowledge`，包括：
+7. `bundle_to_semantic_payload()` 以最新 Semantic schema 作为执行事实，输出写入 `variables.knowledge`，包括：
    - `dataset_id`
    - `schema_version`
    - `index_version`
@@ -523,7 +523,7 @@ question.recommend -> RecommendationAdapter
 
 - `knowledge.retrieve` 不生成 SQL。
 - allowed tables 应显式写入 knowledge，供 SQL 校验使用。
-- 当前如果真实 Headless schema 加载、检索或输出校验失败，应让节点失败，不允许回退到 placeholder knowledge。
+- 当前如果真实 Semantic schema 加载、检索或输出校验失败，应让节点失败，不允许回退到 placeholder knowledge。
 - 真实数据集可能因为多个指标分数接近而进入 `ask_metric_selection`，例如多个指标都包含“人数”时，这是有效业务歧义，不是执行失败。
 - 当前已完成第一阶段可解释 rerank：当 mention 足够具体时优先绑定完整短语匹配的资产；当 mention 只有“人数/次数/率”等弱词时，仍保留 `metric_ambiguous` 让用户选择。
 
@@ -548,7 +548,7 @@ question.recommend -> RecommendationAdapter
 当前已实现：
 
 1. `SqlAdapter.generate()` 从 v1 request 中读取 `dataset_id`、`tenant_id/oid`、重写问题和 `variables.knowledge`。
-2. 通过 `HeadlessSchemaBuilder.build_dataset_schema()` 加载 Headless dataset schema。
+2. 通过 `SemanticSchemaBuilder.build_dataset_schema()` 加载 Semantic dataset schema。
 3. 从 `knowledge.slot_bindings` 和 `knowledge.selected_assets` 抽取 metric/dimension asset id。
 4. 如果上一轮 `sql_error.repair_plan.action=regenerate_sql`，从 `variables.sql_error` 和 `variables.sql` 构造 `repair_context`，包含错误码、错误信息、失败 SQL、候选表/字段。
 5. 调用 `SemanticSQLCompiler` 生成 SQL，并把 `repair_context` 传入 `SemanticSQLCompileRequest`。
@@ -720,7 +720,7 @@ question.recommend -> RecommendationAdapter
 - `intent.recognize`
   - 大模型结构化意图识别。
   - prompt 约束只做意图识别、不回答、不生成 SQL。
-  - prompt 约束只输出自然语言 mention，不选择 Headless 资产 ID、`biz_name` 或数据库字段。
+  - prompt 约束只输出自然语言 mention，不选择 Semantic 资产 ID、`biz_name` 或数据库字段。
   - 输出 `metric_mentions`、`dimension_mentions`、`time_mentions`、`filter_mentions`、`required_slot_types`、`query_shape`，供知识检索确认资产。
   - JSON 输出校验。
   - 非法输出和模型失败规则兜底。
@@ -748,7 +748,7 @@ question.recommend -> RecommendationAdapter
 
 - `knowledge.retrieve`
 - metric ambiguity detection
-- 基于 Headless dataset schema 的候选检索
+- 基于 Semantic dataset schema 的候选检索
 - 基于 intent mention 的确定性分槽位混合召回
 - exact、alias、中文词法和 dense 通道共用 active generation 与权限硬过滤
 - `SemanticBindingPolicy` 统一输出槽位决策、reason codes 与 `allowed_asset_ids`
@@ -773,7 +773,7 @@ question.recommend -> RecommendationAdapter
 - 已审核 metric/dimension 能命中。
 - 多指标歧义能触发 `ask_metric_selection`。
 - 未命中时不生成 SQL。
-- Headless adapter 缺 session、dataset 不存在或 schema 加载失败时，v1 run 失败并在 trace 中暴露节点失败，不回退到 placeholder。
+- Semantic adapter 缺 session、dataset 不存在或 schema 加载失败时，v1 run 失败并在 trace 中暴露节点失败，不回退到 placeholder。
 
 ### 阶段 3：SqlAdapter
 
@@ -843,7 +843,7 @@ question.recommend -> RecommendationAdapter
    - `/graph/runs/{run_id}/trace` 不泄露 SQL 和大结果。
    - `node_execution` 有输入/输出/路由摘要。
    - cancel/retry/resume 行为不回退。
-   - v1 主路径测试必须使用真实 Headless dataset fixture；不能用不存在的 dataset_id 靠 placeholder knowledge 跑通。
+   - v1 主路径测试必须使用真实 Semantic dataset fixture；不能用不存在的 dataset_id 靠 placeholder knowledge 跑通。
 
 ## 8. 风险和约束
 
@@ -852,7 +852,7 @@ question.recommend -> RecommendationAdapter
 | 旧工具输出结构不稳定 | 旧 `ToolResult.payload` 并不完全等于 v1 schema | adapter 必须做显式映射和 schema 校验 |
 | 旧 semantic tool 是空实现 | `SemanticAssetTool` 当前 degraded | KnowledgeAdapter 应直接接 semantic service/runtime asset |
 | 真实节点被 placeholder 掩盖 | 已接入真实 adapter 的节点如果异常后 fallback，会让 trace 显示成功但数据是假的 | 已接入 adapter 的能力不得在 gateway 内吞异常；由节点失败语义暴露问题 |
-| Headless adapter 依赖 DB session | `HeadlessSchemaBuilder` 没有 session 会抛 `HEADLESS_SESSION_REQUIRED` | `build_real_chatbi_v1_runtime(session)` 必须注入 session-backed schema builder |
+| Semantic adapter 依赖 DB session | `SemanticSchemaBuilder` 没有 session 会抛 `SEMANTIC_SESSION_REQUIRED` | `build_real_chatbi_v1_runtime(session)` 必须注入 session-backed schema builder |
 | 弱词造成指标歧义 | 真实数据集里多个指标可能同时包含“人数/次数/率”等词 | 已完成第一阶段 slot-aware rerank；仍保留 `ask_metric_selection` 分支，并继续增强同义词/别名治理 |
 | SQL 生成失败分支不够细 | 当前图只在 execute 后有 SQL error 分支 | 接 SqlAdapter 时需要统一 generate/validate/execute 的错误模型 |
 | 大结果集污染 context/trace | `SqlExecuteTool` 可能返回完整 data | 必须引入 artifact/sample summary |
@@ -863,11 +863,11 @@ question.recommend -> RecommendationAdapter
 
 下一步不建议一次性接所有真实能力。建议先做：
 
-1. 保留已完成的 `RealChatBICapabilityGateway`、`QuestionAdapter.classify()`、`QuestionAdapter.rewrite()`、`QuestionAdapter.recognize_intent()`、`HeadlessKnowledgeAdapter`、`SqlAdapter`、`AnswerAdapter` 和 `RecommendationAdapter`。
+1. 保留已完成的 `RealChatBICapabilityGateway`、`QuestionAdapter.classify()`、`QuestionAdapter.rewrite()`、`QuestionAdapter.recognize_intent()`、`SemanticKnowledgeAdapter`、`SqlAdapter`、`AnswerAdapter` 和 `RecommendationAdapter`。
 2. 完善真实 knowledge 后半段：
    - 指标歧义选项的展示字段。
    - BM25 / embedding / hybrid score 的候选重排。
-   - Headless 资产别名和同义词治理。
+   - Semantic 资产别名和同义词治理。
 3. 继续增强结构化 slot 结果质量，保持 `recognize_intent` 只输出自然语言线索，由 `knowledge.retrieve` 负责资产确认。
 4. 接入真实权限策略源，替换当前默认空策略 provider，并补多表/子查询权限改写测试。
 5. 回归 v1 主路径、真实 knowledge 命中、真实 metric ambiguity、模型分类降级、rewrite 澄清分支、SQL 失败分支、trace 输出和“不回退 placeholder”测试。

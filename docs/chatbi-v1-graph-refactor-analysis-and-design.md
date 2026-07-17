@@ -118,7 +118,7 @@
 优化方向：本期先落 `validate_result` 节点（空结果/异常值检测 + 结构化建议），策略路由以"扩展点"形式预埋而非立刻建满多策略（见 5.3.4）。
 
 **B2. 交互回答的消费机制三头并存，且跨层调用私有方法。**
-同一份用户回答有三条消费路径：① 原样写入 `variables.*_response`（引擎 `allowed_update_paths`）；② `ChatBIV1InteractionResponsePatcher` 深拷贝改写 `intent`/`knowledge`（`runtime.py:60-359`）；③ adapter 重跑时自行读取 `*_response` 当 `user_feedback`（`question.py:1035/1065`）。其中 ② 直接调用 `HeadlessKnowledgeAdapter._constrain_selected_assets_to_metric_models` 等**另一个类的私有方法**（`runtime.py:122-124`），把资产绑定逻辑复制到了装配层。任何 knowledge 结构调整都要同步改三处。
+同一份用户回答有三条消费路径：① 原样写入 `variables.*_response`（引擎 `allowed_update_paths`）；② `ChatBIV1InteractionResponsePatcher` 深拷贝改写 `intent`/`knowledge`（`runtime.py:60-359`）；③ adapter 重跑时自行读取 `*_response` 当 `user_feedback`（`question.py:1035/1065`）。其中 ② 直接调用 `SemanticKnowledgeAdapter._constrain_selected_assets_to_metric_models` 等**另一个类的私有方法**（`runtime.py:122-124`），把资产绑定逻辑复制到了装配层。任何 knowledge 结构调整都要同步改三处。
 优化方向：回答消费收敛为一种机制——交互回答作为节点重跑的输入（见 5.3.1），ResponsePatcher 移除或降级为纯搬运。
 
 **B3. 跨模型链路与单查询链路的结果结构多态。**（旧报告已述，仍成立并可补充证据）
@@ -146,7 +146,7 @@
 
 #### C 类：性能与可观测
 
-**C1. schema 每节点重复全量加载。** `HeadlessSchemaBuilder.build_dataset_schema` 无缓存，intent / knowledge / sql.generate / sql.generate_split / 交互卡片各调一次，每次 6-8 条 DB 查询。同一 Run 内 schema 不会变（甚至有 `schema_version` 字段可做失效判断），应做 Run 级缓存。
+**C1. schema 每节点重复全量加载。** `SemanticSchemaBuilder.build_dataset_schema` 无缓存，intent / knowledge / sql.generate / sql.generate_split / 交互卡片各调一次，每次 6-8 条 DB 查询。同一 Run 内 schema 不会变（甚至有 `schema_version` 字段可做失效判断），应做 Run 级缓存。
 
 **C2. 上下文体积无治理，放大系数很高。**
 候选资产每个都带全量 `payload`（SchemaElement 完整 dump），同一资产在 candidate_groups / selected_assets / slot_bindings / ambiguities 中最多出现 4 份；50 行采样数据直接进 `variables`。而上下文每个节点边界要经历：全量 deepcopy + pydantic revalidate（`context_patcher.py:34-67`）→ Run 快照落库（`run_repository.py:59`）→ `node.succeeded` 事件再带一份全量输出落库（`checkpoint_manager.py:69-74` + `graph_runtime.py:285-297`）。一次运行同一份大 JSON 被序列化十几次。引擎有 `ArtifactRef` 协议（`domain/artifact.py`、`SqlExecuteOutput.artifact_ref` 字段都在），**从未使用**。

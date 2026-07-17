@@ -9,7 +9,7 @@ from sqlalchemy.orm import aliased
 
 from apps.chat.models.chat_model import Chat, ChatRecord, CreateChat, ChatInfo, RenameChat, ChatLog, \
     TypeEnum, OperationEnum, ChatRecordResult, ChatLogHistory, ChatLogHistoryItem
-from apps.chat.services.headless_binding import (
+from apps.chat.services.semantic_binding import (
     DatasetBindingError,
     apply_binding_to_chat,
     apply_binding_to_record,
@@ -20,7 +20,7 @@ from apps.datasource.crud.datasource import get_ds
 from apps.datasource.crud.recommended_problem import get_datasource_recommended_chart
 from apps.datasource.models.datasource import CoreDatasource
 from apps.db.db import exec_sql
-from apps.headless.models import HeadlessDataSet
+from apps.semantic.models import SemanticDataset
 from apps.system.crud.assistant import AssistantOutDsFactory
 from common.core.deps import CurrentAssistant, SessionDep, CurrentUser, Trans
 from common.utils.data_format import DataFormat
@@ -316,7 +316,7 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
         raise Exception(f"Chat with id {chart_id} not Owned by the current user")
     chat_info = ChatInfo(**chat.model_dump())
 
-    dataset = session.get(HeadlessDataSet, chat.dataset_id) if chat.dataset_id else None
+    dataset = session.get(SemanticDataset, chat.dataset_id) if chat.dataset_id else None
     if not dataset:
         chat_info.dataset_exists = False
         chat_info.dataset_name = 'Dataset not exist'

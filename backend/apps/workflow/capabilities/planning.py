@@ -417,7 +417,7 @@ def derive_value_filter_slots(
 ) -> list[dict[str, Any]]:
     """把命中的 VALUE 资产翻译为"父维度 = 标准值"的过滤条件（B9）。
 
-    Headless 的 VALUE 元素复用父维度的 id，matched_text 是用户问题里命中的
+    Semantic 的 VALUE 元素复用父维度的 id，matched_text 是用户问题里命中的
     维值文本；schema_value_maps 用于把别名归一为标准存储值。
     """
 

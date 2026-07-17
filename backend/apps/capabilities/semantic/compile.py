@@ -11,24 +11,24 @@ from typing import Any
 from sqlalchemy import select
 
 from apps.capabilities.schemas import ToolResult
-from apps.headless.models import HeadlessDataSet, HeadlessModel
-from apps.headless.service import HeadlessSchemaBuilder
-from apps.headless.sql_compiler import SemanticSQLCompiler, SemanticSQLCompileRequest
+from apps.semantic.models import SemanticDataset, SemanticModel
+from apps.semantic.service import SemanticSchemaBuilder
+from apps.semantic.sql_compiler import SemanticSQLCompiler, SemanticSQLCompileRequest
 
 
-def resolve_dataset_by_datasource(session, oid: int, datasource_id: int) -> HeadlessDataSet | None:
-    """按数据源解析可用的 Headless 数据集（逻辑移自 v1 SemanticSQLCompilerTool）。"""
+def resolve_dataset_by_datasource(session, oid: int, datasource_id: int) -> SemanticDataset | None:
+    """按数据源解析可用的 Semantic 数据集（逻辑移自 v1 SemanticSQLCompilerTool）。"""
 
     datasets = session.exec(
-        select(HeadlessDataSet).where(HeadlessDataSet.oid == oid, HeadlessDataSet.status == 1).order_by(HeadlessDataSet.id)
+        select(SemanticDataset).where(SemanticDataset.oid == oid, SemanticDataset.status == 1).order_by(SemanticDataset.id)
     ).scalars().all()
     if not datasets:
         return None
     models = session.exec(
-        select(HeadlessModel).where(
-            HeadlessModel.oid == oid,
-            HeadlessModel.datasource_id == datasource_id,
-            HeadlessModel.status == 1,
+        select(SemanticModel).where(
+            SemanticModel.oid == oid,
+            SemanticModel.datasource_id == datasource_id,
+            SemanticModel.status == 1,
         )
     ).scalars().all()
     model_ids = {model.id for model in models}
@@ -59,12 +59,12 @@ def compile_semantic_sql(
         if dataset is None:
             return ToolResult(
                 success=False,
-                error_code="headless_dataset_not_found",
-                message="当前数据源未绑定可用 Headless 数据集",
+                error_code="semantic_dataset_not_found",
+                message="当前数据源未绑定可用 Semantic 数据集",
             )
         dataset_id = dataset.id
     try:
-        schema = HeadlessSchemaBuilder(session).build_dataset_schema(oid, dataset_id)
+        schema = SemanticSchemaBuilder(session).build_dataset_schema(oid, dataset_id)
         result = (compiler or SemanticSQLCompiler()).compile(
             SemanticSQLCompileRequest(
                 schema=schema,

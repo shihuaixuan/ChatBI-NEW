@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from apps.headless.schemas import DataSetSchema, SchemaElement
+from apps.semantic.schemas import DatasetSchema, SchemaElement
 from apps.retrieval.compilation import validate_compilation_assets
 from apps.retrieval.errors import (
     RetrievalPermissionError,
@@ -56,7 +56,7 @@ def _hit(
     return RetrievalHit(
         resource_id=f"{resource_type.value}:{asset_id}",
         resource_type=resource_type,
-        source_type=RetrievalSourceType.HEADLESS,
+        source_type=RetrievalSourceType.SEMANTIC,
         source_id="source-1",
         source_resource_id=f"{resource_type.value}:{asset_id}",
         unit_id=f"unit-{resource_type.value}-{asset_id}",
@@ -158,8 +158,8 @@ def _time_schema(
     *,
     default_dimension_count: int = 1,
     default_time_field: str | None = None,
-) -> DataSetSchema:
-    return DataSetSchema(
+) -> DatasetSchema:
+    return DatasetSchema(
         data_set=SchemaElement(
             data_set_id=20,
             data_set_name="经营分析",

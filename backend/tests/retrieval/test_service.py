@@ -9,7 +9,7 @@ from apps.capabilities.semantic.retrieval import (
     retrieve_semantic_assets,
 )
 from apps.workflow.capabilities.adapters.knowledge import (
-    HeadlessKnowledgeAdapter,
+    SemanticKnowledgeAdapter,
 )
 from apps.retrieval.errors import RetrievalQueryError
 from apps.retrieval.schemas import (
@@ -183,7 +183,7 @@ def test_service_executes_semantic_binding_as_the_only_strategy():
 
 def test_graph_and_agent_consume_the_same_semantic_binding_result():
     service = RetrievalService(object(), semantic_binding_runner=_Runner())
-    graph = HeadlessKnowledgeAdapter(retrieval_service=service).retrieve(
+    graph = SemanticKnowledgeAdapter(retrieval_service=service).retrieve(
         {
             "run_id": "run-1",
             "request": {

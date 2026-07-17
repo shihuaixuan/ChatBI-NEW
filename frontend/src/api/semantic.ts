@@ -1,73 +1,51 @@
 import { request } from '@/utils/request'
 
-export interface SemanticPageParams {
-  datasource_id: number | string
-  keyword?: string
-  status?: string
-  table_id?: number | string
-  owner_id?: number | string
-}
-
-export interface ValidateExpressionPayload {
-  asset_type: 'METRIC' | 'DIMENSION'
-  table_id: number | string
-  expr: string
-  default_agg?: string
-  filter_sql?: string
-}
-
-export interface SemanticAssetDebugParams {
-  datasource_id: number | string
-  table_ids?: number | string | Array<number | string>
+export interface SchemaMapPayload {
+  query_text: string
+  dataset_ids: Array<number | string>
 }
 
 export const semanticApi = {
-  metricPage: (page: number, size: number, params: SemanticPageParams) =>
-    request.get(`/semantic/metrics/page/${page}/${size}`, { params }),
-  metricCreate: (data: any) => request.post('/semantic/metrics', data),
-  metricUpdate: (id: number | string, data: any) => request.put(`/semantic/metrics/${id}`, data),
-  metricApprove: (id: number | string) => request.post(`/semantic/metrics/${id}/approve`),
-  metricDisable: (id: number | string, reason = '') =>
-    request.post(`/semantic/metrics/${id}/disable`, { reason }),
-  metricEmbedding: (id: number | string) => request.post(`/semantic/metrics/${id}/embedding`),
+  datasourceList: () => request.get('/semantic/datasources'),
+  datasourceTables: (id: number | string) => request.get(`/semantic/datasources/${id}/tables`),
+  datasourceColumns: (id: number | string, tableName: string) =>
+    request.get(`/semantic/datasources/${id}/tables/${encodeURIComponent(tableName)}/columns`),
 
-  dimensionPage: (page: number, size: number, params: SemanticPageParams) =>
-    request.get(`/semantic/dimensions/page/${page}/${size}`, { params }),
+  domainList: () => request.get('/semantic/domains'),
+  domainCreate: (data: any) => request.post('/semantic/domains', data),
+  domainUpdate: (id: number | string, data: any) => request.put(`/semantic/domains/${id}`, data),
+  domainDelete: (id: number | string) => request.delete(`/semantic/domains/${id}`),
+
+  modelList: (params?: any) => request.get('/semantic/models', { params }),
+  modelCreate: (data: any) => request.post('/semantic/models', data),
+  modelUpdate: (id: number | string, data: any) => request.put(`/semantic/models/${id}`, data),
+  modelDelete: (id: number | string) => request.delete(`/semantic/models/${id}`),
+  modelBuildSchema: (data: any) => request.post('/semantic/models/build-schema', data),
+  modelCreateWithAssets: (data: any) => request.post('/semantic/models/create-with-assets', data),
+
+  metricList: (params?: any) => request.get('/semantic/metrics', { params }),
+  metricCreate: (data: any) => request.post('/semantic/metrics', data),
+  metricBatchCreateFromMeasures: (data: any) => request.post('/semantic/metrics/batch-create-from-measures', data),
+  metricUpdate: (id: number | string, data: any) => request.put(`/semantic/metrics/${id}`, data),
+  metricDelete: (id: number | string) => request.delete(`/semantic/metrics/${id}`),
+
+  dimensionList: (params?: any) => request.get('/semantic/dimensions', { params }),
   dimensionCreate: (data: any) => request.post('/semantic/dimensions', data),
   dimensionUpdate: (id: number | string, data: any) => request.put(`/semantic/dimensions/${id}`, data),
-  dimensionApprove: (id: number | string) => request.post(`/semantic/dimensions/${id}/approve`),
-  dimensionDisable: (id: number | string, reason = '') =>
-    request.post(`/semantic/dimensions/${id}/disable`, { reason }),
-  dimensionEmbedding: (id: number | string) => request.post(`/semantic/dimensions/${id}/embedding`),
+  dimensionDelete: (id: number | string) => request.delete(`/semantic/dimensions/${id}`),
 
-  initialize: (datasourceId: number | string, data: any) =>
-    request.post(`/semantic/datasources/${datasourceId}/initialize`, data),
-  validate: (datasourceId: number | string, data: ValidateExpressionPayload) =>
-    request.post(`/semantic/datasources/${datasourceId}/validate`, data),
-  chatRecordAssets: (recordId: number | string) =>
-    request.get(`/semantic/chat-records/${recordId}/assets`),
+  datasetList: (params?: any) => request.get('/semantic/datasets', { params }),
+  datasetCreate: (data: any) => request.post('/semantic/datasets', data),
+  datasetUpdate: (id: number | string, data: any) => request.put(`/semantic/datasets/${id}`, data),
+  datasetDelete: (id: number | string) => request.delete(`/semantic/datasets/${id}`),
+  datasetSchema: (id: number | string) => request.get(`/semantic/datasets/${id}/schema`),
 
-  debugProfile: (params: SemanticAssetDebugParams) =>
-    request.get('/semantic/assets/debug/profile', { params }),
-  debugRuntimeSchema: (params: SemanticAssetDebugParams) =>
-    request.get('/semantic/assets/debug/runtime-schema', { params }),
-  debugCandidates: (params: SemanticAssetDebugParams) =>
-    request.get('/semantic/assets/debug/candidates', { params }),
-  debugDocument: (
-    assetType: string,
-    assetId: number | string,
-    params: SemanticAssetDebugParams
-  ) => request.get(`/semantic/assets/debug/documents/${assetType}/${assetId}`, { params }),
-  debugQuality: (params: SemanticAssetDebugParams) =>
-    request.get('/semantic/assets/debug/quality', { params }),
-  debugSyncDatasource: (params: SemanticAssetDebugParams, dryRun = false) =>
-    request.post('/semantic/assets/debug/sync/datasource', null, {
-      params: { ...params, dry_run: dryRun },
-    }),
-  debugSyncDataset: (params: SemanticAssetDebugParams, dryRun = false) =>
-    request.post('/semantic/assets/debug/sync/dataset', null, {
-      params: { ...params, dry_run: dryRun },
-    }),
-  debugInvalidateCache: (params: SemanticAssetDebugParams) =>
-    request.post('/semantic/assets/debug/cache/invalidate', null, { params }),
+  termList: (params?: any) => request.get('/semantic/terms', { params }),
+  termCreate: (data: any) => request.post('/semantic/terms', data),
+  termUpdate: (id: number | string, data: any) => request.put(`/semantic/terms/${id}`, data),
+  termDelete: (id: number | string) => request.delete(`/semantic/terms/${id}`),
+
+  schemaMap: (data: SchemaMapPayload) => request.post('/semantic/schema/map', data),
+  knowledgeRebuild: (datasetId: number | string) =>
+    request.post('/semantic/knowledge/rebuild', null, { params: { dataset_id: datasetId } }),
 }

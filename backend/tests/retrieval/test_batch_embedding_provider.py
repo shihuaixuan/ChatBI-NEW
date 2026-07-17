@@ -1,4 +1,4 @@
-"""Headless 批量 embedding provider 契约测试。"""
+"""Semantic 批量 embedding provider 契约测试。"""
 
 from __future__ import annotations
 

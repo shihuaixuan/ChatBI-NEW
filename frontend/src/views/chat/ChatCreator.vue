@@ -4,7 +4,7 @@ import icon_close_outlined from '@/assets/svg/operate/ope-close.svg'
 import EmptyBackground from '@/views/dashboard/common/EmptyBackground.vue'
 import icon_searchOutline_outlined from '@/assets/svg/icon_search-outline_outlined.svg'
 import { chatApi, ChatInfo } from '@/api/chat.ts'
-import { headlessApi } from '@/api/headless'
+import { semanticApi } from '@/api/semantic'
 import Card from '@/views/ds/ChatCard.vue'
 import { useAssistantStore } from '@/stores/assistant'
 const assistantStore = useAssistantStore()
@@ -37,7 +37,7 @@ const emits = defineEmits(['onChatCreated'])
 
 function listDatasets() {
   searchLoading.value = true
-  headlessApi
+  semanticApi
     .datasetList()
     .then((res) => {
       datasetList.value = Array.isArray(res) ? res : []

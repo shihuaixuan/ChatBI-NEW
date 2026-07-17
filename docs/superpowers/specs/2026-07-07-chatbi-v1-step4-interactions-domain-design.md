@@ -23,7 +23,7 @@
 
 尚未完成的关键点是：`GraphRuntime.resume()` 仍调用 `ChatBIV1InteractionResponsePatcher`，由运行时根据交互回答直接改写 `variables.intent` 和 `variables.knowledge`。这带来三个问题：
 
-1. 运行时层包含 ChatBI 业务知识，甚至调用 `HeadlessKnowledgeAdapter` 私有方法；
+1. 运行时层包含 ChatBI 业务知识，甚至调用 `SemanticKnowledgeAdapter` 私有方法；
 2. 用户回答既存在原始 response 字段，又被 patcher 改写进 intent/knowledge，生命周期不清楚；
 3. `bind_query_plan` 本应是 evidence/plan 的收敛点，但指标选择仍在运行时提前改写 knowledge。
 
@@ -101,7 +101,7 @@ Step 4 的目标是把“交互回答是什么”和“业务如何消费回答�
 
 ### 5.3 slot clarification
 
-原 patcher 的 slot 逻辑迁移到能力层。`HeadlessKnowledgeAdapter.retrieve()` 在使用 `ctx.intent` 前先构造“交互增强后的 intent 视图”：
+原 patcher 的 slot 逻辑迁移到能力层。`SemanticKnowledgeAdapter.retrieve()` 在使用 `ctx.intent` 前先构造“交互增强后的 intent 视图”：
 
 - `subject_domain` 澄清回答写入视图中的 `subject_domain`；
 - `dimension_usage = ignore` 从视图中移除对应维度；

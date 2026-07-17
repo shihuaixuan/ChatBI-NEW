@@ -217,8 +217,8 @@ gateway.invoke(capability: str, request: dict, idempotency_key: str) -> dict
 - `recognize_intent` 只识别自然语言层面的意图和槽位线索。
   - 输出 `metric_mentions`、`dimension_mentions`、`time_mentions`、`filter_mentions`。
   - 输出 `required_slot_types` 和 `query_shape`，描述后续需要确认哪些槽位以及查询形态。
-  - 不输出 Headless `asset_id`、`biz_name` 或数据库字段名。
-- `retrieve_knowledge` 负责把自然语言 mention 确认到 Headless 语义资产。
+  - 不输出 Semantic `asset_id`、`biz_name` 或数据库字段名。
+- `retrieve_knowledge` 负责把自然语言 mention 确认到 Semantic 语义资产。
   - `metric_mentions` 只召回指标候选。
   - `dimension_mentions` 只召回维度候选。
   - `time_mentions` 补充时间维度和时间值候选。

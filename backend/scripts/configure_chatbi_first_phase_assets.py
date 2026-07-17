@@ -1,4 +1,4 @@
-"""幂等修正 ChatBI 首期五张单表模型的 Headless 资产。"""
+"""幂等修正 ChatBI 首期五张单表模型的 Semantic 资产。"""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from apps.headless.models import (
-    HeadlessDataSet,
-    HeadlessDimension,
-    HeadlessMetric,
-    HeadlessModel,
+from apps.semantic.models import (
+    SemanticDataset,
+    SemanticDimension,
+    SemanticMetric,
+    SemanticModel,
 )
 from common.core.db import engine
 
@@ -131,7 +131,7 @@ def _metric(biz_name: str, name: str, expr: str, aliases: list[str]) -> dict[str
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="修正 ChatBI 首期 Headless 资产")
+    parser = argparse.ArgumentParser(description="修正 ChatBI 首期 Semantic 资产")
     parser.add_argument("--dataset-id", type=int, default=243)
     parser.add_argument("--oid", type=int, default=1)
     parser.add_argument("--dry-run", action="store_true")
@@ -141,19 +141,19 @@ def parse_args() -> argparse.Namespace:
 def configure_assets(session: Session, dataset_id: int, oid: int, dry_run: bool) -> dict[str, int]:
     """按稳定业务标识更新资产；重复执行不会创建重复指标。"""
 
-    dataset = session.get(HeadlessDataSet, dataset_id)
+    dataset = session.get(SemanticDataset, dataset_id)
     if dataset is None or dataset.oid != oid or dataset.status != 1:
-        raise ValueError(f"Headless 数据集不存在: {dataset_id}")
+        raise ValueError(f"Semantic 数据集不存在: {dataset_id}")
     model_ids = [
         int(item["id"])
         for item in dataset.data_set_detail.get("dataSetModelConfigs", [])
         if isinstance(item, dict) and item.get("id") is not None
     ]
     models = session.exec(
-        select(HeadlessModel).where(
-            HeadlessModel.oid == oid,
-            HeadlessModel.id.in_(model_ids),
-            HeadlessModel.status == 1,
+        select(SemanticModel).where(
+            SemanticModel.oid == oid,
+            SemanticModel.id.in_(model_ids),
+            SemanticModel.status == 1,
         )
     ).all()
     model_by_table = {str(model.table_name or ""): model for model in models}
@@ -169,10 +169,10 @@ def configure_assets(session: Session, dataset_id: int, oid: int, dry_run: bool)
         _update_value(model, "default_time_field", target["default_time"], summary)
 
         dimensions = session.exec(
-            select(HeadlessDimension).where(
-                HeadlessDimension.oid == oid,
-                HeadlessDimension.model_id == model.id,
-                HeadlessDimension.status == 1,
+            select(SemanticDimension).where(
+                SemanticDimension.oid == oid,
+                SemanticDimension.model_id == model.id,
+                SemanticDimension.status == 1,
             )
         ).all()
         for dimension in dimensions:
@@ -186,10 +186,10 @@ def configure_assets(session: Session, dataset_id: int, oid: int, dry_run: bool)
         existing_metrics = {
             metric.biz_name: metric
             for metric in session.exec(
-                select(HeadlessMetric).where(
-                    HeadlessMetric.oid == oid,
-                    HeadlessMetric.model_id == model.id,
-                    HeadlessMetric.status == 1,
+                select(SemanticMetric).where(
+                    SemanticMetric.oid == oid,
+                    SemanticMetric.model_id == model.id,
+                    SemanticMetric.status == 1,
                 )
             ).all()
         }
@@ -207,7 +207,7 @@ def configure_assets(session: Session, dataset_id: int, oid: int, dry_run: bool)
         for metric_target in target["metrics"]:
             metric = existing_metrics.get(metric_target["biz_name"])
             if metric is None:
-                metric = HeadlessMetric(
+                metric = SemanticMetric(
                     oid=oid,
                     model_id=int(model.id),
                     name=metric_target["name"],
@@ -228,7 +228,7 @@ def configure_assets(session: Session, dataset_id: int, oid: int, dry_run: bool)
 
 
 def _configure_metric(
-    metric: HeadlessMetric,
+    metric: SemanticMetric,
     target: dict[str, Any],
     summary: dict[str, int],
     *,

@@ -8,15 +8,15 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlmodel import Session, col, select
 
-from apps.headless.models import (
-    HeadlessDataSet,
-    HeadlessDomain,
-    HeadlessMetric,
-    HeadlessModel,
+from apps.semantic.models import (
+    SemanticDataset,
+    SemanticDomain,
+    SemanticMetric,
+    SemanticModel,
 )
-from apps.headless.schemas import DataSetSchema, SchemaElement
-from apps.retrieval.headless_indexing import HeadlessIndexCoordinator
-from apps.retrieval.headless_projector import HeadlessSourceProjector
+from apps.semantic.schemas import DatasetSchema, SchemaElement
+from apps.retrieval.semantic_indexing import SemanticIndexCoordinator
+from apps.retrieval.semantic_projector import SemanticSourceProjector
 from apps.retrieval.indexing import (
     DeletedResourceRef,
     IndexEmbeddingProfile,
@@ -102,7 +102,7 @@ def _projected_resources(*, source_version: str, first_aliases: list[str] | None
         biz_name="business_analysis",
         type="DATASET",
     )
-    schema = DataSetSchema(
+    schema = DatasetSchema(
         data_set=dataset,
         metrics=[
             SchemaElement(
@@ -131,7 +131,7 @@ def _projected_resources(*, source_version: str, first_aliases: list[str] | None
             ),
         ],
     )
-    return HeadlessSourceProjector().project(
+    return SemanticSourceProjector().project(
         schema,
         tenant_id=TENANT_ID,
         namespace=NAMESPACE,
@@ -394,11 +394,11 @@ def test_generation_status_and_vectors_are_complete_after_activation(session: Se
     assert all(embedding.embedding is not None and len(embedding.embedding) == 1024 for embedding in embeddings)
 
 
-def test_headless_coordinator_writes_source_projection_and_jobs_in_caller_transaction(session: Session):
-    domain = HeadlessDomain(oid=TENANT_ID, name="交易域", biz_name="trade_domain")
+def test_semantic_coordinator_writes_source_projection_and_jobs_in_caller_transaction(session: Session):
+    domain = SemanticDomain(oid=TENANT_ID, name="交易域", biz_name="trade_domain")
     session.add(domain)
     session.flush()
-    model = HeadlessModel(
+    model = SemanticModel(
         oid=TENANT_ID,
         domain_id=domain.id or 0,
         datasource_id=99_999,
@@ -407,7 +407,7 @@ def test_headless_coordinator_writes_source_projection_and_jobs_in_caller_transa
     )
     session.add(model)
     session.flush()
-    dataset = HeadlessDataSet(
+    dataset = SemanticDataset(
         oid=TENANT_ID,
         domain_id=domain.id or 0,
         name="经营分析",
@@ -422,7 +422,7 @@ def test_headless_coordinator_writes_source_projection_and_jobs_in_caller_transa
     )
     session.add(dataset)
     session.flush()
-    metric = HeadlessMetric(
+    metric = SemanticMetric(
         oid=TENANT_ID,
         model_id=model.id or 0,
         name="销售额",
@@ -435,7 +435,7 @@ def test_headless_coordinator_writes_source_projection_and_jobs_in_caller_transa
     session.add(metric)
     session.flush()
 
-    result = HeadlessIndexCoordinator(session, PROFILE).enqueue_dataset_rebuild(
+    result = SemanticIndexCoordinator(session, PROFILE).enqueue_dataset_rebuild(
         tenant_id=TENANT_ID,
         dataset=dataset,
     )

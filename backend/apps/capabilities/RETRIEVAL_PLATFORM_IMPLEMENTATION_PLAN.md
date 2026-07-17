@@ -8,7 +8,7 @@
 
 截至 2026-07-15，P0、P1-1～P1-5 已经完成。Graph 与 Agent 已统一到
 `RetrievalService`，并直接使用唯一的 `semantic-binding`；现有对外 payload 保持兼容。统一检索存储
-已具备 generation 双写、租户隔离和可回滚 migration，Headless 资产也已具备安全的
+已具备 generation 双写、租户隔离和可回滚 migration，Semantic 资产也已具备安全的
 resource/unit 投影契约和可增量、可重试、可回滚的索引生命周期。
 
 已交付：
@@ -18,7 +18,7 @@ resource/unit 投影契约和可增量、可重试、可回滚的索引生命周
 - 9 条基于数据集 243 真实资产 ID 的语义绑定 Gold Set。
 - Graph/Agent 旧结果转换器、基线采集脚本和离线评测脚本。
 - 契约、依赖方向、安全边界、Gold Set 和评测指标自动测试。
-- 独立于 Workflow/Agent 的 Headless 检索核心和统一服务入口。
+- 独立于 Workflow/Agent 的 Semantic 检索核心和统一服务入口。
 - Graph/Agent 共用的 `semantic-binding` 请求、结果和应用组装工厂；旧策略请求会被明确拒绝。
 - dense 通道启动配置检查，以及关闭、配置缺失、超时、维度不一致、索引不可用和查询错误诊断。
 - 已知 dense 故障允许显式词法降级，未知异常不再被静默吞掉。
@@ -26,14 +26,14 @@ resource/unit 投影契约和可增量、可重试、可回滚的索引生命周
 - 七张统一存储表：source、index generation、resource、unit、embedding、index job、query trace。
 - `vector(1024)` 物理 profile、GIN 词法索引、scope 普通索引和 generation 部分唯一索引。
 - 复合外键在数据库层阻止跨租户、跨来源和 embedding generation 错配。
-- 数据集主题域、模型、指标、维度、术语和受控维值的细粒度 Headless Projector。
+- 数据集主题域、模型、指标、维度、术语和受控维值的细粒度 Semantic Projector。
 - Join、模型兼容和资产关系只保存结构化 metadata，不把执行关系交给向量判断。
 - `content_hash` 与 `embedding_text_hash` 分离，metadata 更新不会触发无意义的向量重算。
 - SQL、字段、权限条件和敏感资产不会进入 embedding 文本。
 - 检索域独立 durable job、批量 embedding、错误分类、退避重试和 `SKIP LOCKED` 任务领取。
 - 增量 generation 自动复制未变化快照和向量，只重新计算文本发生变化的 unit。
 - generation 完整性检查、并发安全原子激活、显式重试、保留代际回滚和 reconciliation 诊断。
-- Headless `/knowledge/rebuild` 在同一业务事务内注册 source、投影资源并写入索引任务。
+- Semantic `/knowledge/rebuild` 在同一业务事务内注册 source、投影资源并写入索引任务。
 - `semantic-binding` 确定性分槽 QueryPlanner，不使用整句兜底猜测缺失资产。
 - exact、批准 alias、`pg_trgm` 和 pgvector dense 通道共用 active-generation 与 ACL 硬过滤。
 - 按资源折叠 unit、记录通道原始分数/rank 的 RRF，以及唯一名称/别名快速路径。
@@ -53,7 +53,7 @@ resource/unit 投影契约和可增量、可重试、可回滚的索引生命周
 | 优先级 | 含义 | 进入条件 |
 | --- | --- | --- |
 | P0 | 当前行为一致性与后续建设的阻塞项 | 立即执行 |
-| P1 | Headless 生产级统一检索能力 | P0 验收完成 |
+| P1 | Semantic 生产级统一检索能力 | P0 验收完成 |
 | P2 | SQL 示例与知识库扩展 | P1 质量和稳定性达标 |
 | P3 | 规模化与高级检索能力 | 真实容量或质量数据证明有必要 |
 
@@ -64,7 +64,7 @@ resource/unit 投影契约和可增量、可重试、可回滚的索引生命周
 ```mermaid
 flowchart LR
     P00["P0-1 基线与评测集"] --> P01["P0-2 统一契约"] --> P02["P0-3 统一服务入口"] --> P03["P0-4 Graph/Agent 对齐"]
-    P03 --> P10["P1-1 检索存储模型"] --> P11["P1-2 Headless Projector"] --> P12["P1-3 增量索引与 Generation"]
+    P03 --> P10["P1-1 检索存储模型"] --> P11["P1-2 Semantic Projector"] --> P12["P1-3 增量索引与 Generation"]
     P12 --> P13["P1-4 混合召回"] --> P14["P1-5 重排与决策门控"] --> P15["P1-6 直接切换"]
     P15 --> P20["P2-1 SQL 示例"] --> P21["P2-2 知识库"]
     P21 --> P30["P3 外部向量库/稀疏与多向量"]
@@ -97,7 +97,7 @@ flowchart LR
 
 主要测试资产：
 
-- `backend/tests/workflow/test_headless_knowledge_adapter.py`
+- `backend/tests/workflow/test_semantic_knowledge_adapter.py`
 - `backend/tests/retrieval/test_semantic_binding.py`
 - `backend/tests/agent/test_core_tools.py`
 - 新增 `backend/tests/retrieval/golden/` 和评测 runner
@@ -145,7 +145,7 @@ backend/apps/retrieval/
 
 - 新增 `apps.retrieval.RetrievalService`，作为 Graph 与 Agent 的唯一检索入口。
 - 将 Workflow 内的检索、门控和业务 payload 投影统一下沉到检索域。
-- 使用 `HeadlessSourceProjector.project()` 生成统一检索资源，不保留旧文档构建入口。
+- 使用 `SemanticSourceProjector.project()` 生成统一检索资源，不保留旧文档构建入口。
 - 删除 `capabilities.semantic.retrieval` 对 `workflow` 的反向 import。
 - 保留 Agent 工具函数签名和 Graph gateway 结果结构，由统一 payload 投影器转换。
 - 依赖方向加入自动测试：`apps.retrieval` 不得 import Agent、Workflow 或 API 层。
@@ -154,13 +154,13 @@ backend/apps/retrieval/
 
 - `backend/apps/capabilities/semantic/retrieval.py`
 - `backend/apps/workflow/capabilities/adapters/knowledge.py`
-- `backend/apps/headless/asset_document.py`
+- `backend/apps/semantic/asset_document.py`
 - 新增 `backend/apps/retrieval/service.py`
-- 新增 `backend/apps/retrieval/headless.py`
+- 新增 `backend/apps/retrieval/semantic_runtime.py`
 
 退出条件：
 
-- 现有 Graph、Agent、Headless 单元测试全部通过。
+- 现有 Graph、Agent、Semantic 单元测试全部通过。
 - Gold Set 候选和决策与基线完全等价；差异必须逐条评审。
 - 检索核心不存在对编排域的 import。
 
@@ -190,7 +190,7 @@ backend/apps/retrieval/
 - 关闭 embedding、配置错误和 provider 超时分别有测试，且都不会显示为正常向量命中。
 - P0 路径 P95 不高于当前基线 20%，不存在额外 LLM 调用。
 
-## 4. P1：Headless 生产级检索
+## 4. P1：Semantic 生产级检索
 
 目标：把指标向量试验升级为指标、维度、术语和选择性维值的可增量、可回滚混合检索。
 
@@ -223,7 +223,7 @@ backend/apps/retrieval/
   embedding generation 错配和非 1024 维记录均被数据库拒绝。
 - `083_remove_legacy_embedding` 已删除旧指标专用向量表，只保留统一检索存储。
 
-### P1-2 实现 Headless Projector
+### P1-2 实现 Semantic Projector
 
 状态：已完成；优先级：高；预计 4～6 人日；依赖 P1-1。
 
@@ -249,7 +249,7 @@ backend/apps/retrieval/
   `build_from_schema()` 入口保持兼容。
 - Projector snapshot 固化文本、metadata、ACL、模型关系和受控维值策略；显式治理、常用标记
   或配置允许且未超过基数上限的维值才进入投影。
-- Headless Schema 统一携带指标/维度 `sensitive_level`，敏感资产在 Projector 入口排除。
+- Semantic Schema 统一携带指标/维度 `sensitive_level`，敏感资产在 Projector 入口排除。
 - 安全测试确认模型 SQL、过滤条件、字段名、Join condition、权限条件和维值技术值均不进入
   `embedding_text`。
 - 别名更新只产生 `identity` unit 的 upsert/re-embed；关系 metadata 更新只 upsert 对应 unit，
@@ -280,9 +280,9 @@ backend/apps/retrieval/
 
 - `081_retrieval_generation_p1` 新增 generation 状态、profile 快照、任务计数和单 source 唯一
   active generation 约束；index job 通过复合外键绑定同 tenant/source/generation。
-- Headless rebuild 在调用方事务内创建或锁定 source、完成安全投影并写 durable job；此阶段不
+- Semantic rebuild 在调用方事务内创建或锁定 source、完成安全投影并写 durable job；此阶段不
   调用外部 provider，因此业务变更与索引事件可以原子提交或一起回滚。
-- Headless rebuild 提交后由后台 worker 消费本次 durable job；应用启动时异步恢复遗留 pending
+- Semantic rebuild 提交后由后台 worker 消费本次 durable job；应用启动时异步恢复遗留 pending
   job，每个任务独立提交，避免单个失败回滚已经完成的 generation 进度。
 - 增量 generation 克隆未触碰的 active unit/vector；文本 hash 不变时复制向量，metadata-only
   更新不调用 provider，delete 使用 tombstone 并在完整快照中移除对应 unit。
@@ -293,7 +293,7 @@ backend/apps/retrieval/
 - 提供失败 generation 显式重试、保留完整 generation 回滚、active 指针/版本/数量对账和队列
   积压统计；调度器可按部署频率调用 `process_next()` 与 `reconcile_source()`。
 - PostgreSQL 集成测试覆盖幂等、增量向量复用、失败重试、delete、rollback、完整性计数、任务
-  领取和 Headless 事务接入；migration 已完成 `080 -> 081 -> 080 -> 081` 往返验证。
+  领取和 Semantic 事务接入；migration 已完成 `080 -> 081 -> 080 -> 081` 往返验证。
 
 ### P1-4 实现分槽 QueryPlanner 与混合召回
 
@@ -363,7 +363,7 @@ backend/apps/retrieval/
 - 可选 `CandidateReranker` 只接收检索层生成的候选 ID；重复 ID 或集合外 ID 明确失败，
   provider 不可用时输出 `degraded`，不静默伪装为正常重排。
 - 按资源类型配置首版阈值并通过 policy version 固化；这些参数仍需使用 Gold Set 和真实流量校准。
-- 模型兼容性读取 Headless resource metadata：不同指标模型要求拆分，同一指标模型下的
+- 模型兼容性读取 Semantic resource metadata：不同指标模型要求拆分，同一指标模型下的
   维度/维值必须对每个已选指标兼容。
 - policy 一次生成 `RetrievalBundle.decision.allowed_asset_ids`；新增统一编译校验入口，同时
   拒绝不可执行状态和白名单外资产。
@@ -391,7 +391,7 @@ backend/apps/retrieval/
 实现记录：
 
 - `RetrievalService` 只组装和执行 `SemanticBindingRunner`，不再读取策略路由配置。
-- 检索结果通过 Headless schema 投影为现有 Graph/Agent payload；索引 metadata 不作为
+- 检索结果通过 Semantic schema 投影为现有 Graph/Agent payload；索引 metadata 不作为
   SQL 执行事实。
 - PostgreSQL statement timeout 与默认 embedding HTTP provider 共用 1.5 秒查询预算。
 - embedding 配置异常且允许词法降级时，dense diagnostics 明确记录 unavailable reason code；

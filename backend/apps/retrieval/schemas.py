@@ -84,7 +84,8 @@ class RetrievalResourceType(str, Enum):
 class RetrievalSourceType(str, Enum):
     """检索资源来源。"""
 
-    HEADLESS = "headless"
+    # 存储值暂时保持不变，避免已有索引记录失效。
+    SEMANTIC = "headless"
     SQL_EXEMPLAR = "sql_exemplar"
     KNOWLEDGE_BASE = "knowledge_base"
     SCHEMA = "schema"
@@ -171,7 +172,7 @@ class RetrievalSubQuery(_StrictModel):
 
 
 class AssetReference(_StrictModel):
-    """命中结果中的稳定 Headless 资产引用。"""
+    """命中结果中的稳定 Semantic 资产引用。"""
 
     asset_type: RetrievalResourceType
     asset_id: int = Field(gt=0)

@@ -10,35 +10,11 @@ from sqlalchemy.orm import aliased
 
 from apps.ai_model.embedding import EmbeddingModelCache
 from apps.datasource.models.datasource import CoreDatasource
-from apps.semantic.assets.enums import AssetEventType, AssetType
-from apps.semantic.assets.index_sync import AssetChangedEvent, schedule_asset_index_sync
 from apps.template.generate_chart.generator import get_base_terminology_template
 from apps.terminology.models.terminology_model import Terminology, TerminologyInfo
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
 from common.utils.embedding_threads import run_save_terminology_embeddings
-
-
-def _schedule_terminology_changed(
-    session: SessionDep,
-    oid: int,
-    terminology_id: int,
-    datasource_ids: list[int] | None,
-    change_fields: list[str],
-) -> None:
-    scoped_datasource_ids = datasource_ids or [None]
-    for datasource_id in scoped_datasource_ids:
-        schedule_asset_index_sync(
-            session,
-            AssetChangedEvent(
-                event_type=AssetEventType.TerminologyChanged,
-                asset_type=AssetType.TERM,
-                asset_id=terminology_id,
-                oid=oid,
-                datasource_id=datasource_id,
-                change_fields=change_fields,
-            ),
-        )
 
 
 def get_terminology_base_query(oid: int, name: Optional[str] = None):
@@ -325,7 +301,6 @@ def create_terminology(session: SessionDep, info: TerminologyInfo, oid: int, tra
     session.add(parent)
     session.flush()
     session.refresh(parent)
-    _schedule_terminology_changed(session, oid, parent.id, datasource_ids, [])
 
     # 插入子记录（其他词）
     child_list = []
@@ -594,13 +569,6 @@ def update_terminology(session: SessionDep, info: TerminologyInfo, oid: int, tra
         enabled=info.enabled,
     )
     session.execute(stmt)
-    _schedule_terminology_changed(
-        session,
-        oid,
-        info.id,
-        datasource_ids,
-        ["word", "description", "specific_ds", "datasource_ids", "enabled"],
-    )
     session.commit()
 
     stmt = delete(Terminology).where(and_(Terminology.pid == info.id))
@@ -638,9 +606,6 @@ def update_terminology(session: SessionDep, info: TerminologyInfo, oid: int, tra
 
 
 def delete_terminology(session: SessionDep, ids: list[int]):
-    terms = session.execute(select(Terminology).where(Terminology.id.in_(ids))).scalars().all()
-    for term in terms:
-        _schedule_terminology_changed(session, term.oid, term.id, term.datasource_ids or [], ["enabled"])
     stmt = delete(Terminology).where(or_(Terminology.id.in_(ids), Terminology.pid.in_(ids)))
     session.execute(stmt)
     session.commit()
@@ -653,8 +618,6 @@ def enable_terminology(session: SessionDep, id: int, enabled: bool, trans: Trans
     if count == 0:
         raise Exception(trans('i18n_terminology.terminology_not_exists'))
 
-    term = session.execute(select(Terminology).where(Terminology.id == id)).scalar_one()
-    _schedule_terminology_changed(session, term.oid, term.id, term.datasource_ids or [], ["enabled"])
     stmt = update(Terminology).where(or_(Terminology.id == id, Terminology.pid == id)).values(
         enabled=enabled,
     )

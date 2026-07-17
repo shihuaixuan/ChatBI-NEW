@@ -10,7 +10,7 @@ from apps.retrieval.errors import RetrievalConfigurationError, RetrievalQueryErr
 from apps.retrieval.service import RetrievalService, build_semantic_binding_request
 
 
-class HeadlessKnowledgeAdapter:
+class SemanticKnowledgeAdapter:
     """把 Workflow 上下文转换为统一检索参数。"""
 
     def __init__(
@@ -44,4 +44,4 @@ class HeadlessKnowledgeAdapter:
         return self._retrieval_service.retrieve(retrieval_request).payload
 
 
-__all__ = ["HeadlessKnowledgeAdapter"]
+__all__ = ["SemanticKnowledgeAdapter"]

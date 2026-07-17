@@ -4,9 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.headless.schemas import DataSetSchema, SchemaElement
+from apps.semantic.schemas import DatasetSchema, SchemaElement
 from apps.retrieval.errors import RetrievalConfigurationError
-from apps.retrieval.headless import RetrievalEmbeddingRuntimeConfig
+from apps.retrieval.semantic_runtime import RetrievalEmbeddingRuntimeConfig
 from apps.retrieval.schemas import (
     RetrievalBindings,
     RetrievalBundle,
@@ -38,8 +38,8 @@ def _request() -> RetrievalRequest:
     )
 
 
-def _schema() -> DataSetSchema:
-    return DataSetSchema(
+def _schema() -> DatasetSchema:
+    return DatasetSchema(
         data_set=SchemaElement(
             data_set_id=20,
             data_set_name="经营分析",
@@ -95,7 +95,7 @@ def test_semantic_binding_connects_recall_policy_schema_and_payload_projection(m
         _HybridRetriever,
     )
     monkeypatch.setattr(
-        "apps.retrieval.semantic_binding.HeadlessSchemaBuilder",
+        "apps.retrieval.semantic_binding.SemanticSchemaBuilder",
         _SchemaBuilder,
     )
     config = RetrievalEmbeddingRuntimeConfig(

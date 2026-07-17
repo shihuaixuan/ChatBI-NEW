@@ -11,14 +11,14 @@ def test_requires_dataset_or_datasource():
     assert result.error_code == "dataset_or_datasource_required"
 
 
-def test_reports_missing_headless_dataset():
+def test_reports_missing_semantic_dataset():
     with patch(
         "apps.capabilities.semantic.compile.resolve_dataset_by_datasource",
         return_value=None,
     ):
         result = compile_semantic_sql(session=None, oid=1, datasource_id=5)
     assert not result.success
-    assert result.error_code == "headless_dataset_not_found"
+    assert result.error_code == "semantic_dataset_not_found"
 
 
 def test_compiles_with_explicit_dataset_id():
@@ -26,7 +26,7 @@ def test_compiles_with_explicit_dataset_id():
     compiler.compile.return_value = MagicMock(
         sql="select 1", tables=["t"], metrics=["gmv"], dimensions=["city"]
     )
-    with patch("apps.capabilities.semantic.compile.HeadlessSchemaBuilder") as builder:
+    with patch("apps.capabilities.semantic.compile.SemanticSchemaBuilder") as builder:
         builder.return_value.build_dataset_schema.return_value = MagicMock()
         result = compile_semantic_sql(
             session=None,
@@ -51,7 +51,7 @@ def test_compiles_with_explicit_dataset_id():
 def test_translates_compiler_value_error():
     compiler = MagicMock()
     compiler.compile.side_effect = ValueError("metric_not_found")
-    with patch("apps.capabilities.semantic.compile.HeadlessSchemaBuilder") as builder:
+    with patch("apps.capabilities.semantic.compile.SemanticSchemaBuilder") as builder:
         builder.return_value.build_dataset_schema.return_value = MagicMock()
         result = compile_semantic_sql(session=None, oid=1, dataset_id=9, compiler=compiler)
 

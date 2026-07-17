@@ -1,4 +1,4 @@
-"""六个 P0 核心工具。全部为能力层/headless 的薄封装，守护内嵌。"""
+"""六个 P0 核心工具。全部为共享能力和语义层的薄封装，守护内嵌。"""
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ class SearchSemanticAssetsTool(AgentTool):
             return ToolOutput(
                 success=False,
                 summary="当前数据源未绑定可用的语义数据集，无法进行语义检索。可改用 get_dataset_schema 查看物理表结构。",
-                error_code="headless_dataset_not_found",
+                error_code="semantic_dataset_not_found",
             )
         understanding = ctx.state.get("question_understanding")
         if not isinstance(understanding, dict):
@@ -230,7 +230,7 @@ class CompileSemanticSqlTool(AgentTool):
             return blocked
         dataset_id = _ensure_dataset_id(ctx)
         if dataset_id is None:
-            return ToolOutput(success=False, summary="当前数据源未绑定语义数据集，无法编译。", error_code="headless_dataset_not_found")
+            return ToolOutput(success=False, summary="当前数据源未绑定语义数据集，无法编译。", error_code="semantic_dataset_not_found")
         known_ids = set(ctx.state.get("semantic_asset_ids") or [])
         requested = set(args.metric_asset_ids) | set(args.dimension_asset_ids) | {f.asset_id for f in args.filters}
         if args.time_bucket and isinstance(args.time_bucket.get("asset_id"), int):

@@ -3,7 +3,7 @@ from typing import Any, cast
 
 from apps.workflow import runtime as chatbi_runtime
 from apps.workflow.capabilities.adapters.knowledge import (
-    HeadlessKnowledgeAdapter,
+    SemanticKnowledgeAdapter,
 )
 from apps.workflow.capabilities.interactions import (
     apply_slot_response_to_intent,
@@ -103,9 +103,9 @@ class FakeRetrievalService:
         )
 
 
-def _knowledge_adapter(service: FakeRetrievalService) -> HeadlessKnowledgeAdapter:
+def _knowledge_adapter(service: FakeRetrievalService) -> SemanticKnowledgeAdapter:
     # 测试替身只实现适配器使用的 retrieve 协议。
-    return HeadlessKnowledgeAdapter(cast(RetrievalService, service))
+    return SemanticKnowledgeAdapter(cast(RetrievalService, service))
 
 
 def _dimension_value_issue(dimension: str) -> dict:
@@ -134,7 +134,7 @@ def _validation(slot_issues: list[dict] | None = None) -> dict:
 
 
 class RealKnowledgeGateway(TrackingGateway):
-    def __init__(self, knowledge_adapter: HeadlessKnowledgeAdapter) -> None:
+    def __init__(self, knowledge_adapter: SemanticKnowledgeAdapter) -> None:
         super().__init__()
         self._knowledge_adapter = knowledge_adapter
 
@@ -188,7 +188,7 @@ class DimensionAmbiguityGateway(TrackingGateway):
 
 
 class DimensionAmbiguityKnowledgePlanningGateway(DimensionAmbiguityGateway):
-    def __init__(self, knowledge_adapter: HeadlessKnowledgeAdapter) -> None:
+    def __init__(self, knowledge_adapter: SemanticKnowledgeAdapter) -> None:
         super().__init__()
         self._knowledge_adapter = knowledge_adapter
         self._plan_binder = QueryPlanBinder()
@@ -1046,5 +1046,5 @@ def test_real_chatbi_v1_runtime_injects_session_backed_knowledge_adapter(monkeyp
     chatbi_runtime.build_real_chatbi_v1_runtime(session=object())
 
     knowledge_adapter = captured["knowledge_adapter"]
-    assert isinstance(knowledge_adapter, HeadlessKnowledgeAdapter)
+    assert isinstance(knowledge_adapter, SemanticKnowledgeAdapter)
     assert knowledge_adapter._retrieval_service is not None

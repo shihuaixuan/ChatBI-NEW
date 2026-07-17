@@ -9,7 +9,7 @@ from apps.workflow.capabilities.adapters.interaction import (
     InteractionAdapter,
 )
 from apps.workflow.capabilities.adapters.knowledge import (
-    HeadlessKnowledgeAdapter,
+    SemanticKnowledgeAdapter,
 )
 from apps.workflow.capabilities.adapters.question import (
     QuestionAdapter,
@@ -30,7 +30,7 @@ from apps.workflow.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
     register_chatbi_v1_handlers,
 )
-from apps.headless.service import HeadlessSchemaBuilder
+from apps.semantic.service import SemanticSchemaBuilder
 from apps.retrieval.service import build_retrieval_service
 from apps.workflow_engine.infrastructure.artifacts.file_store import (
     FileArtifactStore,
@@ -101,7 +101,7 @@ def build_real_chatbi_v1_runtime(
 ) -> GraphRuntime:
     """组装真实 classify_question + 其他占位能力回退的 ChatBI v1 运行时。"""
 
-    schema_builder = HeadlessSchemaBuilder(session)
+    schema_builder = SemanticSchemaBuilder(session)
     retrieval_service = build_retrieval_service(session, schema_builder=schema_builder)
 
     def session_factory() -> Session:
@@ -116,7 +116,7 @@ def build_real_chatbi_v1_runtime(
     gateway = RealChatBICapabilityGateway(
         question_adapter=QuestionAdapter(model_client=question_model_client, schema_builder=schema_builder),
         answer_adapter=AnswerAdapter(model_client=answer_model_client),
-        knowledge_adapter=HeadlessKnowledgeAdapter(
+        knowledge_adapter=SemanticKnowledgeAdapter(
             retrieval_service=retrieval_service,
         ),
         interaction_adapter=InteractionAdapter(schema_builder=schema_builder),

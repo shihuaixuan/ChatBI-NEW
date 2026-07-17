@@ -8,7 +8,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.capabilities.time_slots import normalize_time_range_payload
-from apps.headless.schemas import DataSetSchema, SchemaElement
+from apps.semantic.schemas import DatasetSchema, SchemaElement
 from apps.retrieval.errors import (
     RetrievalProviderUnavailableError,
     RetrievalQueryError,
@@ -713,7 +713,7 @@ def _skipped_rerank_diagnostic() -> RetrievalChannelDiagnostic:
 def bind_default_time_dimensions(
     request: RetrievalRequest,
     bundle: RetrievalBundle,
-    schema: DataSetSchema,
+    schema: DatasetSchema,
 ) -> RetrievalBundle:
     """为已选指标确定性绑定同模型默认时间维度。"""
 
@@ -903,17 +903,17 @@ def bind_default_time_dimensions(
 
 
 def _default_time_dimension_hit(
-    schema: DataSetSchema,
+    schema: DatasetSchema,
     dimension: SchemaElement,
     reference: AssetReference,
     rank: int,
 ) -> RetrievalHit:
-    """把 Headless 默认时间关系记录为可追踪的确定性命中。"""
+    """把 Semantic 默认时间关系记录为可追踪的确定性命中。"""
 
     return RetrievalHit(
         resource_id=f"relation:default-time:{dimension.id}",
         resource_type=RetrievalResourceType.DIMENSION,
-        source_type=RetrievalSourceType.HEADLESS,
+        source_type=RetrievalSourceType.SEMANTIC,
         source_id=f"headless:dataset:{schema.data_set.id}",
         source_resource_id=f"DIMENSION:{dimension.id}",
         unit_id=f"DIMENSION:{dimension.id}:role",
@@ -936,7 +936,7 @@ def _default_time_dimension_hit(
 
 
 def _default_time_candidates(
-    schema: DataSetSchema,
+    schema: DatasetSchema,
     model_id: int,
 ) -> list[SchemaElement]:
     """模型显式默认字段优先；未配置时使用同模型默认时间维度标记。"""

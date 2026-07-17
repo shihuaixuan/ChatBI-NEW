@@ -4,7 +4,7 @@
 
 **Goal:** 让新产生的交互式 Graph ChatBI Run 与会话历史稳定关联，并在刷新、切换会话、澄清恢复、取消、重试和删除场景中保持可恢复、可展示和状态一致。
 
-**Architecture:** `WorkflowRun` 继续作为执行事实源，`ChatRecord` 作为用户可见的稳定历史投影。交互式 Graph Chat 使用独立 API，运行时通过通用 `RunStore` 装饰器在同一 Session 中同步投影 ChatRecord；独立 Headless Graph API 保持无会话语义。
+**Architecture:** `WorkflowRun` 继续作为执行事实源，`ChatRecord` 作为用户可见的稳定历史投影。交互式 Graph Chat 使用独立 API，运行时通过通用 `RunStore` 装饰器在同一 Session 中同步投影 ChatRecord；独立 Semantic Graph API 保持无会话语义。
 
 **Tech Stack:** FastAPI、SQLModel、SQLAlchemy、Alembic、PostgreSQL JSONB、Vue 3、TypeScript、SSE、pytest、Node.js assert、vue-tsc、Vite。
 
@@ -18,7 +18,7 @@
 - ChatRecord 是终态历史展示入口，终态页面不得依赖重新加载完整 Run 才能显示答案。
 - 多轮上下文只读取同用户、同会话、同数据集最近一次成功 Graph 记录的语义摘要。
 - 不自动回填或推断现有孤立 WorkflowRun 的会话归属。
-- 会话删除时清理关联 Workflow 数据；独立 Headless Run 不受影响。
+- 会话删除时清理关联 Workflow 数据；独立 Semantic Run 不受影响。
 - 禁止宽泛 `try/except` 吞掉投影、关联或 Artifact 清理错误。
 - 禁止静默 fallback 掩盖 `chat_id`、`record_id` 或最终答案缺失。
 - 处理可选依赖时禁止把导入失败对象赋值为 `None`；使用明确抛出 `ImportError` 的存根或惰性加载函数。

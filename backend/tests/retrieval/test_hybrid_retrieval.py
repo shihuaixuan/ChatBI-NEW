@@ -27,7 +27,7 @@ def _hit(resource_id: str, unit_id: str, title: str) -> RetrievalHit:
     return RetrievalHit(
         resource_id=resource_id,
         resource_type=RetrievalResourceType.METRIC,
-        source_type=RetrievalSourceType.HEADLESS,
+        source_type=RetrievalSourceType.SEMANTIC,
         source_id="1",
         source_resource_id=f"METRIC:{resource_id}",
         unit_id=unit_id,
