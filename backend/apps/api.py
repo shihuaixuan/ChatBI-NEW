@@ -3,13 +3,13 @@ from sqlbot_xpack.authentication import api as xpack_authentication
 from sqlbot_xpack.config import api as xpack_config
 from sqlbot_xpack.license import api as xpack_license
 
-from apps.chat.api import chat
 from apps.agent import api as agent
+from apps.chat.api import chat
 from apps.dashboard.api import dashboard_api
 from apps.data_training.api import data_training
 from apps.datasource.api import datasource, recommended_problem, table_relation
-from apps.semantic import api as semantic
 from apps.mcp import mcp
+from apps.semantic.api.router import router as semantic_router
 from apps.settings.api import base
 from apps.system.api import (
     aimodel,
@@ -48,7 +48,7 @@ api_router.include_router(apikey.router)
 api_router.include_router(recommended_problem.router)
 
 api_router.include_router(variable_api.router)
-api_router.include_router(semantic.router)
+api_router.include_router(semantic_router)
 api_router.include_router(graph_workflow.router)
 
 # 前端登录加密与授权初始化依赖 xpack 提供的 key/license/status 接口。

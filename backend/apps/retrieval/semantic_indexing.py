@@ -6,18 +6,19 @@ from dataclasses import dataclass
 
 from sqlmodel import Session, select
 
-from apps.semantic.models import SemanticDataset
-from apps.semantic.service import SemanticSchemaBuilder
-from apps.retrieval.semantic_projector import (
-    SemanticProjectionPolicy,
-    SemanticSourceProjector,
-)
 from apps.retrieval.indexing import (
     GenerationEnqueueResult,
     IndexEmbeddingProfile,
     RetrievalIndexingService,
 )
 from apps.retrieval.models import RetrievalSourceModel
+from apps.retrieval.semantic_projector import (
+    SemanticProjectionPolicy,
+    SemanticSourceProjector,
+)
+from apps.semantic.models.orm import SemanticDataset
+from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
+from apps.semantic.services.schema_service import SemanticSchemaService
 from common.core.config import settings
 
 
@@ -105,7 +106,11 @@ class SemanticIndexCoordinator:
         if not isinstance(max_values, int):
             raise ValueError("RETRIEVAL_VALUE_CARDINALITY_CONFIG_INVALID")
 
-        schema = SemanticSchemaBuilder(self._session).build_dataset_schema(tenant_id, dataset.id)
+        schema = SemanticSchemaService(
+            SemanticSchemaLoader(self._session)
+        ).build_dataset_schema(
+            tenant_id, dataset.id
+        )
         projected = SemanticSourceProjector(
             SemanticProjectionPolicy(
                 configured_value_dimension_ids=frozenset(configured_dimension_ids),

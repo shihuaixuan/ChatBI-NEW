@@ -6,7 +6,7 @@ from sqlmodel import col, select
 
 from apps.chat.models.chat_model import Chat, ChatRecord
 from apps.datasource.models.datasource import CoreDatasource
-from apps.semantic.models import (
+from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetModelConfig,
     SemanticModel,

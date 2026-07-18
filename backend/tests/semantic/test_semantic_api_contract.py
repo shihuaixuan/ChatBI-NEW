@@ -1,4 +1,4 @@
-from apps.semantic.api import router
+from apps.semantic.api.router import router
 
 
 def test_semantic_router_exposes_schema_and_mapping_contracts():
@@ -14,7 +14,7 @@ def test_semantic_router_exposes_schema_and_mapping_contracts():
     assert "/semantic/datasets/{dataset_id}/schema" in paths
     assert "/semantic/datasets/{dataset_id}/ontology" in paths
     assert "/semantic/schema/map" in paths
-    assert "/semantic/knowledge/rebuild" in paths
+    assert "/semantic/datasets/{dataset_id}/index/rebuild" in paths
 
 
 def test_semantic_router_exposes_asset_crud_contracts():
@@ -36,6 +36,8 @@ def test_semantic_router_exposes_asset_crud_contracts():
 def test_semantic_router_only_exposes_unified_retrieval_rebuild_contract():
     paths = {route.path for route in router.routes}
 
-    assert "/semantic/knowledge/rebuild" in paths
+    assert "/semantic/datasets/{dataset_id}/index/rebuild" in paths
+    assert "/semantic/knowledge/rebuild" not in paths
     assert "/semantic/datasets/{dataset_id}/metric-embeddings/rebuild" not in paths
     assert "/semantic/datasets/{dataset_id}/metric-embeddings" not in paths
+    assert "/semantic/datasets/{dataset_id}/asset-documents" not in paths

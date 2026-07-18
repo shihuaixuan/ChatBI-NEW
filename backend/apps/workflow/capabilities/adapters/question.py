@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.workflow.capabilities.adapters.intent_validation import (
     IntentPostProcessor,
 )
@@ -39,12 +40,6 @@ class QuestionClassificationModelClient(Protocol):
     """问题分类模型客户端协议，便于测试中替换真实大模型。"""
 
     def __call__(self, prompt: QuestionClassificationPrompt) -> str: ...
-
-
-class QuestionSchemaBuilder(Protocol):
-    """意图识别节点使用的轻量 schema 构建协议。"""
-
-    def build_dataset_schema(self, oid: int, dataset_id: int) -> Any: ...
 
 
 logger = logging.getLogger(__name__)
@@ -978,12 +973,12 @@ class QuestionAdapter:
     def __init__(
         self,
         model_client: QuestionClassificationModelClient | None = None,
-        schema_builder: QuestionSchemaBuilder | None = None,
+        schema_provider: DatasetSchemaProvider | None = None,
         intent_post_processor: IntentPostProcessor | None = None,
         intent_subtask_config: IntentSubtaskConfig | None = None,
     ) -> None:
         self._model_client = model_client or DefaultQuestionClassificationModelClient()
-        self._schema_builder = schema_builder
+        self._schema_provider = schema_provider
         self._intent_post_processor = intent_post_processor or IntentPostProcessor()
         self._intent_subtask_config = intent_subtask_config or IntentSubtaskConfig()
         self._last_intent_subtask_trace: dict[str, Any] = {
@@ -1631,12 +1626,12 @@ class QuestionAdapter:
         return []
 
     def _load_dataset_schema(self, ctx: ChatBIRunContext) -> Any | None:
-        if self._schema_builder is None:
+        if self._schema_provider is None:
             return None
         if ctx.dataset_id is None:
             return None
         try:
-            return self._schema_builder.build_dataset_schema(ctx.tenant_id, ctx.dataset_id)
+            return self._schema_provider.build_dataset_schema(ctx.tenant_id, ctx.dataset_id)
         except Exception:
             return None
 

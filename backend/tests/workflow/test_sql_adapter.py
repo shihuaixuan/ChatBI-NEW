@@ -3,13 +3,13 @@ import threading
 import pytest
 
 from apps.capabilities.schemas import ToolResult
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
+from apps.semantic.services.sql_compiler import SemanticSQLCompileResult
 from apps.workflow.capabilities.adapters.sql import SqlAdapter
 from apps.workflow.capabilities.config import ChatBIConfig
-from apps.semantic.schemas import DatasetSchema, SchemaElement
-from apps.semantic.sql_compiler import SemanticSQLCompileResult
 
 
-class FakeSemanticSchemaBuilder:
+class FakeDatasetSchemaProvider:
     def __init__(self, schema: DatasetSchema) -> None:
         self.schema = schema
         self.calls: list[tuple[int, int]] = []
@@ -65,8 +65,8 @@ def test_sql_adapter_generates_sql_from_semantic_selected_assets():
             )
         ],
     )
-    schema_builder = FakeSemanticSchemaBuilder(schema)
-    adapter = SqlAdapter(schema_builder=schema_builder)
+    schema_provider = FakeDatasetSchemaProvider(schema)
+    adapter = SqlAdapter(schema_provider=schema_provider)
 
     result = adapter.generate(
         {
@@ -87,7 +87,7 @@ def test_sql_adapter_generates_sql_from_semantic_selected_assets():
         }
     )
 
-    assert schema_builder.calls == [(10, 20)]
+    assert schema_provider.calls == [(10, 20)]
     assert result == {
         "sql": (
             "select stall_traffic.stat_date as stat_date, sum(stall_traffic.visit_uv) as visit_uv "
@@ -162,7 +162,7 @@ def test_sql_adapter_treats_filter_dimensions_as_where_conditions_only():
             ),
         ],
     )
-    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema))
+    adapter = SqlAdapter(schema_provider=FakeDatasetSchemaProvider(schema))
 
     result = adapter.generate(
         {
@@ -275,7 +275,7 @@ def test_sql_adapter_does_not_select_dimension_mentions_for_plain_metric_query()
     compiler = CapturingCompiler(
         "select stall_traffic.total_customer_cnt_online as total_customer_cnt_online from stall_traffic_1d stall_traffic"
     )
-    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=compiler)
+    adapter = SqlAdapter(schema_provider=FakeDatasetSchemaProvider(schema), compiler=compiler)
 
     adapter.generate(
         {
@@ -397,7 +397,7 @@ def test_sql_adapter_uses_separated_group_dimensions_and_time_filters():
         "select stall_order.stall_id, sum(stall_order.gmv_total) as gmv_total "
         "from stall_traffic_1d stall_order group by stall_order.stall_id"
     )
-    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=compiler)
+    adapter = SqlAdapter(schema_provider=FakeDatasetSchemaProvider(schema), compiler=compiler)
 
     adapter.generate(
         {
@@ -474,7 +474,7 @@ def test_sql_adapter_passes_ranking_order_and_limit_to_compiler():
         "from stall_traffic_1d stall_order group by stall_order.stall_id "
         "order by gmv_sale desc limit 5"
     )
-    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=compiler)
+    adapter = SqlAdapter(schema_provider=FakeDatasetSchemaProvider(schema), compiler=compiler)
 
     adapter.generate(
         {
@@ -529,7 +529,7 @@ def test_sql_adapter_rejects_unsafe_generated_sql():
         ],
         dimensions=[],
     )
-    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=UnsafeCompiler())
+    adapter = SqlAdapter(schema_provider=FakeDatasetSchemaProvider(schema), compiler=UnsafeCompiler())
 
     with pytest.raises(ValueError, match="unsafe_statement"):
         adapter.generate(
@@ -576,7 +576,7 @@ def test_sql_adapter_passes_repair_context_to_compiler_on_retry():
         dimensions=[],
     )
     compiler = CapturingCompiler("select sum(stall_traffic.visit_uv) as visit_uv from stall_traffic_1d stall_traffic")
-    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=compiler)
+    adapter = SqlAdapter(schema_provider=FakeDatasetSchemaProvider(schema), compiler=compiler)
 
     adapter.generate(
         {
@@ -636,7 +636,7 @@ def test_sql_adapter_rejects_retry_when_regenerated_sql_is_same_as_failed_sql():
         dimensions=[],
     )
     failed_sql = "select sum(visit_uv) as visit_uv from missing_table"
-    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(schema), compiler=CapturingCompiler(failed_sql))
+    adapter = SqlAdapter(schema_provider=FakeDatasetSchemaProvider(schema), compiler=CapturingCompiler(failed_sql))
 
     with pytest.raises(ValueError, match="SQL_REPAIR_REGENERATED_SAME_SQL"):
         adapter.generate(
@@ -886,7 +886,7 @@ def test_sql_adapter_executes_cross_model_plans_as_independent_queries():
         ToolResult(success=True, payload={"fields": ["value"], "data": [{"value": 10}]})
     )
     adapter = SqlAdapter(
-        schema_builder=FakeSemanticSchemaBuilder(schema),
+        schema_provider=FakeDatasetSchemaProvider(schema),
         execute_tool=execute_tool,
     )
 
@@ -1239,7 +1239,7 @@ def test_execute_split_preserves_sub_plan_role_for_share_analysis_e2e():
             )
 
     adapter = SqlAdapter(
-        schema_builder=FakeSemanticSchemaBuilder(schema),
+        schema_provider=FakeDatasetSchemaProvider(schema),
         execute_tool=RoleAwareFakeSqlExecuteTool(),
     )
 

@@ -7,7 +7,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from apps.semantic.schemas import DatasetSchema, JoinRelation, SchemaElement
 from apps.retrieval.projection import (
     ProjectedResource,
     ProjectedUnit,
@@ -17,6 +16,7 @@ from apps.retrieval.projection import (
     ProjectedResourceDelta as ProjectedResourceDelta,
 )
 from apps.retrieval.schemas import RetrievalResourceType, RetrievalSourceType
+from apps.semantic.models.dto import DatasetSchema, JoinRelation, SchemaElement
 
 
 @dataclass(frozen=True, slots=True)

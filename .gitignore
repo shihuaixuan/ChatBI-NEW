@@ -35,6 +35,8 @@ backend/alembic/versions/*
 !backend/alembic/versions/081_retrieval_generation_p1.py
 !backend/alembic/versions/082_retrieval_hybrid_p1.py
 !backend/alembic/versions/083_remove_legacy_embedding.py
+!backend/alembic/versions/085_active_question_flows.py
+!backend/alembic/versions/086_remove_legacy_semantic_index.py
 .codex_run_logs
 .idea
 data/sqlbot

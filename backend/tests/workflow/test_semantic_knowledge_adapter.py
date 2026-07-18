@@ -7,13 +7,13 @@ from typing import Any, cast
 
 import pytest
 
+from apps.retrieval.errors import RetrievalConfigurationError, RetrievalQueryError
+from apps.retrieval.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
+from apps.retrieval.service import RetrievalService
 from apps.workflow.capabilities.adapters.knowledge import (
     SemanticKnowledgeAdapter,
 )
 from apps.workflow.capabilities.interactions import apply_slot_response_to_intent
-from apps.retrieval.errors import RetrievalConfigurationError, RetrievalQueryError
-from apps.retrieval.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
-from apps.retrieval.service import RetrievalService
 
 
 class _RecordingRetrievalService:

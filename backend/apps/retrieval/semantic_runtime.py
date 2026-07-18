@@ -17,10 +17,10 @@ from apps.retrieval.errors import (
     RetrievalIndexUnavailableError,
     RetrievalProviderUnavailableError,
 )
+from apps.retrieval.schemas import RetrievalChannelStatus
 from apps.retrieval.semantic_projector import (
     SemanticSourceProjector as SemanticSourceProjector,
 )
-from apps.retrieval.schemas import RetrievalChannelStatus
 
 
 @dataclass(frozen=True, slots=True)

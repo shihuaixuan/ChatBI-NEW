@@ -1,4 +1,7 @@
-from apps.semantic.models import (
+from sqlmodel import SQLModel
+
+from apps.semantic.models import orm as semantic_orm
+from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDimension,
     SemanticDimensionValue,
@@ -8,6 +11,50 @@ from apps.semantic.models import (
     SemanticModelField,
     SemanticModelMeasure,
 )
+
+
+def test_semantic_orm_package_exports_and_registers_all_tables():
+    expected_exports = {
+        "SemanticAssetAlias",
+        "SemanticAssetRelation",
+        "SemanticDataset",
+        "SemanticDatasetAsset",
+        "SemanticDatasetModelConfig",
+        "SemanticDimension",
+        "SemanticDimensionValue",
+        "SemanticDomain",
+        "SemanticMetric",
+        "SemanticModel",
+        "SemanticModelField",
+        "SemanticModelMeasure",
+        "SemanticModelRelation",
+        "SemanticTerm",
+    }
+    expected_tables = {
+        "headless_asset_alias",
+        "headless_asset_relation",
+        "headless_dataset",
+        "headless_dataset_asset",
+        "headless_dataset_model_config",
+        "headless_dimension",
+        "headless_dimension_value",
+        "headless_domain",
+        "headless_metric",
+        "headless_model",
+        "headless_model_field",
+        "headless_model_measure",
+        "headless_model_relation",
+        "headless_term",
+    }
+
+    exported_tables = {
+        getattr(semantic_orm, name).__tablename__
+        for name in semantic_orm.__all__
+    }
+
+    assert set(semantic_orm.__all__) == expected_exports
+    assert exported_tables == expected_tables
+    assert expected_tables <= set(SQLModel.metadata.tables)
 
 
 def test_semantic_models_expose_storage_fields():

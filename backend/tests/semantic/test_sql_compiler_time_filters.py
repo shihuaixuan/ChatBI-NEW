@@ -2,8 +2,11 @@ from datetime import date
 
 import pytest
 
-from apps.semantic.schemas import DatasetSchema, SchemaElement
-from apps.semantic.sql_compiler import SemanticSQLCompiler, SemanticSQLCompileRequest
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
+from apps.semantic.services.sql_compiler import (
+    SemanticSQLCompiler,
+    SemanticSQLCompileRequest,
+)
 
 
 def _schema() -> DatasetSchema:

@@ -7,12 +7,12 @@ golden 对比：对既有可表达的查询形态，"经 bind_query_plan 计划�
 
 import pytest
 
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.workflow.capabilities.adapters.sql import SqlAdapter
 from apps.workflow.capabilities.planning import QueryPlanBinder
-from apps.semantic.schemas import DatasetSchema, SchemaElement
 
 
-class FakeSemanticSchemaBuilder:
+class FakeDatasetSchemaProvider:
     def __init__(self, schema: DatasetSchema) -> None:
         self.schema = schema
 
@@ -115,7 +115,7 @@ def _request(variables: dict) -> dict:
 
 
 def _generate_sql(variables: dict, database_type: str | None = None) -> str:
-    adapter = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(_schema(database_type)))
+    adapter = SqlAdapter(schema_provider=FakeDatasetSchemaProvider(_schema(database_type)))
     return adapter.generate(_request(variables))["sql"]
 
 
@@ -625,7 +625,7 @@ def test_split_sql_generation_uses_query_plan_sub_plans():
     }
     plan = QueryPlanBinder().bind(_request(variables))
 
-    result = SqlAdapter(schema_builder=FakeSemanticSchemaBuilder(_schema())).generate_split(
+    result = SqlAdapter(schema_provider=FakeDatasetSchemaProvider(_schema())).generate_split(
         _request({**variables, "plan": plan})
     )
 

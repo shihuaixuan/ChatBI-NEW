@@ -1,5 +1,5 @@
 from apps.datasource.models.datasource import CoreDatasource
-from apps.semantic.models import (
+from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDimension,
     SemanticDomain,
@@ -8,7 +8,10 @@ from apps.semantic.models import (
     SemanticModelRelation,
     SemanticTerm,
 )
-from apps.semantic.service import SemanticSchemaBuilder, build_ontology_from_schema
+from apps.semantic.services.builders.schema_builder import (
+    SemanticSchemaBuilder,
+    build_ontology_from_schema,
+)
 
 
 def test_schema_builder_exposes_dataset_selected_metrics_and_dimensions():

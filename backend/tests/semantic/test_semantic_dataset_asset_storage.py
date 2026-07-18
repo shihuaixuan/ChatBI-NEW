@@ -1,9 +1,9 @@
-from apps.semantic.models import (
+from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetAsset,
     SemanticDatasetModelConfig,
 )
-from apps.semantic.storage_sync import (
+from apps.semantic.utils.orm_mapping import (
     build_dataset_detail_from_storage,
     dataset_assets_from_detail,
     dataset_model_configs_from_detail,

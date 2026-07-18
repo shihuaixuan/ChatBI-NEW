@@ -1,0 +1,19 @@
+from typing import Protocol
+
+from apps.semantic.models.orm import SemanticDomain
+
+
+class DomainRepository(Protocol):
+    """主题域生命周期和跨资源校验的仓储端口。"""
+
+    def list_active(self, oid: int) -> list[SemanticDomain]: ...
+
+    def get_active(self, oid: int, domain_id: int) -> SemanticDomain | None: ...
+
+    def is_active(self, oid: int, domain_id: int) -> bool: ...
+
+    def create(self, domain: SemanticDomain) -> SemanticDomain: ...
+
+    def update(self, domain: SemanticDomain) -> SemanticDomain: ...
+
+    def delete(self, domain: SemanticDomain) -> None: ...

@@ -8,7 +8,6 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.capabilities.time_slots import normalize_time_range_payload
-from apps.semantic.schemas import DatasetSchema, SchemaElement
 from apps.retrieval.errors import (
     RetrievalProviderUnavailableError,
     RetrievalQueryError,
@@ -39,6 +38,7 @@ from apps.retrieval.schemas import (
     RetrievalSlotDecision,
     RetrievalSourceType,
 )
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 
 class RerankCandidate(BaseModel):

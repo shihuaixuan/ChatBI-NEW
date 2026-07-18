@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import hashlib
 
-from apps.semantic.models import (
+from apps.retrieval.projection import ProjectedResource, ProjectedResourceDelta
+from apps.retrieval.schemas import RetrievalResourceType
+from apps.retrieval.semantic_projector import (
+    SemanticProjectionPolicy,
+    SemanticSourceProjector,
+)
+from apps.semantic.models.dto import DatasetSchema, JoinRelation, SchemaElement
+from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDimension,
     SemanticMetric,
     SemanticModel,
 )
-from apps.semantic.schemas import DatasetSchema, JoinRelation, SchemaElement
-from apps.semantic.service import SemanticSchemaBuilder
-from apps.retrieval.semantic_projector import (
-    SemanticProjectionPolicy,
-    SemanticSourceProjector,
-)
-from apps.retrieval.projection import ProjectedResource, ProjectedResourceDelta
-from apps.retrieval.schemas import RetrievalResourceType
+from apps.semantic.services.builders.schema_builder import SemanticSchemaBuilder
 
 
 def _schema() -> DatasetSchema:

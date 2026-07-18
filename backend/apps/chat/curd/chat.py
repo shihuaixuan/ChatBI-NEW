@@ -1,30 +1,40 @@
 import datetime
-from typing import List, Optional, Union, Dict, Any
+from typing import Any, Dict, List, Optional, Union
 
 import orjson
 import sqlparse
-from sqlalchemy import and_, select, update
-from sqlalchemy import desc, func
+from sqlalchemy import and_, desc, func, select, update
 from sqlalchemy.orm import aliased
 
-from apps.chat.models.chat_model import Chat, ChatRecord, CreateChat, ChatInfo, RenameChat, ChatLog, \
-    TypeEnum, OperationEnum, ChatRecordResult, ChatLogHistory, ChatLogHistoryItem
+from apps.chat.models.chat_model import (
+    Chat,
+    ChatInfo,
+    ChatLog,
+    ChatLogHistory,
+    ChatLogHistoryItem,
+    ChatRecord,
+    ChatRecordResult,
+    CreateChat,
+    OperationEnum,
+    RenameChat,
+    TypeEnum,
+)
+from apps.chat.services.deletion import ChatDeletionService
 from apps.chat.services.semantic_binding import (
     DatasetBindingError,
     apply_binding_to_chat,
     apply_binding_to_record,
     resolve_dataset_chat_binding,
 )
-from apps.chat.services.deletion import ChatDeletionService
 from apps.datasource.crud.datasource import get_ds
 from apps.datasource.crud.recommended_problem import get_datasource_recommended_chart
 from apps.datasource.models.datasource import CoreDatasource
 from apps.db.db import exec_sql
-from apps.semantic.models import SemanticDataset
+from apps.semantic.models.orm import SemanticDataset
 from apps.system.crud.assistant import AssistantOutDsFactory
-from common.core.deps import CurrentAssistant, SessionDep, CurrentUser, Trans
+from common.core.deps import CurrentAssistant, CurrentUser, SessionDep, Trans
 from common.utils.data_format import DataFormat
-from common.utils.utils import extract_nested_json, SQLBotLogUtil
+from common.utils.utils import SQLBotLogUtil, extract_nested_json
 
 
 def get_chat_record_by_id(session: SessionDep, record_id: int):

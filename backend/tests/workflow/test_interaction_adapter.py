@@ -1,12 +1,12 @@
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.workflow.capabilities.adapters.interaction import InteractionAdapter
 from apps.workflow.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
 from apps.workflow.capabilities.real import RealChatBICapabilityGateway
-from apps.semantic.schemas import DatasetSchema, SchemaElement
 
 
-class FakeSemanticSchemaBuilder:
+class FakeDatasetSchemaProvider:
     def __init__(self, schema: DatasetSchema) -> None:
         self.schema = schema
         self.calls: list[tuple[int, int]] = []
@@ -143,14 +143,14 @@ def test_interaction_adapter_loads_schema_candidates_when_knowledge_is_absent():
             )
         ],
     )
-    schema_builder = FakeSemanticSchemaBuilder(schema)
-    adapter = InteractionAdapter(schema_builder=schema_builder)
+    schema_provider = FakeDatasetSchemaProvider(schema)
+    adapter = InteractionAdapter(schema_provider=schema_provider)
 
     result = adapter.ask_rewrite_clarification(
         _v1_request({"rewrite": {"missing_slots": ["metric", "dimension"]}})
     )
 
-    assert schema_builder.calls == [(10, 30)]
+    assert schema_provider.calls == [(10, 30)]
     assert result["options"] == [
         {"label": "访问人数", "value": {"metric": "访问人数", "asset_id": 100}},
         {"label": "统计日期", "value": {"dimension": "统计日期", "asset_id": 200}},
@@ -271,8 +271,8 @@ def test_interaction_adapter_builds_subject_domain_slot_clarification_card():
             {"domain_id": 2, "name": "商品", "biz_name": "product", "description": "商品经营主题", "model_ids": [11]},
         ],
     )
-    schema_builder = FakeSemanticSchemaBuilder(schema)
-    adapter = InteractionAdapter(schema_builder=schema_builder)
+    schema_provider = FakeDatasetSchemaProvider(schema)
+    adapter = InteractionAdapter(schema_provider=schema_provider)
 
     result = adapter.ask_slot_clarification(
         _v1_request(
@@ -302,7 +302,7 @@ def test_interaction_adapter_builds_subject_domain_slot_clarification_card():
         )
     )
 
-    assert schema_builder.calls == [(10, 30)]
+    assert schema_provider.calls == [(10, 30)]
     assert result["prompt"] == "请确认这个问题属于哪个主题域。"
     assert result["options"] == [
         {"label": "店铺", "value": {"subject_domain": "店铺", "domain_id": 1}},

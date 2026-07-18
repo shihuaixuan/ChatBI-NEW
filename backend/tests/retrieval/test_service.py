@@ -8,9 +8,6 @@ from apps.capabilities.semantic.retrieval import (
     _agent_semantic_status,
     retrieve_semantic_assets,
 )
-from apps.workflow.capabilities.adapters.knowledge import (
-    SemanticKnowledgeAdapter,
-)
 from apps.retrieval.errors import RetrievalQueryError
 from apps.retrieval.schemas import (
     RetrievalBindings,
@@ -24,6 +21,9 @@ from apps.retrieval.semantic_binding import (
     SemanticBindingExecutionResult,
 )
 from apps.retrieval.service import RetrievalService, build_semantic_binding_request
+from apps.workflow.capabilities.adapters.knowledge import (
+    SemanticKnowledgeAdapter,
+)
 
 
 def _request(strategy_version: str | None = None):

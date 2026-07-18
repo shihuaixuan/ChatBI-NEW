@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from typing import Any, cast
 
+from apps.retrieval.service import RetrievalService
 from apps.workflow import runtime as chatbi_runtime
 from apps.workflow.capabilities.adapters.knowledge import (
     SemanticKnowledgeAdapter,
@@ -19,7 +20,6 @@ from apps.workflow.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
     register_chatbi_v1_handlers,
 )
-from apps.retrieval.service import RetrievalService
 from apps.workflow_engine.domain.context import WorkflowContext
 from apps.workflow_engine.domain.run import RunStatus
 from apps.workflow_engine.infrastructure.memory import (

@@ -141,7 +141,7 @@ question.recommend -> RecommendationAdapter
 - 已接入 adapter 的能力，例如 `question.classify`、`question.rewrite`、`intent.recognize`、`knowledge.retrieve`、`answer.*`，由真实 adapter 负责成功或失败。
 - 已接入 adapter 的能力如果抛异常，应该由 `ChatBIV1CapabilityNode` 转换成节点失败，而不是在 gateway 内吞掉异常。
 - 尚未接入的能力，才允许 fallback 到 `PlaceholderChatBICapabilityGateway`；`sql.*`、`question.recommend` 已接入真实 adapter，不应再 fallback。
-- `build_real_chatbi_v1_runtime(session)` 必须给依赖数据库的 adapter 注入 session，例如 `SemanticKnowledgeAdapter(schema_builder=SemanticSchemaBuilder(session))`。
+- `build_real_chatbi_v1_runtime(session)` 统一创建 `SemanticSchemaApplicationService(session)`，并以 `DatasetSchemaProvider` 接口注入需要 Schema 的 adapter。
 
 所有 adapter 输出必须符合 `schemas/v1.py` 中的 output model。这样真实能力上线时，不会污染图上下文结构。
 
@@ -212,7 +212,7 @@ question.recommend -> RecommendationAdapter
 
 - `definition_version="v1"` 使用 `build_real_chatbi_v1_runtime()`。
 - `question.classify`、`question.rewrite`、`intent.recognize`、`knowledge.retrieve`、`answer.*` 走真实 adapter。
-- `knowledge.retrieve` 依赖 DB session，runtime 必须注入 `SemanticSchemaBuilder(session)`。
+- `knowledge.retrieve` 依赖 DB session，runtime 必须注入已组装的 `RetrievalService`。
 - 已接入真实 adapter 的节点异常会导致节点失败，不再回退到 placeholder。
 - `sql.generate`、`sql.execute`、`question.recommend` 已接入真实 adapter；这些节点异常会作为真实节点失败暴露。
 
@@ -342,7 +342,7 @@ question.recommend -> RecommendationAdapter
   - `metric` / `analysis_object`：优先从 `variables.knowledge.candidate_groups.metrics` 生成真实指标选项；无候选时回退访问人数、销售额、订单数等示例选项。
   - `time_range`：生成今天、最近 7 天、本月等时间选项。
   - `dimension`：优先从 `variables.knowledge.candidate_groups.dimensions` 生成真实维度选项；无候选时回退按日期、按店铺、按商品等示例选项。
-- 如果尚未执行 `knowledge.retrieve`，真实 runtime 会给 `InteractionAdapter` 注入 `SemanticSchemaBuilder(session)`，按 `request.dataset_id` 轻量加载 schema，并从 schema.metrics/schema.dimensions 生成候选。
+- 如果尚未执行 `knowledge.retrieve`，真实 runtime 会给 `InteractionAdapter` 注入 `DatasetSchemaProvider`，按 `request.dataset_id` 加载 schema，并从 schema.metrics/schema.dimensions 生成候选。
 - schema 加载失败不会让交互节点失败，会继续使用内置示例选项，保证澄清链路可用。
 - 回答写入 `variables.rewrite_response`，恢复后回到 `rewrite_question`。
 
@@ -350,7 +350,7 @@ question.recommend -> RecommendationAdapter
 
 - 当前为本地规则版。
 - 真实候选优先来自上游 `knowledge.retrieve` 已写入的 `candidate_groups`。
-- 当尚未有 knowledge 上下文时，真实 runtime 允许交互节点通过 session-backed `SemanticSchemaBuilder` 做轻量候选加载。
+- 当尚未有 knowledge 上下文时，真实 runtime 允许交互节点通过 `DatasetSchemaProvider` 加载候选。
 
 输出：
 
@@ -548,7 +548,7 @@ question.recommend -> RecommendationAdapter
 当前已实现：
 
 1. `SqlAdapter.generate()` 从 v1 request 中读取 `dataset_id`、`tenant_id/oid`、重写问题和 `variables.knowledge`。
-2. 通过 `SemanticSchemaBuilder.build_dataset_schema()` 加载 Semantic dataset schema。
+2. 通过 `DatasetSchemaProvider.build_dataset_schema()` 获取 Semantic dataset schema。
 3. 从 `knowledge.slot_bindings` 和 `knowledge.selected_assets` 抽取 metric/dimension asset id。
 4. 如果上一轮 `sql_error.repair_plan.action=regenerate_sql`，从 `variables.sql_error` 和 `variables.sql` 构造 `repair_context`，包含错误码、错误信息、失败 SQL、候选表/字段。
 5. 调用 `SemanticSQLCompiler` 生成 SQL，并把 `repair_context` 传入 `SemanticSQLCompileRequest`。
@@ -852,7 +852,7 @@ question.recommend -> RecommendationAdapter
 | 旧工具输出结构不稳定 | 旧 `ToolResult.payload` 并不完全等于 v1 schema | adapter 必须做显式映射和 schema 校验 |
 | 旧 semantic tool 是空实现 | `SemanticAssetTool` 当前 degraded | KnowledgeAdapter 应直接接 semantic service/runtime asset |
 | 真实节点被 placeholder 掩盖 | 已接入真实 adapter 的节点如果异常后 fallback，会让 trace 显示成功但数据是假的 | 已接入 adapter 的能力不得在 gateway 内吞异常；由节点失败语义暴露问题 |
-| Semantic adapter 依赖 DB session | `SemanticSchemaBuilder` 没有 session 会抛 `SEMANTIC_SESSION_REQUIRED` | `build_real_chatbi_v1_runtime(session)` 必须注入 session-backed schema builder |
+| Semantic adapter 依赖 DB session | adapter 未注入 `DatasetSchemaProvider` 会抛 `SEMANTIC_SCHEMA_PROVIDER_REQUIRED` | `build_real_chatbi_v1_runtime(session)` 必须统一创建并注入 `SemanticSchemaApplicationService` |
 | 弱词造成指标歧义 | 真实数据集里多个指标可能同时包含“人数/次数/率”等词 | 已完成第一阶段 slot-aware rerank；仍保留 `ask_metric_selection` 分支，并继续增强同义词/别名治理 |
 | SQL 生成失败分支不够细 | 当前图只在 execute 后有 SQL error 分支 | 接 SqlAdapter 时需要统一 generate/validate/execute 的错误模型 |
 | 大结果集污染 context/trace | `SqlExecuteTool` 可能返回完整 data | 必须引入 artifact/sample summary |

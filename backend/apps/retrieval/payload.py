@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any, Literal, cast
 
 from apps.capabilities.time_slots import normalize_time_range_payload
-from apps.semantic.schemas import DatasetSchema, SchemaElement
 from apps.retrieval.schemas import (
     AssetReference,
     ExecutableAssetReference,
@@ -25,6 +24,7 @@ from apps.retrieval.schemas import (
     RetrievalSlotDecision,
     RetrievalSourceType,
 )
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 _GROUP_TYPES = {
     "metrics": RetrievalResourceType.METRIC,

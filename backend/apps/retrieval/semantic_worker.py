@@ -12,8 +12,8 @@ from apps.retrieval.embedding import (
     EmbeddingProvider,
     default_retrieval_embedding_provider,
 )
-from apps.retrieval.semantic_indexing import build_semantic_index_profile
 from apps.retrieval.indexing import IndexJobRunResult, RetrievalIndexingService
+from apps.retrieval.semantic_indexing import build_semantic_index_profile
 from common.core.db import engine
 
 logger = logging.getLogger(__name__)

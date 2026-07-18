@@ -1,16 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
+from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.workflow.capabilities.context import ChatBIRunContext
-from apps.semantic.schemas import DatasetSchema, SchemaElement
-
-
-class InteractionSchemaBuilder(Protocol):
-    """交互节点使用的轻量 schema 构建协议。"""
-
-    def build_dataset_schema(self, oid: int, dataset_id: int) -> DatasetSchema: ...
 
 
 @dataclass(frozen=True)
@@ -78,8 +73,8 @@ def _dimension_value_fields_from_options(options: list[dict[str, Any]]) -> list[
 class InteractionAdapter:
     """ChatBI v1 澄清交互适配器，负责生成用户可回答的结构化交互请求。"""
 
-    def __init__(self, schema_builder: InteractionSchemaBuilder | None = None) -> None:
-        self._schema_builder = schema_builder
+    def __init__(self, schema_provider: DatasetSchemaProvider | None = None) -> None:
+        self._schema_provider = schema_provider
         self._card_builder = ClarificationCardBuilder()
 
     def ask_rewrite_clarification(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -283,12 +278,12 @@ class InteractionAdapter:
         return [self._schema_element_option(element, slot_name) for element in elements[:5]]
 
     def _load_schema(self, ctx: ChatBIRunContext) -> DatasetSchema | None:
-        if self._schema_builder is None:
+        if self._schema_provider is None:
             return None
         if ctx.dataset_id is None:
             return None
         try:
-            return self._schema_builder.build_dataset_schema(ctx.tenant_id, ctx.dataset_id)
+            return self._schema_provider.build_dataset_schema(ctx.tenant_id, ctx.dataset_id)
         except Exception:
             return None
 

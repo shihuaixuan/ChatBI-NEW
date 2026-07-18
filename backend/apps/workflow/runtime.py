@@ -1,6 +1,9 @@
 from sqlmodel import Session
 
 from apps.capabilities.sql.executor import SqlExecuteTool
+from apps.retrieval.service import build_retrieval_service
+from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
+from apps.semantic.services.schema_service import SemanticSchemaService
 from apps.workflow.capabilities.adapters.answer import (
     AnswerAdapter,
     AnswerModelClient,
@@ -30,8 +33,6 @@ from apps.workflow.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
     register_chatbi_v1_handlers,
 )
-from apps.semantic.service import SemanticSchemaBuilder
-from apps.retrieval.service import build_retrieval_service
 from apps.workflow_engine.infrastructure.artifacts.file_store import (
     FileArtifactStore,
     SessionArtifactMetadataStore,
@@ -101,8 +102,10 @@ def build_real_chatbi_v1_runtime(
 ) -> GraphRuntime:
     """组装真实 classify_question + 其他占位能力回退的 ChatBI v1 运行时。"""
 
-    schema_builder = SemanticSchemaBuilder(session)
-    retrieval_service = build_retrieval_service(session, schema_builder=schema_builder)
+    schema_provider = SemanticSchemaService(SemanticSchemaLoader(session))
+    retrieval_service = build_retrieval_service(
+        session, schema_provider=schema_provider
+    )
 
     def session_factory() -> Session:
         """为并行执行与 artifact 元数据写入创建独立会话。"""
@@ -114,14 +117,17 @@ def build_real_chatbi_v1_runtime(
         metadata_store=SessionArtifactMetadataStore(session_factory),
     )
     gateway = RealChatBICapabilityGateway(
-        question_adapter=QuestionAdapter(model_client=question_model_client, schema_builder=schema_builder),
+        question_adapter=QuestionAdapter(
+            model_client=question_model_client,
+            schema_provider=schema_provider,
+        ),
         answer_adapter=AnswerAdapter(model_client=answer_model_client),
         knowledge_adapter=SemanticKnowledgeAdapter(
             retrieval_service=retrieval_service,
         ),
-        interaction_adapter=InteractionAdapter(schema_builder=schema_builder),
+        interaction_adapter=InteractionAdapter(schema_provider=schema_provider),
         sql_adapter=SqlAdapter(
-            schema_builder=schema_builder,
+            schema_provider=schema_provider,
             execute_tool=SessionSqlExecutionGateway(
                 session_factory,
                 execute_tool_factory=SqlExecuteTool,

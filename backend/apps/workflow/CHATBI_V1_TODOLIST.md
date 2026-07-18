@@ -156,7 +156,7 @@
   - 验收：根据 `missing_slots`、`ambiguous_slots/conflict_slots`、`knowledge.ambiguities` 生成 prompt/options/response_schema。
   - 验收：rewrite 澄清优先使用 `knowledge.candidate_groups.metrics/dimensions` 真实候选；无候选时回退内置示例。
   - 验收：metric selection 在 ambiguity candidates 为空时可回退到 `knowledge.candidate_groups.metrics`。
-  - 验收：没有 knowledge 上下文时，真实 runtime 注入 `SemanticSchemaBuilder`，可按 `dataset_id` 轻量加载 schema 候选。
+  - 验收：没有 knowledge 上下文时，真实 runtime 注入 `DatasetSchemaProvider`，可按 `dataset_id` 加载 schema 候选。
   - 后续：按问题文本对 schema 候选排序，而不是直接取前 5 个。
 
 - [x] 实现 `QuestionAdapter`。
@@ -176,7 +176,7 @@
   - 后续：接入 BM25 / embedding / hybrid score，并完善同义词/别名治理。
 
 - [x] 实现 `SqlAdapter.generate`。
-  - 复用：`SemanticSQLCompiler`、`SemanticSchemaBuilder`、`SqlValidateTool`
+  - 复用：`SemanticSQLCompiler`、`DatasetSchemaProvider`、`SqlValidateTool`
   - 能力：`sql.generate`
   - 验收：真实 SQL 生成和安全校验可由图节点调用，输出 `sql`、`strategy`、`datasource_id`、`explanation`、`used_assets`。
 

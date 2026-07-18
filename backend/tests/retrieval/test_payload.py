@@ -1,6 +1,5 @@
 """RetrievalBundle 到 Graph/Agent 业务契约的投影测试。"""
 
-from apps.semantic.schemas import DatasetSchema, SchemaElement
 from apps.retrieval.payload import bundle_to_semantic_payload
 from apps.retrieval.schemas import (
     AssetReference,
@@ -21,6 +20,7 @@ from apps.retrieval.schemas import (
     RetrievalSourceType,
 )
 from apps.retrieval.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 
 def _element(asset_type: str, asset_id: int, name: str, biz_name: str) -> SchemaElement:

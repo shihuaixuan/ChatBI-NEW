@@ -11,9 +11,13 @@ from typing import Any
 from sqlalchemy import select
 
 from apps.capabilities.schemas import ToolResult
-from apps.semantic.models import SemanticDataset, SemanticModel
-from apps.semantic.service import SemanticSchemaBuilder
-from apps.semantic.sql_compiler import SemanticSQLCompiler, SemanticSQLCompileRequest
+from apps.semantic.models.orm import SemanticDataset, SemanticModel
+from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
+from apps.semantic.services.schema_service import SemanticSchemaService
+from apps.semantic.services.sql_compiler import (
+    SemanticSQLCompiler,
+    SemanticSQLCompileRequest,
+)
 
 
 def resolve_dataset_by_datasource(session, oid: int, datasource_id: int) -> SemanticDataset | None:
@@ -64,7 +68,11 @@ def compile_semantic_sql(
             )
         dataset_id = dataset.id
     try:
-        schema = SemanticSchemaBuilder(session).build_dataset_schema(oid, dataset_id)
+        schema = SemanticSchemaService(
+            SemanticSchemaLoader(session)
+        ).build_dataset_schema(
+            oid, dataset_id
+        )
         result = (compiler or SemanticSQLCompiler()).compile(
             SemanticSQLCompileRequest(
                 schema=schema,

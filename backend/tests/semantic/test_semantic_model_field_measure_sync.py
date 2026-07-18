@@ -1,14 +1,14 @@
-from apps.semantic.models import SemanticMetric, SemanticModel, SemanticModelMeasure
-from apps.semantic.schemas import ModelCreateWithAssetsPayload
-from apps.semantic.service import (
+from apps.semantic.models.dto import ModelCreateWithAssetsPayload
+from apps.semantic.models.orm import SemanticMetric, SemanticModel, SemanticModelMeasure
+from apps.semantic.services.builders.metric_builder import (
     build_metrics_from_model_measures,
-    build_model_with_assets,
+    normalize_metric_storage_fields,
 )
-from apps.semantic.storage_sync import (
+from apps.semantic.services.builders.model_builder import build_model_with_assets
+from apps.semantic.utils.orm_mapping import (
     build_model_detail_from_storage,
     model_fields_from_detail,
     model_measures_from_detail,
-    normalize_model_storage_fields,
 )
 
 
@@ -153,7 +153,7 @@ def test_metric_fields_are_normalized_from_type_params():
         },
     )
 
-    normalize_model_storage_fields(metric)
+    normalize_metric_storage_fields(metric)
 
     assert metric.expr == "pay_amount"
     assert metric.fields == ["pay_amount"]

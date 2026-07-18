@@ -8,15 +8,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlmodel import Session, col, select
 
-from apps.semantic.models import (
-    SemanticDataset,
-    SemanticDomain,
-    SemanticMetric,
-    SemanticModel,
-)
-from apps.semantic.schemas import DatasetSchema, SchemaElement
-from apps.retrieval.semantic_indexing import SemanticIndexCoordinator
-from apps.retrieval.semantic_projector import SemanticSourceProjector
 from apps.retrieval.indexing import (
     DeletedResourceRef,
     IndexEmbeddingProfile,
@@ -32,6 +23,15 @@ from apps.retrieval.models import (
 )
 from apps.retrieval.projection import ProjectedResource
 from apps.retrieval.schemas import RetrievalResourceType
+from apps.retrieval.semantic_indexing import SemanticIndexCoordinator
+from apps.retrieval.semantic_projector import SemanticSourceProjector
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
+from apps.semantic.models.orm import (
+    SemanticDataset,
+    SemanticDomain,
+    SemanticMetric,
+    SemanticModel,
+)
 from common.core.db import engine
 
 TENANT_ID = 9_920_001

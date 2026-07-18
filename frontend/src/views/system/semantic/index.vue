@@ -46,7 +46,7 @@ const loading = ref(false)
 const saveLoading = ref(false)
 const schemaLoading = ref(false)
 const mapperLoading = ref(false)
-const knowledgeRebuildLoading = ref(false)
+const datasetIndexRebuildLoading = ref(false)
 const tablesLoading = ref(false)
 const fieldsLoading = ref(false)
 
@@ -1047,7 +1047,7 @@ const runMapper = async () => {
   }
 }
 
-const rebuildKnowledge = async (datasetId?: number | string) => {
+const rebuildDatasetIndex = async (datasetId?: number | string) => {
   const targetDatasetId = datasetId || selectedDatasetId.value
   if (!targetDatasetId) {
     ElMessage.warning('请选择数据集')
@@ -1062,12 +1062,12 @@ const rebuildKnowledge = async (datasetId?: number | string) => {
   } catch {
     return
   }
-  knowledgeRebuildLoading.value = true
+  datasetIndexRebuildLoading.value = true
   try {
-    await semanticApi.knowledgeRebuild(targetDatasetId)
+    await semanticApi.datasetIndexRebuild(targetDatasetId)
     ElMessage.success('向量索引重建任务已提交')
   } finally {
-    knowledgeRebuildLoading.value = false
+    datasetIndexRebuildLoading.value = false
   }
 }
 
@@ -1298,7 +1298,7 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
             <template #default="{ row }">
               <div class="row-actions dataset-row-actions">
                 <el-button link type="primary" :icon="Edit" @click="openDatasetEditDialog(row)">编辑</el-button>
-                <el-button link type="primary" :icon="Refresh" :loading="knowledgeRebuildLoading" @click="rebuildKnowledge(row.id)">重建向量索引</el-button>
+                <el-button link type="primary" :icon="Refresh" :loading="datasetIndexRebuildLoading" @click="rebuildDatasetIndex(row.id)">重建向量索引</el-button>
                 <el-button link type="danger" :icon="Delete" @click="deleteEntity('dataset', row)">删除</el-button>
               </div>
             </template>
@@ -1340,7 +1340,7 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
             />
           </div>
           <div class="toolbar-right">
-            <el-button type="primary" :icon="MagicStick" :loading="knowledgeRebuildLoading" @click="rebuildKnowledge()">重建向量索引</el-button>
+            <el-button type="primary" :icon="MagicStick" :loading="datasetIndexRebuildLoading" @click="rebuildDatasetIndex()">重建向量索引</el-button>
           </div>
         </div>
         <div v-if="runtimeTab === 'schema'" class="runtime-panel">

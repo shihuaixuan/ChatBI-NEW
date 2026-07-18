@@ -46,6 +46,6 @@ export const semanticApi = {
   termDelete: (id: number | string) => request.delete(`/semantic/terms/${id}`),
 
   schemaMap: (data: SchemaMapPayload) => request.post('/semantic/schema/map', data),
-  knowledgeRebuild: (datasetId: number | string) =>
-    request.post('/semantic/knowledge/rebuild', null, { params: { dataset_id: datasetId } }),
+  datasetIndexRebuild: (datasetId: number | string) =>
+    request.post(`/semantic/datasets/${datasetId}/index/rebuild`),
 }

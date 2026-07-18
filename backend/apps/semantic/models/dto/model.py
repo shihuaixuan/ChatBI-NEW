@@ -1,0 +1,79 @@
+from typing import Any
+
+from pydantic import Field
+
+from apps.semantic.models.dto.base import SemanticBaseDTO
+
+
+class ModelPayload(SemanticBaseDTO):
+    domain_id: int
+    datasource_id: int
+    name: str
+    biz_name: str
+    description: str | None = None
+    model_detail: dict[str, Any] = Field(default_factory=dict)
+    filter_sql: str | None = None
+    alias: list[str] = Field(default_factory=list)
+    source_type: str = "TABLE"
+    depends: list[dict[str, Any]] = Field(default_factory=list)
+    table_name: str | None = None
+    sql_query: str | None = None
+
+
+class ModelRelationPayload(SemanticBaseDTO):
+    domain_id: int
+    left_model_id: int
+    right_model_id: int
+    join_type: str = "left join"
+    join_conditions: list[dict[str, Any]] = Field(default_factory=list)
+    ext: dict[str, Any] = Field(default_factory=dict)
+
+
+class SemanticTableMeta(SemanticBaseDTO):
+    id: int | None = None
+    table_name: str
+    table_comment: str | None = None
+    checked: bool = True
+
+
+class SemanticColumnMeta(SemanticBaseDTO):
+    id: int | None = None
+    field_name: str
+    field_type: str | None = None
+    field_comment: str | None = None
+    field_index: int = 0
+    checked: bool = True
+
+
+class ModelBuildSchemaPayload(SemanticBaseDTO):
+    datasource_id: int
+    source_type: str = "TABLE"
+    table_name: str | None = None
+    sql: str | None = None
+    columns: list[SemanticColumnMeta] = Field(default_factory=list)
+
+
+class ModelBuildField(SemanticBaseDTO):
+    field_name: str
+    data_type: str | None = None
+    name: str
+    biz_name: str
+    expr: str
+    role: str
+    alias: list[str] = Field(default_factory=list)
+    default_agg: str | None = None
+    semantic_type: str | None = None
+    create_asset: bool = True
+
+
+class ModelBuildSchemaResult(SemanticBaseDTO):
+    source_type: str = "TABLE"
+    table_name: str | None = None
+    sql: str | None = None
+    fields: list[ModelBuildField] = Field(default_factory=list)
+    model_detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelCreateWithAssetsPayload(ModelPayload):
+    table_name: str | None = None
+    sql: str | None = None

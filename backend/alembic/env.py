@@ -23,7 +23,6 @@ config = context.config
 # target_metadata = None
 
 # from apps.system.models.user import SQLModel  # noqa
-# from apps.settings.models.setting_models import SQLModel
 #from apps.chat.models.chat_model import SQLModel
 #from apps.terminology.models.terminology_model import SQLModel
 #from apps.custom_prompt.models.custom_prompt_model import SQLModel

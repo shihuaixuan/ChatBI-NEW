@@ -1,8 +1,10 @@
-from apps.semantic.models import SemanticMetric, SemanticModel
-from apps.semantic.schemas import SemanticColumnMeta, ModelCreateWithAssetsPayload
-from apps.semantic.service import (
-    SemanticModelBuilder,
+from apps.semantic.models.dto import ModelCreateWithAssetsPayload, SemanticColumnMeta
+from apps.semantic.models.orm import SemanticMetric, SemanticModel
+from apps.semantic.services.builders.metric_builder import (
     build_metrics_from_model_measures,
+)
+from apps.semantic.services.builders.model_builder import (
+    SemanticModelBuilder,
     build_model_with_assets,
 )
 

@@ -1,13 +1,13 @@
-from apps.semantic.asset_relation import (
-    build_aliases_for_asset,
-    build_metric_relations,
-    build_term_relations,
-)
-from apps.semantic.models import (
+from apps.semantic.models.orm import (
     SemanticAssetAlias,
     SemanticAssetRelation,
     SemanticMetric,
     SemanticTerm,
+)
+from apps.semantic.repository.sqlmodel.asset_relation_mapper import (
+    build_aliases_for_asset,
+    build_metric_relations,
+    build_term_relations,
 )
 
 

@@ -2,6 +2,7 @@ import json
 import threading
 import time
 
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.workflow.capabilities.adapters.answer import (
     AnswerAdapter,
     build_answer_generation_prompt,
@@ -23,7 +24,6 @@ from apps.workflow.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
 from apps.workflow.capabilities.real import RealChatBICapabilityGateway
-from apps.semantic.schemas import DatasetSchema, SchemaElement
 
 
 class FakeModelClient:
@@ -110,7 +110,7 @@ class FakeSqlAdapter:
         }
 
 
-class FakeSemanticSchemaBuilder:
+class FakeDatasetSchemaProvider:
     def __init__(self, schema: DatasetSchema) -> None:
         self.schema = schema
         self.calls: list[tuple[int, int]] = []
@@ -704,7 +704,7 @@ def test_question_adapter_recognizes_subject_domain_from_dataset_schema():
             {"domain_id": 2, "name": "商品", "biz_name": "product", "description": "商品经营主题", "model_ids": [11]},
         ],
     )
-    schema_builder = FakeSemanticSchemaBuilder(schema)
+    schema_provider = FakeDatasetSchemaProvider(schema)
     model_client = SequenceModelClient(
         [
             '{"intent_type":"metric_query","confidence":0.91,'
@@ -716,13 +716,13 @@ def test_question_adapter_recognizes_subject_domain_from_dataset_schema():
             '{"dimension_mentions":[],"dimension_slots":[],"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}',
         ]
     )
-    adapter = QuestionAdapter(model_client=model_client, schema_builder=schema_builder)
+    adapter = QuestionAdapter(model_client=model_client, schema_provider=schema_provider)
 
     result = adapter.recognize_intent(
         _v1_request("今天商品访问人数", variables={"rewrite": {"rewritten_question": "今天商品访问人数"}})
     )
 
-    assert schema_builder.calls == [(9501, 7001)]
+    assert schema_provider.calls == [(9501, 7001)]
     assert "商品经营主题" in model_client.prompts[0].user_prompt
     assert result["subject_domain"] == {
         "status": "selected",
@@ -1016,7 +1016,7 @@ def test_question_adapter_preserves_unmatched_dimension_slots_and_normalizes_mat
             '"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}',
         ]
     )
-    adapter = QuestionAdapter(model_client=model_client, schema_builder=FakeSemanticSchemaBuilder(schema))
+    adapter = QuestionAdapter(model_client=model_client, schema_provider=FakeDatasetSchemaProvider(schema))
 
     result = adapter.recognize_intent(
         _v1_request("今天店铺1的线上客户数", variables={"rewrite": {"rewritten_question": "今天店铺1的线上客户数"}})
@@ -1119,7 +1119,7 @@ def test_question_adapter_filters_time_dimensions_from_plain_dimension_slots():
             '"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}',
         ]
     )
-    adapter = QuestionAdapter(model_client=model_client, schema_builder=FakeSemanticSchemaBuilder(schema))
+    adapter = QuestionAdapter(model_client=model_client, schema_provider=FakeDatasetSchemaProvider(schema))
 
     result = adapter.recognize_intent(
         _v1_request("今天店铺1的档口客户数", variables={"rewrite": {"rewritten_question": "今天店铺1的档口客户数"}})
@@ -1173,7 +1173,7 @@ def test_question_adapter_retries_dimension_subtask_when_value_contains_dimensio
                 '"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}',
             ]
         ),
-        schema_builder=FakeSemanticSchemaBuilder(schema),
+        schema_provider=FakeDatasetSchemaProvider(schema),
     )
 
     result = adapter.recognize_intent(

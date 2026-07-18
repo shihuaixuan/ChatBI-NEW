@@ -19,10 +19,13 @@ from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from apps.chat.models.chat_model import Chat, ChatRecord
-from apps.workflow import runtime as chatbi_runtime
-from apps.workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
-from apps.semantic.models import (
-    SemanticAssetDocument,
+from apps.retrieval.embedding import StaticEmbeddingProvider
+from apps.retrieval.indexing import RetrievalIndexingService
+from apps.retrieval.semantic_indexing import (
+    SemanticIndexCoordinator,
+    build_semantic_index_profile,
+)
+from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetAsset,
     SemanticDatasetModelConfig,
@@ -30,14 +33,9 @@ from apps.semantic.models import (
     SemanticDomain,
     SemanticMetric,
     SemanticModel,
-    SemanticSchemaIndex,
 )
-from apps.retrieval.embedding import StaticEmbeddingProvider
-from apps.retrieval.semantic_indexing import (
-    SemanticIndexCoordinator,
-    build_semantic_index_profile,
-)
-from apps.retrieval.indexing import RetrievalIndexingService
+from apps.workflow import runtime as chatbi_runtime
+from apps.workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
 from apps.workflow_engine.api import router as graph_router
 from apps.workflow_engine.api import service as graph_service
 from apps.workflow_engine.domain.event import WorkflowEvent
@@ -172,8 +170,6 @@ def _cleanup_semantic_fixture(session: Session, oid: int = 9501) -> None:
         select(SemanticDomain.id).where(SemanticDomain.oid == oid, SemanticDomain.biz_name == "api_graph_v1_domain")
     ).all()
     if dataset_ids:
-        session.execute(delete(SemanticAssetDocument).where(SemanticAssetDocument.dataset_id.in_(dataset_ids)))
-        session.execute(delete(SemanticSchemaIndex).where(SemanticSchemaIndex.dataset_id.in_(dataset_ids)))
         session.execute(delete(SemanticDatasetAsset).where(SemanticDatasetAsset.dataset_id.in_(dataset_ids)))
         session.execute(delete(SemanticDatasetModelConfig).where(SemanticDatasetModelConfig.dataset_id.in_(dataset_ids)))
         session.execute(delete(SemanticDataset).where(SemanticDataset.id.in_(dataset_ids)))
@@ -202,7 +198,18 @@ def _seed_v1_semantic_dataset(session: Session, oid: int = 9501) -> int:
         model_detail={
             "queryType": "table_query",
             "tableQuery": {"table": "stall_traffic_daily"},
-            "fields": [{"fieldName": "visit_uv", "dataType": "BIGINT"}],
+            "fields": [
+                {"fieldName": "visit_uv", "dataType": "BIGINT"},
+                {"fieldName": "stat_date", "dataType": "DATE"},
+            ],
+            "dimensions": [
+                {
+                    "name": "统计日期",
+                    "bizName": "stat_date",
+                    "expr": "stat_date",
+                    "type": "partition_time",
+                }
+            ],
             "measures": [{"name": "访问人数", "bizName": "visit_uv", "expr": "visit_uv", "agg": "SUM"}],
         },
     )
@@ -226,8 +233,21 @@ def _seed_v1_semantic_dataset(session: Session, oid: int = 9501) -> int:
         biz_name="stall_id",
         description="店铺档口维度",
     )
+    time_dimension = SemanticDimension(
+        oid=oid,
+        model_id=model.id or 0,
+        name="统计日期",
+        biz_name="stat_date",
+        type="partition_time",
+        semantic_type="time",
+        expr="stat_date",
+        field_name="stat_date",
+        is_default_time=True,
+        time_granularities=["day"],
+    )
     session.add(metric)
     session.add(dimension)
+    session.add(time_dimension)
     session.flush()
 
     dataset = SemanticDataset(
@@ -241,7 +261,7 @@ def _seed_v1_semantic_dataset(session: Session, oid: int = 9501) -> int:
                     "id": model.id,
                     "includesAll": False,
                     "metrics": [metric.id],
-                    "dimensions": [dimension.id],
+                    "dimensions": [dimension.id, time_dimension.id],
                 }
             ]
         },

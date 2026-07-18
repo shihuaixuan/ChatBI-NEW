@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from apps.semantic.models import (
+from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDimension,
     SemanticMetric,

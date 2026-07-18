@@ -1,12 +1,12 @@
-from apps.semantic.models import (
+from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDimension,
     SemanticDimensionValue,
     SemanticDomain,
     SemanticModel,
 )
-from apps.semantic.service import SemanticSchemaBuilder
-from apps.semantic.storage_sync import (
+from apps.semantic.services.builders.schema_builder import SemanticSchemaBuilder
+from apps.semantic.utils.orm_mapping import (
     build_dim_value_maps_from_storage,
     dimension_values_from_maps,
 )

@@ -1,10 +1,11 @@
-from apps.semantic.models import (
+from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDimension,
     SemanticMetric,
     SemanticModel,
 )
-from apps.semantic.service import SemanticSchemaBuilder, SemanticSchemaMapper
+from apps.semantic.services.builders.schema_builder import SemanticSchemaBuilder
+from apps.semantic.services.matching.schema_element_matcher import SchemaElementMatcher
 
 
 def test_schema_mapper_matches_metric_dimension_and_dimension_value_alias():
@@ -44,7 +45,7 @@ def test_schema_mapper_matches_metric_dimension_and_dimension_value_alias():
         terms=[],
     )
 
-    map_info = SemanticSchemaMapper().map_schema("一号档口咨询UV是多少", schema)
+    map_info = SchemaElementMatcher().match("一号档口咨询UV是多少", schema)
     matches = map_info.data_set_element_matches[20]
 
     assert [match.element.type for match in matches] == ["METRIC", "VALUE"]

@@ -1,0 +1,24 @@
+from fastapi import APIRouter
+
+from apps.semantic.api import (
+    dataset_indexes,
+    dataset_schema,
+    datasets,
+    datasources,
+    dimensions,
+    domains,
+    metrics,
+    models,
+    terms,
+)
+
+router = APIRouter()
+router.include_router(datasources.router)
+router.include_router(domains.router)
+router.include_router(models.router)
+router.include_router(metrics.router)
+router.include_router(dimensions.router)
+router.include_router(datasets.router)
+router.include_router(dataset_indexes.router)
+router.include_router(terms.router)
+router.include_router(dataset_schema.router)

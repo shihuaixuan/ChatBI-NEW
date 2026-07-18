@@ -1,4 +1,4 @@
-from apps.semantic.models import (
+from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetAsset,
     SemanticDatasetModelConfig,
@@ -9,7 +9,7 @@ from apps.semantic.models import (
     SemanticModelField,
     SemanticModelMeasure,
 )
-from apps.semantic.service import SemanticSchemaBuilder
+from apps.semantic.services.builders.schema_builder import SemanticSchemaBuilder
 
 
 def test_schema_builder_prefers_storage_dataset_assets_and_model_fields():

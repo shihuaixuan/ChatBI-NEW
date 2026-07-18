@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from apps.semantic.schemas import DatasetSchema, SchemaElement
 from apps.retrieval.compilation import validate_compilation_assets
 from apps.retrieval.errors import (
     RetrievalPermissionError,
@@ -38,6 +37,7 @@ from apps.retrieval.schemas import (
     RetrievalSubQuery,
 )
 from apps.retrieval.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 
 def _hit(

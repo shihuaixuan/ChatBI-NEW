@@ -6,6 +6,12 @@ from typing import Any
 from apps.capabilities.sql.executor import SqlExecuteTool
 from apps.capabilities.sql.repair import SQLRepairStrategy
 from apps.capabilities.sql.validator import SqlValidateTool
+from apps.semantic.models.dto import DatasetSchema
+from apps.semantic.services.schema_service import DatasetSchemaProvider
+from apps.semantic.services.sql_compiler import (
+    SemanticSQLCompiler,
+    SemanticSQLCompileRequest,
+)
 from apps.workflow.capabilities import planning
 from apps.workflow.capabilities.adapters.permission import PermissionAdapter
 from apps.workflow.capabilities.config import ChatBIConfig
@@ -17,11 +23,6 @@ from apps.workflow.capabilities.execution import (
     build_execution_output,
     validate_execution_output,
 )
-from apps.semantic.service import SemanticSchemaBuilder
-from apps.semantic.sql_compiler import (
-    SemanticSQLCompiler,
-    SemanticSQLCompileRequest,
-)
 
 
 class SqlAdapter:
@@ -29,7 +30,7 @@ class SqlAdapter:
 
     def __init__(
         self,
-        schema_builder: SemanticSchemaBuilder | None = None,
+        schema_provider: DatasetSchemaProvider | None = None,
         compiler: SemanticSQLCompiler | None = None,
         execute_tool: SqlExecuteTool | None = None,
         validate_tool: SqlValidateTool | None = None,
@@ -41,7 +42,7 @@ class SqlAdapter:
         config: ChatBIConfig | None = None,
     ) -> None:
         config = config or ChatBIConfig()
-        self._schema_builder = schema_builder or SemanticSchemaBuilder()
+        self._schema_provider = schema_provider
         self._compiler = compiler or SemanticSQLCompiler()
         self._execute_tool = execute_tool
         self._validate_tool = validate_tool or SqlValidateTool()
@@ -64,7 +65,7 @@ class SqlAdapter:
         if not question or dataset_id is None:
             raise ValueError("SQL_GENERATE_CONTEXT_REQUIRED")
 
-        schema = self._schema_builder.build_dataset_schema(ctx.tenant_id, dataset_id)
+        schema = self._build_dataset_schema(ctx.tenant_id, dataset_id)
         plan = ctx.plan
         if plan.get("status") == "infeasible":
             raise ValueError(f"QUERY_PLAN_INFEASIBLE:{plan.get('infeasible_reason') or 'unknown'}")
@@ -244,7 +245,7 @@ class SqlAdapter:
         if dataset_id is None or not isinstance(plans, list) or len(plans) < 2:
             raise ValueError("CROSS_MODEL_PLAN_REQUIRED")
 
-        schema = self._schema_builder.build_dataset_schema(ctx.tenant_id, dataset_id)
+        schema = self._build_dataset_schema(ctx.tenant_id, dataset_id)
         queries: list[dict[str, Any]] = []
         for index, plan in enumerate(plans):
             slots = plan.get("slots") if isinstance(plan.get("slots"), dict) else {}
@@ -286,6 +287,11 @@ class SqlAdapter:
         if plan.get("strategy") == "multi_query" and isinstance(sub_plans, list):
             return sub_plans
         return ctx.knowledge.get("multi_query_plans")
+
+    def _build_dataset_schema(self, tenant_id: int, dataset_id: int) -> DatasetSchema:
+        if self._schema_provider is None:
+            raise ValueError("SEMANTIC_SCHEMA_PROVIDER_REQUIRED")
+        return self._schema_provider.build_dataset_schema(tenant_id, dataset_id)
 
     def execute_split(self, request: dict[str, Any]) -> dict[str, Any]:
         """并行执行已生成的跨模型 SQL，不承担 SQL 编译职责。"""

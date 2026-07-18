@@ -8,17 +8,12 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
-from apps.semantic.service import SemanticSchemaBuilder
 from apps.retrieval.embedding import (
     EmbeddingProvider,
     OpenAICompatibleEmbeddingProvider,
     SentenceTransformerEmbeddingProvider,
 )
 from apps.retrieval.errors import RetrievalConfigurationError
-from apps.retrieval.semantic_runtime import (
-    ObservedEmbeddingProvider,
-    RetrievalEmbeddingRuntimeConfig,
-)
 from apps.retrieval.hybrid import HybridRetrievalConfig, SemanticBindingHybridRetriever
 from apps.retrieval.payload import bundle_to_semantic_payload
 from apps.retrieval.policy import SemanticBindingPolicy, bind_default_time_dimensions
@@ -27,6 +22,15 @@ from apps.retrieval.schemas import (
     RetrievalBundle,
     RetrievalProfileName,
     RetrievalRequest,
+)
+from apps.retrieval.semantic_runtime import (
+    ObservedEmbeddingProvider,
+    RetrievalEmbeddingRuntimeConfig,
+)
+from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
+from apps.semantic.services.schema_service import (
+    DatasetSchemaProvider,
+    SemanticSchemaService,
 )
 from common.core.config import settings
 
@@ -53,7 +57,7 @@ class SemanticBindingRunner:
         embedding_config: RetrievalEmbeddingRuntimeConfig | None = None,
         hybrid_config: HybridRetrievalConfig | None = None,
         policy: SemanticBindingPolicy | None = None,
-        schema_builder: SemanticSchemaBuilder | None = None,
+        schema_provider: DatasetSchemaProvider | None = None,
     ) -> None:
         self._embedding_provider = embedding_provider
         self._embedding_config = embedding_config or RetrievalEmbeddingRuntimeConfig.from_settings(
@@ -95,7 +99,7 @@ class SemanticBindingRunner:
                 dense_unavailable_error_code=dense_error_code,
             )
         self._policy = policy or SemanticBindingPolicy()
-        self._schema_builder = schema_builder
+        self._schema_provider = schema_provider
 
     def run(
         self,
@@ -123,8 +127,10 @@ class SemanticBindingRunner:
             config=self._hybrid_config,
         ).retrieve(strategy_request)
         policy_result = self._policy.apply(recall)
-        schema_builder = self._schema_builder or SemanticSchemaBuilder(session)
-        schema = schema_builder.build_dataset_schema(
+        schema_provider = self._schema_provider or SemanticSchemaService(
+            SemanticSchemaLoader(session)
+        )
+        schema = schema_provider.build_dataset_schema(
             request.tenant_id,
             request.scope.dataset_ids[0],
         )

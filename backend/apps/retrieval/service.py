@@ -6,10 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from apps.semantic.service import SemanticSchemaBuilder
 from apps.retrieval.embedding import EmbeddingProvider
 from apps.retrieval.errors import RetrievalQueryError
-from apps.retrieval.semantic_runtime import RetrievalEmbeddingRuntimeConfig
 from apps.retrieval.profiles import get_retrieval_profile
 from apps.retrieval.schemas import (
     RetrievalBundle,
@@ -20,6 +18,8 @@ from apps.retrieval.schemas import (
     RetrievalScope,
 )
 from apps.retrieval.semantic_binding import SemanticBindingRunner
+from apps.retrieval.semantic_runtime import RetrievalEmbeddingRuntimeConfig
+from apps.semantic.services.schema_service import DatasetSchemaProvider
 from common.core.config import settings
 
 
@@ -39,7 +39,7 @@ class RetrievalService:
         self,
         session: Any,
         *,
-        schema_builder: SemanticSchemaBuilder | None = None,
+        schema_provider: DatasetSchemaProvider | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         embedding_config: RetrievalEmbeddingRuntimeConfig | None = None,
         semantic_binding_runner: SemanticBindingRunner | None = None,
@@ -47,7 +47,7 @@ class RetrievalService:
     ) -> None:
         self._session = session
         self._runner = semantic_binding_runner or SemanticBindingRunner(
-            schema_builder=schema_builder,
+            schema_provider=schema_provider,
             embedding_provider=embedding_provider,
             embedding_config=embedding_config,
         )
@@ -167,7 +167,7 @@ def build_semantic_binding_request(
 def build_retrieval_service(
     session: Any,
     *,
-    schema_builder: SemanticSchemaBuilder | None = None,
+    schema_provider: DatasetSchemaProvider | None = None,
     embedding_provider: EmbeddingProvider | None = None,
     embedding_config: RetrievalEmbeddingRuntimeConfig | None = None,
 ) -> RetrievalService:
@@ -175,7 +175,7 @@ def build_retrieval_service(
 
     return RetrievalService(
         session,
-        schema_builder=schema_builder,
+        schema_provider=schema_provider,
         embedding_provider=embedding_provider,
         embedding_config=embedding_config,
     )

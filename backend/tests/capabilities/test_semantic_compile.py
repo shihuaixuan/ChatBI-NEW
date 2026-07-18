@@ -26,8 +26,10 @@ def test_compiles_with_explicit_dataset_id():
     compiler.compile.return_value = MagicMock(
         sql="select 1", tables=["t"], metrics=["gmv"], dimensions=["city"]
     )
-    with patch("apps.capabilities.semantic.compile.SemanticSchemaBuilder") as builder:
-        builder.return_value.build_dataset_schema.return_value = MagicMock()
+    with patch(
+        "apps.capabilities.semantic.compile.SemanticSchemaService"
+    ) as service:
+        service.return_value.build_dataset_schema.return_value = MagicMock()
         result = compile_semantic_sql(
             session=None,
             oid=1,
@@ -51,8 +53,10 @@ def test_compiles_with_explicit_dataset_id():
 def test_translates_compiler_value_error():
     compiler = MagicMock()
     compiler.compile.side_effect = ValueError("metric_not_found")
-    with patch("apps.capabilities.semantic.compile.SemanticSchemaBuilder") as builder:
-        builder.return_value.build_dataset_schema.return_value = MagicMock()
+    with patch(
+        "apps.capabilities.semantic.compile.SemanticSchemaService"
+    ) as service:
+        service.return_value.build_dataset_schema.return_value = MagicMock()
         result = compile_semantic_sql(session=None, oid=1, dataset_id=9, compiler=compiler)
 
     assert not result.success
