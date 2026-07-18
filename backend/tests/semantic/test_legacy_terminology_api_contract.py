@@ -42,6 +42,15 @@ def test_terminology_audit_resource_uses_semantic_term_table():
     assert "FROM headless_term" in str(session.query)
 
 
+def test_xpack_terminology_import_compatibility_uses_semantic_term_table():
+    from sqlbot_xpack.audit.curd.audit import build_resource_union_query
+
+    query = str(build_resource_union_query())
+
+    assert "headless_term" in query
+    assert "FROM terminology" not in query
+
+
 class _QueryCaptureSession:
     def __init__(self):
         self.query = None

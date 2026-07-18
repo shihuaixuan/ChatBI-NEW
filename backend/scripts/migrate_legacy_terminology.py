@@ -5,9 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
-from sqlmodel import Session, select
+from pgvector.sqlalchemy import VECTOR  # type: ignore[import-untyped]
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Identity, Text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlmodel import Field, Session, SQLModel, select
 
 from apps.semantic.models.orm import (
     SemanticDataset,
@@ -26,8 +30,33 @@ from apps.semantic.services.term_migration import (
     LegacyTermMigrationPlanner,
     LegacyTermSnapshot,
 )
-from apps.terminology.models.terminology_model import Terminology
 from common.core.db import engine
+
+
+class LegacyTerminology(SQLModel, table=True):
+    """仅供下线脚本读取旧表的临时映射，不属于运行时领域模型。"""
+
+    __tablename__ = "terminology"
+
+    id: int | None = Field(
+        sa_column=Column(BigInteger, Identity(always=True), primary_key=True)
+    )
+    oid: int | None = Field(sa_column=Column(BigInteger, nullable=True, default=1))
+    pid: int | None = Field(sa_column=Column(BigInteger, nullable=True))
+    create_time: datetime | None = Field(
+        sa_column=Column(DateTime(timezone=False), nullable=True)
+    )
+    word: str | None = Field(max_length=255)
+    description: str | None = Field(sa_column=Column(Text, nullable=True))
+    embedding: list[float] | None = Field(sa_column=Column(VECTOR(), nullable=True))
+    aliases: list[str] | None = Field(sa_column=Column(JSONB, nullable=True))
+    dataset_ids: list[int] | None = Field(sa_column=Column(JSONB, nullable=True))
+    mapped_assets: list[dict[str, Any]] | None = Field(
+        sa_column=Column(JSONB, nullable=True)
+    )
+    specific_ds: bool | None = Field(sa_column=Column(Boolean, nullable=True))
+    datasource_ids: list[int] | None = Field(sa_column=Column(JSONB, nullable=True))
+    enabled: bool | None = Field(sa_column=Column(Boolean, nullable=True))
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,6 +75,11 @@ def parse_args() -> argparse.Namespace:
         "--apply",
         action="store_true",
         help="预检无冲突和失败时写入；未指定时只生成报告",
+    )
+    parser.add_argument(
+        "--purge-source",
+        action="store_true",
+        help="迁移成功后删除本次范围内的旧表记录；必须与 --apply 同时使用",
     )
     return parser.parse_args()
 
@@ -68,7 +102,9 @@ def parse_default_domains(values: Sequence[str]) -> dict[int, int]:
     return result
 
 
-def build_legacy_snapshots(rows: Sequence[Terminology]) -> list[LegacyTermSnapshot]:
+def build_legacy_snapshots(
+    rows: Sequence[LegacyTerminology],
+) -> list[LegacyTermSnapshot]:
     """把父子行结构合并为迁移规划器需要的术语快照。"""
 
     children_by_parent: dict[int, list[str]] = {}
@@ -165,9 +201,7 @@ def build_migration_context(
         and (dimension.oid, dimension.model_id) in model_domains
     }
 
-    existing_terms: dict[
-        tuple[int, int, str], ExistingSemanticTermSnapshot
-    ] = {}
+    existing_terms: dict[tuple[int, int, str], ExistingSemanticTermSnapshot] = {}
     for term in terms:
         if term.id is None:
             continue
@@ -202,7 +236,7 @@ def build_migration_context(
 
 
 def apply_plan(session: Session, plan: LegacyTermMigrationPlan) -> int:
-    """在一个事务中写入全部候选；调用前必须完成预检。"""
+    """写入全部候选；事务提交由迁移入口统一控制。"""
 
     if not plan.can_apply:
         raise ValueError("术语迁移计划包含冲突或失败，禁止写入")
@@ -226,8 +260,24 @@ def apply_plan(session: Session, plan: LegacyTermMigrationPlan) -> int:
     session.flush()
     for term in created:
         sync_term_relations(session, term)
-    session.commit()
     return len(created)
+
+
+def validate_source_rows_for_purge(rows: Sequence[LegacyTerminology]) -> None:
+    """确认每条旧记录都能被迁移流程解释，禁止静默删除异常子记录。"""
+
+    parent_ids = {row.id for row in rows if row.id is not None and row.pid is None}
+    for row in rows:
+        if row.id is None:
+            raise ValueError("旧术语存在无主键记录，禁止清理源数据")
+        if row.pid is None:
+            continue
+        if row.pid not in parent_ids:
+            raise ValueError(
+                f"旧术语子记录缺少父记录，禁止清理源数据: id={row.id}, pid={row.pid}"
+            )
+        if not row.word or not row.word.strip():
+            raise ValueError(f"旧术语子记录名称为空，禁止清理源数据: id={row.id}")
 
 
 def run(
@@ -236,10 +286,14 @@ def run(
     oid: int | None,
     default_domains: dict[int, int],
     apply: bool,
+    purge_source: bool = False,
 ) -> tuple[dict[str, Any], int]:
     """执行预检，并在明确要求且结果可写时应用。"""
 
-    legacy_rows = _all(session, Terminology, oid)
+    if purge_source and not apply:
+        raise ValueError("--purge-source 必须与 --apply 同时使用")
+
+    legacy_rows = _all(session, LegacyTerminology, oid)
     domains = _all(session, SemanticDomain, oid)
     datasets = _all(session, SemanticDataset, oid)
     dataset_model_configs = _all(session, SemanticDatasetModelConfig, oid)
@@ -263,7 +317,7 @@ def run(
     )
     report = {
         **plan.to_summary(),
-        "mode": "apply" if apply else "dry-run",
+        "mode": "apply-and-purge" if purge_source else "apply" if apply else "dry-run",
         "candidate_source_ids": [item.source_id for item in plan.candidates],
         "skipped": [
             {"source_id": item.source_id, "target_id": item.target_id}
@@ -273,8 +327,16 @@ def run(
     if apply:
         if not plan.can_apply:
             report["applied_count"] = 0
+            report["purged_count"] = 0
             return report, 2
         report["applied_count"] = apply_plan(session, plan)
+        report["purged_count"] = 0
+        if purge_source:
+            validate_source_rows_for_purge(legacy_rows)
+            for row in legacy_rows:
+                session.delete(row)
+            report["purged_count"] = len(legacy_rows)
+        session.commit()
     return report, 0
 
 
@@ -282,6 +344,8 @@ def main() -> int:
     args = parse_args()
     if args.oid is not None and args.oid <= 0:
         raise ValueError("--oid 必须为正整数")
+    if args.purge_source and not args.apply:
+        raise ValueError("--purge-source 必须与 --apply 同时使用")
     default_domains = parse_default_domains(args.default_domain)
     with Session(engine) as session:
         report, exit_code = run(
@@ -289,6 +353,7 @@ def main() -> int:
             oid=args.oid,
             default_domains=default_domains,
             apply=args.apply,
+            purge_source=args.purge_source,
         )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return exit_code

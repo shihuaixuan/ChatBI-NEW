@@ -24,7 +24,6 @@ LEGACY_INTERNAL_MODEL_PREFIXES = (
     "apps.semantic.models.orm",
     "apps.settings.models",
     "apps.system.models",
-    "apps.terminology.models",
     "apps.workflow_engine.infrastructure.persistence.models",
 )
 

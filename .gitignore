@@ -43,6 +43,7 @@ backend/alembic/versions/*
 !backend/alembic/versions/085_active_question_flows.py
 !backend/alembic/versions/086_remove_legacy_semantic_index.py
 !backend/alembic/versions/087_semantic_term_dataset_scope.py
+!backend/alembic/versions/088_remove_legacy_terminology.py
 .codex_run_logs
 .idea
 data/sqlbot

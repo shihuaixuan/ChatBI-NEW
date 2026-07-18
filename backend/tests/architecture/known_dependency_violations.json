@@ -34,7 +34,6 @@
     "apps/system/crud/assistant.py -> apps.datasource.models.datasource",
     "apps/system/schemas/permission.py -> apps.chat.models.chat_model",
     "apps/system/schemas/permission.py -> apps.datasource.models.datasource",
-    "apps/terminology/curd/terminology.py -> apps.datasource.models.datasource",
     "apps/workflow_engine/api/chat_history.py -> apps.chat.models.chat_model",
     "apps/workflow_engine/api/service.py -> apps.chat.models.chat_model",
     "apps/workflow_engine/api/service.py -> apps.semantic.models.orm"

@@ -8,14 +8,6 @@ executor = ThreadPoolExecutor(max_workers=200)
 session_maker = scoped_session(sessionmaker(bind=engine))
 
 
-# session = session_maker()
-
-
-def run_save_terminology_embeddings(ids: list[int]):
-    from apps.terminology.curd.terminology import save_embeddings
-    executor.submit(save_embeddings, session_maker, ids)
-
-
 def run_save_data_training_embeddings(ids: list[int]):
     from apps.data_training.curd.data_training import save_embeddings
     executor.submit(save_embeddings, session_maker, ids)

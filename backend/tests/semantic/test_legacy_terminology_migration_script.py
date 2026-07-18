@@ -9,11 +9,12 @@ from apps.semantic.models.orm import (
     SemanticModel,
     SemanticTerm,
 )
-from apps.terminology.models.terminology_model import Terminology
 from scripts.migrate_legacy_terminology import (
+    LegacyTerminology,
     build_legacy_snapshots,
     build_migration_context,
     parse_default_domains,
+    validate_source_rows_for_purge,
 )
 
 
@@ -24,14 +25,14 @@ def test_parse_default_domains_rejects_conflicting_values():
 
 def test_build_legacy_snapshots_merges_child_words():
     rows = [
-        Terminology(
+        LegacyTerminology(
             id=7,
             oid=1,
             word="人气",
             aliases=["访问热度"],
             dataset_ids=[20],
         ),
-        Terminology(id=8, oid=1, pid=7, word="热度"),
+        LegacyTerminology(id=8, oid=1, pid=7, word="热度"),
     ]
 
     snapshots = build_legacy_snapshots(rows)
@@ -40,6 +41,13 @@ def test_build_legacy_snapshots_merges_child_words():
     assert snapshots[0].other_words == ("热度",)
     assert snapshots[0].aliases == ("访问热度",)
     assert snapshots[0].dataset_ids == (20,)
+
+
+def test_validate_source_rows_for_purge_rejects_orphan_child():
+    rows = [LegacyTerminology(id=8, oid=1, pid=7, word="热度")]
+
+    with pytest.raises(ValueError, match="缺少父记录"):
+        validate_source_rows_for_purge(rows)
 
 
 def test_build_migration_context_resolves_asset_domains_and_existing_terms():

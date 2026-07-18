@@ -724,7 +724,9 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 截至 2026-07-18，已确认 `settings.models.term_model`、`term_schema_creator` 没有后端运行时和
 Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提交的工作区内容，本阶段保留并登记为
 待确认项。`/system/terminology` 的查询、创建、更新、启停和删除已经切换到 Semantic；术语前端与
-Excel 已迁入 `/semantic/terms`。旧 `terminology` 表仍为数据迁移、外部兼容窗口和最终删除核对保留。
+Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除，只为当前 XPack 版本保留固定导入
+路径，并将查询字段映射到 SemanticTerm；旧表只允许在 088 升级前由迁移脚本读取。外部 API 兼容窗口
+仅保留 Semantic 内的转发路由。
 
 本阶段已完成以下增量：
 
@@ -737,8 +739,10 @@ Excel 已迁入 `/semantic/terms`。旧 `terminology` 表仍为数据迁移、�
 4. 新增 `LegacyTermMigrationPlanner`，对租户、主题域、数据集、指标、维度、同名术语和数据源范围执行
    显式校验，输出总数、候选数、跳过数、冲突数和失败明细。
 5. 新增 `scripts/migrate_legacy_terminology.py`。脚本默认只预检；只有显式传入 `--apply` 且冲突、失败
-   均为 0 时，才在一个事务中写入 SemanticTerm 和资产关系。重复执行时，相同目标术语会记为跳过。
-6. 本地数据库已升级到 087；租户 1 的只读预检为 0 条旧术语、0 冲突、0 失败，未执行数据写入。
+   均为 0 时，才在一个事务中写入 SemanticTerm 和资产关系。只有同时显式指定 `--purge-source` 才清理
+   已核对的源记录；孤立或名称为空的子记录会阻止清理。重复执行时，相同目标术语会记为跳过。
+6. 新增 088 删表迁移。迁移在旧表非空时明确失败，要求先完成预检、迁移和源数据清理。当前本地数据库
+   预检为 0 条旧术语、0 冲突、0 失败，已按正式流程升级到 088，旧表已删除。
 7. `SemanticTermService` 已统一执行名称清理、同主题域重名校验，以及数据集、指标、维度的租户和主题域
    引用校验；正常 API 写入与迁移规划不再使用两套引用规则。
 8. 新增 `TermSearchResult` 和 `SemanticTermQueryService` 公开只读契约。查询只读取指定数据集的运行时
@@ -768,13 +772,17 @@ Excel 已迁入 `/semantic/terms`。旧 `terminology` 表仍为数据迁移、�
     既有关联指标和维度，避免全量更新 DTO 清空关系。
 17. 删除审计的资源联合查询已统一使用本地 Semantic 实现。所有模块的删除审计不再通过 XPack 联合查询
     引用旧 `terminology` 表，解除旧表下线前的隐藏运行时依赖。
+18. 删除无调用的旧术语 API、CRUD、旧 ORM 和术语专用 Embedding 后台入口。迁移脚本使用脚本内只读旧表
+    映射；`apps/terminology` 仅保留当前 XPack 固定导入路径，导出的查询别名实际指向 `headless_term`，
+    不映射旧表。架构基线同步减少 1 条跨领域内部模型依赖。
 
-当前不能直接删除旧路径和旧表：前端调用已迁移完成，但仍需确认外部调用方兼容窗口，并在目标环境执行
-旧表迁移预检和应用。兼容写入会明确拒绝数据源范围并要求有效 `domain_id`；旧 Excel 也已停止使用。
+旧运行时模块和旧表迁移已经完成，当前只保留 `/system/terminology` 外部兼容路径。兼容写入会明确拒绝
+数据源范围并要求有效 `domain_id`；旧 Excel 也已停止使用。目标环境升级 088 前必须先执行迁移脚本预检，
+再显式使用 `--apply --purge-source`；只要旧表仍有记录，数据库升级就会中止，不会自动丢弃数据。
 `specific_ds=true` 的历史记录在迁移预检中只会使用有效数据集—模型配置解析范围；数据源没有关联 Semantic
 数据集时返回 `LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED`，跨主题域或与已有 `dataset_ids` 不一致时返回冲突，
-不能静默扩大术语范围。Agent、Chat、Assistant、动态数据源和术语管理运行时均已停止读取旧术语表；
-完成外部调用确认和数据核对后，才能删除旧路径、旧 CRUD、旧模型与旧表。
+不能静默扩大术语范围。Agent、Chat、Assistant、动态数据源和术语管理运行时均已停止读取旧术语表。
+完成外部调用确认后，可以删除最后的 Semantic 兼容路由和兼容 DTO、Service。
 
 **目标**
 
@@ -784,8 +792,8 @@ Excel 已迁入 `/semantic/terms`。旧 `terminology` 表仍为数据迁移、�
 
 1. 完成 `semantic/api`、`services`、`repository`、`models/orm` 和 `models/dto` 的职责校验。
 2. 清除 Semantic Service 对具体 SQLModel 仓储实现的直接依赖。
-3. 将旧 `terminology` 数据映射到 SemanticTerm。
-4. 将别名、数据集范围和关联资产转换为 Semantic 术语及资产关系。
+3. 将旧 `terminology` 数据映射到 SemanticTerm。已完成迁移规划、执行和源数据清理能力。
+4. 将别名、数据集范围和关联资产转换为 Semantic 术语及资产关系。已完成。
 5. 将旧 `/system/terminology` API 改为 SemanticTermService 的兼容转发入口。核心管理路径已完成，
    Semantic Excel 使用新路径；旧 Excel 路径明确拒绝旧契约。
 6. 迁移前端术语调用到 `/semantic/terms` 后删除旧入口。前端迁移已完成，旧入口等待外部调用确认后删除。
@@ -797,7 +805,7 @@ Excel 已迁入 `/semantic/terms`。旧 `terminology` 表仍为数据迁移、�
 - 同一租户和词语需要定义冲突处理规则。
 - 旧 `dataset_ids` 和 `mapped_assets` 必须验证引用是否有效。
 - 迁移结果需要提供总数、成功数、冲突数和失败明细。
-- 迁移完成前保留旧表只读，确认无调用后再删除。
+- 088 升级前由迁移脚本只读旧表；只有显式迁移和清理成功后才允许删表。
 
 **完成标准**
 
@@ -805,14 +813,18 @@ Excel 已迁入 `/semantic/terms`。旧 `terminology` 表仍为数据迁移、�
 - Semantic Service 测试不使用真实数据库 Session。
 - Repository 测试覆盖租户隔离、关系同步和级联删除。
 - 旧术语 API 不包含独立业务逻辑。
+- 旧 `apps/terminology` 业务实现已删除，最小 XPack 导入兼容映射只读取 Semantic；088 对非空旧表实施
+  硬性保护。
 
 **本阶段验证**
 
 - `tests/semantic`、`tests/retrieval`、`tests/architecture`、`tests/agent`、`tests/chat` 和 Graph API
-  调用方回归：320 个测试通过。
+  调用方回归：324 个测试通过。
 - Semantic 索引协调器 PostgreSQL 集成测试通过。
 - Graph 会话调用方回归测试通过。
 - 本次增量修改文件的 Ruff 检查通过。
+- 088 已完成一次真实降级和再升级验证；当前本地数据库位于 088，旧 `terminology` 表不存在。应用启动及
+  XPack 审计联合查询验证通过，XPack 术语查询实际指向 `headless_term`。
 - 前端术语 API、术语配置页和多语言文件通过定向 ESLint、Prettier；Vite 生产构建通过。完整
   `npm run build` 仍被项目既有的 12 处 `LicenseGenerator` 全局类型缺失阻塞，本次未修改该授权模块。
 - 本阶段前一批 11 个生产代码入口，以及 Semantic 查询契约、服务、装配入口、Agent 端口、术语迁移
