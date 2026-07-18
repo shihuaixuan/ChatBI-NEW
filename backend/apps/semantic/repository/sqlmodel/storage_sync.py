@@ -210,6 +210,15 @@ def sync_term_relations(session: Session, term: SemanticTerm) -> None:
     _replace_relations(session, term.oid, "TERM", term.id, build_term_relations(term))
 
 
+def delete_term_relations(session: Session, term: SemanticTerm) -> None:
+    """删除术语时同步清理别名和资产关系。"""
+
+    if term.id is None:
+        return
+    _replace_aliases(session, term.oid, "TERM", term.id, [])
+    _replace_relations(session, term.oid, "TERM", term.id, [])
+
+
 def _replace_aliases(
     session: Session,
     oid: int,

@@ -23,16 +23,31 @@ class SemanticTermService:
     def list_terms(
         self, oid: int, domain_id: int | None = None
     ) -> list[SemanticTerm]:
-        return self._repository.list_active(oid, domain_id)
+        return self._repository.list_all(oid, domain_id)
 
-    def create_term(self, oid: int, payload: TermPayload) -> SemanticTerm:
+    def create_term(
+        self,
+        oid: int,
+        payload: TermPayload,
+        *,
+        enabled: bool = True,
+    ) -> SemanticTerm:
         payload = self._validated_payload(oid, payload)
         self._require_unique_name(oid, payload.domain_id, payload.name)
-        term = SemanticTerm(**payload.model_dump(), oid=oid)
+        term = SemanticTerm(
+            **payload.model_dump(),
+            oid=oid,
+            status=1 if enabled else 0,
+        )
         return self._repository.create(term)
 
     def update_term(
-        self, oid: int, term_id: int, payload: TermPayload
+        self,
+        oid: int,
+        term_id: int,
+        payload: TermPayload,
+        *,
+        enabled: bool | None = None,
     ) -> SemanticTerm:
         term = self._require_term(oid, term_id)
         payload = self._validated_payload(oid, payload)
@@ -43,6 +58,8 @@ class SemanticTermService:
             exclude_id=term_id,
         )
         assign_values(term, payload.model_dump())
+        if enabled is not None:
+            term.status = 1 if enabled else 0
         return self._repository.update(term)
 
     def delete_term(self, oid: int, term_id: int) -> dict[str, int | bool]:
@@ -50,8 +67,24 @@ class SemanticTermService:
         self._repository.delete(term)
         return {"id": term_id, "deleted": True}
 
+    def delete_terms(self, oid: int, term_ids: list[int]) -> dict[str, list[int]]:
+        normalized_ids = self._reference_ids(term_ids)
+        terms = [self._require_term(oid, term_id) for term_id in normalized_ids]
+        self._repository.delete_many(terms)
+        return {"deleted_ids": normalized_ids}
+
+    def set_term_enabled(
+        self,
+        oid: int,
+        term_id: int,
+        enabled: bool,
+    ) -> SemanticTerm:
+        term = self._require_term(oid, term_id)
+        term.status = 1 if enabled else 0
+        return self._repository.update(term)
+
     def _require_term(self, oid: int, term_id: int) -> SemanticTerm:
-        term = self._repository.get_active(oid, term_id)
+        term = self._repository.get(oid, term_id)
         if term is None:
             raise SemanticNotFoundError("SEMANTIC_TERM_NOT_FOUND")
         return term

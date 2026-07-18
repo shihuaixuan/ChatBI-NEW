@@ -38,7 +38,6 @@ from common.core.sqlbot_cache import init_sqlbot_cache
 from common.utils.embedding_threads import (
     fill_empty_data_training_embeddings,
     fill_empty_table_and_ds_embeddings,
-    fill_empty_terminology_embeddings,
 )
 from common.utils.utils import SQLBotLogUtil
 
@@ -53,10 +52,6 @@ def init_workflow_artifact_cleanup() -> None:
 
     with Session(engine) as session:
         ArtifactCleanupService(session).process_pending()
-
-
-def init_terminology_embedding_data():
-    fill_empty_terminology_embeddings()
 
 
 def init_data_training_embedding_data():
@@ -82,7 +77,6 @@ async def lifespan(app: FastAPI):
     init_workflow_artifact_cleanup()
     init_sqlbot_cache()
     init_dynamic_cors(app)
-    init_terminology_embedding_data()
     init_data_training_embedding_data()
     init_table_and_ds_embedding()
     submit_pending_semantic_index_jobs()

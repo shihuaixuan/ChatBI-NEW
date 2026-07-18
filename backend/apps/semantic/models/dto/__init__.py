@@ -33,7 +33,11 @@ from apps.semantic.models.dto.model import (
     SemanticColumnMeta,
     SemanticTableMeta,
 )
-from apps.semantic.models.dto.term import TermPayload, TermSearchResult
+from apps.semantic.models.dto.term import (
+    LegacyTerminologyDTO,
+    TermPayload,
+    TermSearchResult,
+)
 
 __all__ = [
     "DatasetModelConfig",
@@ -45,6 +49,7 @@ __all__ = [
     "DimensionPayload",
     "DomainPayload",
     "JoinRelation",
+    "LegacyTerminologyDTO",
     "MetricBatchCreateFromMeasuresPayload",
     "MetricPayload",
     "ModelBuildField",

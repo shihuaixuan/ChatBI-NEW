@@ -8,7 +8,10 @@ from apps.semantic.models.orm import (
     SemanticTerm,
 )
 from apps.semantic.repository.sqlmodel.results import all_results
-from apps.semantic.repository.sqlmodel.storage_sync import sync_term_relations
+from apps.semantic.repository.sqlmodel.storage_sync import (
+    delete_term_relations,
+    sync_term_relations,
+)
 from apps.semantic.repository.term_repository import (
     TermReferenceValidation,
     TermRepository,
@@ -21,12 +24,12 @@ class SqlModelTermRepository(TermRepository):
     def __init__(self, session: Session):
         self._session = session
 
-    def list_active(
+    def list_all(
         self,
         oid: int,
         domain_id: int | None = None,
     ) -> list[SemanticTerm]:
-        conditions = [SemanticTerm.oid == oid, SemanticTerm.status == 1]
+        conditions = [SemanticTerm.oid == oid]
         if domain_id is not None:
             conditions.append(SemanticTerm.domain_id == domain_id)
         return all_results(
@@ -37,9 +40,9 @@ class SqlModelTermRepository(TermRepository):
             )
         )
 
-    def get_active(self, oid: int, term_id: int) -> SemanticTerm | None:
+    def get(self, oid: int, term_id: int) -> SemanticTerm | None:
         term = self._session.get(SemanticTerm, term_id)
-        if term is None or term.oid != oid or term.status != 1:
+        if term is None or term.oid != oid:
             return None
         return term
 
@@ -101,7 +104,14 @@ class SqlModelTermRepository(TermRepository):
         return term
 
     def delete(self, term: SemanticTerm) -> None:
+        delete_term_relations(self._session, term)
         self._session.delete(term)
+        self._session.commit()
+
+    def delete_many(self, terms: list[SemanticTerm]) -> None:
+        for term in terms:
+            delete_term_relations(self._session, term)
+            self._session.delete(term)
         self._session.commit()
 
     def _valid_dataset_ids(

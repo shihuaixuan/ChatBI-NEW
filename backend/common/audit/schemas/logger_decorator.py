@@ -1,27 +1,32 @@
-import time
 import functools
-import json
 import inspect
-from typing import Callable, Any, Optional, Dict, Union, List
-from fastapi import Request, HTTPException
-from datetime import datetime
-from pydantic import BaseModel
-from sqlmodel import Session, select
+import json
+import time
 import traceback
-from sqlbot_xpack.audit.curd.audit import build_resource_union_query
-from common.audit.models.log_model import OperationType, OperationStatus, SystemLog, SystemLogsResource
-from common.audit.schemas.request_context import RequestContext
-from apps.system.crud.user import get_user_by_account
-from apps.system.schemas.system_schema import UserInfoDTO, BaseUserDTO
-from sqlalchemy import and_, select
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, Union
 
+from fastapi import HTTPException, Request
+from pydantic import BaseModel
+from sqlalchemy import String, and_, func, literal_column, select
+from sqlbot_xpack.audit.curd.audit import build_resource_union_query
+from sqlmodel import Session
+
+from apps.semantic.models.orm import SemanticTerm
+from apps.system.crud.user import get_user_by_account
+from apps.system.schemas.system_schema import UserInfoDTO
+from common.audit.models.log_model import (
+    OperationModules,
+    OperationStatus,
+    OperationType,
+    SystemLog,
+    SystemLogsResource,
+)
+from common.audit.schemas.request_context import RequestContext
 from common.core.db import engine
 
 
 def get_resource_name_by_id_and_module(session, resource_id: Any, module: str) -> List[Dict[str, str]]:
-    resource_union_query = build_resource_union_query()
-    resource_alias = resource_union_query.alias("resource")
-
     # 统一处理为列表
     if not isinstance(resource_id, list):
         resource_id = [resource_id]
@@ -29,17 +34,26 @@ def get_resource_name_by_id_and_module(session, resource_id: Any, module: str) -
     if not resource_id:
         return []
 
-    # 构建查询，使用 IN 条件
-    query = select(
-        resource_alias.c.id,
-        resource_alias.c.name,
-        resource_alias.c.module
-    ).where(
-        and_(
-            resource_alias.c.id.in_([str(id_) for id_ in resource_id]),
-            resource_alias.c.module == module
+    if module == OperationModules.TERMINOLOGY:
+        # 术语管理已经迁移到 Semantic，审计名称必须读取同一个事实源。
+        query = select(
+            func.cast(SemanticTerm.id, String).label("id"),
+            SemanticTerm.name.label("name"),
+            literal_column("'terminology'").label("module"),
+        ).where(SemanticTerm.id.in_(resource_id))
+    else:
+        resource_union_query = build_resource_union_query()
+        resource_alias = resource_union_query.alias("resource")
+        query = select(
+            resource_alias.c.id,
+            resource_alias.c.name,
+            resource_alias.c.module,
+        ).where(
+            and_(
+                resource_alias.c.id.in_([str(id_) for id_ in resource_id]),
+                resource_alias.c.module == module,
+            )
         )
-    )
 
     results = session.execute(query).fetchall()
 
@@ -459,7 +473,7 @@ class SystemLogger:
                     session.commit()
                 return log
 
-        except Exception as e:
+        except Exception:
             print(f"[SystemLogger] Failed to create log: {str(traceback.format_exc())}")
             return None
 

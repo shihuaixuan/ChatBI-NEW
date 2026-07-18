@@ -1,14 +1,17 @@
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from apps.semantic.errors import SemanticValidationError
 from apps.semantic.models.dto import TermPayload
 from apps.semantic.models.orm import (
+    SemanticAssetAlias,
+    SemanticAssetRelation,
     SemanticDataset,
     SemanticDimension,
     SemanticDomain,
     SemanticMetric,
     SemanticModel,
+    SemanticTerm,
 )
 from apps.semantic.repository.sqlmodel.term_repository import SqlModelTermRepository
 from apps.semantic.repository.term_repository import TermReferenceValidation
@@ -88,6 +91,19 @@ def test_create_term_rejects_duplicate_name_in_same_domain():
     assert exc_info.value.detail == "SEMANTIC_TERM_NAME_EXISTS"
 
 
+def test_disabled_term_can_be_enabled_and_deleted_in_one_batch():
+    term = SemanticTerm(id=7, oid=1, domain_id=10, name="人气", status=0)
+    repository = _TermRepository(terms=[term])
+    service = SemanticTermService(repository, _DomainRepository())
+
+    enabled = service.set_term_enabled(1, 7, True)
+    deleted = service.delete_terms(1, [7, 7])
+
+    assert enabled.status == 1
+    assert deleted == {"deleted_ids": [7]}
+    assert repository.deleted_terms == [term]
+
+
 def test_sqlmodel_repository_validates_tenant_and_domain_reference_scope():
     oid = 9_920_101
     with engine.connect() as connection:
@@ -148,6 +164,72 @@ def test_sqlmodel_repository_validates_tenant_and_domain_reference_scope():
         transaction.rollback()
 
 
+def test_sqlmodel_repository_batch_delete_cleans_term_knowledge():
+    oid = 9_920_102
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        with Session(bind=connection) as session:
+            domain = SemanticDomain(
+                oid=oid,
+                name="术语删除域",
+                biz_name="term_delete_domain",
+            )
+            session.add(domain)
+            session.flush()
+            dataset = SemanticDataset(
+                oid=oid,
+                domain_id=domain.id or 0,
+                name="术语删除数据集",
+                biz_name="term_delete_dataset",
+            )
+            session.add(dataset)
+            session.flush()
+            repository = SqlModelTermRepository(session)
+            term = repository.create(
+                SemanticTerm(
+                    oid=oid,
+                    domain_id=domain.id or 0,
+                    name="人气",
+                    alias=["热度"],
+                    related_datasets=[dataset.id or 0],
+                )
+            )
+
+            assert session.exec(
+                select(SemanticAssetAlias).where(
+                    SemanticAssetAlias.oid == oid,
+                    SemanticAssetAlias.asset_type == "TERM",
+                    SemanticAssetAlias.asset_id == term.id,
+                )
+            ).first() is not None
+            assert session.exec(
+                select(SemanticAssetRelation).where(
+                    SemanticAssetRelation.oid == oid,
+                    SemanticAssetRelation.source_type == "TERM",
+                    SemanticAssetRelation.source_id == term.id,
+                )
+            ).first() is not None
+
+            repository.delete_many([term])
+
+            assert session.get(SemanticTerm, term.id) is None
+            assert session.exec(
+                select(SemanticAssetAlias).where(
+                    SemanticAssetAlias.oid == oid,
+                    SemanticAssetAlias.asset_type == "TERM",
+                    SemanticAssetAlias.asset_id == term.id,
+                )
+            ).first() is None
+            assert session.exec(
+                select(SemanticAssetRelation).where(
+                    SemanticAssetRelation.oid == oid,
+                    SemanticAssetRelation.source_type == "TERM",
+                    SemanticAssetRelation.source_id == term.id,
+                )
+            ).first() is None
+        transaction.rollback()
+
+
 class _DomainRepository:
     def is_active(self, oid, domain_id):
         return oid == 1 and domain_id == 10
@@ -159,9 +241,12 @@ class _TermRepository:
         *,
         validation: TermReferenceValidation | None = None,
         name_exists: bool = False,
+        terms: list[SemanticTerm] | None = None,
     ):
         self.validation = validation or TermReferenceValidation()
         self._name_exists = name_exists
+        self.terms = {term.id: term for term in terms or []}
+        self.deleted_terms = []
 
     def validate_references(
         self,
@@ -178,3 +263,14 @@ class _TermRepository:
 
     def create(self, term):
         return term
+
+    def get(self, oid, term_id):
+        term = self.terms.get(term_id)
+        return term if term is not None and term.oid == oid else None
+
+    def update(self, term):
+        self.terms[term.id] = term
+        return term
+
+    def delete_many(self, terms):
+        self.deleted_terms.extend(terms)

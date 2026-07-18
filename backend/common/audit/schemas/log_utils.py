@@ -1,20 +1,21 @@
-from sqlalchemy import select, func
+from sqlalchemy import String, func, literal_column, select, union_all
 from sqlalchemy.sql import Select
-from sqlalchemy import String, union_all
+from sqlbot_xpack.custom_prompt.models.custom_prompt_model import CustomPrompt
+from sqlbot_xpack.permissions.models.ds_permission import DsPermission
+from sqlbot_xpack.permissions.models.ds_rules import DsRules
 
 from apps.chat.models.chat_model import Chat
 from apps.dashboard.models.dashboard_model import CoreDashboard
 from apps.data_training.models.data_training_model import DataTraining
 from apps.datasource.models.datasource import CoreDatasource
-from apps.system.models.system_model import WorkspaceModel, AiModelDetail, ApiKeyModel
+from apps.semantic.models.orm import SemanticTerm
+from apps.system.models.system_model import (
+    AiModelDetail,
+    ApiKeyModel,
+    AssistantModel,
+    WorkspaceModel,
+)
 from apps.system.models.user import UserModel
-from apps.terminology.models.terminology_model import Terminology
-from apps.system.models.system_model import AssistantModel
-
-from sqlbot_xpack.permissions.models.ds_rules import DsRules
-from sqlbot_xpack.custom_prompt.models.custom_prompt_model import CustomPrompt
-from sqlbot_xpack.permissions.models.ds_permission import DsPermission
-from sqlalchemy import literal_column
 
 
 def build_resource_union_query() -> Select:
@@ -101,12 +102,12 @@ def build_resource_union_query() -> Select:
         literal_column("'workspace'").label("module")
     ).select_from(WorkspaceModel)
 
-    # terminology 表查询（使用word作为name）
+    # Semantic 术语表查询
     terminology_query = select(
-        func.cast(Terminology.id, String).label("id"),
-        Terminology.word.label("name"),
+        func.cast(SemanticTerm.id, String).label("id"),
+        SemanticTerm.name.label("name"),
         literal_column("'terminology'").label("module")
-    ).select_from(Terminology)
+    ).select_from(SemanticTerm)
 
     # sys_assistant 表查询
     sys_assistant_query = select(

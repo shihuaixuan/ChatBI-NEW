@@ -656,7 +656,7 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 截至 2026-07-18，已新增 `tests/architecture/test_dependency_baseline.py` 和
 `tests/architecture/known_dependency_violations.json`，完成以下依赖基线：
 
-- P0 初始记录 40 条跨领域内部模型依赖；P1 清理 1 条后当前为 39 条。
+- P0 初始记录 40 条跨领域内部模型依赖；P1 清理 2 条后当前为 38 条。
 - P0 初始记录 29 条跨领域具体实现依赖；P1 清理 3 条后当前为 26 条。
 - 1 条跨领域 API 依赖。
 - 6 条 Workflow Engine 对业务模块的依赖。
@@ -723,7 +723,8 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 
 截至 2026-07-18，已确认 `settings.models.term_model`、`term_schema_creator` 没有后端运行时和
 Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提交的工作区内容，本阶段保留并登记为
-待确认项。旧 `terminology` 表和 `/system/terminology` API 仍在使用，必须完成数据映射和调用方迁移后再删除。
+待确认项。`/system/terminology` 的查询、创建、更新、启停和删除已经切换到 Semantic；旧
+`terminology` 表仍为数据迁移和最终删除核对保留，旧前端范围表达及 Excel 契约尚未完成迁移。
 
 本阶段已完成以下增量：
 
@@ -752,13 +753,21 @@ Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提�
 12. 外部动态数据源 Assistant 类型 1、3 因不存在本地模型关系，显式拒绝绑定本地 Semantic 数据集；
     其他 Assistant 只有在请求提供并通过租户、数据集、模型和数据源校验后才建立绑定。未绑定数据集的
     Chat 不注入术语上下文，也不再读取旧表，由此删除 Chat 到旧术语具体实现的最后一条依赖。
+13. `/system/terminology` 核心管理路径已迁入 `semantic/api/legacy_terms.py`。兼容层只转换旧响应字段，
+    创建、更新、启停、批量删除和列表查询均调用 `SemanticTermService`，不再调用旧 CRUD 或写旧表；
+    因此再删除 1 条旧术语 API 到 Chat 内部模型的依赖。
+14. Semantic 术语管理现在可读取和启停禁用记录，批量删除先校验全部租户内引用，再在一次提交中清理
+    术语主记录、别名和资产关系。应用启动已停止补旧术语向量，术语删除审计名称改为读取
+    `headless_term`，避免后台任务和审计继续依赖旧事实源。
+15. 旧 Excel 只有数据源范围列，缺少必需的 `domain_id` 和 `dataset_ids`。导入、导出和模板接口在新契约
+    完成前统一返回 HTTP 409 `SEMANTIC_TERM_EXCEL_CONTRACT_REQUIRED`，不允许静默写回旧表。
 
-当前不能直接删除旧入口：旧 UI 和 API 仍提供数据源范围、Excel 导入导出，而 Semantic 术语以主题域和
-数据集范围表达。`specific_ds=true` 的旧记录现在只会使用有效数据集—模型配置解析范围；数据源没有关联
-Semantic 数据集时返回 `LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED`，跨主题域或与已有 `dataset_ids` 不一致时
-返回冲突，不能静默扩大术语范围。Agent、Chat、Assistant 和动态数据源运行时均已停止读取旧术语表；
-未绑定 Semantic 数据集的问数记录明确不提供术语上下文。当前旧表只由 `/system/terminology` 管理 API
-维护和查询。完成该兼容 API 与前端能力迁移后，才能删除旧表。
+当前不能直接删除旧路径和旧表：旧 UI 仍提交 `datasource_ids` 并展示数据源范围，而 Semantic 术语以
+主题域和数据集范围表达。兼容写入会明确拒绝数据源范围并要求有效 `domain_id`；旧 Excel 也已停止使用。
+`specific_ds=true` 的历史记录在迁移预检中只会使用有效数据集—模型配置解析范围；数据源没有关联 Semantic
+数据集时返回 `LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED`，跨主题域或与已有 `dataset_ids` 不一致时返回冲突，
+不能静默扩大术语范围。Agent、Chat、Assistant、动态数据源和术语管理运行时均已停止读取旧术语表；
+完成前端范围选择、Excel 新契约和数据核对后，才能删除旧路径、旧 CRUD、旧模型与旧表。
 
 **目标**
 
@@ -770,7 +779,8 @@ Semantic 数据集时返回 `LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED`，跨主�
 2. 清除 Semantic Service 对具体 SQLModel 仓储实现的直接依赖。
 3. 将旧 `terminology` 数据映射到 SemanticTerm。
 4. 将别名、数据集范围和关联资产转换为 Semantic 术语及资产关系。
-5. 将旧 `/system/terminology` API 改为 SemanticTermService 的兼容转发入口。
+5. 将旧 `/system/terminology` API 改为 SemanticTermService 的兼容转发入口。已完成核心管理路径，Excel
+   接口等待新契约。
 6. 迁移前端术语调用到 `/semantic/terms` 后删除旧入口。
 7. 删除 `settings.models.term_model` 及无效接口。
 8. Semantic 索引重建只依赖抽象索引端口，不直接写 Retrieval 表。
@@ -784,21 +794,22 @@ Semantic 数据集时返回 `LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED`，跨主�
 
 **完成标准**
 
-- 术语只有 Semantic 一套写入 Service。
+- 术语核心管理只有 Semantic 一套写入 Service；Excel 旧写入已经关闭。
 - Semantic Service 测试不使用真实数据库 Session。
 - Repository 测试覆盖租户隔离、关系同步和级联删除。
 - 旧术语 API 不包含独立业务逻辑。
 
 **本阶段验证**
 
-- `tests/semantic`、`tests/retrieval`、`tests/architecture`、`tests/agent`、`tests/chat` 加 1 个 Graph
-  调用方回归：275 个测试通过。
+- `tests/semantic`、`tests/retrieval`、`tests/architecture`、`tests/agent`、`tests/chat` 和 Graph API
+  调用方回归：315 个测试通过。
 - Semantic 索引协调器 PostgreSQL 集成测试通过。
 - Graph 会话调用方回归测试通过。
 - 本次增量修改文件的 Ruff 检查通过。
-- 本阶段前一批 11 个生产代码入口，以及本次新增 Semantic 查询契约、服务、装配入口和 Agent 端口通过
-  Mypy；术语迁移规划器、迁移脚本、Chat 术语上下文服务和数据集绑定服务也通过 Mypy。Agent 与旧 Chat
-  大文件仍有既有严格类型问题，本次未扩大为无关重构。
+- 本阶段前一批 11 个生产代码入口，以及 Semantic 查询契约、服务、装配入口、Agent 端口、术语迁移
+  规划器、迁移脚本、Chat 术语上下文服务和数据集绑定服务通过 Mypy。本次新增的术语兼容 DTO、Service、
+  Repository 和 API 入口也通过 Mypy。Agent、旧 Chat 与存储同步大文件仍有既有严格类型问题，本次未
+  扩大为无关重构。
 
 ### 6.3 阶段 P2：拆分 Access Control、AI Model 和 Assistant
 

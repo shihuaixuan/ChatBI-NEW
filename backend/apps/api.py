@@ -9,6 +9,7 @@ from apps.dashboard.api import dashboard_api
 from apps.data_training.api import data_training
 from apps.datasource.api import datasource, recommended_problem, table_relation
 from apps.mcp import mcp
+from apps.semantic.api import legacy_terms
 from apps.semantic.api.router import router as semantic_router
 from apps.settings.api import base
 from apps.system.api import (
@@ -21,7 +22,6 @@ from apps.system.api import (
     variable_api,
     workspace,
 )
-from apps.terminology.api import terminology
 from apps.workflow_engine.api import router as graph_workflow
 
 #from audit.api import audit_api
@@ -34,7 +34,6 @@ api_router.include_router(workspace.router)
 api_router.include_router(assistant.router)
 api_router.include_router(aimodel.router)
 api_router.include_router(base.router)
-api_router.include_router(terminology.router)
 api_router.include_router(data_training.router)
 api_router.include_router(datasource.router)
 api_router.include_router(chat.router)
@@ -48,6 +47,7 @@ api_router.include_router(apikey.router)
 api_router.include_router(recommended_problem.router)
 
 api_router.include_router(variable_api.router)
+api_router.include_router(legacy_terms.router)
 api_router.include_router(semantic_router)
 api_router.include_router(graph_workflow.router)
 
