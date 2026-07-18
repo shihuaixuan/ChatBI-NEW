@@ -2,6 +2,7 @@ import pytest
 
 from apps.semantic.models.orm import (
     SemanticDataset,
+    SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticDomain,
     SemanticMetric,
@@ -53,6 +54,14 @@ def test_build_migration_context_resolves_asset_domains_and_existing_terms():
                 biz_name="business_dataset",
             )
         ],
+        dataset_model_configs=[
+            SemanticDatasetModelConfig(
+                id=25,
+                oid=1,
+                dataset_id=20,
+                model_id=30,
+            )
+        ],
         models=[
             SemanticModel(
                 id=30,
@@ -94,6 +103,7 @@ def test_build_migration_context_resolves_asset_domains_and_existing_terms():
     )
 
     assert context.dataset_domains[(1, 20)] == 10
+    assert context.datasource_datasets[(1, 40)] == (20,)
     assert context.metric_domains[(1, 100)] == 10
     assert context.dimension_domains[(1, 200)] == 10
     assert context.existing_terms[(1, 10, "人气")].target_id == 300

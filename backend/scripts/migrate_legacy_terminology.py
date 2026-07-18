@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 
 from apps.semantic.models.orm import (
     SemanticDataset,
+    SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticDomain,
     SemanticMetric,
@@ -103,6 +104,7 @@ def build_migration_context(
     *,
     domains: Sequence[SemanticDomain],
     datasets: Sequence[SemanticDataset],
+    dataset_model_configs: Sequence[SemanticDatasetModelConfig],
     models: Sequence[SemanticModel],
     metrics: Sequence[SemanticMetric],
     dimensions: Sequence[SemanticDimension],
@@ -125,6 +127,26 @@ def build_migration_context(
         (model.oid, model.id): model.domain_id
         for model in models
         if model.id is not None and model.status == 1
+    }
+    active_models = {
+        (model.oid, model.id): model
+        for model in models
+        if model.id is not None and model.status == 1
+    }
+    datasource_dataset_lists: dict[tuple[int, int], list[int]] = {}
+    for config in dataset_model_configs:
+        if config.status != 1 or (config.oid, config.dataset_id) not in dataset_domains:
+            continue
+        model = active_models.get((config.oid, config.model_id))
+        if model is None:
+            continue
+        datasource_key = (config.oid, model.datasource_id)
+        dataset_ids = datasource_dataset_lists.setdefault(datasource_key, [])
+        if config.dataset_id not in dataset_ids:
+            dataset_ids.append(config.dataset_id)
+    datasource_datasets = {
+        datasource_key: tuple(dataset_ids)
+        for datasource_key, dataset_ids in datasource_dataset_lists.items()
     }
     metric_domains = {
         (metric.oid, metric.id): model_domains[(metric.oid, metric.model_id)]
@@ -149,13 +171,13 @@ def build_migration_context(
     for term in terms:
         if term.id is None:
             continue
-        key = (term.oid, term.domain_id, term.name.strip())
-        if key in existing_terms:
+        term_key = (term.oid, term.domain_id, term.name.strip())
+        if term_key in existing_terms:
             raise ValueError(
                 f"目标表存在重复术语，无法判定幂等迁移: oid={term.oid}, "
                 f"domain_id={term.domain_id}, name={term.name}"
             )
-        existing_terms[key] = ExistingSemanticTermSnapshot(
+        existing_terms[term_key] = ExistingSemanticTermSnapshot(
             target_id=term.id,
             oid=term.oid,
             domain_id=term.domain_id,
@@ -171,6 +193,7 @@ def build_migration_context(
     return LegacyTermMigrationContext(
         active_domains=active_domains,
         dataset_domains=dataset_domains,
+        datasource_datasets=datasource_datasets,
         metric_domains=metric_domains,
         dimension_domains=dimension_domains,
         default_domains=default_domains,
@@ -219,6 +242,7 @@ def run(
     legacy_rows = _all(session, Terminology, oid)
     domains = _all(session, SemanticDomain, oid)
     datasets = _all(session, SemanticDataset, oid)
+    dataset_model_configs = _all(session, SemanticDatasetModelConfig, oid)
     models = _all(session, SemanticModel, oid)
     metrics = _all(session, SemanticMetric, oid)
     dimensions = _all(session, SemanticDimension, oid)
@@ -229,6 +253,7 @@ def run(
         build_migration_context(
             domains=domains,
             datasets=datasets,
+            dataset_model_configs=dataset_model_configs,
             models=models,
             metrics=metrics,
             dimensions=dimensions,

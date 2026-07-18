@@ -86,6 +86,41 @@ def test_planner_rejects_unresolved_datasource_scope():
     assert plan.failures[0].code == "LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED"
 
 
+def test_planner_maps_datasource_scope_to_configured_datasets():
+    record = LegacyTermSnapshot(
+        source_id=7,
+        oid=1,
+        word="人气",
+        specific_ds=True,
+        datasource_ids=(30,),
+    )
+    context = _context(datasource_datasets={(1, 30): (20, 21)})
+
+    plan = LegacyTermMigrationPlanner().plan([record], context)
+
+    assert plan.can_apply is True
+    assert plan.candidates[0].domain_id == 10
+    assert plan.candidates[0].related_datasets == (20, 21)
+    assert plan.to_summary()["candidates"][0]["related_datasets"] == [20, 21]
+
+
+def test_planner_rejects_conflicting_explicit_and_resolved_dataset_scope():
+    record = LegacyTermSnapshot(
+        source_id=7,
+        oid=1,
+        word="人气",
+        specific_ds=True,
+        datasource_ids=(30,),
+        dataset_ids=(20,),
+    )
+    context = _context(datasource_datasets={(1, 30): (20, 21)})
+
+    plan = LegacyTermMigrationPlanner().plan([record], context)
+
+    assert plan.can_apply is False
+    assert plan.conflicts[0].code == "LEGACY_TERM_DATASET_SCOPE_MISMATCH"
+
+
 def test_planner_rejects_asset_from_another_domain():
     record = LegacyTermSnapshot(
         source_id=7,

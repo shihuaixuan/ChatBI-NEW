@@ -54,6 +54,9 @@ class LegacyTermMigrationContext:
     dataset_domains: Mapping[AssetDomainKey, int]
     metric_domains: Mapping[AssetDomainKey, int]
     dimension_domains: Mapping[AssetDomainKey, int]
+    datasource_datasets: Mapping[AssetDomainKey, tuple[int, ...]] = field(
+        default_factory=dict
+    )
     default_domains: Mapping[int, int] = field(default_factory=dict)
     existing_terms: Mapping[TermKey, ExistingSemanticTermSnapshot] = field(
         default_factory=dict
@@ -126,6 +129,18 @@ class LegacyTermMigrationPlan:
             "conflict_count": len(self.conflicts),
             "failure_count": len(self.failures),
             "can_apply": self.can_apply,
+            "candidates": [
+                {
+                    "source_id": candidate.source_id,
+                    "oid": candidate.oid,
+                    "domain_id": candidate.domain_id,
+                    "name": candidate.name,
+                    "related_datasets": list(candidate.related_datasets),
+                    "related_metrics": list(candidate.related_metrics),
+                    "related_dimensions": list(candidate.related_dimensions),
+                }
+                for candidate in self.candidates
+            ],
             "conflicts": [_issue_dict(issue) for issue in self.conflicts],
             "failures": [_issue_dict(issue) for issue in self.failures],
         }
@@ -216,12 +231,6 @@ class LegacyTermMigrationPlanner:
                 "LEGACY_TERM_NAME_TOO_LONG",
                 "旧术语名称超过 SemanticTerm 的 128 字符限制",
             )
-        if record.specific_ds:
-            return _failure(
-                record,
-                "LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED",
-                "旧术语使用数据源范围，必须先显式转换为数据集范围",
-            )
         if any(_positive_id(value) is None for value in record.dataset_ids):
             return _failure(
                 record,
@@ -229,7 +238,14 @@ class LegacyTermMigrationPlanner:
                 "旧术语的数据集范围包含无效 ID",
             )
 
-        dataset_ids = tuple(_unique_positive_ids(record.dataset_ids))
+        dataset_ids, scope_issue, scope_issue_kind = _resolve_dataset_scope(
+            record,
+            context,
+        )
+        if scope_issue is not None:
+            return None, scope_issue, scope_issue_kind
+        if dataset_ids is None:
+            raise AssertionError("数据集范围和问题不能同时为空")
         domain_id, issue, issue_kind = _resolve_domain(record, dataset_ids, context)
         if issue is not None:
             return None, issue, issue_kind
@@ -262,6 +278,74 @@ class LegacyTermMigrationPlanner:
             None,
             None,
         )
+
+
+def _resolve_dataset_scope(
+    record: LegacyTermSnapshot,
+    context: LegacyTermMigrationContext,
+) -> tuple[tuple[int, ...] | None, TermMigrationIssue | None, str | None]:
+    """把旧数据源范围转换为数据集范围，并拒绝不完整或冲突的映射。"""
+
+    explicit_dataset_ids = tuple(_unique_positive_ids(record.dataset_ids))
+    if not record.specific_ds:
+        return explicit_dataset_ids, None, None
+
+    oid = record.oid
+    if oid is None:
+        raise AssertionError("解析数据集范围前必须先校验租户")
+    if not record.datasource_ids:
+        return _failure(
+            record,
+            "LEGACY_TERM_DATASOURCE_SCOPE_EMPTY",
+            "旧术语启用了数据源范围，但没有配置数据源",
+        )
+    if any(_positive_id(value) is None for value in record.datasource_ids):
+        return _failure(
+            record,
+            "LEGACY_TERM_DATASOURCE_ID_INVALID",
+            "旧术语的数据源范围包含无效 ID",
+        )
+
+    datasource_ids = tuple(_unique_positive_ids(record.datasource_ids))
+    missing_datasource_ids = [
+        datasource_id
+        for datasource_id in datasource_ids
+        if not context.datasource_datasets.get((oid, datasource_id))
+    ]
+    if missing_datasource_ids:
+        return _failure(
+            record,
+            "LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED",
+            "以下数据源没有通过有效模型配置关联 Semantic 数据集: "
+            f"{missing_datasource_ids}",
+        )
+
+    mapped_dataset_ids: list[int] = []
+    for datasource_id in datasource_ids:
+        mapped_values = context.datasource_datasets[(oid, datasource_id)]
+        if any(_positive_id(value) is None for value in mapped_values):
+            return _failure(
+                record,
+                "LEGACY_TERM_DATASOURCE_MAPPING_INVALID",
+                f"数据源 {datasource_id} 的数据集映射包含无效 ID",
+            )
+        for dataset_id in _unique_positive_ids(mapped_values):
+            if dataset_id not in mapped_dataset_ids:
+                mapped_dataset_ids.append(dataset_id)
+
+    if explicit_dataset_ids and set(explicit_dataset_ids) != set(mapped_dataset_ids):
+        return _conflict(
+            record,
+            "LEGACY_TERM_DATASET_SCOPE_MISMATCH",
+            "旧术语已有数据集范围与数据源模型配置解析结果不一致: "
+            f"existing={list(explicit_dataset_ids)}, "
+            f"resolved={mapped_dataset_ids}",
+        )
+    return (
+        explicit_dataset_ids or tuple(mapped_dataset_ids),
+        None,
+        None,
+    )
 
 
 def _resolve_domain(
