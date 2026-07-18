@@ -33,7 +33,7 @@ from apps.semantic.models.dto.model import (
     SemanticColumnMeta,
     SemanticTableMeta,
 )
-from apps.semantic.models.dto.term import TermPayload
+from apps.semantic.models.dto.term import TermPayload, TermSearchResult
 
 __all__ = [
     "DatasetModelConfig",
@@ -62,4 +62,5 @@ __all__ = [
     "SemanticColumnMeta",
     "SemanticTableMeta",
     "TermPayload",
+    "TermSearchResult",
 ]

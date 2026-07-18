@@ -20,7 +20,6 @@ from langchain_core.messages import (
     messages_from_dict,
 )
 
-from apps.chat.models.chat_model import ChatRecord
 from apps.agent import crud
 from apps.agent.budget import BudgetGuard
 from apps.agent.events import sse_event
@@ -46,6 +45,9 @@ from apps.capabilities.question_understanding import (
     QuestionUnderstandingService,
     apply_question_understanding_clarification,
 )
+from apps.chat.models.chat_model import ChatRecord
+from apps.semantic.composition import build_semantic_term_query_service
+from apps.semantic.services.term_query_service import SemanticTermQueryService
 
 FOLDED_PLACEHOLDER = "（此前的工具结果已折叠归档，如需请重新调用工具）"
 
@@ -82,6 +84,7 @@ class AgentLoop:
         model_client=None,
         registry: ToolRegistry | None = None,
         understanding_service: QuestionUnderstandingService | None = None,
+        term_query_service: SemanticTermQueryService | None = None,
     ):
         self.session = session
         self.current_user = current_user
@@ -89,6 +92,9 @@ class AgentLoop:
         self.model_client = model_client or DefaultAgentModelClient()
         self.registry = registry or self._build_registry()
         self.understanding_service = understanding_service or QuestionUnderstandingService()
+        self.term_query_service = term_query_service or build_semantic_term_query_service(
+            session
+        )
 
     def _build_registry(self) -> ToolRegistry:
         registry = ToolRegistry()
@@ -306,6 +312,8 @@ class AgentLoop:
             oid=run.oid,
             user_id=self.current_user.id,
             datasource_id=record.datasource,
+            dataset_id=record.dataset_id,
+            term_query_service=self.term_query_service,
             config=self.config,
             state={"question": record.question or ""},
         )

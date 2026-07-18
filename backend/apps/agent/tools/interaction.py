@@ -65,10 +65,28 @@ class SearchTerminologyTool(AgentTool):
     args_model = SearchTerminologyArgs
 
     def execute(self, ctx: AgentToolContext, args: SearchTerminologyArgs) -> ToolOutput:
-        from apps.terminology.curd.terminology import select_terminology_by_word
+        dataset_id = ctx.dataset_id or ctx.state.get("dataset_id")
+        if not isinstance(dataset_id, int) or dataset_id <= 0:
+            return ToolOutput(
+                success=False,
+                summary="当前问数记录没有绑定 Semantic 数据集，无法查询业务术语。",
+                error_code="semantic_dataset_not_found",
+            )
+        if ctx.term_query_service is None:
+            return ToolOutput(
+                success=False,
+                summary="Semantic 术语查询服务未装配。",
+                error_code="semantic_term_query_unavailable",
+            )
 
-        results = select_terminology_by_word(ctx.session, args.term, ctx.oid, ctx.datasource_id) or []
-        payload = {"items": results[:10], "count": len(results)}
+        results = ctx.term_query_service.search(
+            ctx.oid,
+            dataset_id,
+            args.term,
+            limit=10,
+        )
+        items = [result.model_dump() for result in results]
+        payload = {"items": items, "count": len(items)}
         if not results:
             return ToolOutput(success=True, summary=f"术语库中未找到与「{args.term}」相关的条目。", payload=payload)
         return ToolOutput(success=True, summary=json_summary(payload, _summary_limit(ctx)), payload=payload)

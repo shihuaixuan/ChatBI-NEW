@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import and_, desc, func, select
 
-from apps.chat.models.chat_model import Chat, ChatRecord
 from apps.agent.models import (
     AgentClarificationStatus,
     AgentRunStatus,
@@ -13,6 +12,7 @@ from apps.agent.models import (
     ChatbiAgentTraceEvent,
 )
 from apps.agent.schemas import AgentQuestionRequest
+from apps.chat.models.chat_model import Chat, ChatRecord
 
 
 def now() -> datetime:
@@ -40,6 +40,7 @@ def create_record_and_run(
         create_time=created_at,
         create_by=current_user.id,
         datasource=datasource_id,
+        dataset_id=chat.dataset_id,
         engine_type=chat.engine_type,
         execution_type="agent",
         question=request.question,

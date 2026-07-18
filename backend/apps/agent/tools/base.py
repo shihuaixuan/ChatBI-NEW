@@ -11,10 +11,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Type
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
 import orjson
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from apps.semantic.models.dto import TermSearchResult
+
+
+class TermQueryService(Protocol):
+    """Agent 对 Semantic 术语查询公开能力的最小依赖。"""
+
+    def search(
+        self,
+        oid: int,
+        dataset_id: int,
+        query: str,
+        limit: int = 10,
+    ) -> list[TermSearchResult]: ...
 
 
 @dataclass
@@ -26,6 +41,7 @@ class AgentToolContext:
     user_id: int | None
     datasource_id: int | None
     dataset_id: int | None = None
+    term_query_service: TermQueryService | None = None
     config: Any = None
     # 循环内跨工具共享的运行时状态（语义包、执行结果标记等），由 loop 维护。
     state: dict[str, Any] = field(default_factory=dict)
@@ -44,7 +60,7 @@ class AgentTool:
 
     name: ClassVar[str]
     description: ClassVar[str]
-    args_model: ClassVar[Type[BaseModel]]
+    args_model: ClassVar[type[BaseModel]]
 
     def execute(self, ctx: AgentToolContext, args: BaseModel) -> ToolOutput:  # pragma: no cover - interface
         raise NotImplementedError

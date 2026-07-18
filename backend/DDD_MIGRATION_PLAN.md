@@ -657,10 +657,10 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 `tests/architecture/known_dependency_violations.json`，完成以下依赖基线：
 
 - P0 初始记录 40 条跨领域内部模型依赖；P1 清理 1 条后当前为 39 条。
-- P0 初始记录 29 条跨领域具体实现依赖；P1 清理 1 条后当前为 28 条。
+- P0 初始记录 29 条跨领域具体实现依赖；P1 清理 2 条后当前为 27 条。
 - 1 条跨领域 API 依赖。
 - 6 条 Workflow Engine 对业务模块的依赖。
-- 10 条函数内部业务模块导入。
+- P0 初始记录 10 条函数内部业务模块导入；P1 清理 1 条后当前为 9 条。
 
 基线测试不把这些历史依赖视为合规设计。测试会阻止新增违规依赖；历史依赖被清理后，
 对应基线也必须在同一变更中删除。P0 剩余工作是让首批调用方在实际迁移中采用公开契约；
@@ -740,11 +740,17 @@ Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提�
 6. 本地数据库已升级到 087；租户 1 的只读预检为 0 条旧术语、0 冲突、0 失败，未执行数据写入。
 7. `SemanticTermService` 已统一执行名称清理、同主题域重名校验，以及数据集、指标、维度的租户和主题域
    引用校验；正常 API 写入与迁移规划不再使用两套引用规则。
+8. 新增 `TermSearchResult` 和 `SemanticTermQueryService` 公开只读契约。查询只读取指定数据集的运行时
+   Schema，按名称和别名进行确定性匹配，不读取旧 `terminology` 表，也不在失败时静默回退。
+9. Agent 新记录继承会话绑定的 `dataset_id`，`search_terminology` 工具改为调用 Semantic 术语查询服务；
+   未绑定数据集或服务未装配时返回明确错误。由此删除 1 条跨领域具体实现依赖和 1 条函数内部导入。
 
 当前不能直接删除旧入口：旧 UI 和 API 仍提供数据源范围、Excel 导入导出，而 Semantic 术语以主题域和
 数据集范围表达。`specific_ds=true` 的旧记录目前会返回
 `LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED`，必须先确定“数据源到 Semantic 数据集”的显式映射，不能静默
-扩大术语范围。完成映射并迁移前端能力后，才能把 `/system/terminology` 改为纯转发并删除旧表。
+扩大术语范围。旧 `chat/task/llm.py` 还服务于未绑定 Semantic 数据集的 Assistant 和动态数据源场景，
+因此暂时保留旧术语读取作为明确兼容入口；普通 Agent 已不再依赖该入口。完成范围映射、Chat 调用方和
+前端能力迁移后，才能把 `/system/terminology` 改为纯转发并删除旧表。
 
 **目标**
 
@@ -777,11 +783,13 @@ Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提�
 
 **本阶段验证**
 
-- `tests/semantic`、`tests/retrieval`、`tests/architecture` 加 1 个 Graph 调用方回归：199 个测试通过。
+- `tests/semantic`、`tests/retrieval`、`tests/architecture`、`tests/agent` 加 1 个 Graph 调用方回归：
+  256 个测试通过。
 - Semantic 索引协调器 PostgreSQL 集成测试通过。
 - Graph 会话调用方回归测试通过。
-- 本阶段修改文件的 Ruff `F`、`I` 检查通过。
-- 本阶段 11 个新增或调整的生产代码入口通过 Mypy。
+- 本次增量修改文件的 Ruff 检查通过。
+- 本阶段前一批 11 个生产代码入口，以及本次新增 Semantic 查询契约、服务、装配入口和 Agent 端口通过
+  Mypy。Agent 旧模块仍有既有严格类型问题，本次未扩大为无关重构。
 
 ### 6.3 阶段 P2：拆分 Access Control、AI Model 和 Assistant
 
