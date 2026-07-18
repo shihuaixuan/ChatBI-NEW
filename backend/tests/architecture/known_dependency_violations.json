@@ -4,7 +4,6 @@
     "apps/agent/crud.py -> apps.chat.models.chat_model",
     "apps/agent/loop.py -> apps.chat.models.chat_model",
     "apps/agent/tools/core.py -> apps.datasource.models.datasource",
-    "apps/ai_model/model_factory.py -> apps.system.models.system_model",
     "apps/capabilities/semantic/compile.py -> apps.semantic.models.orm",
     "apps/chat/curd/chat.py -> apps.datasource.models.datasource",
     "apps/chat/curd/chat.py -> apps.semantic.models.orm",

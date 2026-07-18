@@ -834,6 +834,27 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 ### 6.3 阶段 P2：拆分 Access Control、AI Model 和 Assistant
 
+**实施状态：进行中**
+
+截至 2026-07-18，三个领域的第一轮边界确认如下：
+
+- Access Control 负责用户、认证、工作空间、成员关系、API Key 和统一资源授权；系统参数继续属于平台配置。
+- AI Model 负责模型配置持久化、运行时配置解析、密钥解密和模型客户端创建。
+- Assistant 负责助手配置、公开数据源范围、外部数据源接入信息和动态域名；物理连接执行仍通过 Datasource
+  公开契约完成。
+
+本阶段已完成第一批 AI Model 迁移：
+
+1. `AiModelDetail` 和 `AiModelBase` 已迁入 `ai_model/models/orm`；`system_model.py` 只保留当前 API 与
+   XPack 所需的兼容引用，不再定义 `ai_model` 表。
+2. 新增 `StoredAIModelConfig`、`LLMConfig`、`AIModelConfigRepository`、SQLModel 仓储实现和
+   `AIModelRuntimeConfigService`，模型工厂不再创建数据库 Session 或查询 System ORM。
+3. 指定模型不存在时返回 `AI_MODEL_NOT_FOUND`，不再静默改用默认模型；默认模型未配置、配置 JSON
+   非法、参数缺失或键重复时均返回明确领域错误。
+4. 运行时配置解析不再修改参与客户端缓存的配置字典，Azure 专用参数从副本中提取。
+5. 本地默认模型配置通过新 Service 读取成功；应用启动和旧 System 模型引用兼容验证通过。架构基线减少
+   1 条 AI Model 到 System 内部 ORM 的跨领域依赖。
+
 **目标**
 
 消除宽泛 `system` 模块，把不同生命周期的业务资源迁入独立领域。
@@ -843,8 +864,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 1. 创建 `access_control`，迁移用户、认证、工作空间、成员关系和 API Key。
 2. 把 `require_permissions` 中的数据库查询改为统一授权 Service 调用。
 3. 将行列权限和变量解析迁入 Access Control，输出稳定的数据策略 DTO。
-4. 合并 `system` 中 AI 模型 ORM/API 与现有 `apps/ai_model`。
-5. 为模型配置建立仓储接口，模型工厂不再直接查询 System ORM。
+4. 合并 `system` 中 AI 模型 ORM/API 与现有 `apps/ai_model`。ORM 已迁移，API 和管理流程待迁移。
+5. 为模型配置建立仓储接口，模型工厂不再直接查询 System ORM。运行时读取链路已完成。
 6. 创建 `assistant`，迁移助手 ORM、API、外部数据源配置和动态域名管理。
 7. Assistant 通过 Datasource 和 AI Model 的公开契约校验引用。
 8. 系统参数保留为平台配置，不放入 Access Control。
@@ -856,6 +877,14 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 - AI Model 的配置读取和客户端创建通过同一 Service。
 - Assistant 不直接调用 Chat 内部函数。
 - 旧 System API 只保留必要兼容路由。
+
+**本批验证**
+
+- AI Model、Semantic、Retrieval、Architecture、Agent、Capabilities、Chat、Workflow 和 Graph API
+  调用方回归：546 个测试通过。
+- 新增 AI Model Service 和模型归属测试 6 个；与架构基线合计 11 个定向测试通过。
+- AI Model 新增和修改文件通过 Ruff；运行时 DTO、仓储、Service、组装入口、模型工厂及测试通过 Mypy。
+- 本地默认模型通过新 Service 成功解析，应用启动、ORM 单一映射和旧 System 兼容引用验证通过。
 
 ### 6.4 阶段 P3：收敛 Datasource 与数据库连接实现
 
