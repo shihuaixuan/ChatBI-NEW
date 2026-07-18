@@ -50,6 +50,7 @@ backend/alembic/versions/*
 !backend/alembic/versions/088_remove_legacy_terminology.py
 !backend/alembic/versions/089_ai_model_single_default.py
 !backend/alembic/versions/090_access_control_identity_constraints.py
+!backend/alembic/versions/091_access_api_key_constraints.py
 .codex_run_logs
 .idea
 data/sqlbot

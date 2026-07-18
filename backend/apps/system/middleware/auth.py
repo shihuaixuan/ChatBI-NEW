@@ -1,20 +1,31 @@
 
 import base64
-import json
 from typing import Optional
 
 import jwt
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi.security.utils import get_authorization_scheme_param
+from jwt.exceptions import InvalidTokenError
+from pydantic import ValidationError
 from sqlmodel import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from apps.access_control.identity import get_user_by_account, get_user_info
-from apps.access_control.models.dto import UserInfoDTO
-from apps.system.crud.apikey_manage import get_api_key
+from apps.access_control.composition import build_authentication_service
+from apps.access_control.errors import (
+    ApiKeyDisabledError,
+    ApiKeyNotFoundError,
+    UserInactiveError,
+    UserNotFoundError,
+    UserWorkspaceRequiredError,
+)
+from apps.access_control.identity import get_user_by_account
+from apps.access_control.token_authentication import (
+    authenticate_api_key_token,
+    authenticate_bearer_token,
+)
 from apps.system.crud.assistant import get_assistant_info, get_assistant_user
-from apps.system.models.system_model import ApiKeyModel, AssistantModel
+from apps.system.models.system_model import AssistantModel
 from apps.system.schemas.system_schema import AssistantHeader
 from common.core import security
 from common.core.config import settings
@@ -82,43 +93,24 @@ class TokenMiddleware(BaseHTTPMiddleware):
         schema, param = get_authorization_scheme_param(askToken)
         if schema.lower() != "sk":
             return False, f"Token schema error!"
-        try: 
-            payload = jwt.decode(
-                param, options={"verify_signature": False, "verify_exp": False}, algorithms=[security.ALGORITHM]
-            )
-            access_key = payload.get('access_key', None)
-            
-            if not access_key:
-                return False, f"Miss access_key payload error!"
+        try:
             with Session(engine) as session:
-                api_key_model = await get_api_key(session, access_key)
-                api_key_model = ApiKeyModel.model_validate(api_key_model) if api_key_model else None
-                if not api_key_model:
-                    return False, f"Invalid access_key!"
-                if not api_key_model.status:
-                    return False, f"Disabled access_key!"
-                payload = jwt.decode(
-                    param, api_key_model.secret_key, algorithms=[security.ALGORITHM]
-                )
-                uid = api_key_model.uid
-                session_user = await get_user_info(session = session, user_id = uid)
-                if not session_user:
-                    message = trans('i18n_not_exist', msg = trans('i18n_user.account'))
-                    raise Exception(message)
-                session_user = UserInfoDTO.model_validate(session_user)
-                if session_user.status != 1:
-                    message = trans('i18n_login.user_disable', msg = trans('i18n_concat_admin'))
-                    raise Exception(message)
-                if not session_user.oid or session_user.oid == 0:
-                    message = trans('i18n_login.no_associated_ws', msg = trans('i18n_concat_admin'))
-                    raise Exception(message)
-                return True, session_user
-        except Exception as e:
-            msg = str(e)
-            SQLBotLogUtil.exception(f"Token validation error: {msg}")
-            if 'expired' in msg:
-                return False, jwt.ExpiredSignatureError(trans('i18n_permission.token_expired')) 
-            return False, e
+                return True, await authenticate_api_key_token(session, param)
+        except jwt.ExpiredSignatureError:
+            return False, jwt.ExpiredSignatureError(
+                trans("i18n_permission.token_expired")
+            )
+        except (
+            InvalidTokenError,
+            ValidationError,
+            ApiKeyNotFoundError,
+            ApiKeyDisabledError,
+            UserNotFoundError,
+            UserInactiveError,
+            UserWorkspaceRequiredError,
+        ) as exc:
+            SQLBotLogUtil.exception(f"Token validation error: {exc}")
+            return False, self.authentication_error_message(exc, trans)
     
     async def validateToken(self, token: Optional[str], trans: I18n):
         if not token:
@@ -126,30 +118,42 @@ class TokenMiddleware(BaseHTTPMiddleware):
         schema, param = get_authorization_scheme_param(token)
         if schema.lower() != "bearer":
             return False, f"Token schema error!"
-        try: 
-            payload = jwt.decode(
-                param, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
-            )
-            token_data = TokenPayload(**payload)
+        try:
             with Session(engine) as session:
-                session_user = await get_user_info(session = session, user_id = token_data.id)
-                if not session_user:
-                    message = trans('i18n_not_exist', msg = trans('i18n_user.account'))
-                    raise Exception(message)
-                session_user = UserInfoDTO.model_validate(session_user)
-                if session_user.status != 1:
-                    message = trans('i18n_login.user_disable', msg = trans('i18n_concat_admin'))
-                    raise Exception(message)
-                if not session_user.oid or session_user.oid == 0:
-                    message = trans('i18n_login.no_associated_ws', msg = trans('i18n_concat_admin'))
-                    raise Exception(message)
-                return True, session_user
-        except Exception as e:
-            msg = str(e)
-            SQLBotLogUtil.exception(f"Token validation error: {msg}")
-            if 'expired' in msg:
-                return False, jwt.ExpiredSignatureError(trans('i18n_permission.token_expired')) 
-            return False, e
+                return True, authenticate_bearer_token(session, param)
+        except jwt.ExpiredSignatureError:
+            return False, jwt.ExpiredSignatureError(
+                trans("i18n_permission.token_expired")
+            )
+        except (
+            InvalidTokenError,
+            ValidationError,
+            UserNotFoundError,
+            UserInactiveError,
+            UserWorkspaceRequiredError,
+        ) as exc:
+            SQLBotLogUtil.exception(f"Token validation error: {exc}")
+            return False, self.authentication_error_message(exc, trans)
+
+    @staticmethod
+    def authentication_error_message(exc: Exception, trans: I18n):
+        if isinstance(exc, ApiKeyNotFoundError):
+            return "Invalid access_key!"
+        if isinstance(exc, ApiKeyDisabledError):
+            return "Disabled access_key!"
+        if isinstance(exc, UserNotFoundError):
+            return trans("i18n_not_exist", msg=trans("i18n_user.account"))
+        if isinstance(exc, UserInactiveError):
+            return trans(
+                "i18n_login.user_disable",
+                msg=trans("i18n_concat_admin"),
+            )
+        if isinstance(exc, UserWorkspaceRequiredError):
+            return trans(
+                "i18n_login.no_associated_ws",
+                msg=trans("i18n_concat_admin"),
+            )
+        return exc
             
     
     async def validateAssistant(self, assistantToken: Optional[str], trans: I18n) -> tuple[any]:
@@ -214,15 +218,9 @@ class TokenMiddleware(BaseHTTPMiddleware):
                 if not session_user:
                     message = trans('i18n_not_exist', msg = trans('i18n_user.account'))
                     raise Exception(message)
-                session_user = await get_user_info(session = session, user_id = session_user.id)
-                
-                session_user = UserInfoDTO.model_validate(session_user)
-                if session_user.status != 1:
-                    message = trans('i18n_login.user_disable', msg = trans('i18n_concat_admin'))
-                    raise Exception(message)
-                if not session_user.oid or session_user.oid == 0:
-                    message = trans('i18n_login.no_associated_ws', msg = trans('i18n_concat_admin'))
-                    raise Exception(message)
+                session_user = build_authentication_service(session).require_active_user(
+                    session_user.id
+                )
                 if session_user.oid:
                     assistant_info.oid = int(session_user.oid)
                 return True, session_user, assistant_info

@@ -119,3 +119,50 @@ class WorkspaceMemberAlreadyExistsError(AccessControlError):
         super().__init__(
             f"ACCESS_CONTROL_WORKSPACE_MEMBER_ALREADY_EXISTS:{workspace_id}:{user_id}"
         )
+
+
+class InvalidCredentialsError(AccessControlError):
+    def __init__(self) -> None:
+        super().__init__("ACCESS_CONTROL_INVALID_CREDENTIALS")
+
+
+class UserInactiveError(AccessControlError):
+    def __init__(self, user_id: int) -> None:
+        self.user_id = user_id
+        super().__init__(f"ACCESS_CONTROL_USER_INACTIVE:{user_id}")
+
+
+class UserWorkspaceRequiredError(AccessControlError):
+    def __init__(self, user_id: int) -> None:
+        self.user_id = user_id
+        super().__init__(f"ACCESS_CONTROL_USER_WORKSPACE_REQUIRED:{user_id}")
+
+
+class LocalLoginRequiredError(AccessControlError):
+    def __init__(self, user_id: int) -> None:
+        self.user_id = user_id
+        super().__init__(f"ACCESS_CONTROL_LOCAL_LOGIN_REQUIRED:{user_id}")
+
+
+class ApiKeyLimitExceededError(AccessControlError):
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        super().__init__(f"ACCESS_CONTROL_API_KEY_LIMIT_EXCEEDED:{limit}")
+
+
+class ApiKeyNotFoundError(AccessControlError):
+    def __init__(self, api_key_id: int | None = None) -> None:
+        self.api_key_id = api_key_id
+        super().__init__(f"ACCESS_CONTROL_API_KEY_NOT_FOUND:{api_key_id}")
+
+
+class ApiKeyDisabledError(AccessControlError):
+    def __init__(self, access_key: str) -> None:
+        self.access_key = access_key
+        super().__init__("ACCESS_CONTROL_API_KEY_DISABLED")
+
+
+class ApiKeyOwnershipError(AccessControlError):
+    def __init__(self, action: str) -> None:
+        self.action = action
+        super().__init__(f"ACCESS_CONTROL_API_KEY_OWNERSHIP_REQUIRED:{action}")

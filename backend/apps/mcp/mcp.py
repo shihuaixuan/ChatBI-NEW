@@ -3,16 +3,23 @@
 import asyncio
 from datetime import timedelta
 
-import jwt
 import orjson
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from jwt.exceptions import InvalidTokenError
 from pydantic import ValidationError
 
-from apps.access_control.composition import build_identity_workspace_service
-from apps.access_control.identity import authenticate, user_ws_options
+from apps.access_control.composition import build_authentication_service
+from apps.access_control.errors import (
+    InvalidCredentialsError,
+    LocalLoginRequiredError,
+    UserInactiveError,
+    UserNotFoundError,
+    UserWorkspaceRequiredError,
+)
+from apps.access_control.identity import user_ws_options
 from apps.access_control.models.dto import BaseUserDTO, UserInfoDTO
+from apps.access_control.token_authentication import authenticate_bearer_token
 from apps.agent.schemas import AgentStartStreamRequest
 from apps.agent.service import (
     AgentDatasourceNotAllowedError,
@@ -22,10 +29,9 @@ from apps.agent.service import (
 from apps.chat.api.chat import create_chat
 from apps.chat.models.chat_model import ChatStart, CreateChat, McpDs, McpQuestion
 from apps.datasource.crud.datasource import get_datasource_list
-from common.core import security
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
-from common.core.schemas import Token, TokenPayload, XOAuth2PasswordBearer
+from common.core.schemas import Token, XOAuth2PasswordBearer
 from common.core.security import create_access_token
 
 reusable_oauth2 = XOAuth2PasswordBearer(
@@ -52,38 +58,41 @@ router = APIRouter(tags=["mcp"], prefix="/mcp")
 
 def get_user(session: SessionDep, token: str) -> UserInfoDTO:
     try:
-        payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
-        )
-        token_data = TokenPayload(**payload)
+        session_user = authenticate_bearer_token(session, token)
+        # MCP 当前保持固定中文环境，不改变原有语言行为。
+        session_user.language = "zh-CN"
+        return session_user
     except (InvalidTokenError, ValidationError):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Could not validate credentials",
         )
-    session_user = (
-        build_identity_workspace_service(session).get_user_info(token_data.id)
-        if token_data.id is not None
-        else None
-    )
-    if not session_user:
+    except UserNotFoundError:
         raise HTTPException(status_code=404, detail="User not found")
-
-    # MCP 当前保持固定中文环境，不改变原有语言行为。
-    session_user.language = "zh-CN"
-    if session_user.status != 1:
+    except UserInactiveError:
         raise HTTPException(status_code=400, detail="Inactive user")
-    return session_user
+    except UserWorkspaceRequiredError:
+        raise HTTPException(status_code=400, detail="No associated workspace")
 
 
 @router.post("/mcp_start", operation_id="mcp_start")
 async def mcp_start(session: SessionDep, chat: ChatStart):
-    user: BaseUserDTO = authenticate(session=session, account=chat.username, password=chat.password)
-    if not user:
+    try:
+        user: BaseUserDTO = build_authentication_service(session).authenticate_local(
+            chat.username,
+            chat.password,
+        )
+    except InvalidCredentialsError:
         raise HTTPException(status_code=400, detail="Incorrect account or password")
-
-    if not user.oid or user.oid == 0:
-        raise HTTPException(status_code=400, detail="No associated workspace, Please contact the administrator")
+    except UserWorkspaceRequiredError:
+        raise HTTPException(
+            status_code=400,
+            detail="No associated workspace, Please contact the administrator",
+        )
+    except UserInactiveError:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    except LocalLoginRequiredError:
+        raise HTTPException(status_code=400, detail="Unsupported user origin")
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     user_dict = user.to_dict()
     t = Token(access_token=create_access_token(

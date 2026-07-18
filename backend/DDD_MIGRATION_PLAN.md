@@ -865,7 +865,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 10. 启动密钥加密和旧供应商编号修正迁入 `AIModelSecretMigrationService`；旧
     `system/crud/aimodel_manage.py` 已删除。当前数据重复执行迁移更新数为 0。
 
-本阶段已完成 Access Control 授权边界和身份管理两批迁移：
+本阶段已完成 Access Control 授权边界、身份管理和令牌认证三批迁移：
 
 1. 新增 `access_control/models/dto`、`repository`、`services` 和接口适配层，调用者、授权要求、角色判断和
    工作空间资源范围已形成明确边界。
@@ -892,6 +892,17 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     检查重复账号、重复成员关系、孤立成员关系和无效当前工作空间，不合法时中止并报告数量。
 12. System 中的用户 Excel 适配路由暂时保留；XPack 依赖的 `create` 和 `edit` 同名入口只转调
     Access Control Service。待 XPack 发布包改用 Access Control 公开入口后删除这两个兼容函数。
+13. `AuthenticationModel` 和 `ApiKeyModel` 已迁入 `access_control/models/orm`，认证、退出和
+    API Key DTO 迁入 `models/dto`。System 旧模型和 DTO 路径仅转发同一对象，保持 XPack 兼容。
+14. 新增 `ApiKeyRepository`、SQLModel 实现、`ApiKeyService` 和 `AuthenticationService`。本地登录的
+    密码、用户状态、工作空间和来源校验已归并为一个入口。每个用户最多 5 个 API Key 的规则由
+    Service 定义，仓储通过锁定用户行保证并发创建时不超限。
+15. `/login` 和 `/system/apikey` 路由已迁入 `access_control/api`，原路径、请求结构、审计类型、
+    缓存键和错误文本保持不变。System 认证中间件的 Bearer 和 API Key 分支已委托 Access Control；
+    Assistant 和 Embedded 分支待 Assistant 领域迁移时一并移出 System。
+16. MCP 的本地登录和 Bearer 校验改用同一 `AuthenticationService`，不再自行维护用户状态和
+    工作空间校验。新增 091 数据库迁移，为 `access_key` 建立唯一约束、为 `uid` 建立查询索引；
+    升级前显式拦截重复 Key、孤立用户引用和历史超限数据。
 
 **目标**
 
@@ -899,7 +910,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 **任务**
 
-1. 创建 `access_control`，统一授权、用户、工作空间和成员关系已完成；认证配置和 API Key 尚待迁移。
+1. 创建 `access_control`，统一授权、用户、工作空间、成员关系、认证配置和 API Key 已完成。
 2. 把 `require_permissions` 中的数据库查询改为统一授权 Service 调用。已完成。
 3. 将行列权限和变量解析迁入 Access Control，输出稳定的数据策略 DTO。
 4. 合并 `system` 中 AI 模型 ORM/API 与现有 `apps/ai_model`。ORM、API、DTO 和管理流程已迁移；
@@ -930,9 +941,13 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
   新增授权代码和测试通过 Ruff、Mypy。
 - Access Control 用户、工作空间和架构定向测试与既有授权测试共 28 项通过；新增 ORM、DTO、
   仓储、Service、组装入口和接口代码通过 Ruff，核心模型、仓储、Service 与公开身份入口通过 Mypy。
-- 090 已完成真实升级、降级和再升级验证；当前本地数据库位于 090，两个唯一约束已经过数据库反射确认。
+- 090 已完成真实升级、降级和再升级验证；用户账号和成员关系两个唯一约束已经过数据库反射确认。
+- Access Control 认证、API Key 和既有领域及架构定向测试共 42 项通过。新增模型、仓储、
+  Service、令牌校验与 API 通过 Ruff 和 Mypy；应用与 XPack 完整导入通过。
+- 091 已完成真实升级、降级和再升级验证；当前本地数据库位于 091，API Key 唯一约束和
+  用户查询索引已经过数据库反射确认。
 - 应用导入和 OpenAPI 构建通过，共生成 154 个路径；数据源、AI 模型、工作空间和术语等受保护路由均保留。
-- 完整后端回归 668 项通过；架构守卫确认本批再减少 3 条 MCP 到 System 用户内部实现的违规依赖，
+- 完整后端回归 682 项通过；架构守卫确认本批再减少 3 条 MCP 到 System 用户内部实现的违规依赖，
   且未新增违规项。
 
 ### 6.4 阶段 P3：收敛 Datasource 与数据库连接实现

@@ -1,5 +1,15 @@
 """Access Control DTO 稳定导出。"""
 
+from apps.access_control.models.dto.authentication import (
+    ApiKeyGridItem,
+    ApikeyGridItem,
+    ApiKeyRecord,
+    ApiKeyStatus,
+    ApikeyStatus,
+    AuthenticationRecord,
+    LogoutDTO,
+    LogoutSchema,
+)
 from apps.access_control.models.dto.authorization import (
     AuthorizationRequirement,
     AuthorizationSubject,
@@ -35,6 +45,14 @@ __all__ = [
     "AuthorizationRequirement",
     "AuthorizationSubject",
     "SqlbotPermission",
+    "ApiKeyGridItem",
+    "ApiKeyRecord",
+    "ApiKeyStatus",
+    "ApikeyGridItem",
+    "ApikeyStatus",
+    "AuthenticationRecord",
+    "LogoutDTO",
+    "LogoutSchema",
     "EMAIL_REGEX",
     "PWD_REGEX",
     "BaseUser",

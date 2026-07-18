@@ -6,20 +6,72 @@ from typing import NoReturn
 from fastapi import HTTPException
 
 from apps.access_control.errors import (
+    ApiKeyLimitExceededError,
+    ApiKeyNotFoundError,
+    ApiKeyOwnershipError,
     CurrentPasswordMismatchError,
     DefaultWorkspaceCannotDeleteError,
+    InvalidCredentialsError,
     InvalidUserEmailError,
     InvalidUserPasswordError,
+    LocalLoginRequiredError,
     UnsupportedUserLanguageError,
     UnsupportedUserStatusError,
     UserAccountExistsError,
     UserAccountImmutableError,
+    UserInactiveError,
     UserNotFoundError,
+    UserWorkspaceRequiredError,
     WorkspaceMemberAlreadyExistsError,
     WorkspaceMemberNotFoundError,
     WorkspaceMembershipRequiredError,
     WorkspaceNotFoundError,
 )
+
+
+def raise_login_http_error(
+    exc: Exception,
+    trans: Callable[..., str],
+) -> NoReturn:
+    if isinstance(exc, InvalidCredentialsError):
+        raise HTTPException(
+            status_code=400,
+            detail=trans("i18n_login.account_pwd_error"),
+        ) from exc
+    if isinstance(exc, UserWorkspaceRequiredError):
+        raise HTTPException(
+            status_code=400,
+            detail=trans(
+                "i18n_login.no_associated_ws",
+                msg=trans("i18n_concat_admin"),
+            ),
+        ) from exc
+    if isinstance(exc, UserInactiveError):
+        raise HTTPException(
+            status_code=400,
+            detail=trans(
+                "i18n_login.user_disable",
+                msg=trans("i18n_concat_admin"),
+            ),
+        ) from exc
+    if isinstance(exc, LocalLoginRequiredError):
+        raise HTTPException(
+            status_code=400,
+            detail=trans("i18n_login.origin_error"),
+        ) from exc
+    raise exc
+
+
+def raise_api_key_http_error(exc: Exception) -> NoReturn:
+    if isinstance(exc, ApiKeyLimitExceededError):
+        raise ValueError(f"Maximum of {exc.limit} API keys allowed") from exc
+    if isinstance(exc, ApiKeyNotFoundError):
+        raise ValueError("API Key not found") from exc
+    if isinstance(exc, ApiKeyOwnershipError):
+        if exc.action == "modify":
+            raise PermissionError("No permission to modify this API Key") from exc
+        raise PermissionError("No permission to delete this API Key") from exc
+    raise exc
 
 
 def raise_identity_http_error(

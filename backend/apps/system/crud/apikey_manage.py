@@ -1,17 +1,6 @@
 
-from sqlmodel import select
+"""API Key 旧导入路径兼容层。"""
 
-from apps.system.models.system_model import ApiKeyModel
-from apps.system.schemas.auth import CacheName, CacheNamespace
-from common.core.deps import SessionDep
-from common.core.sqlbot_cache import cache, clear_cache
-from common.utils.utils import SQLBotLogUtil
+from apps.access_control.cache import clear_api_key_cache, get_api_key
 
-@cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.ASK_INFO, keyExpression="access_key")
-async def get_api_key(session: SessionDep, access_key: str) -> ApiKeyModel | None:
-    query = select(ApiKeyModel).where(ApiKeyModel.access_key == access_key)
-    return session.exec(query).first()
-
-@clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.ASK_INFO, keyExpression="access_key")
-async def clear_api_key_cache(access_key: str):
-     SQLBotLogUtil.info(f"Api key cache for [{access_key}] has been cleaned")
+__all__ = ["clear_api_key_cache", "get_api_key"]

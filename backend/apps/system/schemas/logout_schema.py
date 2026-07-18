@@ -1,9 +1,5 @@
-from typing import Optional
-from pydantic import BaseModel
+"""退出 DTO 旧导入路径兼容层。"""
 
+from apps.access_control.models.dto import LogoutSchema
 
-class LogoutSchema(BaseModel):
-    token: Optional[str] = None
-    flag: Optional[str] = 'default'
-    origin: Optional[int] = 0
-    data: Optional[str] = None
+__all__ = ["LogoutSchema"]

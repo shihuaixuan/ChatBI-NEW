@@ -1,12 +1,21 @@
 """Access Control 依赖组装入口。"""
 
+import secrets
 from functools import lru_cache
 
 from sqlmodel import Session
 
 from apps.access_control.repository import CompositeWorkspaceResourceScopeRepository
-from apps.access_control.repository.sqlmodel import SQLModelIdentityWorkspaceRepository
-from apps.access_control.services import AuthorizationService, IdentityWorkspaceService
+from apps.access_control.repository.sqlmodel import (
+    SQLModelApiKeyRepository,
+    SQLModelIdentityWorkspaceRepository,
+)
+from apps.access_control.services import (
+    ApiKeyService,
+    AuthenticationService,
+    AuthorizationService,
+    IdentityWorkspaceService,
+)
 from apps.chat.resource_scope import ChatWorkspaceResourceScopeReader
 from apps.datasource.resource_scope import DatasourceWorkspaceResourceScopeReader
 from common.core.security import default_md5_pwd, md5pwd, verify_md5pwd
@@ -32,4 +41,17 @@ def build_identity_workspace_service(session: Session) -> IdentityWorkspaceServi
         verify_password=verify_md5pwd,
         hash_password=md5pwd,
         default_password=default_md5_pwd,
+    )
+
+
+def build_authentication_service(session: Session) -> AuthenticationService:
+    return AuthenticationService(build_identity_workspace_service(session))
+
+
+def build_api_key_service(session: Session) -> ApiKeyService:
+    return ApiKeyService(
+        SQLModelApiKeyRepository(session),
+        build_identity_workspace_service(session),
+        generate_access_key=lambda: secrets.token_urlsafe(16),
+        generate_secret_key=lambda: secrets.token_urlsafe(32),
     )

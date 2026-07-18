@@ -4,21 +4,59 @@ from pydantic import BaseModel, Field
 
 from apps.access_control.models.dto import (
     EMAIL_REGEX as EMAIL_REGEX,
+)
+from apps.access_control.models.dto import (
     PWD_REGEX as PWD_REGEX,
+)
+from apps.access_control.models.dto import (
+    ApikeyGridItem as ApikeyGridItem,
+)
+from apps.access_control.models.dto import (
+    ApikeyStatus as ApikeyStatus,
+)
+from apps.access_control.models.dto import (
     BaseUser as BaseUser,
+)
+from apps.access_control.models.dto import (
     BaseUserDTO as BaseUserDTO,
+)
+from apps.access_control.models.dto import (
     PwdEditor as PwdEditor,
+)
+from apps.access_control.models.dto import (
     UserCreator as UserCreator,
+)
+from apps.access_control.models.dto import (
     UserEditor as UserEditor,
+)
+from apps.access_control.models.dto import (
     UserGrid as UserGrid,
+)
+from apps.access_control.models.dto import (
     UserInfoDTO as UserInfoDTO,
+)
+from apps.access_control.models.dto import (
     UserLanguage as UserLanguage,
+)
+from apps.access_control.models.dto import (
     UserStatus as UserStatus,
+)
+from apps.access_control.models.dto import (
     UserWs as UserWs,
+)
+from apps.access_control.models.dto import (
     UserWsBase as UserWsBase,
+)
+from apps.access_control.models.dto import (
     UserWsDTO as UserWsDTO,
+)
+from apps.access_control.models.dto import (
     UserWsEditor as UserWsEditor,
+)
+from apps.access_control.models.dto import (
     UserWsOption as UserWsOption,
+)
+from apps.access_control.models.dto import (
     WorkspaceUser as WorkspaceUser,
 )
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
@@ -121,13 +159,3 @@ class AssistantUiSchema(BaseCreatorDTO):
     name: Optional[str] = None
     welcome: Optional[str] = None
     welcome_desc: Optional[str] = None
-
-class ApikeyStatus(BaseModel):
-    id: int = Field(description=f"{PLACEHOLDER_PREFIX}id")
-    status: bool = Field(description=f"{PLACEHOLDER_PREFIX}status")
-
-class ApikeyGridItem(BaseCreatorDTO):
-    access_key: str = Field(description=f"Access Key")
-    secret_key: str = Field(description=f"Secret Key")
-    status: bool = Field(description=f"{PLACEHOLDER_PREFIX}status")
-    create_time: int = Field(description=f"{PLACEHOLDER_PREFIX}create_time")
