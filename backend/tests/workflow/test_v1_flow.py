@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from typing import Any, cast
 
+from apps.access_control.data_policy import SessionDataPolicyProvider
 from apps.retrieval.service import RetrievalService
 from apps.workflow import runtime as chatbi_runtime
 from apps.workflow.capabilities.adapters.knowledge import (
@@ -1048,3 +1049,7 @@ def test_real_chatbi_v1_runtime_injects_session_backed_knowledge_adapter(monkeyp
     knowledge_adapter = captured["knowledge_adapter"]
     assert isinstance(knowledge_adapter, SemanticKnowledgeAdapter)
     assert knowledge_adapter._retrieval_service is not None
+    policy_provider = (
+        captured["sql_adapter"]._permission_adapter._policy_provider
+    )
+    assert isinstance(policy_provider, SessionDataPolicyProvider)

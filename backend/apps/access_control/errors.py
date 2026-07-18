@@ -96,9 +96,7 @@ class WorkspaceMembershipRequiredError(AccessControlError):
     def __init__(self, workspace_id: int, workspace_name: str) -> None:
         self.workspace_id = workspace_id
         self.workspace_name = workspace_name
-        super().__init__(
-            f"ACCESS_CONTROL_WORKSPACE_MEMBERSHIP_REQUIRED:{workspace_id}"
-        )
+        super().__init__(f"ACCESS_CONTROL_WORKSPACE_MEMBERSHIP_REQUIRED:{workspace_id}")
 
 
 class DefaultWorkspaceCannotDeleteError(AccessControlError):
@@ -166,3 +164,43 @@ class ApiKeyOwnershipError(AccessControlError):
     def __init__(self, action: str) -> None:
         self.action = action
         super().__init__(f"ACCESS_CONTROL_API_KEY_OWNERSHIP_REQUIRED:{action}")
+
+
+class AccessVariableNotFoundError(AccessControlError):
+    def __init__(self, variable_id: int) -> None:
+        self.variable_id = variable_id
+        super().__init__(f"ACCESS_CONTROL_VARIABLE_NOT_FOUND:{variable_id}")
+
+
+class AccessVariableNameExistsError(AccessControlError):
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(f"ACCESS_CONTROL_VARIABLE_NAME_EXISTS:{name}")
+
+
+class AccessVariableDefinitionError(AccessControlError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"ACCESS_CONTROL_VARIABLE_INVALID:{reason}")
+
+
+class AccessVariableSystemMutationError(AccessControlError):
+    def __init__(self, variable_id: int) -> None:
+        super().__init__(f"ACCESS_CONTROL_SYSTEM_VARIABLE_IMMUTABLE:{variable_id}")
+
+
+class UserVariableAssignmentError(AccessControlError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"ACCESS_CONTROL_USER_VARIABLE_INVALID:{reason}")
+
+
+class DataPolicyConfigurationError(AccessControlError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"ACCESS_CONTROL_DATA_POLICY_INVALID:{reason}")
+
+
+class DataPolicyDatasourceNotFoundError(AccessControlError):
+    def __init__(self, datasource_id: int, workspace_id: int) -> None:
+        super().__init__(
+            f"ACCESS_CONTROL_DATA_POLICY_DATASOURCE_NOT_FOUND:"
+            f"{datasource_id}:{workspace_id}"
+        )

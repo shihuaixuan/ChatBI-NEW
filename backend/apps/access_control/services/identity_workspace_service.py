@@ -27,6 +27,7 @@ from apps.access_control.models.dto import (
     UserGrid,
     UserInfoDTO,
     UserRecord,
+    UserVariableAssignment,
     UserWs,
     UserWsOption,
     WorkspaceBase,
@@ -53,11 +54,16 @@ class IdentityWorkspaceService:
         verify_password: Callable[[str, str], bool],
         hash_password: Callable[[str], str],
         default_password: Callable[[], str],
+        normalize_variable_assignments: Callable[
+            [list[UserVariableAssignment] | None],
+            list[UserVariableAssignment],
+        ],
     ) -> None:
         self._repository = repository
         self._verify_password = verify_password
         self._hash_password = hash_password
         self._default_password = default_password
+        self._normalize_variable_assignments = normalize_variable_assignments
 
     def get_user(self, user_id: int) -> UserRecord:
         user = self._repository.get_user(user_id)
@@ -118,7 +124,9 @@ class IdentityWorkspaceService:
     def get_user_detail(self, user_id: int) -> UserEditor:
         user = self.get_user(user_id)
         detail = UserEditor.model_validate(user.model_dump())
-        detail.oid_list = [item.id for item in self._repository.list_user_workspaces(user_id)]
+        detail.oid_list = [
+            item.id for item in self._repository.list_user_workspaces(user_id)
+        ]
         return detail
 
     def create_user(self, creator: UserCreator) -> UserRecord:
@@ -129,7 +137,16 @@ class IdentityWorkspaceService:
         self._ensure_workspaces_exist(workspace_ids)
         # 历史接口允许 origin 传 null，持久化前统一为本地来源。
         normalized_creator = (
-            creator if creator.origin is not None else creator.model_copy(update={"origin": 0})
+            creator
+            if creator.origin is not None
+            else creator.model_copy(update={"origin": 0})
+        )
+        normalized_creator = normalized_creator.model_copy(
+            update={
+                "system_variables": self._normalize_variable_assignments(
+                    normalized_creator.system_variables
+                )
+            }
         )
         return self._repository.create_user(normalized_creator, workspace_ids)
 
@@ -141,8 +158,18 @@ class IdentityWorkspaceService:
         workspace_ids = list(dict.fromkeys(editor.oid_list or []))
         self._ensure_workspaces_exist(workspace_ids)
         normalized_editor = (
-            editor if editor.origin is not None else editor.model_copy(update={"origin": 0})
+            editor
+            if editor.origin is not None
+            else editor.model_copy(update={"origin": 0})
         )
+        if "system_variables" in editor.model_fields_set:
+            normalized_editor = normalized_editor.model_copy(
+                update={
+                    "system_variables": self._normalize_variable_assignments(
+                        normalized_editor.system_variables
+                    )
+                }
+            )
         updated = self._repository.update_user(normalized_editor, workspace_ids)
         if updated is None:
             raise UserNotFoundError(editor.id)

@@ -6,6 +6,10 @@ from typing import NoReturn
 from fastapi import HTTPException
 
 from apps.access_control.errors import (
+    AccessVariableDefinitionError,
+    AccessVariableNameExistsError,
+    AccessVariableNotFoundError,
+    AccessVariableSystemMutationError,
     ApiKeyLimitExceededError,
     ApiKeyNotFoundError,
     ApiKeyOwnershipError,
@@ -21,6 +25,7 @@ from apps.access_control.errors import (
     UserAccountImmutableError,
     UserInactiveError,
     UserNotFoundError,
+    UserVariableAssignmentError,
     UserWorkspaceRequiredError,
     WorkspaceMemberAlreadyExistsError,
     WorkspaceMemberNotFoundError,
@@ -100,9 +105,7 @@ def raise_identity_http_error(
             detail=f"User with id [{exc.user_id}] not found!",
         ) from exc
     if isinstance(exc, WorkspaceMembershipRequiredError):
-        raise Exception(
-            trans("i18n_user.ws_miss", ws=exc.workspace_name)
-        ) from exc
+        raise Exception(trans("i18n_user.ws_miss", ws=exc.workspace_name)) from exc
     if isinstance(exc, WorkspaceNotFoundError):
         raise HTTPException(
             status_code=404,
@@ -132,4 +135,26 @@ def raise_identity_http_error(
         raise Exception(trans("i18n_error", key=trans("i18n_user.password"))) from exc
     if isinstance(exc, UnsupportedUserStatusError):
         raise HTTPException(status_code=422, detail="status not supported") from exc
+    if isinstance(exc, AccessVariableNotFoundError):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, (AccessVariableDefinitionError, UserVariableAssignmentError)):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    raise exc
+
+
+def raise_variable_http_error(
+    exc: Exception,
+    trans: Callable[..., str],
+) -> NoReturn:
+    if isinstance(exc, AccessVariableNameExistsError):
+        raise HTTPException(
+            status_code=500,
+            detail=trans("i18n_variable.name_exist"),
+        ) from exc
+    if isinstance(exc, AccessVariableNotFoundError):
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, AccessVariableSystemMutationError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, AccessVariableDefinitionError):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     raise exc

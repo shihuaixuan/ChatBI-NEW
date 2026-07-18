@@ -656,8 +656,8 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 截至 2026-07-18，已新增 `tests/architecture/test_dependency_baseline.py` 和
 `tests/architecture/known_dependency_violations.json`，完成以下依赖基线：
 
-- P0 初始记录 40 条跨领域内部模型依赖；P1、P2 累计清理 11 条后当前为 29 条。
-- P0 初始记录 29 条跨领域具体实现依赖；P1、P2 累计清理 9 条后当前为 20 条。
+- P0 初始记录 40 条跨领域内部模型依赖；P1、P2 累计清理 12 条后当前为 28 条。
+- P0 初始记录 29 条跨领域具体实现依赖；P1、P2 累计清理 10 条后当前为 19 条。
 - 1 条跨领域 API 依赖。
 - 6 条 Workflow Engine 对业务模块的依赖。
 - P0 初始记录 10 条函数内部业务模块导入；P1 清理 1 条后当前为 9 条。
@@ -676,7 +676,7 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 | 数据集 Schema | `semantic.services.schema_service.SemanticSchemaService` | 作为唯一 Schema 读取 Service | 调用方直接使用 Semantic Repository 或 ORM 拼装 Schema |
 | 语义 SQL 编译 | `semantic.services.sql_compiler.SemanticSQLCompiler` | 作为唯一编译器；ChatBI 统一组装编译请求 | Graph、Agent 和旧 Chat 各自生成规则 SQL |
 | SQL 校验 | `capabilities.sql.validator.SqlValidateTool` | 迁入 ChatBI SQL Service 并由所有执行方式共享 | 在 Adapter 或 Agent Tool 中复制校验规则 |
-| 数据权限 | 旧 Chat 行列权限已有真实数据源；`PermissionAdapter` 有结构化改写能力，但默认 Provider 尚未接入 | 保留真实权限数据读取，接入 Access Control Policy Provider 后统一由 ChatBI 应用；未接入前不能宣称 Graph 和 Agent 权限等价 | 默认透传的 `PermissionTool` 作为正式权限实现 |
+| 数据权限 | `DataPolicyService` 统一解析真实行列权限和变量，旧 Chat、Datasource 预览及 Graph 运行时均使用 Access Control 公开入口 | 后续由 ChatBI 统一 SQL Service 消费稳定数据策略 DTO，Agent 迁移时必须接入同一入口 | 默认透传的 `PermissionTool`、旧 `datasource.crud.permission` 和独立变量解析 |
 | SQL 执行 | `apps.db.db.exec_sql`、`SqlExecuteTool`、`SessionSqlExecutionGateway` | 建立 Datasource 查询网关作为唯一底层执行入口，ChatBI 统一串联权限和校验 | 旧 Chat、Graph、Agent 直接调用数据库函数 |
 | 时间范围标准化 | `capabilities.time_slots` | 迁入 ChatBI 公共规则并保持一个实现 | Workflow Adapter 和问题理解各自维护时间规则 |
 | 回答生成 | 旧 Chat 和 Graph `AnswerAdapter` 均有实现 | 先定义统一 Answer DTO，再提取 ChatBI AnswerService；迁移前不增加第三套实现 | Agent、Graph 节点中继续增加独立回答规则 |
@@ -834,7 +834,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 ### 6.3 阶段 P2：拆分 Access Control、AI Model 和 Assistant
 
-**实施状态：进行中**
+**实施状态：已完成**
 
 截至 2026-07-18，三个领域的第一轮边界确认如下：
 
@@ -904,6 +904,25 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     工作空间校验。新增 091 数据库迁移，为 `access_key` 建立唯一约束、为 `uid` 建立查询索引；
     升级前显式拦截重复 Key、孤立用户引用和历史超限数据。
 
+本阶段已完成 Access Control 数据策略和权限变量迁移：
+
+1. 新增权限变量 DTO、仓储端口、SQLModel 仓储和 `AccessVariableService`。变量名称、类型、定义范围、
+   系统变量不可修改以及用户绑定值范围由 Service 统一校验；用户创建和更新不再直接保存未校验变量值。
+2. `system_variable` ORM 与 4 个 `/sys_variable` 路由已迁入 Access Control，旧 System 模型路径只转发
+   同一对象，旧 API 和 CRUD 已删除。删除操作现在提交事务，系统内置变量不能被修改或删除。
+3. 新增稳定的 `DataPolicy`、行过滤表达式和禁止列 DTO，以及 `DataPolicyRepository` 和
+   `DataPolicyService`。规则、白名单、字段、变量和条件配置异常均明确失败，不再跳过无效条件后放大访问范围。
+4. 行权限 SQL 值统一转义，数据库标识符按方言转义；自定义变量绑定必须满足定义范围，姓名、账号和邮箱
+   系统变量只从已认证调用者读取。列权限中的无效 `enable` 值和未知过滤类型会明确拒绝。
+5. Datasource 通过公开的物理表字段目录向 Access Control 提供最小元数据契约；Access Control 仓储只读取
+   自身所需权限事实，不再导入 XPack 权限 ORM，消除了由外部模型初始化引起的循环导入。
+6. Datasource 预览和表结构、旧 Chat 行权限以及 Graph v1 `PermissionAdapter` 已接入同一数据策略入口；
+   缺少身份、工作空间或数据源信息，以及 Provider 返回结构错误时 Graph 明确拒绝，不使用默认放行。
+7. 删除旧 `datasource/crud/permission.py` 和 `row_permission.py`，架构基线同步减少 1 条跨领域内部模型依赖
+   和 1 条跨领域具体实现依赖。
+8. 新增 093 数据库迁移，为权限变量增加非空数组、非空名称、类型、创建人和名称唯一约束，以及类型名称
+   查询索引；升级前对历史数据逐项预检，不自动修复不明确数据。
+
 本阶段已完成 Assistant 迁移：
 
 1. 新建 `apps/assistant`，按 ORM、DTO、仓储端口、SQLModel 仓储、Service、外部 HTTP 适配和 API
@@ -936,7 +955,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 1. 创建 `access_control`，统一授权、用户、工作空间、成员关系、认证配置和 API Key 已完成。
 2. 把 `require_permissions` 中的数据库查询改为统一授权 Service 调用。已完成。
-3. 将行列权限和变量解析迁入 Access Control，输出稳定的数据策略 DTO。
+3. 将行列权限和变量解析迁入 Access Control，输出稳定的数据策略 DTO。已完成。
 4. 合并 `system` 中 AI 模型 ORM/API 与现有 `apps/ai_model`。ORM、API、DTO 和管理流程已迁移；
    System 仅保留 XPack 和旧导入路径需要的兼容引用。
 5. 为模型配置建立仓储接口，模型工厂不再直接查询 System ORM。运行时读取链路已完成。
@@ -974,8 +993,13 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 - 092 已完成真实升级、降级和再升级验证；当前本地数据库位于 092，助手类型检查、应用标识和应用密钥
   唯一约束、工作空间非空约束及工作空间类型索引已经过数据库反射确认。
 - 应用导入和 OpenAPI 构建通过，共生成 154 个路径；数据源、AI 模型、工作空间和术语等受保护路由均保留。
-- 完整后端回归 698 项通过；架构守卫确认本批移除 3 条跨领域内部模型依赖和 4 条跨领域具体实现依赖，
-  且未新增违规项。
+- Access Control 数据策略、变量、身份绑定和 Workflow 权限调用方定向测试 29 项通过；新增领域代码通过
+  Ruff，15 个核心 DTO、仓储、Service、组装入口和 Datasource 公开契约通过严格 Mypy 检查。
+- 093 已完成真实升级、降级和再升级验证；当前本地数据库位于 093，5 个检查约束、名称唯一约束和
+  类型名称索引已经过数据库反射确认，3 条内置变量数据保持完整。
+- 完整应用导入和 OpenAPI 构建继续生成 154 个路径，4 个 `/sys_variable` 路由均归属 Access Control。
+- 完整后端回归 716 项通过；架构守卫当前记录 28 条跨领域内部模型依赖和 19 条跨领域具体实现依赖，
+  本批各减少 1 条且未新增违规项。
 
 ### 6.4 阶段 P3：收敛 Datasource 与数据库连接实现
 

@@ -1,5 +1,14 @@
 """Access Control DTO 稳定导出。"""
 
+from apps.access_control.models.dto.access_variable import (
+    AccessVariableCreateData,
+    AccessVariableFilter,
+    AccessVariableInput,
+    AccessVariableRecord,
+    AccessVariableUpdateData,
+    AccessVariableValue,
+    UserVariableAssignment,
+)
 from apps.access_control.models.dto.authentication import (
     ApiKeyGridItem,
     ApikeyGridItem,
@@ -14,6 +23,16 @@ from apps.access_control.models.dto.authorization import (
     AuthorizationRequirement,
     AuthorizationSubject,
     SqlbotPermission,
+)
+from apps.access_control.models.dto.data_policy import (
+    DataPolicy,
+    DataPolicyDeniedColumn,
+    DataPolicyExpression,
+    DataPolicyPredicate,
+    DataPolicyRowFilter,
+    DataPolicySubject,
+    StoredDataPermission,
+    StoredDataRule,
 )
 from apps.access_control.models.dto.identity import (
     EMAIL_REGEX,
@@ -45,6 +64,21 @@ __all__ = [
     "AuthorizationRequirement",
     "AuthorizationSubject",
     "SqlbotPermission",
+    "AccessVariableCreateData",
+    "AccessVariableFilter",
+    "AccessVariableInput",
+    "AccessVariableRecord",
+    "AccessVariableUpdateData",
+    "AccessVariableValue",
+    "UserVariableAssignment",
+    "DataPolicy",
+    "DataPolicyDeniedColumn",
+    "DataPolicyExpression",
+    "DataPolicyPredicate",
+    "DataPolicyRowFilter",
+    "DataPolicySubject",
+    "StoredDataPermission",
+    "StoredDataRule",
     "ApiKeyGridItem",
     "ApiKeyRecord",
     "ApiKeyStatus",

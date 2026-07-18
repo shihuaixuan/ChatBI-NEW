@@ -1,5 +1,6 @@
 from sqlmodel import Session
 
+from apps.access_control.data_policy import SessionDataPolicyProvider
 from apps.capabilities.sql.executor import SqlExecuteTool
 from apps.retrieval.service import build_retrieval_service
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
@@ -14,6 +15,7 @@ from apps.workflow.capabilities.adapters.interaction import (
 from apps.workflow.capabilities.adapters.knowledge import (
     SemanticKnowledgeAdapter,
 )
+from apps.workflow.capabilities.adapters.permission import PermissionAdapter
 from apps.workflow.capabilities.adapters.question import (
     QuestionAdapter,
     QuestionClassificationModelClient,
@@ -131,6 +133,9 @@ def build_real_chatbi_v1_runtime(
             execute_tool=SessionSqlExecutionGateway(
                 session_factory,
                 execute_tool_factory=SqlExecuteTool,
+            ),
+            permission_adapter=PermissionAdapter(
+                policy_provider=SessionDataPolicyProvider(session_factory)
             ),
             artifact_store=artifact_store,
         ),

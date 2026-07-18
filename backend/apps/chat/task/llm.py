@@ -28,6 +28,7 @@ from sqlbot_xpack.custom_prompt.models.custom_prompt_model import CustomPromptTy
 from sqlbot_xpack.license.license_manage import SQLBotLicenseUtil
 from sqlmodel import Session
 
+from apps.access_control.data_policy import requires_data_policy, resolve_data_policy
 from apps.ai_model.model_factory import LLMConfig, LLMFactory, get_default_config
 from apps.assistant import AssistantOutDsSchema
 from apps.assistant.public import (
@@ -82,7 +83,6 @@ from apps.chat.services.semantic_binding import DYNAMIC_DATASOURCE_ASSISTANT_TYP
 from apps.chat.services.term_context import ChatTermContextService
 from apps.data_training.curd.data_training import get_training_template
 from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data
-from apps.datasource.crud.permission import get_row_permission_filters, is_normal_user
 from apps.datasource.embedding.ds_embedding import get_ds_embedding
 from apps.datasource.models.datasource import CoreDatasource
 from apps.db.db import check_connection, exec_sql, get_version
@@ -931,8 +931,17 @@ class LLMService:
         return full_filter_text
 
     def generate_filter(self, _session: Session, sql: str, tables: List):
-        filters = get_row_permission_filters(session=_session, current_user=self.current_user, ds=self.ds,
-                                             tables=tables)
+        # 行权限只通过 Access Control 的公开数据策略解析。
+        policy = resolve_data_policy(
+            _session,
+            self.current_user,
+            self.ds.id,
+            table_names=tables,
+        )
+        filters = [
+            {"table": item.table, "filter": item.condition}
+            for item in policy.row_filters
+        ]
         if not filters:
             return None
         return self.build_table_filter(session=_session, sql=sql, filters=filters)
@@ -1319,7 +1328,7 @@ class LLMService:
 
             sql_operate = OperationEnum.GENERATE_SQL
             sql, tables = self.check_sql(session=_session, res=full_sql_text, operate=sql_operate)
-            if ((not self.current_assistant or is_page_embedded) and is_normal_user(
+            if ((not self.current_assistant or is_page_embedded) and requires_data_policy(
                     self.current_user)) or use_dynamic_ds:
                 sql_result = None
 

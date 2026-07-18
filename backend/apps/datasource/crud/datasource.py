@@ -4,14 +4,9 @@ from typing import List, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import and_, text
-from sqlbot_xpack.permissions.models.ds_rules import DsRules
 from sqlmodel import select
 
-from apps.datasource.crud.permission import (
-    get_column_permission_fields,
-    get_row_permission_filters,
-    is_normal_user,
-)
+from apps.access_control.data_policy import resolve_data_policy
 from apps.datasource.embedding.table_embedding import calc_table_embedding
 from apps.datasource.utils.utils import aes_decrypt
 from apps.db.constant import DB
@@ -324,20 +319,21 @@ def preview(session: SessionDep, current_user: CurrentUser, id: int, data: Table
 
     where = ''
     f_list = [f for f in fields if f.checked]
-    if is_normal_user(current_user):
-        # column is checked, and, column permission for data.fields
-        contain_rules = session.query(DsRules).all()
-        f_list = get_column_permission_fields(session=session, current_user=current_user, table=data.table,
-                                              fields=f_list, contain_rules=contain_rules)
-
-        # row permission tree
-        where_str = ''
-        filter_mapping = get_row_permission_filters(session=session, current_user=current_user, ds=ds, tables=None,
-                                                    single_table=data.table)
-        if filter_mapping:
-            mapping_dict = filter_mapping[0]
-            where_str = mapping_dict.get('filter')
-        where = (' where ' + where_str) if where_str is not None and where_str != '' else ''
+    # 预览的行列权限统一由 Access Control 计算。
+    policy = resolve_data_policy(
+        session,
+        current_user,
+        id,
+        table_id=data.table.id,
+    )
+    denied_field_ids = {item.field_id for item in policy.denied_columns}
+    f_list = [field for field in f_list if field.id not in denied_field_ids]
+    row_filter = next(
+        (item for item in policy.row_filters if item.table_id == data.table.id),
+        None,
+    )
+    if row_filter:
+        where = f' where {row_filter.condition}'
 
     fields = [f.field_name for f in f_list]
     if fields is None or len(fields) == 0:
@@ -438,14 +434,23 @@ def get_table_obj_by_ds(session: SessionDep, current_user: CurrentUser, ds: Core
         else:
             fields_dict[field.table_id] = [field]
 
-    contain_rules = session.query(DsRules).all()
+    # 表结构暴露前统一应用列权限。
+    policy = resolve_data_policy(
+        session,
+        current_user,
+        ds.id,
+        table_names=[table.table_name for table in tables],
+    )
+    denied_by_table: dict[int, set[int]] = {}
+    for denied in policy.denied_columns:
+        denied_by_table.setdefault(denied.table_id, set()).add(denied.field_id)
     for table in tables:
         # fields = session.query(CoreField).filter(and_(CoreField.table_id == table.id, CoreField.checked == True)).all()
-        fields = fields_dict.get(table.id)
-
-        # do column permissions, filter fields
-        fields = get_column_permission_fields(session=session, current_user=current_user, table=table, fields=fields,
-                                              contain_rules=contain_rules)
+        fields = [
+            field
+            for field in fields_dict.get(table.id, [])
+            if field.id not in denied_by_table.get(table.id, set())
+        ]
         _list.append(TableAndFields(schema=schema, table=table, fields=fields))
     return _list
 

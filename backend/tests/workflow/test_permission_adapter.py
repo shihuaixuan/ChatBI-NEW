@@ -126,3 +126,26 @@ def test_permission_adapter_denies_when_permission_tool_fails():
         "sql": None,
         "error_code": "permission_denied",
     }
+
+
+def test_permission_adapter_denies_malformed_provider_policy():
+    tool = FakePermissionTool(
+        SimpleNamespace(success=True, payload={}, error_code=None, message=None)
+    )
+    provider = FakePolicyProvider(
+        {
+            "row_filters": {"table": "orders", "condition": "tenant_id = 1"},
+            "denied_columns": [],
+        }
+    )
+    adapter = PermissionAdapter(permission_tool=tool, policy_provider=provider)
+
+    result = adapter.apply({"sql": "select * from orders", "datasource_id": 7})
+
+    assert result == {
+        "allowed": False,
+        "reason": "权限策略格式错误",
+        "sql": None,
+        "error_code": "permission_policy_invalid",
+    }
+    assert tool.payloads == []

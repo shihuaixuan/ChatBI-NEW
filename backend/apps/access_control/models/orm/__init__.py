@@ -1,5 +1,6 @@
 """Access Control ORM 稳定导出。"""
 
+from apps.access_control.models.orm.access_variable import AccessVariableModel
 from apps.access_control.models.orm.api_key import ApiKeyBaseModel, ApiKeyModel
 from apps.access_control.models.orm.authentication import (
     AuthenticationBaseModel,
@@ -21,6 +22,7 @@ from apps.access_control.models.orm.workspace import (
 __all__ = [
     "ApiKeyBaseModel",
     "ApiKeyModel",
+    "AccessVariableModel",
     "AuthenticationBaseModel",
     "AuthenticationModel",
     "BaseUserPO",

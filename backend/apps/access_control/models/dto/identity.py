@@ -1,10 +1,10 @@
 """用户身份与管理 DTO。"""
 
 import re
-from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from apps.access_control.models.dto.access_variable import UserVariableAssignment
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from common.core.schemas import BaseCreatorDTO
 
@@ -72,7 +72,7 @@ class UserCreator(BaseUser):
         default=None,
         description=f"{PLACEHOLDER_PREFIX}oid",
     )
-    system_variables: list[Any] | None = Field(default_factory=list)
+    system_variables: list[UserVariableAssignment] | None = Field(default_factory=list)
 
 
 class UserEditor(UserCreator, BaseCreatorDTO):
@@ -100,7 +100,7 @@ class UserRecord(BaseModel):
     origin: int
     create_time: int
     language: str
-    system_variables: list[Any] | None = None
+    system_variables: list[UserVariableAssignment] | None = None
 
 
 class PwdEditor(BaseModel):
@@ -112,4 +112,3 @@ class UserInfoDTO(UserEditor):
     language: str = "zh-CN"
     weight: int = 0
     isAdmin: bool = False
-

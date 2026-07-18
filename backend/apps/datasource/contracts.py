@@ -63,3 +63,37 @@ class DatasourceCatalog(Protocol):
         workspace_id: int,
         datasource_ids: list[int] | None = None,
     ) -> list[DatasourceSummary]: ...
+
+
+class DatasourcePolicyField(BaseModel):
+    id: int
+    name: str
+    data_type: str | None = None
+
+
+class DatasourcePolicyTable(BaseModel):
+    id: int
+    name: str
+    fields: list[DatasourcePolicyField]
+
+
+class DatasourcePolicySchema(BaseModel):
+    id: int
+    workspace_id: int
+    database_type: str
+    identifier_prefix: str
+    identifier_suffix: str
+    tables: list[DatasourcePolicyTable]
+
+
+class DatasourcePolicyCatalog(Protocol):
+    """Access Control 读取数据源物理标识时使用的公开契约。"""
+
+    def get_policy_schema(
+        self,
+        workspace_id: int,
+        datasource_id: int,
+        *,
+        table_names: list[str] | None = None,
+        table_id: int | None = None,
+    ) -> DatasourcePolicySchema | None: ...

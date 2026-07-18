@@ -202,7 +202,7 @@ class SQLModelIdentityWorkspaceRepository:
         creator: UserCreator,
         workspace_ids: list[int],
     ) -> UserRecord:
-        data = creator.model_dump(exclude={"oid", "oid_list"})
+        data = creator.model_dump(exclude={"oid", "oid_list"}, by_alias=True)
         user = UserModel.model_validate(data)
         user.language = "zh-CN"
         user.oid = workspace_ids[0] if workspace_ids else 0
@@ -211,7 +211,10 @@ class SQLModelIdentityWorkspaceRepository:
         if user.id is None:
             raise RuntimeError("ACCESS_CONTROL_USER_ID_NOT_GENERATED")
         self._session.add_all(
-            [UserWsModel(uid=user.id, oid=workspace_id, weight=0) for workspace_id in workspace_ids]
+            [
+                UserWsModel(uid=user.id, oid=workspace_id, weight=0)
+                for workspace_id in workspace_ids
+            ]
         )
         self._session.commit()
         self._session.refresh(user)
@@ -249,7 +252,11 @@ class SQLModelIdentityWorkspaceRepository:
             )
 
         user.sqlmodel_update(
-            editor.model_dump(exclude_unset=True, exclude={"id", "oid", "oid_list"})
+            editor.model_dump(
+                exclude_unset=True,
+                exclude={"id", "oid", "oid_list"},
+                by_alias=True,
+            )
         )
         if user.oid not in new_workspace_ids:
             user.oid = workspace_ids[0] if workspace_ids else 0

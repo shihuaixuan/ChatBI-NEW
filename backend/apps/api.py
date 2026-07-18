@@ -3,6 +3,7 @@ from sqlbot_xpack.authentication import api as xpack_authentication
 from sqlbot_xpack.config import api as xpack_config
 from sqlbot_xpack.license import api as xpack_license
 
+from apps.access_control.api import access_variable
 from apps.access_control.api import api_key as access_api_key
 from apps.access_control.api import login as access_login
 from apps.access_control.api import user as access_user
@@ -18,7 +19,7 @@ from apps.mcp import mcp
 from apps.semantic.api import legacy_terms
 from apps.semantic.api.router import router as semantic_router
 from apps.settings.api import base
-from apps.system.api import parameter, user, variable_api
+from apps.system.api import parameter, user
 from apps.workflow_engine.api import router as graph_workflow
 
 #from audit.api import audit_api
@@ -44,7 +45,7 @@ api_router.include_router(access_api_key.router)
 
 api_router.include_router(recommended_problem.router)
 
-api_router.include_router(variable_api.router)
+api_router.include_router(access_variable.router)
 api_router.include_router(legacy_terms.router)
 api_router.include_router(semantic_router)
 api_router.include_router(graph_workflow.router)

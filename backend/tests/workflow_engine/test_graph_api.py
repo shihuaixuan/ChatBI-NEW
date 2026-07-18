@@ -78,6 +78,28 @@ def _fake_chatbi_v1_sql_execute_tool(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fake_chatbi_v1_data_policy_provider(monkeypatch):
+    class FakeDataPolicyProvider:
+        """Graph API 测试显式使用固定允许策略。"""
+
+        def __init__(self, session_factory) -> None:
+            self.session_factory = session_factory
+
+        def get_policy(self, payload: dict) -> dict:
+            return {
+                "allowed": True,
+                "row_filters": [],
+                "denied_columns": [],
+            }
+
+    monkeypatch.setattr(
+        chatbi_runtime,
+        "SessionDataPolicyProvider",
+        FakeDataPolicyProvider,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _fake_chatbi_v1_question_model(monkeypatch, tmp_path):
     class FakeQuestionModelClient:
         def __call__(self, prompt):

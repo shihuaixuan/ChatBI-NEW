@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import sqlglot
 from sqlglot import exp
@@ -62,9 +62,36 @@ class PermissionAdapter:
         if self._policy_provider is None:
             return {"allowed": True, "row_filters": [], "denied_columns": []}
         policy = self._policy_provider.get_policy(payload)
-        if not isinstance(policy, dict):
-            return {"allowed": False, "reason": "权限策略格式错误", "error_code": "permission_policy_invalid"}
+        if not self._valid_policy(policy):
+            return {
+                "allowed": False,
+                "reason": "权限策略格式错误",
+                "error_code": "permission_policy_invalid",
+            }
         return policy
+
+    @staticmethod
+    def _valid_policy(policy: object) -> bool:
+        if not isinstance(policy, dict) or not isinstance(policy.get("allowed"), bool):
+            return False
+        if policy["allowed"] is False:
+            return True
+        row_filters = policy.get("row_filters")
+        denied_columns = policy.get("denied_columns")
+        if not isinstance(row_filters, list) or not isinstance(denied_columns, list):
+            return False
+        if any(
+            not isinstance(item, dict)
+            or not str(item.get("table") or "").strip()
+            or not str(item.get("condition") or "").strip()
+            for item in row_filters
+        ):
+            return False
+        return not any(
+            not isinstance(item, dict)
+            or not str(item.get("column") or "").strip()
+            for item in denied_columns
+        )
 
     def _tool_result(self, original_sql: str, result: ToolResult) -> dict[str, Any]:
         if not result.success:
@@ -88,6 +115,8 @@ class PermissionAdapter:
             return sql
         try:
             expression = sqlglot.parse_one(sql)
+            if not isinstance(expression, exp.Query):
+                raise ValueError("PERMISSION_SQL_QUERY_REQUIRED")
         except Exception as exc:
             raise ValueError("PERMISSION_SQL_PARSE_FAILED") from exc
         for row_filter in filters:
@@ -105,7 +134,7 @@ class PermissionAdapter:
         return expression.sql()
 
     @staticmethod
-    def _table_alias(expression: exp.Expression, table_name: str) -> str | None:
+    def _table_alias(expression: exp.Expr, table_name: str) -> str | None:
         for table in expression.find_all(exp.Table):
             if table.name == table_name:
                 return table.alias_or_name
@@ -127,7 +156,7 @@ class PermissionAdapter:
         if not denied:
             return None
         try:
-            expression = sqlglot.parse_one(sql)
+            expression = cast(exp.Expression, sqlglot.parse_one(sql))
         except Exception as exc:
             raise ValueError("PERMISSION_SQL_PARSE_FAILED") from exc
         for column in expression.find_all(exp.Column):
