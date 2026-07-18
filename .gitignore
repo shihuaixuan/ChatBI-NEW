@@ -18,6 +18,8 @@ backend/tests/*
 !backend/tests/agent/**
 !backend/tests/ai_model/
 !backend/tests/ai_model/**
+!backend/tests/access_control/
+!backend/tests/access_control/**
 !backend/tests/capabilities/
 !backend/tests/capabilities/**
 !backend/tests/architecture/

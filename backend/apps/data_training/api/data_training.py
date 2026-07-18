@@ -15,7 +15,7 @@ from apps.data_training.curd.data_training import page_data_training, create_tra
     enable_training, get_all_data_training, batch_create_training
 from apps.data_training.models.data_training_model import DataTrainingInfo
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
-from apps.system.schemas.permission import SqlbotPermission, require_permissions
+from apps.access_control.permission import SqlbotPermission, require_permissions
 from common.core.config import settings
 from common.core.deps import SessionDep, CurrentUser, Trans
 from common.utils.data_format import DataFormat

@@ -15,7 +15,7 @@ from apps.system.crud.assistant import AssistantOutDs, AssistantOutDsFactory, ge
 from apps.system.crud.assistant_manage import dynamic_upgrade_cors, save
 from apps.system.models.system_model import AssistantModel
 from apps.system.schemas.auth import CacheName, CacheNamespace
-from apps.system.schemas.permission import SqlbotPermission, require_permissions
+from apps.access_control.permission import SqlbotPermission, require_permissions
 from apps.system.schemas.system_schema import AssistantBase, AssistantDTO, AssistantUiSchema, AssistantValidator
 from common.core.config import settings
 from common.core.deps import CurrentAssistant, SessionDep, Trans, CurrentUser
@@ -277,4 +277,3 @@ async def delete(request: Request, session: SessionDep, id: int = Path(descripti
     session.delete(db_model)
     session.commit()
     dynamic_upgrade_cors(request=request, session=session)
-

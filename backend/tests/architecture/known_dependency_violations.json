@@ -31,8 +31,6 @@
     "apps/semantic/services/datasource_service.py -> apps.datasource.models.datasource",
     "apps/system/api/assistant.py -> apps.datasource.models.datasource",
     "apps/system/crud/assistant.py -> apps.datasource.models.datasource",
-    "apps/system/schemas/permission.py -> apps.chat.models.chat_model",
-    "apps/system/schemas/permission.py -> apps.datasource.models.datasource",
     "apps/workflow_engine/api/chat_history.py -> apps.chat.models.chat_model",
     "apps/workflow_engine/api/service.py -> apps.chat.models.chat_model",
     "apps/workflow_engine/api/service.py -> apps.semantic.models.orm"
@@ -57,7 +55,6 @@
     "apps/mcp/mcp.py -> apps.datasource.crud.datasource",
     "apps/mcp/mcp.py -> apps.system.crud.user",
     "apps/retrieval/semantic_binding.py -> apps.semantic.repository.sqlmodel.schema_loader",
-    "apps/system/schemas/permission.py -> apps.datasource.crud.datasource",
     "apps/workflow/runtime.py -> apps.semantic.repository.sqlmodel.schema_loader",
     "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.artifacts.file_store",
     "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.events.publisher",

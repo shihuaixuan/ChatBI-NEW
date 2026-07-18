@@ -865,14 +865,28 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 10. 启动密钥加密和旧供应商编号修正迁入 `AIModelSecretMigrationService`；旧
     `system/crud/aimodel_manage.py` 已删除。当前数据重复执行迁移更新数为 0。
 
+本阶段已完成第一批 Access Control 迁移：
+
+1. 新增 `access_control/models/dto`、`repository`、`services` 和接口适配层，调用者、授权要求、角色判断和
+   工作空间资源范围已形成明确边界。
+2. `AuthorizationService` 成为角色与资源授权的唯一规则入口；Service 只依赖
+   `WorkspaceResourceScopeRepository` 端口，不使用 FastAPI、Session、ORM 或其他领域 CRUD。
+3. Chat 和 Datasource 分别通过公开范围适配器提供会话 ID 和数据源 ID。Access Control 的组装入口只依赖
+   这些适配器，不直接导入 Chat 或 Datasource ORM；Datasource 继续复用原授权范围缓存键。
+4. `require_permissions`、`SqlbotPermission` 和授权请求上下文已迁入 Access Control。全部生产调用方改用
+   `apps.access_control.permission`，`system/schemas/permission.py` 只保留旧导入路径兼容转发。
+5. 现有 `role`、`type` 和 `keyExpression` 声明方式、管理员与工作空间管理员规则、空批量操作和接口错误文本
+   保持兼容；缺失资源参数、无效资源引用、未知角色和未知资源类型改为明确拒绝，不再静默放行。
+6. 架构基线已移除 System 权限模块直接依赖 Chat ORM、Datasource ORM 和 Datasource CRUD 的 3 条违规记录。
+
 **目标**
 
 消除宽泛 `system` 模块，把不同生命周期的业务资源迁入独立领域。
 
 **任务**
 
-1. 创建 `access_control`，迁移用户、认证、工作空间、成员关系和 API Key。
-2. 把 `require_permissions` 中的数据库查询改为统一授权 Service 调用。
+1. 创建 `access_control`，首批统一授权边界已完成；用户、认证、工作空间、成员关系和 API Key 尚待迁移。
+2. 把 `require_permissions` 中的数据库查询改为统一授权 Service 调用。已完成。
 3. 将行列权限和变量解析迁入 Access Control，输出稳定的数据策略 DTO。
 4. 合并 `system` 中 AI 模型 ORM/API 与现有 `apps/ai_model`。ORM、API、DTO 和管理流程已迁移；
    System 仅保留 XPack 和旧导入路径需要的兼容引用。
@@ -892,12 +906,16 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 **本批验证**
 
 - AI Model、Semantic、Retrieval、Architecture、Agent、Capabilities、Chat、Workflow 和 Graph API
-  调用方回归：556 个测试通过。
+  调用方回归保持通过，并已包含在本轮完整后端回归中。
 - AI Model 与架构基线定向测试 21 个通过，覆盖模型归属、运行时配置、管理事务、密钥迁移、路由归属和
   089 非法存量数据拦截。
 - AI Model 新增和修改文件通过 Ruff；DTO、仓储、Service、组装入口、模型工厂及测试通过 Mypy。
 - 本地默认模型通过新 Service 成功解析，应用启动、ORM 单一映射和旧 System 兼容引用验证通过。
 - 前端继续使用原 `/system/aimodel` 契约，无需同步修改；OpenAPI 构建和全部 8 个既有路由注册验证通过。
+- Access Control 纯规则、资源范围组合、参数表达式、装饰器委托和旧导入路径兼容定向测试 17 项通过；
+  新增授权代码和测试通过 Ruff、Mypy。
+- 应用导入和 OpenAPI 构建通过，共生成 154 个路径；数据源、AI 模型、工作空间和术语等受保护路由均保留。
+- 完整后端回归 657 项通过；架构守卫确认本批减少 3 条跨领域内部实现依赖且未新增违规项。
 
 ### 6.4 阶段 P3：收敛 Datasource 与数据库连接实现
 

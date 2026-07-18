@@ -6,7 +6,7 @@ from apps.system.crud.user import clean_user_cache
 from apps.system.crud.workspace import reset_single_user_oid, reset_user_oid
 from apps.system.models.system_model import UserWsModel, WorkspaceBase, WorkspaceEditor, WorkspaceModel
 from apps.system.models.user import UserModel
-from apps.system.schemas.permission import SqlbotPermission, require_permissions
+from apps.access_control.permission import SqlbotPermission, require_permissions
 from apps.system.schemas.system_schema import UserWsBase, UserWsDTO, UserWsEditor, UserWsOption, WorkspaceUser
 from common.audit.models.log_model import OperationType, OperationModules
 from common.audit.schemas.logger_decorator import system_log, LogConfig
@@ -257,5 +257,4 @@ async def single_delete(session: SessionDep, current_user: CurrentUser, id: int 
         session.exec(sqlmodel_delete(UserWsModel).where(UserWsModel.oid == id))
         
     session.delete(db_model)
-
 

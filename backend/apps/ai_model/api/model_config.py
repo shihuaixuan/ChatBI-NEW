@@ -22,7 +22,7 @@ from apps.ai_model.models.dto import (
 )
 from apps.ai_model.services import AIModelManagementService
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
-from apps.system.schemas.permission import SqlbotPermission, require_permissions
+from apps.access_control.permission import SqlbotPermission, require_permissions
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.deps import SessionDep, Trans

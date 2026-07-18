@@ -17,7 +17,7 @@ from sqlalchemy import and_
 from apps.db.db import get_schema
 from apps.db.engine import get_engine_conn
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
-from apps.system.schemas.permission import SqlbotPermission, require_permissions
+from apps.access_control.permission import SqlbotPermission, require_permissions
 from common.audit.models.log_model import OperationType, OperationModules
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.config import settings

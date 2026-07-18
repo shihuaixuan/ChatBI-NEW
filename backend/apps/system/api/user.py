@@ -7,7 +7,7 @@ from apps.system.crud.user_excel import batchUpload, downTemplate, download_erro
 from apps.system.models.system_model import UserWsModel, WorkspaceModel
 from apps.system.models.user import UserModel
 from apps.system.schemas.auth import CacheName, CacheNamespace
-from apps.system.schemas.permission import SqlbotPermission, require_permissions
+from apps.access_control.permission import SqlbotPermission, require_permissions
 from apps.system.schemas.system_schema import PwdEditor, UserCreator, UserEditor, UserGrid, UserInfoDTO, UserLanguage, UserStatus, UserWs
 from common.audit.models.log_model import OperationType, OperationModules
 from common.audit.schemas.logger_decorator import LogConfig, system_log

@@ -28,7 +28,7 @@ from apps.swagger.i18n import (
 )
 from apps.system.crud.assistant import init_dynamic_cors
 from apps.system.middleware.auth import TokenMiddleware
-from apps.system.schemas.permission import RequestContextMiddleware
+from apps.access_control.permission import RequestContextMiddleware
 from apps.workflow_engine.infrastructure.artifacts.cleanup import ArtifactCleanupService
 from common.audit.schemas.request_context import RequestContextMiddlewareCommon
 from common.core.config import settings
