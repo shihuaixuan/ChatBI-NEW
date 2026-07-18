@@ -4,9 +4,9 @@ import os
 import traceback
 import urllib.parse
 import warnings
-from concurrent.futures import ThreadPoolExecutor, Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
-from typing import Any, List, Optional, Union, Dict, Iterator
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 import orjson
 import pandas as pd
@@ -14,9 +14,14 @@ import requests
 import sqlparse
 from langchain.chat_models.base import BaseChatModel
 from langchain_community.utilities import SQLDatabase
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, BaseMessageChunk
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    BaseMessageChunk,
+    HumanMessage,
+)
 from sqlalchemy import and_, select
-from sqlalchemy.orm import sessionmaker, scoped_session
+from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlbot_xpack.config.model import SysArgModel
 from sqlbot_xpack.custom_prompt.curd.custom_prompt import find_custom_prompts
 from sqlbot_xpack.custom_prompt.models.custom_prompt_model import CustomPromptTypeEnum
@@ -24,30 +29,74 @@ from sqlbot_xpack.license.license_manage import SQLBotLicenseUtil
 from sqlmodel import Session
 
 from apps.ai_model.model_factory import LLMConfig, LLMFactory, get_default_config
-from apps.chat.curd.chat import save_sql_answer, save_sql, \
-    save_error_message, save_sql_exec_data, save_chart_answer, save_chart, \
-    finish_record, save_analysis_answer, save_predict_answer, save_predict_data, \
-    save_select_datasource_answer, save_recommend_question_answer, \
-    get_old_questions, save_analysis_predict_record, rename_chat, get_chart_config, \
-    get_chat_chart_data, list_generate_sql_logs, list_generate_chart_logs, start_log, end_log, \
-    get_last_execute_sql_error, format_json_data, format_chart_fields, get_chat_brief_generate, get_chat_predict_data, \
-    get_chat_chart_config, trigger_log_error
-from apps.chat.models.chat_model import ChatQuestion, ChatRecord, Chat, RenameChat, ChatLog, OperationEnum, \
-    ChatFinishStep, AxisObj, SystemPromptMessage, HumanPromptMessage, AIPromptMessage
+from apps.chat.curd.chat import (
+    end_log,
+    finish_record,
+    format_chart_fields,
+    format_json_data,
+    get_chart_config,
+    get_chat_brief_generate,
+    get_chat_chart_config,
+    get_chat_chart_data,
+    get_chat_predict_data,
+    get_last_execute_sql_error,
+    get_old_questions,
+    list_generate_chart_logs,
+    list_generate_sql_logs,
+    rename_chat,
+    save_analysis_answer,
+    save_analysis_predict_record,
+    save_chart,
+    save_chart_answer,
+    save_error_message,
+    save_predict_answer,
+    save_predict_data,
+    save_recommend_question_answer,
+    save_select_datasource_answer,
+    save_sql,
+    save_sql_answer,
+    save_sql_exec_data,
+    start_log,
+    trigger_log_error,
+)
+from apps.chat.models.chat_model import (
+    AIPromptMessage,
+    AxisObj,
+    Chat,
+    ChatFinishStep,
+    ChatLog,
+    ChatQuestion,
+    ChatRecord,
+    HumanPromptMessage,
+    OperationEnum,
+    RenameChat,
+    SystemPromptMessage,
+)
+from apps.chat.services.term_context import ChatTermContextService
 from apps.data_training.curd.data_training import get_training_template
 from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data
 from apps.datasource.crud.permission import get_row_permission_filters, is_normal_user
 from apps.datasource.embedding.ds_embedding import get_ds_embedding
 from apps.datasource.models.datasource import CoreDatasource
-from apps.db.db import exec_sql, get_version, check_connection
-from apps.system.crud.assistant import AssistantOutDs, AssistantOutDsFactory, get_assistant_ds
+from apps.db.db import check_connection, exec_sql, get_version
+from apps.semantic.composition import build_semantic_term_query_service
+from apps.system.crud.assistant import (
+    AssistantOutDs,
+    AssistantOutDsFactory,
+    get_assistant_ds,
+)
 from apps.system.crud.parameter_manage import get_groups
 from apps.system.schemas.system_schema import AssistantOutDsSchema
 from apps.terminology.curd.terminology import get_terminology_template
 from common.core.config import settings
 from common.core.db import engine
 from common.core.deps import CurrentAssistant, CurrentUser
-from common.error import SingleMessageError, SQLBotDBError, ParseSQLResultError, SQLBotDBConnectionError
+from common.error import (
+    ParseSQLResultError,
+    SingleMessageError,
+    SQLBotDBConnectionError,
+    SQLBotDBError,
+)
 from common.utils.data_format import DataFormat
 from common.utils.locale import I18n, I18nHelper
 from common.utils.utils import SQLBotLogUtil, extract_nested_json, prepare_for_orjson
@@ -75,6 +124,7 @@ class LLMService:
 
     # session: Session = db_session
     current_user: CurrentUser
+    chat_oid: int
     current_assistant: Optional[CurrentAssistant] = None
     out_ds_instance: Optional[AssistantOutDs] = None
     change_title: bool = False
@@ -108,6 +158,7 @@ class LLMService:
         chat: Chat | None = session.get(Chat, chat_id)
         if not chat:
             raise SingleMessageError(f"Chat with id {chat_id} not found")
+        self.chat_oid = chat.oid or current_user.oid or 1
         ds: CoreDatasource | AssistantOutDsSchema | None = None
         if not chat.datasource and chat_question.datasource_id:
             _ds = session.get(CoreDatasource, chat_question.datasource_id)
@@ -307,18 +358,37 @@ class LLMService:
         return format_chart_fields(chart_info)
 
     def filter_terminology_template(self, _session: Session, oid: int = None, ds_id: int = None):
-        calculate_oid = oid
-        calculate_ds_id = ds_id
-        if self.current_assistant:
-            calculate_oid = self.current_assistant.oid if self.current_assistant.type != 4 else self.current_user.oid
-            if self.current_assistant.type == 1:
-                calculate_ds_id = None
         self.current_logs[OperationEnum.FILTER_TERMS] = start_log(session=_session,
                                                                   operate=OperationEnum.FILTER_TERMS,
                                                                   record_id=self.record.id, local_operation=True)
 
-        self.chat_question.terminologies, term_list = get_terminology_template(_session, self.chat_question.question,
-                                                                               calculate_oid, calculate_ds_id)
+        if self.record.dataset_id is not None:
+            term_context_service = ChatTermContextService(
+                build_semantic_term_query_service(_session)
+            )
+            self.chat_question.terminologies, term_list = term_context_service.build(
+                self.chat_oid,
+                self.record.dataset_id,
+                self.chat_question.question,
+            )
+        else:
+            # 未绑定 Semantic 数据集的旧 Assistant/动态数据源仍走明确的兼容入口。
+            calculate_oid = oid
+            calculate_ds_id = ds_id
+            if self.current_assistant:
+                calculate_oid = (
+                    self.current_assistant.oid
+                    if self.current_assistant.type != 4
+                    else self.current_user.oid
+                )
+                if self.current_assistant.type == 1:
+                    calculate_ds_id = None
+            self.chat_question.terminologies, term_list = get_terminology_template(
+                _session,
+                self.chat_question.question,
+                calculate_oid,
+                calculate_ds_id,
+            )
         self.current_logs[OperationEnum.FILTER_TERMS] = end_log(session=_session,
                                                                 log=self.current_logs[OperationEnum.FILTER_TERMS],
                                                                 full_message=term_list)

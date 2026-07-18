@@ -33,9 +33,9 @@ def test_graph_chat_history_migration_adds_non_destructive_schema():
 
 
 def test_chat_record_declares_execution_type_contract():
-    # 持久化模型默认标记旧执行链，响应模型则兼容尚未携带该字段的调用方。
+    # 085 迁移后新记录默认使用 Graph，响应模型仍兼容未携带该字段的历史调用方。
     column = ChatRecord.__table__.c.execution_type
 
     assert column.nullable is False
-    assert column.default.arg == "legacy"
+    assert column.default.arg == "graph"
     assert ChatRecordResult().execution_type is None

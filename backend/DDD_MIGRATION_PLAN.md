@@ -747,13 +747,16 @@ Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提�
 10. 术语迁移规划器已通过有效的 `SemanticDatasetModelConfig` 和 `SemanticModel.datasource_id` 建立
     租户隔离的数据源到数据集映射。映射缺失、无效，或旧记录已有数据集范围与解析结果不一致时，
     分别报告明确失败或冲突，不允许写入；预检报告会列出每个候选实际解析出的主题域和关联资产 ID。
+11. 旧 Chat 中已经绑定 `dataset_id` 的记录改为通过 `ChatTermContextService` 调用
+    `SemanticTermQueryService`，不再读取旧术语表；Semantic 查询为空或失败时不会回退旧实现。只有未绑定
+    Semantic 数据集的 Assistant 和动态数据源记录继续使用名称明确的兼容分支。
 
 当前不能直接删除旧入口：旧 UI 和 API 仍提供数据源范围、Excel 导入导出，而 Semantic 术语以主题域和
 数据集范围表达。`specific_ds=true` 的旧记录现在只会使用有效数据集—模型配置解析范围；数据源没有关联
 Semantic 数据集时返回 `LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED`，跨主题域或与已有 `dataset_ids` 不一致时
-返回冲突，不能静默扩大术语范围。旧 `chat/task/llm.py` 还服务于未绑定 Semantic 数据集的 Assistant 和
-动态数据源场景，因此暂时保留旧术语读取作为明确兼容入口；普通 Agent 已不再依赖该入口。完成 Chat
-调用方和前端能力迁移后，才能把 `/system/terminology` 改为纯转发并删除旧表。
+返回冲突，不能静默扩大术语范围。旧 `chat/task/llm.py` 现在只为未绑定 Semantic 数据集的 Assistant 和
+动态数据源场景保留旧术语读取兼容分支；普通 Agent 和已绑定数据集的 Chat 均不再依赖该查询。完成
+Assistant 数据集绑定和前端能力迁移后，才能把 `/system/terminology` 改为纯转发并删除旧表。
 
 **目标**
 
@@ -786,14 +789,14 @@ Semantic 数据集时返回 `LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED`，跨主�
 
 **本阶段验证**
 
-- `tests/semantic`、`tests/retrieval`、`tests/architecture`、`tests/agent` 加 1 个 Graph 调用方回归：
-  258 个测试通过。
+- `tests/semantic`、`tests/retrieval`、`tests/architecture`、`tests/agent`、`tests/chat` 加 1 个 Graph
+  调用方回归：274 个测试通过。
 - Semantic 索引协调器 PostgreSQL 集成测试通过。
 - Graph 会话调用方回归测试通过。
 - 本次增量修改文件的 Ruff 检查通过。
 - 本阶段前一批 11 个生产代码入口，以及本次新增 Semantic 查询契约、服务、装配入口和 Agent 端口通过
-  Mypy；术语迁移规划器和迁移脚本也通过 Mypy。Agent 旧模块仍有既有严格类型问题，本次未扩大为无关
-  重构。
+  Mypy；术语迁移规划器、迁移脚本和 Chat 术语上下文服务也通过 Mypy。Agent 与旧 Chat 大文件仍有既有
+  严格类型问题，本次未扩大为无关重构。
 
 ### 6.3 阶段 P2：拆分 Access Control、AI Model 和 Assistant
 

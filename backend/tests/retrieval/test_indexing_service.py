@@ -459,8 +459,11 @@ def test_semantic_coordinator_writes_source_projection_and_jobs_in_caller_transa
     assert len(result.job_ids) == 3
     resources = list(
         session.exec(
-            select(RetrievalResourceModel).where(
-                RetrievalResourceModel.source_id == result.source_id
+            select(RetrievalResourceModel)
+            .where(RetrievalResourceModel.source_id == result.source_id)
+            .order_by(
+                RetrievalResourceModel.resource_type,
+                RetrievalResourceModel.source_resource_id,
             )
         ).all()
     )

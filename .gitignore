@@ -20,6 +20,9 @@ backend/tests/*
 !backend/tests/capabilities/**
 !backend/tests/architecture/
 !backend/tests/architecture/**
+!backend/tests/chat/
+backend/tests/chat/*
+!backend/tests/chat/test_semantic_term_context.py
 !backend/tests/retrieval/
 !backend/tests/retrieval/**
 !backend/tests/semantic/
