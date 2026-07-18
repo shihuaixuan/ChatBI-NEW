@@ -9,6 +9,7 @@ from apps.semantic.api import (
     domains,
     metrics,
     models,
+    term_excel,
     terms,
 )
 
@@ -21,4 +22,5 @@ router.include_router(dimensions.router)
 router.include_router(datasets.router)
 router.include_router(dataset_indexes.router)
 router.include_router(terms.router)
+router.include_router(term_excel.router)
 router.include_router(dataset_schema.router)

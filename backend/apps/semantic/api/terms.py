@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from apps.semantic.api.error_mapping import map_semantic_errors_to_http
 from apps.semantic.models.dto import TermPayload
@@ -15,14 +15,21 @@ router = APIRouter(tags=["Semantic"], prefix="/semantic")
 
 @router.get("/terms")
 async def list_terms(
-    session: SessionDep, current_user: CurrentUser, domain_id: int | None = None
+    session: SessionDep,
+    current_user: CurrentUser,
+    domain_id: int | None = None,
+    word: str | None = None,
+    dataset_ids: list[int] | None = Query(None),
 ) -> list[SemanticTerm]:
     with map_semantic_errors_to_http():
         return SemanticTermService(
             SqlModelTermRepository(session),
             SqlModelDomainRepository(session),
-        ).list_terms(
-            current_user.oid, domain_id
+        ).search_terms(
+            current_user.oid,
+            domain_id=domain_id,
+            word=word,
+            dataset_ids=dataset_ids,
         )
 
 
@@ -65,6 +72,19 @@ async def delete_term(
         ).delete_term(
             current_user.oid, term_id
         )
+
+
+@router.delete("/terms")
+async def delete_terms(
+    session: SessionDep,
+    current_user: CurrentUser,
+    term_ids: list[int],
+) -> dict[str, list[int]]:
+    with map_semantic_errors_to_http():
+        return SemanticTermService(
+            SqlModelTermRepository(session),
+            SqlModelDomainRepository(session),
+        ).delete_terms(current_user.oid, term_ids)
 
 
 @router.patch("/terms/{term_id}/enabled")

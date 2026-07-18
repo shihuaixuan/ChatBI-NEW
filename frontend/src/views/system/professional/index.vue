@@ -1,9 +1,9 @@
 <script lang="ts" setup>
-import { nextTick, onMounted, reactive, ref, unref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, unref } from 'vue'
 import icon_export_outlined from '@/assets/svg/icon_export_outlined.svg'
 import { professionalApi } from '@/api/professional'
 import { formatTimestamp } from '@/utils/date'
-import { datasourceApi } from '@/api/datasource'
+import { semanticApi } from '@/api/semantic'
 import icon_add_outlined from '@/assets/svg/icon_add_outlined.svg'
 import IconOpeEdit from '@/assets/svg/icon_edit_outlined.svg'
 import IconOpeDelete from '@/assets/svg/icon_delete.svg'
@@ -17,18 +17,19 @@ import iconFilter from '@/assets/svg/icon-filter_outlined.svg'
 import Uploader from '@/views/system/excel-upload/Uploader.vue'
 
 interface Form {
-  id?: string | null
+  id?: number | string | null
+  domain_id: number | null
   word: string | null
   other_words: string[]
   specific_ds: boolean
-  datasource_ids: number[]
-  datasource_names: string[]
+  dataset_ids: number[]
   description: string | null
 }
 
 const { t } = useI18n()
 const multipleSelectionAll = ref<any[]>([])
-const allDsList = ref<any[]>([])
+const domainList = ref<any[]>([])
+const datasetList = ref<any[]>([])
 const keywords = ref('')
 const oldKeywords = ref('')
 const searchLoading = ref(false)
@@ -37,10 +38,8 @@ const drawerMainRef = ref()
 const selectable = () => {
   return true
 }
-onMounted(() => {
-  datasourceApi.list().then((res) => {
-    filterOption.value[0].option = [...res]
-  })
+onMounted(async () => {
+  await loadScopeOptions()
   search()
 })
 const dialogFormVisible = ref<boolean>(false)
@@ -63,20 +62,59 @@ const dialogTitle = ref('')
 const updateLoading = ref(false)
 const defaultForm = {
   id: null,
+  domain_id: null,
   word: null,
   description: null,
   specific_ds: false,
-  datasource_ids: [],
+  dataset_ids: [],
   other_words: [''],
-  datasource_names: [],
 }
 const pageForm = ref<Form>(cloneDeep(defaultForm))
+
+const scopedDatasetList = computed(() =>
+  pageForm.value.domain_id
+    ? datasetList.value.filter((item) => `${item.domain_id}` === `${pageForm.value.domain_id}`)
+    : []
+)
+
+const domainName = (domainId: number | string) =>
+  domainList.value.find((item) => `${item.id}` === `${domainId}`)?.name || domainId
+
+const datasetNames = (datasetIds: number[]) =>
+  (datasetIds || []).map(
+    (id) => datasetList.value.find((item) => `${item.id}` === `${id}`)?.name || id
+  )
+
+const loadScopeOptions = async () => {
+  const [domains, datasets] = await Promise.all([
+    semanticApi.domainList(),
+    semanticApi.datasetList(),
+  ])
+  domainList.value = Array.isArray(domains) ? domains : []
+  datasetList.value = Array.isArray(datasets) ? datasets : []
+  filterOption.value[0].option = [...domainList.value]
+  filterOption.value[1].option = [...datasetList.value]
+}
 
 const cancelDelete = () => {
   handleToggleRowSelection(false)
   multipleSelectionAll.value = []
   checkAll.value = false
   isIndeterminate.value = false
+}
+
+const currentExportParams = () => {
+  const params: Record<string, any> = {}
+  if (keywords.value) params.word = keywords.value
+  state.conditions.forEach((condition: any) => {
+    if (condition.field === 'domain_id' && condition.value.length) {
+      params.domain_id = condition.value[0]
+    }
+    if (condition.field === 'dslist' && condition.value.length) {
+      params.dataset_ids = condition.value
+    }
+  })
+  return params
 }
 
 const exportExcel = () => {
@@ -89,7 +127,7 @@ const exportExcel = () => {
   }).then(() => {
     searchLoading.value = true
     professionalApi
-      .export2Excel(keywords.value ? { word: keywords.value } : {})
+      .export2Excel(currentExportParams())
       .then((res) => {
         const blob = new Blob([res], {
           type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -239,6 +277,7 @@ const search = ($event: any = {}) => {
     .then((res) => {
       toggleRowLoading.value = true
       fieldList.value = res.data
+      pageInfo.currentPage = res.current_page
       pageInfo.total = res.total_count
       searchLoading.value = false
       nextTick(() => {
@@ -254,13 +293,20 @@ const termFormRef = ref()
 
 const validatePass = (_: any, value: any, callback: any) => {
   if (pageForm.value.specific_ds && !value.length) {
-    callback(new Error(t('datasource.Please_select') + t('common.empty') + t('ds.title')))
+    callback(new Error(t('datasource.Please_select') + t('professional.dataset_scope')))
   } else {
     callback()
   }
 }
 
 const rules = {
+  domain_id: [
+    {
+      required: true,
+      message: t('datasource.Please_select') + t('professional.theme_domain'),
+      trigger: 'change',
+    },
+  ],
   word: [
     {
       required: true,
@@ -274,7 +320,7 @@ const rules = {
         t('datasource.please_enter') + t('common.empty') + t('professional.term_description'),
     },
   ],
-  datasource_ids: [
+  dataset_ids: [
     {
       validator: validatePass,
       trigger: 'blur',
@@ -283,7 +329,13 @@ const rules = {
 }
 
 const handleChange = () => {
-  termFormRef.value.validateField('datasource_ids')
+  termFormRef.value.validateField('dataset_ids')
+}
+
+const handleDomainChange = () => {
+  const validDatasetIds = new Set(scopedDatasetList.value.map((item) => item.id))
+  pageForm.value.dataset_ids = pageForm.value.dataset_ids.filter((id) => validDatasetIds.has(id))
+  handleChange()
 }
 
 const saveHandler = () => {
@@ -314,11 +366,6 @@ const saveHandler = () => {
     }
   })
 }
-const list = () => {
-  datasourceApi.list().then((res) => {
-    allDsList.value = res
-  })
-}
 const editHandler = (row: any) => {
   pageForm.value.id = null
   if (row) {
@@ -326,12 +373,13 @@ const editHandler = (row: any) => {
     if (!pageForm.value.other_words.length) {
       pageForm.value.other_words = ['']
     }
+  } else if (domainList.value.length) {
+    pageForm.value.domain_id = domainList.value[0].id
   }
   dialogTitle.value = row?.id
     ? t('professional.editing_terminology')
     : t('professional.create_new_term')
   dialogFormVisible.value = true
-  list()
 }
 
 const onFormClose = () => {
@@ -369,10 +417,18 @@ const filterOption = ref<any[]>([
   {
     type: 'select',
     option: [],
+    field: 'domain_id',
+    title: t('professional.theme_domain'),
+    operate: 'eq',
+    property: { placeholder: t('datasource.Please_select') + t('professional.theme_domain') },
+  },
+  {
+    type: 'select',
+    option: [],
     field: 'dslist',
-    title: t('ds.title'),
+    title: t('professional.dataset_scope'),
     operate: 'in',
-    property: { placeholder: t('common.empty') + t('ds.title') },
+    property: { placeholder: t('datasource.Please_select') + t('professional.dataset_scope') },
   },
 ])
 
@@ -410,7 +466,7 @@ const drawerMainClose = () => {
 
 const changeStatus = (id: any, val: any) => {
   professionalApi
-    .enable(id, val + '')
+    .enable(id, Boolean(val))
     .then(() => {
       ElMessage({
         message: t('common.save_success'),
@@ -448,8 +504,8 @@ const changeStatus = (id: any, val: any) => {
           {{ $t('professional.export_all') }}
         </el-button>
         <Uploader
-          upload-path="/system/terminology/uploadExcel"
-          template-path="/system/terminology/template"
+          upload-path="/semantic/terms/upload-excel"
+          template-path="/semantic/terms/template"
           :template-name="`${t('professional.professional_terminology')}.xlsx`"
           @upload-finished="search"
         />
@@ -497,6 +553,11 @@ const changeStatus = (id: any, val: any) => {
               }}
             </template>
           </el-table-column>
+          <el-table-column :label="$t('professional.theme_domain')" min-width="180">
+            <template #default="scope">
+              {{ domainName(scope.row.domain_id) }}
+            </template>
+          </el-table-column>
           <el-table-column :label="$t('professional.term_description')" min-width="240"
             ><template #default="scope">
               <div class="field-comment_d">
@@ -506,14 +567,16 @@ const changeStatus = (id: any, val: any) => {
               </div>
             </template>
           </el-table-column>
-          <el-table-column :label="$t('training.effective_data_sources')" min-width="240"
+          <el-table-column :label="$t('professional.dataset_scope')" min-width="240"
             ><template #default="scope">
               <div v-if="scope.row.specific_ds" class="field-comment_d">
-                <span :title="scope.row.datasource_names" class="notes-in_table">{{
-                  scope.row.datasource_names.join(',')
-                }}</span>
+                <span
+                  :title="datasetNames(scope.row.dataset_ids).join(',')"
+                  class="notes-in_table"
+                  >{{ datasetNames(scope.row.dataset_ids).join(',') }}</span
+                >
               </div>
-              <div v-else>{{ t('training.all_data_sources') }}</div>
+              <div v-else>{{ t('professional.all_domain_datasets') }}</div>
             </template>
           </el-table-column>
           <el-table-column :label="t('ds.status')" width="180">
@@ -630,6 +693,22 @@ const changeStatus = (id: any, val: any) => {
       class="form-content_error"
       @submit.prevent
     >
+      <el-form-item prop="domain_id" :label="t('professional.theme_domain')">
+        <el-select
+          v-model="pageForm.domain_id"
+          filterable
+          :placeholder="$t('datasource.Please_select') + $t('professional.theme_domain')"
+          style="width: 100%"
+          @change="handleDomainChange"
+        >
+          <el-option
+            v-for="item in domainList"
+            :key="item.id"
+            :label="item.name"
+            :value="item.id"
+          />
+        </el-select>
+      </el-form-item>
       <el-form-item prop="word" :label="t('professional.term_name')">
         <el-input
           v-model="pageForm.word"
@@ -652,23 +731,29 @@ const changeStatus = (id: any, val: any) => {
       <el-form-item
         class="is-required"
         :class="!pageForm.specific_ds && 'no-error'"
-        prop="datasource_ids"
-        :label="t('training.effective_data_sources')"
+        prop="dataset_ids"
+        :label="t('professional.dataset_scope')"
       >
         <el-radio-group v-model="pageForm.specific_ds">
-          <el-radio :value="false">{{ $t('training.all_data_sources') }}</el-radio>
-          <el-radio :value="true">{{ $t('training.partial_data_sources') }}</el-radio>
+          <el-radio :value="false">{{ $t('professional.all_domain_datasets') }}</el-radio>
+          <el-radio :value="true">{{ $t('professional.partial_datasets') }}</el-radio>
         </el-radio-group>
         <el-select
           v-if="pageForm.specific_ds"
-          v-model="pageForm.datasource_ids"
+          v-model="pageForm.dataset_ids"
           multiple
           filterable
-          :placeholder="$t('datasource.Please_select') + $t('common.empty') + $t('ds.title')"
+          :disabled="!pageForm.domain_id"
+          :placeholder="$t('datasource.Please_select') + $t('professional.dataset_scope')"
           style="width: 100%; margin-top: 8px"
           @change="handleChange"
         >
-          <el-option v-for="item in allDsList" :key="item.id" :label="item.name" :value="item.id" />
+          <el-option
+            v-for="item in scopedDatasetList"
+            :key="item.id"
+            :label="item.name"
+            :value="item.id"
+          />
         </el-select>
       </el-form-item>
 
@@ -744,12 +829,17 @@ const changeStatus = (id: any, val: any) => {
           {{ pageForm.other_words.join(',') }}
         </div>
       </el-form-item>
-      <el-form-item :label="t('training.effective_data_sources')">
+      <el-form-item :label="t('professional.theme_domain')">
+        <div class="content">
+          {{ domainName(pageForm.domain_id || 0) }}
+        </div>
+      </el-form-item>
+      <el-form-item :label="t('professional.dataset_scope')">
         <div class="content">
           {{
             pageForm.specific_ds
-              ? pageForm.datasource_names.join(',')
-              : t('training.all_data_sources')
+              ? datasetNames(pageForm.dataset_ids).join(',')
+              : t('professional.all_domain_datasets')
           }}
         </div>
       </el-form-item>

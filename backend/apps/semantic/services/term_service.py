@@ -25,6 +25,38 @@ class SemanticTermService:
     ) -> list[SemanticTerm]:
         return self._repository.list_all(oid, domain_id)
 
+    def search_terms(
+        self,
+        oid: int,
+        *,
+        domain_id: int | None = None,
+        word: str | None = None,
+        dataset_ids: list[int] | None = None,
+    ) -> list[SemanticTerm]:
+        normalized_word = str(word or "").strip().casefold()
+        normalized_dataset_ids = set(self._reference_ids(dataset_ids or []))
+        terms = self._repository.list_all(oid, domain_id)
+        result = [
+            term
+            for term in terms
+            if (
+                not normalized_word
+                or normalized_word in term.name.casefold()
+                or any(
+                    normalized_word in alias.casefold()
+                    for alias in term.alias
+                )
+            )
+            and (
+                not normalized_dataset_ids
+                or not term.related_datasets
+                or bool(
+                    normalized_dataset_ids.intersection(term.related_datasets)
+                )
+            )
+        ]
+        return sorted(result, key=lambda term: term.id or 0, reverse=True)
+
     def create_term(
         self,
         oid: int,

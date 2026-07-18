@@ -114,24 +114,12 @@ class LegacyTerminologyCompatibilityService:
         domain_id: int | None,
         dataset_ids: list[int],
     ) -> list[SemanticTerm]:
-        normalized_dataset_ids = set(self._positive_ids(dataset_ids))
-        normalized_word = str(word or "").strip().casefold()
-        terms = self._term_service.list_terms(oid, domain_id)
-        result = [
-            term
-            for term in terms
-            if (
-                not normalized_word
-                or normalized_word in term.name.casefold()
-                or any(normalized_word in alias.casefold() for alias in term.alias)
-            )
-            and (
-                not normalized_dataset_ids
-                or not term.related_datasets
-                or bool(normalized_dataset_ids.intersection(term.related_datasets))
-            )
-        ]
-        return sorted(result, key=lambda term: term.id or 0, reverse=True)
+        return self._term_service.search_terms(
+            oid,
+            domain_id=domain_id,
+            word=word,
+            dataset_ids=self._positive_ids(dataset_ids),
+        )
 
     def _to_payload(self, info: LegacyTerminologyDTO) -> TermPayload:
         if info.domain_id is None or info.domain_id <= 0:

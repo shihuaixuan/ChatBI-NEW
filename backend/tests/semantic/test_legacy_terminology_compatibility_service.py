@@ -113,6 +113,32 @@ class _TermService:
             and (domain_id is None or term.domain_id == domain_id)
         ]
 
+    def search_terms(
+        self,
+        oid,
+        *,
+        domain_id=None,
+        word=None,
+        dataset_ids=None,
+    ):
+        normalized_word = str(word or "").casefold()
+        normalized_dataset_ids = set(dataset_ids or [])
+        result = [
+            term
+            for term in self.list_terms(oid, domain_id)
+            if (
+                not normalized_word
+                or normalized_word in term.name.casefold()
+                or any(normalized_word in alias.casefold() for alias in term.alias)
+            )
+            and (
+                not normalized_dataset_ids
+                or not term.related_datasets
+                or bool(normalized_dataset_ids.intersection(term.related_datasets))
+            )
+        ]
+        return sorted(result, key=lambda term: term.id or 0, reverse=True)
+
     def create_term(self, oid, payload, *, enabled=True):
         self.created = (oid, payload, enabled)
         return SemanticTerm(

@@ -104,6 +104,45 @@ def test_disabled_term_can_be_enabled_and_deleted_in_one_batch():
     assert repository.deleted_terms == [term]
 
 
+def test_search_terms_filters_alias_and_includes_domain_wide_scope():
+    repository = _TermRepository(
+        terms=[
+            SemanticTerm(
+                id=7,
+                oid=1,
+                domain_id=10,
+                name="人气",
+                alias=["访问热度"],
+                related_datasets=[20],
+            ),
+            SemanticTerm(
+                id=8,
+                oid=1,
+                domain_id=10,
+                name="通用热度",
+                related_datasets=[],
+            ),
+            SemanticTerm(
+                id=9,
+                oid=1,
+                domain_id=10,
+                name="销售额",
+                related_datasets=[21],
+            ),
+        ]
+    )
+    service = SemanticTermService(repository, _DomainRepository())
+
+    terms = service.search_terms(
+        1,
+        domain_id=10,
+        word="热度",
+        dataset_ids=[20],
+    )
+
+    assert [term.id for term in terms] == [8, 7]
+
+
 def test_sqlmodel_repository_validates_tenant_and_domain_reference_scope():
     oid = 9_920_101
     with engine.connect() as connection:
@@ -263,6 +302,14 @@ class _TermRepository:
 
     def create(self, term):
         return term
+
+    def list_all(self, oid, domain_id=None):
+        return [
+            term
+            for term in self.terms.values()
+            if term.oid == oid
+            and (domain_id is None or term.domain_id == domain_id)
+        ]
 
     def get(self, oid, term_id):
         term = self.terms.get(term_id)

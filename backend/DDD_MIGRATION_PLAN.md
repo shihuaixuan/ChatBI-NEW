@@ -723,8 +723,8 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 
 截至 2026-07-18，已确认 `settings.models.term_model`、`term_schema_creator` 没有后端运行时和
 Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提交的工作区内容，本阶段保留并登记为
-待确认项。`/system/terminology` 的查询、创建、更新、启停和删除已经切换到 Semantic；旧
-`terminology` 表仍为数据迁移和最终删除核对保留，旧前端范围表达及 Excel 契约尚未完成迁移。
+待确认项。`/system/terminology` 的查询、创建、更新、启停和删除已经切换到 Semantic；术语前端与
+Excel 已迁入 `/semantic/terms`。旧 `terminology` 表仍为数据迁移、外部兼容窗口和最终删除核对保留。
 
 本阶段已完成以下增量：
 
@@ -759,15 +759,22 @@ Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提�
 14. Semantic 术语管理现在可读取和启停禁用记录，批量删除先校验全部租户内引用，再在一次提交中清理
     术语主记录、别名和资产关系。应用启动已停止补旧术语向量，术语删除审计名称改为读取
     `headless_term`，避免后台任务和审计继续依赖旧事实源。
-15. 旧 Excel 只有数据源范围列，缺少必需的 `domain_id` 和 `dataset_ids`。导入、导出和模板接口在新契约
-    完成前统一返回 HTTP 409 `SEMANTIC_TERM_EXCEL_CONTRACT_REQUIRED`，不允许静默写回旧表。
+15. 新增 Semantic 术语 Excel 端口、Excel 仓储实现和应用服务，固定使用 `domain_id`、`name`、
+    `aliases`、`description`、`dataset_ids`、`enabled` 六列。模板、导入、导出和失败明细工作簿均通过
+    `/semantic/terms` 提供，导入逐行调用 `SemanticTermService`，不写旧表；旧 Excel 路径继续返回明确
+    HTTP 409，防止旧数据源范围文件被误用。
+16. 术语配置前端已直接调用 `/semantic/terms`，范围选择由数据源改为主题域和数据集，搜索、分页和批量
+    删除不再依赖 `/system/terminology`。Semantic 资产页编辑术语时会保留并可调整数据集范围，同时保留
+    既有关联指标和维度，避免全量更新 DTO 清空关系。
+17. 删除审计的资源联合查询已统一使用本地 Semantic 实现。所有模块的删除审计不再通过 XPack 联合查询
+    引用旧 `terminology` 表，解除旧表下线前的隐藏运行时依赖。
 
-当前不能直接删除旧路径和旧表：旧 UI 仍提交 `datasource_ids` 并展示数据源范围，而 Semantic 术语以
-主题域和数据集范围表达。兼容写入会明确拒绝数据源范围并要求有效 `domain_id`；旧 Excel 也已停止使用。
+当前不能直接删除旧路径和旧表：前端调用已迁移完成，但仍需确认外部调用方兼容窗口，并在目标环境执行
+旧表迁移预检和应用。兼容写入会明确拒绝数据源范围并要求有效 `domain_id`；旧 Excel 也已停止使用。
 `specific_ds=true` 的历史记录在迁移预检中只会使用有效数据集—模型配置解析范围；数据源没有关联 Semantic
 数据集时返回 `LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED`，跨主题域或与已有 `dataset_ids` 不一致时返回冲突，
 不能静默扩大术语范围。Agent、Chat、Assistant、动态数据源和术语管理运行时均已停止读取旧术语表；
-完成前端范围选择、Excel 新契约和数据核对后，才能删除旧路径、旧 CRUD、旧模型与旧表。
+完成外部调用确认和数据核对后，才能删除旧路径、旧 CRUD、旧模型与旧表。
 
 **目标**
 
@@ -779,9 +786,9 @@ Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提�
 2. 清除 Semantic Service 对具体 SQLModel 仓储实现的直接依赖。
 3. 将旧 `terminology` 数据映射到 SemanticTerm。
 4. 将别名、数据集范围和关联资产转换为 Semantic 术语及资产关系。
-5. 将旧 `/system/terminology` API 改为 SemanticTermService 的兼容转发入口。已完成核心管理路径，Excel
-   接口等待新契约。
-6. 迁移前端术语调用到 `/semantic/terms` 后删除旧入口。
+5. 将旧 `/system/terminology` API 改为 SemanticTermService 的兼容转发入口。核心管理路径已完成，
+   Semantic Excel 使用新路径；旧 Excel 路径明确拒绝旧契约。
+6. 迁移前端术语调用到 `/semantic/terms` 后删除旧入口。前端迁移已完成，旧入口等待外部调用确认后删除。
 7. 删除 `settings.models.term_model` 及无效接口。
 8. Semantic 索引重建只依赖抽象索引端口，不直接写 Retrieval 表。
 
@@ -794,7 +801,7 @@ Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提�
 
 **完成标准**
 
-- 术语核心管理只有 Semantic 一套写入 Service；Excel 旧写入已经关闭。
+- 术语核心管理和 Excel 只有 Semantic 一套写入 Service；Excel 旧写入已经关闭。
 - Semantic Service 测试不使用真实数据库 Session。
 - Repository 测试覆盖租户隔离、关系同步和级联删除。
 - 旧术语 API 不包含独立业务逻辑。
@@ -802,14 +809,16 @@ Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提�
 **本阶段验证**
 
 - `tests/semantic`、`tests/retrieval`、`tests/architecture`、`tests/agent`、`tests/chat` 和 Graph API
-  调用方回归：315 个测试通过。
+  调用方回归：320 个测试通过。
 - Semantic 索引协调器 PostgreSQL 集成测试通过。
 - Graph 会话调用方回归测试通过。
 - 本次增量修改文件的 Ruff 检查通过。
+- 前端术语 API、术语配置页和多语言文件通过定向 ESLint、Prettier；Vite 生产构建通过。完整
+  `npm run build` 仍被项目既有的 12 处 `LicenseGenerator` 全局类型缺失阻塞，本次未修改该授权模块。
 - 本阶段前一批 11 个生产代码入口，以及 Semantic 查询契约、服务、装配入口、Agent 端口、术语迁移
   规划器、迁移脚本、Chat 术语上下文服务和数据集绑定服务通过 Mypy。本次新增的术语兼容 DTO、Service、
-  Repository 和 API 入口也通过 Mypy。Agent、旧 Chat 与存储同步大文件仍有既有严格类型问题，本次未
-  扩大为无关重构。
+  Repository、API 入口，以及术语 Excel DTO、端口、仓储、Service 和 API 通过 Mypy。Agent、旧 Chat
+  与存储同步大文件仍有既有严格类型问题，本次未扩大为无关重构。
 
 ### 6.3 阶段 P2：拆分 Access Control、AI Model 和 Assistant
 

@@ -33,6 +33,15 @@ def test_semantic_router_exposes_asset_crud_contracts():
         assert (path, ("PUT",)) in routes
 
     assert ("/semantic/terms/{term_id}/enabled", ("PATCH",)) in routes
+    assert ("/semantic/terms", ("DELETE",)) in routes
+
+
+def test_semantic_router_exposes_term_excel_contracts():
+    routes = {(route.path, tuple(sorted(route.methods))) for route in router.routes}
+
+    assert ("/semantic/terms/export", ("GET",)) in routes
+    assert ("/semantic/terms/template", ("GET",)) in routes
+    assert ("/semantic/terms/upload-excel", ("POST",)) in routes
 
 
 def test_semantic_router_only_exposes_unified_retrieval_rebuild_contract():

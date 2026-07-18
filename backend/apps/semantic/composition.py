@@ -2,6 +2,9 @@
 
 from sqlmodel import Session
 
+from apps.semantic.repository.excel.term_workbook_repository import (
+    ExcelTermWorkbookRepository,
+)
 from apps.semantic.repository.sqlmodel.domain_repository import (
     SqlModelDomainRepository,
 )
@@ -11,6 +14,7 @@ from apps.semantic.services.schema_service import SemanticSchemaService
 from apps.semantic.services.term_compatibility_service import (
     LegacyTerminologyCompatibilityService,
 )
+from apps.semantic.services.term_excel_service import SemanticTermExcelService
 from apps.semantic.services.term_query_service import SemanticTermQueryService
 from apps.semantic.services.term_service import SemanticTermService
 
@@ -38,7 +42,22 @@ def build_legacy_terminology_compatibility_service(
     )
 
 
+def build_semantic_term_excel_service(
+    session: Session,
+) -> SemanticTermExcelService:
+    """装配 Semantic 术语 Excel 服务。"""
+
+    return SemanticTermExcelService(
+        SemanticTermService(
+            SqlModelTermRepository(session),
+            SqlModelDomainRepository(session),
+        ),
+        ExcelTermWorkbookRepository(),
+    )
+
+
 __all__ = [
     "build_legacy_terminology_compatibility_service",
     "build_semantic_term_query_service",
+    "build_semantic_term_excel_service",
 ]

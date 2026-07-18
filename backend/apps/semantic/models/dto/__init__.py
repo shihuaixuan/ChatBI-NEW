@@ -38,6 +38,10 @@ from apps.semantic.models.dto.term import (
     TermPayload,
     TermSearchResult,
 )
+from apps.semantic.models.dto.term_excel import (
+    TermWorkbookImportResult,
+    TermWorkbookRow,
+)
 
 __all__ = [
     "DatasetModelConfig",
@@ -68,4 +72,6 @@ __all__ = [
     "SemanticTableMeta",
     "TermPayload",
     "TermSearchResult",
+    "TermWorkbookImportResult",
+    "TermWorkbookRow",
 ]

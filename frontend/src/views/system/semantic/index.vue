@@ -92,6 +92,9 @@ const simpleForm = reactive({
   metric_expr: '',
   metric_filter_sql: '',
   metric_dependency_keys: [] as Array<number | string>,
+  related_dataset_ids: [] as Array<number | string>,
+  related_metric_ids: [] as Array<number | string>,
+  related_dimension_ids: [] as Array<number | string>,
 })
 
 const modelForm = reactive({
@@ -123,6 +126,9 @@ const datasetDimensionOptions = reactive<Record<string, any[]>>({})
 
 const currentDomain = computed(() => domains.value.find((item) => `${item.id}` === `${selectedDomainId.value}`))
 const currentDataset = computed(() => datasets.value.find((item) => `${item.id}` === `${selectedDatasetId.value}`))
+const termDatasetOptions = computed(() =>
+  datasets.value.filter((item) => `${item.domain_id}` === `${simpleForm.domain_id}`)
+)
 const displayedMetrics = computed(() =>
   selectedModelId.value ? metrics.value.filter((item) => `${item.model_id}` === `${selectedModelId.value}`) : metrics.value
 )
@@ -283,6 +289,9 @@ const resetSimpleForm = () => {
     metric_expr: '',
     metric_filter_sql: '',
     metric_dependency_keys: [],
+    related_dataset_ids: [],
+    related_metric_ids: [],
+    related_dimension_ids: [],
   })
 }
 
@@ -294,6 +303,11 @@ const openSimpleDialog = (type: SimpleDialogType) => {
     simpleForm.model_id = models.value[0].id
   }
   simpleDialogVisible.value = true
+}
+
+const handleTermDomainChange = () => {
+  const validIds = new Set(termDatasetOptions.value.map((item) => String(item.id)))
+  simpleForm.related_dataset_ids = simpleForm.related_dataset_ids.filter((id) => validIds.has(String(id)))
 }
 
 const resetMeasureInitSelection = () => {
@@ -400,6 +414,9 @@ const openSimpleEditDialog = (type: SimpleDialogType, row: any) => {
     metric_expr: metricExprFromParams(metricDefineType, metricTypeParams),
     metric_filter_sql: metricFilterSqlFromParams(metricDefineType, metricTypeParams),
     metric_dependency_keys: metricDependencyKeysFromParams(metricDefineType, metricTypeParams),
+    related_dataset_ids: row.related_datasets || [],
+    related_metric_ids: row.related_metrics || [],
+    related_dimension_ids: row.related_dimensions || [],
   })
   simpleDialogVisible.value = true
 }
@@ -514,6 +531,9 @@ const buildSimplePayload = () => {
     name: simpleForm.name,
     alias: splitText(simpleForm.alias_text),
     description: simpleForm.description,
+    related_datasets: simpleForm.related_dataset_ids.map(Number),
+    related_metrics: simpleForm.related_metric_ids.map(Number),
+    related_dimensions: simpleForm.related_dimension_ids.map(Number),
   }
 }
 
@@ -1313,6 +1333,15 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
           <el-table-column label="别名" min-width="180"><template #default="{ row }">{{ aliasText(row) }}</template></el-table-column>
           <el-table-column label="关联指标" width="110"><template #default="{ row }">{{ row.related_metrics?.length || 0 }}</template></el-table-column>
           <el-table-column label="关联维度" width="110"><template #default="{ row }">{{ row.related_dimensions?.length || 0 }}</template></el-table-column>
+          <el-table-column label="数据集范围" min-width="180">
+            <template #default="{ row }">
+              {{
+                row.related_datasets?.length
+                  ? `${row.related_datasets.length} 个指定数据集`
+                  : '主题域内全部数据集'
+              }}
+            </template>
+          </el-table-column>
           <el-table-column prop="description" label="描述" min-width="240" />
           <el-table-column label="操作" width="140" fixed="right">
             <template #default="{ row }">
@@ -1612,7 +1641,7 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
         <el-row v-if="simpleDialogType !== 'domain'" :gutter="12">
           <el-col v-if="simpleDialogType === 'term'" :span="12">
             <el-form-item class="required-item" label="主题域">
-              <el-select v-model="simpleForm.domain_id">
+              <el-select v-model="simpleForm.domain_id" @change="handleTermDomainChange">
                 <el-option v-for="item in domains" :key="item.id" :label="item.name" :value="item.id" />
               </el-select>
             </el-form-item>
@@ -1634,6 +1663,21 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
         </el-form-item>
         <el-form-item v-if="simpleDialogType !== 'domain'" label="描述">
           <el-input v-model="simpleForm.description" type="textarea" :rows="2" />
+        </el-form-item>
+        <el-form-item v-if="simpleDialogType === 'term'" label="数据集范围">
+          <el-select
+            v-model="simpleForm.related_dataset_ids"
+            multiple
+            clearable
+            placeholder="留空表示主题域内全部数据集"
+          >
+            <el-option
+              v-for="item in termDatasetOptions"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
         </el-form-item>
         <template v-if="simpleDialogType === 'metric'">
           <div class="metric-define-panel">

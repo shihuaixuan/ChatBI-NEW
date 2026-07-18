@@ -9,7 +9,6 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import String, and_, func, literal_column, select
-from sqlbot_xpack.audit.curd.audit import build_resource_union_query
 from sqlmodel import Session
 
 from apps.semantic.models.orm import SemanticTerm
@@ -22,6 +21,7 @@ from common.audit.models.log_model import (
     SystemLog,
     SystemLogsResource,
 )
+from common.audit.schemas.log_utils import build_resource_union_query
 from common.audit.schemas.request_context import RequestContext
 from common.core.db import engine
 
