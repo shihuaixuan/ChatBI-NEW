@@ -2,6 +2,11 @@
 
 from apps.semantic.models.dto.base import SemanticBaseDTO
 from apps.semantic.models.dto.dataset import DatasetPayload
+from apps.semantic.models.dto.dataset_index import (
+    DatasetIndexEnqueueResult,
+    DatasetIndexRebuildResult,
+    DatasetIndexVersion,
+)
 from apps.semantic.models.dto.dataset_schema import (
     DatasetModelConfig,
     DatasetSchema,
@@ -33,6 +38,9 @@ from apps.semantic.models.dto.term import TermPayload
 __all__ = [
     "DatasetModelConfig",
     "DatasetPayload",
+    "DatasetIndexEnqueueResult",
+    "DatasetIndexRebuildResult",
+    "DatasetIndexVersion",
     "DatasetSchema",
     "DimensionPayload",
     "DomainPayload",

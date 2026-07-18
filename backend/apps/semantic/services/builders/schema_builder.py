@@ -134,7 +134,11 @@ class SemanticSchemaBuilder:
             model_relations=exposed_relations,
             metrics=[self._metric_element(dataset, metric) for metric in exposed_metrics],
             dimensions=[self._dimension_element(dataset, dimension, model_by_id.get(dimension.model_id)) for dimension in exposed_dimensions],
-            terms=[self._term_element(dataset, term) for term in terms if term.status == 1],
+            terms=[
+                self._term_element(dataset, term)
+                for term in terms
+                if term.status == 1 and _term_applies_to_dataset(term, dataset)
+            ],
             query_config=dataset.query_config or {},
         )
         schema.dimension_values = [
@@ -311,6 +315,15 @@ def _runtime_subject_domains(
             }
         )
     return result
+
+
+def _term_applies_to_dataset(
+    term: SemanticTerm,
+    dataset: SemanticDataset,
+) -> bool:
+    """未指定数据集的术语作用于整个主题域，否则只作用于明确的数据集。"""
+
+    return not term.related_datasets or dataset.id in term.related_datasets
 
 
 def _runtime_dataset_asset_ids(

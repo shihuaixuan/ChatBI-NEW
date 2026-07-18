@@ -25,6 +25,7 @@ from apps.retrieval.semantic_indexing import (
     SemanticIndexCoordinator,
     build_semantic_index_profile,
 )
+from apps.semantic.models.dto import DatasetIndexVersion
 from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetAsset,
@@ -34,6 +35,8 @@ from apps.semantic.models.orm import (
     SemanticMetric,
     SemanticModel,
 )
+from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
+from apps.semantic.services.schema_service import SemanticSchemaService
 from apps.workflow import runtime as chatbi_runtime
 from apps.workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
 from apps.workflow_engine.api import router as graph_router
@@ -269,9 +272,17 @@ def _seed_v1_semantic_dataset(session: Session, oid: int = 9501) -> int:
     session.add(dataset)
     session.flush()
     profile = build_semantic_index_profile()
+    schema = SemanticSchemaService(SemanticSchemaLoader(session)).build_dataset_schema(
+        oid, dataset.id or 0
+    )
     queued = SemanticIndexCoordinator(session, profile).enqueue_dataset_rebuild(
         tenant_id=oid,
-        dataset=dataset,
+        version=DatasetIndexVersion(
+            dataset_id=dataset.id or 0,
+            schema_version=dataset.schema_version,
+            index_version=dataset.index_version,
+        ),
+        schema=schema,
     )
     provider = StaticEmbeddingProvider(
         vector=[0.0] * profile.dimension,
@@ -279,7 +290,7 @@ def _seed_v1_semantic_dataset(session: Session, oid: int = 9501) -> int:
         model=profile.model,
     )
     indexing = RetrievalIndexingService(session, profile)
-    for job_id in queued.generation.job_ids:
+    for job_id in queued.job_ids:
         indexing.process_job(job_id, provider)
     session.commit()
     return dataset.id or 0

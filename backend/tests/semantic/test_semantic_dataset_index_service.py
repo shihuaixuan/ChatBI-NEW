@@ -5,9 +5,11 @@ from fastapi import BackgroundTasks
 
 from apps.retrieval.semantic_worker import process_semantic_index_jobs
 from apps.semantic.api import dataset_indexes
+from apps.semantic.models.dto import (
+    DatasetIndexEnqueueResult,
+    DatasetIndexRebuildResult,
+)
 from apps.semantic.models.orm import SemanticDataset
-from apps.semantic.repository.dataset_index_repository import DatasetIndexRebuildResult
-from apps.semantic.repository.sqlmodel import dataset_index_repository
 from apps.semantic.repository.sqlmodel.dataset_index_repository import (
     SqlModelDatasetIndexRepository,
 )
@@ -16,7 +18,7 @@ from apps.semantic.services.dataset_index_service import (
 )
 
 
-def test_rebuild_index_only_enqueues_unified_retrieval(monkeypatch):
+def test_rebuild_index_only_enqueues_unified_retrieval():
     dataset = SemanticDataset(
         id=9,
         oid=1,
@@ -27,29 +29,23 @@ def test_rebuild_index_only_enqueues_unified_retrieval(monkeypatch):
     )
     session = _DatasetSession(dataset)
 
-    class _IndexCoordinator:
-        def __init__(self, coordinator_session):
-            assert coordinator_session is session
-
-        def enqueue_dataset_rebuild(self, *, tenant_id: int, dataset):
+    class _IndexGateway:
+        def enqueue_dataset_rebuild(self, *, tenant_id: int, version, schema):
             assert tenant_id == 1
-            assert dataset.id == 9
-            return SimpleNamespace(
+            assert version.dataset_id == 9
+            assert version.schema_version == 1
+            assert version.index_version == 3
+            assert schema.data_set.id == 9
+            return DatasetIndexEnqueueResult(
                 source_id=77,
-                generation=SimpleNamespace(
-                    generation="dataset-9-index-3",
-                    job_ids=(101, 102),
-                ),
+                generation="dataset-9-index-3",
+                job_ids=(101, 102),
             )
 
-    monkeypatch.setattr(
-        dataset_index_repository,
-        "SemanticIndexCoordinator",
-        _IndexCoordinator,
-    )
-
     result = SemanticDatasetIndexService(
-        SqlModelDatasetIndexRepository(session)
+        SqlModelDatasetIndexRepository(session),
+        _SchemaReader(),
+        _IndexGateway(),
     ).rebuild_index(1, 9)
 
     assert dataset.index_version == 3
@@ -69,7 +65,7 @@ async def test_rebuild_dataset_index_schedules_application_job_ids(monkeypatch):
     background_tasks = BackgroundTasks()
 
     class _IndexService:
-        def __init__(self, _session):
+        def __init__(self, *_dependencies):
             pass
 
         def rebuild_index(self, oid: int, dataset_id: int):
@@ -118,3 +114,10 @@ class _DatasetSession:
 
     def commit(self):
         self.commit_count += 1
+
+
+class _SchemaReader:
+    def build_dataset_schema(self, oid: int, dataset_id: int):
+        assert oid == 1
+        assert dataset_id == 9
+        return SimpleNamespace(data_set=SimpleNamespace(id=9))

@@ -1,13 +1,16 @@
 from fastapi import APIRouter, BackgroundTasks
 
+from apps.retrieval.semantic_indexing import SemanticIndexCoordinator
 from apps.retrieval.semantic_worker import process_semantic_index_jobs
 from apps.semantic.api.error_mapping import map_semantic_errors_to_http
 from apps.semantic.repository.sqlmodel.dataset_index_repository import (
     SqlModelDatasetIndexRepository,
 )
+from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
 from apps.semantic.services.dataset_index_service import (
     SemanticDatasetIndexService,
 )
+from apps.semantic.services.schema_service import SemanticSchemaService
 from common.core.deps import CurrentUser, SessionDep
 
 router = APIRouter(tags=["Semantic"], prefix="/semantic")
@@ -19,10 +22,12 @@ async def rebuild_dataset_index(
     current_user: CurrentUser,
     background_tasks: BackgroundTasks,
     dataset_id: int,
-):
+) -> dict[str, int | str | list[int]]:
     with map_semantic_errors_to_http():
         result = SemanticDatasetIndexService(
-            SqlModelDatasetIndexRepository(session)
+            SqlModelDatasetIndexRepository(session),
+            SemanticSchemaService(SemanticSchemaLoader(session)),
+            SemanticIndexCoordinator(session),
         ).rebuild_index(
             current_user.oid,
             dataset_id,

@@ -63,6 +63,7 @@ def test_term_relations_link_related_metrics_and_dimensions():
         name="人气",
         related_metrics=[10],
         related_dimensions=[20],
+        related_datasets=[30],
     )
 
     relations = build_term_relations(term)
@@ -70,4 +71,5 @@ def test_term_relations_link_related_metrics_and_dimensions():
     assert {(item.source_type, item.relation_type, item.target_type, item.target_id) for item in relations} == {
         ("TERM", "RELATED_TO", "METRIC", 10),
         ("TERM", "RELATED_TO", "DIMENSION", 20),
+        ("TERM", "SCOPED_TO", "DATASET", 30),
     }

@@ -110,6 +110,48 @@ def test_schema_builder_exposes_dataset_selected_metrics_and_dimensions():
     assert schema.metrics[0].fields == ["visit_uv"]
 
 
+def test_schema_builder_only_exposes_terms_in_dataset_scope():
+    domain = SemanticDomain(id=1, oid=1, name="销售域", biz_name="sales")
+    dataset = SemanticDataset(
+        id=20,
+        oid=1,
+        domain_id=1,
+        name="销售数据集",
+        biz_name="sales_dataset",
+    )
+    global_term = SemanticTerm(
+        id=100,
+        oid=1,
+        domain_id=1,
+        name="全域术语",
+    )
+    scoped_term = SemanticTerm(
+        id=101,
+        oid=1,
+        domain_id=1,
+        name="当前数据集术语",
+        related_datasets=[20],
+    )
+    other_term = SemanticTerm(
+        id=102,
+        oid=1,
+        domain_id=1,
+        name="其他数据集术语",
+        related_datasets=[21],
+    )
+
+    schema = SemanticSchemaBuilder().build_from_assets(
+        dataset=dataset,
+        domain=domain,
+        models=[],
+        metrics=[],
+        dimensions=[],
+        terms=[global_term, scoped_term, other_term],
+    )
+
+    assert [term.id for term in schema.terms] == [100, 101]
+
+
 def test_schema_builder_adds_database_and_model_relations_for_runtime_assets():
     domain = SemanticDomain(id=1, oid=1, name="销售域", biz_name="sales")
     datasource = CoreDatasource(

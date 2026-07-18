@@ -76,6 +76,10 @@ def build_term_relations(term: SemanticTerm) -> list[SemanticAssetRelation]:
         _relation(term.oid, "TERM", term.id, "RELATED_TO", "DIMENSION", dimension_id)
         for dimension_id in term.related_dimensions or []
     )
+    relations.extend(
+        _relation(term.oid, "TERM", term.id, "SCOPED_TO", "DATASET", dataset_id)
+        for dataset_id in term.related_datasets or []
+    )
     return relations
 
 

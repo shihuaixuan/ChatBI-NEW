@@ -60,6 +60,10 @@ class SemanticTerm(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     )
+    related_datasets: list[int] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
     status: int = Field(default=1, nullable=False)
     created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
     updated_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))

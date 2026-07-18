@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from apps.semantic.errors import SemanticNotFoundError
+from apps.semantic.errors import SemanticNotFoundError, SemanticValidationError
 from apps.semantic.models.dto import TermPayload
 from apps.semantic.models.orm import SemanticTerm
 from apps.semantic.repository.domain_repository import DomainRepository
 from apps.semantic.repository.term_repository import TermRepository
 from apps.semantic.utils.model_update import assign_values
+from apps.semantic.utils.text import unique_texts
 
 
 class SemanticTermService:
@@ -25,7 +26,8 @@ class SemanticTermService:
         return self._repository.list_active(oid, domain_id)
 
     def create_term(self, oid: int, payload: TermPayload) -> SemanticTerm:
-        self._require_domain(oid, payload.domain_id)
+        payload = self._validated_payload(oid, payload)
+        self._require_unique_name(oid, payload.domain_id, payload.name)
         term = SemanticTerm(**payload.model_dump(), oid=oid)
         return self._repository.create(term)
 
@@ -33,7 +35,13 @@ class SemanticTermService:
         self, oid: int, term_id: int, payload: TermPayload
     ) -> SemanticTerm:
         term = self._require_term(oid, term_id)
-        self._require_domain(oid, payload.domain_id)
+        payload = self._validated_payload(oid, payload)
+        self._require_unique_name(
+            oid,
+            payload.domain_id,
+            payload.name,
+            exclude_id=term_id,
+        )
         assign_values(term, payload.model_dump())
         return self._repository.update(term)
 
@@ -51,3 +59,64 @@ class SemanticTermService:
     def _require_domain(self, oid: int, domain_id: int) -> None:
         if not self._domain_repository.is_active(oid, domain_id):
             raise SemanticNotFoundError("SEMANTIC_DOMAIN_NOT_FOUND")
+
+    def _validated_payload(self, oid: int, payload: TermPayload) -> TermPayload:
+        self._require_domain(oid, payload.domain_id)
+        name = payload.name.strip()
+        if not name:
+            raise SemanticValidationError("SEMANTIC_TERM_NAME_EMPTY")
+
+        values = payload.model_dump()
+        values["name"] = name
+        values["alias"] = [
+            alias
+            for alias in unique_texts(payload.alias)
+            if alias != name
+        ]
+        for field_name in (
+            "related_datasets",
+            "related_metrics",
+            "related_dimensions",
+        ):
+            values[field_name] = self._reference_ids(values[field_name])
+
+        normalized = TermPayload(**values)
+        validation = self._repository.validate_references(
+            oid,
+            normalized.domain_id,
+            normalized.related_datasets,
+            normalized.related_metrics,
+            normalized.related_dimensions,
+        )
+        if validation.invalid_dataset_ids:
+            raise SemanticValidationError("SEMANTIC_TERM_DATASET_REFERENCE_INVALID")
+        if validation.invalid_metric_ids:
+            raise SemanticValidationError("SEMANTIC_TERM_METRIC_REFERENCE_INVALID")
+        if validation.invalid_dimension_ids:
+            raise SemanticValidationError("SEMANTIC_TERM_DIMENSION_REFERENCE_INVALID")
+        return normalized
+
+    def _require_unique_name(
+        self,
+        oid: int,
+        domain_id: int,
+        name: str,
+        exclude_id: int | None = None,
+    ) -> None:
+        if self._repository.name_exists(
+            oid,
+            domain_id,
+            name,
+            exclude_id=exclude_id,
+        ):
+            raise SemanticValidationError("SEMANTIC_TERM_NAME_EXISTS")
+
+    @staticmethod
+    def _reference_ids(values: list[int]) -> list[int]:
+        result: list[int] = []
+        for value in values:
+            if isinstance(value, bool) or value <= 0:
+                raise SemanticValidationError("SEMANTIC_TERM_REFERENCE_ID_INVALID")
+            if value not in result:
+                result.append(value)
+        return result

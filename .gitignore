@@ -18,6 +18,8 @@ backend/tests/*
 !backend/tests/agent/**
 !backend/tests/capabilities/
 !backend/tests/capabilities/**
+!backend/tests/architecture/
+!backend/tests/architecture/**
 !backend/tests/retrieval/
 !backend/tests/retrieval/**
 !backend/tests/semantic/
@@ -37,6 +39,7 @@ backend/alembic/versions/*
 !backend/alembic/versions/083_remove_legacy_embedding.py
 !backend/alembic/versions/085_active_question_flows.py
 !backend/alembic/versions/086_remove_legacy_semantic_index.py
+!backend/alembic/versions/087_semantic_term_dataset_scope.py
 .codex_run_logs
 .idea
 data/sqlbot

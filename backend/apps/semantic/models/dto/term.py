@@ -10,3 +10,4 @@ class TermPayload(SemanticBaseDTO):
     description: str | None = None
     related_metrics: list[int] = Field(default_factory=list)
     related_dimensions: list[int] = Field(default_factory=list)
+    related_datasets: list[int] = Field(default_factory=list)

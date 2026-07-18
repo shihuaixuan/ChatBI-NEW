@@ -25,13 +25,15 @@ from apps.retrieval.projection import ProjectedResource
 from apps.retrieval.schemas import RetrievalResourceType
 from apps.retrieval.semantic_indexing import SemanticIndexCoordinator
 from apps.retrieval.semantic_projector import SemanticSourceProjector
-from apps.semantic.models.dto import DatasetSchema, SchemaElement
+from apps.semantic.models.dto import DatasetIndexVersion, DatasetSchema, SchemaElement
 from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDomain,
     SemanticMetric,
     SemanticModel,
 )
+from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
+from apps.semantic.services.schema_service import SemanticSchemaService
 from common.core.db import engine
 
 TENANT_ID = 9_920_001
@@ -435,18 +437,26 @@ def test_semantic_coordinator_writes_source_projection_and_jobs_in_caller_transa
     session.add(metric)
     session.flush()
 
+    schema = SemanticSchemaService(SemanticSchemaLoader(session)).build_dataset_schema(
+        TENANT_ID, dataset.id or 0
+    )
     result = SemanticIndexCoordinator(session, PROFILE).enqueue_dataset_rebuild(
         tenant_id=TENANT_ID,
-        dataset=dataset,
+        version=DatasetIndexVersion(
+            dataset_id=dataset.id or 0,
+            schema_version=dataset.schema_version,
+            index_version=dataset.index_version,
+        ),
+        schema=schema,
     )
 
     source = session.get(RetrievalSourceModel, result.source_id)
     assert source is not None
     assert source.source_key == f"dataset:{dataset.id}"
     assert source.status == "rebuilding"
-    assert result.source_version == "schema:3:index:7"
-    assert result.generation.generation == f"dataset-{dataset.id}-index-7"
-    assert len(result.generation.job_ids) == 3
+    assert source.source_version == "schema:3:index:7"
+    assert result.generation == f"dataset-{dataset.id}-index-7"
+    assert len(result.job_ids) == 3
     resources = list(
         session.exec(
             select(RetrievalResourceModel).where(

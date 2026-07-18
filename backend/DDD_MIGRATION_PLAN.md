@@ -1,6 +1,6 @@
 # SQLBot 后端 DDD 分阶段迁移方案
 
-> 状态：初稿  
+> 状态：实施中
 > 日期：2026-07-18  
 > 适用范围：`backend/apps/` 业务代码及其直接依赖  
 > 目标读者：后端开发人员、架构负责人、测试人员和后续维护人员
@@ -96,13 +96,15 @@ SQLBot 后端已经形成数据源接入、语义建模、统一检索、对话�
 
 #### 2.3.3 同一业务数据存在多个事实源
 
-当前至少存在以下术语模型：
+迁移开始时存在以下术语模型：
 
 - `terminology.models.Terminology`
 - `semantic.models.orm.SemanticTerm`
 - `settings.models.term_model`
 
-多套术语模型会导致维护入口、Embedding、关联资产和查询结果不一致。目标状态必须只保留 Semantic 术语一个权威实现。
+多套术语模型会导致维护入口、Embedding、关联资产和查询结果不一致。2026-07-18 已确认
+`settings.models.term_model` 没有运行时和 Alembic 引用，但该文件可能是尚未提交的工作区内容，当前保留；
+后续仍需完成旧 Terminology 与 SemanticTerm 的数据和入口合并。目标状态必须只保留 Semantic 术语一个权威实现。
 
 #### 2.3.4 问数业务能力存在多条实现链路
 
@@ -654,8 +656,8 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 截至 2026-07-18，已新增 `tests/architecture/test_dependency_baseline.py` 和
 `tests/architecture/known_dependency_violations.json`，完成以下依赖基线：
 
-- 40 条跨领域内部模型依赖。
-- 29 条跨领域具体实现依赖。
+- P0 初始记录 40 条跨领域内部模型依赖；P1 清理 1 条后当前为 39 条。
+- P0 初始记录 29 条跨领域具体实现依赖；P1 清理 1 条后当前为 28 条。
 - 1 条跨领域 API 依赖。
 - 6 条 Workflow Engine 对业务模块的依赖。
 - 10 条函数内部业务模块导入。
@@ -717,6 +719,33 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 
 ### 6.2 阶段 P1：完成 Semantic 边界并统一术语
 
+**实施状态：进行中**
+
+截至 2026-07-18，已确认 `settings.models.term_model`、`term_schema_creator` 没有后端运行时和
+Alembic 引用。由于这些文件不属于当前 `HEAD`，可能是尚未提交的工作区内容，本阶段保留并登记为
+待确认项。旧 `terminology` 表和 `/system/terminology` API 仍在使用，必须完成数据映射和调用方迁移后再删除。
+
+本阶段已完成以下增量：
+
+1. Semantic 数据集索引 Service 改为依赖 `DatasetIndexGateway`，不再由 Semantic 仓储直接创建
+   Retrieval 协调器，也不再把 `SemanticDataset` ORM 传给 Retrieval。
+2. 新增数据集索引版本、任务创建结果和重建结果 DTO；Retrieval 只消费 Semantic 的公开 DTO 与
+   `DatasetSchema`。
+3. 新增 `SemanticTerm.related_datasets` 和 087 数据库迁移。空数组表示作用于整个主题域，非空数组
+   表示只进入指定数据集的运行时 Schema，并同步生成 `TERM -> DATASET` 资产关系。
+4. 新增 `LegacyTermMigrationPlanner`，对租户、主题域、数据集、指标、维度、同名术语和数据源范围执行
+   显式校验，输出总数、候选数、跳过数、冲突数和失败明细。
+5. 新增 `scripts/migrate_legacy_terminology.py`。脚本默认只预检；只有显式传入 `--apply` 且冲突、失败
+   均为 0 时，才在一个事务中写入 SemanticTerm 和资产关系。重复执行时，相同目标术语会记为跳过。
+6. 本地数据库已升级到 087；租户 1 的只读预检为 0 条旧术语、0 冲突、0 失败，未执行数据写入。
+7. `SemanticTermService` 已统一执行名称清理、同主题域重名校验，以及数据集、指标、维度的租户和主题域
+   引用校验；正常 API 写入与迁移规划不再使用两套引用规则。
+
+当前不能直接删除旧入口：旧 UI 和 API 仍提供数据源范围、Excel 导入导出，而 Semantic 术语以主题域和
+数据集范围表达。`specific_ds=true` 的旧记录目前会返回
+`LEGACY_TERM_DATASOURCE_SCOPE_UNRESOLVED`，必须先确定“数据源到 Semantic 数据集”的显式映射，不能静默
+扩大术语范围。完成映射并迁移前端能力后，才能把 `/system/terminology` 改为纯转发并删除旧表。
+
 **目标**
 
 把 Semantic 确立为语义资产唯一事实源，完成当前已开始的分层迁移。
@@ -745,6 +774,14 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 - Semantic Service 测试不使用真实数据库 Session。
 - Repository 测试覆盖租户隔离、关系同步和级联删除。
 - 旧术语 API 不包含独立业务逻辑。
+
+**本阶段验证**
+
+- `tests/semantic`、`tests/retrieval`、`tests/architecture` 加 1 个 Graph 调用方回归：199 个测试通过。
+- Semantic 索引协调器 PostgreSQL 集成测试通过。
+- Graph 会话调用方回归测试通过。
+- 本阶段修改文件的 Ruff `F`、`I` 检查通过。
+- 本阶段 11 个新增或调整的生产代码入口通过 Mypy。
 
 ### 6.3 阶段 P2：拆分 Access Control、AI Model 和 Assistant
 
@@ -918,7 +955,8 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 | `apps/terminology/models/` | `apps/semantic/models/orm/` | 合并 | 数据迁入 SemanticTerm，禁止继续双写 |
 | `apps/terminology/curd/` | `apps/semantic/services/`、`repository/` | 重写后合并 | Excel 导入、查询和 Embedding 职责分开 |
 | `apps/terminology/api/` | `apps/semantic/api/` | 兼容转发后删除 | 前端迁移到 `/semantic/terms` |
-| `apps/settings/models/setting_models.py` | 无 | 删除 | 第三套术语模型没有保留价值 |
+| `apps/settings/models/setting_models.py` | `apps/knowledge/` 或删除 | 待确认，当前保留 | 第三套术语模型无运行时引用，但不覆盖工作区未提交内容 |
+| `apps/settings/schemas/setting_schemas.py` | `apps/knowledge/` 或删除 | 待确认，当前保留 | DTO 与模型一并确认归属 |
 | `apps/data_training/` | `apps/knowledge/` | 迁移并重命名 | 使用 SQL 示例和问题示例等准确名称 |
 | `apps/datasource/api/recommended_problem.py` | `apps/knowledge/api/` | 迁移 | 推荐问题不属于数据源连接职责 |
 | `apps/datasource/crud/recommended_problem.py` | `apps/knowledge/repository/` | 迁移 | 由 Knowledge 管理源数据 |
