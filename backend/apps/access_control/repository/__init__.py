@@ -1,5 +1,8 @@
 """Access Control 仓储端口与实现导出。"""
 
+from apps.access_control.repository.identity_workspace_repository import (
+    IdentityWorkspaceRepository,
+)
 from apps.access_control.repository.resource_scope import (
     CompositeWorkspaceResourceScopeRepository,
     ResourceId,
@@ -12,5 +15,5 @@ __all__ = [
     "ResourceId",
     "WorkspaceResourceScopeReader",
     "WorkspaceResourceScopeRepository",
+    "IdentityWorkspaceRepository",
 ]
-

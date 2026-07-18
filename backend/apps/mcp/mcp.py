@@ -9,21 +9,19 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from jwt.exceptions import InvalidTokenError
 from pydantic import ValidationError
-from sqlmodel import select
 
-from apps.chat.api.chat import create_chat
-from apps.chat.models.chat_model import ChatStart, CreateChat, McpDs, McpQuestion
+from apps.access_control.composition import build_identity_workspace_service
+from apps.access_control.identity import authenticate, user_ws_options
+from apps.access_control.models.dto import BaseUserDTO, UserInfoDTO
 from apps.agent.schemas import AgentStartStreamRequest
 from apps.agent.service import (
     AgentDatasourceNotAllowedError,
     AgentNotEnabledError,
     create_agent_start_stream,
 )
+from apps.chat.api.chat import create_chat
+from apps.chat.models.chat_model import ChatStart, CreateChat, McpDs, McpQuestion
 from apps.datasource.crud.datasource import get_datasource_list
-from apps.system.crud.user import authenticate, get_db_user, user_ws_options
-from apps.system.models.system_model import UserWsModel
-from apps.system.models.user import UserModel
-from apps.system.schemas.system_schema import BaseUserDTO, UserInfoDTO
 from common.core import security
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
@@ -52,7 +50,7 @@ router = APIRouter(tags=["mcp"], prefix="/mcp")
 #     ))
 
 
-def get_user(session: SessionDep, token: str):
+def get_user(session: SessionDep, token: str) -> UserInfoDTO:
     try:
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[security.ALGORITHM]
@@ -63,22 +61,16 @@ def get_user(session: SessionDep, token: str):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Could not validate credentials",
         )
-    # session_user = await get_user_info(session=session, user_id=token_data.id)
-
-    db_user: UserModel = get_db_user(session=session, user_id=token_data.id)
-    session_user = UserInfoDTO.model_validate(db_user.model_dump())
-    session_user.isAdmin = session_user.id == 1 and session_user.account == 'admin'
-    session_user.language = 'zh-CN'
-    if session_user.isAdmin:
-        session_user = session_user
-    ws_model: UserWsModel = session.exec(
-        select(UserWsModel).where(UserWsModel.uid == session_user.id, UserWsModel.oid == session_user.oid)).first()
-    session_user.weight = ws_model.weight if ws_model else -1
-
-    session_user = UserInfoDTO.model_validate(session_user)
+    session_user = (
+        build_identity_workspace_service(session).get_user_info(token_data.id)
+        if token_data.id is not None
+        else None
+    )
     if not session_user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # MCP 当前保持固定中文环境，不改变原有语言行为。
+    session_user.language = "zh-CN"
     if session_user.status != 1:
         raise HTTPException(status_code=400, detail="Inactive user")
     return session_user

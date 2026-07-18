@@ -1,12 +1,12 @@
-"""Access Control 模型公开入口。"""
+"""Access Control ORM 稳定导出。"""
 
-from apps.access_control.models.dto import *  # noqa: F403
-from apps.access_control.models.dto import __all__ as _dto_exports
-from apps.access_control.models.orm import (
+from apps.access_control.models.orm.identity import (
     BaseUserPO,
     UserModel,
     UserPlatformBase,
     UserPlatformModel,
+)
+from apps.access_control.models.orm.workspace import (
     UserWsBaseModel,
     UserWsModel,
     WorkspaceBaseModel,
@@ -14,7 +14,6 @@ from apps.access_control.models.orm import (
 )
 
 __all__ = [
-    *_dto_exports,
     "BaseUserPO",
     "UserModel",
     "UserPlatformBase",
@@ -24,3 +23,4 @@ __all__ = [
     "WorkspaceBaseModel",
     "WorkspaceModel",
 ]
+

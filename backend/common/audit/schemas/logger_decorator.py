@@ -11,9 +11,9 @@ from pydantic import BaseModel
 from sqlalchemy import String, and_, func, literal_column, select
 from sqlmodel import Session
 
+from apps.access_control.identity import get_user_by_account
+from apps.access_control.models.dto import UserInfoDTO
 from apps.semantic.models.orm import SemanticTerm
-from apps.system.crud.user import get_user_by_account
-from apps.system.schemas.system_schema import UserInfoDTO
 from common.audit.models.log_model import (
     OperationModules,
     OperationStatus,

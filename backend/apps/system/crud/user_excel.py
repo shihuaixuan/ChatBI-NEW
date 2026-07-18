@@ -1,18 +1,20 @@
 
 
 import asyncio
-from http.client import HTTPException
+import atexit
 import io
+import os
 import sys
 import tempfile
-import uuid
-import atexit
 import threading
-from fastapi.responses import StreamingResponse, FileResponse
-import os
-from openai import BaseModel
+import uuid
+from http.client import HTTPException
+
 import pandas as pd
-from apps.system.models.user import UserModel
+from fastapi.responses import FileResponse, StreamingResponse
+from openai import BaseModel
+
+from apps.access_control.models import UserModel
 from common.core.deps import SessionDep
 
 
@@ -332,9 +334,3 @@ def _cleanup_temp_files():
 
 
 atexit.register(_cleanup_temp_files)
-    
-
-
-
-    
-   

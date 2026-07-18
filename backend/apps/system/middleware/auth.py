@@ -2,25 +2,30 @@
 import base64
 import json
 from typing import Optional
+
+import jwt
 from fastapi import Request
 from fastapi.responses import JSONResponse
-import jwt
+from fastapi.security.utils import get_authorization_scheme_param
 from sqlmodel import Session
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from apps.access_control.identity import get_user_by_account, get_user_info
+from apps.access_control.models.dto import UserInfoDTO
 from apps.system.crud.apikey_manage import get_api_key
-from apps.system.models.system_model import ApiKeyModel, AssistantModel
-from common.core.db import engine 
 from apps.system.crud.assistant import get_assistant_info, get_assistant_user
-from apps.system.crud.user import get_user_by_account, get_user_info
-from apps.system.schemas.system_schema import AssistantHeader, UserInfoDTO
+from apps.system.models.system_model import ApiKeyModel, AssistantModel
+from apps.system.schemas.system_schema import AssistantHeader
 from common.core import security
 from common.core.config import settings
+from common.core.db import engine
+from common.core.deps import get_i18n
 from common.core.schemas import TokenPayload
 from common.utils.locale import I18n
 from common.utils.utils import SQLBotLogUtil, get_origin_from_referer
 from common.utils.whitelist import whiteUtils
-from fastapi.security.utils import get_authorization_scheme_param
-from common.core.deps import get_i18n
+
+
 class TokenMiddleware(BaseHTTPMiddleware):
     
     

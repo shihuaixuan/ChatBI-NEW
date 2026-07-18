@@ -2,31 +2,15 @@ from typing import Optional
 
 from sqlmodel import BigInteger, Field, SQLModel, Text
 
+# 当前 System API 与 XPack 仍使用旧导入路径，权威 ORM 已归属 Access Control。
+from apps.access_control.models import UserWsModel as UserWsModel
+from apps.access_control.models import WorkspaceBase as WorkspaceBase
+from apps.access_control.models import WorkspaceEditor as WorkspaceEditor
+from apps.access_control.models import WorkspaceModel as WorkspaceModel
 # 当前 System API 与 XPack 仍使用旧导入路径，权威 ORM 已归属 AI Model。
 from apps.ai_model.models import AiModelBase as AiModelBase
 from apps.ai_model.models import AiModelDetail as AiModelDetail
 from common.core.models import SnowflakeBase
-from common.core.schemas import BaseCreatorDTO
-
-
-class WorkspaceBase(SQLModel):
-    name: str = Field(max_length=255, nullable=False)
-
-class WorkspaceEditor(WorkspaceBase, BaseCreatorDTO):
-    pass
-    
-class WorkspaceModel(SnowflakeBase, WorkspaceBase, table=True):
-    __tablename__ = "sys_workspace"
-    create_time: int = Field(default=0, sa_type=BigInteger())
-    
-class UserWsBaseModel(SQLModel):
-    uid: int = Field(nullable=False, sa_type=BigInteger())
-    oid: int = Field(nullable=False, sa_type=BigInteger())
-    weight: int =  Field(default=0, nullable=False)
-    
-class UserWsModel(SnowflakeBase, UserWsBaseModel, table=True):
-    __tablename__ = "sys_user_ws"
-    
 
 class AssistantBaseModel(SQLModel):
     name: str = Field(max_length=255, nullable=False)

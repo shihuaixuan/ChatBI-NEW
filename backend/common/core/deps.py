@@ -4,10 +4,11 @@ from urllib.parse import unquote
 
 from fastapi import Depends, Request
 from sqlmodel import Session
-from apps.system.schemas.system_schema import AssistantHeader, UserInfoDTO
+
+from apps.access_control.models.dto import UserInfoDTO
+from apps.system.schemas.system_schema import AssistantHeader
 from common.core.db import get_session
 from common.utils.locale import I18n
-
 
 SessionDep = Annotated[Session, Depends(get_session)]
 i18n = I18n()
@@ -31,6 +32,5 @@ async def get_current_assistant(request: Request) -> AssistantHeader | None:
     return base_assistant
 
 CurrentAssistant = Annotated[AssistantHeader, Depends(get_current_assistant)]
-
 
 

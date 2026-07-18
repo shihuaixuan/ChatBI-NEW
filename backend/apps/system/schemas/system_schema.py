@@ -1,107 +1,28 @@
-import re
-from typing import Optional,List
+from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
+from apps.access_control.models.dto import (
+    EMAIL_REGEX as EMAIL_REGEX,
+    PWD_REGEX as PWD_REGEX,
+    BaseUser as BaseUser,
+    BaseUserDTO as BaseUserDTO,
+    PwdEditor as PwdEditor,
+    UserCreator as UserCreator,
+    UserEditor as UserEditor,
+    UserGrid as UserGrid,
+    UserInfoDTO as UserInfoDTO,
+    UserLanguage as UserLanguage,
+    UserStatus as UserStatus,
+    UserWs as UserWs,
+    UserWsBase as UserWsBase,
+    UserWsDTO as UserWsDTO,
+    UserWsEditor as UserWsEditor,
+    UserWsOption as UserWsOption,
+    WorkspaceUser as WorkspaceUser,
+)
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from common.core.schemas import BaseCreatorDTO
-
-EMAIL_REGEX = re.compile(
-    r"^[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*@"
-    r"([a-zA-Z0-9]+(-[a-zA-Z0-9]+)*\.)+"
-    r"[a-zA-Z]{2,}$"
-)
-PWD_REGEX = re.compile(
-    r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)"
-    r"(?=.*[~!@#$%^&*()_+\-={}|:\"<>?`\[\];',./])"
-    r"[A-Za-z\d~!@#$%^&*()_+\-={}|:\"<>?`\[\];',./]{8,20}$"
-)
-
-
-class UserStatus(BaseCreatorDTO):
-    status: int = Field(default=1, description=f"{PLACEHOLDER_PREFIX}status")
-
-
-class UserLanguage(BaseModel):
-    language: str = Field(description=f"{PLACEHOLDER_PREFIX}language")
-
-
-class BaseUser(BaseModel):
-    account: str = Field(min_length=1, max_length=100, description="用户账号")
-    oid: int
-
-
-class BaseUserDTO(BaseUser, BaseCreatorDTO):
-    language: str = Field(pattern=r"^(zh-CN|zh-TW|en|ko-KR)$", default="zh-CN", description="用户语言")
-    password: str
-    status: int = 1
-    origin: int = 0
-    name: str
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "account": self.account,
-            "oid": self.oid
-        }
-
-    @field_validator("language")
-    def validate_language(cls, lang: str) -> str:
-        if not re.fullmatch(r"^(zh-CN|zh-TW|en|ko-KR)$", lang):
-            raise ValueError("Language must be 'zh-CN', 'zh-TW', 'en', or 'ko-KR'")
-        return lang
-
-
-class UserCreator(BaseUser):
-    name: str = Field(min_length=1, max_length=100, description=f"{PLACEHOLDER_PREFIX}user_name")
-    email: str = Field(min_length=1, max_length=100, description=f"{PLACEHOLDER_PREFIX}user_email")
-    status: int = Field(default=1, description=f"{PLACEHOLDER_PREFIX}status")
-    origin: Optional[int] = Field(default=0, description=f"{PLACEHOLDER_PREFIX}origin")
-    oid_list: Optional[list[int]] = Field(default=None, description=f"{PLACEHOLDER_PREFIX}oid")
-    system_variables: Optional[List] = Field(default=[])
-
-    """ @field_validator("email")
-    def validate_email(cls, lang: str) -> str:
-        if not re.fullmatch(EMAIL_REGEX, lang):
-            raise ValueError("Email format is invalid!")
-        return lang """
-
-
-class UserEditor(UserCreator, BaseCreatorDTO):
-    pass
-
-
-class UserGrid(UserEditor):
-    create_time: int = Field(description=f"{PLACEHOLDER_PREFIX}create_time")
-    language: str = Field(default="zh-CN" ,description=f"{PLACEHOLDER_PREFIX}language") 
-    # space_name: Optional[str] = None
-    # origin: str = ''
-
-
-class PwdEditor(BaseModel):
-    pwd: str = Field(description=f"{PLACEHOLDER_PREFIX}origin_pwd")
-    new_pwd: str = Field(description=f"{PLACEHOLDER_PREFIX}new_pwd")
-
-
-class UserWsBase(BaseModel):
-    uid_list: list[int] = Field(description=f"{PLACEHOLDER_PREFIX}uid")
-    oid: Optional[int] = Field(default=None, description=f"{PLACEHOLDER_PREFIX}oid")
-
-
-class UserWsDTO(UserWsBase):
-    weight: Optional[int] = Field(default=0, description=f"{PLACEHOLDER_PREFIX}weight")
-
-
-class UserWsEditor(BaseModel):
-    uid: int = Field(description=f"{PLACEHOLDER_PREFIX}uid")
-    oid: int = Field(description=f"{PLACEHOLDER_PREFIX}oid")
-    weight: int = Field(default=0, description=f"{PLACEHOLDER_PREFIX}weight")
-
-
-class UserInfoDTO(UserEditor):
-    language: str = "zh-CN"
-    weight: int = 0
-    isAdmin: bool = False
 
 
 class AssistantBase(BaseModel):
@@ -147,19 +68,6 @@ class AssistantValidator(BaseModel):
             token=token,
             **kwargs
         )
-
-
-class WorkspaceUser(UserEditor):
-    weight: int
-    create_time: int
-
-
-class UserWs(BaseCreatorDTO):
-    name: str = Field(description="user_name")
-
-
-class UserWsOption(UserWs):
-    account: str = Field(description="user_account")
 
 
 class AssistantFieldSchema(BaseModel):

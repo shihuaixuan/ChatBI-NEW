@@ -865,7 +865,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 10. 启动密钥加密和旧供应商编号修正迁入 `AIModelSecretMigrationService`；旧
     `system/crud/aimodel_manage.py` 已删除。当前数据重复执行迁移更新数为 0。
 
-本阶段已完成第一批 Access Control 迁移：
+本阶段已完成 Access Control 授权边界和身份管理两批迁移：
 
 1. 新增 `access_control/models/dto`、`repository`、`services` 和接口适配层，调用者、授权要求、角色判断和
    工作空间资源范围已形成明确边界。
@@ -878,6 +878,20 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 5. 现有 `role`、`type` 和 `keyExpression` 声明方式、管理员与工作空间管理员规则、空批量操作和接口错误文本
    保持兼容；缺失资源参数、无效资源引用、未知角色和未知资源类型改为明确拒绝，不再静默放行。
 6. 架构基线已移除 System 权限模块直接依赖 Chat ORM、Datasource ORM 和 Datasource CRUD 的 3 条违规记录。
+7. `UserModel`、`UserPlatformModel`、`WorkspaceModel` 和 `UserWsModel` 已迁入
+   `access_control/models/orm`；用户、工作空间和成员 DTO 迁入 `models/dto`。System 旧模型文件
+   只保留 XPack 和历史导入路径所需的同对象转发。
+8. 新增 `IdentityWorkspaceRepository` 端口、SQLModel 实现和 `IdentityWorkspaceService`。账号、邮箱格式、
+   工作空间存在性、成员绑定和密码更新规则集中在 Service；成员集合与用户当前工作空间
+   在一个仓储事务中同步更新。
+9. `/user` 管理路由和 `/system/workspace` 工作空间路由已迁入 `access_control/api`，对外路径、
+   权限声明、审计类型和主要错误文本保持不变；API 不再执行 SQL 或组织事务。
+10. 登录、认证中间件、审计和 MCP 已改用 Access Control 公开身份查询入口。MCP 不再直接读取
+    System 用户 ORM、成员 ORM 或用户 CRUD，架构基线同步减少 3 条历史违规。
+11. 新增 090 数据库迁移，对用户账号和 `(uid, oid)` 成员关系建立唯一约束。升级前会显式
+    检查重复账号、重复成员关系、孤立成员关系和无效当前工作空间，不合法时中止并报告数量。
+12. System 中的用户 Excel 适配路由暂时保留；XPack 依赖的 `create` 和 `edit` 同名入口只转调
+    Access Control Service。待 XPack 发布包改用 Access Control 公开入口后删除这两个兼容函数。
 
 **目标**
 
@@ -885,7 +899,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 **任务**
 
-1. 创建 `access_control`，首批统一授权边界已完成；用户、认证、工作空间、成员关系和 API Key 尚待迁移。
+1. 创建 `access_control`，统一授权、用户、工作空间和成员关系已完成；认证配置和 API Key 尚待迁移。
 2. 把 `require_permissions` 中的数据库查询改为统一授权 Service 调用。已完成。
 3. 将行列权限和变量解析迁入 Access Control，输出稳定的数据策略 DTO。
 4. 合并 `system` 中 AI 模型 ORM/API 与现有 `apps/ai_model`。ORM、API、DTO 和管理流程已迁移；
@@ -914,8 +928,12 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 - 前端继续使用原 `/system/aimodel` 契约，无需同步修改；OpenAPI 构建和全部 8 个既有路由注册验证通过。
 - Access Control 纯规则、资源范围组合、参数表达式、装饰器委托和旧导入路径兼容定向测试 17 项通过；
   新增授权代码和测试通过 Ruff、Mypy。
+- Access Control 用户、工作空间和架构定向测试与既有授权测试共 28 项通过；新增 ORM、DTO、
+  仓储、Service、组装入口和接口代码通过 Ruff，核心模型、仓储、Service 与公开身份入口通过 Mypy。
+- 090 已完成真实升级、降级和再升级验证；当前本地数据库位于 090，两个唯一约束已经过数据库反射确认。
 - 应用导入和 OpenAPI 构建通过，共生成 154 个路径；数据源、AI 模型、工作空间和术语等受保护路由均保留。
-- 完整后端回归 657 项通过；架构守卫确认本批减少 3 条跨领域内部实现依赖且未新增违规项。
+- 完整后端回归 668 项通过；架构守卫确认本批再减少 3 条 MCP 到 System 用户内部实现的违规依赖，
+  且未新增违规项。
 
 ### 6.4 阶段 P3：收敛 Datasource 与数据库连接实现
 

@@ -1,19 +1,20 @@
+from datetime import timedelta
 from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
-from apps.system.schemas.logout_schema import LogoutSchema
-from apps.system.schemas.system_schema import BaseUserDTO
-from common.core.deps import SessionDep, Trans
-from common.utils.crypto import sqlbot_decrypt
-from ..crud.user import authenticate
-from common.core.security import create_access_token
-from datetime import timedelta
-from common.core.config import settings
-from common.core.schemas import Token
 from sqlbot_xpack.authentication.manage import logout as xpack_logout
 
-from common.audit.models.log_model import OperationType, OperationModules
-from common.audit.schemas.logger_decorator import system_log, LogConfig
+from apps.access_control.identity import authenticate
+from apps.access_control.models.dto import BaseUserDTO
+from apps.system.schemas.logout_schema import LogoutSchema
+from common.audit.models.log_model import OperationModules, OperationType
+from common.audit.schemas.logger_decorator import LogConfig, system_log
+from common.core.config import settings
+from common.core.deps import SessionDep, Trans
+from common.core.schemas import Token
+from common.core.security import create_access_token
+from common.utils.crypto import sqlbot_decrypt
 
 router = APIRouter(tags=["login"], prefix="/login")
 

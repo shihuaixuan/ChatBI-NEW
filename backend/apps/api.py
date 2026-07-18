@@ -3,6 +3,8 @@ from sqlbot_xpack.authentication import api as xpack_authentication
 from sqlbot_xpack.config import api as xpack_config
 from sqlbot_xpack.license import api as xpack_license
 
+from apps.access_control.api import user as access_user
+from apps.access_control.api import workspace as access_workspace
 from apps.agent import api as agent
 from apps.ai_model.api import model_config as ai_model
 from apps.chat.api import chat
@@ -20,7 +22,6 @@ from apps.system.api import (
     parameter,
     user,
     variable_api,
-    workspace,
 )
 from apps.workflow_engine.api import router as graph_workflow
 
@@ -29,8 +30,9 @@ from apps.workflow_engine.api import router as graph_workflow
 
 api_router = APIRouter()
 api_router.include_router(login.router)
+api_router.include_router(access_user.router)
 api_router.include_router(user.router)
-api_router.include_router(workspace.router)
+api_router.include_router(access_workspace.router)
 api_router.include_router(assistant.router)
 api_router.include_router(ai_model.router)
 api_router.include_router(base.router)
