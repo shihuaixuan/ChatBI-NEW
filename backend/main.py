@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 
 from alembic import command
+from apps.ai_model.composition import migrate_ai_model_secrets
 from apps.api import api_router
 from apps.retrieval.semantic_worker import submit_pending_semantic_index_jobs
 from apps.swagger.i18n import (
@@ -25,7 +26,6 @@ from apps.swagger.i18n import (
     i18n_list,
     tags_metadata,
 )
-from apps.system.crud.aimodel_manage import async_model_info
 from apps.system.crud.assistant import init_dynamic_cors
 from apps.system.middleware.auth import TokenMiddleware
 from apps.system.schemas.permission import RequestContextMiddleware
@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
     submit_pending_semantic_index_jobs()
     SQLBotLogUtil.info("✅ Numora 初始化完成")
     await sqlbot_xpack.core.clean_xpack_cache()
-    await async_model_info()  # 异步加密已有模型的密钥和地址
+    await migrate_ai_model_secrets()  # 加密历史模型密钥并修正旧供应商编号
     await sqlbot_xpack.core.monitor_app(app)
     yield
     SQLBotLogUtil.info("Numora 应用关闭")

@@ -18,3 +18,14 @@ class DefaultAIModelNotConfiguredError(AIModelError):
 class AIModelConfigInvalidError(AIModelError):
     def __init__(self, detail: str) -> None:
         super().__init__(f"AI_MODEL_CONFIG_INVALID:{detail}")
+
+
+class AIModelDefaultCannotDeleteError(AIModelError):
+    def __init__(self, model_name: str) -> None:
+        self.model_name = model_name
+        super().__init__(f"AI_MODEL_DEFAULT_CANNOT_DELETE:{model_name}")
+
+
+class AIModelDefaultChangeRequiresEndpointError(AIModelError):
+    def __init__(self, model_id: int) -> None:
+        super().__init__(f"AI_MODEL_DEFAULT_CHANGE_REQUIRES_ENDPOINT:{model_id}")

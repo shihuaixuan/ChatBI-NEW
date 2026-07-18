@@ -13,7 +13,7 @@ from apps.ai_model.errors import (
 )
 from apps.ai_model.models.dto import LLMConfig, StoredAIModelConfig
 from apps.ai_model.repository import AIModelConfigRepository
-from common.utils.utils import prepare_model_arg
+from apps.ai_model.services.model_config_rules import build_runtime_params
 
 SecretDecryptor = Callable[[str], Awaitable[str]]
 
@@ -72,19 +72,12 @@ class AIModelRuntimeConfigService:
             raise AIModelConfigInvalidError("JSON_FORMAT") from exc
         if not isinstance(raw_items, list):
             raise AIModelConfigInvalidError("ROOT_MUST_BE_LIST")
+        if not all(isinstance(item, dict) for item in raw_items):
+            invalid_index = next(
+                index
+                for index, item in enumerate(raw_items, start=1)
+                if not isinstance(item, dict)
+            )
+            raise AIModelConfigInvalidError(f"ITEM_NOT_OBJECT:{invalid_index}")
 
-        params: dict[str, Any] = {}
-        for index, item in enumerate(raw_items, start=1):
-            if not isinstance(item, dict):
-                raise AIModelConfigInvalidError(f"ITEM_NOT_OBJECT:{index}")
-            key = item.get("key")
-            if not isinstance(key, str) or not key.strip():
-                raise AIModelConfigInvalidError(f"KEY_REQUIRED:{index}")
-            if "val" not in item:
-                raise AIModelConfigInvalidError(f"VALUE_REQUIRED:{index}")
-            key = key.strip()
-            if key in params:
-                raise AIModelConfigInvalidError(f"DUPLICATE_KEY:{key}")
-            value = item["val"]
-            params[key] = "" if value == "" else prepare_model_arg(value)
-        return params
+        return build_runtime_params(raw_items)

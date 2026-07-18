@@ -854,6 +854,16 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 4. 运行时配置解析不再修改参与客户端缓存的配置字典，Azure 专用参数从副本中提取。
 5. 本地默认模型配置通过新 Service 读取成功；应用启动和旧 System 模型引用兼容验证通过。架构基线减少
    1 条 AI Model 到 System 内部 ORM 的跨领域依赖。
+6. `/system/aimodel` 路径保持兼容，但全部路由已迁入 `ai_model/api/model_config.py`；旧
+   `system/api/aimodel.py` 已删除。API 只负责权限、审计、响应和领域错误转换，不再直接查询数据库。
+7. 新增 AI Model 管理 DTO、管理仓储端口、SQLModel 实现和 `AIModelManagementService`。创建、编辑、
+   查询、删除和默认模型切换统一经过 Service；System 中的 DTO 文件只保留导入兼容。
+8. 普通编辑不能改变默认状态，默认模型不能删除；首个模型自动成为默认模型，后续默认切换在一个事务中
+   清除旧默认并设置新默认。新增 089 PostgreSQL 部分唯一索引，为并发写入提供最终唯一约束。
+9. 089 升级前会校验：存在模型时必须恰好有一个默认模型，数据不满足时明确中止，不擅自选择默认项。
+   当前本地数据库已完成真实升级、降级和再升级验证，位于 089。
+10. 启动密钥加密和旧供应商编号修正迁入 `AIModelSecretMigrationService`；旧
+    `system/crud/aimodel_manage.py` 已删除。当前数据重复执行迁移更新数为 0。
 
 **目标**
 
@@ -864,7 +874,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 1. 创建 `access_control`，迁移用户、认证、工作空间、成员关系和 API Key。
 2. 把 `require_permissions` 中的数据库查询改为统一授权 Service 调用。
 3. 将行列权限和变量解析迁入 Access Control，输出稳定的数据策略 DTO。
-4. 合并 `system` 中 AI 模型 ORM/API 与现有 `apps/ai_model`。ORM 已迁移，API 和管理流程待迁移。
+4. 合并 `system` 中 AI 模型 ORM/API 与现有 `apps/ai_model`。ORM、API、DTO 和管理流程已迁移；
+   System 仅保留 XPack 和旧导入路径需要的兼容引用。
 5. 为模型配置建立仓储接口，模型工厂不再直接查询 System ORM。运行时读取链路已完成。
 6. 创建 `assistant`，迁移助手 ORM、API、外部数据源配置和动态域名管理。
 7. Assistant 通过 Datasource 和 AI Model 的公开契约校验引用。
@@ -881,10 +892,12 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 **本批验证**
 
 - AI Model、Semantic、Retrieval、Architecture、Agent、Capabilities、Chat、Workflow 和 Graph API
-  调用方回归：546 个测试通过。
-- 新增 AI Model Service 和模型归属测试 6 个；与架构基线合计 11 个定向测试通过。
-- AI Model 新增和修改文件通过 Ruff；运行时 DTO、仓储、Service、组装入口、模型工厂及测试通过 Mypy。
+  调用方回归：556 个测试通过。
+- AI Model 与架构基线定向测试 21 个通过，覆盖模型归属、运行时配置、管理事务、密钥迁移、路由归属和
+  089 非法存量数据拦截。
+- AI Model 新增和修改文件通过 Ruff；DTO、仓储、Service、组装入口、模型工厂及测试通过 Mypy。
 - 本地默认模型通过新 Service 成功解析，应用启动、ORM 单一映射和旧 System 兼容引用验证通过。
+- 前端继续使用原 `/system/aimodel` 契约，无需同步修改；OpenAPI 构建和全部 8 个既有路由注册验证通过。
 
 ### 6.4 阶段 P3：收敛 Datasource 与数据库连接实现
 

@@ -1,30 +1,18 @@
 
-from typing import List
-from pydantic import BaseModel, Field
+"""AI Model DTO 旧导入路径兼容。"""
 
-from apps.swagger.i18n import PLACEHOLDER_PREFIX
-from common.core.schemas import BaseCreatorDTO
+from apps.ai_model.models.dto import (
+    AiModelConfigItem as AiModelConfigItem,
+)
+from apps.ai_model.models.dto import AiModelCreator as AiModelCreator
+from apps.ai_model.models.dto import AiModelEditor as AiModelEditor
+from apps.ai_model.models.dto import AiModelGridItem as AiModelGridItem
+from apps.ai_model.models.dto import AiModelItem as AiModelItem
 
-class AiModelItem(BaseModel):
-    name: str = Field(description=f"{PLACEHOLDER_PREFIX}model_name")
-    model_type: int = Field(description=f"{PLACEHOLDER_PREFIX}model_type")
-    base_model: str = Field(description=f"{PLACEHOLDER_PREFIX}base_model")
-    supplier: int = Field(description=f"{PLACEHOLDER_PREFIX}supplier")
-    protocol: int = Field(description=f"{PLACEHOLDER_PREFIX}protocol")
-    default_model: bool = Field(default=False, description=f"{PLACEHOLDER_PREFIX}default_model")
-
-class AiModelGridItem(AiModelItem, BaseCreatorDTO):
-    pass
-
-class AiModelConfigItem(BaseModel):
-    key: str = Field(description=f"{PLACEHOLDER_PREFIX}arg_name")
-    val: object = Field(description=f"{PLACEHOLDER_PREFIX}arg_val")
-    name: str = Field(description=f"{PLACEHOLDER_PREFIX}arg_show_name")
-    
-class AiModelCreator(AiModelItem):
-    api_domain: str = Field(description=f"{PLACEHOLDER_PREFIX}api_domain")
-    api_key: str = Field(description=f"{PLACEHOLDER_PREFIX}api_key")
-    config_list: List[AiModelConfigItem] = Field(description=f"{PLACEHOLDER_PREFIX}config_list")
-    
-class AiModelEditor(AiModelCreator, BaseCreatorDTO):
-    pass
+__all__ = [
+    "AiModelConfigItem",
+    "AiModelCreator",
+    "AiModelEditor",
+    "AiModelGridItem",
+    "AiModelItem",
+]

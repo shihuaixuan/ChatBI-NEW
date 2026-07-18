@@ -4,17 +4,13 @@ from sqlbot_xpack.custom_prompt.models.custom_prompt_model import CustomPrompt
 from sqlbot_xpack.permissions.models.ds_permission import DsPermission
 from sqlbot_xpack.permissions.models.ds_rules import DsRules
 
+from apps.ai_model.models import AiModelDetail
 from apps.chat.models.chat_model import Chat
 from apps.dashboard.models.dashboard_model import CoreDashboard
 from apps.data_training.models.data_training_model import DataTraining
 from apps.datasource.models.datasource import CoreDatasource
 from apps.semantic.models.orm import SemanticTerm
-from apps.system.models.system_model import (
-    AiModelDetail,
-    ApiKeyModel,
-    AssistantModel,
-    WorkspaceModel,
-)
+from apps.system.models.system_model import ApiKeyModel, AssistantModel, WorkspaceModel
 from apps.system.models.user import UserModel
 
 
