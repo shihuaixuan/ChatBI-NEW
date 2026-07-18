@@ -1,6 +1,12 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
+from apps.chat.services.semantic_binding import (
+    DatasetBindingError,
+    validate_assistant_dataset_binding,
+)
 from apps.chat.task import llm as llm_module
 from apps.semantic.models.dto import TermSearchResult
 
@@ -36,15 +42,8 @@ def test_dataset_bound_chat_uses_semantic_term_context(monkeypatch):
         "build_semantic_term_query_service",
         lambda _session: query,
     )
-    monkeypatch.setattr(
-        llm_module,
-        "get_terminology_template",
-        lambda *_args: (_ for _ in ()).throw(
-            AssertionError("绑定数据集时不得读取旧术语表")
-        ),
-    )
 
-    service.filter_terminology_template(object(), oid=1, ds_id=30)
+    service.load_term_context(object())
 
     assert query.calls == [(1, 20, "GMV是多少", 10)]
     assert json.loads(service.chat_question.terminologies) == [
@@ -55,8 +54,7 @@ def test_dataset_bound_chat_uses_semantic_term_context(monkeypatch):
     ]
 
 
-def test_unbound_assistant_uses_explicit_legacy_compatibility(monkeypatch):
-    calls = []
+def test_unbound_assistant_has_no_semantic_term_context(monkeypatch):
     service = _service(dataset_id=None)
     service.current_assistant = SimpleNamespace(oid=9, type=1)
     _patch_logs(monkeypatch)
@@ -68,17 +66,17 @@ def test_unbound_assistant_uses_explicit_legacy_compatibility(monkeypatch):
         ),
     )
 
-    def legacy_query(session, question, oid, datasource_id):
-        calls.append((session, question, oid, datasource_id))
-        return "legacy", [{"words": ["旧术语"]}]
+    service.chat_question.terminologies = "stale context"
+    service.load_term_context(object())
 
-    monkeypatch.setattr(llm_module, "get_terminology_template", legacy_query)
-    session = object()
+    assert service.chat_question.terminologies == ""
 
-    service.filter_terminology_template(session, oid=1, ds_id=30)
 
-    assert calls == [(session, "GMV是多少", 9, None)]
-    assert service.chat_question.terminologies == "legacy"
+def test_dynamic_datasource_assistant_rejects_local_semantic_dataset():
+    with pytest.raises(DatasetBindingError, match="不能绑定本地 Semantic 数据集"):
+        validate_assistant_dataset_binding(dataset_id=20, assistant_type=1)
+
+    validate_assistant_dataset_binding(dataset_id=20, assistant_type=0)
 
 
 def _service(dataset_id: int | None):

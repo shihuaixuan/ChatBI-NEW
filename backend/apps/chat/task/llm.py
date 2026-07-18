@@ -72,6 +72,7 @@ from apps.chat.models.chat_model import (
     RenameChat,
     SystemPromptMessage,
 )
+from apps.chat.services.semantic_binding import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
 from apps.chat.services.term_context import ChatTermContextService
 from apps.data_training.curd.data_training import get_training_template
 from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data
@@ -87,7 +88,6 @@ from apps.system.crud.assistant import (
 )
 from apps.system.crud.parameter_manage import get_groups
 from apps.system.schemas.system_schema import AssistantOutDsSchema
-from apps.terminology.curd.terminology import get_terminology_template
 from common.core.config import settings
 from common.core.db import engine
 from common.core.deps import CurrentAssistant, CurrentUser
@@ -105,7 +105,6 @@ warnings.filterwarnings("ignore")
 
 executor = ThreadPoolExecutor(max_workers=200)
 
-dynamic_ds_types = [1, 3]
 dynamic_subsql_prefix = 'select * from sqlbot_dynamic_temp_table_'
 
 session_maker = scoped_session(sessionmaker(bind=engine, class_=Session))
@@ -176,7 +175,10 @@ class LLMService:
 
         if chat.datasource:
             # Get available datasource
-            if current_assistant and current_assistant.type in dynamic_ds_types:
+            if (
+                current_assistant
+                and current_assistant.type in DYNAMIC_DATASOURCE_ASSISTANT_TYPES
+            ):
                 self.out_ds_instance = AssistantOutDsFactory.get_instance(current_assistant)
                 ds = self.out_ds_instance.get_ds(chat.datasource)
                 if not ds:
@@ -357,12 +359,15 @@ class LLMService:
         chart_info = get_chart_config(_session, self.record.id)
         return format_chart_fields(chart_info)
 
-    def filter_terminology_template(self, _session: Session, oid: int = None, ds_id: int = None):
+    def load_term_context(self, _session: Session):
         self.current_logs[OperationEnum.FILTER_TERMS] = start_log(session=_session,
                                                                   operate=OperationEnum.FILTER_TERMS,
                                                                   record_id=self.record.id, local_operation=True)
 
-        if self.record.dataset_id is not None:
+        if self.record.dataset_id is None:
+            self.chat_question.terminologies = ""
+            term_list = []
+        else:
             term_context_service = ChatTermContextService(
                 build_semantic_term_query_service(_session)
             )
@@ -370,24 +375,6 @@ class LLMService:
                 self.chat_oid,
                 self.record.dataset_id,
                 self.chat_question.question,
-            )
-        else:
-            # 未绑定 Semantic 数据集的旧 Assistant/动态数据源仍走明确的兼容入口。
-            calculate_oid = oid
-            calculate_ds_id = ds_id
-            if self.current_assistant:
-                calculate_oid = (
-                    self.current_assistant.oid
-                    if self.current_assistant.type != 4
-                    else self.current_user.oid
-                )
-                if self.current_assistant.type == 1:
-                    calculate_ds_id = None
-            self.chat_question.terminologies, term_list = get_terminology_template(
-                _session,
-                self.chat_question.question,
-                calculate_oid,
-                calculate_ds_id,
             )
         self.current_logs[OperationEnum.FILTER_TERMS] = end_log(session=_session,
                                                                 log=self.current_logs[OperationEnum.FILTER_TERMS],
@@ -472,7 +459,7 @@ class LLMService:
 
         ds_id = self.ds.id if isinstance(self.ds, CoreDatasource) else None
 
-        self.filter_terminology_template(_session, self.current_user.oid, ds_id)
+        self.load_term_context(_session)
 
         self.filter_custom_prompts(_session, CustomPromptTypeEnum.ANALYSIS, self.current_user.oid, ds_id)
 
@@ -725,7 +712,11 @@ class LLMService:
                 _datasource = data['id']
                 _chat = _session.get(Chat, self.record.chat_id)
                 _chat.datasource = _datasource
-                if self.current_assistant and self.current_assistant.type in dynamic_ds_types:
+                if (
+                    self.current_assistant
+                    and self.current_assistant.type
+                    in DYNAMIC_DATASOURCE_ASSISTANT_TYPES
+                ):
                     _ds = self.out_ds_instance.get_ds(data['id'])
                     self.ds = _ds
                     self.chat_question.engine = _ds.type + get_version(self.ds)
@@ -772,7 +763,7 @@ class LLMService:
             oid = self.ds.oid if isinstance(self.ds, CoreDatasource) else 1
             ds_id = self.ds.id if isinstance(self.ds, CoreDatasource) else None
 
-            self.filter_terminology_template(_session, oid, ds_id)
+            self.load_term_context(_session)
 
             self.filter_training_template(_session, oid, ds_id)
 
@@ -1238,7 +1229,7 @@ class LLMService:
                 oid = self.ds.oid if isinstance(self.ds, CoreDatasource) else 1
                 ds_id = self.ds.id if isinstance(self.ds, CoreDatasource) else None
 
-                self.filter_terminology_template(_session, oid, ds_id)
+                self.load_term_context(_session)
 
                 self.filter_training_template(_session, oid, ds_id)
 
@@ -1315,7 +1306,11 @@ class LLMService:
                     if not stream:
                         json_result['title'] = brief
 
-            use_dynamic_ds: bool = self.current_assistant and self.current_assistant.type in dynamic_ds_types
+            use_dynamic_ds: bool = (
+                self.current_assistant
+                and self.current_assistant.type
+                in DYNAMIC_DATASOURCE_ASSISTANT_TYPES
+            )
             is_page_embedded: bool = self.current_assistant and self.current_assistant.type == 4
             dynamic_sql_result = None
             sqlbot_temp_sql_text = None

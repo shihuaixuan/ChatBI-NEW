@@ -54,7 +54,6 @@
     "apps/chat/task/llm.py -> apps.datasource.crud.permission",
     "apps/chat/task/llm.py -> apps.system.crud.assistant",
     "apps/chat/task/llm.py -> apps.system.crud.parameter_manage",
-    "apps/chat/task/llm.py -> apps.terminology.curd.terminology",
     "apps/dashboard/crud/dashboard_service.py -> apps.chat.curd.chat",
     "apps/datasource/embedding/ds_embedding.py -> apps.system.crud.assistant",
     "apps/db/db.py -> apps.system.crud.assistant",

@@ -21,10 +21,12 @@ from apps.chat.models.chat_model import (
 )
 from apps.chat.services.deletion import ChatDeletionService
 from apps.chat.services.semantic_binding import (
+    DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
     DatasetBindingError,
     apply_binding_to_chat,
     apply_binding_to_record,
     resolve_dataset_chat_binding,
+    validate_assistant_dataset_binding,
 )
 from apps.datasource.crud.datasource import get_ds
 from apps.datasource.crud.recommended_problem import get_datasource_recommended_chart
@@ -313,9 +315,6 @@ def get_chat_with_records_with_data(session: SessionDep, chart_id: int, current_
     return get_chat_with_records(session, chart_id, current_user, current_assistant, True)
 
 
-dynamic_ds_types = [1, 3]
-
-
 def get_chat_with_records(session: SessionDep, chart_id: int, current_user: CurrentUser,
                           current_assistant: CurrentAssistant, with_data: bool = False,
                           trans: Trans = None) -> ChatInfo:
@@ -334,7 +333,10 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
         chat_info.dataset_exists = True
         chat_info.dataset_name = dataset.name
 
-    if current_assistant and current_assistant.type in dynamic_ds_types:
+    if (
+        current_assistant
+        and current_assistant.type in DYNAMIC_DATASOURCE_ASSISTANT_TYPES
+    ):
         out_ds_instance = AssistantOutDsFactory.get_instance(current_assistant)
         ds = out_ds_instance.get_ds(chat.datasource, trans)
     else:
@@ -728,6 +730,10 @@ def list_generate_chart_logs(session: SessionDep, chart_id: int) -> List[ChatLog
 
 def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj: CreateChat,
                 require_datasource: bool = True, _current_assistant: CurrentAssistant = None) -> ChatInfo:
+    validate_assistant_dataset_binding(
+        create_chat_obj.dataset_id,
+        _current_assistant.type if _current_assistant else None,
+    )
     if not create_chat_obj.dataset_id and require_datasource:
         raise DatasetBindingError("请选择数据集")
 
