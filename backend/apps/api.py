@@ -9,6 +9,7 @@ from apps.access_control.api import user as access_user
 from apps.access_control.api import workspace as access_workspace
 from apps.agent import api as agent
 from apps.ai_model.api import model_config as ai_model
+from apps.assistant.api import assistants as assistant
 from apps.chat.api import chat
 from apps.dashboard.api import dashboard_api
 from apps.data_training.api import data_training
@@ -17,12 +18,7 @@ from apps.mcp import mcp
 from apps.semantic.api import legacy_terms
 from apps.semantic.api.router import router as semantic_router
 from apps.settings.api import base
-from apps.system.api import (
-    assistant,
-    parameter,
-    user,
-    variable_api,
-)
+from apps.system.api import parameter, user, variable_api
 from apps.workflow_engine.api import router as graph_workflow
 
 #from audit.api import audit_api

@@ -6,12 +6,12 @@ from sqlbot_xpack.permissions.models.ds_rules import DsRules
 
 from apps.access_control.models import ApiKeyModel, UserModel, WorkspaceModel
 from apps.ai_model.models import AiModelDetail
+from apps.assistant.audit import build_assistant_audit_resource_query
 from apps.chat.models.chat_model import Chat
 from apps.dashboard.models.dashboard_model import CoreDashboard
 from apps.data_training.models.data_training_model import DataTraining
 from apps.datasource.models.datasource import CoreDatasource
 from apps.semantic.models.orm import SemanticTerm
-from apps.system.models.system_model import AssistantModel
 
 
 def build_resource_union_query() -> Select:
@@ -106,11 +106,7 @@ def build_resource_union_query() -> Select:
     ).select_from(SemanticTerm)
 
     # sys_assistant 表查询
-    sys_assistant_query = select(
-        func.cast(AssistantModel.id, String).label("id"),
-        AssistantModel.name.label("name"),
-        literal_column("'application'").label("module")
-    ).select_from(AssistantModel)
+    sys_assistant_query = build_assistant_audit_resource_query()
 
     # sys_apikey 表查询
     sys_apikey_query = select(

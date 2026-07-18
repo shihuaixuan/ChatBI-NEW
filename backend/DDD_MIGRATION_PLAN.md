@@ -656,8 +656,8 @@ Graph、Agent、MCP 和 Web API 只能调用这些实现，不能复制规则。
 截至 2026-07-18，已新增 `tests/architecture/test_dependency_baseline.py` 和
 `tests/architecture/known_dependency_violations.json`，完成以下依赖基线：
 
-- P0 初始记录 40 条跨领域内部模型依赖；P1 清理 2 条后当前为 38 条。
-- P0 初始记录 29 条跨领域具体实现依赖；P1 清理 3 条后当前为 26 条。
+- P0 初始记录 40 条跨领域内部模型依赖；P1、P2 累计清理 11 条后当前为 29 条。
+- P0 初始记录 29 条跨领域具体实现依赖；P1、P2 累计清理 9 条后当前为 20 条。
 - 1 条跨领域 API 依赖。
 - 6 条 Workflow Engine 对业务模块的依赖。
 - P0 初始记录 10 条函数内部业务模块导入；P1 清理 1 条后当前为 9 条。
@@ -899,10 +899,34 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     Service 定义，仓储通过锁定用户行保证并发创建时不超限。
 15. `/login` 和 `/system/apikey` 路由已迁入 `access_control/api`，原路径、请求结构、审计类型、
     缓存键和错误文本保持不变。System 认证中间件的 Bearer 和 API Key 分支已委托 Access Control；
-    Assistant 和 Embedded 分支待 Assistant 领域迁移时一并移出 System。
+    Assistant 和 Embedded 分支已在 Assistant 领域迁移时一并移出 System。
 16. MCP 的本地登录和 Bearer 校验改用同一 `AuthenticationService`，不再自行维护用户状态和
     工作空间校验。新增 091 数据库迁移，为 `access_key` 建立唯一约束、为 `uid` 建立查询索引；
     升级前显式拦截重复 Key、孤立用户引用和历史超限数据。
+
+本阶段已完成 Assistant 迁移：
+
+1. 新建 `apps/assistant`，按 ORM、DTO、仓储端口、SQLModel 仓储、Service、外部 HTTP 适配和 API
+   分层。`AssistantModel`、助手 DTO 和 12 个 `/system/assistant` 路由均已归属 Assistant；原
+   System API 和认证中间件已删除，XPack 仍使用的模型、Schema 和 CRUD 路径只转发到唯一实现。
+2. 助手工作空间、类型、数据源范围和自定义模型引用由 `AssistantService` 统一校验。创建、修改、详情、
+   界面配置和删除不再由 API 直接查询或提交数据库，读取与修改都会拒绝跨工作空间资源。
+3. Datasource 新增数据源摘要、外部连接 DTO 和目录公开契约。普通助手的公开列表只允许引用同工作空间
+   数据源；离线请求只返回明确配置的 `public_list`。`apps/db` 不再导入 Assistant DTO 或 System CRUD。
+4. AI Model 新增不暴露密钥的模型引用校验 Service；助手启用自定义模型时必须引用已存在的模型，指定
+   无效模型不会回退到默认模型。
+5. 高级助手的外部数据源调用迁入 `repository/external`。接口失败、响应结构错误、凭据错误和解密错误
+   均显式失败；未知数据库类型不会作为可用数据源返回。
+6. Assistant 和 Embedded 令牌认证迁入 `access_control/api/authentication.py` 与
+   `assistant/token_authentication.py`。Embedded 令牌先按应用选择密钥，再完整验签，并校验令牌
+   `appId` 与记录一致；公开 Assistant 信息 DTO 不再返回 `app_secret`。
+7. 动态 CORS 域名从 Assistant Service 读取，不再宽泛捕获数据库错误。界面配置更新只删除明确移除或
+   被新文件替换的资源，未提交的 Logo 和悬浮图标不再被误删。
+8. 新增 092 数据库迁移，使 `oid` 非空，限制有效 Assistant 类型，并为 `app_id`、`app_secret`
+   建立唯一约束、为 `(oid, type)` 建立查询索引。升级前会显式拦截重复标识、重复密钥、空工作空间和
+   无效类型。
+9. 架构基线移除 3 条跨领域内部模型依赖和 4 条跨领域具体实现依赖；Chat、DataTraining、Datasource
+   Embedding、DB 和审计调用方已改用 Assistant、Datasource 的公开契约。
 
 **目标**
 
@@ -916,8 +940,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 4. 合并 `system` 中 AI 模型 ORM/API 与现有 `apps/ai_model`。ORM、API、DTO 和管理流程已迁移；
    System 仅保留 XPack 和旧导入路径需要的兼容引用。
 5. 为模型配置建立仓储接口，模型工厂不再直接查询 System ORM。运行时读取链路已完成。
-6. 创建 `assistant`，迁移助手 ORM、API、外部数据源配置和动态域名管理。
-7. Assistant 通过 Datasource 和 AI Model 的公开契约校验引用。
+6. 创建 `assistant`，迁移助手 ORM、API、外部数据源配置和动态域名管理。已完成。
+7. Assistant 通过 Datasource 和 AI Model 的公开契约校验引用。已完成。
 8. 系统参数保留为平台配置，不放入 Access Control。
 
 **完成标准**
@@ -944,10 +968,13 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 - 090 已完成真实升级、降级和再升级验证；用户账号和成员关系两个唯一约束已经过数据库反射确认。
 - Access Control 认证、API Key 和既有领域及架构定向测试共 42 项通过。新增模型、仓储、
   Service、令牌校验与 API 通过 Ruff 和 Mypy；应用与 XPack 完整导入通过。
-- 091 已完成真实升级、降级和再升级验证；当前本地数据库位于 091，API Key 唯一约束和
-  用户查询索引已经过数据库反射确认。
+- 091 已完成真实升级、降级和再升级验证；API Key 唯一约束和用户查询索引已经过数据库反射确认。
+- Assistant 与架构定向测试 21 项通过；Assistant 核心 DTO、ORM、仓储、Service、组装、令牌认证及
+  Datasource、AI Model 公开契约通过 Ruff 和 Mypy。XPack 完整导入和 12 个原 Assistant 路由注册通过。
+- 092 已完成真实升级、降级和再升级验证；当前本地数据库位于 092，助手类型检查、应用标识和应用密钥
+  唯一约束、工作空间非空约束及工作空间类型索引已经过数据库反射确认。
 - 应用导入和 OpenAPI 构建通过，共生成 154 个路径；数据源、AI 模型、工作空间和术语等受保护路由均保留。
-- 完整后端回归 682 项通过；架构守卫确认本批再减少 3 条 MCP 到 System 用户内部实现的违规依赖，
+- 完整后端回归 698 项通过；架构守卫确认本批移除 3 条跨领域内部模型依赖和 4 条跨领域具体实现依赖，
   且未新增违规项。
 
 ### 6.4 阶段 P3：收敛 Datasource 与数据库连接实现

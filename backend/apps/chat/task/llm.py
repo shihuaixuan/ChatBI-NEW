@@ -29,6 +29,12 @@ from sqlbot_xpack.license.license_manage import SQLBotLicenseUtil
 from sqlmodel import Session
 
 from apps.ai_model.model_factory import LLMConfig, LLMFactory, get_default_config
+from apps.assistant import AssistantOutDsSchema
+from apps.assistant.public import (
+    AssistantOutDs,
+    AssistantOutDsFactory,
+    get_assistant_ds,
+)
 from apps.chat.curd.chat import (
     end_log,
     finish_record,
@@ -81,13 +87,7 @@ from apps.datasource.embedding.ds_embedding import get_ds_embedding
 from apps.datasource.models.datasource import CoreDatasource
 from apps.db.db import check_connection, exec_sql, get_version
 from apps.semantic.composition import build_semantic_term_query_service
-from apps.system.crud.assistant import (
-    AssistantOutDs,
-    AssistantOutDsFactory,
-    get_assistant_ds,
-)
 from apps.system.crud.parameter_manage import get_groups
-from apps.system.schemas.system_schema import AssistantOutDsSchema
 from common.core.config import settings
 from common.core.db import engine
 from common.core.deps import CurrentAssistant, CurrentUser

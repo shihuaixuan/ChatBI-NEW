@@ -4,39 +4,53 @@ import os
 import platform
 import re
 import urllib.parse
-from datetime import datetime, date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Optional, List
+from typing import List, Optional
 
 import oracledb
 import psycopg2
 import pymssql
 
-from apps.db.db_sql import get_table_sql, get_field_sql, get_version_sql
+from apps.db.db_sql import get_field_sql, get_table_sql, get_version_sql
 from common.error import ParseSQLResultError
 
 if platform.system() != "Darwin":
     import dmPython
 import pymysql
 import redshift_connector
-from sqlalchemy import create_engine, text, Engine
+import sqlglot
+from fastapi import HTTPException
+from pyhive import hive
+from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
+from sqlglot import expressions as exp
 
-from apps.datasource.models.datasource import DatasourceConf, CoreDatasource, TableSchema, ColumnSchema
+from apps.datasource import (
+    ExternalDatasource as AssistantOutDsSchema,
+)
+from apps.datasource import (
+    build_external_datasource_configuration,
+)
+from apps.datasource.models.datasource import (
+    ColumnSchema,
+    CoreDatasource,
+    DatasourceConf,
+    TableSchema,
+)
 from apps.datasource.utils.utils import aes_decrypt
 from apps.db.constant import DB, ConnectType
 from apps.db.engine import get_engine_config
-from apps.system.crud.assistant import get_out_ds_conf
-from apps.system.schemas.system_schema import AssistantOutDsSchema
+from apps.db.es_engine import (
+    get_es_connect,
+    get_es_data_by_http,
+    get_es_fields,
+    get_es_index,
+)
+from common.core.config import settings
 from common.core.deps import Trans
 from common.utils.utils import SQLBotLogUtil, equals_ignore_case
-from fastapi import HTTPException
-from apps.db.es_engine import get_es_connect, get_es_index, get_es_fields, get_es_data_by_http
-from common.core.config import settings
-import sqlglot
-from sqlglot import expressions as exp
-from sqlalchemy.pool import NullPool
-from pyhive import hive
 
 try:
     if os.path.exists(settings.ORACLE_CLIENT_PATH):
@@ -172,7 +186,7 @@ def get_engine(ds: CoreDatasource, timeout: int = 0) -> Engine:
 def get_session(ds: CoreDatasource | AssistantOutDsSchema):
     # engine = get_engine(ds) if isinstance(ds, CoreDatasource) else get_ds_engine(ds)
     if isinstance(ds, AssistantOutDsSchema):
-        out_conf = get_out_ds_conf(ds, 30)
+        out_conf = build_external_datasource_configuration(ds, 30)
         ds.configuration = out_conf
 
     engine = get_engine(ds)
@@ -183,7 +197,7 @@ def get_session(ds: CoreDatasource | AssistantOutDsSchema):
 
 def check_connection(trans: Optional[Trans], ds: CoreDatasource | AssistantOutDsSchema, is_raise: bool = False):
     if isinstance(ds, AssistantOutDsSchema):
-        out_conf = get_out_ds_conf(ds, 10)
+        out_conf = build_external_datasource_configuration(ds, 10)
         ds.configuration = out_conf
 
     db = DB.get_db(ds.type)
@@ -298,7 +312,11 @@ def get_version(ds: CoreDatasource | AssistantOutDsSchema):
             **json.loads(aes_decrypt(ds.configuration))) if not equals_ignore_case(ds.type,
                                                                                    "excel") else get_engine_config()
     else:
-        conf = DatasourceConf(**json.loads(aes_decrypt(get_out_ds_conf(ds, 10))))
+        conf = DatasourceConf(
+            **json.loads(
+                aes_decrypt(build_external_datasource_configuration(ds, 10))
+            )
+        )
     # if isinstance(ds, AssistantOutDsSchema):
     #     conf = DatasourceConf()
     #     conf.host = ds.host

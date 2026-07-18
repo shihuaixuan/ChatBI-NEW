@@ -16,8 +16,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 
 from alembic import command
+from apps.access_control.api.authentication import TokenMiddleware
+from apps.access_control.permission import RequestContextMiddleware
 from apps.ai_model.composition import migrate_ai_model_secrets
 from apps.api import api_router
+from apps.assistant.public import init_dynamic_cors
 from apps.retrieval.semantic_worker import submit_pending_semantic_index_jobs
 from apps.swagger.i18n import (
     DEFAULT_LANG,
@@ -26,9 +29,6 @@ from apps.swagger.i18n import (
     i18n_list,
     tags_metadata,
 )
-from apps.system.crud.assistant import init_dynamic_cors
-from apps.system.middleware.auth import TokenMiddleware
-from apps.access_control.permission import RequestContextMiddleware
 from apps.workflow_engine.infrastructure.artifacts.cleanup import ArtifactCleanupService
 from common.audit.schemas.request_context import RequestContextMiddlewareCommon
 from common.core.config import settings

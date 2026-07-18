@@ -7,23 +7,39 @@ from sqlalchemy import and_, text
 from sqlbot_xpack.permissions.models.ds_rules import DsRules
 from sqlmodel import select
 
-from apps.datasource.crud.permission import get_column_permission_fields, get_row_permission_filters, is_normal_user
+from apps.datasource.crud.permission import (
+    get_column_permission_fields,
+    get_row_permission_filters,
+    is_normal_user,
+)
 from apps.datasource.embedding.table_embedding import calc_table_embedding
 from apps.datasource.utils.utils import aes_decrypt
 from apps.db.constant import DB
-from apps.db.db import get_tables, get_fields, exec_sql, check_connection
+from apps.db.db import check_connection, exec_sql, get_fields, get_tables
 from apps.db.engine import get_engine_config, get_engine_conn
-from apps.system.schemas.auth import CacheName, CacheNamespace
+from common.core.cache_keys import CacheName, CacheNamespace
 from common.core.config import settings
-from common.core.deps import SessionDep, CurrentUser, Trans
-from common.utils.embedding_threads import run_save_table_embeddings, run_save_ds_embeddings
-from common.utils.utils import SQLBotLogUtil, deepcopy_ignore_extra, equals_ignore_case
+from common.core.deps import CurrentUser, SessionDep, Trans
 from common.core.sqlbot_cache import cache, clear_cache
-from .table import get_tables_by_ds_id
+from common.utils.embedding_threads import (
+    run_save_ds_embeddings,
+    run_save_table_embeddings,
+)
+from common.utils.utils import SQLBotLogUtil, deepcopy_ignore_extra, equals_ignore_case
+
 from ..crud.field import delete_field_by_ds_id, update_field
 from ..crud.table import delete_table_by_ds_id, update_table
-from ..models.datasource import CoreDatasource, CreateDatasource, CoreTable, CoreField, ColumnSchema, TableObj, \
-    DatasourceConf, TableAndFields
+from ..models.datasource import (
+    ColumnSchema,
+    CoreDatasource,
+    CoreField,
+    CoreTable,
+    CreateDatasource,
+    DatasourceConf,
+    TableAndFields,
+    TableObj,
+)
+from .table import get_tables_by_ds_id
 
 
 def get_datasource_list(session: SessionDep, user: CurrentUser, oid: Optional[int] = None) -> List[CoreDatasource]:

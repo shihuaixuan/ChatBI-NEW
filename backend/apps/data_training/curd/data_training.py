@@ -5,13 +5,16 @@ from typing import List, Optional
 from xml.dom.minidom import parseString
 
 import dicttoxml
-from sqlalchemy import and_, select, func, delete, update, or_
-from sqlalchemy import text
+from sqlalchemy import and_, delete, func, or_, select, text, update
 
 from apps.ai_model.embedding import EmbeddingModelCache
-from apps.data_training.models.data_training_model import DataTrainingInfo, DataTraining, DataTrainingInfoResult
+from apps.assistant.public import list_assistant_references
+from apps.data_training.models.data_training_model import (
+    DataTraining,
+    DataTrainingInfo,
+    DataTrainingInfoResult,
+)
 from apps.datasource.models.datasource import CoreDatasource
-from apps.system.models.system_model import AssistantModel
 from apps.template.generate_chart.generator import get_base_data_training_template
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
@@ -84,11 +87,8 @@ def build_data_training_query(session: SessionDep, oid: int, name: Optional[str]
             DataTraining.description,
             DataTraining.enabled,
             DataTraining.advanced_application,
-            AssistantModel.name.label('advanced_application_name'),
         )
         .outerjoin(CoreDatasource, and_(DataTraining.datasource == CoreDatasource.id))
-        .outerjoin(AssistantModel,
-                   and_(DataTraining.advanced_application == AssistantModel.id, AssistantModel.type == 1))
         .where(and_(DataTraining.id.in_(paginated_parent_ids)))
         .order_by(DataTraining.create_time.desc())
     )
@@ -101,7 +101,21 @@ def execute_data_training_query(session: SessionDep, stmt) -> List[DataTrainingI
     执行查询并返回数据训练信息列表
     """
     _list = []
-    result = session.execute(stmt)
+    result = list(session.execute(stmt))
+    assistant_ids = sorted(
+        {
+            row.advanced_application
+            for row in result
+            if row.advanced_application is not None
+        }
+    )
+    assistant_names = {
+        assistant.id: assistant.name
+        for assistant in list_assistant_references(
+            assistant_ids,
+            assistant_type=1,
+        )
+    }
 
     for row in result:
         _list.append(DataTrainingInfoResult(
@@ -114,7 +128,7 @@ def execute_data_training_query(session: SessionDep, stmt) -> List[DataTrainingI
             description=row.description,
             enabled=row.enabled,
             advanced_application=str(row.advanced_application) if row.advanced_application else None,
-            advanced_application_name=row.advanced_application_name,
+            advanced_application_name=assistant_names.get(row.advanced_application),
         ))
 
     return _list
@@ -303,12 +317,13 @@ def batch_create_training(session: SessionDep, info_list: List[DataTrainingInfo]
     for ds in datasource_result:
         datasource_name_to_id[ds.name.strip()] = ds.id
 
-    assistant_name_to_id = {}
-
-    assistant_stmt = select(AssistantModel.id, AssistantModel.name).where(and_(AssistantModel.type == 1, AssistantModel.oid == oid))
-    assistant_result = session.execute(assistant_stmt).all()
-    for assistant in assistant_result:
-        assistant_name_to_id[assistant.name.strip()] = assistant.id
+    assistant_name_to_id = {
+        assistant.name.strip(): assistant.id
+        for assistant in list_assistant_references(
+            workspace_id=oid,
+            assistant_type=1,
+        )
+    }
 
     # 验证和转换数据
     valid_records = []

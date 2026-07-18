@@ -3,19 +3,31 @@
 import json
 import time
 import traceback
-from typing import Optional
+from typing import Optional, Protocol
 
 from apps.ai_model.embedding import EmbeddingModelCache
+from apps.datasource import ExternalDatasource
 from apps.datasource.embedding.utils import cosine_similarity
 from apps.datasource.models.datasource import CoreDatasource
-from apps.system.crud.assistant import AssistantOutDs
 from common.core.config import settings
-from common.core.deps import CurrentAssistant
-from common.core.deps import SessionDep, CurrentUser
+from common.core.deps import CurrentAssistant, CurrentUser, SessionDep
 from common.utils.utils import SQLBotLogUtil
 
 
-def get_ds_embedding(session: SessionDep, current_user: CurrentUser, _ds_list, out_ds: AssistantOutDs,
+class ExternalDatasourceSchemaReader(Protocol):
+    ds_list: list[ExternalDatasource]
+
+    def get_ds(self, datasource_id: int) -> ExternalDatasource: ...
+
+    def get_db_schema(
+        self,
+        datasource_id: int,
+        question: str = "",
+        embedding: bool = True,
+    ) -> str: ...
+
+
+def get_ds_embedding(session: SessionDep, current_user: CurrentUser, _ds_list, out_ds: ExternalDatasourceSchemaReader,
                      question: str,
                      current_assistant: Optional[CurrentAssistant] = None):
     _list = []

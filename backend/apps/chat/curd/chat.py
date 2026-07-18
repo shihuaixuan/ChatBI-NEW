@@ -6,6 +6,7 @@ import sqlparse
 from sqlalchemy import and_, desc, func, select, update
 from sqlalchemy.orm import aliased
 
+from apps.assistant.public import AssistantOutDsFactory
 from apps.chat.models.chat_model import (
     Chat,
     ChatInfo,
@@ -33,7 +34,6 @@ from apps.datasource.crud.recommended_problem import get_datasource_recommended_
 from apps.datasource.models.datasource import CoreDatasource
 from apps.db.db import exec_sql
 from apps.semantic.models.orm import SemanticDataset
-from apps.system.crud.assistant import AssistantOutDsFactory
 from common.core.deps import CurrentAssistant, CurrentUser, SessionDep, Trans
 from common.utils.data_format import DataFormat
 from common.utils.utils import SQLBotLogUtil, extract_nested_json

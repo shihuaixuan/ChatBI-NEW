@@ -20,6 +20,8 @@ backend/tests/*
 !backend/tests/ai_model/**
 !backend/tests/access_control/
 !backend/tests/access_control/**
+!backend/tests/assistant/
+!backend/tests/assistant/**
 !backend/tests/capabilities/
 !backend/tests/capabilities/**
 !backend/tests/architecture/
@@ -51,6 +53,7 @@ backend/alembic/versions/*
 !backend/alembic/versions/089_ai_model_single_default.py
 !backend/alembic/versions/090_access_control_identity_constraints.py
 !backend/alembic/versions/091_access_api_key_constraints.py
+!backend/alembic/versions/092_assistant_constraints.py
 .codex_run_logs
 .idea
 data/sqlbot
