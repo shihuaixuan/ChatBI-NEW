@@ -40,7 +40,6 @@ from apps.template.filter.generator import get_permissions_template
 from apps.template.generate_analysis.generator import get_analysis_template
 from apps.template.generate_chart.generator import get_chart_template
 from apps.template.generate_dynamic.generator import get_dynamic_template
-from apps.template.generate_guess_question.generator import get_guess_question_template
 from apps.template.generate_predict.generator import get_predict_template
 from apps.template.generate_sql.generator import (
     get_sql_example_template,
@@ -212,13 +211,6 @@ class AiModelQuestion(BaseModel):
 
     def datasource_user_question(self, datasource_list: str = "[]"):
         return get_datasource_template()['user'].format(lang=self.lang, question=self.question, data=datasource_list)
-
-    def guess_sys_question(self, articles_number: int = 4):
-        return get_guess_question_template()['system'].format(lang=self.lang, articles_number=articles_number, sqlbot_name=self.sqlbot_name)
-
-    def guess_user_question(self, old_questions: str = "[]"):
-        return get_guess_question_template()['user'].format(question=self.question, schema=self.db_schema,
-                                                            old_questions=old_questions)
 
     def filter_sys_question(self):
         return get_permissions_template()['system'].format(lang=self.lang, engine=self.engine, sqlbot_name=self.sqlbot_name)

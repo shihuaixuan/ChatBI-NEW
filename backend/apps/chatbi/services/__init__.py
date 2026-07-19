@@ -30,6 +30,12 @@ from apps.chatbi.services.query_service import QueryService, SQLExecutor
 from apps.chatbi.services.question_understanding_validation_service import (
     QuestionUnderstandingValidationService,
 )
+from apps.chatbi.services.recommended_question_service import (
+    RecommendedQuestionHistoryProvider,
+    RecommendedQuestionModelClient,
+    RecommendedQuestionPromptBuilder,
+    RecommendedQuestionService,
+)
 from apps.chatbi.services.result_artifact_service import (
     ResultArtifactError,
     ResultArtifactGateway,
@@ -73,6 +79,10 @@ __all__ = [
     "QueryService",
     "QuestionUnderstandingValidationService",
     "RecommendedQuestionProvider",
+    "RecommendedQuestionHistoryProvider",
+    "RecommendedQuestionModelClient",
+    "RecommendedQuestionPromptBuilder",
+    "RecommendedQuestionService",
     "ResultArtifactError",
     "ResultArtifactGateway",
     "ResultArtifactService",

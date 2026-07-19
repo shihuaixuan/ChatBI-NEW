@@ -6,7 +6,7 @@ import urllib.parse
 import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import orjson
 import pandas as pd
@@ -17,7 +17,6 @@ from langchain_community.utilities import SQLDatabase
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
-    BaseMessageChunk,
     HumanMessage,
 )
 from sqlalchemy import and_, select
@@ -30,6 +29,7 @@ from sqlmodel import Session
 
 from apps.access_control.data_policy import requires_data_policy, resolve_data_policy
 from apps.ai_model.model_factory import LLMConfig, LLMFactory, get_default_config
+from apps.ai_model.streaming import process_stream
 from apps.assistant import AssistantOutDsSchema
 from apps.assistant.public import (
     AssistantOutDs,
@@ -48,7 +48,6 @@ from apps.chat.curd.chat import (
     get_chat_chart_data,
     get_chat_predict_data,
     get_last_execute_sql_error,
-    get_old_questions,
     list_generate_chart_logs,
     list_generate_sql_logs,
     save_analysis_answer,
@@ -58,7 +57,6 @@ from apps.chat.curd.chat import (
     save_error_message,
     save_predict_answer,
     save_predict_data,
-    save_recommend_question_answer,
     save_select_datasource_answer,
     save_sql,
     save_sql_answer,
@@ -81,6 +79,7 @@ from apps.chat.models.chat_model import (
 )
 from apps.chat.services.semantic_binding import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
 from apps.chat.services.term_context import ChatTermContextService
+from apps.chatbi.models import RecommendedQuestionGenerationData
 from apps.datasource import (
     DatasourceConnection,
     build_external_datasource_connection,
@@ -104,6 +103,9 @@ from common.error import (
 from common.utils.data_format import DataFormat
 from common.utils.locale import I18n, I18nHelper
 from common.utils.utils import SQLBotLogUtil, extract_nested_json, prepare_for_orjson
+from infrastructure.recommended_questions import (
+    build_recommended_question_service,
+)
 
 warnings.filterwarnings("ignore")
 
@@ -589,12 +591,17 @@ class LLMService:
                     current_user=self.current_user,
                     ds=self.ds)
 
-        guess_msg: List[Union[BaseMessage, dict[str, Any]]] = []
-        guess_msg.append(SystemPromptMessage(content=self.chat_question.guess_sys_question(self.articles_number)))
-
-        old_questions = list(map(lambda q: q.strip(), get_old_questions(_session, self.record.datasource)))
-        guess_msg.append(
-            HumanMessage(content=self.chat_question.guess_user_question(orjson.dumps(old_questions).decode())))
+        data = RecommendedQuestionGenerationData(
+            record_id=self.record.id or 0,
+            question=self.chat_question.question or "",
+            schema=self.chat_question.db_schema or "",
+            datasource_id=self.record.datasource,
+            language=self.chat_question.lang,
+            assistant_name=self.chat_question.sqlbot_name,
+            articles_number=self.articles_number,
+        )
+        service = build_recommended_question_service(_session, self.llm)
+        messages = service.prepare(data)
 
         self.current_logs[OperationEnum.GENERATE_RECOMMENDED_QUESTIONS] = start_log(session=_session,
                                                                                     ai_modal_id=self.chat_question.ai_modal_id,
@@ -602,43 +609,43 @@ class LLMService:
                                                                                     operate=OperationEnum.GENERATE_RECOMMENDED_QUESTIONS,
                                                                                     record_id=self.record.id,
                                                                                     full_message=[
-                                                                                        {'type': msg.type,
-                                                                                         'sqlbot_system': getattr(msg,
-                                                                                                                  'sqlbot_system',
-                                                                                                                  False) is True,
-                                                                                         'content': msg.content} for
-                                                                                        msg
-                                                                                        in guess_msg])
-        full_thinking_text = ''
-        full_guess_text = ''
-        token_usage = {}
-        res = process_stream(self.llm.stream(guess_msg), token_usage)
-        for chunk in res:
-            if chunk.get('content'):
-                full_guess_text += chunk.get('content')
-            if chunk.get('reasoning_content'):
-                full_thinking_text += chunk.get('reasoning_content')
-            yield chunk
+                                                                                        {
+                                                                                            'type': message.role,
+                                                                                            'sqlbot_system': message.role == 'system',
+                                                                                            'content': message.content,
+                                                                                        }
+                                                                                        for message in messages
+                                                                                    ])
+        for event in service.generate(data, messages):
+            if event.kind == 'chunk':
+                yield {
+                    'content': event.content,
+                    'reasoning_content': event.reasoning_content,
+                }
+                continue
 
-        guess_msg.append(AIMessage(full_guess_text))
-
-        self.current_logs[OperationEnum.GENERATE_RECOMMENDED_QUESTIONS] = end_log(session=_session,
-                                                                                  log=self.current_logs[
-                                                                                      OperationEnum.GENERATE_RECOMMENDED_QUESTIONS],
-                                                                                  full_message=[
-                                                                                      {'type': msg.type,
-                                                                                       'sqlbot_system': getattr(msg,
-                                                                                                                'sqlbot_system',
-                                                                                                                False) is True,
-                                                                                       'content': msg.content}
-                                                                                      for msg in guess_msg],
-                                                                                  reasoning_content=full_thinking_text,
-                                                                                  token_usage=token_usage)
-        self.record = save_recommend_question_answer(session=_session, record_id=self.record.id,
-                                                     answer={'content': full_guess_text},
-                                                     articles_number=self.articles_number)
-
-        yield {'recommended_question': self.record.recommended_question}
+            self.current_logs[OperationEnum.GENERATE_RECOMMENDED_QUESTIONS] = end_log(
+                session=_session,
+                log=self.current_logs[OperationEnum.GENERATE_RECOMMENDED_QUESTIONS],
+                full_message=[
+                    *[
+                        {
+                            'type': message.role,
+                            'sqlbot_system': message.role == 'system',
+                            'content': message.content,
+                        }
+                        for message in messages
+                    ],
+                    {
+                        'type': 'ai',
+                        'sqlbot_system': False,
+                        'content': event.content,
+                    },
+                ],
+                reasoning_content=event.reasoning_content,
+                token_usage=event.token_usage,
+            )
+            yield {'recommended_question': event.recommended_question}
 
     def select_datasource(self, _session: Session):
         datasource_msg: List[Union[BaseMessage, dict[str, Any]]] = []
@@ -1840,116 +1847,6 @@ def request_picture(chat_id: int, record_id: int, chart: dict, data: dict):
     request_path = urllib.parse.urljoin(settings.SERVER_IMAGE_HOST, f"{file_name}.png")
 
     return request_path, _error
-
-
-def get_token_usage(chunk: BaseMessageChunk, token_usage: dict = None):
-    try:
-        if chunk.usage_metadata:
-            if token_usage is None:
-                token_usage = {}
-            token_usage['input_tokens'] = chunk.usage_metadata.get('input_tokens')
-            token_usage['output_tokens'] = chunk.usage_metadata.get('output_tokens')
-            token_usage['total_tokens'] = chunk.usage_metadata.get('total_tokens')
-    except Exception:
-        pass
-
-
-def process_stream(res: Iterator[BaseMessageChunk],
-                   token_usage: Dict[str, Any] = None,
-                   enable_tag_parsing: bool = settings.PARSE_REASONING_BLOCK_ENABLED,
-                   start_tag: str = settings.DEFAULT_REASONING_CONTENT_START,
-                   end_tag: str = settings.DEFAULT_REASONING_CONTENT_END
-                   ):
-    if token_usage is None:
-        token_usage = {}
-    in_thinking_block = False  # 标记是否在思考过程块中
-    current_thinking = ''  # 当前收集的思考过程内容
-    pending_start_tag = ''  # 用于缓存可能被截断的开始标签部分
-
-    for chunk in res:
-        SQLBotLogUtil.info(chunk)
-        reasoning_content_chunk = ''
-        content = chunk.content
-        output_content = ''  # 实际要输出的内容
-
-        # 检查additional_kwargs中的reasoning_content
-        if 'reasoning_content' in chunk.additional_kwargs:
-            reasoning_content = chunk.additional_kwargs.get('reasoning_content', '')
-            if reasoning_content is None:
-                reasoning_content = ''
-
-            # 累积additional_kwargs中的思考内容到current_thinking
-            current_thinking += reasoning_content
-            reasoning_content_chunk = reasoning_content
-
-        # 只有当current_thinking不是空字符串时才跳过标签解析
-        if not in_thinking_block and current_thinking.strip() != '':
-            output_content = content  # 正常输出content
-            yield {
-                'content': output_content,
-                'reasoning_content': reasoning_content_chunk
-            }
-            get_token_usage(chunk, token_usage)
-            continue  # 跳过后续的标签解析逻辑
-
-        # 如果没有有效的思考内容，并且启用了标签解析，才执行标签解析逻辑
-        # 如果有缓存的开始标签部分，先拼接当前内容
-        if pending_start_tag:
-            content = pending_start_tag + content
-            pending_start_tag = ''
-
-        # 检查是否开始思考过程块（处理可能被截断的开始标签）
-        if enable_tag_parsing and not in_thinking_block and start_tag:
-            if start_tag in content:
-                start_idx = content.index(start_tag)
-                # 只有当开始标签前面没有其他文本时才认为是真正的思考块开始
-                if start_idx == 0 or content[:start_idx].strip() == '':
-                    # 完整标签存在且前面没有其他文本
-                    output_content += content[:start_idx]  # 输出开始标签之前的内容
-                    content = content[start_idx + len(start_tag):]  # 移除开始标签
-                    in_thinking_block = True
-                else:
-                    # 开始标签前面有其他文本，不认为是思考块开始
-                    output_content += content
-                    content = ''
-            else:
-                # 检查是否可能有部分开始标签
-                for i in range(1, len(start_tag)):
-                    if content.endswith(start_tag[:i]):
-                        # 只有当当前内容全是空白时才缓存部分标签
-                        if content[:-i].strip() == '':
-                            pending_start_tag = start_tag[:i]
-                            content = content[:-i]  # 移除可能的部分标签
-                            output_content += content
-                            content = ''
-                        break
-
-        # 处理思考块内容
-        if enable_tag_parsing and in_thinking_block and end_tag:
-            if end_tag in content:
-                # 找到结束标签
-                end_idx = content.index(end_tag)
-                current_thinking += content[:end_idx]  # 收集思考内容
-                reasoning_content_chunk += current_thinking  # 添加到当前块的思考内容
-                content = content[end_idx + len(end_tag):]  # 移除结束标签后的内容
-                current_thinking = ''  # 重置当前思考内容
-                in_thinking_block = False
-                output_content += content  # 输出结束标签之后的内容
-            else:
-                # 在遇到结束标签前，持续收集思考内容
-                current_thinking += content
-                reasoning_content_chunk += content
-                content = ''
-
-        else:
-            # 不在思考块中或标签解析未启用，正常输出
-            output_content += content
-
-        yield {
-            'content': output_content,
-            'reasoning_content': reasoning_content_chunk
-        }
-        get_token_usage(chunk, token_usage)
 
 
 def get_lang_name(lang: str):

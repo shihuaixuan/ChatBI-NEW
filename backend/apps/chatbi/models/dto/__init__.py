@@ -28,6 +28,12 @@ from apps.chatbi.models.dto.question_understanding import (
     QuestionUnderstandingValidationIssue,
     QuestionUnderstandingValidationResult,
 )
+from apps.chatbi.models.dto.recommended_question import (
+    RecommendedQuestionGenerationData,
+    RecommendedQuestionGenerationEvent,
+    RecommendedQuestionMessage,
+    RecommendedQuestionModelChunk,
+)
 from apps.chatbi.models.dto.result_artifact import (
     ChatBIResultArtifactRef,
     ResultArtifactWriteData,
@@ -60,6 +66,10 @@ __all__ = [
     "QuestionUnderstandingValidationData",
     "QuestionUnderstandingValidationIssue",
     "QuestionUnderstandingValidationResult",
+    "RecommendedQuestionGenerationData",
+    "RecommendedQuestionGenerationEvent",
+    "RecommendedQuestionMessage",
+    "RecommendedQuestionModelChunk",
     "RenameChat",
     "ResultArtifactWriteData",
     "SemanticRetrievalData",
