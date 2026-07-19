@@ -1,3 +1,9 @@
+from apps.chatbi.models.dto.chat_record import (
+    ChatRecordCreateData,
+    ChatRecordExecutionType,
+    ChatRecordResultProjection,
+    ChatRecordStatus,
+)
 from apps.chatbi.models.dto.conversation import (
     ChatInfo,
     ConversationBinding,
@@ -8,6 +14,10 @@ from apps.chatbi.models.dto.conversation import (
 
 __all__ = [
     "ChatInfo",
+    "ChatRecordCreateData",
+    "ChatRecordExecutionType",
+    "ChatRecordResultProjection",
+    "ChatRecordStatus",
     "ConversationBinding",
     "ConversationCreateData",
     "CreateChat",

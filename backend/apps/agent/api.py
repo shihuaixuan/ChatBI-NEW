@@ -2,7 +2,6 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session
 
-from apps.chat.models.chat_model import ChatRecord
 from apps.agent import crud
 from apps.agent.loop import AgentLoop
 from apps.agent.models import AgentClarificationStatus, AgentRunStatus
@@ -19,6 +18,7 @@ from apps.agent.service import (
     create_agent_start_stream,
     get_agent_config,
 )
+from apps.chatbi.models import ChatRecord
 from common.core.db import engine
 from common.core.deps import CurrentUser, SessionDep
 

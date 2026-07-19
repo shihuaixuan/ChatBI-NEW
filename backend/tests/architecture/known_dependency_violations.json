@@ -1,7 +1,5 @@
 {
   "cross_domain_internal_models": [
-    "apps/agent/api.py -> apps.chat.models.chat_model",
-    "apps/agent/loop.py -> apps.chat.models.chat_model",
     "apps/agent/tools/core.py -> apps.datasource.models.datasource",
     "apps/capabilities/semantic/compile.py -> apps.semantic.models.orm",
     "apps/chat/curd/chat.py -> apps.datasource.models.datasource",
@@ -19,8 +17,6 @@
     "apps/semantic/repository/sqlmodel/schema_loader.py -> apps.datasource.models.datasource",
     "apps/semantic/services/builders/schema_builder.py -> apps.datasource.models.datasource",
     "apps/semantic/services/datasource_service.py -> apps.datasource.models.datasource",
-    "apps/workflow_engine/api/chat_history.py -> apps.chat.models.chat_model",
-    "apps/workflow_engine/api/service.py -> apps.chat.models.chat_model",
     "apps/workflow_engine/api/service.py -> apps.semantic.models.orm"
   ],
   "cross_domain_concrete_implementations": [
@@ -40,8 +36,7 @@
   ],
   "cross_domain_api_imports": [],
   "workflow_engine_business_imports": [
-    "apps/workflow_engine/api/chat_history.py -> apps.chat.models.chat_model",
-    "apps/workflow_engine/api/service.py -> apps.chat.models.chat_model",
+    "apps/workflow_engine/api/service.py -> apps.chatbi.workflow_gateway",
     "apps/workflow_engine/api/service.py -> apps.semantic.models.orm",
     "apps/workflow_engine/api/service.py -> apps.workflow.definitions.chatbi_minimal_v1",
     "apps/workflow_engine/api/service.py -> apps.workflow.definitions.chatbi_v1",

@@ -6,6 +6,7 @@ from apps.chatbi.models import (
     Chat,
     ChatInfo,
     ChatRecord,
+    ChatRecordStatus,
     ConversationCreateData,
 )
 
@@ -61,7 +62,9 @@ class SQLModelConversationRepository:
                 engine_type=binding.datasource_type_name,
                 first_chat=True,
                 finish=True,
+                status=ChatRecordStatus.SUCCEEDED.value,
                 create_time=data.created_at,
+                finish_time=data.created_at,
                 create_by=data.user_id,
             )
             if data.recommended_questions:

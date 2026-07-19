@@ -24,6 +24,12 @@ from apps.chat.models.chat_model import (
 from apps.chat.services.semantic_binding import (
     DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
 )
+from apps.chatbi.chat_record import build_chat_record_service
+from apps.chatbi.models import (
+    ChatRecordCreateData,
+    ChatRecordExecutionType,
+    ChatRecordStatus,
+)
 from apps.chatbi.services import ConversationNotFoundError
 from apps.datasource.composition import build_datasource_connection_service
 from apps.datasource.models.datasource import CoreDatasource
@@ -702,21 +708,27 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
 
 
 def save_analysis_predict_record(session: SessionDep, base_record: ChatRecord, action_type: str) -> ChatRecord:
-    record = ChatRecord()
+    if not base_record.question:
+        raise ValueError("Base chat record question is required")
+
     # 分析和预测沿用来源记录类型；历史来源统一投影为 Graph。
-    record.execution_type = (
-        base_record.execution_type
+    execution_type = (
+        ChatRecordExecutionType(base_record.execution_type)
         if base_record.execution_type in {"graph", "agent"}
-        else "graph"
+        else ChatRecordExecutionType.GRAPH
     )
-    record.question = base_record.question
-    record.chat_id = base_record.chat_id
-    record.dataset_id = base_record.dataset_id
-    record.datasource = base_record.datasource
-    record.engine_type = base_record.engine_type
+    record = build_chat_record_service(session).create(
+        ChatRecordCreateData(
+            chat_id=base_record.chat_id,
+            user_id=base_record.create_by,
+            question=base_record.question,
+            dataset_id=base_record.dataset_id,
+            datasource_id=base_record.datasource,
+            engine_type=base_record.engine_type or "",
+            execution_type=execution_type,
+        )
+    )
     record.ai_modal_id = base_record.ai_modal_id
-    record.create_time = datetime.datetime.now()
-    record.create_by = base_record.create_by
     record.chart = base_record.chart
     record.data = base_record.data
 
@@ -725,15 +737,12 @@ def save_analysis_predict_record(session: SessionDep, base_record: ChatRecord, a
     elif action_type == 'predict':
         record.predict_record_id = base_record.id
 
-    result = ChatRecord(**record.model_dump())
-
     session.add(record)
     session.flush()
     session.refresh(record)
-    result.id = record.id
     session.commit()
 
-    return result
+    return ChatRecord(**record.model_dump())
 
 
 def start_log(session: SessionDep, ai_modal_id: int = None, ai_modal_name: str = None, operate: OperationEnum = None,
@@ -991,23 +1000,13 @@ def save_predict_data(session: SessionDep, record_id: int, data: str = '') -> Ch
 def save_error_message(session: SessionDep, record_id: int, message: str) -> ChatRecord:
     if not record_id:
         raise Exception("Record id cannot be None")
-    record = get_chat_record_by_id(session, record_id)
-
-    record.error = message
-    record.finish = True
-    record.finish_time = datetime.datetime.now()
-
-    result = ChatRecord(**record.model_dump())
-
-    stmt = update(ChatRecord).where(and_(ChatRecord.id == record.id)).values(
-        error=record.error,
-        finish=record.finish,
-        finish_time=record.finish_time
+    record = build_chat_record_service(session).transition_by_id(
+        record_id,
+        ChatRecordStatus.FAILED,
+        error=message,
     )
 
-    session.execute(stmt)
-
-    session.commit()
+    result = ChatRecord(**record.model_dump())
 
     # log error finish
     stmt = update(ChatLog).where(and_(ChatLog.pid == record.id, ChatLog.finish_time.is_(None))).values(
@@ -1043,19 +1042,12 @@ def save_sql_exec_data(session: SessionDep, record_id: int, data: str) -> ChatRe
 def finish_record(session: SessionDep, record_id: int) -> ChatRecord:
     if not record_id:
         raise Exception("Record id cannot be None")
-    record = get_chat_record_by_id(session, record_id)
-
-    record.finish = True
-    record.finish_time = datetime.datetime.now()
-
-    result = ChatRecord(**record.model_dump())
-
-    stmt = update(ChatRecord).where(and_(ChatRecord.id == record.id)).values(
-        finish=record.finish,
-        finish_time=record.finish_time
+    record = build_chat_record_service(session).transition_by_id(
+        record_id,
+        ChatRecordStatus.SUCCEEDED,
     )
 
-    session.execute(stmt)
+    result = ChatRecord(**record.model_dump())
 
     session.commit()
 

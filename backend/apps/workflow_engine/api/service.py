@@ -9,7 +9,14 @@ from uuid import uuid4
 from fastapi import HTTPException
 from sqlmodel import Session, col, func, select
 
-from apps.chat.models.chat_model import Chat, ChatRecord
+from apps.chatbi.workflow_gateway import (
+    Chat,
+    ChatRecord,
+    ChatRecordCreateData,
+    ChatRecordExecutionType,
+    build_chat_record_service,
+    build_workflow_chat_record_gateway,
+)
 from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetModelConfig,
@@ -59,6 +66,15 @@ from apps.workflow_engine.runtime.public_projection import (
     sanitize_public_output,
 )
 from common.core.db import engine
+
+
+def _graph_chat_record_projector(session: Session) -> GraphChatRecordProjector:
+    """在业务 API 边界装配 ChatBI 记录投影端口。"""
+
+    return GraphChatRecordProjector(
+        session,
+        build_workflow_chat_record_gateway(session),
+    )
 
 
 class GraphApiService:
@@ -118,21 +134,18 @@ class GraphApiService:
         run_id = request.run_id or f"graph-{uuid4().hex}"
         chat, dataset_id = self._resolve_chat_query_context(current_user, chat_id, request)
 
-        record = ChatRecord(
-            chat_id=chat_id,
-            create_time=datetime.now(),
-            create_by=current_user.id,
-            dataset_id=dataset_id,
-            datasource=chat.datasource,
-            engine_type=chat.engine_type,
-            execution_type="graph",
-            question=request.question,
-            finish=False,
-            status=RunStatus.CREATED.value,
-            trace_id=run_id,
+        record = build_chat_record_service(self._session).create(
+            ChatRecordCreateData(
+                chat_id=chat_id,
+                user_id=current_user.id,
+                question=request.question,
+                dataset_id=dataset_id,
+                datasource_id=chat.datasource,
+                engine_type=chat.engine_type,
+                execution_type=ChatRecordExecutionType.GRAPH,
+                trace_id=run_id,
+            )
         )
-        self._session.add(record)
-        self._session.flush()
         if record.id is None:
             raise RuntimeError("GRAPH_CHAT_RECORD_ID_MISSING")
 
@@ -148,7 +161,7 @@ class GraphApiService:
         }
         run_store = ChatProjectingRunStore(
             RunRepository(self._session),
-            GraphChatRecordProjector(self._session),
+            _graph_chat_record_projector(self._session),
         )
         runtime = build_real_chatbi_v1_runtime(
             self._session,
@@ -345,7 +358,7 @@ class GraphApiService:
                 raise HTTPException(status_code=400, detail="GRAPH_CHAT_DEFINITION_UNSUPPORTED")
             run_store = ChatProjectingRunStore(
                 RunRepository(self._session),
-                GraphChatRecordProjector(self._session),
+                _graph_chat_record_projector(self._session),
             )
             return build_real_chatbi_v1_runtime(
                 self._session,
@@ -614,7 +627,7 @@ class GraphApiService:
             self._session.add(interaction)
         self._append_control_event(run_id, "run.cancelled", {"status": "cancelled"})
         try:
-            GraphChatRecordProjector(self._session).project_model(run)
+            _graph_chat_record_projector(self._session).project_model(run)
             self._session.commit()
         except GraphResultNotProjectableError as exc:
             self._raise_projection_http_error(exc)
@@ -628,7 +641,7 @@ class GraphApiService:
             runtime = self._build_runtime_for_run(run)
             try:
                 self._restore_v1_run_for_retry(run)
-                GraphChatRecordProjector(self._session).project_model(run)
+                _graph_chat_record_projector(self._session).project_model(run)
                 self._append_control_event(run_id, "run.retry_requested", {"status": "created"})
                 self._session.flush()
                 retried = runtime.execute(run_id)

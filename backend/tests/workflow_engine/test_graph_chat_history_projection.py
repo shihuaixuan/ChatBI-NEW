@@ -5,6 +5,7 @@ from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from apps.chat.models.chat_model import Chat, ChatRecord
+from apps.chatbi.workflow_gateway import build_workflow_chat_record_gateway
 from apps.workflow_engine.api.chat_history import (
     ChatProjectingRunStore,
     GraphChatRecordProjector,
@@ -15,6 +16,13 @@ from apps.workflow_engine.domain.run import RunStatus, WorkflowRun
 from apps.workflow_engine.infrastructure.persistence.models import WorkflowRunModel
 from apps.workflow_engine.infrastructure.persistence.run_repository import RunRepository
 from common.core.db import engine
+
+
+def graph_record_projector(session: Session) -> GraphChatRecordProjector:
+    return GraphChatRecordProjector(
+        session,
+        build_workflow_chat_record_gateway(session),
+    )
 
 
 def seed_graph_record(session: Session) -> tuple[Chat, ChatRecord]:
@@ -117,7 +125,7 @@ def test_projector_writes_success_snapshot(session: Session):
         },
     )
 
-    projected = GraphChatRecordProjector(session).project(run)
+    projected = graph_record_projector(session).project(run)
 
     assert projected is not None
     assert projected.status == "succeeded"
@@ -147,7 +155,7 @@ def test_projector_rejects_success_without_displayable_answer(session: Session):
     with pytest.raises(
         GraphResultNotProjectableError, match="GRAPH_RESULT_NOT_PROJECTABLE"
     ):
-        GraphChatRecordProjector(session).project(run)
+        graph_record_projector(session).project(run)
 
     assert (
         record.trace_id,
@@ -168,10 +176,10 @@ def test_projector_keeps_waiting_record_recoverable(session: Session):
         variables={},
     )
 
-    projected = GraphChatRecordProjector(session).project(run)
+    projected = graph_record_projector(session).project(run)
 
     assert projected is not None
-    assert projected.status == "waiting_input"
+    assert projected.status == "waiting_user"
     assert projected.finish is False
     assert projected.trace_id == run.run_id
 
@@ -185,7 +193,7 @@ def test_projector_writes_failed_snapshot(session: Session):
         variables={},
     )
 
-    projected = GraphChatRecordProjector(session).project(run)
+    projected = graph_record_projector(session).project(run)
 
     assert projected is not None
     assert projected.status == "failed"
@@ -199,7 +207,7 @@ def test_projector_ignores_standalone_run(session: Session):
         record_id=None, chat_id=None, status=RunStatus.SUCCEEDED, variables={}
     )
 
-    assert GraphChatRecordProjector(session).project(run) is None
+    assert graph_record_projector(session).project(run) is None
 
 
 def test_projector_rejects_incomplete_chat_ownership(session: Session):
@@ -210,7 +218,7 @@ def test_projector_rejects_incomplete_chat_ownership(session: Session):
     with pytest.raises(
         GraphResultNotProjectableError, match="GRAPH_CHAT_OWNERSHIP_INCOMPLETE"
     ):
-        GraphChatRecordProjector(session).project(run)
+        graph_record_projector(session).project(run)
 
 
 def test_projector_rejects_record_from_another_chat(session: Session):
@@ -225,7 +233,7 @@ def test_projector_rejects_record_from_another_chat(session: Session):
     with pytest.raises(
         GraphResultNotProjectableError, match="GRAPH_CHAT_RECORD_NOT_FOUND"
     ):
-        GraphChatRecordProjector(session).project(run)
+        graph_record_projector(session).project(run)
 
 
 def test_project_model_uses_physical_ownership_when_context_omits_it(
@@ -260,10 +268,10 @@ def test_project_model_uses_physical_ownership_when_context_omits_it(
         updated_at=run.updated_at,
     )
 
-    projected = GraphChatRecordProjector(session).project_model(model)
+    projected = graph_record_projector(session).project_model(model)
 
     assert projected is not None
-    assert projected.status == "waiting_input"
+    assert projected.status == "waiting_user"
 
 
 def test_project_model_rejects_context_ownership_conflict(session: Session):
@@ -303,7 +311,7 @@ def test_project_model_rejects_context_ownership_conflict(session: Session):
     with pytest.raises(
         GraphResultNotProjectableError, match="GRAPH_CHAT_OWNERSHIP_CONFLICT"
     ):
-        GraphChatRecordProjector(session).project_model(model)
+        graph_record_projector(session).project_model(model)
 
 
 def test_run_repository_create_persists_physical_chat_ownership(session: Session):
@@ -331,7 +339,7 @@ def test_projecting_run_store_projects_before_caller_commit(session: Session):
     record.status = "seeded"
     session.flush()
     base = RunRepository(session)
-    store = ChatProjectingRunStore(base, GraphChatRecordProjector(session))
+    store = ChatProjectingRunStore(base, graph_record_projector(session))
     run = workflow_run(
         record_id=record.id,
         chat_id=chat.id,
@@ -350,7 +358,7 @@ def test_projecting_run_store_projects_before_caller_commit(session: Session):
 
     assert store.get(run.run_id).version == created.version + 1
     assert saved.status is RunStatus.WAITING_INPUT
-    assert session.get(ChatRecord, record.id).status == "waiting_input"
+    assert session.get(ChatRecord, record.id).status == "waiting_user"
     session.rollback()
     session.expire_all()
     assert session.get(ChatRecord, record.id).status == "created"

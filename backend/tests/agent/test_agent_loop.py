@@ -7,7 +7,6 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
-from apps.chat.models.chat_model import ChatRecord
 from apps.agent.loop import AgentLoop
 from apps.agent.models import (
     AgentRunStatus,
@@ -26,6 +25,7 @@ from apps.capabilities.question_understanding import (
     QuestionUnderstandingOutput,
     QuestionUnderstandingService,
 )
+from apps.chat.models.chat_model import ChatRecord
 
 
 class FakeSession:
@@ -252,6 +252,9 @@ def test_happy_path_tool_then_finish():
     assert "tool-called" in types and "tool-result" in types
     assert types[-3:] == ["answer", "run-finished", "finish"]
     assert run.status == AgentRunStatus.FINISHED.value
+    assert record.status == "succeeded"
+    assert record.finish is True
+    assert record.finish_time is not None
     assert record.sql_answer == "最终答案"
     assert record.sql == "select 1"
     assert orjson.loads(record.data) == {"fields": ["a"], "data": [{"a": 1}]}
@@ -344,6 +347,9 @@ def test_budget_exhaustion_fails_run_honestly():
 
     assert types[-2:] == ["run-failed", "error"]
     assert run.status == AgentRunStatus.FAILED.value
+    assert record.status == "failed"
+    assert record.finish is True
+    assert record.finish_time is not None
     assert run.error_class == "budget_exhausted"
 
 

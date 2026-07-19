@@ -45,8 +45,8 @@ from apps.capabilities.question_understanding import (
     QuestionUnderstandingService,
     apply_question_understanding_clarification,
 )
-from apps.chat.models.chat_model import ChatRecord
 from apps.chatbi.composition import build_query_service
+from apps.chatbi.models import ChatRecord
 from apps.chatbi.services import QueryService
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
@@ -684,20 +684,29 @@ class AgentLoop:
         )
 
     def _finish(self, run, record, messages, budget, *, answer, chart, sql, step_id=None, full_data=None, execution=None) -> Iterator[str]:
-        record.sql_answer = answer
-        record.chart_answer = answer
-        record.sql = sql
-        record.chart = orjson.dumps(chart or {}).decode()
+        record_data = None
         if full_data is not None and execution:
-            record.data = orjson.dumps({"fields": execution.get("fields") or [], "data": full_data}).decode()
-        crud.finish_record(self.session, record, AgentRunStatus.FINISHED.value)
+            record_data = orjson.dumps(
+                {
+                    "fields": execution.get("fields") or [],
+                    "data": full_data,
+                }
+            ).decode()
+        crud.complete_record(
+            self.session,
+            record,
+            answer=answer,
+            chart_answer=answer,
+            sql=sql,
+            chart=orjson.dumps(chart or {}).decode(),
+            data=record_data,
+        )
         crud.update_run(
             self.session, run,
             status=AgentRunStatus.FINISHED.value,
             messages=_serialize_messages(messages),
             budget_snapshot=budget.snapshot(),
         )
-        self.session.add(record)
         self.session.commit()
         yield self._emit(run, "answer", {"record_id": record.id, "content": answer}, step_id)
         yield self._emit(run, "run-finished", {"record_id": record.id, "content": answer}, step_id)

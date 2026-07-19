@@ -12,8 +12,16 @@ from apps.agent.models import (
     ChatbiAgentTraceEvent,
 )
 from apps.agent.schemas import AgentQuestionRequest
+from apps.chatbi.chat_record import build_chat_record_service
 from apps.chatbi.conversation import build_conversation_reader_service
-from apps.chatbi.models import Chat, ChatRecord
+from apps.chatbi.models import (
+    Chat,
+    ChatRecord,
+    ChatRecordCreateData,
+    ChatRecordExecutionType,
+    ChatRecordResultProjection,
+    ChatRecordStatus,
+)
 
 
 def now() -> datetime:
@@ -36,21 +44,18 @@ def create_record_and_run(
     chat = get_chat_for_user(session, request.chat_id, current_user)
     datasource_id = request.datasource_id or chat.datasource
     created_at = now()
-    record = ChatRecord(
-        chat_id=request.chat_id,
-        create_time=created_at,
-        create_by=current_user.id,
-        datasource=datasource_id,
-        dataset_id=chat.dataset_id,
-        engine_type=chat.engine_type,
-        execution_type="agent",
-        question=request.question,
-        finish=False,
-        status=AgentRunStatus.CREATED.value,
+    record_service = build_chat_record_service(session)
+    record = record_service.create(
+        ChatRecordCreateData(
+            chat_id=request.chat_id,
+            user_id=current_user.id,
+            question=request.question,
+            dataset_id=chat.dataset_id,
+            datasource_id=datasource_id,
+            engine_type=chat.engine_type,
+            execution_type=ChatRecordExecutionType.AGENT,
+        )
     )
-    session.add(record)
-    session.flush()
-    session.refresh(record)
 
     run = ChatbiAgentRun(
         oid=current_user.oid if current_user.oid is not None else 1,
@@ -65,8 +70,12 @@ def create_record_and_run(
     session.add(run)
     session.flush()
     session.refresh(run)
-    record.trace_id = str(run.id)
-    session.add(record)
+    record_service.transition(
+        record,
+        ChatRecordStatus.CREATED,
+        trace_id=str(run.id),
+        execution_type=ChatRecordExecutionType.AGENT,
+    )
     session.commit()
     session.refresh(record)
     session.refresh(run)
@@ -135,11 +144,40 @@ def update_run(
 
 
 def finish_record(session, record: ChatRecord, status: str, error: str | None = None) -> None:
-    record.status = status
-    record.finish = status == AgentRunStatus.FINISHED.value
-    record.error = error
-    record.finish_time = now()
-    session.add(record)
+    """兼容 Agent 旧调用名，状态规则由 ChatRecordService 维护。"""
+
+    build_chat_record_service(session).transition(
+        record,
+        status,
+        error=error,
+        execution_type=ChatRecordExecutionType.AGENT,
+    )
+
+
+def complete_record(
+    session,
+    record: ChatRecord,
+    *,
+    answer: str,
+    chart_answer: str,
+    sql: str | None,
+    chart: str,
+    data: str | None,
+) -> None:
+    """统一投影 Agent 成功结果和终态。"""
+
+    build_chat_record_service(session).transition(
+        record,
+        ChatRecordStatus.SUCCEEDED,
+        execution_type=ChatRecordExecutionType.AGENT,
+        result=ChatRecordResultProjection(
+            answer=answer,
+            chart_answer=chart_answer,
+            sql=sql,
+            chart=chart,
+            data=data,
+        ),
+    )
 
 
 def next_sequence(session, run_id: int) -> int:

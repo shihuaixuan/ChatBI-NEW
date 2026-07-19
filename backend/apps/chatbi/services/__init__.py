@@ -1,3 +1,11 @@
+from apps.chatbi.services.chat_record_service import (
+    ChatRecordError,
+    ChatRecordNotFoundError,
+    ChatRecordOwnershipError,
+    ChatRecordService,
+    ChatRecordTransitionError,
+    normalize_chat_record_status,
+)
 from apps.chatbi.services.conversation_service import (
     ConversationBindingError,
     ConversationBindingProvider,
@@ -16,6 +24,11 @@ from apps.chatbi.services.sql_permission import (
 )
 
 __all__ = [
+    "ChatRecordError",
+    "ChatRecordNotFoundError",
+    "ChatRecordOwnershipError",
+    "ChatRecordService",
+    "ChatRecordTransitionError",
     "ConversationBindingError",
     "ConversationBindingProvider",
     "ConversationDeletionProvider",
@@ -29,4 +42,5 @@ __all__ = [
     "RecommendedQuestionProvider",
     "SQLExecutor",
     "SQLPermissionService",
+    "normalize_chat_record_status",
 ]

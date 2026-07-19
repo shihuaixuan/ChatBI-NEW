@@ -734,7 +734,7 @@ def test_graph_chat_waiting_record_resumes_into_stable_snapshot():
     )
     assert created.status_code == 200
     record_id = created.json()["record_id"]
-    assert _load_chat_record(record_id).status == "waiting_input"
+    assert _load_chat_record(record_id).status == "waiting_user"
     interaction_id = _load_pending_interaction_id("api-chat-clarify")
 
     answered = _client().post(

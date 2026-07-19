@@ -84,7 +84,7 @@ class ChatLog(SQLModel, table=True):
     start_time: datetime = Field(
         sa_column=Column(DateTime(timezone=False), nullable=True)
     )
-    finish_time: datetime = Field(
+    finish_time: datetime | None = Field(
         sa_column=Column(DateTime(timezone=False), nullable=True)
     )
     token_usage: dict[str, Any] | int | None = Field(sa_column=Column(JSONB))
@@ -138,7 +138,7 @@ class ChatRecord(SQLModel, table=True):
     create_time: datetime = Field(
         sa_column=Column(DateTime(timezone=False), nullable=True)
     )
-    finish_time: datetime = Field(
+    finish_time: datetime | None = Field(
         sa_column=Column(DateTime(timezone=False), nullable=True)
     )
     create_by: int = Field(sa_column=Column(BigInteger, nullable=True))
@@ -146,23 +146,23 @@ class ChatRecord(SQLModel, table=True):
         default=None,
         sa_column=Column(BigInteger, nullable=True),
     )
-    datasource: int = Field(sa_column=Column(BigInteger, nullable=True))
-    engine_type: str = Field(max_length=64, nullable=True)
-    question: str = Field(sa_column=Column(Text, nullable=True))
-    sql_answer: str = Field(sa_column=Column(Text, nullable=True))
-    sql: str = Field(sa_column=Column(Text, nullable=True))
-    sql_exec_result: str = Field(sa_column=Column(Text, nullable=True))
-    data: str = Field(sa_column=Column(Text, nullable=True))
-    chart_answer: str = Field(sa_column=Column(Text, nullable=True))
-    chart: str = Field(sa_column=Column(Text, nullable=True))
-    analysis: str = Field(sa_column=Column(Text, nullable=True))
-    predict: str = Field(sa_column=Column(Text, nullable=True))
-    predict_data: str = Field(sa_column=Column(Text, nullable=True))
-    recommended_question_answer: str = Field(
+    datasource: int | None = Field(sa_column=Column(BigInteger, nullable=True))
+    engine_type: str | None = Field(max_length=64, nullable=True)
+    question: str | None = Field(sa_column=Column(Text, nullable=True))
+    sql_answer: str | None = Field(sa_column=Column(Text, nullable=True))
+    sql: str | None = Field(sa_column=Column(Text, nullable=True))
+    sql_exec_result: str | None = Field(sa_column=Column(Text, nullable=True))
+    data: str | None = Field(sa_column=Column(Text, nullable=True))
+    chart_answer: str | None = Field(sa_column=Column(Text, nullable=True))
+    chart: str | None = Field(sa_column=Column(Text, nullable=True))
+    analysis: str | None = Field(sa_column=Column(Text, nullable=True))
+    predict: str | None = Field(sa_column=Column(Text, nullable=True))
+    predict_data: str | None = Field(sa_column=Column(Text, nullable=True))
+    recommended_question_answer: str | None = Field(
         sa_column=Column(Text, nullable=True)
     )
-    recommended_question: str = Field(sa_column=Column(Text, nullable=True))
-    datasource_select_answer: str = Field(
+    recommended_question: str | None = Field(sa_column=Column(Text, nullable=True))
+    datasource_select_answer: str | None = Field(
         sa_column=Column(Text, nullable=True)
     )
     finish: bool = Field(
@@ -172,10 +172,10 @@ class ChatRecord(SQLModel, table=True):
     trace_id: str | None = Field(default=None, max_length=64, nullable=True)
     # 新记录默认进入 Graph；Agent 入口会显式覆盖为 agent。
     execution_type: str = Field(default="graph", max_length=32, nullable=False)
-    error: str = Field(sa_column=Column(Text, nullable=True))
-    analysis_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
-    predict_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
-    regenerate_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
+    error: str | None = Field(sa_column=Column(Text, nullable=True))
+    analysis_record_id: int | None = Field(sa_column=Column(BigInteger, nullable=True))
+    predict_record_id: int | None = Field(sa_column=Column(BigInteger, nullable=True))
+    regenerate_record_id: int | None = Field(sa_column=Column(BigInteger, nullable=True))
 
 
 __all__ = [

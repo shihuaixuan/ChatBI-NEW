@@ -1,10 +1,8 @@
-from datetime import datetime
+from typing import Any, Protocol
 
-import orjson
 from sqlmodel import Session
 
-from apps.chat.models.chat_model import ChatRecord
-from apps.workflow_engine.domain.run import RunStatus, WorkflowRun
+from apps.workflow_engine.domain.run import WorkflowRun
 from apps.workflow_engine.infrastructure.persistence.models import WorkflowRunModel
 from apps.workflow_engine.infrastructure.persistence.run_repository import (
     RunOwnershipError,
@@ -17,13 +15,30 @@ class GraphResultNotProjectableError(RuntimeError):
     """Graph 成功但无法形成用户可见历史快照。"""
 
 
+class GraphRecordProjectionGateway(Protocol):
+    def project(
+        self,
+        *,
+        record_id: int,
+        chat_id: int,
+        run_id: str,
+        status: str,
+        variables: dict[str, Any],
+    ) -> Any: ...
+
+
 class GraphChatRecordProjector:
     """把领域 Run 同步投影为同一事务内的 ChatRecord 快照。"""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(
+        self,
+        session: Session,
+        gateway: GraphRecordProjectionGateway,
+    ) -> None:
         self._session = session
+        self._gateway = gateway
 
-    def project(self, run: WorkflowRun) -> ChatRecord | None:
+    def project(self, run: WorkflowRun) -> Any | None:
         """更新绑定的聊天记录；独立 Run 不生成历史投影。"""
         record_id = run.context.request.get("record_id")
         chat_id = run.context.request.get("chat_id")
@@ -32,57 +47,18 @@ class GraphChatRecordProjector:
         if record_id is None or chat_id is None:
             raise GraphResultNotProjectableError("GRAPH_CHAT_OWNERSHIP_INCOMPLETE")
 
-        record = self._session.get(ChatRecord, int(record_id))
-        if record is None or record.chat_id != int(chat_id):
-            raise GraphResultNotProjectableError("GRAPH_CHAT_RECORD_NOT_FOUND")
-
-        success_answer: str | None = None
-        success_sql: str | None = None
-        success_chart: str | None = None
-        if run.status is RunStatus.SUCCEEDED:
-            variables = run.context.variables
-            final_reply = variables.get("final_reply") or {}
-            legacy_answer = variables.get("answer") or {}
-            success_answer = str(
-                final_reply.get("final_answer") or legacy_answer.get("answer") or ""
-            ).strip()
-            if not success_answer:
-                raise GraphResultNotProjectableError("GRAPH_RESULT_NOT_PROJECTABLE")
-            sql_payload = variables.get("sql") or {}
-            success_sql = (
-                sql_payload.get("sql") if isinstance(sql_payload, dict) else None
+        try:
+            return self._gateway.project(
+                record_id=int(record_id),
+                chat_id=int(chat_id),
+                run_id=run.run_id,
+                status=run.status.value,
+                variables=run.context.variables,
             )
-            chart = final_reply.get("chart")
-            success_chart = orjson.dumps(chart).decode() if chart is not None else None
+        except ValueError as exc:
+            raise GraphResultNotProjectableError(str(exc)) from exc
 
-        record.trace_id = run.run_id
-        record.execution_type = "graph"
-        record.status = run.status.value
-        record.finish = run.status in {
-            RunStatus.SUCCEEDED,
-            RunStatus.FAILED,
-            RunStatus.CANCELLED,
-        }
-        record.finish_time = datetime.now() if record.finish else None
-
-        if run.status is RunStatus.SUCCEEDED:
-            record.sql_answer = success_answer
-            record.sql = success_sql
-            record.chart = success_chart
-            record.error = None
-        elif run.status is RunStatus.FAILED:
-            record.error = "GRAPH_RUN_FAILED"
-        elif run.status in {RunStatus.CREATED, RunStatus.RUNNING}:
-            # 重试沿用原记录，进入运行态时清理旧终态快照。
-            record.finish = False
-            record.finish_time = None
-            record.error = None
-
-        self._session.add(record)
-        self._session.flush()
-        return record
-
-    def project_model(self, run: WorkflowRunModel) -> ChatRecord | None:
+    def project_model(self, run: WorkflowRunModel) -> Any | None:
         """复用仓储转换规则投影 ORM Run。"""
         try:
             domain_run = RunRepository(self._session).to_domain(run)

@@ -5,8 +5,6 @@ from types import SimpleNamespace
 import orjson
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from apps.ai_model.openai.llm import BaseChatOpenAI
-from apps.chat.models.chat_model import ChatRecord
 from apps.agent.loop import FOLDED_PLACEHOLDER, AgentLoop, _fold_messages
 from apps.agent.models import (
     AgentClarificationResumeKind,
@@ -18,7 +16,9 @@ from apps.agent.prompts import build_system_prompt
 from apps.agent.schemas import AgentConfig
 from apps.agent.tools.interaction import ClarifyTool
 from apps.agent.tools.registry import ToolRegistry
+from apps.ai_model.openai.llm import BaseChatOpenAI
 from apps.capabilities.question_understanding import DimensionSlot
+from apps.chat.models.chat_model import ChatRecord
 from tests.agent.test_agent_loop import (
     FakeSession,
     FinishProbeTool,
@@ -103,6 +103,9 @@ def test_clarify_suspends_run_and_persists_messages():
     assert payload["question"] == "你要查哪种额度？"
     assert payload["options"][0]["label"] == "授信额度"
     assert run.status == AgentRunStatus.WAITING_USER.value
+    assert record.status == "waiting_user"
+    assert record.finish is False
+    assert record.finish_time is None
     assert run.budget_snapshot["clarifications"] == 1
     # 消息历史保留了带未回填 tool_call 的 assistant 消息
     assert run.messages[-1]["type"] == "ai"

@@ -1190,7 +1190,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 **实施状态：进行中**
 
-截至 2026-07-19，已完成第一批统一 SQL 查询链路和第二批会话生命周期收敛：
+截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛和第三批会话记录状态与结果投影统一：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1216,6 +1216,22 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     均由 `ConversationService` 表达。MCP 不再跨领域导入 Chat API，相关依赖基线已移除。
 12. 第二批 ChatBI、Chat、Agent、MCP 和架构定向回归 52 项通过；当前完整后端回归 836 项通过，新增代码通过
     Ruff 和严格 Mypy，`git diff --check` 通过，OpenAPI 保持 154 个路径。
+13. 新增 `ChatRecordService`、Repository 端口和 SQLModel 仓储，统一创建、状态转换、错误记录和最终结果投影；
+    对外状态固定为 `created`、`running`、`waiting_user`、`succeeded`、`failed`、`cancelled`，Agent Run 的
+    `finished` 和 Graph Run 的 `waiting_input` 只在各自执行器内部保留，并在 ChatRecord 边界转换。
+14. `succeeded`、`failed`、`cancelled` 统一设置 `finish=true` 和 `finish_time`；失败必须包含明确错误，成功记录
+    不能重新进入运行态。失败重试可以进入 `created` 或 `running`，但必须清除旧答案、SQL、图表、数据和错误，
+    避免终态快照污染新一次执行。
+15. Agent 的创建、运行、澄清、成功、失败和取消流程已通过 `ChatRecordService` 更新会话记录；Agent 最终答案、
+    SQL、图表和数据统一投影到 ChatRecord，不再由 Agent CRUD 分别维护记录终态字段。
+16. Graph 历史投影已拆为通用投影端口和 ChatBI 业务网关。`workflow_engine/api/chat_history.py` 不再直接依赖
+    Chat、ChatBI ORM 或业务仓储，ChatBI 记录读取、创建和状态更新由 `apps.chatbi.workflow_gateway` 组装；Graph
+    重试会清除旧终态结果，等待输入统一对外显示为 `waiting_user`。
+17. 旧 Chat 的完成和错误入口已改为转调 `ChatRecordService`；分析、预测记录也通过统一创建入口生成，欢迎记录
+    显式写入 `succeeded` 和完成时间。Agent API 与 Loop 已改用 ChatBI 公开 ChatRecord 模型路径，新增架构守卫
+    防止 Agent、Graph 和旧 Chat 恢复直接维护状态或绕过统一创建入口。
+18. 第三批 ChatBI、Agent、Chat、Graph 和架构组合回归 226 项通过，完整后端回归 849 项通过；新增代码通过
+    Ruff 和严格 Mypy，应用导入和 `git diff --check` 通过，OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1233,8 +1249,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
    已完成，Schema、Semantic 检索与编译工具尚待迁移。
 5. Graph Adapter 改为调用相同 Service。SQL 执行 Adapter 已完成，其余 Adapter 待后续迁移。
 6. 旧 `chat/task/llm.py` 调整为兼容入口或直接删除，不能继续维护独立业务逻辑。
-7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期与所有权规则已统一，记录状态、
-   澄清和最终结果投影仍待后续批次收敛。
+7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期、所有权、Agent 与 Graph 的
+   记录状态、澄清等待状态及最终结果投影已统一；执行器内部 Run 状态继续保持各自语义。
 8. SQL、数据结果和制品保存建立统一大小限制和清理规则。
 9. 推荐、分析和预测作为 ChatBI 应用能力调用 AI Model，不放入 ORM 方法或模板模块。
 

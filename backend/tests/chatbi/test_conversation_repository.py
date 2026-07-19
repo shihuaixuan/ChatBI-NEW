@@ -69,6 +69,9 @@ def test_sqlmodel_repository_supports_conversation_lifecycle():
         assert created.dataset_name == "仓储测试数据集"
         assert len(created.records) == 1
         assert created.records[0].execution_type == "graph"
+        assert created.records[0].status == "succeeded"
+        assert created.records[0].finish is True
+        assert created.records[0].finish_time == created.records[0].create_time
         assert created.records[0].recommended_question == '["推荐问题一"]'
         assert service.get_owned(99301, chat_id).id == chat_id
         assert [chat.id for chat in service.list_for_owner(99301, 99101)] == [
