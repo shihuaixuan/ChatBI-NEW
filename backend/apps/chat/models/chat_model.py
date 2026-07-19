@@ -36,7 +36,6 @@ from apps.chatbi.models import (
     TypeEnum as TypeEnum,
 )
 from apps.template.filter.generator import get_permissions_template
-from apps.template.generate_dynamic.generator import get_dynamic_template
 
 
 class ChatRecordResult(BaseModel):
@@ -122,13 +121,6 @@ class AiModelQuestion(BaseModel):
 
     def filter_user_question(self):
         return get_permissions_template()['user'].format(sql=self.sql, filter=self.filter)
-
-    def dynamic_sys_question(self):
-        return get_dynamic_template()['system'].format(lang=self.lang, engine=self.engine, sqlbot_name=self.sqlbot_name)
-
-    def dynamic_user_question(self):
-        return get_dynamic_template()['user'].format(sql=self.sql, sub_query=self.sub_query)
-
 
 class ChatQuestion(AiModelQuestion):
     chat_id: int

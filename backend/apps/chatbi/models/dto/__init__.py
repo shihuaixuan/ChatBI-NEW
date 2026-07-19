@@ -33,6 +33,10 @@ from apps.chatbi.models.dto.datasource_selection import (
     DatasourceSelectionMessage,
     DatasourceSelectionModelChunk,
 )
+from apps.chatbi.models.dto.dynamic_sql_generation import (
+    DynamicSQLGenerationData,
+    DynamicSQLSubqueryMapping,
+)
 from apps.chatbi.models.dto.execution_binding import (
     ExecutionBinding,
     ExecutionBindingData,
@@ -97,6 +101,8 @@ __all__ = [
     "DatasourceSelectionEvent",
     "DatasourceSelectionMessage",
     "DatasourceSelectionModelChunk",
+    "DynamicSQLGenerationData",
+    "DynamicSQLSubqueryMapping",
     "ExecutionBinding",
     "ExecutionBindingData",
     "PhysicalSchemaField",

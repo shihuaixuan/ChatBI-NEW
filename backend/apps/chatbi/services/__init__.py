@@ -35,6 +35,12 @@ from apps.chatbi.services.datasource_selection_service import (
     DatasourceSelectionPromptBuilder,
     DatasourceSelectionService,
 )
+from apps.chatbi.services.dynamic_sql_generation_service import (
+    DynamicSQLGenerationError,
+    DynamicSQLGenerationModelClient,
+    DynamicSQLGenerationPromptBuilder,
+    DynamicSQLGenerationService,
+)
 from apps.chatbi.services.execution_binding_service import (
     ExecutionBindingError,
     ExecutionBindingService,
@@ -73,6 +79,7 @@ from apps.chatbi.services.sql_generation_service import (
     SQLGenerationModelClient,
     SQLGenerationPromptBuilder,
     SQLGenerationService,
+    parse_sql_generation_result,
 )
 from apps.chatbi.services.sql_permission import (
     PermissionPolicyProvider,
@@ -108,6 +115,10 @@ __all__ = [
     "DatasourceSelectionService",
     "ExecutionBindingError",
     "ExecutionBindingService",
+    "DynamicSQLGenerationError",
+    "DynamicSQLGenerationModelClient",
+    "DynamicSQLGenerationPromptBuilder",
+    "DynamicSQLGenerationService",
     "PermissionPolicyProvider",
     "PhysicalSchemaService",
     "QueryService",
@@ -133,4 +144,5 @@ __all__ = [
     "SemanticRetrievalGateway",
     "SemanticRetrievalService",
     "normalize_chat_record_status",
+    "parse_sql_generation_result",
 ]

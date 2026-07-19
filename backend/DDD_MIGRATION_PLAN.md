@@ -1194,8 +1194,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 第四批语义 SQL 编译入口收敛、第五批语义检索与物理 Schema 查询收敛、第六批执行绑定规则统一，以及第七批
 问题理解确定性校验规则收敛、第八批会话最终结果大小边界统一、第九批旧 Chat 核心结果写入收敛，以及第十批
 Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助结果写入收敛、第十二批推荐问题生成流程收敛，
-第十三批分析和预测生成流程收敛、第十四批数据源选择流程收敛、第十五批图表生成流程收敛，以及第十六批
-主 SQL 生成模型编排收敛：
+第十三批分析和预测生成流程收敛、第十四批数据源选择流程收敛、第十五批图表生成流程收敛、第十六批
+主 SQL 生成模型编排收敛，以及第十七批动态 SQL 生成编排收敛：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1388,6 +1388,19 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 70. 第十六批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 550 项通过，完整后端回归 979 项通过；
     新增和修改代码通过定向 Ruff，新 DTO、Service 和外层适配器通过严格 Mypy，应用导入和 `git diff --check` 通过，
     OpenAPI 保持 154 个路径。
+71. ChatBI 新增动态 SQL 子查询映射和生成输入 DTO，以及 `DynamicSQLGenerationService`；Service 统一校验原始 SQL、
+    数据库引擎和子查询占位映射，消费模型流并复用主 SQL 批次建立的结构化响应解析规则。模型业务失败、非法 JSON、
+    非法字段结构和空 SQL 继续返回同一组明确错误，主 SQL 与动态 SQL 不再维护两套响应解析逻辑。
+72. 现有动态 SQL 模板和子查询映射序列化迁入中立基础设施适配器，LangChain 转换复用统一 SQL 模型客户端；系统消息
+    和用户消息的历史日志标记保持不变。ChatBI Service 不导入模板、LangChain、旧 Chat、Session、ORM 或 Workflow
+    Engine，完整模型原文和思考内容仍由外层生成日志保存。
+73. 旧 `LLMService.generate_with_sub_sql` 只保留稳定输入准备、生成日志和错误日志投影，提示词构造、模型流消费和响应
+    解析均转交 ChatBI Service；旧 `dynamic_sys_question` 和 `dynamic_user_question` 已删除。外部助手表 SQL 到占位符的
+    映射、解析后占位 SQL 的 ChatRecord 写入，以及执行前替换为真实子查询的顺序保持不变；`check_save_sql` 当前只为
+    权限 SQL 兼容流程保留。
+74. 第十七批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 567 项通过，完整后端回归 996 项通过；
+    新增和修改代码通过定向 Ruff，新 DTO、Service 和外层适配器通过严格 Mypy，应用导入和 `git diff --check` 通过，
+    OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1401,8 +1414,8 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
    历史记录、日志响应及旧 LLM 请求 DTO 待后续批次继续拆分。
 3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。检索、SQL 语义
    编译、SQL 校验、权限应用和执行已统一；问题理解的确定性校验规则、数据源选择、推荐问题以及分析预测模型调用
-   编排、主 SQL 生成编排和图表生成编排已统一，问题理解模型编排、动态与权限 SQL 模型编排和最终回答待后续批次
-   收敛。
+   编排、主 SQL 生成编排、动态 SQL 生成编排和图表生成编排已统一，问题理解模型编排、权限 SQL 模型编排和最终回答
+   待后续批次收敛。
 4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。SQL 校验和执行工具
    已完成，语义 SQL 编译、物理 Schema、Semantic 检索、执行绑定和问题理解校验已接入统一入口；问题理解模型编排
    和回答工具待后续迁移。

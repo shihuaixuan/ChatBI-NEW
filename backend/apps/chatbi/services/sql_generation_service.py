@@ -92,7 +92,7 @@ class SQLGenerationService:
             ),
         )
         try:
-            result = _parse_sql_generation_result(full_content)
+            result = parse_sql_generation_result(full_content)
         except SQLGenerationError as exc:
             yield SQLGenerationEvent(
                 kind="completed",
@@ -125,7 +125,7 @@ class SQLGenerationService:
             raise SQLGenerationError("SQL_GENERATION_CURRENT_TIME_REQUIRED")
 
 
-def _parse_sql_generation_result(content: str) -> SQLGenerationResult:
+def parse_sql_generation_result(content: str) -> SQLGenerationResult:
     payload = _extract_first_json_value(content)
     if payload is None:
         raise SQLGenerationError(
@@ -198,4 +198,5 @@ __all__ = [
     "SQLGenerationModelClient",
     "SQLGenerationPromptBuilder",
     "SQLGenerationService",
+    "parse_sql_generation_result",
 ]

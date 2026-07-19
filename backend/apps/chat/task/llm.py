@@ -79,6 +79,8 @@ from apps.chatbi.models import (
     DatasourceSelectionCandidate,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
+    DynamicSQLGenerationData,
+    DynamicSQLSubqueryMapping,
     RecommendedQuestionGenerationData,
     SQLGenerationData,
     SQLGenerationMessage,
@@ -86,6 +88,7 @@ from apps.chatbi.models import (
 from apps.chatbi.services import (
     ChartGenerationError,
     DatasourceSelectionError,
+    DynamicSQLGenerationError,
     SQLGenerationError,
 )
 from apps.datasource import (
@@ -114,6 +117,9 @@ from common.utils.utils import SQLBotLogUtil, extract_nested_json, prepare_for_o
 from infrastructure.analysis_prediction import build_analysis_prediction_service
 from infrastructure.chart_generation import build_chart_generation_service
 from infrastructure.datasource_selection import build_datasource_selection_service
+from infrastructure.dynamic_sql_generation import (
+    build_dynamic_sql_generation_service,
+)
 from infrastructure.recommended_questions import (
     build_recommended_question_service,
 )
@@ -891,64 +897,90 @@ class LLMService:
             )
             yield event
 
-    def generate_with_sub_sql(self, session: Session, sql, sub_mappings: list):
-        sub_query = json.dumps(sub_mappings, ensure_ascii=False)
-        self.chat_question.sql = sql
-        self.chat_question.sub_query = sub_query
-        dynamic_sql_msg: List[Union[BaseMessage, dict[str, Any]]] = []
-        dynamic_sql_msg.append(SystemPromptMessage(content=self.chat_question.dynamic_sys_question()))
-        dynamic_sql_msg.append(HumanMessage(content=self.chat_question.dynamic_user_question()))
+    def generate_with_sub_sql(
+            self,
+            session: Session,
+            sql: str,
+            sub_mappings: list[DynamicSQLSubqueryMapping],
+    ) -> str:
+        generation_data = DynamicSQLGenerationData(
+            sql=sql,
+            subqueries=sub_mappings,
+            language=self.chat_question.lang,
+            engine=self.chat_question.engine,
+            assistant_name=self.chat_question.sqlbot_name,
+        )
+        service = build_dynamic_sql_generation_service(self.llm)
+        try:
+            messages = service.prepare(generation_data)
+        except DynamicSQLGenerationError as exc:
+            raise SingleMessageError(str(exc)) from exc
 
         self.current_logs[OperationEnum.GENERATE_DYNAMIC_SQL] = start_log(session=session,
                                                                           ai_modal_id=self.chat_question.ai_modal_id,
                                                                           ai_modal_name=self.chat_question.ai_modal_name,
                                                                           operate=OperationEnum.GENERATE_DYNAMIC_SQL,
                                                                           record_id=self.record.id,
-                                                                          full_message=[{'type': msg.type,
-                                                                                         'sqlbot_system': getattr(msg,
-                                                                                                                  'sqlbot_system',
-                                                                                                                  False) is True,
-                                                                                         'content': msg.content}
-                                                                                        for
-                                                                                        msg in dynamic_sql_msg])
+                                                                          full_message=[
+                                                                              {
+                                                                                  'type': message.role,
+                                                                                  'sqlbot_system': message.system_context,
+                                                                                  'content': message.content,
+                                                                              }
+                                                                              for message in messages
+                                                                          ])
+        dynamic_result = None
+        for event in service.generate(generation_data, messages):
+            if event.kind == 'chunk':
+                continue
+            self.current_logs[OperationEnum.GENERATE_DYNAMIC_SQL] = end_log(
+                session=session,
+                log=self.current_logs[OperationEnum.GENERATE_DYNAMIC_SQL],
+                full_message=[
+                    *[
+                        {
+                            'type': message.role,
+                            'sqlbot_system': message.system_context,
+                            'content': message.content,
+                        }
+                        for message in messages
+                    ],
+                    {
+                        'type': 'ai',
+                        'sqlbot_system': False,
+                        'content': event.content,
+                    },
+                ],
+                reasoning_content=event.reasoning_content,
+                token_usage=event.token_usage,
+            )
+            SQLBotLogUtil.info(event.content)
+            if event.error:
+                trigger_log_error(
+                    session,
+                    self.current_logs[OperationEnum.GENERATE_DYNAMIC_SQL],
+                )
+                raise SingleMessageError(event.error)
+            dynamic_result = event.result
 
-        full_thinking_text = ''
-        full_dynamic_text = ''
-        token_usage = {}
-        res = process_stream(self.llm.stream(dynamic_sql_msg), token_usage)
-        for chunk in res:
-            if chunk.get('content'):
-                full_dynamic_text += chunk.get('content')
-            if chunk.get('reasoning_content'):
-                full_thinking_text += chunk.get('reasoning_content')
-
-        dynamic_sql_msg.append(AIMessage(full_dynamic_text))
-
-        self.current_logs[OperationEnum.GENERATE_DYNAMIC_SQL] = end_log(session=session,
-                                                                        log=self.current_logs[
-                                                                            OperationEnum.GENERATE_DYNAMIC_SQL],
-                                                                        full_message=[
-                                                                            {'type': msg.type,
-                                                                             'sqlbot_system': getattr(msg,
-                                                                                                      'sqlbot_system',
-                                                                                                      False) is True,
-                                                                             'content': msg.content}
-                                                                            for msg in dynamic_sql_msg],
-                                                                        reasoning_content=full_thinking_text,
-                                                                        token_usage=token_usage)
-
-        SQLBotLogUtil.info(full_dynamic_text)
-        return full_dynamic_text
+        if dynamic_result is None:
+            raise SingleMessageError('DYNAMIC_SQL_GENERATION_RESULT_REQUIRED')
+        return dynamic_result.sql
 
     def generate_assistant_dynamic_sql(self, _session: Session, sql, tables: List):
         ds: AssistantOutDsSchema = self.ds
-        sub_query = []
+        sub_query: list[DynamicSQLSubqueryMapping] = []
         result_dict = {}
         for table in ds.tables:
             if table.name in tables and table.sql:
                 # sub_query.append({"table": table.name, "query": table.sql})
                 result_dict[table.name] = table.sql
-                sub_query.append({"table": table.name, "query": f'{dynamic_subsql_prefix}{table.name}'})
+                sub_query.append(
+                    DynamicSQLSubqueryMapping(
+                        table=table.name,
+                        query=f'{dynamic_subsql_prefix}{table.name}',
+                    )
+                )
         if not sub_query:
             return None
         temp_sql_text = self.generate_with_sub_sql(session=_session, sql=sql, sub_mappings=sub_query)
@@ -1336,7 +1368,6 @@ class LLMService:
             assistant_dynamic_sql = None
             # row permission
 
-            sql_operate = OperationEnum.GENERATE_SQL
             sql = sql_generation_result.sql
             tables = sql_generation_result.tables
             if ((not self.current_assistant or is_page_embedded) and requires_data_policy(
@@ -1352,12 +1383,19 @@ class LLMService:
 
                 if sql_result:
                     SQLBotLogUtil.info(sql_result)
-                    sql_operate = OperationEnum.GENERATE_SQL_WITH_PERMISSIONS
-                    sql = self.check_save_sql(session=_session, res=sql_result, operate=sql_operate)
+                    sql = self.check_save_sql(
+                        session=_session,
+                        res=sql_result,
+                        operate=OperationEnum.GENERATE_SQL_WITH_PERMISSIONS,
+                    )
                 elif dynamic_sql_result and sqlbot_temp_sql_text:
-                    sql_operate = OperationEnum.GENERATE_DYNAMIC_SQL
-                    assistant_dynamic_sql = self.check_save_sql(session=_session, res=sqlbot_temp_sql_text,
-                                                                operate=sql_operate)
+                    assistant_dynamic_sql = sqlbot_temp_sql_text
+                    save_sql(
+                        session=_session,
+                        sql=assistant_dynamic_sql,
+                        record_id=self.record.id,
+                    )
+                    self.chat_question.sql = assistant_dynamic_sql
                 else:
                     save_sql(session=_session, sql=sql, record_id=self.record.id)
                     self.chat_question.sql = sql
