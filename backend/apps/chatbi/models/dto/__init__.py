@@ -1,4 +1,6 @@
 from apps.chatbi.models.dto.chat_record import (
+    ChatRecordAuxiliaryProjection,
+    ChatRecordAuxiliaryType,
     ChatRecordCreateData,
     ChatRecordExecutionType,
     ChatRecordResultLimits,
@@ -40,6 +42,8 @@ from apps.chatbi.models.dto.semantic_retrieval import SemanticRetrievalData
 __all__ = [
     "ChatInfo",
     "ChatBIResultArtifactRef",
+    "ChatRecordAuxiliaryProjection",
+    "ChatRecordAuxiliaryType",
     "ChatRecordCreateData",
     "ChatRecordExecutionType",
     "ChatRecordResultLimits",

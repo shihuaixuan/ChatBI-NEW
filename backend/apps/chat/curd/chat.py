@@ -26,8 +26,8 @@ from apps.chat.services.semantic_binding import (
 )
 from apps.chatbi.chat_record import build_chat_record_service
 from apps.chatbi.models import (
-    ChatRecordCreateData,
-    ChatRecordExecutionType,
+    ChatRecordAuxiliaryProjection,
+    ChatRecordAuxiliaryType,
     ChatRecordResultProjection,
     ChatRecordStatus,
 )
@@ -709,47 +709,11 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
 
 
 def save_analysis_predict_record(session: SessionDep, base_record: ChatRecord, action_type: str) -> ChatRecord:
-    if not base_record.question:
-        raise ValueError("Base chat record question is required")
-
-    # 分析和预测沿用来源记录类型；历史来源统一投影为 Graph。
-    execution_type = (
-        ChatRecordExecutionType(base_record.execution_type)
-        if base_record.execution_type in {"graph", "agent"}
-        else ChatRecordExecutionType.GRAPH
+    record = build_chat_record_service(session).create_auxiliary(
+        base_record,
+        ChatRecordAuxiliaryType(action_type),
     )
-    record_service = build_chat_record_service(session)
-    record = record_service.create(
-        ChatRecordCreateData(
-            chat_id=base_record.chat_id,
-            user_id=base_record.create_by,
-            question=base_record.question,
-            dataset_id=base_record.dataset_id,
-            datasource_id=base_record.datasource,
-            engine_type=base_record.engine_type or "",
-            execution_type=execution_type,
-        )
-    )
-    record.ai_modal_id = base_record.ai_modal_id
-
-    if action_type == 'analysis':
-        record.analysis_record_id = base_record.id
-    elif action_type == 'predict':
-        record.predict_record_id = base_record.id
-
-    record_service.project_result(
-        record,
-        ChatRecordResultProjection(
-            chart=base_record.chart,
-            data=base_record.data,
-        ),
-    )
-
-    session.add(record)
-    session.flush()
-    session.refresh(record)
     session.commit()
-
     return ChatRecord(**record.model_dump())
 
 
@@ -819,16 +783,11 @@ def save_analysis_answer(session: SessionDep, record_id: int, answer: str = '') 
     if not record_id:
         raise Exception("Record id cannot be None")
 
-    stmt = update(ChatRecord).where(and_(ChatRecord.id == record_id)).values(
-        analysis=answer,
+    record = build_chat_record_service(session).project_auxiliary_by_id(
+        record_id,
+        ChatRecordAuxiliaryProjection(analysis=answer),
     )
-
-    session.execute(stmt)
-
     session.commit()
-
-    record = get_chat_record_by_id(session, record_id)
-
     return record
 
 
@@ -836,16 +795,11 @@ def save_predict_answer(session: SessionDep, record_id: int, answer: str) -> Cha
     if not record_id:
         raise Exception("Record id cannot be None")
 
-    stmt = update(ChatRecord).where(and_(ChatRecord.id == record_id)).values(
-        predict=answer,
+    record = build_chat_record_service(session).project_auxiliary_by_id(
+        record_id,
+        ChatRecordAuxiliaryProjection(predict=answer),
     )
-
-    session.execute(stmt)
-
     session.commit()
-
-    record = get_chat_record_by_id(session, record_id)
-
     return record
 
 
@@ -853,32 +807,16 @@ def save_select_datasource_answer(session: SessionDep, record_id: int, answer: s
                                   datasource: int = None, engine_type: str = None) -> ChatRecord:
     if not record_id:
         raise Exception("Record id cannot be None")
-    record = get_chat_record_by_id(session, record_id)
-
-    record.datasource_select_answer = answer
-
-    if datasource:
-        record.datasource = datasource
-        record.engine_type = engine_type
-
-    result = ChatRecord(**record.model_dump())
-
-    if datasource:
-        stmt = update(ChatRecord).where(and_(ChatRecord.id == record.id)).values(
-            datasource_select_answer=record.datasource_select_answer,
-            datasource=record.datasource,
-            engine_type=record.engine_type,
-        )
-    else:
-        stmt = update(ChatRecord).where(and_(ChatRecord.id == record.id)).values(
-            datasource_select_answer=record.datasource_select_answer,
-        )
-
-    session.execute(stmt)
-
+    record = build_chat_record_service(session).project_auxiliary_by_id(
+        record_id,
+        ChatRecordAuxiliaryProjection(
+            datasource_select_answer=answer,
+            datasource_id=datasource,
+            engine_type=engine_type if datasource else None,
+        ),
+    )
     session.commit()
-
-    return result
+    return record
 
 
 def save_recommend_question_answer(session: SessionDep, record_id: int,
@@ -889,36 +827,17 @@ def save_recommend_question_answer(session: SessionDep, record_id: int,
     recommended_question_answer = orjson.dumps(answer).decode()
 
     json_str = '[]'
-    if answer and answer.get('content') and answer.get('content') != '':
-        try:
-            json_str = extract_nested_json(answer.get('content'))
-
-            if not json_str:
-                json_str = '[]'
-        except Exception:
-            pass
+    content = answer.get('content') if isinstance(answer, dict) else None
+    if isinstance(content, str) and content:
+        json_str = extract_nested_json(content) or '[]'
     recommended_question = json_str
-
-    stmt = update(ChatRecord).where(and_(ChatRecord.id == record_id)).values(
-        recommended_question_answer=recommended_question_answer,
-        recommended_question=recommended_question,
+    record = build_chat_record_service(session).project_recommendation_by_id(
+        record_id,
+        answer=recommended_question_answer,
+        questions=recommended_question,
+        articles_number=articles_number or 4,
     )
-
-    session.execute(stmt)
     session.commit()
-
-    record = get_chat_record_by_id(session, record_id)
-    record.recommended_question_answer = recommended_question_answer
-    record.recommended_question = recommended_question
-    if articles_number > 4:
-        stmt_chat = update(Chat).where(and_(Chat.id == record.chat_id)).values(
-            recommended_question_answer=recommended_question_answer,
-            recommended_question=recommended_question,
-            recommended_generate=True
-        )
-        session.execute(stmt_chat)
-        session.commit()
-
     return record
 
 
@@ -960,21 +879,12 @@ def save_chart(session: SessionDep, record_id: int, chart: str) -> ChatRecord:
 def save_predict_data(session: SessionDep, record_id: int, data: str = '') -> ChatRecord:
     if not record_id:
         raise Exception("Record id cannot be None")
-    record = get_chat_record_by_id(session, record_id)
-
-    record.predict_data = data
-
-    result = ChatRecord(**record.model_dump())
-
-    stmt = update(ChatRecord).where(and_(ChatRecord.id == record.id)).values(
-        predict_data=record.predict_data
+    record = build_chat_record_service(session).project_auxiliary_by_id(
+        record_id,
+        ChatRecordAuxiliaryProjection(predict_data=data),
     )
-
-    session.execute(stmt)
-
     session.commit()
-
-    return result
+    return record
 
 
 def save_error_message(session: SessionDep, record_id: int, message: str) -> ChatRecord:

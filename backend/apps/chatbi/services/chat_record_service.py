@@ -5,6 +5,8 @@ import orjson
 
 from apps.chatbi.models import (
     ChatRecord,
+    ChatRecordAuxiliaryProjection,
+    ChatRecordAuxiliaryType,
     ChatRecordCreateData,
     ChatRecordExecutionType,
     ChatRecordResultLimits,
@@ -111,6 +113,105 @@ class ChatRecordService:
         if not data.question.strip():
             raise ChatRecordError("ChatRecord question is required")
         return self._repository.create(data)
+
+    def create_auxiliary(
+        self,
+        base_record: ChatRecord,
+        auxiliary_type: str | ChatRecordAuxiliaryType,
+    ) -> ChatRecord:
+        """基于已有查询结果创建分析或预测记录。"""
+
+        if base_record.id is None:
+            raise ChatRecordError("CHAT_RECORD_AUXILIARY_SOURCE_ID_REQUIRED")
+        if not (base_record.question or "").strip():
+            raise ChatRecordError("CHAT_RECORD_AUXILIARY_QUESTION_REQUIRED")
+        resolved_type = ChatRecordAuxiliaryType(auxiliary_type)
+        execution_type = (
+            ChatRecordExecutionType(base_record.execution_type)
+            if base_record.execution_type in {"graph", "agent"}
+            else ChatRecordExecutionType.GRAPH
+        )
+        record = self.create(
+            ChatRecordCreateData(
+                chat_id=base_record.chat_id,
+                user_id=base_record.create_by,
+                question=base_record.question or "",
+                dataset_id=base_record.dataset_id,
+                datasource_id=base_record.datasource,
+                engine_type=base_record.engine_type or "",
+                execution_type=execution_type,
+            )
+        )
+        record.ai_modal_id = base_record.ai_modal_id
+        if resolved_type is ChatRecordAuxiliaryType.ANALYSIS:
+            record.analysis_record_id = base_record.id
+        else:
+            record.predict_record_id = base_record.id
+        self._apply_result(
+            record,
+            self._bounded_result(
+                ChatRecordResultProjection(
+                    chart=base_record.chart,
+                    data=base_record.data,
+                )
+            ),
+        )
+        self._repository.save(record)
+        return record
+
+    def project_auxiliary_by_id(
+        self,
+        record_id: int,
+        result: ChatRecordAuxiliaryProjection,
+        *,
+        expected_chat_id: int | None = None,
+    ) -> ChatRecord:
+        return self.project_auxiliary(
+            self.get(record_id),
+            result,
+            expected_chat_id=expected_chat_id,
+        )
+
+    def project_auxiliary(
+        self,
+        record: ChatRecord,
+        result: ChatRecordAuxiliaryProjection,
+        *,
+        expected_chat_id: int | None = None,
+    ) -> ChatRecord:
+        """保存不改变执行状态的后处理结果，允许成功记录补写推荐问题。"""
+
+        if expected_chat_id is not None and record.chat_id != expected_chat_id:
+            raise ChatRecordOwnershipError("CHAT_RECORD_CHAT_MISMATCH")
+        bounded_result = self._bounded_auxiliary(result)
+        self._apply_auxiliary(record, bounded_result)
+        self._repository.save(record)
+        return record
+
+    def project_recommendation_by_id(
+        self,
+        record_id: int,
+        *,
+        answer: str,
+        questions: str,
+        articles_number: int,
+    ) -> ChatRecord:
+        """保存推荐问题，并按历史规则把扩展推荐提升到会话。"""
+
+        record = self.project_auxiliary_by_id(
+            record_id,
+            ChatRecordAuxiliaryProjection(
+                recommended_question_answer=answer,
+                recommended_question=questions,
+            ),
+        )
+        if articles_number > 4:
+            self._repository.promote_recommendation(
+                record.chat_id,
+                answer=record.recommended_question_answer or "",
+                questions=record.recommended_question or "[]",
+            )
+        return record
 
     def transition_by_id(
         self,
@@ -273,6 +374,65 @@ class ChatRecordService:
             data=self._bounded_data(result.data) if result.data is not None else None,
         )
 
+    def _bounded_auxiliary(
+        self,
+        result: ChatRecordAuxiliaryProjection,
+    ) -> ChatRecordAuxiliaryProjection:
+        if result.datasource_id is not None:
+            if result.datasource_id <= 0 or not (result.engine_type or "").strip():
+                raise ChatRecordError("CHAT_RECORD_DATASOURCE_BINDING_INVALID")
+        elif result.engine_type is not None:
+            raise ChatRecordError("CHAT_RECORD_DATASOURCE_BINDING_INVALID")
+        return ChatRecordAuxiliaryProjection(
+            analysis=self._bounded_optional_text(result.analysis, "ANALYSIS"),
+            predict=self._bounded_optional_text(result.predict, "PREDICT"),
+            predict_data=self._bounded_optional_data_blob(
+                result.predict_data,
+                "PREDICT_DATA",
+            ),
+            recommended_question_answer=self._bounded_optional_text(
+                result.recommended_question_answer,
+                "RECOMMENDED_QUESTION_ANSWER",
+            ),
+            recommended_question=self._bounded_optional_text(
+                result.recommended_question,
+                "RECOMMENDED_QUESTION",
+            ),
+            datasource_select_answer=self._bounded_optional_text(
+                result.datasource_select_answer,
+                "DATASOURCE_SELECT_ANSWER",
+            ),
+            datasource_id=result.datasource_id,
+            engine_type=result.engine_type,
+        )
+
+    def _bounded_optional_text(
+        self,
+        value: str | None,
+        field: str,
+    ) -> str | None:
+        if value is None:
+            return None
+        return self._bounded_text(
+            value,
+            self._result_limits.max_answer_chars,
+            field,
+        )
+
+    def _bounded_optional_data_blob(
+        self,
+        value: str | None,
+        field: str,
+    ) -> str | None:
+        if value is None:
+            return None
+        size = len(value.encode("utf-8"))
+        if size > self._result_limits.max_data_bytes:
+            raise ChatRecordResultTooLargeError(
+                f"CHAT_RECORD_{field}_TOO_LARGE:{size}>{self._result_limits.max_data_bytes}"
+            )
+        return value
+
     @staticmethod
     def _apply_result(
         record: ChatRecord,
@@ -290,6 +450,27 @@ class ChatRecordService:
             record.chart = result.chart
         if result.data is not None:
             record.data = result.data
+
+    @staticmethod
+    def _apply_auxiliary(
+        record: ChatRecord,
+        result: ChatRecordAuxiliaryProjection,
+    ) -> None:
+        if result.analysis is not None:
+            record.analysis = result.analysis
+        if result.predict is not None:
+            record.predict = result.predict
+        if result.predict_data is not None:
+            record.predict_data = result.predict_data
+        if result.recommended_question_answer is not None:
+            record.recommended_question_answer = result.recommended_question_answer
+        if result.recommended_question is not None:
+            record.recommended_question = result.recommended_question
+        if result.datasource_select_answer is not None:
+            record.datasource_select_answer = result.datasource_select_answer
+        if result.datasource_id is not None:
+            record.datasource = result.datasource_id
+            record.engine_type = result.engine_type
 
     @staticmethod
     def _bounded_text(value: str, max_chars: int, field: str) -> str:
@@ -365,6 +546,12 @@ class ChatRecordService:
         record.sql = None
         record.chart = None
         record.data = None
+        record.analysis = None
+        record.predict = None
+        record.predict_data = None
+        record.recommended_question_answer = None
+        record.recommended_question = None
+        record.datasource_select_answer = None
         record.error = None
 
 

@@ -12,5 +12,13 @@ class ChatRecordRepository(Protocol):
 
     def save(self, record: ChatRecord) -> None: ...
 
+    def promote_recommendation(
+        self,
+        chat_id: int,
+        *,
+        answer: str,
+        questions: str,
+    ) -> None: ...
+
 
 __all__ = ["ChatRecordRepository"]

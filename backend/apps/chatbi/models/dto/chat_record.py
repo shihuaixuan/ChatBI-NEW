@@ -16,6 +16,11 @@ class ChatRecordExecutionType(str, Enum):
     AGENT = "agent"
 
 
+class ChatRecordAuxiliaryType(str, Enum):
+    ANALYSIS = "analysis"
+    PREDICT = "predict"
+
+
 @dataclass(frozen=True, slots=True)
 class ChatRecordCreateData:
     chat_id: int
@@ -38,6 +43,20 @@ class ChatRecordResultProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class ChatRecordAuxiliaryProjection:
+    """旧 Chat 后处理能力写入的辅助结果。"""
+
+    analysis: str | None = None
+    predict: str | None = None
+    predict_data: str | None = None
+    recommended_question_answer: str | None = None
+    recommended_question: str | None = None
+    datasource_select_answer: str | None = None
+    datasource_id: int | None = None
+    engine_type: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ChatRecordResultLimits:
     """会话最终快照的持久化大小边界。"""
 
@@ -48,6 +67,8 @@ class ChatRecordResultLimits:
 
 
 __all__ = [
+    "ChatRecordAuxiliaryProjection",
+    "ChatRecordAuxiliaryType",
     "ChatRecordCreateData",
     "ChatRecordExecutionType",
     "ChatRecordResultProjection",

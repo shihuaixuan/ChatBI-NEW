@@ -5,6 +5,8 @@ import pytest
 
 from apps.chatbi.models import (
     ChatRecord,
+    ChatRecordAuxiliaryProjection,
+    ChatRecordAuxiliaryType,
     ChatRecordExecutionType,
     ChatRecordResultLimits,
     ChatRecordResultProjection,
@@ -22,6 +24,7 @@ class FakeChatRecordRepository:
     def __init__(self, record: ChatRecord | None = None) -> None:
         self.record = record
         self.saved = 0
+        self.promotions = []
 
     def get(self, record_id: int) -> ChatRecord | None:
         if self.record is not None and self.record.id == record_id:
@@ -46,6 +49,15 @@ class FakeChatRecordRepository:
     def save(self, record: ChatRecord) -> None:
         self.record = record
         self.saved += 1
+
+    def promote_recommendation(
+        self,
+        chat_id: int,
+        *,
+        answer: str,
+        questions: str,
+    ) -> None:
+        self.promotions.append((chat_id, answer, questions))
 
 
 def _record(status: str | None = "created") -> ChatRecord:
@@ -233,6 +245,102 @@ def test_draft_result_projection_applies_same_size_limits_as_final_result():
     assert record.sql is None
 
 
+def test_auxiliary_projection_allows_terminal_record_and_keeps_status():
+    record = _record("succeeded")
+    record.finish = True
+    service = ChatRecordService(FakeChatRecordRepository(record))
+
+    service.project_auxiliary(
+        record,
+        ChatRecordAuxiliaryProjection(
+            analysis='{"content":"分析结果"}',
+            predict='{"content":"预测结果"}',
+            predict_data='[{"month":"2026-08","value":10}]',
+        ),
+    )
+
+    assert record.status == "succeeded"
+    assert record.finish is True
+    assert record.analysis == '{"content":"分析结果"}'
+    assert record.predict == '{"content":"预测结果"}'
+    assert record.predict_data == '[{"month":"2026-08","value":10}]'
+
+
+def test_auxiliary_projection_rejects_oversized_predict_data_without_mutation():
+    record = _record("running")
+    service = ChatRecordService(
+        FakeChatRecordRepository(record),
+        result_limits=ChatRecordResultLimits(max_data_bytes=10),
+    )
+
+    with pytest.raises(
+        ChatRecordResultTooLargeError,
+        match="CHAT_RECORD_PREDICT_DATA_TOO_LARGE",
+    ):
+        service.project_auxiliary(
+            record,
+            ChatRecordAuxiliaryProjection(predict_data='[{"value":12345}]'),
+        )
+
+    assert record.predict_data is None
+
+
+def test_auxiliary_datasource_binding_requires_engine_type():
+    record = _record("created")
+    service = ChatRecordService(FakeChatRecordRepository(record))
+
+    with pytest.raises(
+        ValueError,
+        match="CHAT_RECORD_DATASOURCE_BINDING_INVALID",
+    ):
+        service.project_auxiliary(
+            record,
+            ChatRecordAuxiliaryProjection(datasource_id=100),
+        )
+
+    assert record.datasource is None
+
+
+def test_extended_recommendation_is_promoted_to_conversation():
+    record = _record("succeeded")
+    record.finish = True
+    repository = FakeChatRecordRepository(record)
+    service = ChatRecordService(repository)
+
+    service.project_recommendation_by_id(
+        record.id or 0,
+        answer='{"content":"[\\"问题一\\"]"}',
+        questions='["问题一"]',
+        articles_number=5,
+    )
+
+    assert record.recommended_question == '["问题一"]'
+    assert repository.promotions == [
+        (20, '{"content":"[\\"问题一\\"]"}', '["问题一"]')
+    ]
+
+
+def test_create_auxiliary_record_copies_source_snapshot_and_relation():
+    base_record = _record("succeeded")
+    base_record.execution_type = "agent"
+    base_record.chart = '{"type":"line"}'
+    base_record.data = '{"fields":["month"],"data":[{"month":"2026-07"}]}'
+    repository = FakeChatRecordRepository(base_record)
+    service = ChatRecordService(repository)
+
+    created = service.create_auxiliary(
+        base_record,
+        ChatRecordAuxiliaryType.ANALYSIS,
+    )
+
+    assert created.id == 10
+    assert created.execution_type == "agent"
+    assert created.analysis_record_id == base_record.id
+    assert created.predict_record_id is None
+    assert created.chart == base_record.chart
+    assert created.data == base_record.data
+
+
 def test_failed_retry_clears_stale_terminal_snapshot():
     record = _record("failed")
     record.finish = True
@@ -242,6 +350,8 @@ def test_failed_retry_clears_stale_terminal_snapshot():
     record.sql = "select old"
     record.chart = "{}"
     record.data = "{}"
+    record.analysis = "旧分析"
+    record.predict_data = "旧预测数据"
     service = ChatRecordService(FakeChatRecordRepository(record))
 
     service.transition(record, ChatRecordStatus.RUNNING)
@@ -254,6 +364,8 @@ def test_failed_retry_clears_stale_terminal_snapshot():
     assert record.sql is None
     assert record.chart is None
     assert record.data is None
+    assert record.analysis is None
+    assert record.predict_data is None
 
 
 def test_terminal_record_rejects_illegal_reopen():

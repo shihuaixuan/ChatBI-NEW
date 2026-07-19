@@ -1193,7 +1193,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛、第三批会话记录状态与结果投影统一、
 第四批语义 SQL 编译入口收敛、第五批语义检索与物理 Schema 查询收敛、第六批执行绑定规则统一，以及第七批
 问题理解确定性校验规则收敛、第八批会话最终结果大小边界统一、第九批旧 Chat 核心结果写入收敛，以及第十批
-Agent、Graph 结果 Artifact 生命周期统一：
+Agent、Graph 结果 Artifact 生命周期统一和第十一批旧 Chat 辅助结果写入收敛：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1305,6 +1305,18 @@ Agent、Graph 结果 Artifact 生命周期统一：
 46. 第十批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 466 项通过，完整后端回归 893 项通过；
     新增和修改代码通过定向 Ruff，新 DTO、Service、外层适配器和 Agent 删除服务通过严格 Mypy，`git diff --check`
     通过，OpenAPI 保持 154 个路径。
+47. ChatBI 新增 `ChatRecordAuxiliaryProjection` 和分析、预测类型 DTO，`ChatRecordService` 统一保存分析回答、预测回答、
+    预测数据、推荐问题、数据源选择回答及记录执行绑定。辅助结果补写不改变记录状态，允许成功记录异步补充推荐问题；
+    文本和预测数据继续受统一大小边界约束，非法的数据源与引擎组合明确返回 `CHAT_RECORD_DATASOURCE_BINDING_INVALID`。
+48. 分析、预测派生记录改由 `ChatRecordService.create_auxiliary` 创建，来源记录关系、执行类型、模型 ID、图表和数据快照
+    只在一个入口复制；扩展推荐问题提升到 Chat 的 `articles_number > 4` 规则也迁入 Service，通过仓储在同一事务内更新
+    ChatRecord 和 Chat，避免记录更新成功而会话推荐状态失败的部分提交。
+49. 旧 `apps/chat/curd/chat.py` 的 `save_analysis_answer`、`save_predict_answer`、`save_predict_data`、
+    `save_recommend_question_answer` 和 `save_select_datasource_answer` 已改为兼容转发，不再直接赋值或
+    `update(ChatRecord)`；推荐问题 JSON 提取移除宽泛异常吞掉，无法提取时显式保存空列表的历史契约保持不变。
+50. 第十一批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 473 项通过，完整后端回归 900 项通过；
+    新增和修改代码通过定向 Ruff，ChatBI DTO、Service 和仓储通过严格 Mypy，`git diff --check` 通过，OpenAPI
+    保持 154 个路径。
 
 **目标**
 
@@ -1328,8 +1340,9 @@ Agent、Graph 结果 Artifact 生命周期统一：
    记录状态、澄清等待状态及最终结果投影已统一；执行器内部 Run 状态继续保持各自语义。
 8. SQL、数据结果和制品保存建立统一大小限制和清理规则。Agent 与 Graph 的 ChatRecord 最终快照大小边界已统一，
    Agent 与 Graph 完整 SQL 结果已接入同一 Artifact Service，会话删除已统一清理两类执行数据和 Artifact；旧 Chat
-   的核心 SQL、图表和执行数据写入已接入相同边界，分析、预测、推荐等辅助结果字段待后续批次收敛。
-9. 推荐、分析和预测作为 ChatBI 应用能力调用 AI Model，不放入 ORM 方法或模板模块。
+   的核心 SQL、图表、执行数据、分析、预测、推荐和数据源选择结果均已接入相同边界。
+9. 推荐、分析和预测作为 ChatBI 应用能力调用 AI Model，不放入 ORM 方法或模板模块。辅助记录创建、结果投影和
+   推荐提升规则已迁入 ChatBI，模型提示词组装与流式调用编排待后续批次迁移。
 
 **完成标准**
 

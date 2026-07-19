@@ -1,6 +1,8 @@
 from apps.chatbi.models.dto import (
     ChatBIResultArtifactRef,
     ChatInfo,
+    ChatRecordAuxiliaryProjection,
+    ChatRecordAuxiliaryType,
     ChatRecordCreateData,
     ChatRecordExecutionType,
     ChatRecordResultLimits,
@@ -37,6 +39,8 @@ from apps.chatbi.models.orm import (
 __all__ = [
     "Chat",
     "ChatBIResultArtifactRef",
+    "ChatRecordAuxiliaryProjection",
+    "ChatRecordAuxiliaryType",
     "ChatFinishStep",
     "ChatInfo",
     "ChatLog",

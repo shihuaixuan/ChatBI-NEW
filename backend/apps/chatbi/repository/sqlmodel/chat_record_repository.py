@@ -2,7 +2,7 @@ from datetime import datetime
 
 from sqlmodel import Session
 
-from apps.chatbi.models import ChatRecord, ChatRecordCreateData
+from apps.chatbi.models import Chat, ChatRecord, ChatRecordCreateData
 
 
 class SQLModelChatRecordRepository:
@@ -36,6 +36,22 @@ class SQLModelChatRecordRepository:
 
     def save(self, record: ChatRecord) -> None:
         self._session.add(record)
+        self._session.flush()
+
+    def promote_recommendation(
+        self,
+        chat_id: int,
+        *,
+        answer: str,
+        questions: str,
+    ) -> None:
+        chat = self._session.get(Chat, chat_id)
+        if not isinstance(chat, Chat):
+            raise ValueError(f"Chat with id {chat_id} not found")
+        chat.recommended_question_answer = answer
+        chat.recommended_question = questions
+        chat.recommended_generate = True
+        self._session.add(chat)
         self._session.flush()
 
 

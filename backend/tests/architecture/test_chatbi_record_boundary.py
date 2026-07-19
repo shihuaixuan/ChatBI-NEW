@@ -96,9 +96,10 @@ def test_legacy_analysis_and_predict_record_uses_chatbi_create_service():
     source = _function_source(tree, "save_analysis_predict_record")
 
     assert "build_chat_record_service" in source
-    assert "ChatRecordCreateData" in source
-    assert "record_service.project_result" in source
+    assert "create_auxiliary" in source
     assert "record = ChatRecord()" not in source
+    assert ".analysis_record_id =" not in source
+    assert ".predict_record_id =" not in source
     assert "record.chart =" not in source
     assert "record.data =" not in source
 
@@ -121,6 +122,32 @@ def test_legacy_core_result_writes_forward_to_chatbi_service():
         assert ".chart_answer =" not in source
         assert ".chart =" not in source
         assert ".data =" not in source
+
+
+def test_legacy_auxiliary_result_writes_forward_to_chatbi_service():
+    tree = _tree("apps/chat/curd/chat.py")
+
+    for name in (
+        "save_analysis_answer",
+        "save_predict_answer",
+        "save_select_datasource_answer",
+        "save_predict_data",
+    ):
+        source = _function_source(tree, name)
+        assert "project_auxiliary_by_id" in source
+        assert "update(ChatRecord)" not in source
+        assert ".analysis =" not in source
+        assert ".predict =" not in source
+        assert ".predict_data =" not in source
+        assert ".datasource_select_answer =" not in source
+
+    recommendation_source = _function_source(
+        tree,
+        "save_recommend_question_answer",
+    )
+    assert "project_recommendation_by_id" in recommendation_source
+    assert "update(ChatRecord)" not in recommendation_source
+    assert "update(Chat)" not in recommendation_source
 
 
 def test_chat_record_service_owns_final_result_size_policy():
