@@ -52,7 +52,6 @@ class UpdateDatasource(BaseModel):
     description: str | None = None
     type: str | None = None
     configuration: str | None = None
-    table_relation: list[Any] | None = None
     recommended_config: int | None = None
 
 

@@ -14,11 +14,13 @@ from apps.datasource.repository.connectors.maintenance_gateway import (
 from apps.datasource.repository.sqlmodel import (
     SQLModelDatasourceConnectionRepository,
     SQLModelDatasourceMetadataRepository,
+    SQLModelDatasourcePhysicalRelationRepository,
     SQLModelDatasourceRepository,
 )
 from apps.datasource.services import (
     DatasourceConnectionService,
     DatasourceMetadataService,
+    DatasourcePhysicalRelationService,
     DatasourceService,
     ExcelImportService,
 )
@@ -53,6 +55,16 @@ def build_datasource_service(session: Session) -> DatasourceService:
         SQLModelDatasourceRepository(session),
         build_datasource_metadata_service(session),
         DatabaseDatasourceMaintenanceGateway(),
+    )
+
+
+def build_datasource_physical_relation_service(
+    session: Session,
+) -> DatasourcePhysicalRelationService:
+    """装配数据源物理表关系维护 Service。"""
+
+    return DatasourcePhysicalRelationService(
+        SQLModelDatasourcePhysicalRelationRepository(session)
     )
 
 

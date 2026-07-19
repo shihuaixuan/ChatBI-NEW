@@ -62,7 +62,6 @@ class SQLModelDatasourceRepository:
                 "configuration",
                 "status",
                 "num",
-                "table_relation",
                 "recommended_config",
             ):
                 setattr(row, field, getattr(datasource, field))

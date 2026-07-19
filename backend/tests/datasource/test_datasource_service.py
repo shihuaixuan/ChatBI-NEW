@@ -166,16 +166,20 @@ def test_update_preserves_server_fields_and_refreshes_type_name():
         create_by=7,
         oid=3,
         status="Success",
+        table_relation=[{"id": "edge-1", "shape": "edge"}],
     )
     service = _service(repository)
 
     result = service.update(
         3,
-        UpdateDatasource(
-            id=10,
-            name="新名称",
-            type="mysql",
-            configuration="new",
+        UpdateDatasource.model_validate(
+            {
+                "id": 10,
+                "name": "新名称",
+                "type": "mysql",
+                "configuration": "new",
+                "table_relation": [],
+            }
         ),
     )
 
@@ -184,6 +188,7 @@ def test_update_preserves_server_fields_and_refreshes_type_name():
     assert result.type_name == "MySQL"
     assert result.create_by == 7
     assert result.oid == 3
+    assert result.table_relation == [{"id": "edge-1", "shape": "edge"}]
 
 
 def test_external_cleanup_failure_prevents_local_datasource_delete():

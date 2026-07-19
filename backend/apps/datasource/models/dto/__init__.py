@@ -22,6 +22,11 @@ from apps.datasource.models.dto.excel_import import (
     ExcelImportResult,
     ImportedExcelSheet,
 )
+from apps.datasource.models.dto.physical_relation import (
+    PhysicalRelationCell,
+    PhysicalRelationEndpoint,
+    PhysicalRelationResources,
+)
 from apps.datasource.models.dto.physical_schema import (
     PhysicalField,
     PhysicalTable,
@@ -48,6 +53,9 @@ __all__ = [
     "ImportedExcelSheet",
     "PreviewResponse",
     "PhysicalField",
+    "PhysicalRelationCell",
+    "PhysicalRelationEndpoint",
+    "PhysicalRelationResources",
     "PhysicalTable",
     "PhysicalTableSnapshot",
     "RecommendedProblemBase",

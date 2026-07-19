@@ -3,10 +3,14 @@ from sqlmodel import Session, col, select
 
 from apps.datasource.models.dto import (
     PhysicalField,
+    PhysicalRelationCell,
     PhysicalTable,
     PhysicalTableSnapshot,
 )
 from apps.datasource.models.orm import CoreDatasource, CoreField, CoreTable
+from apps.datasource.models.rules.physical_relation import (
+    retain_valid_physical_relation_cells,
+)
 
 
 class SQLModelDatasourceMetadataRepository:
@@ -99,6 +103,7 @@ class SQLModelDatasourceMetadataRepository:
                     delete(CoreTable).where(col(CoreTable.ds_id) == datasource_id)
                 )
 
+            self._reconcile_relations_without_commit(datasource_id)
             datasource.num = f"{len(snapshots)}/{total_table_count}"
             self._session.add(datasource)
             self._session.commit()
@@ -114,6 +119,7 @@ class SQLModelDatasourceMetadataRepository:
     ) -> None:
         try:
             self._replace_fields_without_commit(datasource_id, table_id, fields)
+            self._reconcile_relations_without_commit(datasource_id)
             self._session.commit()
         except Exception:
             self._session.rollback()
@@ -211,6 +217,37 @@ class SQLModelDatasourceMetadataRepository:
             self._session.exec(
                 delete(CoreField).where(col(CoreField.table_id) == table_id)
             )
+
+    def _reconcile_relations_without_commit(self, datasource_id: int) -> None:
+        datasource = self._session.get(CoreDatasource, datasource_id)
+        if datasource is None:
+            raise ValueError(f"Datasource {datasource_id} not found")
+
+        table_ids = set(
+            self._session.exec(
+                select(CoreTable.id).where(col(CoreTable.ds_id) == datasource_id)
+            ).all()
+        )
+        field_table_ids = dict(
+            self._session.exec(
+                select(CoreField.id, CoreField.table_id).where(
+                    col(CoreField.ds_id) == datasource_id
+                )
+            ).all()
+        )
+        cells = [
+            PhysicalRelationCell.model_validate(item)
+            for item in (datasource.table_relation or [])
+        ]
+        datasource.table_relation = [
+            cell.model_dump(mode="json", exclude_none=True)
+            for cell in retain_valid_physical_relation_cells(
+                cells,
+                table_ids,
+                field_table_ids,
+            )
+        ]
+        self._session.add(datasource)
 
     def _require_table(self, table_id: int | None) -> CoreTable:
         row = self._session.get(CoreTable, table_id) if table_id is not None else None

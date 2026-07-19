@@ -1005,7 +1005,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 **实施状态：进行中**
 
-截至 2026-07-19，已完成三批基础边界、元数据和数据源维护应用流程迁移：
+截至 2026-07-19，已完成四批基础边界、元数据、数据源维护和物理关系应用流程迁移：
 
 1. `CoreDatasource`、`CoreTable`、`CoreField` 和 `DsRecommendedProblem` 已迁入
    `datasource/models/orm`，连接、元数据、导入和推荐问题请求对象已迁入 `models/dto`。旧
@@ -1044,6 +1044,14 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     架构基线移除 2 条跨领域具体实现依赖。
 17. 新增数据源创建、回滚、名称冲突、更新和外部清理失败测试。第三批跨模块定向回归 201 项通过，完整
     后端回归 732 项通过；Ruff、Mypy、应用导入和 154 个 OpenAPI 路径验证通过。
+18. 新增物理关系图 DTO、`DatasourcePhysicalRelationRepository` 和
+    `DatasourcePhysicalRelationService`，`/table_relation` 读写接口不再直接访问 ORM，并继续保留原路径。
+19. 物理关系统一校验节点表、边端点表及字段归属，拒绝跨数据源表、字段归属错误和表自关联。图组件的
+    位置、样式等附加属性通过 DTO 保留，不进入 Semantic 的业务模型 Join 结构。
+20. 数据源基本信息更新已禁止直接写入 `table_relation`，物理关系的用户维护只保留一个写入入口。表选择或
+    字段同步删除物理资源时，会在同一个元数据事务中移除失效节点和边，避免关系图继续引用已删除的表或字段。
+21. 新增物理关系归属校验、自关联拒绝、元数据变化清理和提交失败回滚测试。第四批跨模块定向回归
+    208 项通过，完整后端回归 739 项通过；Ruff、Mypy、OpenAPI 154 个路径和关系请求 DTO 验证通过。
 
 **目标**
 
@@ -1059,7 +1067,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
    后续继续收敛外部连接与本地连接的内部适配。
 5. 将 Excel 文件导入与数据源创建放入同一应用流程，明确文件清理和失败回滚。Excel 导入事务、临时文件
    清理及数据源创建时的元数据事务已完成；现有两步 API 契约暂时保留。
-6. 物理表关系保留在 Datasource；业务模型 Join 只保留在 Semantic。
+6. 物理表关系保留在 Datasource；业务模型 Join 只保留在 Semantic。物理关系 DTO、校验、仓储和
+   Service 已完成，Semantic 继续使用独立的模型关系结构。
 7. 删除数据源内部旧 Embedding 写入逻辑，统一由 Retrieval 的 Schema Source 投影负责。新增写入和后台
    补写已删除；旧 Chat 读取兼容待 P5 删除。
 8. 把推荐问题移出 Datasource，迁入 Knowledge。
