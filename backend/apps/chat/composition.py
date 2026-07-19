@@ -43,7 +43,7 @@ class SemanticConversationBindingProvider:
 
 
 class ChatDeletionProvider:
-    """保留现有 Graph 与 Artifact 级联清理能力。"""
+    """保留现有 Agent、Graph 与 Artifact 级联清理能力。"""
 
     def __init__(self, session: Session) -> None:
         self._service = ChatDeletionService(session)

@@ -6,6 +6,7 @@ from apps.chatbi.composition import (
     build_semantic_query_service,
     build_semantic_retrieval_service,
 )
+from apps.chatbi.services import ResultArtifactService
 from apps.chatbi.services.sql_permission import PermissionAdapter
 from apps.retrieval.service import build_retrieval_service
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
@@ -39,11 +40,6 @@ from apps.workflow.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
     register_chatbi_v1_handlers,
 )
-from apps.workflow_engine.infrastructure.artifacts.file_store import (
-    FileArtifactStore,
-    SessionArtifactMetadataStore,
-    workflow_artifact_root,
-)
 from apps.workflow_engine.infrastructure.events.publisher import DatabaseEventPublisher
 from apps.workflow_engine.infrastructure.persistence.interaction_manager import (
     DatabaseInteractionManager,
@@ -64,6 +60,7 @@ from apps.workflow_engine.runtime.lease import InMemoryRunLease
 from apps.workflow_engine.runtime.router import ConditionRouter
 from apps.workflow_engine.runtime.scheduler import NodeScheduler
 from common.core.db import engine
+from infrastructure.result_artifacts import build_workflow_artifact_gateway
 
 
 def build_placeholder_chatbi_runtime(session: Session, commit_events: bool = False) -> GraphRuntime:
@@ -114,13 +111,12 @@ def build_real_chatbi_v1_runtime(
     )
 
     def session_factory() -> Session:
-        """为并行执行与 artifact 元数据写入创建独立会话。"""
+        """为并行执行创建独立会话。"""
 
         return Session(engine)
 
-    artifact_store = FileArtifactStore(
-        root=workflow_artifact_root(),
-        metadata_store=SessionArtifactMetadataStore(session_factory),
+    result_artifact_service = ResultArtifactService(
+        build_workflow_artifact_gateway(session)
     )
     gateway = RealChatBICapabilityGateway(
         question_adapter=QuestionAdapter(
@@ -144,7 +140,7 @@ def build_real_chatbi_v1_runtime(
             permission_adapter=PermissionAdapter(
                 policy_provider=SessionDataPolicyProvider(session_factory)
             ),
-            artifact_store=artifact_store,
+            result_artifact_service=result_artifact_service,
         ),
         fallback_gateway=PlaceholderChatBICapabilityGateway(),
     )

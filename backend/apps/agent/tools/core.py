@@ -13,8 +13,17 @@ from apps.agent.tools.base import (
     json_summary,
 )
 from apps.capabilities.time_slots import normalize_time_range
-from apps.chatbi.models import SemanticQueryCompileData, SemanticRetrievalData
-from apps.chatbi.services import QueryService, SemanticQueryCompileError
+from apps.chatbi.models import (
+    ChatRecordExecutionType,
+    ResultArtifactWriteData,
+    SemanticQueryCompileData,
+    SemanticRetrievalData,
+)
+from apps.chatbi.services import (
+    QueryService,
+    ResultArtifactWriteError,
+    SemanticQueryCompileError,
+)
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
 
@@ -376,6 +385,17 @@ class ExecuteSqlTool(AgentTool):
                 summary="ChatBI 查询服务未配置。",
                 error_code="query_service_required",
             )
+        if (
+            ctx.result_artifact_service is None
+            or not ctx.execution_id
+            or ctx.chat_id is None
+            or ctx.record_id is None
+        ):
+            return ToolOutput(
+                success=False,
+                summary="ChatBI 结果 Artifact 服务或执行归属未配置。",
+                error_code="result_artifact_service_required",
+            )
         result = ctx.query_service.execute_sql(
             sql=args.sql,
             datasource_id=ctx.datasource_id,
@@ -385,7 +405,36 @@ class ExecuteSqlTool(AgentTool):
         )
         if not result.success:
             return ToolOutput(success=False, summary=result.message or (result.error_code or "执行失败"), error_code=result.error_code)
-        payload = result.payload
+        payload = dict(result.payload or {})
+        full_data = payload.pop("full_data", [])
+        try:
+            artifact_ref = ctx.result_artifact_service.save(
+                ResultArtifactWriteData(
+                    execution_id=ctx.execution_id,
+                    execution_type=ChatRecordExecutionType.AGENT,
+                    chat_id=ctx.chat_id,
+                    record_id=ctx.record_id,
+                    kind="sql_result",
+                    payload={
+                        "query_id": "query-0",
+                        "fields": payload["fields"],
+                        "rows": full_data,
+                        "row_count": payload["row_count"],
+                    },
+                    metadata={
+                        "query_id": "query-0",
+                        "row_count": payload["row_count"],
+                    },
+                )
+            )
+        except ResultArtifactWriteError:
+            return ToolOutput(
+                success=False,
+                summary="SQL 结果 Artifact 写入失败。",
+                error_code="sql_result_artifact_write_failed",
+            )
+        artifact_ref_payload = artifact_ref.model_dump(mode="json")
+        payload["artifact_ref"] = artifact_ref_payload
         compiled = ctx.state.get("compiled_sql")
         sql_source = "compiled" if compiled and _normalize(args.sql) == _normalize(compiled) else "manual"
         ctx.state["last_execution"] = {
@@ -393,10 +442,10 @@ class ExecuteSqlTool(AgentTool):
             "fields": payload["fields"],
             "row_count": payload["row_count"],
             "sample_rows": payload["sample_rows"],
-            "artifact_ref": payload.get("artifact_ref"),
+            "artifact_ref": artifact_ref_payload,
             "sql_source": sql_source,
         }
-        ctx.state["full_data"] = payload.pop("full_data")
+        ctx.state["full_data"] = full_data
         summary_view = {key: payload[key] for key in ("sql", "fields", "sample_rows", "row_count", "stats_summary")}
         summary_view["sql_source"] = sql_source
         return ToolOutput(success=True, summary=json_summary(summary_view, _summary_limit(ctx)), payload={**payload, "sql_source": sql_source})

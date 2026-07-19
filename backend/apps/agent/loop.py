@@ -55,11 +55,13 @@ from apps.chatbi.models import ChatRecord
 from apps.chatbi.services import (
     PhysicalSchemaService,
     QueryService,
+    ResultArtifactService,
     SemanticQueryService,
     SemanticRetrievalService,
 )
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
+from infrastructure.result_artifacts import build_workflow_artifact_gateway
 
 FOLDED_PLACEHOLDER = "（此前的工具结果已折叠归档，如需请重新调用工具）"
 
@@ -101,6 +103,7 @@ class AgentLoop:
         semantic_query_service: SemanticQueryService | None = None,
         semantic_retrieval_service: SemanticRetrievalService | None = None,
         physical_schema_service: PhysicalSchemaService | None = None,
+        result_artifact_service: ResultArtifactService | None = None,
     ):
         self.session = session
         self.current_user = current_user
@@ -125,6 +128,10 @@ class AgentLoop:
         )
         self.physical_schema_service = (
             physical_schema_service or build_physical_schema_service(session)
+        )
+        self.result_artifact_service = (
+            result_artifact_service
+            or ResultArtifactService(build_workflow_artifact_gateway(session))
         )
 
     def _build_registry(self) -> ToolRegistry:
@@ -338,17 +345,23 @@ class AgentLoop:
         )
 
     def _new_ctx(self, run: ChatbiAgentRun, record: ChatRecord) -> AgentToolContext:
+        if run.id is None or record.id is None:
+            raise RuntimeError("AGENT_EXECUTION_OWNERSHIP_MISSING")
         return AgentToolContext(
             session=self.session,
             oid=run.oid,
             user_id=self.current_user.id,
             datasource_id=record.datasource,
+            execution_id=f"agent:{run.id}",
+            chat_id=run.chat_id,
+            record_id=record.id,
             dataset_id=record.dataset_id,
             term_query_service=self.term_query_service,
             query_service=self.query_service,
             semantic_query_service=self.semantic_query_service,
             semantic_retrieval_service=self.semantic_retrieval_service,
             physical_schema_service=self.physical_schema_service,
+            result_artifact_service=self.result_artifact_service,
             config=self.config,
             state={"question": record.question or ""},
         )

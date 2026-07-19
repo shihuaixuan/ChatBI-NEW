@@ -17,6 +17,7 @@ from apps.agent.tools.core import (
 )
 from apps.capabilities.schemas import ToolResult
 from apps.chatbi.models import (
+    ChatBIResultArtifactRef,
     PhysicalSchemaField,
     PhysicalSchemaResult,
     PhysicalSchemaTable,
@@ -26,6 +27,7 @@ from apps.chatbi.models import (
 
 def _ctx(
     query_service=None,
+    result_artifact_service=None,
     semantic_query_service=None,
     semantic_retrieval_service=None,
     physical_schema_service=None,
@@ -44,7 +46,13 @@ def _ctx(
         oid=1,
         user_id=1,
         datasource_id=5,
+        execution_id="agent:10",
+        chat_id=20,
+        record_id=30,
         query_service=query_service,
+        result_artifact_service=(
+            result_artifact_service or RecordingResultArtifactService()
+        ),
         semantic_query_service=semantic_query_service,
         semantic_retrieval_service=semantic_retrieval_service,
         physical_schema_service=physical_schema_service,
@@ -72,7 +80,27 @@ class RecordingQueryService:
                 "row_count": 2,
                 "stats_summary": {"amount": {"sum": 30.0}},
                 "full_data": [{"amount": 10}, {"amount": 20}],
-                "artifact_ref": {"artifact_id": "result-1"},
+            },
+        )
+
+
+class RecordingResultArtifactService:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def save(self, data):
+        self.calls.append(data)
+        return ChatBIResultArtifactRef(
+            artifact_id="result-1",
+            kind=data.kind,
+            content_type="application/json",
+            size=10,
+            digest="sha256:test",
+            metadata={
+                "execution_id": data.execution_id,
+                "execution_type": data.execution_type.value,
+                "chat_id": data.chat_id,
+                "record_id": data.record_id,
             },
         )
 
@@ -148,8 +176,10 @@ def test_validate_sql_uses_chatbi_query_service():
 
 def test_execute_sql_uses_chatbi_query_service_with_identity_scope():
     service = RecordingQueryService()
+    artifact_service = RecordingResultArtifactService()
     ctx = _ctx(
         query_service=service,
+        result_artifact_service=artifact_service,
         allowed_tables=["orders"],
         compiled_sql="select amount from orders",
     )
@@ -170,6 +200,10 @@ def test_execute_sql_uses_chatbi_query_service_with_identity_scope():
         }
     ]
     assert ctx.state["full_data"] == [{"amount": 10}, {"amount": 20}]
+    assert artifact_service.calls[0].payload["rows"] == [
+        {"amount": 10},
+        {"amount": 20},
+    ]
     assert output.payload["sql_source"] == "compiled"
 
 
@@ -196,7 +230,9 @@ def test_execute_sql_preserves_artifact_reference_for_record_projection():
     output = ExecuteSqlTool().execute(ctx, ExecuteSqlArgs(sql="select amount from orders"))
 
     assert output.success
-    assert ctx.state["last_execution"]["artifact_ref"] == {"artifact_id": "result-1"}
+    artifact_ref = ctx.state["last_execution"]["artifact_ref"]
+    assert artifact_ref["artifact_id"] == "result-1"
+    assert artifact_ref["metadata"]["execution_type"] == "agent"
 
 
 def test_compile_requires_semantic_package_first():

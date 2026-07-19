@@ -6,11 +6,15 @@ from typing import Any
 from apps.capabilities.sql.repair import SQLRepairStrategy
 from apps.capabilities.sql.validator import SqlValidateTool
 from apps.chatbi.models import (
+    ChatRecordExecutionType,
+    ResultArtifactWriteData,
     SemanticQueryCompileData,
     SemanticQueryCompileResult,
 )
 from apps.chatbi.services import (
     QueryService,
+    ResultArtifactService,
+    ResultArtifactWriteError,
     SemanticQueryService,
     SQLExecutor,
 )
@@ -28,7 +32,6 @@ from apps.workflow.capabilities.context import ChatBIRunContext
 from apps.workflow.capabilities.execution import (
     ExecutionQuery,
     ExecutionResult,
-    ResultArtifactStore,
     build_execution_output,
     validate_execution_output,
 )
@@ -45,7 +48,7 @@ class SqlAdapter:
         validate_tool: SqlValidateTool | None = None,
         permission_adapter: PermissionAdapter | None = None,
         repair_strategy: SQLRepairStrategy | None = None,
-        artifact_store: ResultArtifactStore | None = None,
+        result_artifact_service: ResultArtifactService | None = None,
         sample_row_limit: int | None = None,
         max_parallel_queries: int | None = None,
         config: ChatBIConfig | None = None,
@@ -63,7 +66,7 @@ class SqlAdapter:
             )
         self._permission_adapter = permission_adapter or PermissionAdapter()
         self._repair_strategy = repair_strategy or SQLRepairStrategy()
-        self._artifact_store = artifact_store
+        self._result_artifact_service = result_artifact_service
         self._sample_row_limit = max(
             sample_row_limit if sample_row_limit is not None else config.sql_sample_row_limit,
             0,
@@ -198,24 +201,29 @@ class SqlAdapter:
         fields = payload.get("fields") or []
         row_count = int(payload.get("row_count") or len(rows))
         sample_rows = payload.get("sample_rows") or []
-        artifact_ref = payload.get("artifact_ref")
-        if self._artifact_store is not None:
+        artifact_ref = None
+        if self._result_artifact_service is not None:
             try:
-                artifact_ref = self._artifact_store.put_json(
-                    run_id=ctx.run_id,
-                    kind="sql_result",
-                    payload={
-                        "query_id": query.query_id,
-                        "fields": fields,
-                        "rows": rows,
-                        "row_count": row_count,
-                    },
-                    metadata={
-                        "query_id": query.query_id,
-                        "row_count": row_count,
-                    },
+                artifact_ref = self._result_artifact_service.save(
+                    ResultArtifactWriteData(
+                        execution_id=ctx.run_id,
+                        execution_type=ChatRecordExecutionType.GRAPH,
+                        chat_id=self._int_or_none(ctx.request_value("chat_id")),
+                        record_id=self._int_or_none(ctx.request_value("record_id")),
+                        kind="sql_result",
+                        payload={
+                            "query_id": query.query_id,
+                            "fields": fields,
+                            "rows": rows,
+                            "row_count": row_count,
+                        },
+                        metadata={
+                            "query_id": query.query_id,
+                            "row_count": row_count,
+                        },
+                    )
                 )
-            except Exception:
+            except ResultArtifactWriteError:
                 return self._failed_result(
                     query.query_id,
                     "SQL_RESULT_ARTIFACT_WRITE_FAILED",

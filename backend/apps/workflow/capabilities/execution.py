@@ -1,26 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from apps.capabilities.schemas import ToolResult
 from apps.capabilities.sql.executor import SqlExecuteTool
-from apps.workflow_engine.domain.artifact import ArtifactRef
-
-
-class ResultArtifactStore(Protocol):
-    """SQL 完整结果正文存储协议。"""
-
-    def put_json(
-        self,
-        run_id: str,
-        kind: str,
-        payload: dict[str, Any],
-        metadata: dict[str, Any] | None = None,
-    ) -> ArtifactRef: ...
+from apps.chatbi.models import ChatBIResultArtifactRef
 
 
 class SessionSqlExecutionGateway:
@@ -62,7 +50,7 @@ class ExecutionResult(BaseModel):
     sample_rows: list[dict[str, Any]] = Field(default_factory=list)
     sampled_row_count: int = Field(default=0, ge=0)
     result_truncated: bool = False
-    artifact_ref: ArtifactRef | None = None
+    artifact_ref: ChatBIResultArtifactRef | None = None
     execution_ms: int = Field(default=0, ge=0)
     error_code: str | None = None
     message: str | None = None

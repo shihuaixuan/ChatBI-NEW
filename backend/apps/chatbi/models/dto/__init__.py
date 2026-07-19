@@ -26,6 +26,10 @@ from apps.chatbi.models.dto.question_understanding import (
     QuestionUnderstandingValidationIssue,
     QuestionUnderstandingValidationResult,
 )
+from apps.chatbi.models.dto.result_artifact import (
+    ChatBIResultArtifactRef,
+    ResultArtifactWriteData,
+)
 from apps.chatbi.models.dto.semantic_query import (
     SemanticQueryCompileData,
     SemanticQueryCompileResult,
@@ -35,6 +39,7 @@ from apps.chatbi.models.dto.semantic_retrieval import SemanticRetrievalData
 
 __all__ = [
     "ChatInfo",
+    "ChatBIResultArtifactRef",
     "ChatRecordCreateData",
     "ChatRecordExecutionType",
     "ChatRecordResultLimits",
@@ -52,6 +57,7 @@ __all__ = [
     "QuestionUnderstandingValidationIssue",
     "QuestionUnderstandingValidationResult",
     "RenameChat",
+    "ResultArtifactWriteData",
     "SemanticRetrievalData",
     "SemanticQueryCompileData",
     "SemanticQueryCompileResult",

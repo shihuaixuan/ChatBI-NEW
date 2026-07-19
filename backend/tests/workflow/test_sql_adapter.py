@@ -3,6 +3,8 @@ import threading
 import pytest
 
 from apps.capabilities.schemas import ToolResult
+from apps.chatbi.models import ChatBIResultArtifactRef
+from apps.chatbi.services import ResultArtifactWriteError
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.sql_compiler import SemanticSQLCompileResult
 from apps.workflow.capabilities.adapters.sql import SqlAdapter
@@ -670,23 +672,23 @@ class FakeSqlExecuteTool:
         return self.result
 
 
-class FakeResultArtifactStore:
+class FakeResultArtifactService:
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
         self.calls: list[dict] = []
 
-    def put_json(self, **payload):
+    def save(self, data):
         if self.fail:
-            raise RuntimeError("artifact unavailable")
-        self.calls.append(payload)
-        return {
-            "artifact_id": "artifact-1",
-            "kind": "sql_result",
-            "content_type": "application/json",
-            "size": 10,
-            "digest": "sha256:test",
-            "metadata": payload.get("metadata") or {},
-        }
+            raise ResultArtifactWriteError("artifact unavailable")
+        self.calls.append(data)
+        return ChatBIResultArtifactRef(
+            artifact_id="artifact-1",
+            kind=data.kind,
+            content_type="application/json",
+            size=10,
+            digest="sha256:test",
+            metadata=data.metadata,
+        )
 
 
 class BlockingSqlExecuteTool:
@@ -780,10 +782,10 @@ def test_sql_adapter_executes_single_query_with_uniform_result_and_artifact():
             },
         )
     )
-    artifact_store = FakeResultArtifactStore()
+    artifact_service = FakeResultArtifactService()
     adapter = SqlAdapter(
         execute_tool=execute_tool,
-        artifact_store=artifact_store,
+        result_artifact_service=artifact_service,
         sample_row_limit=1,
     )
 
@@ -802,7 +804,7 @@ def test_sql_adapter_executes_single_query_with_uniform_result_and_artifact():
     assert result["queries"][0]["query_id"] == "query-0"
     assert result["results"][0]["sample_rows"] == [{"value": 1}]
     assert result["results"][0]["artifact_ref"]["artifact_id"] == "artifact-1"
-    assert artifact_store.calls[0]["payload"]["rows"] == [
+    assert artifact_service.calls[0].payload["rows"] == [
         {"value": 1},
         {"value": 2},
     ]
@@ -815,7 +817,7 @@ def test_sql_adapter_returns_stable_failure_when_artifact_write_fails():
     )
     adapter = SqlAdapter(
         execute_tool=execute_tool,
-        artifact_store=FakeResultArtifactStore(fail=True),
+        result_artifact_service=FakeResultArtifactService(fail=True),
     )
 
     result = adapter.execute(
@@ -940,7 +942,7 @@ def test_sql_adapter_executes_split_queries_in_parallel_and_keeps_order():
     execute_tool = BlockingSqlExecuteTool()
     adapter = SqlAdapter(
         execute_tool=execute_tool,
-        artifact_store=FakeResultArtifactStore(),
+        result_artifact_service=FakeResultArtifactService(),
     )
 
     result = adapter.execute_split(
@@ -979,7 +981,7 @@ def test_sql_adapter_executes_split_queries_in_parallel_and_keeps_order():
 def test_sql_adapter_preserves_successful_split_result_when_sibling_fails():
     adapter = SqlAdapter(
         execute_tool=SelectiveFailureSqlExecuteTool(),
-        artifact_store=FakeResultArtifactStore(),
+        result_artifact_service=FakeResultArtifactService(),
     )
 
     result = adapter.execute_split(

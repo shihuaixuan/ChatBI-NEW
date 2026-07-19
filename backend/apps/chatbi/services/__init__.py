@@ -30,6 +30,12 @@ from apps.chatbi.services.query_service import QueryService, SQLExecutor
 from apps.chatbi.services.question_understanding_validation_service import (
     QuestionUnderstandingValidationService,
 )
+from apps.chatbi.services.result_artifact_service import (
+    ResultArtifactError,
+    ResultArtifactGateway,
+    ResultArtifactService,
+    ResultArtifactWriteError,
+)
 from apps.chatbi.services.semantic_query_service import (
     SemanticCompilationGateway,
     SemanticQueryCompileError,
@@ -67,6 +73,10 @@ __all__ = [
     "QueryService",
     "QuestionUnderstandingValidationService",
     "RecommendedQuestionProvider",
+    "ResultArtifactError",
+    "ResultArtifactGateway",
+    "ResultArtifactService",
+    "ResultArtifactWriteError",
     "SQLExecutor",
     "SQLPermissionService",
     "SemanticCompilationGateway",

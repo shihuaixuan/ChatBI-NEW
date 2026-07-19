@@ -1,4 +1,5 @@
 from apps.chatbi.models.dto import (
+    ChatBIResultArtifactRef,
     ChatInfo,
     ChatRecordCreateData,
     ChatRecordExecutionType,
@@ -17,6 +18,7 @@ from apps.chatbi.models.dto import (
     QuestionUnderstandingValidationIssue,
     QuestionUnderstandingValidationResult,
     RenameChat,
+    ResultArtifactWriteData,
     SemanticQueryCompileData,
     SemanticQueryCompileResult,
     SemanticQueryUsedAsset,
@@ -34,6 +36,7 @@ from apps.chatbi.models.orm import (
 
 __all__ = [
     "Chat",
+    "ChatBIResultArtifactRef",
     "ChatFinishStep",
     "ChatInfo",
     "ChatLog",
@@ -57,6 +60,7 @@ __all__ = [
     "QuestionUnderstandingValidationResult",
     "QuickCommand",
     "RenameChat",
+    "ResultArtifactWriteData",
     "SemanticRetrievalData",
     "SemanticQueryCompileData",
     "SemanticQueryCompileResult",

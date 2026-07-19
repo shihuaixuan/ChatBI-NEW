@@ -1192,7 +1192,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛、第三批会话记录状态与结果投影统一、
 第四批语义 SQL 编译入口收敛、第五批语义检索与物理 Schema 查询收敛、第六批执行绑定规则统一，以及第七批
-问题理解确定性校验规则收敛、第八批会话最终结果大小边界统一和第九批旧 Chat 核心结果写入收敛：
+问题理解确定性校验规则收敛、第八批会话最终结果大小边界统一、第九批旧 Chat 核心结果写入收敛，以及第十批
+Agent、Graph 结果 Artifact 生命周期统一：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1292,6 +1293,18 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     和原结果保持不变。新增架构守卫，防止旧 Chat 恢复对核心结果字段的直接赋值或 `update(ChatRecord)`。
 42. 第九批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 443 项通过，完整后端回归 887 项通过；
     新增和修改代码通过定向 Ruff 与严格 Mypy，`git diff --check` 通过，OpenAPI 保持 154 个路径。
+43. ChatBI 新增稳定的 `ChatBIResultArtifactRef`、`ResultArtifactWriteData` 和 `ResultArtifactService`，统一执行归属、
+    Artifact 写入、引用投影和会话级清理入口；Service 只依赖通用端口，不导入 Workflow Engine、Session、ORM 或
+    文件存储实现，`chat_id` 与 `record_id` 必须同时存在或同时缺失，保留独立 Graph Run 的原有能力。
+44. Agent 和 Graph SQL 执行已调用同一个结果 Artifact Service，完整结果统一保存 `query_id`、字段、全量行和行数，
+    Artifact 元数据统一记录执行 ID、执行类型、会话和记录归属。Agent 不再依赖底层执行器偶然返回引用；写入失败
+    明确返回 `sql_result_artifact_write_failed`，Graph 保持原有 `SQL_RESULT_ARTIFACT_WRITE_FAILED` 节点契约。
+45. 会话删除改为通过统一 Artifact 清理端口按 `chat_id` 查找 Agent、Graph Artifact，同时保留旧 Graph run ID 的
+    兼容清理；清理任务与元数据删除在会话删除事务内登记，提交成功后再处理正文。Agent run、步骤、事件和澄清记录
+    也进入同一会话生命周期，旧删除服务不再直接操作 Workflow Artifact ORM 或 Cleanup Service。
+46. 第十批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 466 项通过，完整后端回归 893 项通过；
+    新增和修改代码通过定向 Ruff，新 DTO、Service、外层适配器和 Agent 删除服务通过严格 Mypy，`git diff --check`
+    通过，OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1314,8 +1327,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期、所有权、Agent 与 Graph 的
    记录状态、澄清等待状态及最终结果投影已统一；执行器内部 Run 状态继续保持各自语义。
 8. SQL、数据结果和制品保存建立统一大小限制和清理规则。Agent 与 Graph 的 ChatRecord 最终快照大小边界已统一，
-   Graph 完整结果继续使用 Artifact；旧 Chat 的核心 SQL、图表和执行数据写入已接入相同边界，分析、预测、推荐等
-   辅助结果字段和跨执行器 Artifact 清理策略待后续批次收敛。
+   Agent 与 Graph 完整 SQL 结果已接入同一 Artifact Service，会话删除已统一清理两类执行数据和 Artifact；旧 Chat
+   的核心 SQL、图表和执行数据写入已接入相同边界，分析、预测、推荐等辅助结果字段待后续批次收敛。
 9. 推荐、分析和预测作为 ChatBI 应用能力调用 AI Model，不放入 ORM 方法或模板模块。
 
 **完成标准**

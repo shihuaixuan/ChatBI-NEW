@@ -18,7 +18,9 @@ from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from apps.chatbi.models import (
+        ChatBIResultArtifactRef,
         PhysicalSchemaResult,
+        ResultArtifactWriteData,
         SemanticQueryCompileData,
         SemanticQueryCompileResult,
         SemanticRetrievalData,
@@ -47,6 +49,25 @@ class QueryService(Protocol):
         *,
         allowed_tables: list[str] | None = None,
     ) -> Any: ...
+
+    def execute_sql(
+        self,
+        *,
+        sql: str,
+        datasource_id: int,
+        workspace_id: int | None,
+        user_id: int | None,
+        allowed_tables: list[str] | None = None,
+    ) -> Any: ...
+
+
+class ResultArtifactWriter(Protocol):
+    """Agent 对 ChatBI 结果 Artifact 服务的最小依赖。"""
+
+    def save(
+        self,
+        data: ResultArtifactWriteData,
+    ) -> ChatBIResultArtifactRef: ...
 
 
 class SemanticQueryCompiler(Protocol):
@@ -79,16 +100,6 @@ class PhysicalSchemaReader(Protocol):
         table_keyword: str = "",
     ) -> PhysicalSchemaResult: ...
 
-    def execute_sql(
-        self,
-        *,
-        sql: str,
-        datasource_id: int,
-        workspace_id: int | None,
-        user_id: int | None,
-        allowed_tables: list[str] | None = None,
-    ) -> Any: ...
-
 
 @dataclass
 class AgentToolContext:
@@ -98,12 +109,16 @@ class AgentToolContext:
     oid: int
     user_id: int | None
     datasource_id: int | None
+    execution_id: str | None = None
+    chat_id: int | None = None
+    record_id: int | None = None
     dataset_id: int | None = None
     term_query_service: TermQueryService | None = None
     query_service: QueryService | None = None
     semantic_query_service: SemanticQueryCompiler | None = None
     semantic_retrieval_service: SemanticAssetRetriever | None = None
     physical_schema_service: PhysicalSchemaReader | None = None
+    result_artifact_service: ResultArtifactWriter | None = None
     config: Any = None
     # 循环内跨工具共享的运行时状态（语义包、执行结果标记等），由 loop 维护。
     state: dict[str, Any] = field(default_factory=dict)
