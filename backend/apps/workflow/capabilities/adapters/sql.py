@@ -5,12 +5,21 @@ from typing import Any
 
 from apps.capabilities.sql.repair import SQLRepairStrategy
 from apps.capabilities.sql.validator import SqlValidateTool
-from apps.chatbi.services import QueryService, SQLExecutor
-from apps.semantic.models.dto import DatasetSchema
+from apps.chatbi.models import (
+    SemanticQueryCompileData,
+    SemanticQueryCompileResult,
+)
+from apps.chatbi.services import (
+    QueryService,
+    SemanticQueryService,
+    SQLExecutor,
+)
 from apps.semantic.services.schema_service import DatasetSchemaProvider
+from apps.semantic.services.sql_compilation_service import (
+    SemanticSQLCompilationService,
+)
 from apps.semantic.services.sql_compiler import (
     SemanticSQLCompiler,
-    SemanticSQLCompileRequest,
 )
 from apps.workflow.capabilities import planning
 from apps.workflow.capabilities.adapters.permission import PermissionAdapter
@@ -41,10 +50,17 @@ class SqlAdapter:
         max_parallel_queries: int | None = None,
         config: ChatBIConfig | None = None,
         query_service: QueryService | None = None,
+        semantic_query_service: SemanticQueryService | None = None,
     ) -> None:
         config = config or ChatBIConfig()
-        self._schema_provider = schema_provider
-        self._compiler = compiler or SemanticSQLCompiler()
+        self._semantic_query_service = semantic_query_service
+        if self._semantic_query_service is None and schema_provider is not None:
+            self._semantic_query_service = SemanticQueryService(
+                SemanticSQLCompilationService(
+                    schema_provider,
+                    compiler or SemanticSQLCompiler(),
+                )
+            )
         self._permission_adapter = permission_adapter or PermissionAdapter()
         self._repair_strategy = repair_strategy or SQLRepairStrategy()
         self._artifact_store = artifact_store
@@ -70,7 +86,6 @@ class SqlAdapter:
         if not question or dataset_id is None:
             raise ValueError("SQL_GENERATE_CONTEXT_REQUIRED")
 
-        schema = self._build_dataset_schema(ctx.tenant_id, dataset_id)
         plan = ctx.plan
         if plan.get("status") == "infeasible":
             raise ValueError(f"QUERY_PLAN_INFEASIBLE:{plan.get('infeasible_reason') or 'unknown'}")
@@ -94,9 +109,10 @@ class SqlAdapter:
             time_bucket = None
             select_mode = "aggregate"
         repair_context = self._repair_context(ctx)
-        result = self._compiler.compile(
-            SemanticSQLCompileRequest(
-                schema=schema,
+        result = self._compile_semantic_query(
+            SemanticQueryCompileData(
+                workspace_id=ctx.tenant_id,
+                dataset_id=dataset_id,
                 question=question,
                 slots=slots,
                 repair_context=repair_context,
@@ -118,11 +134,15 @@ class SqlAdapter:
         return {
             "sql": validated_sql,
             "strategy": "semantic_sql_compiler",
-            "datasource_id": self._datasource_id(schema, result.metrics, result.dimensions),
+            "datasource_id": result.datasource_id,
             "explanation": "基于 Semantic 语义资产生成 SQL",
             "used_assets": [
-                *self._used_assets("METRIC", result.metrics, schema.metrics),
-                *self._used_assets("DIMENSION", result.dimensions, schema.dimensions),
+                {
+                    "asset_type": asset.asset_type,
+                    "asset_id": asset.asset_id,
+                    "biz_name": asset.biz_name,
+                }
+                for asset in result.used_assets
             ],
         }
 
@@ -234,13 +254,13 @@ class SqlAdapter:
         if dataset_id is None or not isinstance(plans, list) or len(plans) < 2:
             raise ValueError("CROSS_MODEL_PLAN_REQUIRED")
 
-        schema = self._build_dataset_schema(ctx.tenant_id, dataset_id)
         queries: list[dict[str, Any]] = []
         for index, plan in enumerate(plans):
             slots = plan.get("slots") if isinstance(plan.get("slots"), dict) else {}
-            compiled = self._compiler.compile(
-                SemanticSQLCompileRequest(
-                    schema=schema,
+            compiled = self._compile_semantic_query(
+                SemanticQueryCompileData(
+                    workspace_id=ctx.tenant_id,
+                    dataset_id=dataset_id,
                     question=ctx.raw_question,
                     slots=slots,
                     select_mode=str(plan.get("select_mode") or "aggregate"),
@@ -254,7 +274,6 @@ class SqlAdapter:
             if not validated.success:
                 raise ValueError(validated.error_code or "SQL_VALIDATE_FAILED")
             sql = (validated.payload or {}).get("sql") or compiled.sql
-            datasource_id = self._datasource_id(schema, compiled.metrics, compiled.dimensions)
             queries.append(
                 {
                     "plan_ref": index,
@@ -263,7 +282,7 @@ class SqlAdapter:
                     "metrics": plan.get("metrics") or compiled.metrics,
                     "dimensions": plan.get("dimensions") or compiled.dimensions,
                     "sql": sql,
-                    "datasource_id": datasource_id,
+                    "datasource_id": compiled.datasource_id,
                 }
             )
         return {
@@ -280,10 +299,13 @@ class SqlAdapter:
             return sub_plans
         return ctx.knowledge.get("multi_query_plans")
 
-    def _build_dataset_schema(self, tenant_id: int, dataset_id: int) -> DatasetSchema:
-        if self._schema_provider is None:
-            raise ValueError("SEMANTIC_SCHEMA_PROVIDER_REQUIRED")
-        return self._schema_provider.build_dataset_schema(tenant_id, dataset_id)
+    def _compile_semantic_query(
+        self,
+        data: SemanticQueryCompileData,
+    ) -> SemanticQueryCompileResult:
+        if self._semantic_query_service is None:
+            raise ValueError("SEMANTIC_QUERY_SERVICE_REQUIRED")
+        return self._semantic_query_service.compile(data)
 
     def execute_split(self, request: dict[str, Any]) -> dict[str, Any]:
         """并行执行已生成的跨模型 SQL，不承担 SQL 编译职责。"""
@@ -402,46 +424,6 @@ class SqlAdapter:
             return value
         if isinstance(value, str) and value.isdigit():
             return int(value)
-        return None
-
-    @staticmethod
-    def _used_assets(asset_type: str, biz_names: list[str], elements) -> list[dict[str, Any]]:
-        element_by_biz_name = {element.biz_name: element for element in elements}
-        assets: list[dict[str, Any]] = []
-        for biz_name in biz_names:
-            element = element_by_biz_name.get(biz_name)
-            if element is None:
-                continue
-            assets.append(
-                {
-                    "asset_type": asset_type,
-                    "asset_id": element.id,
-                    "biz_name": element.biz_name,
-                }
-            )
-        return assets
-
-    def _datasource_id(self, schema, metric_biz_names: list[str], dimension_biz_names: list[str]) -> int | None:
-        model_by_id = {model.get("id"): model for model in schema.models}
-        for element in [*schema.metrics, *schema.dimensions]:
-            if element.biz_name not in {*metric_biz_names, *dimension_biz_names}:
-                continue
-            model = model_by_id.get(element.model) or {}
-            datasource_id = self._int_or_none(model.get("datasource_id") or model.get("datasourceId"))
-            if datasource_id is not None:
-                return datasource_id
-            datasource_id = self._int_or_none(self._measure_datasource_id(element))
-            if datasource_id is not None:
-                return datasource_id
-        return None
-
-    @staticmethod
-    def _measure_datasource_id(element) -> Any:
-        params = element.type_params or {}
-        measure_params = params.get("metricDefineByMeasureParams") if isinstance(params, dict) else {}
-        measures = measure_params.get("measures") if isinstance(measure_params, dict) else []
-        if measures and isinstance(measures[0], dict):
-            return measures[0].get("datasourceId") or measures[0].get("datasource_id")
         return None
 
     @staticmethod

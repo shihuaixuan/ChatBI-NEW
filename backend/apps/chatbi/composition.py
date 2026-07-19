@@ -5,8 +5,10 @@ from apps.capabilities.sql.execution_gateway import SqlExecuteTool
 from apps.chatbi.conversation import build_conversation_reader_service
 from apps.chatbi.services import (
     QueryService,
+    SemanticQueryService,
     SQLPermissionService,
 )
+from apps.semantic.composition import build_semantic_sql_compilation_service
 from common.core.db import engine
 
 
@@ -31,4 +33,14 @@ def build_query_service(
     )
 
 
-__all__ = ["build_conversation_reader_service", "build_query_service"]
+def build_semantic_query_service(session: Session) -> SemanticQueryService:
+    """装配 Agent 与 Graph 共用的语义 SQL 编译入口。"""
+
+    return SemanticQueryService(build_semantic_sql_compilation_service(session))
+
+
+__all__ = [
+    "build_conversation_reader_service",
+    "build_query_service",
+    "build_semantic_query_service",
+]

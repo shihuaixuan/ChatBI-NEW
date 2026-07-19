@@ -45,9 +45,12 @@ from apps.capabilities.question_understanding import (
     QuestionUnderstandingService,
     apply_question_understanding_clarification,
 )
-from apps.chatbi.composition import build_query_service
+from apps.chatbi.composition import (
+    build_query_service,
+    build_semantic_query_service,
+)
 from apps.chatbi.models import ChatRecord
-from apps.chatbi.services import QueryService
+from apps.chatbi.services import QueryService, SemanticQueryService
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
 
@@ -88,6 +91,7 @@ class AgentLoop:
         understanding_service: QuestionUnderstandingService | None = None,
         term_query_service: SemanticTermQueryService | None = None,
         query_service: QueryService | None = None,
+        semantic_query_service: SemanticQueryService | None = None,
     ):
         self.session = session
         self.current_user = current_user
@@ -102,6 +106,9 @@ class AgentLoop:
             session,
             default_limit=self.config.default_limit,
             sample_rows=self.config.sample_rows,
+        )
+        self.semantic_query_service = (
+            semantic_query_service or build_semantic_query_service(session)
         )
 
     def _build_registry(self) -> ToolRegistry:
@@ -323,6 +330,7 @@ class AgentLoop:
             dataset_id=record.dataset_id,
             term_query_service=self.term_query_service,
             query_service=self.query_service,
+            semantic_query_service=self.semantic_query_service,
             config=self.config,
             state={"question": record.question or ""},
         )

@@ -11,6 +11,11 @@ from apps.chatbi.models.dto.conversation import (
     CreateChat,
     RenameChat,
 )
+from apps.chatbi.models.dto.semantic_query import (
+    SemanticQueryCompileData,
+    SemanticQueryCompileResult,
+    SemanticQueryUsedAsset,
+)
 
 __all__ = [
     "ChatInfo",
@@ -22,4 +27,7 @@ __all__ = [
     "ConversationCreateData",
     "CreateChat",
     "RenameChat",
+    "SemanticQueryCompileData",
+    "SemanticQueryCompileResult",
+    "SemanticQueryUsedAsset",
 ]

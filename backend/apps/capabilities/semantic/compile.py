@@ -1,8 +1,4 @@
-"""语义编译请求组装：数据集解析 + 结构化查询计划 → SemanticSQLCompiler。
-
-图侧 SqlAdapter 与 Agentic 工具层共用的编译入口（当前图侧仍走自身实现，
-按解耦分析 Step 3 收敛后统一到此处）。入参为普通领域对象。
-"""
+"""旧语义编译函数兼容入口，实际编译统一转发到 Semantic Service。"""
 
 from __future__ import annotations
 
@@ -11,12 +7,15 @@ from typing import Any
 from sqlalchemy import select
 
 from apps.capabilities.schemas import ToolResult
+from apps.semantic.models.dto import SemanticQueryCompileRequest
 from apps.semantic.models.orm import SemanticDataset, SemanticModel
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
 from apps.semantic.services.schema_service import SemanticSchemaService
+from apps.semantic.services.sql_compilation_service import (
+    SemanticSQLCompilationService,
+)
 from apps.semantic.services.sql_compiler import (
     SemanticSQLCompiler,
-    SemanticSQLCompileRequest,
 )
 
 
@@ -68,14 +67,13 @@ def compile_semantic_sql(
             )
         dataset_id = dataset.id
     try:
-        schema = SemanticSchemaService(
-            SemanticSchemaLoader(session)
-        ).build_dataset_schema(
-            oid, dataset_id
-        )
-        result = (compiler or SemanticSQLCompiler()).compile(
-            SemanticSQLCompileRequest(
-                schema=schema,
+        result = SemanticSQLCompilationService(
+            SemanticSchemaService(SemanticSchemaLoader(session)),
+            compiler or SemanticSQLCompiler(),
+        ).compile(
+            SemanticQueryCompileRequest(
+                workspace_id=oid,
+                dataset_id=dataset_id,
                 question=question or "",
                 slots=slots or {},
                 limit=limit,
@@ -90,7 +88,7 @@ def compile_semantic_sql(
             "tables": result.tables,
             "metrics": result.metrics,
             "dimensions": result.dimensions,
-            "dataset_id": dataset_id,
+            "dataset_id": result.dataset_id,
             "strategy": "semantic_sql_compiler",
         },
     )

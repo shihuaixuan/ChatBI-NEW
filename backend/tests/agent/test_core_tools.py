@@ -16,9 +16,10 @@ from apps.agent.tools.core import (
     ValidateSqlTool,
 )
 from apps.capabilities.schemas import ToolResult
+from apps.chatbi.models import SemanticQueryCompileResult
 
 
-def _ctx(query_service=None, **state):
+def _ctx(query_service=None, semantic_query_service=None, **state):
     values = {
         "question_understanding": {
             "rewritten_question": "本月销售额",
@@ -33,6 +34,7 @@ def _ctx(query_service=None, **state):
         user_id=1,
         datasource_id=5,
         query_service=query_service,
+        semantic_query_service=semantic_query_service,
         state=values,
     )
 
@@ -58,6 +60,23 @@ class RecordingQueryService:
                 "stats_summary": {"amount": {"sum": 30.0}},
                 "full_data": [{"amount": 10}, {"amount": 20}],
             },
+        )
+
+
+class RecordingSemanticQueryService:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def compile(self, data):
+        self.calls.append(data)
+        return SemanticQueryCompileResult(
+            dataset_id=data.dataset_id,
+            sql="select 1",
+            tables=["t"],
+            metrics=["gmv"],
+            dimensions=["city"],
+            datasource_id=5,
+            used_assets=[],
         )
 
 
@@ -159,14 +178,17 @@ def test_compile_rejects_asset_outside_package():
 
 
 def test_compile_passes_known_assets_to_capability():
-    ctx = _ctx(dataset_id=3, semantic_asset_ids=[10, 11])
-    with patch("apps.agent.tools.core.compile_semantic_sql") as compile_mock:
-        compile_mock.return_value = ToolResult(success=True, payload={"sql": "select 1", "tables": ["t"]})
-        output = CompileSemanticSqlTool().execute(
-            ctx, CompileSemanticSqlArgs(metric_asset_ids=[10], dimension_asset_ids=[11])
-        )
+    service = RecordingSemanticQueryService()
+    ctx = _ctx(
+        semantic_query_service=service,
+        dataset_id=3,
+        semantic_asset_ids=[10, 11],
+    )
+    output = CompileSemanticSqlTool().execute(
+        ctx, CompileSemanticSqlArgs(metric_asset_ids=[10], dimension_asset_ids=[11])
+    )
     assert output.success
-    slots = compile_mock.call_args.kwargs["slots"]
+    slots = service.calls[0].slots
     assert slots["metrics"] == [{"asset_id": 10, "asset_type": "METRIC"}]
     assert slots["dimensions"] == [{"asset_id": 11, "asset_type": "DIMENSION"}]
     assert ctx.state["compiled_sql"] == "select 1"
@@ -180,7 +202,9 @@ def test_compile_normalizes_today_literal_from_confirmed_time_range():
         "offset_days": 0,
         "timezone": "Asia/Shanghai",
     }
+    service = RecordingSemanticQueryService()
     ctx = _ctx(
+        semantic_query_service=service,
         dataset_id=3,
         semantic_asset_ids=[10, 11],
         question_understanding={
@@ -198,18 +222,16 @@ def test_compile_normalizes_today_literal_from_confirmed_time_range():
         },
     )
 
-    with patch("apps.agent.tools.core.compile_semantic_sql") as compile_mock:
-        compile_mock.return_value = ToolResult(success=True, payload={"sql": "select 1", "tables": ["t"]})
-        output = CompileSemanticSqlTool().execute(
-            ctx,
-            CompileSemanticSqlArgs(
-                metric_asset_ids=[10],
-                filters=[{"asset_id": 11, "operator": "=", "value": "today"}],
-            ),
-        )
+    output = CompileSemanticSqlTool().execute(
+        ctx,
+        CompileSemanticSqlArgs(
+            metric_asset_ids=[10],
+            filters=[{"asset_id": 11, "operator": "=", "value": "today"}],
+        ),
+    )
 
     assert output.success
-    assert compile_mock.call_args.kwargs["slots"]["filters"] == [
+    assert service.calls[0].slots["filters"] == [
         {
             "asset_id": 11,
             "asset_type": "DIMENSION",

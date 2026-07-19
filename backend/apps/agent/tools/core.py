@@ -12,13 +12,11 @@ from apps.agent.tools.base import (
     ToolOutput,
     json_summary,
 )
-from apps.capabilities.semantic.compile import (
-    compile_semantic_sql,
-    resolve_dataset_by_datasource,
-)
+from apps.capabilities.semantic.compile import resolve_dataset_by_datasource
 from apps.capabilities.semantic.retrieval import retrieve_semantic_assets
 from apps.capabilities.time_slots import normalize_time_range
-from apps.chatbi.services import QueryService
+from apps.chatbi.models import SemanticQueryCompileData
+from apps.chatbi.services import QueryService, SemanticQueryCompileError
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
 
@@ -280,16 +278,38 @@ class CompileSemanticSqlTool(AgentTool):
             "dimensions": [{"asset_id": i, "asset_type": "DIMENSION"} for i in args.dimension_asset_ids],
             "filters": [{**filter_item, "asset_type": "DIMENSION"} for filter_item in filters],
         }
-        result = compile_semantic_sql(
-            ctx.session,
-            oid=ctx.oid,
-            dataset_id=dataset_id,
-            slots=slots,
-            limit=args.limit or getattr(ctx.config, "default_limit", 100),
-        )
-        if not result.success:
-            return ToolOutput(success=False, summary=result.message or (result.error_code or "编译失败"), error_code=result.error_code)
-        payload = result.payload
+        if ctx.semantic_query_service is None:
+            return ToolOutput(
+                success=False,
+                summary="ChatBI 语义查询服务未配置。",
+                error_code="semantic_query_service_required",
+            )
+        try:
+            result = ctx.semantic_query_service.compile(
+                SemanticQueryCompileData(
+                    workspace_id=ctx.oid,
+                    dataset_id=dataset_id,
+                    question=str(understanding.get("rewritten_question") or ""),
+                    slots=slots,
+                    order_by=[item.model_dump(mode="json") for item in args.order_by],
+                    limit=args.limit or getattr(ctx.config, "default_limit", 100),
+                    time_bucket=args.time_bucket,
+                )
+            )
+        except SemanticQueryCompileError as exc:
+            return ToolOutput(
+                success=False,
+                summary="语义资产不足，无法使用规则编译生成 SQL",
+                error_code=str(exc),
+            )
+        payload = {
+            "sql": result.sql,
+            "tables": result.tables,
+            "metrics": result.metrics,
+            "dimensions": result.dimensions,
+            "dataset_id": result.dataset_id,
+            "strategy": "semantic_sql_compiler",
+        }
         ctx.state["compiled_sql"] = payload["sql"]
         tables = set(ctx.state.get("allowed_tables") or [])
         tables.update(payload.get("tables") or [])

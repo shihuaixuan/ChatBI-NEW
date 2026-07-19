@@ -17,6 +17,10 @@ import orjson
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
+    from apps.chatbi.models import (
+        SemanticQueryCompileData,
+        SemanticQueryCompileResult,
+    )
     from apps.semantic.models.dto import TermSearchResult
 
 
@@ -42,6 +46,15 @@ class QueryService(Protocol):
         allowed_tables: list[str] | None = None,
     ) -> Any: ...
 
+
+class SemanticQueryCompiler(Protocol):
+    """Agent 对 ChatBI 语义 SQL 编译入口的最小依赖。"""
+
+    def compile(
+        self,
+        data: SemanticQueryCompileData,
+    ) -> SemanticQueryCompileResult: ...
+
     def execute_sql(
         self,
         *,
@@ -64,6 +77,7 @@ class AgentToolContext:
     dataset_id: int | None = None
     term_query_service: TermQueryService | None = None
     query_service: QueryService | None = None
+    semantic_query_service: SemanticQueryCompiler | None = None
     config: Any = None
     # 循环内跨工具共享的运行时状态（语义包、执行结果标记等），由 loop 维护。
     state: dict[str, Any] = field(default_factory=dict)

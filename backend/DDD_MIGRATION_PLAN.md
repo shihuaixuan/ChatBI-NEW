@@ -1190,7 +1190,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 **实施状态：进行中**
 
-截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛和第三批会话记录状态与结果投影统一：
+截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛、第三批会话记录状态与结果投影统一，
+以及第四批语义 SQL 编译入口收敛：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1232,6 +1233,15 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     防止 Agent、Graph 和旧 Chat 恢复直接维护状态或绕过统一创建入口。
 18. 第三批 ChatBI、Agent、Chat、Graph 和架构组合回归 226 项通过，完整后端回归 849 项通过；新增代码通过
     Ruff 和严格 Mypy，应用导入和 `git diff --check` 通过，OpenAPI 保持 154 个路径。
+19. Semantic 新增公开的语义 SQL 编译请求、结果 DTO 和 `SemanticSQLCompilationService`，统一负责数据集 Schema
+    加载和 `SemanticSQLCompiler` 调用；ChatBI 不再自行装配 Semantic 仓储或直接读取 Semantic ORM。
+20. ChatBI 新增 `SemanticQueryService`，统一把 Semantic 编译结果投影为 SQL、表、指标、维度、数据源和已使用资产；
+    数据源解析和资产投影规则不再由 Graph SQL Adapter 单独维护，编译失败统一保留明确错误编码。
+21. Agent `compile_semantic_sql` 工具和 Graph `SqlAdapter` 已改为调用同一个 `SemanticQueryService`。Graph 正式运行时
+    由 ChatBI 组装该服务；旧 `apps.capabilities.semantic.compile` 只保留兼容函数，并转发到 Semantic 公开编译服务，
+    不再维护另一套 Schema 加载和编译流程。
+22. 第四批 Agent、Graph、ChatBI、Semantic 和架构组合回归 539 项通过，完整后端回归 854 项通过；新增服务和 DTO
+    通过 Ruff 与严格 Mypy，依赖基线未增加违规项。
 
 **目标**
 
@@ -1243,11 +1253,11 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
    ConversationService 已完成第二批基础会话生命周期收敛。
 2. 迁移 Chat、ChatRecord 和 ChatLog，并拆分 ORM 与 DTO。核心 ORM 和创建、重命名、会话信息 DTO 已迁移，
    历史记录、日志响应及旧 LLM 请求 DTO 待后续批次继续拆分。
-3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。SQL 校验、
-   权限应用和执行已统一，问题理解、检索、语义编译和回答待后续批次收敛。
+3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。SQL 语义编译、
+   SQL 校验、权限应用和执行已统一，问题理解、检索和回答待后续批次收敛。
 4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。SQL 校验和执行工具
-   已完成，Schema、Semantic 检索与编译工具尚待迁移。
-5. Graph Adapter 改为调用相同 Service。SQL 执行 Adapter 已完成，其余 Adapter 待后续迁移。
+   已完成，语义 SQL 编译工具已接入统一入口；物理 Schema 和 Semantic 检索工具尚待迁移。
+5. Graph Adapter 改为调用相同 Service。SQL 编译和执行 Adapter 已完成，其余 Adapter 待后续迁移。
 6. 旧 `chat/task/llm.py` 调整为兼容入口或直接删除，不能继续维护独立业务逻辑。
 7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期、所有权、Agent 与 Graph 的
    记录状态、澄清等待状态及最终结果投影已统一；执行器内部 Run 状态继续保持各自语义。

@@ -14,6 +14,10 @@ from apps.semantic.services.dataset_reference_service import (
     SemanticDatasetReferenceService,
 )
 from apps.semantic.services.schema_service import SemanticSchemaService
+from apps.semantic.services.sql_compilation_service import (
+    SemanticSQLCompilationService,
+)
+from apps.semantic.services.sql_compiler import SemanticSQLCompiler
 from apps.semantic.services.term_compatibility_service import (
     LegacyTerminologyCompatibilityService,
 )
@@ -39,6 +43,17 @@ def build_semantic_dataset_reference_service(
 
     return SemanticDatasetReferenceService(
         SemanticSchemaService(SemanticSchemaLoader(session))
+    )
+
+
+def build_semantic_sql_compilation_service(
+    session: Session,
+) -> SemanticSQLCompilationService:
+    """装配供 ChatBI 使用的 Semantic SQL 编译服务。"""
+
+    return SemanticSQLCompilationService(
+        SemanticSchemaService(SemanticSchemaLoader(session)),
+        SemanticSQLCompiler(),
     )
 
 
@@ -71,6 +86,7 @@ def build_semantic_term_excel_service(
 
 __all__ = [
     "build_semantic_dataset_reference_service",
+    "build_semantic_sql_compilation_service",
     "build_legacy_terminology_compatibility_service",
     "build_semantic_term_query_service",
     "build_semantic_term_excel_service",

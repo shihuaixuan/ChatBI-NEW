@@ -8,6 +8,9 @@ from apps.chatbi.models.dto import (
     ConversationCreateData,
     CreateChat,
     RenameChat,
+    SemanticQueryCompileData,
+    SemanticQueryCompileResult,
+    SemanticQueryUsedAsset,
 )
 from apps.chatbi.models.orm import (
     Chat,
@@ -35,5 +38,8 @@ __all__ = [
     "OperationEnum",
     "QuickCommand",
     "RenameChat",
+    "SemanticQueryCompileData",
+    "SemanticQueryCompileResult",
+    "SemanticQueryUsedAsset",
     "TypeEnum",
 ]
