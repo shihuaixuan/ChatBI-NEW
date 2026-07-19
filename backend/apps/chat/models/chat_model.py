@@ -37,10 +37,8 @@ from apps.chatbi.models import (
 )
 from apps.datasource.database import DB
 from apps.template.filter.generator import get_permissions_template
-from apps.template.generate_analysis.generator import get_analysis_template
 from apps.template.generate_chart.generator import get_chart_template
 from apps.template.generate_dynamic.generator import get_dynamic_template
-from apps.template.generate_predict.generator import get_predict_template
 from apps.template.generate_sql.generator import (
     get_sql_example_template,
     get_sql_template,
@@ -192,19 +190,6 @@ class AiModelQuestion(BaseModel):
     def chart_user_question(self, chart_type: Optional[str] = '', schema: Optional[str] = ''):
         return get_chart_template()['user'].format(lang=self.lang, sql=self.sql, question=self.question, rule=self.rule,
                                                    chart_type=chart_type, schema=schema)
-
-    def analysis_sys_question(self):
-        return get_analysis_template()['system'].format(lang=self.lang, terminologies=self.terminologies,
-                                                        custom_prompt=self.custom_prompt, sqlbot_name=self.sqlbot_name)
-
-    def analysis_user_question(self):
-        return get_analysis_template()['user'].format(fields=self.fields, data=self.data)
-
-    def predict_sys_question(self):
-        return get_predict_template()['system'].format(lang=self.lang, custom_prompt=self.custom_prompt, sqlbot_name=self.sqlbot_name)
-
-    def predict_user_question(self):
-        return get_predict_template()['user'].format(fields=self.fields, data=self.data)
 
     def datasource_sys_question(self):
         return get_datasource_template()['system'].format(lang=self.lang, sqlbot_name=self.sqlbot_name)

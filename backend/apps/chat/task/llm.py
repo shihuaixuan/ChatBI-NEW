@@ -50,12 +50,10 @@ from apps.chat.curd.chat import (
     get_last_execute_sql_error,
     list_generate_chart_logs,
     list_generate_sql_logs,
-    save_analysis_answer,
     save_analysis_predict_record,
     save_chart,
     save_chart_answer,
     save_error_message,
-    save_predict_answer,
     save_predict_data,
     save_select_datasource_answer,
     save_sql,
@@ -79,7 +77,11 @@ from apps.chat.models.chat_model import (
 )
 from apps.chat.services.semantic_binding import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
 from apps.chat.services.term_context import ChatTermContextService
-from apps.chatbi.models import RecommendedQuestionGenerationData
+from apps.chatbi.models import (
+    AnalysisPredictionGenerationData,
+    ChatRecordAuxiliaryType,
+    RecommendedQuestionGenerationData,
+)
 from apps.datasource import (
     DatasourceConnection,
     build_external_datasource_connection,
@@ -103,6 +105,7 @@ from common.error import (
 from common.utils.data_format import DataFormat
 from common.utils.locale import I18n, I18nHelper
 from common.utils.utils import SQLBotLogUtil, extract_nested_json, prepare_for_orjson
+from infrastructure.analysis_prediction import build_analysis_prediction_service
 from infrastructure.recommended_questions import (
     build_recommended_question_service,
 )
@@ -472,16 +475,24 @@ class LLMService:
         self.chat_question.fields = orjson.dumps(fields).decode()
         data = get_chat_chart_data(_session, self.record.id)
         self.chat_question.data = orjson.dumps(data.get('data')).decode()
-        analysis_msg: List[Union[BaseMessage, dict[str, Any]]] = []
-
         ds_id = self.ds.id if isinstance(self.ds, CoreDatasource) else None
 
         self.load_term_context(_session)
 
         self.filter_custom_prompts(_session, CustomPromptTypeEnum.ANALYSIS, self.current_user.oid, ds_id)
 
-        analysis_msg.append(SystemPromptMessage(content=self.chat_question.analysis_sys_question()))
-        analysis_msg.append(HumanMessage(content=self.chat_question.analysis_user_question()))
+        generation_data = AnalysisPredictionGenerationData(
+            record_id=self.record.id or 0,
+            generation_type=ChatRecordAuxiliaryType.ANALYSIS,
+            fields=self.chat_question.fields,
+            data=self.chat_question.data,
+            language=self.chat_question.lang,
+            assistant_name=self.chat_question.sqlbot_name,
+            custom_prompt=self.chat_question.custom_prompt,
+            terminologies=self.chat_question.terminologies,
+        )
+        service = build_analysis_prediction_service(_session, self.llm)
+        messages = service.prepare(generation_data)
 
         self.current_logs[OperationEnum.ANALYSIS] = start_log(session=_session,
                                                               ai_modal_id=self.chat_question.ai_modal_id,
@@ -489,38 +500,42 @@ class LLMService:
                                                               operate=OperationEnum.ANALYSIS,
                                                               record_id=self.record.id,
                                                               full_message=[
-                                                                  {'type': msg.type,
-                                                                   'sqlbot_system': getattr(msg, 'sqlbot_system',
-                                                                                            False) is True,
-                                                                   'content': msg.content} for
-                                                                  msg
-                                                                  in analysis_msg])
-        full_thinking_text = ''
-        full_analysis_text = ''
-        token_usage = {}
-        res = process_stream(self.llm.stream(analysis_msg), token_usage)
-        for chunk in res:
-            if chunk.get('content'):
-                full_analysis_text += chunk.get('content')
-            if chunk.get('reasoning_content'):
-                full_thinking_text += chunk.get('reasoning_content')
-            yield chunk
+                                                                  {
+                                                                      'type': message.role,
+                                                                      'sqlbot_system': message.role == 'system',
+                                                                      'content': message.content,
+                                                                  }
+                                                                  for message in messages
+                                                              ])
+        for event in service.generate(generation_data, messages):
+            if event.kind == 'chunk':
+                yield {
+                    'content': event.content,
+                    'reasoning_content': event.reasoning_content,
+                }
+                continue
 
-        analysis_msg.append(AIMessage(full_analysis_text))
-
-        self.current_logs[OperationEnum.ANALYSIS] = end_log(session=_session,
-                                                            log=self.current_logs[
-                                                                OperationEnum.ANALYSIS],
-                                                            full_message=[
-                                                                {'type': msg.type,
-                                                                 'sqlbot_system': getattr(msg, 'sqlbot_system',
-                                                                                          False) is True,
-                                                                 'content': msg.content}
-                                                                for msg in analysis_msg],
-                                                            reasoning_content=full_thinking_text,
-                                                            token_usage=token_usage)
-        self.record = save_analysis_answer(session=_session, record_id=self.record.id,
-                                           answer=orjson.dumps({'content': full_analysis_text}).decode())
+            self.current_logs[OperationEnum.ANALYSIS] = end_log(
+                session=_session,
+                log=self.current_logs[OperationEnum.ANALYSIS],
+                full_message=[
+                    *[
+                        {
+                            'type': message.role,
+                            'sqlbot_system': message.role == 'system',
+                            'content': message.content,
+                        }
+                        for message in messages
+                    ],
+                    {
+                        'type': 'ai',
+                        'sqlbot_system': False,
+                        'content': event.content,
+                    },
+                ],
+                reasoning_content=event.reasoning_content,
+                token_usage=event.token_usage,
+            )
 
     def generate_predict(self, _session: Session):
         fields = self.get_fields_from_chart(_session)
@@ -531,9 +546,17 @@ class LLMService:
         ds_id = self.ds.id if isinstance(self.ds, CoreDatasource) else None
         self.filter_custom_prompts(_session, CustomPromptTypeEnum.PREDICT_DATA, self.current_user.oid, ds_id)
 
-        predict_msg: List[Union[BaseMessage, dict[str, Any]]] = []
-        predict_msg.append(SystemPromptMessage(content=self.chat_question.predict_sys_question()))
-        predict_msg.append(HumanMessage(content=self.chat_question.predict_user_question()))
+        generation_data = AnalysisPredictionGenerationData(
+            record_id=self.record.id or 0,
+            generation_type=ChatRecordAuxiliaryType.PREDICT,
+            fields=self.chat_question.fields,
+            data=self.chat_question.data,
+            language=self.chat_question.lang,
+            assistant_name=self.chat_question.sqlbot_name,
+            custom_prompt=self.chat_question.custom_prompt,
+        )
+        service = build_analysis_prediction_service(_session, self.llm)
+        messages = service.prepare(generation_data)
 
         self.current_logs[OperationEnum.PREDICT_DATA] = start_log(session=_session,
                                                                   ai_modal_id=self.chat_question.ai_modal_id,
@@ -541,37 +564,42 @@ class LLMService:
                                                                   operate=OperationEnum.PREDICT_DATA,
                                                                   record_id=self.record.id,
                                                                   full_message=[
-                                                                      {'type': msg.type,
-                                                                       'sqlbot_system': getattr(msg, 'sqlbot_system',
-                                                                                                False) is True,
-                                                                       'content': msg.content} for
-                                                                      msg
-                                                                      in predict_msg])
-        full_thinking_text = ''
-        full_predict_text = ''
-        token_usage = {}
-        res = process_stream(self.llm.stream(predict_msg), token_usage)
-        for chunk in res:
-            if chunk.get('content'):
-                full_predict_text += chunk.get('content')
-            if chunk.get('reasoning_content'):
-                full_thinking_text += chunk.get('reasoning_content')
-            yield chunk
+                                                                      {
+                                                                          'type': message.role,
+                                                                          'sqlbot_system': message.role == 'system',
+                                                                          'content': message.content,
+                                                                      }
+                                                                      for message in messages
+                                                                  ])
+        for event in service.generate(generation_data, messages):
+            if event.kind == 'chunk':
+                yield {
+                    'content': event.content,
+                    'reasoning_content': event.reasoning_content,
+                }
+                continue
 
-        predict_msg.append(AIMessage(full_predict_text))
-        self.record = save_predict_answer(session=_session, record_id=self.record.id,
-                                          answer=orjson.dumps({'content': full_predict_text}).decode())
-        self.current_logs[OperationEnum.PREDICT_DATA] = end_log(session=_session,
-                                                                log=self.current_logs[
-                                                                    OperationEnum.PREDICT_DATA],
-                                                                full_message=[
-                                                                    {'type': msg.type,
-                                                                     'sqlbot_system': getattr(msg, 'sqlbot_system',
-                                                                                              False) is True,
-                                                                     'content': msg.content}
-                                                                    for msg in predict_msg],
-                                                                reasoning_content=full_thinking_text,
-                                                                token_usage=token_usage)
+            self.current_logs[OperationEnum.PREDICT_DATA] = end_log(
+                session=_session,
+                log=self.current_logs[OperationEnum.PREDICT_DATA],
+                full_message=[
+                    *[
+                        {
+                            'type': message.role,
+                            'sqlbot_system': message.role == 'system',
+                            'content': message.content,
+                        }
+                        for message in messages
+                    ],
+                    {
+                        'type': 'ai',
+                        'sqlbot_system': False,
+                        'content': event.content,
+                    },
+                ],
+                reasoning_content=event.reasoning_content,
+                token_usage=event.token_usage,
+            )
 
     def generate_recommend_questions_task(self, _session: Session):
 

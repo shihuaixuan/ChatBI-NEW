@@ -1193,7 +1193,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛、第三批会话记录状态与结果投影统一、
 第四批语义 SQL 编译入口收敛、第五批语义检索与物理 Schema 查询收敛、第六批执行绑定规则统一，以及第七批
 问题理解确定性校验规则收敛、第八批会话最终结果大小边界统一、第九批旧 Chat 核心结果写入收敛，以及第十批
-Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助结果写入收敛，以及第十二批推荐问题生成流程收敛：
+Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助结果写入收敛、第十二批推荐问题生成流程收敛，
+以及第十三批分析和预测生成流程收敛：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1330,6 +1331,19 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 54. 第十二批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 485 项通过，完整后端回归 914 项通过；
     新增和修改代码通过定向 Ruff，新 DTO、Service、仓储、AI Model 流解析和外层适配器通过严格 Mypy，
     `git diff --check` 通过，OpenAPI 保持 154 个路径。
+55. ChatBI 新增分析预测生成输入、稳定消息、模型分块和生成事件 DTO，以及 `AnalysisPredictionService`；Service 通过
+    提示词和模型流端口统一消费分析、预测模型输出，累计正文、思考内容和 token 用量，并根据明确的辅助类型只投影
+    `analysis` 或 `predict` 字段。记录 ID 和辅助类型在模型调用前校验，非法输入返回明确错误。
+56. 现有分析、预测模板和 LangChain 消息转换放入中立基础设施适配器；分析继续接收术语和分析自定义提示，预测继续
+    接收预测自定义提示，两者保持原有字段和数据格式。ChatBI Service 不导入模板、LangChain、旧 Chat、Session 或
+    ORM，结果写入继续复用 `ChatRecordService` 的辅助结果大小边界和事务内 flush。
+57. 旧 `LLMService.generate_analysis` 和 `generate_predict` 只保留字段与数据准备、术语或自定义提示加载、生成日志和
+    原有 SSE 字典投影，提示词组装、模型流消费和 ChatRecord 结果写入均转交 ChatBI Service；旧
+    `analysis_sys_question`、`analysis_user_question`、`predict_sys_question`、`predict_user_question` 已删除，
+    `analysis-result`、`predict-result` 及完成事件契约保持不变，旧 CRUD 写入继续作为兼容转发入口保留。
+58. 第十三批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 497 项通过，完整后端回归 926 项通过；
+    新增和修改代码通过定向 Ruff，新 DTO、Service 和外层适配器通过严格 Mypy，`git diff --check` 通过，OpenAPI
+    保持 154 个路径。
 
 **目标**
 
@@ -1342,8 +1356,8 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 2. 迁移 Chat、ChatRecord 和 ChatLog，并拆分 ORM 与 DTO。核心 ORM 和创建、重命名、会话信息 DTO 已迁移，
    历史记录、日志响应及旧 LLM 请求 DTO 待后续批次继续拆分。
 3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。检索、SQL 语义
-   编译、SQL 校验、权限应用和执行已统一；问题理解的确定性校验规则和推荐问题模型调用编排已统一，问题理解模型
-   编排和最终回答待后续批次收敛。
+   编译、SQL 校验、权限应用和执行已统一；问题理解的确定性校验规则、推荐问题以及分析预测模型调用编排已统一，
+   问题理解模型编排和最终回答待后续批次收敛。
 4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。SQL 校验和执行工具
    已完成，语义 SQL 编译、物理 Schema、Semantic 检索、执行绑定和问题理解校验已接入统一入口；问题理解模型编排
    和回答工具待后续迁移。

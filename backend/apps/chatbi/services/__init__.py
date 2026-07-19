@@ -1,3 +1,8 @@
+from apps.chatbi.services.analysis_prediction_service import (
+    AnalysisPredictionModelClient,
+    AnalysisPredictionPromptBuilder,
+    AnalysisPredictionService,
+)
 from apps.chatbi.services.chat_record_service import (
     ChatRecordError,
     ChatRecordNotFoundError,
@@ -57,6 +62,9 @@ from apps.chatbi.services.sql_permission import (
 )
 
 __all__ = [
+    "AnalysisPredictionModelClient",
+    "AnalysisPredictionPromptBuilder",
+    "AnalysisPredictionService",
     "ChatRecordError",
     "ChatRecordNotFoundError",
     "ChatRecordOwnershipError",

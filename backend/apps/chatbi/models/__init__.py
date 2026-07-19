@@ -1,4 +1,8 @@
 from apps.chatbi.models.dto import (
+    AnalysisPredictionGenerationData,
+    AnalysisPredictionGenerationEvent,
+    AnalysisPredictionMessage,
+    AnalysisPredictionModelChunk,
     ChatBIResultArtifactRef,
     ChatInfo,
     ChatRecordAuxiliaryProjection,
@@ -41,6 +45,10 @@ from apps.chatbi.models.orm import (
 )
 
 __all__ = [
+    "AnalysisPredictionGenerationData",
+    "AnalysisPredictionGenerationEvent",
+    "AnalysisPredictionMessage",
+    "AnalysisPredictionModelChunk",
     "Chat",
     "ChatBIResultArtifactRef",
     "ChatRecordAuxiliaryProjection",

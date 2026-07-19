@@ -1,3 +1,9 @@
+from apps.chatbi.models.dto.analysis_prediction import (
+    AnalysisPredictionGenerationData,
+    AnalysisPredictionGenerationEvent,
+    AnalysisPredictionMessage,
+    AnalysisPredictionModelChunk,
+)
 from apps.chatbi.models.dto.chat_record import (
     ChatRecordAuxiliaryProjection,
     ChatRecordAuxiliaryType,
@@ -46,6 +52,10 @@ from apps.chatbi.models.dto.semantic_query import (
 from apps.chatbi.models.dto.semantic_retrieval import SemanticRetrievalData
 
 __all__ = [
+    "AnalysisPredictionGenerationData",
+    "AnalysisPredictionGenerationEvent",
+    "AnalysisPredictionMessage",
+    "AnalysisPredictionModelChunk",
     "ChatInfo",
     "ChatBIResultArtifactRef",
     "ChatRecordAuxiliaryProjection",
