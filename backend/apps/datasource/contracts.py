@@ -7,6 +7,18 @@ from typing import Protocol
 from pydantic import BaseModel
 
 
+class DatasourceRecommendationConfigStore(Protocol):
+    """推荐问题事务使用的数据源配置公开端口。"""
+
+    def get_recommended_config(self, datasource_id: int) -> int | None: ...
+
+    def stage_recommended_config(
+        self,
+        datasource_id: int,
+        recommended_config: int,
+    ) -> bool: ...
+
+
 class DatasourceSummary(BaseModel):
     """Assistant 等调用方可读取的数据源摘要。"""
 

@@ -41,12 +41,6 @@ def check_status(_session: SessionDep, trans: Trans, ds: CoreDatasource, is_rais
     return check_connection(trans, ds, is_raise)
 
 
-def update_ds_recommended_config(session: SessionDep, datasource_id: int, recommended_config: int):
-    record = session.exec(select(CoreDatasource).where(CoreDatasource.id == datasource_id)).first()
-    record.recommended_config = recommended_config
-    session.add(record)
-    session.commit()
-
 def getTablesByDs(_session: SessionDep, ds: CoreDatasource):
     # check_status(session, ds, True)
     tables = get_tables(ds)

@@ -28,7 +28,6 @@
   "cross_domain_concrete_implementations": [
     "apps/agent/tools/interaction.py -> apps.data_training.curd.data_training",
     "apps/capabilities/semantic/compile.py -> apps.semantic.repository.sqlmodel.schema_loader",
-    "apps/chat/curd/chat.py -> apps.datasource.crud.recommended_problem",
     "apps/chat/services/deletion.py -> apps.workflow_engine.infrastructure.artifacts.cleanup",
     "apps/chat/services/deletion.py -> apps.workflow_engine.infrastructure.persistence.models",
     "apps/chat/task/llm.py -> apps.data_training.curd.data_training",

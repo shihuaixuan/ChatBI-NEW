@@ -15,6 +15,7 @@ from apps.datasource.repository.sqlmodel import (
     SQLModelDatasourceConnectionRepository,
     SQLModelDatasourceMetadataRepository,
     SQLModelDatasourcePhysicalRelationRepository,
+    SQLModelDatasourceRecommendationConfigStore,
     SQLModelDatasourceRepository,
 )
 from apps.datasource.services import (
@@ -75,3 +76,11 @@ def build_excel_import_service(upload_directory: str | Path) -> ExcelImportServi
         PostgreSQLExcelImportGateway(),
         Path(upload_directory),
     )
+
+
+def build_datasource_recommendation_config_store(
+    session: Session,
+) -> SQLModelDatasourceRecommendationConfigStore:
+    """装配供推荐问题共享事务使用的数据源配置端口。"""
+
+    return SQLModelDatasourceRecommendationConfigStore(session)

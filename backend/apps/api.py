@@ -14,7 +14,8 @@ from apps.assistant.api import assistants as assistant
 from apps.chat.api import chat
 from apps.dashboard.api import dashboard_api
 from apps.data_training.api import data_training
-from apps.datasource.api import datasource, recommended_problem, table_relation
+from apps.datasource.api import datasource, table_relation
+from apps.knowledge.api import recommended_problem
 from apps.mcp import mcp
 from apps.semantic.api import legacy_terms
 from apps.semantic.api.router import router as semantic_router

@@ -30,8 +30,8 @@ from apps.chat.services.semantic_binding import (
     validate_assistant_dataset_binding,
 )
 from apps.datasource.composition import build_datasource_connection_service
-from apps.datasource.crud.recommended_problem import get_datasource_recommended_chart
 from apps.datasource.models.datasource import CoreDatasource
+from apps.knowledge.composition import build_recommended_problem_service
 from apps.semantic.models.orm import SemanticDataset
 from common.core.deps import CurrentAssistant, CurrentUser, SessionDep, Trans
 from common.utils.data_format import DataFormat
@@ -775,9 +775,10 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
         record.finish = True
         record.create_time = datetime.datetime.now()
         record.create_by = current_user.id
-        ds = session.get(CoreDatasource, binding.datasource_id)
-        if isinstance(ds, CoreDatasource) and ds.recommended_config == 2:
-            questions = get_datasource_recommended_chart(session, ds.id)
+        questions = build_recommended_problem_service(session).list_for_chat(
+            binding.datasource_id
+        )
+        if questions is not None:
             record.recommended_question = orjson.dumps(questions).decode()
             record.recommended_question_answer = orjson.dumps({
                 "content": questions

@@ -32,12 +32,6 @@ from apps.datasource.models.dto.physical_schema import (
     PhysicalTable,
     PhysicalTableSnapshot,
 )
-from apps.datasource.models.dto.recommended_problem import (
-    RecommendedProblemBase,
-    RecommendedProblemBaseChat,
-    RecommendedProblemItem,
-    RecommendedProblemResponse,
-)
 
 __all__ = [
     "ColumnSchema",
@@ -58,10 +52,6 @@ __all__ = [
     "PhysicalRelationResources",
     "PhysicalTable",
     "PhysicalTableSnapshot",
-    "RecommendedProblemBase",
-    "RecommendedProblemBaseChat",
-    "RecommendedProblemItem",
-    "RecommendedProblemResponse",
     "SheetFields",
     "TableAndFields",
     "TableObj",

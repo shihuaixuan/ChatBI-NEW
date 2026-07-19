@@ -1,9 +1,13 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RecommendedProblemItem(BaseModel):
+    """推荐问题的读取与写入 DTO。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
     id: int | None = None
     datasource_id: int | None = None
     question: str = ""
@@ -13,16 +17,8 @@ class RecommendedProblemItem(BaseModel):
     create_by: int | None = None
 
 
-class RecommendedProblemResponse:
-    def __init__(
-        self,
-        datasource_id: int | None,
-        recommended_config: int | None,
-        questions: str | None,
-    ) -> None:
-        self.datasource_id = datasource_id
-        self.recommended_config = recommended_config
-        self.questions = questions
+class RecommendedProblemResponse(BaseModel):
+    """兼容现有前端的推荐问题配置响应。"""
 
     datasource_id: int | None = None
     recommended_config: int | None = None
@@ -30,13 +26,8 @@ class RecommendedProblemResponse:
 
 
 class RecommendedProblemBase(BaseModel):
+    """整批保存推荐问题的请求。"""
+
     datasource_id: int | None = None
     recommended_config: int | None = None
     problemInfo: list[RecommendedProblemItem] = Field(default_factory=list)
-
-
-class RecommendedProblemBaseChat:
-    def __init__(self, content: list[str]) -> None:
-        self.content = content
-
-    content: list[str] = []

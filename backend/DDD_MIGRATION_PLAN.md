@@ -1003,13 +1003,13 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 ### 6.4 阶段 P3：收敛 Datasource 与数据库连接实现
 
-**实施状态：进行中**
+**实施状态：已完成**
 
-截至 2026-07-19，已完成五批基础边界、元数据、数据源维护、物理关系和连接适配流程迁移：
+截至 2026-07-19，已完成六批基础边界、元数据、数据源维护、物理关系、连接适配和推荐问题迁移：
 
-1. `CoreDatasource`、`CoreTable`、`CoreField` 和 `DsRecommendedProblem` 已迁入
-   `datasource/models/orm`，连接、元数据、导入和推荐问题请求对象已迁入 `models/dto`。旧
-   `models/datasource.py` 只保留同对象导入兼容，不再定义 ORM 或 DTO。
+1. `CoreDatasource`、`CoreTable` 和 `CoreField` 已迁入 `datasource/models/orm`，连接、元数据和导入
+   请求对象已迁入 `models/dto`。旧 `models/datasource.py` 只保留 Datasource 对象导入兼容，不再定义
+   ORM 或 DTO；推荐问题最终已迁入 Knowledge。
 2. 原 `apps/db` 中数据库类型、SQL 模板、本地数据引擎、Elasticsearch 和多数据库驱动实现已迁入
    `datasource/repository/connectors`，生产代码不再导入 `apps.db`，原目录已删除。
 3. 新增 `DatasourceConnectionRepository`、`DatasourceConnectionGateway`、最小连接快照 DTO 和
@@ -1060,6 +1060,14 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     表字段元数据、查询执行和只读 SQL 的统一 Service 契约测试；SQLite 继续保留真实文件数据库集成测试。
 25. 第五批跨模块定向回归 238 项通过，完整后端回归 769 项通过；Ruff、Mypy、应用导入和 OpenAPI
     154 个路径验证通过。其他数据库的真实驱动集成仍需要对应数据库环境，不用模拟成功掩盖驱动错误。
+26. 推荐问题的 ORM、DTO、Repository、Service 和 API 已迁入 Knowledge，继续映射原
+    `ds_recommended_problem` 表，不新增数据迁移；Datasource 中原推荐问题 API、CRUD 和模型定义已删除。
+27. Datasource 新增最小推荐配置公开端口，Knowledge 仓储在共享会话事务中同时更新
+    `core_datasource.recommended_config` 并整批替换推荐问题，提交失败时统一回滚。
+28. Chat 首条欢迎记录改用 Knowledge 公开 Service 获取自定义推荐问题，架构基线移除
+    `chat -> datasource.crud.recommended_problem` 违规依赖；原 3 个推荐问题 API 路径及 JSON 字符串响应保持。
+29. Knowledge、Chat 和架构定向回归 22 项通过，完整后端回归 780 项通过；Knowledge 核心代码通过 Ruff
+    和严格 Mypy 检查，应用 OpenAPI 继续生成 154 个路径。
 
 **目标**
 
@@ -1079,7 +1087,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
    Service 已完成，Semantic 继续使用独立的模型关系结构。
 7. 删除数据源内部旧 Embedding 写入逻辑，统一由 Retrieval 的 Schema Source 投影负责。新增写入和后台
    补写已删除；旧 Chat 读取兼容待 P5 删除。
-8. 把推荐问题移出 Datasource，迁入 Knowledge。
+8. 把推荐问题移出 Datasource，迁入 Knowledge。已完成，原表名和 API 路径保持兼容。
 
 **完成标准**
 
@@ -1090,14 +1098,28 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 ### 6.5 阶段 P4：建立 Knowledge，并隔离 Retrieval 来源
 
+**实施状态：进行中**
+
+截至 2026-07-19，已完成第一批推荐问题资源迁移：
+
+1. 已建立 Knowledge 的推荐问题 DTO、ORM、Repository、Service、API 和组装入口，推荐问题源数据只有一个
+   权威写入实现。
+2. 原 `ds_recommended_problem` 表名和 3 个 `/recommended_problem` API 路径保持不变，前端依赖的
+   `questions` JSON 字符串响应保持兼容。
+3. 推荐配置与问题整批替换已统一事务；问题的数据源归属、创建人和创建时间由 Service 统一写入，不再信任
+   请求项中的归属和审计字段。
+4. Chat 已通过 Knowledge 公开 Service 读取自定义推荐问题，不再导入 Datasource 推荐问题 CRUD。
+5. SQL 示例资源、Retrieval Source Adapter、索引变更通知和 Retrieval 内部模型拆分将在后续批次继续实施。
+
 **目标**
 
 明确知识源与检索索引的所有权，完成 SQL 示例和未来知识资源的扩展边界。
 
 **任务**
 
-1. 创建 `knowledge`，将 `data_training` 重命名并迁移为 SQL 示例资源。
-2. 将 `DsRecommendedProblem` 迁入 Knowledge 的推荐问题资源。
+1. 创建 `knowledge`，将 `data_training` 重命名并迁移为 SQL 示例资源。Knowledge 基础领域已创建，
+   SQL 示例资源尚待迁移。
+2. 将 `DsRecommendedProblem` 迁入 Knowledge 的推荐问题资源。已完成，保留原表名兼容。
 3. 定义 SQL 示例状态、验证状态、适用数据集和关联资产规则。
 4. 为 Semantic、Knowledge 和可选 Schema 定义独立 Retrieval Source Adapter。
 5. Retrieval 只读取公开资源快照，不导入对方 ORM 和具体仓储。

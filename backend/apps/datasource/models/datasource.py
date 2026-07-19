@@ -13,9 +13,6 @@ from apps.datasource.models.dto import (
     FieldObj,
     ImportRequest,
     PreviewResponse,
-    RecommendedProblemBase,
-    RecommendedProblemBaseChat,
-    RecommendedProblemResponse,
     SheetFields,
     TableAndFields,
     TableObj,
@@ -26,7 +23,6 @@ from apps.datasource.models.orm import (
     CoreDatasource,
     CoreField,
     CoreTable,
-    DsRecommendedProblem,
 )
 
 __all__ = [
@@ -37,14 +33,10 @@ __all__ = [
     "CoreTable",
     "CreateDatasource",
     "DatasourceConf",
-    "DsRecommendedProblem",
     "FieldInfo",
     "FieldObj",
     "ImportRequest",
     "PreviewResponse",
-    "RecommendedProblemBase",
-    "RecommendedProblemBaseChat",
-    "RecommendedProblemResponse",
     "SheetFields",
     "TableAndFields",
     "TableObj",
