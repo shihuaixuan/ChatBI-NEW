@@ -1196,7 +1196,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助结果写入收敛、第十二批推荐问题生成流程收敛，
 第十三批分析和预测生成流程收敛、第十四批数据源选择流程收敛、第十五批图表生成流程收敛、第十六批
 主 SQL 生成模型编排收敛、第十七批动态 SQL 生成编排收敛、第十八批权限 SQL 生成编排收敛，以及第十九批
-旧 Chat SQL 执行入口收敛：
+旧 Chat SQL 执行入口收敛、第二十批旧 Chat 查询结果标准化与记录投影收敛：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1429,6 +1429,19 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 82. 第十九批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 597 项通过，完整后端回归 1026 项通过；
     新增和修改代码通过定向 Ruff，QueryService 和连接快照适配器通过严格 Mypy，应用导入和 `git diff --check` 通过，
     OpenAPI 保持 154 个路径。
+83. ChatBI 新增稳定的 `QueryResultProjectionData` 和 `QueryResultProjectionService`，统一校验记录、数据源、字段、行、
+    执行元信息和行数限制输入；Service 只依赖 `ChatRecordService`，不导入旧 Chat、`DataFormat`、Session、ORM 或
+    Datasource。查询结果序列化后只通过 `project_result_by_id` 投影一次，继续复用 ChatRecord 的统一字节大小边界。
+84. 大整数、大浮点数、嵌套对象和数组中的数值，以及旧驱动返回的 `bytes` 均在同一入口递归标准化；
+    `alias.column` 只在短字段不存在时补充 `column`，避免覆盖真实同名列。开启行数限制时最多保留 1000 行并写入
+    `limit`，关闭限制时保留全部结果；空结果继续保持不写入 `datasource` 的历史结构，执行器元信息完整保留。
+85. 旧 `LLMService.run_task` 已改为使用查询结果投影 Service，删除 `save_sql_data` 及其对
+    `save_sql_exec_data`、`prepare_for_orjson` 的依赖，并移除外层两次 `DataFormat` 标准化调用。投影成功后由外层
+    显式 commit，失败时 rollback；返回的标准化结果继续供 Markdown、图表和图片流程使用，`execute-success` 和
+    `sql-data` SSE 契约保持不变。
+86. 第二十批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 614 项通过，完整后端回归 1043 项通过；
+    新增和修改代码通过定向 Ruff，新 DTO、Service 和外层适配器通过严格 Mypy，应用导入和 `git diff --check` 通过，
+    OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1443,7 +1456,7 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。检索、SQL 语义
    编译、SQL 校验、权限应用和执行已统一；问题理解的确定性校验规则、数据源选择、推荐问题以及分析预测模型调用
    编排、主 SQL 生成编排、动态 SQL 生成编排、权限 SQL 生成编排和图表生成编排已统一，问题理解模型编排和最终回答
-   待后续批次收敛。
+   待后续批次收敛；旧 Chat 查询结果标准化和 ChatRecord 数据投影已统一。
 4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。SQL 校验和执行工具
    已完成，语义 SQL 编译、物理 Schema、Semantic 检索、执行绑定和问题理解校验已接入统一入口；问题理解模型编排
    和回答工具待后续迁移。
@@ -1454,7 +1467,8 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
    记录状态、澄清等待状态及最终结果投影已统一；执行器内部 Run 状态继续保持各自语义。
 8. SQL、数据结果和制品保存建立统一大小限制和清理规则。Agent 与 Graph 的 ChatRecord 最终快照大小边界已统一，
    Agent 与 Graph 完整 SQL 结果已接入同一 Artifact Service，会话删除已统一清理两类执行数据和 Artifact；旧 Chat
-   的核心 SQL、图表、执行数据、分析、预测、推荐和数据源选择结果均已接入相同边界。
+   的核心 SQL、图表、执行数据、分析、预测、推荐和数据源选择结果均已接入相同边界，查询结果展示标准化与行数截断
+   也已收敛到 ChatBI Service。
 9. 推荐、分析和预测作为 ChatBI 应用能力调用 AI Model，不放入 ORM 方法或模板模块。辅助记录创建、结果投影和
    推荐提升规则已迁入 ChatBI，模型提示词组装与流式调用编排待后续批次迁移。
 

@@ -50,6 +50,9 @@ from apps.chatbi.models.dto.physical_schema import (
     PhysicalSchemaResult,
     PhysicalSchemaTable,
 )
+from apps.chatbi.models.dto.query_result_projection import (
+    QueryResultProjectionData,
+)
 from apps.chatbi.models.dto.question_understanding import (
     QuestionUnderstandingValidationData,
     QuestionUnderstandingValidationIssue,
@@ -117,6 +120,7 @@ __all__ = [
     "QuestionUnderstandingValidationData",
     "QuestionUnderstandingValidationIssue",
     "QuestionUnderstandingValidationResult",
+    "QueryResultProjectionData",
     "RecommendedQuestionGenerationData",
     "RecommendedQuestionGenerationEvent",
     "RecommendedQuestionMessage",

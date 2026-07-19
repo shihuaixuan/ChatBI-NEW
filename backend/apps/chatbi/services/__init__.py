@@ -55,6 +55,10 @@ from apps.chatbi.services.physical_schema_service import (
     DatasourceMetadataReader,
     PhysicalSchemaService,
 )
+from apps.chatbi.services.query_result_projection_service import (
+    QueryResultProjectionError,
+    QueryResultProjectionService,
+)
 from apps.chatbi.services.query_service import QueryService, SQLExecutor
 from apps.chatbi.services.question_understanding_validation_service import (
     QuestionUnderstandingValidationService,
@@ -132,6 +136,8 @@ __all__ = [
     "PermissionSQLGenerationPromptBuilder",
     "PermissionSQLGenerationService",
     "QueryService",
+    "QueryResultProjectionError",
+    "QueryResultProjectionService",
     "QuestionUnderstandingValidationService",
     "RecommendedQuestionProvider",
     "RecommendedQuestionHistoryProvider",

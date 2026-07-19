@@ -47,7 +47,6 @@ from apps.chat.curd.chat import (
     save_error_message,
     save_predict_data,
     save_sql,
-    save_sql_exec_data,
     start_log,
     trigger_log_error,
 )
@@ -75,6 +74,7 @@ from apps.chatbi.models import (
     DynamicSQLSubqueryMapping,
     PermissionSQLFilter,
     PermissionSQLGenerationData,
+    QueryResultProjectionData,
     RecommendedQuestionGenerationData,
     SQLGenerationData,
     SQLGenerationMessage,
@@ -108,7 +108,7 @@ from common.error import (
 )
 from common.utils.data_format import DataFormat
 from common.utils.locale import I18n, I18nHelper
-from common.utils.utils import SQLBotLogUtil, extract_nested_json, prepare_for_orjson
+from common.utils.utils import SQLBotLogUtil, extract_nested_json
 from infrastructure.analysis_prediction import build_analysis_prediction_service
 from infrastructure.chart_generation import build_chart_generation_service
 from infrastructure.datasource_selection import build_datasource_selection_service
@@ -119,6 +119,9 @@ from infrastructure.permission_sql_generation import (
     build_permission_sql_generation_service,
 )
 from infrastructure.query_execution import build_legacy_chat_query_service
+from infrastructure.query_result_projection import (
+    build_query_result_projection_service,
+)
 from infrastructure.recommended_questions import (
     build_recommended_question_service,
 )
@@ -1165,23 +1168,6 @@ class LLMService:
     def save_error(self, session: Session, message: str):
         return save_error_message(session=session, record_id=self.record.id, message=message)
 
-    def save_sql_data(self, session: Session, data_obj: Dict[str, Any]):
-        try:
-            data_result = data_obj.get('data')
-            limit = 1000
-            if data_result:
-                data_result = prepare_for_orjson(data_result)
-                if data_result and len(data_result) > limit and self.enable_sql_row_limit:
-                    data_obj['data'] = data_result[:limit]
-                    data_obj['limit'] = limit
-                else:
-                    data_obj['data'] = data_result
-                data_obj['datasource'] = self.ds.id
-            return save_sql_exec_data(session=session, record_id=self.record.id,
-                                      data=orjson.dumps(data_obj).decode())
-        except Exception as e:
-            raise e
-
     def finish(self, session: Session):
         return finish_record(session=session, record_id=self.record.id)
 
@@ -1437,11 +1423,30 @@ class LLMService:
                                                                    full_message={'sql': real_execute_sql,
                                                                                  'count': len(result.get('data'))})
 
-            _data = DataFormat.convert_large_numbers_in_object_array(result.get('data'))
-            _data = DataFormat.normalize_qualified_sql_column_keys_in_object_array(_data)
-            result["data"] = _data
-
-            self.save_sql_data(session=_session, data_obj=result)
+            datasource_id = self.connection.id if self.connection else None
+            if datasource_id is None:
+                raise SQLBotDBError("Datasource connection is not initialized")
+            execution_metadata = {
+                key: value
+                for key, value in result.items()
+                if key not in {"fields", "data"}
+            }
+            try:
+                result = build_query_result_projection_service(_session).project(
+                    QueryResultProjectionData(
+                        record_id=self.record.id or 0,
+                        datasource_id=datasource_id,
+                        fields=result.get("fields") or [],
+                        rows=result.get("data") or [],
+                        execution_metadata=execution_metadata,
+                        enable_row_limit=self.enable_sql_row_limit,
+                    )
+                )
+                _session.commit()
+            except Exception:
+                _session.rollback()
+                raise
+            _data = result.get("data") or []
             if in_chat:
                 yield 'data:' + orjson.dumps({'content': 'execute-success', 'type': 'sql-data'}).decode() + '\n\n'
             if not stream:
