@@ -16,16 +16,18 @@ from apps.agent.models import (
 from apps.agent.schemas import AgentConfig
 from apps.agent.tools.base import AgentTool, ToolOutput
 from apps.agent.tools.registry import ToolRegistry
-from apps.capabilities.question_understanding import (
+from apps.chat.models.chat_model import ChatRecord
+from apps.chatbi.models import (
     IntentRecognitionOutput,
     IntentValidationOutput,
-    QuestionUnderstandingError,
-    QuestionUnderstandingModelResponse,
     QuestionUnderstandingOutcome,
     QuestionUnderstandingOutput,
+)
+from apps.chatbi.services import (
+    QuestionUnderstandingError,
+    QuestionUnderstandingModelResponse,
     QuestionUnderstandingService,
 )
-from apps.chat.models.chat_model import ChatRecord
 
 
 class FakeSession:

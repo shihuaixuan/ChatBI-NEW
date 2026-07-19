@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -8,11 +7,25 @@ import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from json import JSONDecodeError
 from typing import Any, Protocol
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
+from apps.chatbi.models import (
+    QuestionIntentProjectionData,
+    QuestionModelInvocationData,
+    QuestionModelJSONMode,
+    QuestionModelResponse,
+)
+from apps.chatbi.services import (
+    QuestionIntentProjectionService,
+    QuestionModelCallError,
+    QuestionModelError,
+    QuestionModelService,
+)
+from apps.chatbi.services.question_understanding_prompt import (
+    DIMENSION_EXTRACTION_RULES,
+    METRIC_TIME_EXTRACTION_RULES,
+    QUESTION_REWRITE_BUSINESS_RULES,
+)
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.workflow.capabilities.adapters.intent_validation import (
     IntentPostProcessor,
@@ -26,6 +39,7 @@ from apps.workflow.schemas.v1 import (
     QuestionClassificationOutput,
     QuestionRewriteOutput,
 )
+from infrastructure.question_model import build_question_model_service
 
 
 @dataclass(frozen=True)
@@ -40,6 +54,26 @@ class QuestionClassificationModelClient(Protocol):
     """问题分类模型客户端协议，便于测试中替换真实大模型。"""
 
     def __call__(self, prompt: QuestionClassificationPrompt) -> str: ...
+
+
+class CallableQuestionModelClient:
+    """把 Graph 现有可调用模型端口适配到 ChatBI 统一端口。"""
+
+    def __init__(self, client: QuestionClassificationModelClient) -> None:
+        self._client = client
+
+    def invoke(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> QuestionModelResponse:
+        content = self._client(
+            QuestionClassificationPrompt(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+        )
+        return QuestionModelResponse(content=content)
 
 
 logger = logging.getLogger(__name__)
@@ -143,16 +177,8 @@ def build_question_rewrite_prompt(
   "image_profile_hint": null
 }
 
-语义保真规范化原则：
-- 保留用户原始意图，只规范表达、补齐明确上下文，不扩展不存在的业务条件。
-- 保持修饰关系、归属关系、并列关系和筛选关系，不把一个完整业务短语拆成多个独立意图。
-- 不拆分或重组指标短语内部的业务修饰关系；例如带有对象、范围、状态、口径修饰的指标短语，应作为整体语义边界保留。
-- 不新增用户没有表达的分组、筛选、比较、排序或明细意图；不要为了让问题看起来更完整而添加分析动作。
-- 对并列指标、并列对象或并列条件，只做语义清晰化，不合并、不丢弃、不改写成上下级关系。
-- 不填充系统默认时间、默认维度、默认筛选或默认口径；默认值由后续执行链路处理。
-- 如果问题依赖上文，需要结合 conversation_context 补全主语、时间、指标或维度。
-- 追问或省略句只能继承 conversation_context 中稳定的上一轮语义；只替换用户本轮明确提到的槽位，其余槽位沿用上一轮可确认语义。
-- 如果当前问题与上文不能可靠衔接，或会产生多个合理解释，不要强行补全；设置 need_user_input=true 并指出缺失槽位。
+{shared_rewrite_rules}
+
 - 如果可以判断适合的展示类型，可在 image_profile_hint 中给出 table、line、bar、pie 等简短提示；不确定时返回 null。
 
 ChatBI 必需信息判定：
@@ -162,7 +188,7 @@ ChatBI 必需信息判定：
 - dimension：只有用户明确要求“按...看”“分...统计”“排行”“TopN”“对比不同...”但没有说明维度，且上下文无法补全时，才把 dimension 放入 missing_slots。
 - filter：只有用户提到模糊对象或条件，例如“这个地区”“那个渠道”“这些客户”，且上下文无法解析时，才把 filter 放入 missing_slots。
 - 不要为了追求完整而过度澄清；只要可以形成一个合理、可执行的数据问题，就应 need_user_input=false。
-""".strip()
+""".strip().replace("{shared_rewrite_rules}", QUESTION_REWRITE_BUSINESS_RULES)
     user_payload = {
         "question": question,
         "dataset_id": dataset_id,
@@ -240,13 +266,19 @@ def build_intent_recognition_prompt(
   - 没有任何候选主题域时输出 status=not_required。
 - 你不能选择真实指标、维度或枚举值 ID；资产确认由后续知识检索节点完成。
 
+{shared_metric_time_rules}
+
+{shared_dimension_rules}
+
 歧义和冲突判定：
 - 如果不知道用户要分析的指标或业务对象，ambiguous_slots 包含 metric。
 - 如果用户要求分组、排行或对比但没有给出维度，ambiguous_slots 包含 dimension。
 - 如果用户使用“这个/那个/这些/上面”等指代且上下文无法解析，ambiguous_slots 包含 reference。
 - 如果用户同时提出互相冲突的时间粒度或分析目标，conflict_slots 包含 time_grain 或 intent。
 - confidence 必须是 0 到 1 之间的数字；低于 0.8 会触发意图澄清。
-""".strip()
+""".strip().replace(
+        "{shared_metric_time_rules}", METRIC_TIME_EXTRACTION_RULES
+    ).replace("{shared_dimension_rules}", DIMENSION_EXTRACTION_RULES)
     user_payload = {
         "rewritten_question": rewritten_question,
         "conversation_context": conversation_context or {},
@@ -335,17 +367,6 @@ def build_semantic_mentions_prompt(
 
 你不负责识别分组、筛选、对比、排序、维度绑定、指标 ID、字段名、业务口径或 SQL 语义。
 
-# 核心原则
-
-只抽取用户原文中明确出现的线索。
-
-不要推断。
-不要补全。
-不要改写。
-不要标准化。
-不要输出解释。
-不要输出 JSON 以外的任何内容。
-
 # 输出格式
 
 只输出一个 JSON 对象，结构必须完全符合以下格式：
@@ -361,132 +382,11 @@ def build_semantic_mentions_prompt(
   "conflict_slots": []
 }
 
-# 字段规则
+{shared_metric_time_rules}
 
-## metric_mentions
-
-`metric_mentions` 只输出用户问题中明确出现的“指标、事实或可度量业务结果”线索。
-
-可以进入 `metric_mentions` 的例子：
-
-- 销售额
-- 订单数
-- 客单价
-- 转化率
-- GMV
-- 支付金额
-- 新增用户数
-- 退款率
-- 成交客户数
-- 库存周转天数
-
-保留用户原文中的指标修饰词，例如：
-
-- 新增销售额
-- 支付订单数
-- 有效访问人数
-- 去重用户数
-- 平均客单价
-
-不要把以下内容放入 `metric_mentions`：
-
-- 时间表达：今天、昨天、最近7天、本月、去年同期
-- 分组对象：按城市、按渠道、按门店、按商品分类
-- 筛选对象：北京、华东区、App 端、会员用户
-- 对比对象：同比、环比、对比去年、和上月比
-- 排序或 TopN：最高、最低、前10、排名
-- 展示方式：趋势、分布、明细、占比图
-- 单纯的维度名：城市、渠道、门店、商品、用户、地区
-
-如果用户只说“看一下北京最近7天的数据”，没有明确指标，则 `metric_mentions` 输出空数组。
-
+# Graph 线索约束
 `available_dimensions` 如果存在，只能作为辅助理解维度语义的参考，不是指标抽取的白名单或黑名单。
-
 不要输出指标 ID、字段名、`biz_name` 或任何系统内部标识。
-
-## time_mentions
-
-`time_mentions` 输出用户问题中明确出现的时间线索。
-
-可以进入 `time_mentions` 的例子：
-
-- 今天
-- 昨天
-- 本周
-- 上周
-- 本月
-- 上月
-- 今年
-- 去年
-- 最近7天
-- 近30天
-- 过去三个月
-- 2024年
-- 2024-01-01 到 2024-01-31
-- 去年同期
-- 同比
-- 环比
-
-不要把时间表达放入 `metric_mentions`。
-
-## time_range
-
-`time_range` 表示用户是否明确提供了时间范围。
-
-当用户明确提到时间范围时：
-
-{
-  "raw": "用户原文中的时间表达",
-  "value_status": "provided"
-}
-
-当用户没有明确提到时间范围时：
-
-{
-  "raw": null,
-  "value_status": "not_provided"
-}
-
-如果用户提到多个时间表达，`time_range.raw` 保留完整原文片段，例如：
-
-{
-  "raw": "本月和上月",
-  "value_status": "provided"
-}
-
-## ambiguous_slots
-
-当某个词既可能是指标，也可能是维度、对象或其他语义，且无法仅根据用户问题判断时，放入 `ambiguous_slots`。
-
-例如：
-
-- “看一下用户”：用户可能是对象，不一定是指标。
-- “分析订单”：订单可能是业务对象，不一定是订单数。
-- “门店情况”：门店是维度对象，“情况”没有明确指标。
-
-如果没有歧义，输出空数组。
-
-## conflict_slots
-
-当用户问题中存在明显冲突的时间或指标表达时，放入 `conflict_slots`。
-
-例如：
-
-- “今天和昨天的本月销售额”
-- “最近7天的上月订单数”
-- “今年去年销售额”
-
-如果没有冲突，输出空数组。
-
-# 抽取步骤
-
-1. 先识别所有明确时间表达，放入 `time_mentions`。
-2. 根据是否存在时间表达设置 `time_range`。
-3. 再识别明确指标线索，放入 `metric_mentions`。
-4. 排除时间、分组、筛选、对比、排序、展示方式等非指标线索。
-5. 对不确定语义放入 `ambiguous_slots`。
-6. 对明显冲突语义放入 `conflict_slots`。
-7. 最终只输出 JSON 对象。
 
 # 示例
 
@@ -591,7 +491,7 @@ def build_semantic_mentions_prompt(
   "ambiguous_slots": [],
   "conflict_slots": ["最近7天的上月"]
 }
-""".strip()
+""".strip().replace("{shared_metric_time_rules}", METRIC_TIME_EXTRACTION_RULES)
     user_prompt = _markdown_user_prompt(
         rewritten_question=rewritten_question,
         available_dimensions=dimension_candidates,
@@ -636,22 +536,17 @@ def build_dimension_slots_prompt(
 
 # 维度候选规则
 
+{shared_dimension_rules}
+
 - 「可用维度」是普通维度候选，只作为理解用户维度表达的参考，不是输出白名单。
 - 「时间字段候选」只用于后续时间字段绑定，不能输出到 `dimension_mentions` 或 `dimension_slots`。
 - `dimension_mentions` 和 `dimension_slots[].name` 输出用户问题里的自然语言维度短语，例如“店铺”“商品”“地区”“渠道”。
 - 维度识别必须独立完成，不要依赖指标线索识别子任务的输出，也不要假设其他子任务会纠正当前结果。
 - 不要为了命中维度候选而拆分指标短语内部的业务修饰关系；当一个候选词只是修饰某个可度量业务结果时，应保留在原短语语义内，不要单独输出为维度槽位。
-- 只有当用户表达了分组、筛选、排行、对比、明细对象或明确维度值时，才输出维度；单纯出现在指标名称、业务结果名称或对象化指标短语中的名词，不等于维度意图。
 - 用户表达命中「可用维度」的 `name` 或 `aliases` 时，必须输出对应的标准 `name`。
 - 用户表达没有完全命中时，应在「可用维度」中选择语义最相近、业务上最有关联的候选，并输出对应的标准 `name`。
 - 如果多个候选都可能匹配，或用户表达和全部候选差异很大，不要强行替换；保留用户原文维度短语，并在 `ambiguous_slots` 中加入 `dimension`。
 - 不输出维度 ID、字段名、`biz_name`。
-
-# 维度角色规则
-
-- 用户表达“按 X / 各 X / 每个 X / 分 X”时，`role=group_by`。
-- 用户表达具体对象或筛选条件时，`role=filter`。
-- 用户只提到维度名，但没有明确分组意图，也没有明确值时，`role=ambiguous`。
 
 # 维度值规则
 
@@ -673,7 +568,7 @@ def build_dimension_slots_prompt(
 只有当用户表达了筛选条件，但无法归属到任何「可用维度」时，才输出到 `residual_filter_mentions`。
 
 已进入 `dimension_slots` 的筛选条件，不要重复输出到 `residual_filter_mentions`。
-""".strip()
+""".strip().replace("{shared_dimension_rules}", DIMENSION_EXTRACTION_RULES)
     user_prompt = _markdown_user_prompt(
         rewritten_question=rewritten_question,
         available_dimensions=plain_dimension_candidates,
@@ -910,37 +805,6 @@ def _dimension_candidate_by_text(
     return by_text
 
 
-class DefaultQuestionClassificationModelClient:
-    """默认问题分类模型客户端，复用项目已有 LLM 配置。"""
-
-    def __init__(self) -> None:
-        self._llm = None
-
-    def __call__(self, prompt: QuestionClassificationPrompt) -> str:
-        llm = self._get_llm()
-        response = llm.invoke(
-            [
-                SystemMessage(content=prompt.system_prompt),
-                HumanMessage(content=prompt.user_prompt),
-            ]
-        )
-        return str(getattr(response, "content", response) or "")
-
-    def _get_llm(self):
-        if self._llm is None:
-            from apps.ai_model.model_factory import LLMFactory, get_default_config
-
-            # 默认模型配置依赖异步解密逻辑；这里沿用现有工具层的同步调用方式。
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                config = asyncio.run(get_default_config())
-            else:
-                raise RuntimeError("question classification model cannot be loaded inside a running event loop")
-            self._llm = LLMFactory.create_llm(config).llm
-        return self._llm
-
-
 class QuestionAdapter:
     """ChatBI v1 问题节点真实能力适配器。"""
 
@@ -950,10 +814,22 @@ class QuestionAdapter:
         schema_provider: DatasetSchemaProvider | None = None,
         intent_post_processor: IntentPostProcessor | None = None,
         intent_subtask_config: IntentSubtaskConfig | None = None,
+        question_model_service: QuestionModelService | None = None,
+        intent_projection_service: QuestionIntentProjectionService | None = None,
     ) -> None:
-        self._model_client = model_client or DefaultQuestionClassificationModelClient()
+        if model_client is not None and question_model_service is not None:
+            raise ValueError("QUESTION_MODEL_SOURCE_CONFLICT")
+        self._model_client = model_client
+        self._question_model_service = (
+            QuestionModelService(CallableQuestionModelClient(model_client))
+            if model_client is not None
+            else question_model_service or build_question_model_service()
+        )
         self._schema_provider = schema_provider
         self._intent_post_processor = intent_post_processor or IntentPostProcessor()
+        self._intent_projection_service = (
+            intent_projection_service or QuestionIntentProjectionService()
+        )
         self._intent_subtask_config = intent_subtask_config or IntentSubtaskConfig()
         self._last_intent_subtask_trace: dict[str, Any] = {
             "enabled": False,
@@ -992,12 +868,12 @@ class QuestionAdapter:
             conversation_context=ctx.conversation,
         )
         try:
-            model_text = self._model_client(prompt)
-        except Exception as exc:
+            payload = self._invoke_prompt(prompt, "classification")
+        except QuestionModelCallError as exc:
             raise RuntimeError("CLASSIFICATION_MODEL_CALL_FAILED") from exc
-
+        except QuestionModelError as exc:
+            raise ValueError("CLASSIFICATION_MODEL_OUTPUT_INVALID") from exc
         try:
-            payload = self._extract_json_object(model_text)
             output = QuestionClassificationOutput.model_validate(payload)
         except Exception as exc:
             raise ValueError("CLASSIFICATION_MODEL_OUTPUT_INVALID") from exc
@@ -1019,8 +895,7 @@ class QuestionAdapter:
             user_feedback=user_feedback,
         )
         try:
-            model_text = self._model_client(prompt)
-            payload = self._extract_json_object(model_text)
+            payload = self._invoke_prompt(prompt, "rewrite")
             output = QuestionRewriteOutput.model_validate(payload)
         except Exception:
             return self._rewrite_fallback(question, user_feedback)
@@ -1071,9 +946,15 @@ class QuestionAdapter:
         shape = subtask_results["shape"].payload
         semantic = subtask_results["semantic"].payload
         dimensions = subtask_results["dimensions"].payload
-        intent_payload = self._merge_intent_parts(shape, semantic, dimensions)
-        output = IntentRecognitionOutput.model_validate(intent_payload)
-        output = self._apply_intent_feedback(output, user_feedback)
+        projection = self._intent_projection_service.project(
+            QuestionIntentProjectionData(
+                shape=shape,
+                semantic=semantic,
+                dimensions=dimensions,
+                user_feedback=user_feedback,
+            )
+        )
+        output = IntentRecognitionOutput.model_validate(projection.payload)
         validation = self._intent_post_processor.validate(output.model_dump(mode="json"), retry_count=0)
         return output.model_copy(update={"validation": validation}).model_dump(mode="json")
 
@@ -1236,6 +1117,7 @@ class QuestionAdapter:
 
         fallback_payload = self._intent_subtask_fallback_payloads(fallback)["shape"]
         return self._recognize_subtask(
+            "intent_shape",
             prompt,
             {**user_feedback},
             fallback_payload,
@@ -1260,6 +1142,7 @@ class QuestionAdapter:
 
         fallback_payload = self._intent_subtask_fallback_payloads(fallback)["semantic"]
         return self._recognize_subtask(
+            "semantic_mentions",
             prompt,
             {**user_feedback},
             fallback_payload,
@@ -1284,6 +1167,7 @@ class QuestionAdapter:
 
         fallback_payload = self._intent_subtask_fallback_payloads(fallback)["dimensions"]
         return self._recognize_subtask(
+            "dimension_slots",
             prompt,
             {**user_feedback},
             fallback_payload,
@@ -1292,6 +1176,7 @@ class QuestionAdapter:
 
     def _recognize_subtask(
         self,
+        stage: str,
         prompt_builder,
         user_feedback: dict[str, Any],
         fallback_payload: dict[str, Any],
@@ -1301,8 +1186,7 @@ class QuestionAdapter:
         retry_feedback: dict[str, Any] = {}
         for retry_count in range(self._intent_post_processor.max_retry_count):
             prompt = prompt_builder({**user_feedback, **retry_feedback})
-            model_text = self._model_client(prompt)
-            result = self._extract_json_object(model_text)
+            result = self._invoke_prompt(prompt, stage)
             validation = validator(result)
             result = validation["payload"]
             if validation["status"] == "invalid" and validation["retryable"] and retry_count + 1 < self._intent_post_processor.max_retry_count:
@@ -1314,32 +1198,36 @@ class QuestionAdapter:
             return result
         return result
 
+    def _invoke_prompt(
+        self,
+        prompt: QuestionClassificationPrompt,
+        stage: str,
+    ) -> dict[str, Any]:
+        return self._question_model_service.invoke(
+            QuestionModelInvocationData(
+                stage=stage,
+                system_prompt=prompt.system_prompt,
+                user_prompt=prompt.user_prompt,
+                json_mode=QuestionModelJSONMode.EXTRACT_OBJECT,
+            )
+        ).payload
+
     def _validate_intent_shape_payload(
         self,
         payload: dict[str, Any],
         subject_domains: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        normalized = {
-            "intent_type": self._valid_intent_type(payload.get("intent_type")),
-            "confidence": self._confidence(payload.get("confidence")),
-            "required_slot_types": self._valid_required_slot_types(payload.get("required_slot_types")),
-            "query_shape": payload.get("query_shape") if isinstance(payload.get("query_shape"), dict) else {},
-            "subject_domain": self._normalize_subject_domain_output(payload.get("subject_domain"), subject_domains),
-            "ambiguous_slots": self._text_list(payload.get("ambiguous_slots")),
-            "conflict_slots": self._text_list(payload.get("conflict_slots")),
-        }
+        normalized = self._intent_projection_service.normalize_shape(
+            payload,
+            subject_domain=self._normalize_subject_domain_output(
+                payload.get("subject_domain"),
+                subject_domains,
+            ),
+        )
         return {"status": "valid", "retryable": False, "reason_code": "VALID", "repair_hint": None, "payload": normalized}
 
     def _validate_semantic_mentions_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        time_mentions = self._text_list(payload.get("time_mentions"))
-        time_range = normalize_time_range_payload(payload.get("time_range") or self._time_range_from_mentions(time_mentions))
-        normalized = {
-            "metric_mentions": self._text_list(payload.get("metric_mentions")),
-            "time_mentions": time_mentions,
-            "time_range": time_range,
-            "ambiguous_slots": self._text_list(payload.get("ambiguous_slots")),
-            "conflict_slots": self._text_list(payload.get("conflict_slots")),
-        }
+        normalized = self._intent_projection_service.normalize_semantic(payload)
         return {"status": "valid", "retryable": False, "reason_code": "VALID", "repair_hint": None, "payload": normalized}
 
     def _validate_dimension_slots_payload(
@@ -1368,9 +1256,8 @@ class QuestionAdapter:
             "payload": normalized,
         }
 
-    @classmethod
     def _normalize_dimension_slots_payload(
-        cls,
+        self,
         payload: dict[str, Any],
         available_dimensions: list[dict[str, Any]],
     ) -> dict[str, Any]:
@@ -1379,9 +1266,11 @@ class QuestionAdapter:
         candidate_by_text_with_time = _dimension_candidate_by_text(normalized_candidates, include_time=True)
         if not normalized_candidates:
             slots = [dict(slot) for slot in payload.get("dimension_slots") or [] if isinstance(slot, dict)]
-            mentions = cls._unique_strings(
+            mentions = self._intent_projection_service.unique_strings(
                 [
-                    *cls._text_list(payload.get("dimension_mentions")),
+                    *self._intent_projection_service.normalize_text_list(
+                        payload.get("dimension_mentions")
+                    ),
                     *[str(slot.get("name")) for slot in slots if slot.get("name")],
                 ]
             )
@@ -1391,11 +1280,17 @@ class QuestionAdapter:
                 "residual_filter_mentions": [
                     item for item in payload.get("residual_filter_mentions") or [] if isinstance(item, dict)
                 ],
-                "ambiguous_slots": cls._text_list(payload.get("ambiguous_slots")),
-                "conflict_slots": cls._text_list(payload.get("conflict_slots")),
+                "ambiguous_slots": self._intent_projection_service.normalize_text_list(
+                    payload.get("ambiguous_slots")
+                ),
+                "conflict_slots": self._intent_projection_service.normalize_text_list(
+                    payload.get("conflict_slots")
+                ),
             }
         mentions: list[str] = []
-        for mention in cls._text_list(payload.get("dimension_mentions")):
+        for mention in self._intent_projection_service.normalize_text_list(
+            payload.get("dimension_mentions")
+        ):
             mention_key = _dimension_text_key(mention)
             if mention_key in candidate_by_text_with_time and mention_key not in candidate_by_text:
                 continue
@@ -1419,24 +1314,40 @@ class QuestionAdapter:
             if candidate is None:
                 normalized_slot = {
                     "name": slot_name,
-                    "role": cls._valid_dimension_role(slot.get("role")),
+                    "role": self._intent_projection_service.normalize_dimension_role(
+                        slot.get("role")
+                    ),
                     "value": slot.get("value"),
-                    "value_status": cls._valid_value_status(slot.get("value_status"), slot.get("value")),
+                    "value_status": self._intent_projection_service.normalize_value_status(
+                        slot.get("value_status"), slot.get("value")
+                    ),
                 }
                 if "value_confidence" in slot:
-                    normalized_slot["value_confidence"] = cls._confidence(slot.get("value_confidence"))
+                    normalized_slot["value_confidence"] = (
+                        self._intent_projection_service.normalize_confidence(
+                            slot.get("value_confidence")
+                        )
+                    )
                 slots.append(normalized_slot)
                 if slot_name not in mentions:
                     mentions.append(slot_name)
                 continue
             normalized_slot = {
                 "name": slot_name,
-                "role": cls._valid_dimension_role(slot.get("role")),
+                "role": self._intent_projection_service.normalize_dimension_role(
+                    slot.get("role")
+                ),
                 "value": slot.get("value"),
-                "value_status": cls._valid_value_status(slot.get("value_status"), slot.get("value")),
+                "value_status": self._intent_projection_service.normalize_value_status(
+                    slot.get("value_status"), slot.get("value")
+                ),
             }
             if "value_confidence" in slot:
-                normalized_slot["value_confidence"] = cls._confidence(slot.get("value_confidence"))
+                normalized_slot["value_confidence"] = (
+                    self._intent_projection_service.normalize_confidence(
+                        slot.get("value_confidence")
+                    )
+                )
             slots.append(normalized_slot)
             if slot_name not in mentions:
                 mentions.append(slot_name)
@@ -1447,8 +1358,12 @@ class QuestionAdapter:
             "residual_filter_mentions": [
                 item for item in payload.get("residual_filter_mentions") or [] if isinstance(item, dict)
             ],
-            "ambiguous_slots": cls._text_list(payload.get("ambiguous_slots")),
-            "conflict_slots": cls._text_list(payload.get("conflict_slots")),
+            "ambiguous_slots": self._intent_projection_service.normalize_text_list(
+                payload.get("ambiguous_slots")
+            ),
+            "conflict_slots": self._intent_projection_service.normalize_text_list(
+                payload.get("conflict_slots")
+            ),
         }
 
     @classmethod
@@ -1484,125 +1399,6 @@ class QuestionAdapter:
         texts = [candidate.get("name"), *(candidate.get("aliases") or [])]
         return any(_dimension_text_key(text) and _dimension_text_key(text) in value_key for text in texts)
 
-    @classmethod
-    def _merge_intent_parts(
-        cls,
-        shape: dict[str, Any],
-        semantic: dict[str, Any],
-        dimensions: dict[str, Any],
-    ) -> dict[str, Any]:
-        ambiguous_slots = cls._unique_strings(
-            [
-                *cls._text_list(shape.get("ambiguous_slots")),
-                *cls._text_list(semantic.get("ambiguous_slots")),
-                *cls._text_list(dimensions.get("ambiguous_slots")),
-            ]
-        )
-        conflict_slots = cls._unique_strings(
-            [
-                *cls._text_list(shape.get("conflict_slots")),
-                *cls._text_list(semantic.get("conflict_slots")),
-                *cls._text_list(dimensions.get("conflict_slots")),
-            ]
-        )
-        if not semantic.get("metric_mentions") and "metric" not in ambiguous_slots:
-            ambiguous_slots.append("metric")
-        for slot in dimensions.get("dimension_slots") or []:
-            if isinstance(slot, dict) and str(slot.get("value_status") or "").lower() == "ambiguous":
-                if "filter_value" not in ambiguous_slots:
-                    ambiguous_slots.append("filter_value")
-        required_slot_types = cls._valid_required_slot_types(shape.get("required_slot_types"))
-        time_range = semantic.get("time_range") if isinstance(semantic.get("time_range"), dict) else {}
-        if str(time_range.get("value_status") or "").lower() == "provided" and "time_dimension" not in required_slot_types:
-            required_slot_types.append("time_dimension")
-        confidence_values = [
-            cls._confidence(shape.get("confidence")),
-            cls._confidence(semantic.get("confidence", 1.0)),
-            cls._confidence(dimensions.get("confidence", 1.0)),
-        ]
-        return {
-            "intent_type": cls._valid_intent_type(shape.get("intent_type")),
-            "confidence": min(confidence_values),
-            "metric_mentions": cls._text_list(semantic.get("metric_mentions")),
-            "dimension_mentions": cls._unique_strings(
-                [
-                    *cls._text_list(dimensions.get("dimension_mentions")),
-                    *[
-                        str(slot.get("name"))
-                        for slot in dimensions.get("dimension_slots") or []
-                        if isinstance(slot, dict) and slot.get("name")
-                    ],
-                ]
-            ),
-            "dimension_slots": dimensions.get("dimension_slots") if isinstance(dimensions.get("dimension_slots"), list) else [],
-            "time_mentions": cls._text_list(semantic.get("time_mentions")),
-            "time_range": time_range or {"raw": None, "value_status": "not_provided"},
-            "filter_mentions": dimensions.get("residual_filter_mentions")
-            if isinstance(dimensions.get("residual_filter_mentions"), list)
-            else [],
-            "required_slot_types": required_slot_types,
-            "query_shape": shape.get("query_shape") if isinstance(shape.get("query_shape"), dict) else {},
-            "subject_domain": shape.get("subject_domain") if isinstance(shape.get("subject_domain"), dict) else _default_subject_domain("not_required"),
-            "ambiguous_slots": ambiguous_slots,
-            "conflict_slots": conflict_slots,
-        }
-
-    @staticmethod
-    def _valid_intent_type(value: Any) -> str:
-        intent_type = str(value or "").strip()
-        allowed = {
-            "metric_query",
-            "trend_analysis",
-            "ranking_analysis",
-            "comparison_analysis",
-            "detail_query",
-            "share_analysis",
-            "anomaly_analysis",
-            "unknown",
-        }
-        return intent_type if intent_type in allowed else "unknown"
-
-    @staticmethod
-    def _valid_required_slot_types(value: Any) -> list[str]:
-        allowed = {"metric", "dimension", "time_dimension", "time_range", "filter", "order", "limit", "comparison_target"}
-        return [item for item in QuestionAdapter._text_list(value) if item in allowed]
-
-    @staticmethod
-    def _valid_dimension_role(value: Any) -> str:
-        role = str(value or "").strip().lower()
-        return role if role in {"group_by", "filter", "ambiguous"} else "ambiguous"
-
-    @staticmethod
-    def _valid_value_status(status: Any, value: Any) -> str:
-        normalized = str(status or "").strip().lower()
-        if normalized in {"provided", "not_provided", "ambiguous"}:
-            return normalized
-        return "provided" if value not in (None, "") else "not_provided"
-
-    @staticmethod
-    def _confidence(value: Any) -> float:
-        try:
-            return min(max(float(value), 0.0), 1.0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    @staticmethod
-    def _unique_strings(values: list[Any]) -> list[str]:
-        result: list[str] = []
-        for value in values:
-            text = str(value or "").strip()
-            if text and text not in result:
-                result.append(text)
-        return result
-
-    @staticmethod
-    def _text_list(value: Any) -> list[str]:
-        if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item or "").strip()]
-        if isinstance(value, str) and value.strip():
-            return [value.strip()]
-        return []
-
     def _load_dataset_schema(self, ctx: ChatBIRunContext) -> Any | None:
         if self._schema_provider is None:
             return None
@@ -1629,22 +1425,6 @@ class QuestionAdapter:
             if candidate is not None:
                 candidates.append(candidate)
         return _normalize_dimension_candidates(candidates)
-
-    @staticmethod
-    def _extract_json_object(text: str) -> dict[str, Any]:
-        """从模型回复中提取第一个 JSON 对象，兼容误输出的 Markdown 包裹。"""
-
-        decoder = json.JSONDecoder()
-        for index, char in enumerate(text):
-            if char != "{":
-                continue
-            try:
-                value, _ = decoder.raw_decode(text[index:])
-            except JSONDecodeError:
-                continue
-            if isinstance(value, dict):
-                return value
-        raise ValueError("classification JSON object not found")
 
     @staticmethod
     def _dump(category: str, reason: str, risk_level: str, confidence: float) -> dict[str, Any]:
@@ -1892,51 +1672,6 @@ class QuestionAdapter:
             "reason": str(raw.get("reason") or "主题域未能唯一确定"),
             "candidate_domain_ids": candidate_ids,
         }
-
-    @staticmethod
-    def _merge_subject_domain_ambiguity(ambiguous_slots: list[str], subject_domain: dict[str, Any]) -> list[str]:
-        slots = [str(slot) for slot in ambiguous_slots]
-        status = str(subject_domain.get("status") or "")
-        if status in {"ambiguous", "not_matched"}:
-            if "subject_domain" not in slots:
-                slots.append("subject_domain")
-            return slots
-        return [slot for slot in slots if slot != "subject_domain"]
-
-    @classmethod
-    def _apply_intent_feedback(
-        cls,
-        output: IntentRecognitionOutput,
-        user_feedback: dict[str, Any],
-    ) -> IntentRecognitionOutput:
-        """把用户已确认的分析方式确定性写回，避免同一意图反复澄清。"""
-
-        confirmed_intent = cls._confirmed_intent_type(user_feedback)
-        if not confirmed_intent:
-            return output
-        return output.model_copy(
-            update={
-                "intent_type": confirmed_intent,
-                "confidence": max(output.confidence, 0.95),
-                "ambiguous_slots": cls._without_intent_slots(output.ambiguous_slots),
-                "conflict_slots": cls._without_intent_slots(output.conflict_slots),
-            }
-        )
-
-    @staticmethod
-    def _confirmed_intent_type(user_feedback: dict[str, Any]) -> str | None:
-        if user_feedback.get("skipped") is True:
-            return None
-        value = user_feedback.get("intent") or user_feedback.get("intent_type") or user_feedback.get("analysis_type")
-        if not isinstance(value, str):
-            return None
-        value = value.strip()
-        return value or None
-
-    @staticmethod
-    def _without_intent_slots(slots: list[str]) -> list[str]:
-        intent_slot_names = {"intent", "intent_type", "analysis_type", "analysis_mode", "query_shape"}
-        return [slot for slot in slots if str(slot) not in intent_slot_names]
 
     @classmethod
     def _dimension_slots_from_question(cls, question: str, dimension_mentions: list[str]) -> list[dict[str, Any]]:

@@ -17,8 +17,8 @@ from apps.agent.schemas import AgentConfig
 from apps.agent.tools.interaction import ClarifyTool
 from apps.agent.tools.registry import ToolRegistry
 from apps.ai_model.openai.llm import BaseChatOpenAI
-from apps.capabilities.question_understanding import DimensionSlot
 from apps.chat.models.chat_model import ChatRecord
+from apps.chatbi.models import DimensionSlot
 from tests.agent.test_agent_loop import (
     FakeSession,
     FinishProbeTool,

@@ -40,14 +40,10 @@ from apps.agent.tools.interaction import (
     SearchTerminologyTool,
 )
 from apps.agent.tools.registry import ToolRegistry
-from apps.capabilities.question_understanding import (
-    QuestionUnderstandingError,
-    QuestionUnderstandingService,
-    apply_question_understanding_clarification,
-)
 from apps.chatbi.composition import (
     build_physical_schema_service,
     build_query_service,
+    build_question_understanding_service,
     build_semantic_query_service,
     build_semantic_retrieval_service,
 )
@@ -55,9 +51,12 @@ from apps.chatbi.models import ChatRecord
 from apps.chatbi.services import (
     PhysicalSchemaService,
     QueryService,
+    QuestionUnderstandingError,
+    QuestionUnderstandingService,
     ResultArtifactService,
     SemanticQueryService,
     SemanticRetrievalService,
+    apply_question_understanding_clarification,
 )
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
@@ -110,7 +109,9 @@ class AgentLoop:
         self.config = config or AgentConfig()
         self.model_client = model_client or DefaultAgentModelClient()
         self.registry = registry or self._build_registry()
-        self.understanding_service = understanding_service or QuestionUnderstandingService()
+        self.understanding_service = (
+            understanding_service or build_question_understanding_service()
+        )
         self.term_query_service = term_query_service or build_semantic_term_query_service(
             session
         )

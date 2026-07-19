@@ -1055,7 +1055,7 @@ def test_dimension_slots_normalization_preserves_unmatched_natural_language_ment
         "conflict_slots": [],
     }
 
-    result = QuestionAdapter._normalize_dimension_slots_payload(
+    result = QuestionAdapter(model_client=FakeModelClient("{}"))._normalize_dimension_slots_payload(
         payload,
         available_dimensions=[
             {"name": "档口ID", "aliases": []},

@@ -6,6 +6,7 @@ from apps.chatbi.conversation import build_conversation_reader_service
 from apps.chatbi.services import (
     PhysicalSchemaService,
     QueryService,
+    QuestionUnderstandingService,
     SemanticQueryService,
     SemanticRetrievalGateway,
     SemanticRetrievalService,
@@ -15,6 +16,7 @@ from apps.datasource.composition import build_datasource_metadata_service
 from apps.retrieval.service import build_retrieval_service
 from apps.semantic.composition import build_semantic_sql_compilation_service
 from common.core.db import engine
+from infrastructure.question_model import build_question_model_service
 
 
 def build_query_service(
@@ -61,10 +63,19 @@ def build_physical_schema_service(session: Session) -> PhysicalSchemaService:
     return PhysicalSchemaService(build_datasource_metadata_service(session))
 
 
+def build_question_understanding_service() -> QuestionUnderstandingService:
+    """装配 Agent 使用的严格问题理解服务。"""
+
+    return QuestionUnderstandingService(
+        question_model_service=build_question_model_service()
+    )
+
+
 __all__ = [
     "build_conversation_reader_service",
     "build_physical_schema_service",
     "build_query_service",
+    "build_question_understanding_service",
     "build_semantic_query_service",
     "build_semantic_retrieval_service",
 ]

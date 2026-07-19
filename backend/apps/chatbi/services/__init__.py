@@ -60,6 +60,31 @@ from apps.chatbi.services.query_result_projection_service import (
     QueryResultProjectionService,
 )
 from apps.chatbi.services.query_service import QueryService, SQLExecutor
+from apps.chatbi.services.question_intent_projection_service import (
+    QuestionIntentProjectionService,
+)
+from apps.chatbi.services.question_model_service import (
+    QuestionModelCallError,
+    QuestionModelClient,
+    QuestionModelError,
+    QuestionModelOutputError,
+    QuestionModelService,
+)
+from apps.chatbi.services.question_understanding_prompt import (
+    DIMENSION_EXTRACTION_RULES,
+    METRIC_TIME_EXTRACTION_RULES,
+    QUESTION_REWRITE_BUSINESS_RULES,
+)
+from apps.chatbi.services.question_understanding_service import (
+    DIMENSION_SYSTEM_PROMPT,
+    INTENT_SYSTEM_PROMPT,
+    REWRITE_SYSTEM_PROMPT,
+    QuestionUnderstandingError,
+    QuestionUnderstandingModelClient,
+    QuestionUnderstandingModelResponse,
+    QuestionUnderstandingService,
+    apply_question_understanding_clarification,
+)
 from apps.chatbi.services.question_understanding_validation_service import (
     QuestionUnderstandingValidationService,
 )
@@ -139,6 +164,22 @@ __all__ = [
     "QueryResultProjectionError",
     "QueryResultProjectionService",
     "QuestionUnderstandingValidationService",
+    "QuestionModelCallError",
+    "QuestionModelClient",
+    "QuestionModelError",
+    "QuestionModelOutputError",
+    "QuestionModelService",
+    "QuestionIntentProjectionService",
+    "QuestionUnderstandingError",
+    "QuestionUnderstandingModelClient",
+    "QuestionUnderstandingModelResponse",
+    "QuestionUnderstandingService",
+    "DIMENSION_EXTRACTION_RULES",
+    "METRIC_TIME_EXTRACTION_RULES",
+    "QUESTION_REWRITE_BUSINESS_RULES",
+    "DIMENSION_SYSTEM_PROMPT",
+    "INTENT_SYSTEM_PROMPT",
+    "REWRITE_SYSTEM_PROMPT",
     "RecommendedQuestionProvider",
     "RecommendedQuestionHistoryProvider",
     "RecommendedQuestionModelClient",
@@ -160,5 +201,6 @@ __all__ = [
     "SemanticRetrievalGateway",
     "SemanticRetrievalService",
     "normalize_chat_record_status",
+    "apply_question_understanding_clarification",
     "parse_sql_generation_result",
 ]

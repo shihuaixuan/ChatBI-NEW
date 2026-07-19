@@ -2,6 +2,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from apps.chatbi.models.dto.question_understanding import (
+    NaturalLanguageIntentOutputBase,
+    QuestionRewriteOutputBase,
+)
+
 
 class QuestionClassificationInput(BaseModel):
     """问题分类节点输入。"""
@@ -39,12 +44,9 @@ class AnswerOutput(BaseModel):
     citations: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class QuestionRewriteOutput(BaseModel):
+class QuestionRewriteOutput(QuestionRewriteOutputBase):
     """问题重写节点输出。"""
 
-    rewritten_question: str
-    need_user_input: bool = False
-    missing_slots: list[str] = Field(default_factory=list)
     image_profile_hint: str | None = None
 
 
@@ -63,25 +65,21 @@ class ImageProfileOutput(BaseModel):
     chart_candidates: list[str] = Field(default_factory=list)
 
 
-class IntentRecognitionOutput(BaseModel):
+class IntentRecognitionOutput(
+    NaturalLanguageIntentOutputBase[
+        str,
+        dict[str, Any],
+        dict[str, Any],
+        str,
+    ]
+):
     """意图识别节点输出。
 
     这里只表达自然语言层面的查询意图和检索线索，不确认 Semantic 资产 ID。
     """
 
-    intent_type: str
-    confidence: float = Field(ge=0, le=1)
-    metric_mentions: list[str] = Field(default_factory=list)
-    dimension_mentions: list[str] = Field(default_factory=list)
-    dimension_slots: list[dict[str, Any]] = Field(default_factory=list)
-    time_mentions: list[str] = Field(default_factory=list)
     time_range: dict[str, Any] = Field(default_factory=dict)
-    filter_mentions: list[dict[str, Any]] = Field(default_factory=list)
-    required_slot_types: list[str] = Field(default_factory=list)
-    query_shape: dict[str, Any] = Field(default_factory=dict)
     subject_domain: dict[str, Any] = Field(default_factory=dict)
-    ambiguous_slots: list[str] = Field(default_factory=list)
-    conflict_slots: list[str] = Field(default_factory=list)
     validation: dict[str, Any] = Field(default_factory=dict)
 
 
