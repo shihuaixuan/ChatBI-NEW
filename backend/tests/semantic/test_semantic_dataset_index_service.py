@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import BackgroundTasks
 
-from apps.retrieval.semantic_worker import process_semantic_index_jobs
+from apps.retrieval.worker import process_index_jobs
 from apps.semantic.api import dataset_indexes
 from apps.semantic.models.dto import (
     DatasetIndexEnqueueResult,
@@ -96,7 +96,7 @@ async def test_rebuild_dataset_index_schedules_application_job_ids(monkeypatch):
     assert response["retrieval_status"] == "queued"
     assert len(background_tasks.tasks) == 1
     task = background_tasks.tasks[0]
-    assert task.func is process_semantic_index_jobs
+    assert task.func is process_index_jobs
     assert task.args == ((101, 102),)
 
 

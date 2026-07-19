@@ -1,3 +1,5 @@
+import hashlib
+import json
 from datetime import datetime
 from typing import Any
 
@@ -40,6 +42,87 @@ class SQLExampleRecord(BaseModel):
     dataset_id: int | None = None
     enabled: bool = True
     advanced_application: int | None = None
+
+
+class SQLExampleSnapshot(BaseModel):
+    """Retrieval 只读的单条 SQL 示例公开快照。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: int = Field(gt=0)
+    question: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    example_type: str = Field(min_length=1)
+    sql: str | None = None
+    linked_assets: tuple[dict[str, Any], ...] = ()
+    dataset_id: int | None = Field(default=None, gt=0)
+    datasource_id: int | None = Field(default=None, gt=0)
+    assistant_id: int | None = Field(default=None, gt=0)
+
+    @classmethod
+    def from_record(cls, record: SQLExampleRecord) -> "SQLExampleSnapshot":
+        if record.id is None:
+            raise ValueError("SQL_EXAMPLE_NOT_PERSISTED")
+        return cls(
+            id=record.id,
+            question=record.question,
+            description=record.description,
+            example_type=record.example_type,
+            sql=record.sql,
+            linked_assets=tuple(record.linked_assets),
+            dataset_id=record.dataset_id,
+            datasource_id=record.datasource,
+            assistant_id=record.advanced_application,
+        )
+
+
+class SQLExampleSourceSnapshot(BaseModel):
+    """一个工作空间内全部启用 SQL 示例的完整来源快照。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    workspace_id: int = Field(gt=0)
+    source_version: str = Field(min_length=1, max_length=128)
+    examples: tuple[SQLExampleSnapshot, ...] = ()
+
+    @classmethod
+    def from_records(
+        cls,
+        workspace_id: int,
+        records: list[SQLExampleRecord],
+    ) -> "SQLExampleSourceSnapshot":
+        examples = tuple(
+            sorted(
+                (
+                    SQLExampleSnapshot.from_record(record)
+                    for record in records
+                    if record.enabled
+                ),
+                key=lambda item: item.id,
+            )
+        )
+        encoded = json.dumps(
+            [item.model_dump(mode="json") for item in examples],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()
+        return cls(
+            workspace_id=workspace_id,
+            source_version=f"snapshot:{digest}",
+            examples=examples,
+        )
+
+
+class SQLExampleIndexEnqueueResult(BaseModel):
+    """Knowledge 接收的 Retrieval durable job 提交结果。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_id: int = Field(gt=0)
+    generation: str = Field(min_length=1)
+    job_ids: tuple[int, ...] = ()
 
 
 class SQLExampleResult(BaseModel):

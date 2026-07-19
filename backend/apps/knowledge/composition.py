@@ -19,6 +19,7 @@ from apps.knowledge.services import (
     SQLExampleQueryService,
     SQLExampleService,
 )
+from apps.retrieval.sql_example_indexing import SQLExampleIndexCoordinator
 from common.core.config import settings
 
 
@@ -39,6 +40,7 @@ def build_sql_example_service(session: Session) -> SQLExampleService:
     return SQLExampleService(
         SQLModelSQLExampleRepository(session),
         PublicSQLExampleReferenceCatalog(session),
+        SQLExampleIndexCoordinator(session),
         LegacySQLExampleIndexGateway(),
     )
 

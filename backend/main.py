@@ -21,7 +21,7 @@ from apps.access_control.permission import RequestContextMiddleware
 from apps.ai_model.composition import migrate_ai_model_secrets
 from apps.api import api_router
 from apps.assistant.public import init_dynamic_cors
-from apps.retrieval.semantic_worker import submit_pending_semantic_index_jobs
+from apps.retrieval.worker import submit_pending_index_jobs
 from apps.swagger.i18n import (
     DEFAULT_LANG,
     PLACEHOLDER_PREFIX,
@@ -73,7 +73,7 @@ async def lifespan(app: FastAPI):
     init_sqlbot_cache()
     init_dynamic_cors(app)
     init_data_training_embedding_data()
-    submit_pending_semantic_index_jobs()
+    submit_pending_index_jobs()
     SQLBotLogUtil.info("✅ Numora 初始化完成")
     await sqlbot_xpack.core.clean_xpack_cache()
     await migrate_ai_model_secrets()  # 加密历史模型密钥并修正旧供应商编号

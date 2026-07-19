@@ -91,14 +91,9 @@ class SQLModelSQLExampleRepository:
 
     def create(self, example: SQLExampleRecord) -> int:
         row = SQLExampleModel(**example.model_dump(exclude={"id"}))
-        try:
-            self._session.add(row)
-            self._session.flush()
-            self._session.refresh(row)
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
+        self._session.add(row)
+        self._session.flush()
+        self._session.refresh(row)
         if row.id is None:
             raise RuntimeError("Created SQL example has no ID")
         return row.id
@@ -114,40 +109,32 @@ class SQLModelSQLExampleRepository:
         ).first()
         if row is None:
             raise SQLExampleNotFoundError()
-        try:
-            for field in (
-                "datasource",
-                "question",
-                "description",
-                "example_type",
-                "sql",
-                "linked_assets",
-                "dataset_id",
-                "enabled",
-                "advanced_application",
-            ):
-                setattr(row, field, getattr(example, field))
-            self._session.add(row)
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
+        for field in (
+            "datasource",
+            "question",
+            "description",
+            "example_type",
+            "sql",
+            "linked_assets",
+            "dataset_id",
+            "enabled",
+            "advanced_application",
+        ):
+            setattr(row, field, getattr(example, field))
+        self._session.add(row)
+        self._session.flush()
         return example.id
 
     def delete(self, workspace_id: int, example_ids: list[int]) -> None:
         if not example_ids:
             return
-        try:
-            self._session.exec(
-                delete(SQLExampleModel).where(
-                    col(SQLExampleModel.oid) == workspace_id,
-                    col(SQLExampleModel.id).in_(example_ids),
-                )
+        self._session.exec(
+            delete(SQLExampleModel).where(
+                col(SQLExampleModel.oid) == workspace_id,
+                col(SQLExampleModel.id).in_(example_ids),
             )
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
+        )
+        self._session.flush()
 
     def set_enabled(
         self,
@@ -163,14 +150,15 @@ class SQLModelSQLExampleRepository:
         ).first()
         if row is None:
             return False
-        try:
-            row.enabled = enabled
-            self._session.add(row)
-            self._session.commit()
-        except Exception:
-            self._session.rollback()
-            raise
+        row.enabled = enabled
+        self._session.add(row)
+        self._session.flush()
         return True
+
+    def commit(self) -> None:
+        """提交源数据与同 Session 暂存的 Retrieval durable job。"""
+
+        self._session.commit()
 
     def search_lexical_ids(
         self,

@@ -7,11 +7,14 @@ from apps.knowledge.models.dto.sql_example import (
     SQLExampleErrorDetail,
     SQLExampleImportFailure,
     SQLExampleImportResult,
+    SQLExampleIndexEnqueueResult,
     SQLExampleInput,
     SQLExampleMatch,
     SQLExamplePage,
     SQLExampleRecord,
     SQLExampleResult,
+    SQLExampleSnapshot,
+    SQLExampleSourceSnapshot,
 )
 
 __all__ = [
@@ -21,9 +24,12 @@ __all__ = [
     "SQLExampleImportFailure",
     "SQLExampleErrorDetail",
     "SQLExampleImportResult",
+    "SQLExampleIndexEnqueueResult",
     "SQLExampleInput",
     "SQLExampleMatch",
     "SQLExamplePage",
     "SQLExampleRecord",
     "SQLExampleResult",
+    "SQLExampleSnapshot",
+    "SQLExampleSourceSnapshot",
 ]

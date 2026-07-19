@@ -1100,7 +1100,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 **实施状态：进行中**
 
-截至 2026-07-19，已完成两批推荐问题和 SQL 示例资源迁移：
+截至 2026-07-19，已完成三批推荐问题、SQL 示例资源迁移和 Retrieval 来源隔离：
 
 1. 已建立 Knowledge 的推荐问题 DTO、ORM、Repository、Service、API 和组装入口，推荐问题源数据只有一个
    权威写入实现。
@@ -1115,12 +1115,23 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
    更新、启停和删除均增加工作空间范围约束，禁止跨工作空间修改源数据。
 7. Agent SQL 示例工具和旧 Chat 提示词组装已统一调用 `SQLExampleQueryService`，删除对旧
    `data_training.curd` 的直接依赖；词法召回与旧向量召回通过独立端口合并并保持原输出格式。
-8. 内容创建、更新、启停和删除会调用明确的索引提交端口。当前旧 `data_training.embedding` 仅由迁移适配器
-   维护，后台失败会记录完整异常；后续批次将由 Retrieval Source Adapter 和 generation 索引替代。
+8. 内容创建、更新、启停和删除会调用明确的索引提交端口。当前已由 Retrieval Source Adapter 提交 durable
+   generation；旧 `data_training.embedding` 仅作为查询切换前的兼容派生数据由迁移适配器继续维护。
 9. 旧 `apps/data_training/api` 和 `curd` 已删除。由于已安装 XPack 仍硬编码旧模型路径，
    `apps/data_training/models/data_training_model.py` 暂时只保留 Knowledge 对象别名，不再拥有模型定义。
 10. SQL 示例、Agent、Chat、XPack 和架构定向回归 101 项通过，完整后端回归 793 项通过；Knowledge 核心代码
     通过 Ruff 和严格 Mypy 检查，应用 OpenAPI 继续生成 154 个路径。
+11. Knowledge 已提供工作空间级 SQL 示例完整快照，快照只包含启用资源，并通过稳定内容 hash 生成
+    `source_version`；Retrieval 的 SQL 示例投影只读取公开 DTO，不导入 Knowledge ORM 或具体仓储。
+12. 新增 SQL 示例 Retrieval Source Adapter，统一使用 `sql_exemplar` 来源、工作空间命名空间和完整重建
+    generation。创建、更新、启停、删除和批量导入会在同一事务内提交源数据、完整投影和 durable job，
+    索引暂存失败时源数据不提交。
+13. Semantic 专用 worker 已收敛为统一 Retrieval worker，应用启动时恢复所有来源的 pending job；SQL 示例
+    源事务提交后会立即唤醒对应 job。禁用或删除资源通过完整快照产生明确失效，构建失败时旧活动 generation
+    保持不变。
+14. 旧 SQL 示例查询仍读取 `data_training.embedding`，因此本批保留提交成功后的旧向量维护，待
+    `SQL_EXEMPLAR` 查询 profile 接管召回后删除。第三批 Knowledge、Retrieval、Semantic 和架构定向回归
+    126 项通过，完整后端回归 799 项通过；新增代码通过 Ruff 和严格 Mypy，OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1133,12 +1144,14 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 2. 将 `DsRecommendedProblem` 迁入 Knowledge 的推荐问题资源。已完成，保留原表名兼容。
 3. 定义 SQL 示例状态、验证状态、适用数据集和关联资产规则。现有启停状态、`dataset_id` 和
    `linked_assets` 已进入 Knowledge 契约，独立验证状态及完整关联资产校验尚待实施。
-4. 为 Semantic、Knowledge 和可选 Schema 定义独立 Retrieval Source Adapter。
-5. Retrieval 只读取公开资源快照，不导入对方 ORM 和具体仓储。
-6. 内容变更后通过事件或索引端口提交重建请求。已建立统一索引提交端口，当前由旧向量适配器实现，
-   待接入 Retrieval durable job。
+4. 为 Semantic、Knowledge 和可选 Schema 定义独立 Retrieval Source Adapter。Semantic 和 Knowledge 已完成，
+   可选 Schema 来源待后续按实际检索需求接入。
+5. Retrieval 只读取公开资源快照，不导入对方 ORM 和具体仓储。Semantic 和 SQL 示例来源已完成。
+6. 内容变更后通过事件或索引端口提交重建请求。SQL 示例已接入 Retrieval durable job，并与源数据使用同一
+   事务；旧向量仅作为查询切换前的兼容派生数据继续维护。
 7. 将 `retrieval/models.py` 和 `schemas.py` 分别迁入 ORM 与 DTO 目录。
-8. 将检索查询、索引构建和来源投影分开，保持主流程可读。
+8. 将检索查询、索引构建和来源投影分开，保持主流程可读。统一 worker、SQL 示例来源投影和索引协调已拆分，
+   `SQL_EXEMPLAR` 查询 profile 接管旧召回仍待后续完成。
 
 **完成标准**
 

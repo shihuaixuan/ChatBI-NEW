@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks
 
 from apps.retrieval.semantic_indexing import SemanticIndexCoordinator
-from apps.retrieval.semantic_worker import process_semantic_index_jobs
+from apps.retrieval.worker import process_index_jobs
 from apps.semantic.api.error_mapping import map_semantic_errors_to_http
 from apps.semantic.repository.sqlmodel.dataset_index_repository import (
     SqlModelDatasetIndexRepository,
@@ -32,7 +32,7 @@ async def rebuild_dataset_index(
             current_user.oid,
             dataset_id,
         )
-    background_tasks.add_task(process_semantic_index_jobs, result.job_ids)
+    background_tasks.add_task(process_index_jobs, result.job_ids)
     return {
         "dataset_id": result.dataset_id,
         "index_version": result.index_version,

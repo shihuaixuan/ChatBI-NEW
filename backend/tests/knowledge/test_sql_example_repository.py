@@ -26,18 +26,21 @@ class FailingCommitSession:
         self.rollback_called = True
 
 
-def test_repository_rolls_back_when_create_commit_fails():
+def test_repository_stages_create_and_propagates_transaction_commit_failure():
     session = FailingCommitSession()
     repository = SQLModelSQLExampleRepository(session)
 
-    with pytest.raises(RuntimeError, match="提交失败"):
-        repository.create(
-            SQLExampleRecord(
-                oid=3,
-                datasource=8,
-                question="本月销售额",
-                description="SELECT 1",
-            )
+    example_id = repository.create(
+        SQLExampleRecord(
+            oid=3,
+            datasource=8,
+            question="本月销售额",
+            description="SELECT 1",
         )
+    )
 
-    assert session.rollback_called
+    with pytest.raises(RuntimeError, match="提交失败"):
+        repository.commit()
+
+    assert example_id == 10
+    assert not session.rollback_called

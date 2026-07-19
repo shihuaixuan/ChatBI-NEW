@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from sqlmodel import Session, select
 
-from apps.retrieval.indexing import (
-    IndexEmbeddingProfile,
-    RetrievalIndexingService,
-)
+from apps.retrieval.index_profile import build_retrieval_index_profile
+from apps.retrieval.indexing import IndexEmbeddingProfile, RetrievalIndexingService
 from apps.retrieval.models import RetrievalSourceModel
 from apps.retrieval.semantic_projector import (
     SemanticProjectionPolicy,
@@ -18,18 +16,12 @@ from apps.semantic.models.dto import (
     DatasetIndexVersion,
     DatasetSchema,
 )
-from common.core.config import settings
 
 
 def build_semantic_index_profile() -> IndexEmbeddingProfile:
-    """统一构造 Semantic 索引与 worker 共用的物理 embedding profile。"""
+    """兼容旧导入名称，返回统一 Retrieval 物理 profile。"""
 
-    return IndexEmbeddingProfile(
-        name="bge-m3-1024",
-        provider=settings.RETRIEVAL_EMBEDDING_PROVIDER,
-        model=settings.RETRIEVAL_EMBEDDING_MODEL,
-        dimension=settings.RETRIEVAL_EMBEDDING_DIMENSION,
-    )
+    return build_retrieval_index_profile()
 
 
 class SemanticIndexCoordinator:

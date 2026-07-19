@@ -1,6 +1,11 @@
 from typing import Protocol
 
-from apps.knowledge.models.dto import SQLExampleMatch, SQLExampleRecord
+from apps.knowledge.models.dto import (
+    SQLExampleIndexEnqueueResult,
+    SQLExampleMatch,
+    SQLExampleRecord,
+    SQLExampleSourceSnapshot,
+)
 
 
 class SQLExampleRepository(Protocol):
@@ -41,6 +46,8 @@ class SQLExampleRepository(Protocol):
         example_id: int,
         enabled: bool,
     ) -> bool: ...
+
+    def commit(self) -> None: ...
 
     def search_lexical_ids(
         self,
@@ -84,7 +91,18 @@ class SQLExampleVectorSearch(Protocol):
 
 
 class SQLExampleIndexGateway(Protocol):
-    """SQL 示例内容变更后的索引提交端口。"""
+    """SQL 示例公开快照到 Retrieval durable generation 的提交端口。"""
+
+    def stage_rebuild(
+        self,
+        snapshot: SQLExampleSourceSnapshot,
+    ) -> SQLExampleIndexEnqueueResult: ...
+
+    def submit(self, job_ids: tuple[int, ...]) -> None: ...
+
+
+class SQLExampleVectorIndexGateway(Protocol):
+    """统一查询切换前继续维护旧向量列的迁移端口。"""
 
     def enqueue_upserts(self, example_ids: list[int]) -> None: ...
 

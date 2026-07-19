@@ -13,11 +13,13 @@ from apps.knowledge.models.dto import (
     SQLExamplePage,
     SQLExampleRecord,
     SQLExampleResult,
+    SQLExampleSourceSnapshot,
 )
 from apps.knowledge.repository import (
     SQLExampleIndexGateway,
     SQLExampleReferenceCatalog,
     SQLExampleRepository,
+    SQLExampleVectorIndexGateway,
 )
 
 
@@ -29,10 +31,12 @@ class SQLExampleService:
         repository: SQLExampleRepository,
         reference_catalog: SQLExampleReferenceCatalog,
         index_gateway: SQLExampleIndexGateway,
+        vector_index_gateway: SQLExampleVectorIndexGateway,
     ) -> None:
         self._repository = repository
         self._reference_catalog = reference_catalog
         self._index_gateway = index_gateway
+        self._vector_index_gateway = vector_index_gateway
 
     def page(
         self,
@@ -75,7 +79,7 @@ class SQLExampleService:
 
     def create(self, workspace_id: int, request: SQLExampleInput) -> int:
         example_id = self._create(workspace_id, request)
-        self._index_gateway.enqueue_upserts([example_id])
+        self._commit_index_change(workspace_id, upsert_ids=[example_id])
         return example_id
 
     def update(self, workspace_id: int, request: SQLExampleInput) -> int:
@@ -92,13 +96,15 @@ class SQLExampleService:
         )
         self._ensure_not_duplicate(example, exclude_id=request.id)
         example_id = self._repository.update(example)
-        self._index_gateway.enqueue_upserts([example_id])
+        self._commit_index_change(workspace_id, upsert_ids=[example_id])
         return example_id
 
     def delete(self, workspace_id: int, example_ids: list[int]) -> None:
         normalized_ids = sorted({value for value in example_ids if value > 0})
+        if not normalized_ids:
+            return
         self._repository.delete(workspace_id, normalized_ids)
-        self._index_gateway.enqueue_deletes(normalized_ids)
+        self._commit_index_change(workspace_id, delete_ids=normalized_ids)
 
     def set_enabled(
         self,
@@ -108,7 +114,7 @@ class SQLExampleService:
     ) -> None:
         if not self._repository.set_enabled(workspace_id, example_id, enabled):
             raise SQLExampleNotFoundError()
-        self._index_gateway.enqueue_upserts([example_id])
+        self._commit_index_change(workspace_id, upsert_ids=[example_id])
 
     def batch_import(
         self,
@@ -154,7 +160,8 @@ class SQLExampleService:
                     )
                 )
 
-        self._index_gateway.enqueue_upserts(inserted_ids)
+        if inserted_ids:
+            self._commit_index_change(workspace_id, upsert_ids=inserted_ids)
         return SQLExampleImportResult(
             success_count=len(inserted_ids),
             failed_records=failures,
@@ -167,6 +174,23 @@ class SQLExampleService:
         example = self._validated_record(workspace_id, request)
         self._ensure_not_duplicate(example)
         return self._repository.create(example)
+
+    def _commit_index_change(
+        self,
+        workspace_id: int,
+        *,
+        upsert_ids: list[int] | None = None,
+        delete_ids: list[int] | None = None,
+    ) -> None:
+        """在同一事务内提交源快照和 durable job，提交后再启动后台消费者。"""
+
+        records = self._repository.list_by_workspace(workspace_id)
+        snapshot = SQLExampleSourceSnapshot.from_records(workspace_id, records)
+        enqueue_result = self._index_gateway.stage_rebuild(snapshot)
+        self._repository.commit()
+        self._index_gateway.submit(enqueue_result.job_ids)
+        self._vector_index_gateway.enqueue_upserts(upsert_ids or [])
+        self._vector_index_gateway.enqueue_deletes(delete_ids or [])
 
     def _validated_record(
         self,
