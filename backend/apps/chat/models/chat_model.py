@@ -35,7 +35,6 @@ from apps.chatbi.models import (
 from apps.chatbi.models import (
     TypeEnum as TypeEnum,
 )
-from apps.template.filter.generator import get_permissions_template
 
 
 class ChatRecordResult(BaseModel):
@@ -115,12 +114,6 @@ class AiModelQuestion(BaseModel):
     regenerate_record_id: Optional[int] = None
     sample_data: str = ""
     sqlbot_name: str = "Numora"
-
-    def filter_sys_question(self):
-        return get_permissions_template()['system'].format(lang=self.lang, engine=self.engine, sqlbot_name=self.sqlbot_name)
-
-    def filter_user_question(self):
-        return get_permissions_template()['user'].format(sql=self.sql, filter=self.filter)
 
 class ChatQuestion(AiModelQuestion):
     chat_id: int

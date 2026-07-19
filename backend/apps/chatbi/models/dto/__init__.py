@@ -41,6 +41,10 @@ from apps.chatbi.models.dto.execution_binding import (
     ExecutionBinding,
     ExecutionBindingData,
 )
+from apps.chatbi.models.dto.permission_sql_generation import (
+    PermissionSQLFilter,
+    PermissionSQLGenerationData,
+)
 from apps.chatbi.models.dto.physical_schema import (
     PhysicalSchemaField,
     PhysicalSchemaResult,
@@ -108,6 +112,8 @@ __all__ = [
     "PhysicalSchemaField",
     "PhysicalSchemaResult",
     "PhysicalSchemaTable",
+    "PermissionSQLFilter",
+    "PermissionSQLGenerationData",
     "QuestionUnderstandingValidationData",
     "QuestionUnderstandingValidationIssue",
     "QuestionUnderstandingValidationResult",

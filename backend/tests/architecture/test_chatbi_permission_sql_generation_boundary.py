@@ -33,9 +33,9 @@ def _class_method_source(tree: ast.Module, class_name: str, name: str) -> str:
     return ast.unparse(method)
 
 
-def test_recommended_question_service_only_depends_on_stable_ports():
+def test_permission_sql_generation_service_only_depends_on_stable_ports():
     imports = _imports(
-        _tree("apps/chatbi/services/recommended_question_service.py")
+        _tree("apps/chatbi/services/permission_sql_generation_service.py")
     )
 
     assert "sqlmodel" not in imports
@@ -45,40 +45,47 @@ def test_recommended_question_service_only_depends_on_stable_ports():
     assert not any(module.startswith("apps.workflow_engine") for module in imports)
 
 
-def test_legacy_recommendation_task_only_keeps_schema_log_and_sse_projection():
+def test_legacy_permission_sql_generation_delegates_to_chatbi():
     tree = _tree("apps/chat/task/llm.py")
-    source = _class_method_source(
-        tree,
-        "LLMService",
-        "generate_recommend_questions_task",
-    )
+    source = _class_method_source(tree, "LLMService", "build_table_filter")
 
-    assert "build_recommended_question_service" in source
+    assert "build_permission_sql_generation_service" in source
     assert "service.prepare" in source
     assert "service.generate" in source
     assert "start_log" in source
     assert "end_log" in source
-    assert "guess_sys_question" not in source
-    assert "guess_user_question" not in source
-    assert "get_old_questions" not in source
-    assert "save_recommend_question_answer" not in source
     assert "self.llm.stream" not in source
+    assert "filter_sys_question" not in source
+    assert "filter_user_question" not in source
 
 
-def test_sql_model_adapter_uses_shared_model_stream_parser():
-    adapter_tree = _tree("infrastructure/sql_generation.py")
-    adapter_imports = _imports(adapter_tree)
-    legacy_tree = _tree("apps/chat/task/llm.py")
-
-    assert "apps.ai_model.streaming" in adapter_imports
-    assert "apps.ai_model.streaming" not in _imports(legacy_tree)
-    assert not any(
-        isinstance(node, ast.FunctionDef) and node.name == "process_stream"
-        for node in adapter_tree.body
+def test_legacy_llm_service_no_longer_owns_sql_response_parser():
+    tree = _tree("apps/chat/task/llm.py")
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "LLMService"
     )
+    method_names = {
+        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
+    }
+    class_source = ast.unparse(class_node)
+
+    assert "check_sql" not in method_names
+    assert "check_save_sql" not in method_names
+    assert "self.llm.stream" not in class_source
 
 
-def test_legacy_chat_question_no_longer_owns_recommendation_templates():
+def test_legacy_permission_sources_use_stable_filter_dto():
+    tree = _tree("apps/chat/task/llm.py")
+
+    for method_name in ("generate_filter", "generate_assistant_filter"):
+        source = _class_method_source(tree, "LLMService", method_name)
+        assert "PermissionSQLFilter" in source
+        assert "build_table_filter" in source
+
+
+def test_legacy_chat_question_no_longer_owns_permission_sql_templates():
     tree = _tree("apps/chat/models/chat_model.py")
     imports = _imports(tree)
     class_node = next(
@@ -90,6 +97,6 @@ def test_legacy_chat_question_no_longer_owns_recommendation_templates():
         node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
     }
 
-    assert "apps.template.generate_guess_question.generator" not in imports
-    assert "guess_sys_question" not in method_names
-    assert "guess_user_question" not in method_names
+    assert "apps.template.filter.generator" not in imports
+    assert "filter_sys_question" not in method_names
+    assert "filter_user_question" not in method_names

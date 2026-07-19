@@ -1,12 +1,11 @@
 import concurrent
-import json
 import os
 import traceback
 import urllib.parse
 import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, cast
 
 import orjson
 import pandas as pd
@@ -14,11 +13,6 @@ import requests
 import sqlparse
 from langchain.chat_models.base import BaseChatModel
 from langchain_community.utilities import SQLDatabase
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    HumanMessage,
-)
 from sqlalchemy import and_, select
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlbot_xpack.config.model import SysArgModel
@@ -29,7 +23,6 @@ from sqlmodel import Session
 
 from apps.access_control.data_policy import requires_data_policy, resolve_data_policy
 from apps.ai_model.model_factory import LLMConfig, LLMFactory, get_default_config
-from apps.ai_model.streaming import process_stream
 from apps.assistant import AssistantOutDsSchema
 from apps.assistant.public import (
     AssistantOutDs,
@@ -67,7 +60,6 @@ from apps.chat.models.chat_model import (
     ChatRecord,
     OperationEnum,
     RenameChat,
-    SystemPromptMessage,
 )
 from apps.chat.services.semantic_binding import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
 from apps.chat.services.term_context import ChatTermContextService
@@ -81,6 +73,8 @@ from apps.chatbi.models import (
     DatasourceSelectionEvent,
     DynamicSQLGenerationData,
     DynamicSQLSubqueryMapping,
+    PermissionSQLFilter,
+    PermissionSQLGenerationData,
     RecommendedQuestionGenerationData,
     SQLGenerationData,
     SQLGenerationMessage,
@@ -89,6 +83,7 @@ from apps.chatbi.services import (
     ChartGenerationError,
     DatasourceSelectionError,
     DynamicSQLGenerationError,
+    PermissionSQLGenerationError,
     SQLGenerationError,
 )
 from apps.datasource import (
@@ -119,6 +114,9 @@ from infrastructure.chart_generation import build_chart_generation_service
 from infrastructure.datasource_selection import build_datasource_selection_service
 from infrastructure.dynamic_sql_generation import (
     build_dynamic_sql_generation_service,
+)
+from infrastructure.permission_sql_generation import (
+    build_permission_sql_generation_service,
 )
 from infrastructure.recommended_questions import (
     build_recommended_question_service,
@@ -987,13 +985,25 @@ class LLMService:
         result_dict['sqlbot_temp_sql_text'] = temp_sql_text
         return result_dict
 
-    def build_table_filter(self, session: Session, sql: str, filters: list):
-        filter = json.dumps(filters, ensure_ascii=False)
-        self.chat_question.sql = sql
-        self.chat_question.filter = filter
-        permission_sql_msg: List[Union[BaseMessage, dict[str, Any]]] = []
-        permission_sql_msg.append(SystemPromptMessage(content=self.chat_question.filter_sys_question()))
-        permission_sql_msg.append(HumanMessage(content=self.chat_question.filter_user_question()))
+    def build_table_filter(
+            self,
+            session: Session,
+            sql: str,
+            filters: list[PermissionSQLFilter],
+    ) -> str:
+        generation_data = PermissionSQLGenerationData(
+            record_id=self.record.id or 0,
+            sql=sql,
+            filters=filters,
+            language=self.chat_question.lang,
+            engine=self.chat_question.engine,
+            assistant_name=self.chat_question.sqlbot_name,
+        )
+        service = build_permission_sql_generation_service(session, self.llm)
+        try:
+            messages = service.prepare(generation_data)
+        except PermissionSQLGenerationError as exc:
+            raise SingleMessageError(str(exc)) from exc
 
         self.current_logs[OperationEnum.GENERATE_SQL_WITH_PERMISSIONS] = start_log(session=session,
                                                                                    ai_modal_id=self.chat_question.ai_modal_id,
@@ -1001,40 +1011,51 @@ class LLMService:
                                                                                    operate=OperationEnum.GENERATE_SQL_WITH_PERMISSIONS,
                                                                                    record_id=self.record.id,
                                                                                    full_message=[
-                                                                                       {'type': msg.type,
-                                                                                        'sqlbot_system': getattr(msg,
-                                                                                                                 'sqlbot_system',
-                                                                                                                 False) is True,
-                                                                                        'content': msg.content} for
-                                                                                       msg
-                                                                                       in permission_sql_msg])
-        full_thinking_text = ''
-        full_filter_text = ''
-        token_usage = {}
-        res = process_stream(self.llm.stream(permission_sql_msg), token_usage)
-        for chunk in res:
-            if chunk.get('content'):
-                full_filter_text += chunk.get('content')
-            if chunk.get('reasoning_content'):
-                full_thinking_text += chunk.get('reasoning_content')
+                                                                                       {
+                                                                                           'type': message.role,
+                                                                                           'sqlbot_system': message.system_context,
+                                                                                           'content': message.content,
+                                                                                       }
+                                                                                       for message in messages
+                                                                                   ])
+        permission_result = None
+        for event in service.generate(generation_data, messages):
+            if event.kind == 'chunk':
+                continue
+            self.current_logs[OperationEnum.GENERATE_SQL_WITH_PERMISSIONS] = end_log(
+                session=session,
+                log=self.current_logs[OperationEnum.GENERATE_SQL_WITH_PERMISSIONS],
+                full_message=[
+                    *[
+                        {
+                            'type': message.role,
+                            'sqlbot_system': message.system_context,
+                            'content': message.content,
+                        }
+                        for message in messages
+                    ],
+                    {
+                        'type': 'ai',
+                        'sqlbot_system': False,
+                        'content': event.content,
+                    },
+                ],
+                reasoning_content=event.reasoning_content,
+                token_usage=event.token_usage,
+            )
+            SQLBotLogUtil.info(event.content)
+            if event.error:
+                trigger_log_error(
+                    session,
+                    self.current_logs[OperationEnum.GENERATE_SQL_WITH_PERMISSIONS],
+                )
+                raise SingleMessageError(event.error)
+            permission_result = event.result
 
-        permission_sql_msg.append(AIMessage(full_filter_text))
-
-        self.current_logs[OperationEnum.GENERATE_SQL_WITH_PERMISSIONS] = end_log(session=session,
-                                                                                 log=self.current_logs[
-                                                                                     OperationEnum.GENERATE_SQL_WITH_PERMISSIONS],
-                                                                                 full_message=[
-                                                                                     {'type': msg.type,
-                                                                                      'sqlbot_system': getattr(msg,
-                                                                                                               'sqlbot_system',
-                                                                                                               False) is True,
-                                                                                      'content': msg.content}
-                                                                                     for msg in permission_sql_msg],
-                                                                                 reasoning_content=full_thinking_text,
-                                                                                 token_usage=token_usage)
-
-        SQLBotLogUtil.info(full_filter_text)
-        return full_filter_text
+        if permission_result is None:
+            raise SingleMessageError('PERMISSION_SQL_GENERATION_RESULT_REQUIRED')
+        self.chat_question.sql = permission_result.sql
+        return permission_result.sql
 
     def generate_filter(self, _session: Session, sql: str, tables: List):
         # 行权限只通过 Access Control 的公开数据策略解析。
@@ -1045,7 +1066,7 @@ class LLMService:
             table_names=tables,
         )
         filters = [
-            {"table": item.table, "filter": item.condition}
+            PermissionSQLFilter(table=item.table, condition=item.condition)
             for item in policy.row_filters
         ]
         if not filters:
@@ -1054,10 +1075,15 @@ class LLMService:
 
     def generate_assistant_filter(self, _session: Session, sql, tables: List):
         ds: AssistantOutDsSchema = self.ds
-        filters = []
+        filters: list[PermissionSQLFilter] = []
         for table in ds.tables:
             if table.name in tables and table.rule:
-                filters.append({"table": table.name, "filter": table.rule})
+                filters.append(
+                    PermissionSQLFilter(
+                        table=table.name,
+                        condition=table.rule,
+                    )
+                )
         if not filters:
             return None
         return self.build_table_filter(session=_session, sql=sql, filters=filters)
@@ -1120,46 +1146,6 @@ class LLMService:
                 token_usage=event.token_usage,
             )
             yield event
-
-    def check_sql(self, session: Session, res: str, operate: OperationEnum) -> tuple[str, Optional[list]]:
-        json_str = extract_nested_json(res)
-
-        log = self.current_logs[operate]
-
-        if json_str is None:
-            trigger_log_error(session, log)
-            raise SingleMessageError(orjson.dumps({'message': 'SQL answer is not a valid json object',
-                                                   'traceback': "SQL answer is not a valid json object:\n" + res}).decode())
-        sql: str
-        data: dict
-        try:
-            data = orjson.loads(json_str)
-
-            if data['success']:
-                sql = data['sql']
-            else:
-                message = data['message']
-                raise SingleMessageError(message)
-        except SingleMessageError as e:
-            trigger_log_error(session, log)
-            raise e
-        except Exception:
-            trigger_log_error(session, log)
-            raise SingleMessageError(orjson.dumps({'message': 'Cannot parse sql from answer',
-                                                   'traceback': "Cannot parse sql from answer:\n" + res}).decode())
-
-        if sql.strip() == '':
-            trigger_log_error(session, log)
-            raise SingleMessageError("SQL query is empty")
-        return sql, data.get('tables')
-
-    def check_save_sql(self, session: Session, res: str, operate: OperationEnum) -> str:
-        sql, *_ = self.check_sql(session=session, res=res, operate=operate)
-        save_sql(session=session, sql=sql, record_id=self.record.id)
-
-        self.chat_question.sql = sql
-
-        return sql
 
     def check_save_predict_data(self, session: Session, res: str) -> bool:
 
@@ -1383,11 +1369,7 @@ class LLMService:
 
                 if sql_result:
                     SQLBotLogUtil.info(sql_result)
-                    sql = self.check_save_sql(
-                        session=_session,
-                        res=sql_result,
-                        operate=OperationEnum.GENERATE_SQL_WITH_PERMISSIONS,
-                    )
+                    sql = sql_result
                 elif dynamic_sql_result and sqlbot_temp_sql_text:
                     assistant_dynamic_sql = sqlbot_temp_sql_text
                     save_sql(

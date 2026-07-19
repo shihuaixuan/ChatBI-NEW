@@ -45,6 +45,12 @@ from apps.chatbi.services.execution_binding_service import (
     ExecutionBindingError,
     ExecutionBindingService,
 )
+from apps.chatbi.services.permission_sql_generation_service import (
+    PermissionSQLGenerationError,
+    PermissionSQLGenerationModelClient,
+    PermissionSQLGenerationPromptBuilder,
+    PermissionSQLGenerationService,
+)
 from apps.chatbi.services.physical_schema_service import (
     DatasourceMetadataReader,
     PhysicalSchemaService,
@@ -121,6 +127,10 @@ __all__ = [
     "DynamicSQLGenerationService",
     "PermissionPolicyProvider",
     "PhysicalSchemaService",
+    "PermissionSQLGenerationError",
+    "PermissionSQLGenerationModelClient",
+    "PermissionSQLGenerationPromptBuilder",
+    "PermissionSQLGenerationService",
     "QueryService",
     "QuestionUnderstandingValidationService",
     "RecommendedQuestionProvider",
