@@ -8,8 +8,7 @@ from uuid import uuid4
 
 from apps.retrieval.embedding import EmbeddingProvider
 from apps.retrieval.errors import RetrievalQueryError
-from apps.retrieval.profiles import get_retrieval_profile
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     RetrievalBundle,
     RetrievalDimensionSlot,
     RetrievalIntent,
@@ -17,6 +16,7 @@ from apps.retrieval.schemas import (
     RetrievalRequest,
     RetrievalScope,
 )
+from apps.retrieval.profiles import get_retrieval_profile
 from apps.retrieval.semantic_binding import SemanticBindingRunner
 from apps.retrieval.semantic_runtime import RetrievalEmbeddingRuntimeConfig
 from apps.semantic.services.schema_service import DatasetSchemaProvider

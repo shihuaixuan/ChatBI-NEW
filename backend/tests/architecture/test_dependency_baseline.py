@@ -19,7 +19,6 @@ LEGACY_INTERNAL_MODEL_PREFIXES = (
     "apps.chat.models",
     "apps.dashboard.models",
     "apps.datasource.models",
-    "apps.retrieval.models",
     "apps.semantic.models.orm",
     "apps.settings.models",
     "apps.system.models",

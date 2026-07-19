@@ -17,7 +17,7 @@ from apps.retrieval.errors import (
     RetrievalIndexUnavailableError,
     RetrievalProviderUnavailableError,
 )
-from apps.retrieval.schemas import RetrievalChannelStatus
+from apps.retrieval.models.dto import RetrievalChannelStatus
 from apps.retrieval.semantic_projector import (
     SemanticSourceProjector as SemanticSourceProjector,
 )

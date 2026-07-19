@@ -10,7 +10,12 @@ FORBIDDEN = (
     "apps.agent",
     "apps.agentic_chat",
 )
-GENERIC_RETRIEVAL_MODULES = ("projection.py", "indexing.py", "models.py")
+GENERIC_RETRIEVAL_MODULES = (
+    "projection.py",
+    "indexing.py",
+    "models/orm/retrieval.py",
+    "models/dto/retrieval.py",
+)
 
 
 def test_retrieval_domain_does_not_import_orchestration_packages():
@@ -37,3 +42,21 @@ def test_generic_projection_and_indexing_modules_do_not_import_headless():
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     assert not alias.name.startswith("apps.semantic"), f"{path} 反向依赖了 Semantic"
+
+
+def test_retrieval_runtime_uses_structured_orm_and_dto_imports():
+    compatibility_paths = {
+        RETRIEVAL_DIR / "schemas.py",
+        RETRIEVAL_DIR / "models" / "__init__.py",
+    }
+    legacy_modules = {"apps.retrieval.models", "apps.retrieval.schemas"}
+    for path in RETRIEVAL_DIR.rglob("*.py"):
+        if path in compatibility_paths:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                assert node.module not in legacy_modules, f"{path} 仍通过兼容入口导入模型"
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name not in legacy_modules, f"{path} 仍通过兼容入口导入模型"

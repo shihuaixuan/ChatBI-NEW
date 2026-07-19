@@ -13,11 +13,7 @@ from apps.retrieval.errors import (
     RetrievalQueryError,
 )
 from apps.retrieval.hybrid import HybridRecallResult, SubQueryRecallResult
-from apps.retrieval.profiles import (
-    SemanticBindingGateThreshold,
-    get_retrieval_profile,
-)
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,
     RetrievalAmbiguity,
@@ -37,6 +33,10 @@ from apps.retrieval.schemas import (
     RetrievalScores,
     RetrievalSlotDecision,
     RetrievalSourceType,
+)
+from apps.retrieval.profiles import (
+    SemanticBindingGateThreshold,
+    get_retrieval_profile,
 )
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 

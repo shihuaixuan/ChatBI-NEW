@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     RetrievalProfileName,
     RetrievalPurpose,
     RetrievalRequest,

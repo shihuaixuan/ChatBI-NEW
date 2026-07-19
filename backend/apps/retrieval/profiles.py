@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from apps.retrieval.errors import RetrievalConfigurationError
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     RetrievalChannel,
     RetrievalProfileName,
     RetrievalResourceType,

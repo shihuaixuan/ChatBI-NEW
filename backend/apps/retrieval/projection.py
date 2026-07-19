@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from apps.retrieval.schemas import RetrievalResourceType, RetrievalSourceType
+from apps.retrieval.models.dto import RetrievalResourceType, RetrievalSourceType
 
 
 class _ProjectionModel(BaseModel):

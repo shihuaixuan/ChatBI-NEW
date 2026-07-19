@@ -1,6 +1,6 @@
-"""兼容旧 Retrieval DTO 导入；新代码使用 `apps.retrieval.models.dto`。"""
+"""Retrieval 请求、结果和诊断 DTO 公开入口。"""
 
-from apps.retrieval.models.dto import (
+from apps.retrieval.models.dto.retrieval import (
     AssetReference,
     ExecutableAssetReference,
     RetrievalAmbiguity,

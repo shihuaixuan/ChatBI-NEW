@@ -6,9 +6,7 @@
 from apps.retrieval.compilation import validate_compilation_assets
 from apps.retrieval.hybrid import HybridRecallResult, SemanticBindingHybridRetriever
 from apps.retrieval.indexing import IndexEmbeddingProfile, RetrievalIndexingService
-from apps.retrieval.planner import RetrievalQueryPlan, SemanticBindingQueryPlanner
-from apps.retrieval.policy import SemanticBindingPolicy, SemanticBindingPolicyResult
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,
     RetrievalBundle,
@@ -16,6 +14,8 @@ from apps.retrieval.schemas import (
     RetrievalProfileName,
     RetrievalRequest,
 )
+from apps.retrieval.planner import RetrievalQueryPlan, SemanticBindingQueryPlanner
+from apps.retrieval.policy import SemanticBindingPolicy, SemanticBindingPolicyResult
 from apps.retrieval.service import (
     RetrievalService,
     RetrievalServiceResult,

@@ -14,7 +14,8 @@ from apps.retrieval.indexing import (
     RetrievalIndexingService,
     RetryableIndexingError,
 )
-from apps.retrieval.models import (
+from apps.retrieval.models.dto import RetrievalResourceType
+from apps.retrieval.models.orm import (
     RetrievalEmbeddingModel,
     RetrievalIndexGenerationModel,
     RetrievalResourceModel,
@@ -22,7 +23,6 @@ from apps.retrieval.models import (
     RetrievalUnitModel,
 )
 from apps.retrieval.projection import ProjectedResource
-from apps.retrieval.schemas import RetrievalResourceType
 from apps.retrieval.semantic_indexing import SemanticIndexCoordinator
 from apps.retrieval.semantic_projector import SemanticSourceProjector
 from apps.semantic.models.dto import DatasetIndexVersion, DatasetSchema, SchemaElement

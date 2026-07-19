@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from apps.knowledge.models.dto import SQLExampleSnapshot, SQLExampleSourceSnapshot
+from apps.retrieval.models.dto import RetrievalResourceType, RetrievalSourceType
 from apps.retrieval.projection import (
     ProjectedResource,
     ProjectedUnit,
     projection_content_hash,
 )
-from apps.retrieval.schemas import RetrievalResourceType, RetrievalSourceType
 
 
 class SQLExampleSourceProjector:

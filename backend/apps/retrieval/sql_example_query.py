@@ -13,13 +13,13 @@ from apps.retrieval.embedding import (
     default_retrieval_embedding_provider,
 )
 from apps.retrieval.errors import RetrievalConfigurationError, RetrievalError
-from apps.retrieval.profiles import get_retrieval_profile
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     RetrievalChannel,
     RetrievalChannelDiagnostic,
     RetrievalChannelStatus,
     RetrievalProfileName,
 )
+from apps.retrieval.profiles import get_retrieval_profile
 from apps.retrieval.semantic_runtime import (
     ObservedEmbeddingProvider,
     RetrievalEmbeddingRuntimeConfig,

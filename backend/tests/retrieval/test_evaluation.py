@@ -11,8 +11,7 @@ from apps.retrieval.evaluation import (
     evaluate_baseline,
     load_gold_set,
 )
-from apps.retrieval.payload import semantic_payload_to_bundle
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,
     RetrievalBindings,
@@ -31,6 +30,7 @@ from apps.retrieval.schemas import (
     RetrievalSlotDecision,
     RetrievalSourceType,
 )
+from apps.retrieval.payload import semantic_payload_to_bundle
 
 GOLD_SET_PATH = Path(__file__).parent / "golden" / "semantic_binding.json"
 

@@ -10,7 +10,7 @@ from apps.retrieval.hybrid import (
     SemanticBindingHybridRetriever,
     reciprocal_rank_fusion,
 )
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     RetrievalChannel,
     RetrievalChannelStatus,
     RetrievalHit,

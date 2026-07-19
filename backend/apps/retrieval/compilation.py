@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from apps.retrieval.errors import RetrievalPermissionError, RetrievalQueryError
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     ExecutableAssetReference,
     RetrievalDecision,
     RetrievalDecisionStatus,

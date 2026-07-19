@@ -10,7 +10,7 @@ from statistics import fmean
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,
     RetrievalBundle,

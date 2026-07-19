@@ -11,6 +11,7 @@ from apps.retrieval.models import (
     RetrievalSourceModel,
     RetrievalUnitModel,
 )
+from apps.retrieval.models.orm import RetrievalSourceModel as ORMSourceModel
 
 
 def _constraint_columns(table, constraint_type):
@@ -39,6 +40,10 @@ def test_retrieval_storage_defines_all_logical_tables():
         "retrieval_index_job",
         "retrieval_query_trace",
     }
+
+
+def test_legacy_models_import_maps_to_new_orm_definition():
+    assert RetrievalSourceModel is ORMSourceModel
 
 
 def test_scope_and_acl_fields_are_indexable_columns_not_only_json_metadata():

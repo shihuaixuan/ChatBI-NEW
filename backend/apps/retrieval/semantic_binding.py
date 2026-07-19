@@ -15,14 +15,14 @@ from apps.retrieval.embedding import (
 )
 from apps.retrieval.errors import RetrievalConfigurationError
 from apps.retrieval.hybrid import HybridRetrievalConfig, SemanticBindingHybridRetriever
-from apps.retrieval.payload import bundle_to_semantic_payload
-from apps.retrieval.policy import SemanticBindingPolicy, bind_default_time_dimensions
-from apps.retrieval.profiles import get_retrieval_profile
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     RetrievalBundle,
     RetrievalProfileName,
     RetrievalRequest,
 )
+from apps.retrieval.payload import bundle_to_semantic_payload
+from apps.retrieval.policy import SemanticBindingPolicy, bind_default_time_dimensions
+from apps.retrieval.profiles import get_retrieval_profile
 from apps.retrieval.semantic_runtime import (
     ObservedEmbeddingProvider,
     RetrievalEmbeddingRuntimeConfig,

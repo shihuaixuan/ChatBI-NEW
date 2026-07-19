@@ -9,7 +9,7 @@ from apps.capabilities.semantic.retrieval import (
     retrieve_semantic_assets,
 )
 from apps.retrieval.errors import RetrievalQueryError
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     RetrievalBindings,
     RetrievalBundle,
     RetrievalDecision,

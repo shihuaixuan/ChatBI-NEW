@@ -11,15 +11,7 @@ from apps.retrieval.errors import (
     RetrievalQueryError,
 )
 from apps.retrieval.hybrid import HybridRecallResult, SubQueryRecallResult
-from apps.retrieval.payload import bundle_to_semantic_payload
-from apps.retrieval.planner import RetrievalQueryPlan
-from apps.retrieval.policy import (
-    RerankCandidate,
-    RerankScore,
-    SemanticBindingPolicy,
-    bind_default_time_dimensions,
-)
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     AssetReference,
     RetrievalChannel,
     RetrievalChannelDiagnostic,
@@ -35,6 +27,14 @@ from apps.retrieval.schemas import (
     RetrievalScores,
     RetrievalSourceType,
     RetrievalSubQuery,
+)
+from apps.retrieval.payload import bundle_to_semantic_payload
+from apps.retrieval.planner import RetrievalQueryPlan
+from apps.retrieval.policy import (
+    RerankCandidate,
+    RerankScore,
+    SemanticBindingPolicy,
+    bind_default_time_dimensions,
 )
 from apps.retrieval.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
 from apps.semantic.models.dto import DatasetSchema, SchemaElement

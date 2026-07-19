@@ -1100,7 +1100,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 **实施状态：进行中**
 
-截至 2026-07-19，已完成四批推荐问题、SQL 示例资源迁移和 Retrieval 来源隔离：
+截至 2026-07-19，已完成五批推荐问题、SQL 示例资源迁移和 Retrieval 来源隔离：
 
 1. 已建立 Knowledge 的推荐问题 DTO、ORM、Repository、Service、API 和组装入口，推荐问题源数据只有一个
    权威写入实现。
@@ -1140,6 +1140,11 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 17. 删除旧 `knowledge.repository.embedding`、`common.utils.embedding_threads`、启动缺失向量补全和源数据变更后的
     旧向量写入。第四批 Knowledge、Retrieval、Agent、Chat、XPack 和架构定向回归 201 项通过，完整后端回归
     804 项通过；新增代码通过 Ruff 和严格 Mypy，OpenAPI 保持 154 个路径。
+18. Retrieval 的 7 个 SQLModel 持久化模型已迁入 `models/orm`，请求、命中、决策和诊断 DTO 已迁入
+    `models/dto`。生产代码和基线采集脚本统一使用新路径，ORM 与跨领域 DTO 的边界可以由导入路径直接识别。
+19. `apps.retrieval.models` 包和 `apps.retrieval.schemas` 文件只保留兼容转发，旧导入与新定义保持同一对象身份；
+    新增架构守卫禁止 Retrieval 运行时代码重新使用兼容入口。第五批 Retrieval 和架构定向回归 105 项通过，
+    完整后端回归 807 项通过；Retrieval 全目录通过 Ruff 和严格 Mypy。
 
 **目标**
 
@@ -1157,7 +1162,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 5. Retrieval 只读取公开资源快照，不导入对方 ORM 和具体仓储。Semantic 和 SQL 示例来源已完成。
 6. 内容变更后通过事件或索引端口提交重建请求。SQL 示例已接入 Retrieval durable job，并与源数据使用同一
    事务；旧向量读写链路已删除。
-7. 将 `retrieval/models.py` 和 `schemas.py` 分别迁入 ORM 与 DTO 目录。
+7. 将 `retrieval/models.py` 和 `schemas.py` 分别迁入 ORM 与 DTO 目录。已完成，旧路径只保留兼容转发。
 8. 将检索查询、索引构建和来源投影分开，保持主流程可读。统一 worker、SQL 示例来源投影、索引协调和
    `SQL_EXEMPLAR` 查询执行器已拆分完成。
 

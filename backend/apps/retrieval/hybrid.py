@@ -15,9 +15,7 @@ from apps.retrieval.errors import (
     RetrievalError,
     RetrievalIndexUnavailableError,
 )
-from apps.retrieval.planner import RetrievalQueryPlan, SemanticBindingQueryPlanner
-from apps.retrieval.profiles import get_retrieval_profile
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     AssetReference,
     RetrievalChannel,
     RetrievalChannelDiagnostic,
@@ -31,6 +29,8 @@ from apps.retrieval.schemas import (
     RetrievalSourceType,
     RetrievalSubQuery,
 )
+from apps.retrieval.planner import RetrievalQueryPlan, SemanticBindingQueryPlanner
+from apps.retrieval.profiles import get_retrieval_profile
 
 
 class QueryEmbeddingProvider(Protocol):

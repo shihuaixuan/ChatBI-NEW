@@ -14,13 +14,13 @@ from apps.retrieval.indexing import (
     RetrievalIndexingService,
     RetryableIndexingError,
 )
-from apps.retrieval.models import (
+from apps.retrieval.models.dto import RetrievalResourceType, RetrievalSourceType
+from apps.retrieval.models.orm import (
     RetrievalIndexGenerationModel,
     RetrievalResourceModel,
     RetrievalSourceModel,
     RetrievalUnitModel,
 )
-from apps.retrieval.schemas import RetrievalResourceType, RetrievalSourceType
 from apps.retrieval.sql_example_indexing import SQLExampleIndexCoordinator
 from apps.retrieval.sql_example_projector import SQLExampleSourceProjector
 from common.core.db import engine

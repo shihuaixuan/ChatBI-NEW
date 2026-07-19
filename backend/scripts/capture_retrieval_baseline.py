@@ -18,8 +18,8 @@ from apps.retrieval.evaluation import (
     RetrievalGoldenCase,
     load_gold_set,
 )
+from apps.retrieval.models.dto import RetrievalChannel, RetrievalChannelStatus
 from apps.retrieval.payload import semantic_payload_to_bundle
-from apps.retrieval.schemas import RetrievalChannel, RetrievalChannelStatus
 from apps.retrieval.service import build_retrieval_service
 from common.core.db import engine
 

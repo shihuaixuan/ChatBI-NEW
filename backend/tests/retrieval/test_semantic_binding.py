@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from apps.retrieval.errors import RetrievalConfigurationError
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     RetrievalBindings,
     RetrievalBundle,
     RetrievalDecision,

@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from apps.retrieval.models.dto import RetrievalResourceType, RetrievalSourceType
 from apps.retrieval.projection import ProjectedResource, ProjectedUnit
-from apps.retrieval.schemas import RetrievalResourceType, RetrievalSourceType
 
 
 def _knowledge_resource(**overrides) -> ProjectedResource:

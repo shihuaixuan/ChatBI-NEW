@@ -10,8 +10,8 @@ from apps.knowledge.models.dto import (
 )
 from apps.retrieval.index_profile import build_retrieval_index_profile
 from apps.retrieval.indexing import IndexEmbeddingProfile, RetrievalIndexingService
-from apps.retrieval.models import RetrievalSourceModel
-from apps.retrieval.schemas import RetrievalSourceType
+from apps.retrieval.models.dto import RetrievalSourceType
+from apps.retrieval.models.orm import RetrievalSourceModel
 from apps.retrieval.sql_example_projector import SQLExampleSourceProjector
 from apps.retrieval.worker import submit_index_jobs
 

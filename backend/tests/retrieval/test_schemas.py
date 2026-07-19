@@ -3,6 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
+from apps.retrieval.models.dto import RetrievalRequest as RetrievalRequestDTO
 from apps.retrieval.profiles import PROFILE_REGISTRY, get_retrieval_profile
 from apps.retrieval.schemas import (
     AssetReference,
@@ -18,11 +19,16 @@ from apps.retrieval.schemas import (
     RetrievalHit,
     RetrievalProfileName,
     RetrievalPurpose,
+    RetrievalRequest,
     RetrievalResourceType,
     RetrievalScores,
     RetrievalSlotDecision,
     RetrievalSourceType,
 )
+
+
+def test_legacy_schemas_import_maps_to_new_dto_definition():
+    assert RetrievalRequest is RetrievalRequestDTO
 
 
 def _metric_hit(asset_id: int = 7) -> RetrievalHit:

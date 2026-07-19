@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from apps.retrieval.planner import SemanticBindingQueryPlanner
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     RetrievalDimensionSlot,
     RetrievalIntent,
     RetrievalProfileName,
@@ -11,6 +10,7 @@ from apps.retrieval.schemas import (
     RetrievalRequest,
     RetrievalScope,
 )
+from apps.retrieval.planner import SemanticBindingQueryPlanner
 
 
 def _request() -> RetrievalRequest:

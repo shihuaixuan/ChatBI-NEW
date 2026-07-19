@@ -12,7 +12,8 @@ import httpx
 from sqlalchemy import or_
 from sqlmodel import Session, col, select
 
-from apps.retrieval.models import (
+from apps.retrieval.models.dto import RetrievalResourceType
+from apps.retrieval.models.orm import (
     RetrievalEmbeddingModel,
     RetrievalIndexGenerationModel,
     RetrievalIndexJobModel,
@@ -21,7 +22,6 @@ from apps.retrieval.models import (
     RetrievalUnitModel,
 )
 from apps.retrieval.projection import ProjectedResource
-from apps.retrieval.schemas import RetrievalResourceType
 
 
 class BatchEmbeddingProvider(Protocol):

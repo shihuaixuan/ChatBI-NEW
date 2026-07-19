@@ -12,7 +12,7 @@ from sqlmodel import Session
 from apps.knowledge.models.dto import SQLExampleRecord, SQLExampleSourceSnapshot
 from apps.retrieval.errors import RetrievalProviderUnavailableError
 from apps.retrieval.indexing import IndexEmbeddingProfile, RetrievalIndexingService
-from apps.retrieval.schemas import RetrievalChannel, RetrievalChannelStatus
+from apps.retrieval.models.dto import RetrievalChannel, RetrievalChannelStatus
 from apps.retrieval.semantic_runtime import RetrievalEmbeddingRuntimeConfig
 from apps.retrieval.sql_example_indexing import SQLExampleIndexCoordinator
 from apps.retrieval.sql_example_query import (

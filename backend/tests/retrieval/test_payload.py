@@ -1,7 +1,6 @@
 """RetrievalBundle 到 Graph/Agent 业务契约的投影测试。"""
 
-from apps.retrieval.payload import bundle_to_semantic_payload
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,
     RetrievalBindings,
@@ -19,6 +18,7 @@ from apps.retrieval.schemas import (
     RetrievalSlotDecision,
     RetrievalSourceType,
 )
+from apps.retrieval.payload import bundle_to_semantic_payload
 from apps.retrieval.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 

@@ -6,7 +6,7 @@ from sqlmodel import Session, select
 
 from apps.retrieval.index_profile import build_retrieval_index_profile
 from apps.retrieval.indexing import IndexEmbeddingProfile, RetrievalIndexingService
-from apps.retrieval.models import RetrievalSourceModel
+from apps.retrieval.models.orm import RetrievalSourceModel
 from apps.retrieval.semantic_projector import (
     SemanticProjectionPolicy,
     SemanticSourceProjector,

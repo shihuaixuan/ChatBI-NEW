@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal, cast
 
 from apps.capabilities.time_slots import normalize_time_range_payload
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,
     RetrievalBindings,

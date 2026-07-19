@@ -14,13 +14,7 @@ from apps.retrieval.hybrid import (
     SemanticBindingSearchStore,
 )
 from apps.retrieval.indexing import IndexEmbeddingProfile, RetrievalIndexingService
-from apps.retrieval.models import RetrievalResourceModel, RetrievalSourceModel
-from apps.retrieval.projection import (
-    ProjectedResource,
-    ProjectedUnit,
-    projection_content_hash,
-)
-from apps.retrieval.schemas import (
+from apps.retrieval.models.dto import (
     RetrievalChannel,
     RetrievalChannelStatus,
     RetrievalIntent,
@@ -31,6 +25,12 @@ from apps.retrieval.schemas import (
     RetrievalScope,
     RetrievalSourceType,
     RetrievalSubQuery,
+)
+from apps.retrieval.models.orm import RetrievalResourceModel, RetrievalSourceModel
+from apps.retrieval.projection import (
+    ProjectedResource,
+    ProjectedUnit,
+    projection_content_hash,
 )
 from common.core.db import engine
 
