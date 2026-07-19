@@ -18,8 +18,10 @@ from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from apps.chatbi.models import (
+        PhysicalSchemaResult,
         SemanticQueryCompileData,
         SemanticQueryCompileResult,
+        SemanticRetrievalData,
     )
     from apps.semantic.models.dto import TermSearchResult
 
@@ -55,6 +57,28 @@ class SemanticQueryCompiler(Protocol):
         data: SemanticQueryCompileData,
     ) -> SemanticQueryCompileResult: ...
 
+
+class SemanticAssetRetriever(Protocol):
+    """Agent 对 ChatBI 语义资产检索入口的最小依赖。"""
+
+    def retrieve_for_agent(
+        self,
+        data: SemanticRetrievalData,
+        *,
+        max_candidates_per_group: int = 5,
+    ) -> dict[str, Any]: ...
+
+
+class PhysicalSchemaReader(Protocol):
+    """Agent 对 ChatBI 物理 Schema 入口的最小依赖。"""
+
+    def get(
+        self,
+        datasource_id: int,
+        *,
+        table_keyword: str = "",
+    ) -> PhysicalSchemaResult: ...
+
     def execute_sql(
         self,
         *,
@@ -78,6 +102,8 @@ class AgentToolContext:
     term_query_service: TermQueryService | None = None
     query_service: QueryService | None = None
     semantic_query_service: SemanticQueryCompiler | None = None
+    semantic_retrieval_service: SemanticAssetRetriever | None = None
+    physical_schema_service: PhysicalSchemaReader | None = None
     config: Any = None
     # 循环内跨工具共享的运行时状态（语义包、执行结果标记等），由 loop 维护。
     state: dict[str, Any] = field(default_factory=dict)

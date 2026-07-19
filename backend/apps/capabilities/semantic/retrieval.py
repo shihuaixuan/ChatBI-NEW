@@ -1,13 +1,14 @@
-"""Agentic `search_semantic_assets` 的稳定能力层入口。"""
+"""旧语义检索函数兼容入口，实际检索统一转发到 ChatBI Service。"""
 
 from __future__ import annotations
 
 from typing import Any
 
+from apps.chatbi.models import SemanticRetrievalData
+from apps.chatbi.services import SemanticRetrievalService
 from apps.retrieval.service import (
     RetrievalService,
     build_retrieval_service,
-    build_semantic_binding_request,
 )
 
 
@@ -30,79 +31,37 @@ def retrieve_semantic_assets(
     没有时按整句问题检索。
     """
 
-    service = retrieval_service or build_retrieval_service(session)
-    request = build_semantic_binding_request(
-        request_id=request_id,
-        tenant_id=oid,
-        actor_id=actor_id or 1,
-        dataset_id=dataset_id,
-        original_question=question,
-        rewritten_question=question,
-        intent=intent,
+    service = SemanticRetrievalService(
+        retrieval_service or build_retrieval_service(session)
     )
-    result = service.retrieve(request)
-    return _to_semantic_package(result.payload, max_candidates_per_group)
+    return service.retrieve_for_agent(
+        SemanticRetrievalData(
+            workspace_id=oid,
+            user_id=actor_id,
+            dataset_id=dataset_id,
+            original_question=question,
+            rewritten_question=question,
+            intent=intent or {},
+            request_id=request_id,
+        ),
+        max_candidates_per_group=max_candidates_per_group,
+    )
 
 
 def _to_semantic_package(raw: dict[str, Any], max_per_group: int) -> dict[str, Any]:
     """把图侧检索输出裁剪为 Agentic 语义包：候选 + 选中资产 + 歧义提示 + 截断统计。"""
 
-    candidate_groups = raw.get("candidate_groups") or {}
-    trimmed_groups: dict[str, list[dict[str, Any]]] = {}
-    truncated: dict[str, int] = {}
-    for group, items in candidate_groups.items():
-        items = items if isinstance(items, list) else []
-        trimmed_groups[group] = [_public_candidate(item) for item in items[:max_per_group]]
-        if len(items) > max_per_group:
-            truncated[group] = len(items) - max_per_group
-
-    return {
-        "hit": bool(raw.get("hit")),
-        "status": _agent_semantic_status(raw),
-        "dataset_id": raw.get("dataset_id"),
-        "tables": raw.get("tables") or [],
-        "metrics": raw.get("metrics") or [],
-        "dimensions": raw.get("dimensions") or [],
-        "terms": raw.get("terms") or [],
-        "selected_assets": raw.get("selected_assets") or {},
-        "slot_bindings": raw.get("slot_bindings") or {},
-        "candidate_groups": trimmed_groups,
-        "ambiguities": raw.get("ambiguities") or [],
-        "decision": raw.get("decision") or {},
-        "multi_query_plans": raw.get("multi_query_plans") or [],
-        "retrieval_strategy_version": raw.get("retrieval_strategy_version"),
-        "retrieval_diagnostics": raw.get("retrieval_diagnostics") or {},
-        "truncated": truncated,
-    }
+    return SemanticRetrievalService.project_agent_package(
+        raw,
+        max_candidates_per_group=max_per_group,
+    )
 
 
 def _public_candidate(item: dict[str, Any]) -> dict[str, Any]:
-    keep = ("asset_type", "asset_id", "biz_name", "display_name", "score", "source", "model_id", "description")
-    return {key: item.get(key) for key in keep if item.get(key) is not None}
+    return SemanticRetrievalService._public_candidate(item)
 
 
 def _agent_semantic_status(raw: dict[str, Any]) -> str | None:
     """Agent 需要知道具体歧义槽位，不能把维度歧义统一描述成指标歧义。"""
 
-    decision = raw.get("decision")
-    if not isinstance(decision, dict):
-        return raw.get("status")
-    reason_codes = {
-        str(code)
-        for code in decision.get("reason_codes") or []
-        if code
-    }
-    if "TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL" in reason_codes:
-        return "time_dimension_not_configured"
-    if decision.get("status") != "ambiguous":
-        return raw.get("status")
-    ambiguity_types = {
-        str(item.get("type") or "")
-        for item in raw.get("ambiguities") or []
-        if isinstance(item, dict) and item.get("type")
-    }
-    if ambiguity_types == {"metric"}:
-        return "metric_ambiguous"
-    if ambiguity_types == {"dimension"}:
-        return "dimension_ambiguous"
-    return "semantic_ambiguous"
+    return SemanticRetrievalService.agent_semantic_status(raw)

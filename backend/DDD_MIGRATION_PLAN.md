@@ -1190,8 +1190,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 **实施状态：进行中**
 
-截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛、第三批会话记录状态与结果投影统一，
-以及第四批语义 SQL 编译入口收敛：
+截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛、第三批会话记录状态与结果投影统一、
+第四批语义 SQL 编译入口收敛，以及第五批语义检索与物理 Schema 查询收敛：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1242,6 +1242,17 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     不再维护另一套 Schema 加载和编译流程。
 22. 第四批 Agent、Graph、ChatBI、Semantic 和架构组合回归 539 项通过，完整后端回归 854 项通过；新增服务和 DTO
     通过 Ruff 与严格 Mypy，依赖基线未增加违规项。
+23. ChatBI 新增 `SemanticRetrievalService`，统一根据工作空间、用户、数据集、原问题、改写问题和确认后的意图构造
+    Retrieval 请求。Graph 获取完整检索结果，Agent 使用同一结果的受控裁剪投影，候选截断、公开字段和歧义状态
+    不再由 `capabilities` 单独维护。
+24. Agent `search_semantic_assets` 工具和 Graph `SemanticKnowledgeAdapter` 已改为调用同一个 ChatBI 检索服务；Graph
+    运行时复用已有的带 Schema Provider 的 Retrieval Service。旧 `apps.capabilities.semantic.retrieval` 只保留兼容
+    函数和旧测试入口，实际请求组装及 Agent 投影均转发到 ChatBI。
+25. ChatBI 新增 `PhysicalSchemaService`，通过 Datasource 公开元数据 Service 统一读取已启用表和字段、应用表名或注释
+    过滤，并返回 ChatBI DTO。Agent `get_dataset_schema` 不再在工具方法内导入 Datasource ORM 或直接执行 SQL；依赖
+    基线同步减少 Agent 到 Datasource 内部模型和函数内导入两条历史违规。
+26. 第五批 Agent、Graph、ChatBI、Retrieval、Workflow 和架构组合回归 538 项通过，完整后端回归 861 项通过；新增
+    服务和 DTO 通过 Ruff 与严格 Mypy，`git diff --check` 通过。
 
 **目标**
 
@@ -1253,11 +1264,11 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
    ConversationService 已完成第二批基础会话生命周期收敛。
 2. 迁移 Chat、ChatRecord 和 ChatLog，并拆分 ORM 与 DTO。核心 ORM 和创建、重命名、会话信息 DTO 已迁移，
    历史记录、日志响应及旧 LLM 请求 DTO 待后续批次继续拆分。
-3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。SQL 语义编译、
-   SQL 校验、权限应用和执行已统一，问题理解、检索和回答待后续批次收敛。
+3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。检索、SQL 语义
+   编译、SQL 校验、权限应用和执行已统一，问题理解和回答待后续批次收敛。
 4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。SQL 校验和执行工具
-   已完成，语义 SQL 编译工具已接入统一入口；物理 Schema 和 Semantic 检索工具尚待迁移。
-5. Graph Adapter 改为调用相同 Service。SQL 编译和执行 Adapter 已完成，其余 Adapter 待后续迁移。
+   已完成，语义 SQL 编译、物理 Schema 和 Semantic 检索工具已接入统一入口；问题理解和回答工具待后续迁移。
+5. Graph Adapter 改为调用相同 Service。Semantic 检索、SQL 编译和执行 Adapter 已完成，其余 Adapter 待后续迁移。
 6. 旧 `chat/task/llm.py` 调整为兼容入口或直接删除，不能继续维护独立业务逻辑。
 7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期、所有权、Agent 与 Graph 的
    记录状态、澄清等待状态及最终结果投影已统一；执行器内部 Run 状态继续保持各自语义。

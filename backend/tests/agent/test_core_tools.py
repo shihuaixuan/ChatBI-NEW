@@ -1,7 +1,5 @@
 """核心工具的守护行为测试（不依赖真实 DB/LLM）。"""
 
-from unittest.mock import patch
-
 from apps.agent.tools.base import AgentToolContext
 from apps.agent.tools.core import (
     CompileSemanticSqlArgs,
@@ -10,16 +8,29 @@ from apps.agent.tools.core import (
     ExecuteSqlTool,
     FinishArgs,
     FinishTool,
+    GetDatasetSchemaArgs,
+    GetDatasetSchemaTool,
     SearchSemanticAssetsArgs,
     SearchSemanticAssetsTool,
     ValidateSqlArgs,
     ValidateSqlTool,
 )
 from apps.capabilities.schemas import ToolResult
-from apps.chatbi.models import SemanticQueryCompileResult
+from apps.chatbi.models import (
+    PhysicalSchemaField,
+    PhysicalSchemaResult,
+    PhysicalSchemaTable,
+    SemanticQueryCompileResult,
+)
 
 
-def _ctx(query_service=None, semantic_query_service=None, **state):
+def _ctx(
+    query_service=None,
+    semantic_query_service=None,
+    semantic_retrieval_service=None,
+    physical_schema_service=None,
+    **state,
+):
     values = {
         "question_understanding": {
             "rewritten_question": "本月销售额",
@@ -35,6 +46,8 @@ def _ctx(query_service=None, semantic_query_service=None, **state):
         datasource_id=5,
         query_service=query_service,
         semantic_query_service=semantic_query_service,
+        semantic_retrieval_service=semantic_retrieval_service,
+        physical_schema_service=physical_schema_service,
         state=values,
     )
 
@@ -77,6 +90,37 @@ class RecordingSemanticQueryService:
             dimensions=["city"],
             datasource_id=5,
             used_assets=[],
+        )
+
+
+class RecordingSemanticRetrievalService:
+    def __init__(self, package) -> None:
+        self.package = package
+        self.calls = []
+
+    def retrieve_for_agent(self, data, *, max_candidates_per_group=5):
+        self.calls.append((data, max_candidates_per_group))
+        return self.package
+
+
+class StaticPhysicalSchemaService:
+    def get(self, datasource_id, *, table_keyword=""):
+        assert datasource_id == 5
+        assert table_keyword == "订单"
+        return PhysicalSchemaResult(
+            tables=[
+                PhysicalSchemaTable(
+                    name="orders",
+                    comment="订单表",
+                    fields=[
+                        PhysicalSchemaField(
+                            name="amount",
+                            data_type="numeric",
+                            comment="订单金额",
+                        )
+                    ],
+                )
+            ]
         )
 
 
@@ -286,14 +330,6 @@ def test_search_collects_asset_ids_and_tables_into_state():
         "dimension_slots": [{"name": "城市", "role": "group_by"}],
         "time_mentions": [],
     }
-    ctx = _ctx(
-        dataset_id=3,
-        question_understanding={
-            "rewritten_question": "按城市看 gmv",
-            "intent": intent,
-            "validation": {"status": "valid"},
-        },
-    )
     package = {
         "hit": True,
         "status": "hit",
@@ -301,14 +337,41 @@ def test_search_collects_asset_ids_and_tables_into_state():
         "candidate_groups": {"metrics": [{"asset_id": 7, "biz_name": "gmv"}]},
         "selected_assets": {"dimensions": [{"asset_id": 8, "biz_name": "city"}]},
     }
-    with patch("apps.agent.tools.core.retrieve_semantic_assets", return_value=package) as retrieve_mock:
-        output = SearchSemanticAssetsTool().execute(ctx, SearchSemanticAssetsArgs())
+    service = RecordingSemanticRetrievalService(package)
+    ctx = _ctx(
+        semantic_retrieval_service=service,
+        dataset_id=3,
+        question_understanding={
+            "rewritten_question": "按城市看 gmv",
+            "intent": intent,
+            "validation": {"status": "valid"},
+        },
+    )
+    output = SearchSemanticAssetsTool().execute(ctx, SearchSemanticAssetsArgs())
     assert output.success
-    assert retrieve_mock.call_args.kwargs["question"] == "按城市看 gmv"
-    assert retrieve_mock.call_args.kwargs["intent"] is intent
+    request = service.calls[0][0]
+    assert request.rewritten_question == "按城市看 gmv"
+    assert request.intent is intent
     assert ctx.state["semantic_asset_ids"] == [7, 8]
     assert ctx.state["allowed_tables"] == ["dws_sales"]
     assert ctx.state["semantic_package"] is package
+
+
+def test_physical_schema_tool_uses_chatbi_service():
+    ctx = _ctx(physical_schema_service=StaticPhysicalSchemaService())
+
+    output = GetDatasetSchemaTool().execute(
+        ctx,
+        GetDatasetSchemaArgs(table_keyword="订单"),
+    )
+
+    assert output.success
+    assert output.payload["tables"][0]["fields"][0] == {
+        "name": "amount",
+        "type": "numeric",
+        "comment": "订单金额",
+    }
+    assert ctx.state["allowed_tables"] == ["orders"]
 
 
 def test_search_rejects_missing_confirmed_understanding():

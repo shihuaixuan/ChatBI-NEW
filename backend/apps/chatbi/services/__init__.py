@@ -17,11 +17,19 @@ from apps.chatbi.services.conversation_service import (
     ConversationServiceConfigurationError,
     RecommendedQuestionProvider,
 )
+from apps.chatbi.services.physical_schema_service import (
+    DatasourceMetadataReader,
+    PhysicalSchemaService,
+)
 from apps.chatbi.services.query_service import QueryService, SQLExecutor
 from apps.chatbi.services.semantic_query_service import (
     SemanticCompilationGateway,
     SemanticQueryCompileError,
     SemanticQueryService,
+)
+from apps.chatbi.services.semantic_retrieval_service import (
+    SemanticRetrievalGateway,
+    SemanticRetrievalService,
 )
 from apps.chatbi.services.sql_permission import (
     PermissionPolicyProvider,
@@ -42,7 +50,9 @@ __all__ = [
     "ConversationOwnershipError",
     "ConversationService",
     "ConversationServiceConfigurationError",
+    "DatasourceMetadataReader",
     "PermissionPolicyProvider",
+    "PhysicalSchemaService",
     "QueryService",
     "RecommendedQuestionProvider",
     "SQLExecutor",
@@ -50,5 +60,7 @@ __all__ = [
     "SemanticCompilationGateway",
     "SemanticQueryCompileError",
     "SemanticQueryService",
+    "SemanticRetrievalGateway",
+    "SemanticRetrievalService",
     "normalize_chat_record_status",
 ]

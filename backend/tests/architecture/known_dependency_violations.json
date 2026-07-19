@@ -1,6 +1,5 @@
 {
   "cross_domain_internal_models": [
-    "apps/agent/tools/core.py -> apps.datasource.models.datasource",
     "apps/capabilities/semantic/compile.py -> apps.semantic.models.orm",
     "apps/chat/curd/chat.py -> apps.datasource.models.datasource",
     "apps/chat/curd/chat.py -> apps.semantic.models.orm",
@@ -44,7 +43,6 @@
   ],
   "function_local_app_imports": [
     "apps/agent/loop.py -> apps.ai_model.model_factory",
-    "apps/agent/tools/core.py -> apps.datasource.models.datasource",
     "apps/capabilities/question_understanding.py -> apps.ai_model.model_factory",
     "apps/workflow/capabilities/adapters/answer.py -> apps.ai_model.model_factory",
     "apps/workflow/capabilities/adapters/question.py -> apps.ai_model.model_factory"

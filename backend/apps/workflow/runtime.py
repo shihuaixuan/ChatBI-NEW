@@ -2,7 +2,10 @@ from sqlmodel import Session
 
 from apps.access_control.data_policy import SessionDataPolicyProvider
 from apps.capabilities.sql.executor import SqlExecuteTool
-from apps.chatbi.composition import build_semantic_query_service
+from apps.chatbi.composition import (
+    build_semantic_query_service,
+    build_semantic_retrieval_service,
+)
 from apps.chatbi.services.sql_permission import PermissionAdapter
 from apps.retrieval.service import build_retrieval_service
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
@@ -126,7 +129,10 @@ def build_real_chatbi_v1_runtime(
         ),
         answer_adapter=AnswerAdapter(model_client=answer_model_client),
         knowledge_adapter=SemanticKnowledgeAdapter(
-            retrieval_service=retrieval_service,
+            semantic_retrieval_service=build_semantic_retrieval_service(
+                session,
+                retrieval_gateway=retrieval_service,
+            ),
         ),
         interaction_adapter=InteractionAdapter(schema_provider=schema_provider),
         sql_adapter=SqlAdapter(

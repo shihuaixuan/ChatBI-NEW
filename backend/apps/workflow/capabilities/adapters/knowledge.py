@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from apps.chatbi.models import SemanticRetrievalData
+from apps.chatbi.services import (
+    SemanticRetrievalService,
+)
 from apps.retrieval.errors import RetrievalConfigurationError, RetrievalQueryError
-from apps.retrieval.service import RetrievalService, build_semantic_binding_request
+from apps.retrieval.service import RetrievalService
 from apps.workflow.capabilities.context import ChatBIRunContext
 from apps.workflow.capabilities.interactions import apply_slot_response_to_intent
 
@@ -16,13 +20,18 @@ class SemanticKnowledgeAdapter:
     def __init__(
         self,
         retrieval_service: RetrievalService | None = None,
+        semantic_retrieval_service: SemanticRetrievalService | None = None,
     ) -> None:
-        self._retrieval_service = retrieval_service
+        self._semantic_retrieval_service = semantic_retrieval_service
+        if self._semantic_retrieval_service is None and retrieval_service is not None:
+            self._semantic_retrieval_service = SemanticRetrievalService(
+                retrieval_service
+            )
 
     def retrieve(self, request: dict[str, Any]) -> dict[str, Any]:
         ctx = ChatBIRunContext(request)
         intent = apply_slot_response_to_intent(ctx.intent, ctx.slot_response)
-        if self._retrieval_service is None:
+        if self._semantic_retrieval_service is None:
             raise RetrievalConfigurationError(
                 "Workflow 未配置统一检索服务",
                 details={"reason_code": "RETRIEVAL_SERVICE_MISSING"},
@@ -32,16 +41,17 @@ class SemanticKnowledgeAdapter:
                 "语义检索缺少问题或数据集",
                 details={"reason_code": "SEMANTIC_BINDING_REQUEST_INCOMPLETE"},
             )
-        retrieval_request = build_semantic_binding_request(
-            request_id=ctx.run_id or None,
-            tenant_id=ctx.tenant_id,
-            actor_id=ctx.user_id or 1,
-            dataset_id=ctx.dataset_id,
-            original_question=ctx.raw_question or ctx.question,
-            rewritten_question=ctx.question,
-            intent=intent,
+        return self._semantic_retrieval_service.retrieve(
+            SemanticRetrievalData(
+                workspace_id=ctx.tenant_id,
+                user_id=ctx.user_id,
+                dataset_id=ctx.dataset_id,
+                original_question=ctx.raw_question or ctx.question,
+                rewritten_question=ctx.question,
+                intent=intent,
+                request_id=ctx.run_id or None,
+            )
         )
-        return self._retrieval_service.retrieve(retrieval_request).payload
 
 
 __all__ = ["SemanticKnowledgeAdapter"]

@@ -11,11 +11,17 @@ from apps.chatbi.models.dto.conversation import (
     CreateChat,
     RenameChat,
 )
+from apps.chatbi.models.dto.physical_schema import (
+    PhysicalSchemaField,
+    PhysicalSchemaResult,
+    PhysicalSchemaTable,
+)
 from apps.chatbi.models.dto.semantic_query import (
     SemanticQueryCompileData,
     SemanticQueryCompileResult,
     SemanticQueryUsedAsset,
 )
+from apps.chatbi.models.dto.semantic_retrieval import SemanticRetrievalData
 
 __all__ = [
     "ChatInfo",
@@ -26,7 +32,11 @@ __all__ = [
     "ConversationBinding",
     "ConversationCreateData",
     "CreateChat",
+    "PhysicalSchemaField",
+    "PhysicalSchemaResult",
+    "PhysicalSchemaTable",
     "RenameChat",
+    "SemanticRetrievalData",
     "SemanticQueryCompileData",
     "SemanticQueryCompileResult",
     "SemanticQueryUsedAsset",

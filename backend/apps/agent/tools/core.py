@@ -13,9 +13,8 @@ from apps.agent.tools.base import (
     json_summary,
 )
 from apps.capabilities.semantic.compile import resolve_dataset_by_datasource
-from apps.capabilities.semantic.retrieval import retrieve_semantic_assets
 from apps.capabilities.time_slots import normalize_time_range
-from apps.chatbi.models import SemanticQueryCompileData
+from apps.chatbi.models import SemanticQueryCompileData, SemanticRetrievalData
 from apps.chatbi.services import QueryService, SemanticQueryCompileError
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
@@ -104,14 +103,22 @@ class SearchSemanticAssetsTool(AgentTool):
                 summary="已确认的问题理解结构不完整，无法执行语义检索。",
                 error_code="question_understanding_invalid",
             )
-        package = retrieve_semantic_assets(
-            ctx.session,
-            oid=ctx.oid,
-            dataset_id=dataset_id,
-            question=question,
-            intent=intent,
-            actor_id=ctx.user_id,
-            request_id=str(ctx.state.get("run_id") or "") or None,
+        if ctx.semantic_retrieval_service is None:
+            return ToolOutput(
+                success=False,
+                summary="ChatBI 语义检索服务未配置。",
+                error_code="semantic_retrieval_service_required",
+            )
+        package = ctx.semantic_retrieval_service.retrieve_for_agent(
+            SemanticRetrievalData(
+                workspace_id=ctx.oid,
+                user_id=ctx.user_id,
+                dataset_id=dataset_id,
+                original_question=str(ctx.state.get("question") or question),
+                rewritten_question=question,
+                intent=intent,
+                request_id=str(ctx.state.get("run_id") or "") or None,
+            )
         )
         # 语义包与合法资产集合入 state，供 compile 校验"只接受出现过的资产"。
         ctx.state["semantic_package"] = package
@@ -145,43 +152,42 @@ class GetDatasetSchemaTool(AgentTool):
     args_model = GetDatasetSchemaArgs
 
     def execute(self, ctx: AgentToolContext, args: GetDatasetSchemaArgs) -> ToolOutput:
-        from sqlalchemy import select
-
-        from apps.datasource.models.datasource import CoreField, CoreTable
-
         if not ctx.datasource_id:
             return ToolOutput(success=False, summary="缺少数据源，无法查看表结构。", error_code="datasource_required")
-        tables = ctx.session.exec(
-            select(CoreTable).where(CoreTable.ds_id == ctx.datasource_id, CoreTable.checked.is_(True))
-        ).scalars().all()
-        keyword = args.table_keyword.strip().lower()
-        items = []
-        for table in tables:
-            comment = table.custom_comment or table.table_comment or ""
-            if keyword and keyword not in table.table_name.lower() and keyword not in comment.lower():
-                continue
-            fields = ctx.session.exec(
-                select(CoreField).where(CoreField.table_id == table.id, CoreField.checked.is_(True))
-            ).scalars().all()
-            items.append(
-                {
-                    "table": table.table_name,
-                    "comment": comment,
-                    "fields": [
-                        {
-                            "name": field.field_name,
-                            "type": field.field_type,
-                            "comment": field.custom_comment or field.field_comment,
-                        }
-                        for field in fields
-                    ],
-                }
+        if ctx.physical_schema_service is None:
+            return ToolOutput(
+                success=False,
+                summary="ChatBI 物理 Schema 服务未配置。",
+                error_code="physical_schema_service_required",
             )
+        schema = ctx.physical_schema_service.get(
+            ctx.datasource_id,
+            table_keyword=args.table_keyword,
+        )
+        items = [
+            {
+                "table": table.name,
+                "comment": table.comment,
+                "fields": [
+                    {
+                        "name": field.name,
+                        "type": field.data_type,
+                        "comment": field.comment,
+                    }
+                    for field in table.fields
+                ],
+            }
+            for table in schema.tables
+        ]
         allowed = set(ctx.state.get("allowed_tables") or [])
         allowed.update(item["table"] for item in items)
         ctx.state["allowed_tables"] = sorted(allowed)
         payload = {"tables": items, "table_count": len(items)}
-        return ToolOutput(success=True, summary=json_summary(payload, _summary_limit(ctx)), payload=payload)
+        return ToolOutput(
+            success=True,
+            summary=json_summary(payload, _summary_limit(ctx)),
+            payload=payload,
+        )
 
 
 class CompileFilter(BaseModel):

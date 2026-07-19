@@ -63,3 +63,38 @@ def test_chatbi_semantic_query_service_has_no_session_or_repository_dependency()
     assert "sqlmodel" not in imports
     assert not any(".repository" in module for module in imports)
     assert not any(".models.orm" in module for module in imports)
+
+
+def test_agent_semantic_retrieval_and_physical_schema_use_chatbi_services():
+    imports = _imports("apps/agent/tools/core.py")
+    source = (
+        BACKEND_DIR / "apps/agent/tools/core.py"
+    ).read_text(encoding="utf-8")
+
+    assert "apps.capabilities.semantic.retrieval" not in imports
+    assert not any(module.startswith("apps.datasource") for module in imports)
+    assert "semantic_retrieval_service.retrieve_for_agent" in source
+    assert "physical_schema_service.get" in source
+
+
+def test_graph_semantic_retrieval_uses_chatbi_service():
+    imports = _imports("apps/workflow/capabilities/adapters/knowledge.py")
+    source = (
+        BACKEND_DIR / "apps/workflow/capabilities/adapters/knowledge.py"
+    ).read_text(encoding="utf-8")
+
+    assert "apps.chatbi.services" in imports
+    assert "build_semantic_binding_request" not in source
+    assert "semantic_retrieval_service.retrieve" in source
+
+
+def test_chatbi_retrieval_and_schema_services_have_no_runtime_dependency():
+    retrieval_imports = _imports(
+        "apps/chatbi/services/semantic_retrieval_service.py"
+    )
+    schema_imports = _imports("apps/chatbi/services/physical_schema_service.py")
+
+    for imports in (retrieval_imports, schema_imports):
+        assert "sqlmodel" not in imports
+        assert not any(".repository" in module for module in imports)
+        assert not any(".models.orm" in module for module in imports)
