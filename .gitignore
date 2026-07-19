@@ -26,6 +26,8 @@ backend/tests/*
 !backend/tests/capabilities/**
 !backend/tests/datasource/
 !backend/tests/datasource/**
+!backend/tests/knowledge/
+!backend/tests/knowledge/**
 !backend/tests/architecture/
 !backend/tests/architecture/**
 !backend/tests/chat/

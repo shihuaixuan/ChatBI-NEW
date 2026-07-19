@@ -13,9 +13,8 @@ from apps.ai_model.api import model_config as ai_model
 from apps.assistant.api import assistants as assistant
 from apps.chat.api import chat
 from apps.dashboard.api import dashboard_api
-from apps.data_training.api import data_training
 from apps.datasource.api import datasource, table_relation
-from apps.knowledge.api import recommended_problem
+from apps.knowledge.api import recommended_problem, sql_example
 from apps.mcp import mcp
 from apps.semantic.api import legacy_terms
 from apps.semantic.api.router import router as semantic_router
@@ -34,7 +33,7 @@ api_router.include_router(access_workspace.router)
 api_router.include_router(assistant.router)
 api_router.include_router(ai_model.router)
 api_router.include_router(base.router)
-api_router.include_router(data_training.router)
+api_router.include_router(sql_example.router)
 api_router.include_router(datasource.router)
 api_router.include_router(chat.router)
 api_router.include_router(agent.router)

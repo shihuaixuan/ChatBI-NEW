@@ -8,3 +8,22 @@ class RecommendedProblemDatasourceNotFoundError(LookupError):
 
 class RecommendedProblemRequestError(ValueError):
     """推荐问题保存请求缺少必要字段。"""
+
+
+class SQLExampleError(ValueError):
+    """可由接口层本地化的 SQL 示例业务错误。"""
+
+    def __init__(self, message_key: str, *format_args: object) -> None:
+        super().__init__(message_key)
+        self.message_key = message_key
+        self.format_args = format_args
+
+
+class SQLExampleNotFoundError(SQLExampleError):
+    def __init__(self) -> None:
+        super().__init__("i18n_data_training.data_training_not_exists")
+
+
+class SQLExampleDuplicateError(SQLExampleError):
+    def __init__(self) -> None:
+        super().__init__("i18n_data_training.exists_in_db")

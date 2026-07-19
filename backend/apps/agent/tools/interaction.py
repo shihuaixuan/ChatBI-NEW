@@ -10,6 +10,7 @@ from apps.agent.tools.base import (
     ToolOutput,
     json_summary,
 )
+from apps.knowledge.composition import build_sql_example_query_service
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
 
@@ -105,9 +106,11 @@ class GetSqlExamplesTool(AgentTool):
     args_model = GetSqlExamplesArgs
 
     def execute(self, ctx: AgentToolContext, args: GetSqlExamplesArgs) -> ToolOutput:
-        from apps.data_training.curd.data_training import select_training_by_question
-
-        results = select_training_by_question(ctx.session, args.question, ctx.oid, ctx.datasource_id) or []
+        results = build_sql_example_query_service(ctx.session).search(
+            args.question,
+            ctx.oid,
+            datasource_id=ctx.datasource_id,
+        )
         payload = {"items": results[:5], "count": len(results), "note": "仅供参考，非真实结果"}
         if not results:
             return ToolOutput(success=True, summary="没有召回到相似的 SQL 示例。", payload=payload)

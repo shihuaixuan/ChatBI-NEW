@@ -81,15 +81,15 @@ from apps.chat.models.chat_model import (
 )
 from apps.chat.services.semantic_binding import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
 from apps.chat.services.term_context import ChatTermContextService
-from apps.data_training.curd.data_training import get_training_template
 from apps.datasource import (
     DatasourceConnection,
     build_external_datasource_connection,
 )
 from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data
+from apps.datasource.database import check_connection, exec_sql, get_version
 from apps.datasource.embedding.ds_embedding import get_ds_embedding
 from apps.datasource.models.datasource import CoreDatasource
-from apps.datasource.database import check_connection, exec_sql, get_version
+from apps.knowledge.composition import build_sql_example_query_service
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.system.crud.parameter_manage import get_groups
 from common.core.config import settings
@@ -422,15 +422,21 @@ class LLMService:
             if self.current_assistant.type == 1:
                 calculate_ds_id = None
         if self.current_assistant and self.current_assistant.type == 1:
-            self.chat_question.data_training, example_list = get_training_template(_session,
-                                                                                   self.chat_question.question,
-                                                                                   calculate_oid,
-                                                                                   None, self.current_assistant.id)
+            self.chat_question.data_training, example_list = (
+                build_sql_example_query_service(_session).build_prompt(
+                    self.chat_question.question,
+                    calculate_oid,
+                    assistant_id=self.current_assistant.id,
+                )
+            )
         else:
-            self.chat_question.data_training, example_list = get_training_template(_session,
-                                                                                   self.chat_question.question,
-                                                                                   calculate_oid,
-                                                                                   calculate_ds_id)
+            self.chat_question.data_training, example_list = (
+                build_sql_example_query_service(_session).build_prompt(
+                    self.chat_question.question,
+                    calculate_oid,
+                    datasource_id=calculate_ds_id,
+                )
+            )
         self.current_logs[OperationEnum.FILTER_SQL_EXAMPLE] = end_log(session=_session,
                                                                       log=self.current_logs[
                                                                           OperationEnum.FILTER_SQL_EXAMPLE],

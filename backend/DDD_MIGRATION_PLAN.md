@@ -1100,7 +1100,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 **实施状态：进行中**
 
-截至 2026-07-19，已完成第一批推荐问题资源迁移：
+截至 2026-07-19，已完成两批推荐问题和 SQL 示例资源迁移：
 
 1. 已建立 Knowledge 的推荐问题 DTO、ORM、Repository、Service、API 和组装入口，推荐问题源数据只有一个
    权威写入实现。
@@ -1109,7 +1109,18 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 3. 推荐配置与问题整批替换已统一事务；问题的数据源归属、创建人和创建时间由 Service 统一写入，不再信任
    请求项中的归属和审计字段。
 4. Chat 已通过 Knowledge 公开 Service 读取自定义推荐问题，不再导入 Datasource 推荐问题 CRUD。
-5. SQL 示例资源、Retrieval Source Adapter、索引变更通知和 Retrieval 内部模型拆分将在后续批次继续实施。
+5. `data_training` 的 ORM、DTO、维护 Repository、查询 Repository、Service 和 API 已迁入 Knowledge，
+   继续映射原 `data_training` 表并保留全部 `/system/data-training` 路径。
+6. SQL 示例列表不再关联 Datasource ORM，数据源和高级应用名称分别通过 Datasource、Assistant 公开目录解析；
+   更新、启停和删除均增加工作空间范围约束，禁止跨工作空间修改源数据。
+7. Agent SQL 示例工具和旧 Chat 提示词组装已统一调用 `SQLExampleQueryService`，删除对旧
+   `data_training.curd` 的直接依赖；词法召回与旧向量召回通过独立端口合并并保持原输出格式。
+8. 内容创建、更新、启停和删除会调用明确的索引提交端口。当前旧 `data_training.embedding` 仅由迁移适配器
+   维护，后台失败会记录完整异常；后续批次将由 Retrieval Source Adapter 和 generation 索引替代。
+9. 旧 `apps/data_training/api` 和 `curd` 已删除。由于已安装 XPack 仍硬编码旧模型路径，
+   `apps/data_training/models/data_training_model.py` 暂时只保留 Knowledge 对象别名，不再拥有模型定义。
+10. SQL 示例、Agent、Chat、XPack 和架构定向回归 101 项通过，完整后端回归 793 项通过；Knowledge 核心代码
+    通过 Ruff 和严格 Mypy 检查，应用 OpenAPI 继续生成 154 个路径。
 
 **目标**
 
@@ -1117,13 +1128,15 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 **任务**
 
-1. 创建 `knowledge`，将 `data_training` 重命名并迁移为 SQL 示例资源。Knowledge 基础领域已创建，
-   SQL 示例资源尚待迁移。
+1. 创建 `knowledge`，将 `data_training` 重命名并迁移为 SQL 示例资源。已完成源数据、维护 API 和查询入口
+   迁移；只保留 XPack 所需的旧模型导入别名。
 2. 将 `DsRecommendedProblem` 迁入 Knowledge 的推荐问题资源。已完成，保留原表名兼容。
-3. 定义 SQL 示例状态、验证状态、适用数据集和关联资产规则。
+3. 定义 SQL 示例状态、验证状态、适用数据集和关联资产规则。现有启停状态、`dataset_id` 和
+   `linked_assets` 已进入 Knowledge 契约，独立验证状态及完整关联资产校验尚待实施。
 4. 为 Semantic、Knowledge 和可选 Schema 定义独立 Retrieval Source Adapter。
 5. Retrieval 只读取公开资源快照，不导入对方 ORM 和具体仓储。
-6. 内容变更后通过事件或索引端口提交重建请求。
+6. 内容变更后通过事件或索引端口提交重建请求。已建立统一索引提交端口，当前由旧向量适配器实现，
+   待接入 Retrieval durable job。
 7. 将 `retrieval/models.py` 和 `schemas.py` 分别迁入 ORM 与 DTO 目录。
 8. 将检索查询、索引构建和来源投影分开，保持主流程可读。
 

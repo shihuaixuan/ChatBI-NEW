@@ -9,8 +9,8 @@ from apps.ai_model.models import AiModelDetail
 from apps.assistant.audit import build_assistant_audit_resource_query
 from apps.chat.models.chat_model import Chat
 from apps.dashboard.models.dashboard_model import CoreDashboard
-from apps.data_training.models.data_training_model import DataTraining
 from apps.datasource.models.datasource import CoreDatasource
+from apps.knowledge.models.orm import SQLExampleModel
 from apps.semantic.models.orm import SemanticTerm
 
 
@@ -58,10 +58,10 @@ def build_resource_union_query() -> Select:
 
     # data_training 表查询（使用question作为name）
     data_training_query = select(
-        func.cast(DataTraining.id, String).label("id"),
-        DataTraining.question.label("name"),
+        func.cast(SQLExampleModel.id, String).label("id"),
+        SQLExampleModel.question.label("name"),
         literal_column("'data_training'").label("module")
-    ).select_from(DataTraining)
+    ).select_from(SQLExampleModel)
 
     # ds_permission 表查询
     ds_permission_query = select(
