@@ -30,7 +30,7 @@ class QueryRepository:
         ]
 
 
-class VectorSearch:
+class RetrievalSearch:
     def search_ids(
         self,
         workspace_id: int,
@@ -43,9 +43,9 @@ class VectorSearch:
         return [2, 3]
 
 
-def test_query_merges_lexical_and_vector_results_without_duplicates():
+def test_query_merges_source_lexical_and_retrieval_results_without_duplicates():
     repository = QueryRepository()
-    service = SQLExampleQueryService(repository, VectorSearch())
+    service = SQLExampleQueryService(repository, RetrievalSearch())
 
     result = service.search("销售额", 3, datasource_id=8)
 
@@ -58,6 +58,14 @@ def test_blank_question_does_not_query_repository():
     service = SQLExampleQueryService(repository)
 
     assert service.search("  ", 3, datasource_id=8) == []
+    assert repository.search_calls == 0
+
+
+def test_query_without_datasource_or_assistant_scope_does_not_read_examples():
+    repository = QueryRepository()
+    service = SQLExampleQueryService(repository, RetrievalSearch())
+
+    assert service.search("销售额", 3) == []
     assert repository.search_calls == 0
 
 

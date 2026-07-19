@@ -35,9 +35,6 @@ from common.core.config import settings
 from common.core.db import engine
 from common.core.response_middleware import ResponseMiddleware, exception_handler
 from common.core.sqlbot_cache import init_sqlbot_cache
-from common.utils.embedding_threads import (
-    fill_empty_data_training_embeddings,
-)
 from common.utils.utils import SQLBotLogUtil
 
 
@@ -51,10 +48,6 @@ def init_workflow_artifact_cleanup() -> None:
 
     with Session(engine) as session:
         ArtifactCleanupService(session).process_pending()
-
-
-def init_data_training_embedding_data():
-    fill_empty_data_training_embeddings()
 
 
 def mount_xpack_static(app: FastAPI):
@@ -72,7 +65,6 @@ async def lifespan(app: FastAPI):
     init_workflow_artifact_cleanup()
     init_sqlbot_cache()
     init_dynamic_cors(app)
-    init_data_training_embedding_data()
     submit_pending_index_jobs()
     SQLBotLogUtil.info("✅ Numora 初始化完成")
     await sqlbot_xpack.core.clean_xpack_cache()

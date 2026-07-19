@@ -71,6 +71,10 @@ class RecordingSQLExampleRepository:
 
     def delete(self, workspace_id: int, example_ids: list[int]) -> None:
         self.deleted = (workspace_id, example_ids)
+        for example_id in example_ids:
+            record = self.records.get(example_id)
+            if record is not None and record.oid == workspace_id:
+                del self.records[example_id]
 
     def set_enabled(
         self,
@@ -148,18 +152,6 @@ class RecordingIndexGateway:
         self.submissions.append(job_ids)
 
 
-class RecordingVectorIndexGateway:
-    def __init__(self) -> None:
-        self.upserts: list[list[int]] = []
-        self.deletes: list[list[int]] = []
-
-    def enqueue_upserts(self, example_ids: list[int]) -> None:
-        self.upserts.append(example_ids)
-
-    def enqueue_deletes(self, example_ids: list[int]) -> None:
-        self.deletes.append(example_ids)
-
-
 class FailingIndexGateway(RecordingIndexGateway):
     def stage_rebuild(
         self,
@@ -172,21 +164,18 @@ class FailingIndexGateway(RecordingIndexGateway):
 def _service(
     repository: RecordingSQLExampleRepository,
     index_gateway: RecordingIndexGateway | None = None,
-    vector_index_gateway: RecordingVectorIndexGateway | None = None,
 ) -> SQLExampleService:
     return SQLExampleService(
         repository,
         FakeReferenceCatalog(),
         index_gateway or RecordingIndexGateway(),
-        vector_index_gateway or RecordingVectorIndexGateway(),
     )
 
 
 def test_create_normalizes_content_and_owns_workspace_fields():
     repository = RecordingSQLExampleRepository()
     index_gateway = RecordingIndexGateway()
-    vector_gateway = RecordingVectorIndexGateway()
-    service = _service(repository, index_gateway, vector_gateway)
+    service = _service(repository, index_gateway)
 
     example_id = service.create(
         3,
@@ -207,15 +196,13 @@ def test_create_normalizes_content_and_owns_workspace_fields():
     assert [item.id for item in index_gateway.snapshots[0].examples] == [100]
     assert index_gateway.submissions == [(11,)]
     assert repository.commit_count == 1
-    assert vector_gateway.upserts == [[100]]
 
 
 def test_duplicate_is_rejected_before_create_and_index():
     repository = RecordingSQLExampleRepository()
     repository.duplicate = True
     index_gateway = RecordingIndexGateway()
-    vector_gateway = RecordingVectorIndexGateway()
-    service = _service(repository, index_gateway, vector_gateway)
+    service = _service(repository, index_gateway)
 
     with pytest.raises(SQLExampleDuplicateError):
         service.create(
@@ -229,13 +216,11 @@ def test_duplicate_is_rejected_before_create_and_index():
 
     assert repository.created == []
     assert index_gateway.snapshots == []
-    assert vector_gateway.upserts == []
 
 
 def test_index_stage_failure_prevents_source_commit_and_legacy_vector_submission():
     repository = RecordingSQLExampleRepository()
-    vector_gateway = RecordingVectorIndexGateway()
-    service = _service(repository, FailingIndexGateway(), vector_gateway)
+    service = _service(repository, FailingIndexGateway())
 
     with pytest.raises(RuntimeError, match="索引任务暂存失败"):
         service.create(
@@ -248,7 +233,6 @@ def test_index_stage_failure_prevents_source_commit_and_legacy_vector_submission
         )
 
     assert repository.commit_count == 0
-    assert vector_gateway.upserts == []
 
 
 def test_page_resolves_reference_names_without_cross_domain_orm():
@@ -315,21 +299,19 @@ def test_disabling_example_removes_it_from_complete_index_snapshot():
 def test_delete_is_scoped_to_workspace_and_submits_index_deletion():
     repository = RecordingSQLExampleRepository()
     index_gateway = RecordingIndexGateway()
-    vector_gateway = RecordingVectorIndexGateway()
-    service = _service(repository, index_gateway, vector_gateway)
+    service = _service(repository, index_gateway)
 
     service.delete(3, [2, 1, 2, -1])
 
     assert repository.deleted == (3, [1, 2])
     assert len(index_gateway.snapshots) == 1
-    assert vector_gateway.deletes == [[1, 2]]
+    assert index_gateway.snapshots[0].examples == ()
 
 
 def test_batch_import_resolves_names_deduplicates_and_indexes_once():
     repository = RecordingSQLExampleRepository()
     index_gateway = RecordingIndexGateway()
-    vector_gateway = RecordingVectorIndexGateway()
-    service = _service(repository, index_gateway, vector_gateway)
+    service = _service(repository, index_gateway)
     valid = SQLExampleInput(
         question="本月销售额",
         description="SELECT 1",
@@ -356,4 +338,3 @@ def test_batch_import_resolves_names_deduplicates_and_indexes_once():
         "datasource_not_found"
     )
     assert [item.id for item in index_gateway.snapshots[0].examples] == [100]
-    assert vector_gateway.upserts == [[100]]

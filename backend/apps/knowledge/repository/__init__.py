@@ -5,8 +5,7 @@ from apps.knowledge.repository.sql_example_repository import (
     SQLExampleIndexGateway,
     SQLExampleReferenceCatalog,
     SQLExampleRepository,
-    SQLExampleVectorIndexGateway,
-    SQLExampleVectorSearch,
+    SQLExampleRetrievalSearch,
 )
 
 __all__ = [
@@ -14,6 +13,5 @@ __all__ = [
     "SQLExampleIndexGateway",
     "SQLExampleReferenceCatalog",
     "SQLExampleRepository",
-    "SQLExampleVectorSearch",
-    "SQLExampleVectorIndexGateway",
+    "SQLExampleRetrievalSearch",
 ]

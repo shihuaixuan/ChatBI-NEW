@@ -3,7 +3,7 @@ from xml.dom.minidom import parseString
 
 import dicttoxml  # type: ignore[import-untyped]
 
-from apps.knowledge.repository import SQLExampleRepository, SQLExampleVectorSearch
+from apps.knowledge.repository import SQLExampleRepository, SQLExampleRetrievalSearch
 from apps.template.generate_chart.generator import get_base_data_training_template
 
 
@@ -13,10 +13,10 @@ class SQLExampleQueryService:
     def __init__(
         self,
         repository: SQLExampleRepository,
-        vector_search: SQLExampleVectorSearch | None = None,
+        retrieval_search: SQLExampleRetrievalSearch | None = None,
     ) -> None:
         self._repository = repository
-        self._vector_search = vector_search
+        self._retrieval_search = retrieval_search
 
     def search(
         self,
@@ -27,7 +27,7 @@ class SQLExampleQueryService:
         assistant_id: int | None = None,
     ) -> list[dict[str, str]]:
         normalized_question = question.strip()
-        if not normalized_question:
+        if not normalized_question or (datasource_id is None and assistant_id is None):
             return []
         example_ids = self._repository.search_lexical_ids(
             workspace_id,
@@ -35,9 +35,9 @@ class SQLExampleQueryService:
             datasource_id=datasource_id,
             assistant_id=assistant_id,
         )
-        if self._vector_search is not None:
+        if self._retrieval_search is not None:
             example_ids.extend(
-                self._vector_search.search_ids(
+                self._retrieval_search.search_ids(
                     workspace_id,
                     normalized_question,
                     datasource_id=datasource_id,

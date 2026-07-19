@@ -3,10 +3,6 @@ from sqlmodel import Session
 from apps.datasource.composition import (
     build_datasource_recommendation_config_store,
 )
-from apps.knowledge.repository.embedding import (
-    LegacySQLExampleIndexGateway,
-    LegacySQLExampleVectorSearch,
-)
 from apps.knowledge.repository.reference_catalog import (
     PublicSQLExampleReferenceCatalog,
 )
@@ -20,7 +16,7 @@ from apps.knowledge.services import (
     SQLExampleService,
 )
 from apps.retrieval.sql_example_indexing import SQLExampleIndexCoordinator
-from common.core.config import settings
+from apps.retrieval.sql_example_query import SQLExampleRetriever
 
 
 def build_recommended_problem_service(
@@ -41,19 +37,13 @@ def build_sql_example_service(session: Session) -> SQLExampleService:
         SQLModelSQLExampleRepository(session),
         PublicSQLExampleReferenceCatalog(session),
         SQLExampleIndexCoordinator(session),
-        LegacySQLExampleIndexGateway(),
     )
 
 
 def build_sql_example_query_service(session: Session) -> SQLExampleQueryService:
     """装配 SQL 示例召回 Service。"""
 
-    vector_search = (
-        LegacySQLExampleVectorSearch(session)
-        if settings.EMBEDDING_ENABLED
-        else None
-    )
     return SQLExampleQueryService(
         SQLModelSQLExampleRepository(session),
-        vector_search,
+        SQLExampleRetriever(session),
     )

@@ -77,8 +77,8 @@ class SQLExampleReferenceCatalog(Protocol):
     ) -> dict[int, str]: ...
 
 
-class SQLExampleVectorSearch(Protocol):
-    """迁移期 SQL 示例向量召回端口。"""
+class SQLExampleRetrievalSearch(Protocol):
+    """SQL 示例统一检索召回端口。"""
 
     def search_ids(
         self,
@@ -99,11 +99,3 @@ class SQLExampleIndexGateway(Protocol):
     ) -> SQLExampleIndexEnqueueResult: ...
 
     def submit(self, job_ids: tuple[int, ...]) -> None: ...
-
-
-class SQLExampleVectorIndexGateway(Protocol):
-    """统一查询切换前继续维护旧向量列的迁移端口。"""
-
-    def enqueue_upserts(self, example_ids: list[int]) -> None: ...
-
-    def enqueue_deletes(self, example_ids: list[int]) -> None: ...
