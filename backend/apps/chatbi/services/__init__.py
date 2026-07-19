@@ -3,6 +3,13 @@ from apps.chatbi.services.analysis_prediction_service import (
     AnalysisPredictionPromptBuilder,
     AnalysisPredictionService,
 )
+from apps.chatbi.services.answer_generation_service import (
+    AnswerGenerationService,
+    AnswerModelClient,
+    CallableAnswerModelClient,
+    build_answer_generation_prompt,
+)
+from apps.chatbi.services.answer_projection_service import AnswerProjectionService
 from apps.chatbi.services.chart_generation_service import (
     ChartGenerationError,
     ChartGenerationModelClient,
@@ -60,8 +67,17 @@ from apps.chatbi.services.query_result_projection_service import (
     QueryResultProjectionService,
 )
 from apps.chatbi.services.query_service import QueryService, SQLExecutor
+from apps.chatbi.services.question_input_projection_service import (
+    QuestionInputProjectionService,
+)
+from apps.chatbi.services.question_intent_fallback_service import (
+    QuestionIntentFallbackService,
+)
 from apps.chatbi.services.question_intent_projection_service import (
     QuestionIntentProjectionService,
+)
+from apps.chatbi.services.question_intent_validation_service import (
+    QuestionIntentValidationService,
 )
 from apps.chatbi.services.question_model_service import (
     QuestionModelCallError,
@@ -125,6 +141,10 @@ __all__ = [
     "AnalysisPredictionModelClient",
     "AnalysisPredictionPromptBuilder",
     "AnalysisPredictionService",
+    "AnswerGenerationService",
+    "AnswerModelClient",
+    "AnswerProjectionService",
+    "CallableAnswerModelClient",
     "ChatRecordError",
     "ChatRecordNotFoundError",
     "ChatRecordOwnershipError",
@@ -170,6 +190,9 @@ __all__ = [
     "QuestionModelOutputError",
     "QuestionModelService",
     "QuestionIntentProjectionService",
+    "QuestionIntentValidationService",
+    "QuestionInputProjectionService",
+    "QuestionIntentFallbackService",
     "QuestionUnderstandingError",
     "QuestionUnderstandingModelClient",
     "QuestionUnderstandingModelResponse",
@@ -202,5 +225,6 @@ __all__ = [
     "SemanticRetrievalService",
     "normalize_chat_record_status",
     "apply_question_understanding_clarification",
+    "build_answer_generation_prompt",
     "parse_sql_generation_result",
 ]

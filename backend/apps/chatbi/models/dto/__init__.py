@@ -4,6 +4,16 @@ from apps.chatbi.models.dto.analysis_prediction import (
     AnalysisPredictionMessage,
     AnalysisPredictionModelChunk,
 )
+from apps.chatbi.models.dto.answer_generation import (
+    AnswerGenerationData,
+    AnswerGenerationMode,
+    AnswerGenerationPrompt,
+    AnswerGenerationResult,
+)
+from apps.chatbi.models.dto.answer_projection import (
+    AnswerProjectionData,
+    AnswerProjectionResult,
+)
 from apps.chatbi.models.dto.chart_generation import (
     ChartGenerationData,
     ChartGenerationEvent,
@@ -65,10 +75,12 @@ from apps.chatbi.models.dto.question_understanding import (
     IntentRecognitionOutput,
     IntentValidationOutput,
     NaturalLanguageIntentOutputBase,
+    QuestionClassificationOutputBase,
     QuestionIntentProjectionData,
     QuestionIntentProjectionResult,
     QuestionRewriteOutput,
     QuestionRewriteOutputBase,
+    QuestionRewriteProjectionOutput,
     QuestionUnderstandingOutcome,
     QuestionUnderstandingOutput,
     QuestionUnderstandingValidationData,
@@ -101,6 +113,12 @@ from apps.chatbi.models.dto.sql_generation import (
 )
 
 __all__ = [
+    "AnswerGenerationData",
+    "AnswerGenerationMode",
+    "AnswerGenerationPrompt",
+    "AnswerGenerationResult",
+    "AnswerProjectionData",
+    "AnswerProjectionResult",
     "AnalysisPredictionGenerationData",
     "AnalysisPredictionGenerationEvent",
     "AnalysisPredictionMessage",
@@ -135,6 +153,7 @@ __all__ = [
     "IntentRecognitionOutput",
     "IntentValidationOutput",
     "NaturalLanguageIntentOutputBase",
+    "QuestionClassificationOutputBase",
     "QuestionIntentProjectionData",
     "QuestionIntentProjectionResult",
     "PhysicalSchemaField",
@@ -151,6 +170,7 @@ __all__ = [
     "QuestionModelResult",
     "QuestionRewriteOutput",
     "QuestionRewriteOutputBase",
+    "QuestionRewriteProjectionOutput",
     "QuestionUnderstandingOutcome",
     "QuestionUnderstandingOutput",
     "QueryResultProjectionData",

@@ -2,9 +2,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from apps.chatbi.models import AnswerGenerationResult
 from apps.chatbi.models.dto.question_understanding import (
     NaturalLanguageIntentOutputBase,
-    QuestionRewriteOutputBase,
+    QuestionClassificationOutputBase,
+    QuestionRewriteProjectionOutput,
 )
 
 
@@ -18,13 +20,8 @@ class QuestionClassificationInput(BaseModel):
     conversation_context: dict[str, Any] = Field(default_factory=dict)
 
 
-class QuestionClassificationOutput(BaseModel):
+class QuestionClassificationOutput(QuestionClassificationOutputBase):
     """问题分类节点输出。"""
-
-    category: Literal["forbidden", "chitchat", "data", "followup"]
-    reason: str
-    risk_level: Literal["low", "medium", "high"] = "low"
-    confidence: float = Field(default=0.0, ge=0, le=1)
 
 
 class QuestionRewriteInput(BaseModel):
@@ -35,19 +32,12 @@ class QuestionRewriteInput(BaseModel):
     user_feedback: dict[str, Any] = Field(default_factory=dict)
 
 
-class AnswerOutput(BaseModel):
+class AnswerOutput(AnswerGenerationResult):
     """业务回复节点输出。"""
 
-    answer: str
-    warnings: list[str] = Field(default_factory=list)
-    render_type: str = "text"
-    citations: list[dict[str, Any]] = Field(default_factory=list)
 
-
-class QuestionRewriteOutput(QuestionRewriteOutputBase):
+class QuestionRewriteOutput(QuestionRewriteProjectionOutput):
     """问题重写节点输出。"""
-
-    image_profile_hint: str | None = None
 
 
 class IntentRecognitionInput(BaseModel):

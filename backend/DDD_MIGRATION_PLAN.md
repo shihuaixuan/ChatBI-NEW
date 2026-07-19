@@ -1491,6 +1491,65 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 102. 第二十四批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 643 项通过，完整后端回归 1072 项通过；
     新增和修改代码通过定向 Ruff，意图投影 DTO 与 Service 通过严格 Mypy，应用导入和 `git diff --check` 通过，
     OpenAPI 保持 154 个路径。
+103. ChatBI 新增 `QuestionIntentValidationService`，统一把问题理解校验结果投影为 Graph 稳定意图校验契约；维度值误识别
+    为时间表达时的修复提示、违规明细、重试计数、最大重试次数和澄清槽位由同一 Service 生成，正常意图、需要澄清的
+    维度槽位和主题域槽位继续保持既有输出结构。
+104. Graph `QuestionAdapter` 已直接调用 ChatBI 意图校验 Service；最终意图校验、维度子任务修复校验和最大重试次数不再
+    依赖 Graph 内部实现。模型再次调用、并行子任务、超时与异常降级、执行追踪、候选主题域与维度映射和节点投影仍由
+    Graph 编排层负责，没有迁入无副作用的 ChatBI 校验边界。
+105. 旧 `apps.workflow.capabilities.adapters.intent_validation` 删除独立业务实现，只保留
+    `IntentPostProcessor`、`IntentValidationAdapter` 与 `QuestionIntentValidationService` 的同一对象身份兼容导出；架构
+    守卫禁止新 Service 导入 Agent、Workflow、AI Model、基础设施、LangChain 或 SQLModel，并锁定 Graph 的重试编排归属。
+106. 第二十五批定向测试 67 项、架构测试 84 项、Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 651 项
+    通过，完整后端回归 1080 项通过；新增和修改代码通过定向 Ruff，新意图校验 Service 与兼容入口通过严格 Mypy，
+    应用导入和 `git diff --check` 通过，OpenAPI 保持 154 个路径。
+107. ChatBI 新增共享的问题分类输出基类和 Graph 问题重写投影 DTO；分类类别、风险级别、置信度边界，以及重写问题、
+    澄清标记、缺失槽位和图表提示字段由 ChatBI 定义。Graph 节点 Schema 只继承这些公共契约，不再重复声明字段和校验。
+108. ChatBI 新增 `QuestionInputProjectionService`，统一空问题、缺少数据集时无需调用模型的固定分类结果，分类模型输出
+    校验，以及问题重写输出规范化。上游已有数据集时，模型误报的 `dataset_id` 缺失槽位在同一入口移除，并根据剩余
+    缺失槽位重新计算是否需要用户输入。
+109. Graph 问题重写的空问题投影和模型失败降级内容已迁入同一 Service；原问题保留、澄清关键词判定、已有用户反馈时
+    不重复澄清和 `metric` 缺失槽位结构保持不变。分类模型调用失败和非法输出继续明确失败，重写模型异常是否进入降级、
+    模型调用、提示词、节点写入和流程路由仍由 Graph 编排层负责。
+110. 第二十六批定向测试 85 项、架构测试 86 项、Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 658 项
+    通过，完整后端回归 1087 项通过；新增和修改代码通过定向 Ruff，共享 DTO、输入投影 Service 和 Graph Schema 通过
+    严格 Mypy，应用导入和 `git diff --check` 通过，OpenAPI 保持 154 个路径。
+111. ChatBI 新增 `QuestionIntentFallbackService`，统一模型不可用时的轻量自然语言意图推断；模糊问题、指标查询、趋势、
+    排名、对比、占比、异常和明细的关键词优先级、置信度、必需槽位和查询形态由同一 Service 维护，不再散落在 Graph
+    Adapter。
+112. 常见指标、维度、相对时间和绝对月份线索提取，以及维度筛选值、分组角色、时间粒度、排序方向和 TopN 数量推断已
+    迁入 ChatBI。降级结果只包含自然语言意图字段，不包含 Graph 主题域候选、节点校验或执行追踪字段；时间 AST 继续由
+    统一意图投影 Service 在 Graph 拆分备用载荷时规范化。
+113. Graph `QuestionAdapter` 已删除 `_intent_dump`、`_intent_fallback` 及其指标、维度、时间和排序辅助方法，直接消费
+    `QuestionIntentFallbackService`。Graph 仍决定空问题短路、哪些子任务因异常或超时使用降级结果，并继续负责备用载荷
+    拆分、候选主题域与维度映射、并行执行、超时、错误来源和追踪投影。
+114. 第二十七批定向测试 79 项、架构测试 88 项、Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 670 项
+    通过，完整后端回归 1099 项通过；新增和修改代码通过定向 Ruff，意图降级 Service 通过严格 Mypy，应用导入和
+    `git diff --check` 通过，OpenAPI 保持 154 个路径。
+115. ChatBI 新增结构化回答生成输入、模式、提示词和结果 DTO，以及 `AnswerGenerationService`；Service 统一构造安全回答
+    提示词，通过既有结构化模型调用边界提取 JSON 对象并校验回答、警告、渲染类型和引用字段。Graph `AnswerOutput` 只
+    继承 ChatBI 结果契约，不再重复声明字段。
+116. reject、chitchat 和 generate 三种模式的固定安全文案、模型调用失败警告、输出解析失败警告，以及上游节点失败时
+    携带错误码的降级回答由 ChatBI 单点表达。既有可调用回答模型通过 `CallableAnswerModelClient` 兼容适配，测试和运行时
+    注入方式保持不变。
+117. Graph `AnswerAdapter` 已删除默认 LangChain 客户端、函数内 AI Model 导入、JSON 对象提取和固定降级实现，默认模型
+    复用统一问题模型基础设施。Graph 继续负责裁剪问题、计划、执行摘要、知识决策和错误信息，计算多查询占比与对比摘要，
+    并在 `compose` 中合成回答、推荐问题和图表；依赖基线同步删除回答适配器的历史函数内导入违规。
+118. 第二十八批定向测试 90 项、架构测试 92 项、Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 683 项
+    通过，完整后端回归 1112 项通过；新增和修改代码通过定向 Ruff，回答 DTO、Service、Graph Adapter 和 Schema 通过
+    严格 Mypy，应用导入和 `git diff --check` 通过，OpenAPI 保持 154 个路径。
+119. ChatBI 新增 `AnswerProjectionData`、`AnswerProjectionResult` 和 `AnswerProjectionService`，统一生成回答模型所需的
+    最小上下文。问题、计划、执行结果、知识决策、节点失败和 SQL 错误均按明确白名单投影，SQL 原文、候选载荷、完整
+    结果和未授权扩展字段不会进入回答模型输入。
+120. 历史单查询扁平执行结果到统一结果列表的兼容转换，以及多查询角色映射、占比、当前值与基线对比、差值和变化率
+    计算已迁入 ChatBI。布尔值和非法数字不会参与数值摘要，基线为零时变化率保持空值，样例行、截断标记和 Artifact
+    引用结构保持不变。
+121. Graph `build_answer_projection` 只负责从 `ChatBIRunContext` 读取原问题、重写问题及各上下文域，并调用
+    `AnswerProjectionService`；字段裁剪、扁平结果兼容和多查询摘要辅助方法已从 `AnswerAdapter` 删除。Graph 继续负责
+    节点上下文读取、回答 Service 调用和最终回复组合。
+122. 第二十九批定向测试 84 项、架构测试 94 项、Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 690 项
+    通过，完整后端回归 1119 项通过；新增和修改代码通过定向 Ruff，回答投影 DTO、Service 和 Graph Adapter 通过严格
+    Mypy，应用导入和 `git diff --check` 通过，OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1503,17 +1562,20 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 2. 迁移 Chat、ChatRecord 和 ChatLog，并拆分 ORM 与 DTO。核心 ORM 和创建、重命名、会话信息 DTO 已迁移，
    历史记录、日志响应及旧 LLM 请求 DTO 待后续批次继续拆分。
 3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。检索、SQL 语义
-   编译、SQL 校验、权限应用和执行已统一；问题理解的确定性校验规则、数据源选择、推荐问题以及分析预测模型调用
+   编译、SQL 校验、权限应用和执行已统一；问题理解的确定性校验规则、Graph 意图校验结果投影、数据源选择、推荐问题以及分析预测模型调用
    编排、主 SQL 生成编排、动态 SQL 生成编排、权限 SQL 生成编排和图表生成编排已统一；Agent 问题理解编排已迁入
    ChatBI，Graph 的通用意图字段清洗、子任务合并、必需槽位和用户反馈写回已接入 ChatBI 投影 Service，Graph 特有候选
-   映射与编排继续保留；最终回答待后续批次收敛。问题理解的模型调用、默认模型适配、JSON 解析边界、自然语言业务
-   DTO 和提示词业务规则已统一；旧 Chat 查询结果标准化和 ChatRecord 数据投影已统一。
+   映射与编排继续保留；Graph 结构化回答生成已迁入 ChatBI，Agent 最终回答工具和统一最终回复投影待后续批次收敛。
+   问题理解的模型调用、默认模型适配、JSON 解析边界、自然语言业务
+   DTO、提示词业务规则、Graph 分类与重写确定性投影、自然语言意图降级推断、修复提示、重试计数、澄清槽位投影、
+   回答上下文投影和结构化回答生成已统一；旧 Chat 查询结果标准化和 ChatRecord 数据投影已统一。
 4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。SQL 校验和执行工具
    已完成，语义 SQL 编译、物理 Schema、Semantic 检索、执行绑定和问题理解校验已接入统一入口；问题理解 Service、
    模型调用、提示词与输出 DTO 已迁入统一 ChatBI 边界，旧路径只保留兼容导出，回答工具待后续处理。
 5. Graph Adapter 改为调用相同 Service。问题理解校验、Semantic 检索、SQL 编译和执行 Adapter 已完成，其余
-   Adapter 待后续迁移；问题分类、重写和三类意图子任务已接入统一模型调用边界、公共 DTO、提示词规则和意图投影
-   Service，Graph 特有的候选主题域、候选维度、并行、重试、降级和节点投影继续由 Graph 编排层负责。
+   Adapter 待后续迁移；问题分类、重写、三类意图子任务和结构化回答生成已接入统一模型调用边界、公共 DTO、提示词规则、输入投影、
+   意图投影、意图降级推断、确定性意图校验、回答上下文投影和回答生成 Service，Graph 特有的模型失败路由、候选
+   主题域、候选维度、并行、模型重试循环、降级触发与备用载荷拆分、上下文读取和最终节点投影继续由 Graph 编排层负责。
 6. 旧 `chat/task/llm.py` 调整为兼容入口或直接删除，不能继续维护独立业务逻辑。
 7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期、所有权、Agent 与 Graph 的
    记录状态、澄清等待状态及最终结果投影已统一；执行器内部 Run 状态继续保持各自语义。
@@ -1648,7 +1710,7 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 | `apps/workflow/definitions/`、`nodes/`、`conditions/` | `apps/chatbi/orchestration/graph/` | 迁移 | 这些内容是 ChatBI 业务图 |
 | `apps/workflow/capabilities/` | `apps/chatbi/services/` 或 Graph 适配 | 拆分迁移 | 业务实现归 Service，节点转换归适配 |
 | `apps/workflow/runtime.py` | ChatBI 应用装配入口 | 迁移 | 负责将业务图注入通用引擎 |
-| `apps/capabilities/question_understanding.py` | `apps/chatbi/services/question_understanding_service.py` | 已迁移，保留兼容导出 | Agent 已直接使用 ChatBI Service；Graph 编排适配待继续收敛 |
+| `apps/capabilities/question_understanding.py` | `apps/chatbi/services/question_understanding_service.py` | 已迁移，保留兼容导出 | Agent 已直接使用 ChatBI Service；Graph 已接入共享 DTO、提示词、模型调用、分类与重写投影、意图投影、降级推断和确定性校验，编排适配继续收敛 |
 | `apps/capabilities/semantic/` | ChatBI 对 Semantic/Retrieval 的适配 | 合并 | 兼容转发清理后删除顶级目录 |
 | `apps/capabilities/sql/` | ChatBI SQL Service 与 Datasource 查询适配 | 拆分迁移 | 校验、权限、执行保持单一实现 |
 | `apps/workflow_engine/` | `backend/platform/workflow_engine/` | 隔离后迁移 | 先清除业务依赖，再移动目录 |

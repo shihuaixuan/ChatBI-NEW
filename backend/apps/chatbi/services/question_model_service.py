@@ -39,7 +39,7 @@ class QuestionModelClient(Protocol):
 
 
 class QuestionModelService:
-    """统一问题分类、重写、意图和维度子任务的模型调用边界。"""
+    """统一问题理解与结构化回答任务的模型调用边界。"""
 
     def __init__(self, model_client: QuestionModelClient) -> None:
         self._model_client = model_client

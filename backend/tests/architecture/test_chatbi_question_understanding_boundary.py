@@ -17,11 +17,13 @@ def _imports(relative_path: str) -> set[str]:
 
 def test_agent_and_graph_share_question_understanding_validation_service():
     agent_imports = _imports("apps/chatbi/services/question_understanding_service.py")
-    graph_imports = _imports("apps/workflow/capabilities/adapters/intent_validation.py")
+    graph_validation_imports = _imports(
+        "apps/chatbi/services/question_intent_validation_service.py"
+    )
 
     service_module = "apps.chatbi.services.question_understanding_validation_service"
     assert service_module in agent_imports
-    assert service_module in graph_imports
+    assert service_module in graph_validation_imports
 
 
 def test_graph_intent_adapter_does_not_reimplement_dimension_time_rule():
@@ -118,7 +120,8 @@ def test_question_understanding_dtos_are_owned_by_chatbi():
     ):
         assert f"class {class_name}" not in agent_source
 
-    assert "QuestionRewriteOutputBase" in graph_source
+    assert "QuestionClassificationOutputBase" in graph_source
+    assert "QuestionRewriteProjectionOutput" in graph_source
     assert "NaturalLanguageIntentOutputBase" in graph_source
 
 
@@ -195,3 +198,119 @@ def test_graph_keeps_intent_orchestration_and_candidate_mapping():
     assert "_record_intent_subtask_trace" in graph_source
     assert "_normalize_subject_domain_output" in graph_source
     assert "_normalize_dimension_slots_payload" in graph_source
+
+
+def test_question_intent_validation_service_has_no_graph_or_framework_dependency():
+    imports = _imports("apps/chatbi/services/question_intent_validation_service.py")
+
+    assert not any(module.startswith("apps.agent") for module in imports)
+    assert not any(module.startswith("apps.workflow") for module in imports)
+    assert not any(module.startswith("apps.ai_model") for module in imports)
+    assert not any(module.startswith("infrastructure") for module in imports)
+    assert not any(module.startswith("langchain") for module in imports)
+    assert "sqlmodel" not in imports
+
+
+def test_graph_uses_chatbi_intent_validation_service_directly():
+    graph_source = (
+        BACKEND_DIR / "apps/workflow/capabilities/adapters/question.py"
+    ).read_text(encoding="utf-8")
+
+    assert "QuestionIntentValidationService" in graph_source
+    assert "apps.workflow.capabilities.adapters.intent_validation" not in graph_source
+    assert "_intent_validation_service.validate" in graph_source
+
+
+def test_old_graph_intent_validation_path_only_reexports_chatbi_service():
+    compatibility_path = "apps/workflow/capabilities/adapters/intent_validation.py"
+    compatibility_source = (BACKEND_DIR / compatibility_path).read_text(encoding="utf-8")
+
+    assert _imports(compatibility_path) == {
+        "apps.chatbi.services.question_intent_validation_service"
+    }
+    assert "class IntentPostProcessor" not in compatibility_source
+    assert "def validate" not in compatibility_source
+
+
+def test_graph_keeps_intent_model_retry_orchestration():
+    graph_source = (
+        BACKEND_DIR / "apps/workflow/capabilities/adapters/question.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def _recognize_subtask" in graph_source
+    assert "for retry_count in range" in graph_source
+    assert "def _run_intent_subtasks" in graph_source
+
+
+def test_question_input_projection_rules_are_owned_by_chatbi():
+    service_path = "apps/chatbi/services/question_input_projection_service.py"
+    service_imports = _imports(service_path)
+    graph_source = (
+        BACKEND_DIR / "apps/workflow/capabilities/adapters/question.py"
+    ).read_text(encoding="utf-8")
+
+    assert not any(module.startswith("apps.agent") for module in service_imports)
+    assert not any(module.startswith("apps.workflow") for module in service_imports)
+    assert not any(module.startswith("apps.ai_model") for module in service_imports)
+    assert not any(module.startswith("infrastructure") for module in service_imports)
+    assert not any(module.startswith("langchain") for module in service_imports)
+    assert "sqlmodel" not in service_imports
+
+    assert "QuestionInputProjectionService" in graph_source
+    assert "_input_projection_service.classification_precondition" in graph_source
+    assert "_input_projection_service.project_classification" in graph_source
+    assert "_input_projection_service.project_rewrite" in graph_source
+    assert "def _dump" not in graph_source
+    assert "def _rewrite_dump" not in graph_source
+    assert "def _normalize_rewrite_output" not in graph_source
+    assert "def _rewrite_fallback" not in graph_source
+
+
+def test_graph_keeps_question_model_error_and_rewrite_fallback_orchestration():
+    graph_source = (
+        BACKEND_DIR / "apps/workflow/capabilities/adapters/question.py"
+    ).read_text(encoding="utf-8")
+
+    assert "CLASSIFICATION_MODEL_CALL_FAILED" in graph_source
+    assert "CLASSIFICATION_MODEL_OUTPUT_INVALID" in graph_source
+    assert "except Exception:" in graph_source
+    assert "_input_projection_service.fallback_rewrite" in graph_source
+
+
+def test_question_intent_fallback_rules_are_owned_by_chatbi():
+    service_path = "apps/chatbi/services/question_intent_fallback_service.py"
+    service_imports = _imports(service_path)
+    graph_source = (
+        BACKEND_DIR / "apps/workflow/capabilities/adapters/question.py"
+    ).read_text(encoding="utf-8")
+
+    assert not any(module.startswith("apps.agent") for module in service_imports)
+    assert not any(module.startswith("apps.workflow") for module in service_imports)
+    assert not any(module.startswith("apps.ai_model") for module in service_imports)
+    assert not any(module.startswith("infrastructure") for module in service_imports)
+    assert not any(module.startswith("langchain") for module in service_imports)
+    assert "sqlmodel" not in service_imports
+
+    assert "QuestionIntentFallbackService" in graph_source
+    assert "_intent_fallback_service.infer" in graph_source
+    assert "def _intent_dump" not in graph_source
+    assert "def _intent_fallback" not in graph_source
+    assert "def _dimension_slots_from_question" not in graph_source
+    assert "def _extract_metric_mentions" not in graph_source
+    assert "def _extract_dimension_mentions" not in graph_source
+    assert "def _extract_time_mentions" not in graph_source
+    assert "def _infer_time_grain" not in graph_source
+    assert "def _infer_order_direction" not in graph_source
+    assert "def _infer_limit" not in graph_source
+
+
+def test_graph_keeps_intent_fallback_trigger_and_subtask_projection():
+    graph_source = (
+        BACKEND_DIR / "apps/workflow/capabilities/adapters/question.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def _intent_subtask_fallback_payloads" in graph_source
+    assert "def _fallback_intent_subtask_result" in graph_source
+    assert "exception_fallback" in graph_source
+    assert "timeout_fallback" in graph_source
+    assert "_record_intent_subtask_trace" in graph_source

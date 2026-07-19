@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
@@ -16,7 +15,10 @@ from apps.chatbi.models import (
     QuestionModelResponse,
 )
 from apps.chatbi.services import (
+    QuestionInputProjectionService,
+    QuestionIntentFallbackService,
     QuestionIntentProjectionService,
+    QuestionIntentValidationService,
     QuestionModelCallError,
     QuestionModelError,
     QuestionModelService,
@@ -27,18 +29,11 @@ from apps.chatbi.services.question_understanding_prompt import (
     QUESTION_REWRITE_BUSINESS_RULES,
 )
 from apps.semantic.services.schema_service import DatasetSchemaProvider
-from apps.workflow.capabilities.adapters.intent_validation import (
-    IntentPostProcessor,
-)
 from apps.workflow.capabilities.adapters.time_slots import (
     normalize_time_range_payload,
 )
 from apps.workflow.capabilities.context import ChatBIRunContext
-from apps.workflow.schemas.v1 import (
-    IntentRecognitionOutput,
-    QuestionClassificationOutput,
-    QuestionRewriteOutput,
-)
+from apps.workflow.schemas.v1 import IntentRecognitionOutput
 from infrastructure.question_model import build_question_model_service
 
 
@@ -812,10 +807,12 @@ class QuestionAdapter:
         self,
         model_client: QuestionClassificationModelClient | None = None,
         schema_provider: DatasetSchemaProvider | None = None,
-        intent_post_processor: IntentPostProcessor | None = None,
+        intent_post_processor: QuestionIntentValidationService | None = None,
         intent_subtask_config: IntentSubtaskConfig | None = None,
         question_model_service: QuestionModelService | None = None,
         intent_projection_service: QuestionIntentProjectionService | None = None,
+        input_projection_service: QuestionInputProjectionService | None = None,
+        intent_fallback_service: QuestionIntentFallbackService | None = None,
     ) -> None:
         if model_client is not None and question_model_service is not None:
             raise ValueError("QUESTION_MODEL_SOURCE_CONFLICT")
@@ -826,9 +823,17 @@ class QuestionAdapter:
             else question_model_service or build_question_model_service()
         )
         self._schema_provider = schema_provider
-        self._intent_post_processor = intent_post_processor or IntentPostProcessor()
+        self._intent_validation_service = (
+            intent_post_processor or QuestionIntentValidationService()
+        )
         self._intent_projection_service = (
             intent_projection_service or QuestionIntentProjectionService()
+        )
+        self._input_projection_service = (
+            input_projection_service or QuestionInputProjectionService()
+        )
+        self._intent_fallback_service = (
+            intent_fallback_service or QuestionIntentFallbackService()
         )
         self._intent_subtask_config = intent_subtask_config or IntentSubtaskConfig()
         self._last_intent_subtask_trace: dict[str, Any] = {
@@ -857,10 +862,12 @@ class QuestionAdapter:
         ctx = ChatBIRunContext(request)
         question = ctx.raw_question
 
-        if not question:
-            return self._dump("forbidden", "empty_question", "medium", 1.0)
-        if ctx.dataset_id is None:
-            return self._dump("forbidden", "missing_dataset", "medium", 1.0)
+        precondition = self._input_projection_service.classification_precondition(
+            question,
+            ctx.dataset_id,
+        )
+        if precondition is not None:
+            return precondition
 
         prompt = build_question_classification_prompt(
             question=question,
@@ -874,10 +881,9 @@ class QuestionAdapter:
         except QuestionModelError as exc:
             raise ValueError("CLASSIFICATION_MODEL_OUTPUT_INVALID") from exc
         try:
-            output = QuestionClassificationOutput.model_validate(payload)
+            return self._input_projection_service.project_classification(payload)
         except Exception as exc:
             raise ValueError("CLASSIFICATION_MODEL_OUTPUT_INVALID") from exc
-        return output.model_dump(mode="json")
 
     def rewrite(self, request: dict[str, Any]) -> dict[str, Any]:
         """调用大模型补全上下文，输出稳定的问题重写结果。"""
@@ -886,7 +892,7 @@ class QuestionAdapter:
         question = ctx.raw_question
         user_feedback = ctx.rewrite_response
         if not question:
-            return self._rewrite_dump("", True, ["question"], None)
+            return self._input_projection_service.empty_rewrite()
 
         prompt = build_question_rewrite_prompt(
             question=question,
@@ -896,11 +902,15 @@ class QuestionAdapter:
         )
         try:
             payload = self._invoke_prompt(prompt, "rewrite")
-            output = QuestionRewriteOutput.model_validate(payload)
+            return self._input_projection_service.project_rewrite(
+                payload,
+                dataset_id=ctx.dataset_id,
+            )
         except Exception:
-            return self._rewrite_fallback(question, user_feedback)
-        output = self._normalize_rewrite_output(output, dataset_id=ctx.dataset_id)
-        return output.model_dump(mode="json")
+            return self._input_projection_service.fallback_rewrite(
+                question,
+                user_feedback,
+            )
 
     def recognize_intent(self, request: dict[str, Any]) -> dict[str, Any]:
         """调用大模型分段识别分析意图，并在失败时使用轻量规则兜底。"""
@@ -912,10 +922,15 @@ class QuestionAdapter:
         subject_domains = self._subject_domains_from_schema(schema)
         available_dimensions = self._available_dimensions_from_schema(schema)
         if not rewritten_question:
-            return self._intent_dump("unknown", 0.4, ["metric"], [])
+            return IntentRecognitionOutput.model_validate(
+                {
+                    **self._intent_fallback_service.empty_intent(),
+                    "subject_domain": _default_subject_domain("not_required"),
+                }
+            ).model_dump(mode="json")
 
         conversation_context = ctx.conversation
-        fallback = self._intent_fallback(rewritten_question)
+        fallback = self._intent_fallback_service.infer(rewritten_question)
         fallback_payloads = self._intent_subtask_fallback_payloads(fallback)
         subtask_results = self._run_intent_subtasks(
             {
@@ -955,7 +970,10 @@ class QuestionAdapter:
             )
         )
         output = IntentRecognitionOutput.model_validate(projection.payload)
-        validation = self._intent_post_processor.validate(output.model_dump(mode="json"), retry_count=0)
+        validation = self._intent_validation_service.validate(
+            output.model_dump(mode="json"),
+            retry_count=0,
+        )
         return output.model_copy(update={"validation": validation}).model_dump(mode="json")
 
     def _intent_subtask_fallback_payloads(self, fallback: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1184,12 +1202,12 @@ class QuestionAdapter:
     ) -> dict[str, Any]:
         result: dict[str, Any] = fallback_payload
         retry_feedback: dict[str, Any] = {}
-        for retry_count in range(self._intent_post_processor.max_retry_count):
+        for retry_count in range(self._intent_validation_service.max_retry_count):
             prompt = prompt_builder({**user_feedback, **retry_feedback})
             result = self._invoke_prompt(prompt, stage)
             validation = validator(result)
             result = validation["payload"]
-            if validation["status"] == "invalid" and validation["retryable"] and retry_count + 1 < self._intent_post_processor.max_retry_count:
+            if validation["status"] == "invalid" and validation["retryable"] and retry_count + 1 < self._intent_validation_service.max_retry_count:
                 retry_feedback = {
                     "reason_code": validation["reason_code"],
                     "feedback": validation["repair_hint"],
@@ -1236,7 +1254,7 @@ class QuestionAdapter:
         available_dimensions: list[dict[str, Any]],
     ) -> dict[str, Any]:
         normalized = self._normalize_dimension_slots_payload(payload, available_dimensions)
-        shared_validation = self._intent_post_processor.validate(normalized)
+        shared_validation = self._intent_validation_service.validate(normalized)
         if shared_validation["status"] == "invalid":
             return {
                 "status": "invalid",
@@ -1427,215 +1445,6 @@ class QuestionAdapter:
         return _normalize_dimension_candidates(candidates)
 
     @staticmethod
-    def _dump(category: str, reason: str, risk_level: str, confidence: float) -> dict[str, Any]:
-        return QuestionClassificationOutput(
-            category=category,
-            reason=reason,
-            risk_level=risk_level,
-            confidence=confidence,
-        ).model_dump(mode="json")
-
-    @staticmethod
-    def _rewrite_dump(
-        rewritten_question: str,
-        need_user_input: bool,
-        missing_slots: list[str],
-        image_profile_hint: str | None,
-    ) -> dict[str, Any]:
-        return QuestionRewriteOutput(
-            rewritten_question=rewritten_question,
-            need_user_input=need_user_input,
-            missing_slots=missing_slots,
-            image_profile_hint=image_profile_hint,
-        ).model_dump(mode="json")
-
-    @staticmethod
-    def _normalize_rewrite_output(output: QuestionRewriteOutput, dataset_id: Any) -> QuestionRewriteOutput:
-        """上游已提供 dataset_id 时，防御模型误把 dataset_id 当成缺失槽位。"""
-
-        if dataset_id is None:
-            return output
-        missing_slots = [slot for slot in output.missing_slots if slot != "dataset_id"]
-        if missing_slots == output.missing_slots:
-            return output
-        return output.model_copy(
-            update={
-                "missing_slots": missing_slots,
-                "need_user_input": bool(missing_slots),
-            }
-        )
-
-    @classmethod
-    def _rewrite_fallback(cls, question: str, user_feedback: dict[str, Any]) -> dict[str, Any]:
-        """模型不可用时保留最小澄清兜底，避免交互分支失去回归入口。"""
-
-        need_user_input = not user_feedback and any(keyword in question for keyword in ("需要澄清", "信息不足", "补充"))
-        return cls._rewrite_dump(
-            question,
-            need_user_input,
-            ["metric"] if need_user_input else [],
-            None,
-        )
-
-    @staticmethod
-    def _intent_dump(
-        intent_type: str,
-        confidence: float,
-        ambiguous_slots: list[str],
-        conflict_slots: list[str],
-        metric_mentions: list[str] | None = None,
-        dimension_mentions: list[str] | None = None,
-        time_mentions: list[str] | None = None,
-        filter_mentions: list[dict[str, Any]] | None = None,
-        dimension_slots: list[dict[str, Any]] | None = None,
-        time_range: dict[str, Any] | None = None,
-        required_slot_types: list[str] | None = None,
-        query_shape: dict[str, Any] | None = None,
-        subject_domain: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return IntentRecognitionOutput(
-            intent_type=intent_type,
-            confidence=confidence,
-            metric_mentions=metric_mentions or [],
-            dimension_mentions=dimension_mentions or [],
-            dimension_slots=dimension_slots or [],
-            time_mentions=time_mentions or [],
-            time_range=time_range or {"raw": None, "value_status": "not_provided"},
-            filter_mentions=filter_mentions or [],
-            required_slot_types=required_slot_types or [],
-            query_shape=query_shape or {},
-            subject_domain=subject_domain or _default_subject_domain("not_required"),
-            ambiguous_slots=ambiguous_slots,
-            conflict_slots=conflict_slots,
-        ).model_dump(mode="json")
-
-    @classmethod
-    def _intent_fallback(cls, question: str) -> dict[str, Any]:
-        """模型不可用时用轻量规则识别常见分析意图。"""
-
-        if any(word in question for word in ("看一下情况", "分析一下", "怎么样", "看看数据")):
-            return cls._intent_dump(
-                "unknown",
-                0.4,
-                ["metric"],
-                [],
-                required_slot_types=["metric"],
-                query_shape={"select_mode": "unknown"},
-            )
-        metric_mentions = cls._extract_metric_mentions(question)
-        dimension_mentions = cls._extract_dimension_mentions(question)
-        time_mentions = cls._extract_time_mentions(question)
-        dimension_slots = cls._dimension_slots_from_question(question, dimension_mentions)
-        time_range = cls._time_range_from_mentions(time_mentions)
-        if any(word in question for word in ("趋势", "走势", "变化", "按天", "按周", "按月")):
-            return cls._intent_dump(
-                "trend_analysis",
-                0.85,
-                [],
-                [],
-                metric_mentions=metric_mentions,
-                dimension_mentions=dimension_mentions,
-                time_mentions=time_mentions,
-                dimension_slots=dimension_slots,
-                time_range=time_range,
-                required_slot_types=["metric", "time_dimension"],
-                query_shape={
-                    "select_mode": "aggregate",
-                    "needs_group_by": True,
-                    "time_grain": cls._infer_time_grain(question),
-                },
-            )
-        if any(word in question for word in ("最高", "最低", "最好", "最差", "top", "Top", "前", "后", "排名")):
-            return cls._intent_dump(
-                "ranking_analysis",
-                0.85,
-                [],
-                [],
-                metric_mentions=metric_mentions,
-                dimension_mentions=dimension_mentions,
-                time_mentions=time_mentions,
-                dimension_slots=dimension_slots,
-                time_range=time_range,
-                required_slot_types=["metric", "dimension", "order", "limit"],
-                query_shape={
-                    "select_mode": "aggregate",
-                    "needs_group_by": True,
-                    "needs_order_by": True,
-                    "order_direction": cls._infer_order_direction(question),
-                    "limit": cls._infer_limit(question),
-                },
-            )
-        if any(word in question for word in ("同比", "环比", "对比", "较上期", "比较")):
-            return cls._intent_dump(
-                "comparison_analysis",
-                0.85,
-                [],
-                [],
-                metric_mentions=metric_mentions,
-                dimension_mentions=dimension_mentions,
-                time_mentions=time_mentions,
-                dimension_slots=dimension_slots,
-                time_range=time_range,
-                required_slot_types=["metric", "comparison_target"],
-                query_shape={"select_mode": "aggregate", "needs_group_by": bool(dimension_mentions)},
-            )
-        if any(word in question for word in ("占比", "构成", "比例")):
-            return cls._intent_dump(
-                "share_analysis",
-                0.85,
-                [],
-                [],
-                metric_mentions=metric_mentions,
-                dimension_mentions=dimension_mentions,
-                time_mentions=time_mentions,
-                dimension_slots=dimension_slots,
-                time_range=time_range,
-                required_slot_types=["metric", "dimension"],
-                query_shape={"select_mode": "share", "needs_group_by": True},
-            )
-        if any(word in question for word in ("异常", "波动", "下降原因", "上升原因", "为什么下降", "为什么上升")):
-            return cls._intent_dump(
-                "anomaly_analysis",
-                0.85,
-                [],
-                [],
-                metric_mentions=metric_mentions,
-                dimension_mentions=dimension_mentions,
-                time_mentions=time_mentions,
-                dimension_slots=dimension_slots,
-                time_range=time_range,
-                required_slot_types=["metric", "time_range"],
-                query_shape={"select_mode": "diagnostic"},
-            )
-        if any(word in question for word in ("明细", "详情", "列表", "清单")):
-            return cls._intent_dump(
-                "detail_query",
-                0.85,
-                [],
-                [],
-                metric_mentions=metric_mentions,
-                dimension_mentions=dimension_mentions,
-                time_mentions=time_mentions,
-                dimension_slots=dimension_slots,
-                time_range=time_range,
-                required_slot_types=["dimension"],
-                query_shape={"select_mode": "detail"},
-            )
-        return cls._intent_dump(
-            "metric_query",
-            0.85,
-            [],
-            [],
-            metric_mentions=metric_mentions,
-            dimension_mentions=dimension_mentions,
-            time_mentions=time_mentions,
-            dimension_slots=dimension_slots,
-            time_range=time_range,
-            required_slot_types=["metric"],
-            query_shape={"select_mode": "aggregate", "needs_group_by": bool(dimension_mentions)},
-        )
-
-    @staticmethod
     def _normalize_subject_domain_output(
         raw_subject_domain: Any,
         subject_domains: list[dict[str, Any]],
@@ -1672,141 +1481,3 @@ class QuestionAdapter:
             "reason": str(raw.get("reason") or "主题域未能唯一确定"),
             "candidate_domain_ids": candidate_ids,
         }
-
-    @classmethod
-    def _dimension_slots_from_question(cls, question: str, dimension_mentions: list[str]) -> list[dict[str, Any]]:
-        """抽取维度角色和值状态，值缺失时显式标记而不是伪造业务值。"""
-
-        slots: list[dict[str, Any]] = []
-        for dimension in dimension_mentions:
-            value = cls._extract_dimension_value(question, dimension)
-            if value is not None:
-                slots.append(
-                    {
-                        "name": dimension,
-                        "role": "filter",
-                        "value": value,
-                        "value_status": "provided",
-                    }
-                )
-                continue
-            role = "group_by" if cls._is_group_by_dimension(question, dimension) else "ambiguous"
-            slots.append(
-                {
-                    "name": dimension,
-                    "role": role,
-                    "value": None,
-                    "value_status": "not_provided",
-                }
-            )
-        return slots
-
-    @staticmethod
-    def _extract_dimension_value(question: str, dimension: str) -> str | None:
-        """识别“1号档口/档口 1”这类常见维度值表达。"""
-
-        import re
-
-        patterns = (
-            rf"([A-Za-z0-9一二三四五六七八九十百千万]+)\s*号?\s*{re.escape(dimension)}",
-            rf"{re.escape(dimension)}\s*([A-Za-z0-9一二三四五六七八九十百千万]+)\s*号?",
-        )
-        for pattern in patterns:
-            matched = re.search(pattern, question)
-            if matched:
-                return matched.group(1)
-        return None
-
-    @staticmethod
-    def _is_group_by_dimension(question: str, dimension: str) -> bool:
-        """判断用户是否明确要求按某个维度分组。"""
-
-        group_markers = (
-            f"各{dimension}",
-            f"每个{dimension}",
-            f"按{dimension}",
-            f"分{dimension}",
-            f"{dimension}排行",
-            f"{dimension}排名",
-        )
-        ranking_markers = ("最高", "最低", "最好", "最差", "top", "Top", "前", "后", "排名")
-        return any(marker in question for marker in group_markers) or (
-            dimension in question and any(marker in question for marker in ranking_markers)
-        )
-
-    @staticmethod
-    def _time_range_from_mentions(time_mentions: list[str]) -> dict[str, Any]:
-        if not time_mentions:
-            return {"raw": None, "value_status": "not_provided"}
-        return {"raw": time_mentions[0], "value_status": "provided"}
-
-    @staticmethod
-    def _extract_metric_mentions(question: str) -> list[str]:
-        """从问题中提取常见自然语言指标线索，不做资产确认。"""
-
-        keywords = (
-            "销售额",
-            "订单数",
-            "访问人数",
-            "访问量",
-            "用户数",
-            "利润",
-            "GMV",
-            "成交额",
-            "收入",
-            "客单价",
-        )
-        return [keyword for keyword in keywords if keyword in question]
-
-    @staticmethod
-    def _extract_dimension_mentions(question: str) -> list[str]:
-        """从问题中提取常见自然语言维度线索，不做资产确认。"""
-
-        keywords = ("商品", "地区", "区域", "渠道", "店铺", "客户", "用户", "日期", "月份", "城市", "档口")
-        mentions = [keyword for keyword in keywords if keyword in question]
-        if any(word in question for word in ("按天", "按周", "按月")) and "日期" not in mentions and "月份" not in mentions:
-            mentions.append("日期")
-        return mentions
-
-    @staticmethod
-    def _extract_time_mentions(question: str) -> list[str]:
-        """从问题中提取自然语言时间线索。"""
-
-        keywords = ("今天", "昨日", "昨天", "本周", "上周", "本月", "上月", "最近 7 天", "最近7天", "近 30 天", "近30天")
-        mentions = [keyword for keyword in keywords if keyword in question]
-        absolute_months = re.findall(r"\d{4}\s*年\s*\d{1,2}\s*月", question)
-        mentions.extend(month for month in absolute_months if month not in mentions)
-        for keyword in ("按天", "按周", "按月"):
-            if keyword in question:
-                mentions.append(keyword)
-        return mentions
-
-    @staticmethod
-    def _infer_time_grain(question: str) -> str | None:
-        if "按月" in question:
-            return "month"
-        if "按周" in question:
-            return "week"
-        if "按天" in question or "趋势" in question or "走势" in question:
-            return "day"
-        return None
-
-    @staticmethod
-    def _infer_order_direction(question: str) -> str:
-        if any(word in question for word in ("最低", "最差", "后")):
-            return "asc"
-        return "desc"
-
-    @staticmethod
-    def _infer_limit(question: str) -> int | None:
-        natural_limit = re.search(r"(?:最高|最低|最好|最差)(?:的)?\s*(\d+)\s*个", question)
-        if natural_limit:
-            return int(natural_limit.group(1))
-        for marker in ("Top", "top", "前", "后"):
-            index = question.find(marker)
-            if index < 0:
-                continue
-            digits = "".join(char for char in question[index + len(marker) : index + len(marker) + 3] if char.isdigit())
-            if digits:
-                return int(digits)
-        return None

@@ -31,12 +31,27 @@ TimeRangeT = TypeVar("TimeRangeT")
 RequiredSlotTypeT = TypeVar("RequiredSlotTypeT")
 
 
+class QuestionClassificationOutputBase(BaseModel):
+    """Graph 与后续 ChatBI 入口共享的问题分类输出契约。"""
+
+    category: Literal["forbidden", "chitchat", "data", "followup"]
+    reason: str
+    risk_level: Literal["low", "medium", "high"] = "low"
+    confidence: float = Field(default=0.0, ge=0, le=1)
+
+
 class QuestionRewriteOutputBase(BaseModel):
     """Agent 与 Graph 共享的问题重写最小契约。"""
 
     rewritten_question: str
     need_user_input: bool = False
     missing_slots: list[str] = Field(default_factory=list)
+
+
+class QuestionRewriteProjectionOutput(QuestionRewriteOutputBase):
+    """Graph 问题重写节点使用的稳定投影契约。"""
+
+    image_profile_hint: str | None = None
 
 
 class NaturalLanguageIntentOutputBase(
@@ -232,8 +247,10 @@ __all__ = [
     "IntentType",
     "IntentValidationOutput",
     "NaturalLanguageIntentOutputBase",
+    "QuestionClassificationOutputBase",
     "QuestionRewriteOutput",
     "QuestionRewriteOutputBase",
+    "QuestionRewriteProjectionOutput",
     "QuestionIntentProjectionData",
     "QuestionIntentProjectionResult",
     "QuestionUnderstandingOutcome",
