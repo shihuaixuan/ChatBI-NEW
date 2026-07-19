@@ -392,6 +392,8 @@ class ExecuteSqlTool(AgentTool):
             "sql": payload["sql"],
             "fields": payload["fields"],
             "row_count": payload["row_count"],
+            "sample_rows": payload["sample_rows"],
+            "artifact_ref": payload.get("artifact_ref"),
             "sql_source": sql_source,
         }
         ctx.state["full_data"] = payload.pop("full_data")

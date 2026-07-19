@@ -37,9 +37,20 @@ class ChatRecordResultProjection:
     data: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ChatRecordResultLimits:
+    """会话最终快照的持久化大小边界。"""
+
+    max_answer_chars: int = 100_000
+    max_sql_chars: int = 200_000
+    max_chart_chars: int = 200_000
+    max_data_bytes: int = 1_000_000
+
+
 __all__ = [
     "ChatRecordCreateData",
     "ChatRecordExecutionType",
     "ChatRecordResultProjection",
+    "ChatRecordResultLimits",
     "ChatRecordStatus",
 ]

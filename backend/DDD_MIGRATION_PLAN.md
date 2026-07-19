@@ -1192,7 +1192,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛、第三批会话记录状态与结果投影统一、
 第四批语义 SQL 编译入口收敛、第五批语义检索与物理 Schema 查询收敛、第六批执行绑定规则统一，以及第七批
-问题理解确定性校验规则收敛：
+问题理解确定性校验规则收敛和第八批会话最终结果大小边界统一：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1274,6 +1274,15 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     保持不变。时间表达识别与归一化的权威实现迁入 ChatBI，旧 Capabilities 和 Graph 路径只保留兼容导出。
 34. 第七批 Agent、Graph、ChatBI、Workflow、Workflow Engine 和架构组合回归 434 项通过，完整后端回归
     878 项通过；新增和修改代码通过定向 Ruff 与严格 Mypy，`git diff --check` 通过，OpenAPI 保持 154 个路径。
+35. ChatBI 新增 `ChatRecordResultLimits`，由 `ChatRecordService` 统一限制最终答案、图表答案、SQL、图表配置和
+    数据快照大小；Agent、Graph 只提交结果投影，不再各自决定会话表可写入的数据规模。
+36. 超大答案、SQL 或图表配置返回明确的 `CHAT_RECORD_*_TOO_LARGE` 错误，所有大小校验在记录状态变化前完成，
+    避免校验失败后留下已成功但结果不完整的部分状态。超大数据结果保存为包含原始行数、实际保存行数、
+    `result_truncated=true` 和可选 Artifact 引用的受控摘要；非法 JSON 和无法容纳的摘要明确失败，不静默丢失。
+37. Agent SQL 工具保留 `artifact_ref` 到最终结果投影边界，小结果继续保持原有 `fields/data` 历史契约；Graph
+    继续由既有 Artifact Store 保存完整执行结果，并通过同一个 ChatRecordService 保存最终会话快照。
+38. 第八批 Agent、Graph、ChatBI、Workflow、Workflow Engine 和架构组合回归 439 项通过，完整后端回归
+    883 项通过；新增和修改代码通过定向 Ruff 与严格 Mypy，`git diff --check` 通过，OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1295,7 +1304,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 6. 旧 `chat/task/llm.py` 调整为兼容入口或直接删除，不能继续维护独立业务逻辑。
 7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期、所有权、Agent 与 Graph 的
    记录状态、澄清等待状态及最终结果投影已统一；执行器内部 Run 状态继续保持各自语义。
-8. SQL、数据结果和制品保存建立统一大小限制和清理规则。
+8. SQL、数据结果和制品保存建立统一大小限制和清理规则。Agent 与 Graph 的 ChatRecord 最终快照大小边界已统一，
+   Graph 完整结果继续使用 Artifact；旧 Chat 的直接字段写入和跨执行器 Artifact 清理策略待后续批次收敛。
 9. 推荐、分析和预测作为 ChatBI 应用能力调用 AI Model，不放入 ORM 方法或模板模块。
 
 **完成标准**

@@ -1,14 +1,17 @@
 from datetime import datetime
 
+import orjson
 import pytest
 
 from apps.chatbi.models import (
     ChatRecord,
     ChatRecordExecutionType,
+    ChatRecordResultLimits,
     ChatRecordResultProjection,
     ChatRecordStatus,
 )
 from apps.chatbi.services import (
+    ChatRecordResultTooLargeError,
     ChatRecordService,
     ChatRecordTransitionError,
     normalize_chat_record_status,
@@ -101,6 +104,76 @@ def test_success_projects_result_and_clears_error():
     assert record.sql_answer == "销售额为 100 元"
     assert record.sql == "select 100 as sales"
     assert record.error is None
+
+
+def test_large_data_is_saved_as_explicit_bounded_summary():
+    record = _record("running")
+    service = ChatRecordService(
+        FakeChatRecordRepository(record),
+        result_limits=ChatRecordResultLimits(max_data_bytes=220),
+    )
+    source = {
+        "fields": ["name", "amount"],
+        "data": [
+            {"name": f"门店-{index}-" + "长名称" * 5, "amount": index}
+            for index in range(10)
+        ],
+        "row_count": 10,
+        "artifact_ref": {"artifact_id": "artifact-1"},
+    }
+
+    service.transition(
+        record,
+        ChatRecordStatus.SUCCEEDED,
+        result=ChatRecordResultProjection(data=orjson.dumps(source).decode()),
+    )
+
+    stored = orjson.loads(record.data)
+    assert len(record.data.encode("utf-8")) <= 220
+    assert stored["result_truncated"] is True
+    assert stored["row_count"] == 10
+    assert stored["stored_row_count"] < 10
+    assert stored["artifact_ref"] == {"artifact_id": "artifact-1"}
+
+
+def test_oversized_text_rejects_transition_without_partial_mutation():
+    record = _record("running")
+    service = ChatRecordService(
+        FakeChatRecordRepository(record),
+        result_limits=ChatRecordResultLimits(max_answer_chars=5),
+    )
+
+    with pytest.raises(
+        ChatRecordResultTooLargeError,
+        match="CHAT_RECORD_ANSWER_TOO_LARGE",
+    ):
+        service.transition(
+            record,
+            ChatRecordStatus.SUCCEEDED,
+            result=ChatRecordResultProjection(answer="超过五个字符的回答"),
+        )
+
+    assert record.status == "running"
+    assert record.finish is False
+    assert record.sql_answer is None
+
+
+def test_oversized_non_json_data_returns_clear_error():
+    record = _record("running")
+    service = ChatRecordService(
+        FakeChatRecordRepository(record),
+        result_limits=ChatRecordResultLimits(max_data_bytes=10),
+    )
+
+    with pytest.raises(
+        ChatRecordResultTooLargeError,
+        match="CHAT_RECORD_DATA_TOO_LARGE_INVALID_JSON",
+    ):
+        service.transition(
+            record,
+            ChatRecordStatus.SUCCEEDED,
+            result=ChatRecordResultProjection(data="不是合法且足够长的 JSON"),
+        )
 
 
 def test_failed_retry_clears_stale_terminal_snapshot():

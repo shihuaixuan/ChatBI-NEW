@@ -1,6 +1,7 @@
 from apps.chatbi.models.dto.chat_record import (
     ChatRecordCreateData,
     ChatRecordExecutionType,
+    ChatRecordResultLimits,
     ChatRecordResultProjection,
     ChatRecordStatus,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "ChatInfo",
     "ChatRecordCreateData",
     "ChatRecordExecutionType",
+    "ChatRecordResultLimits",
     "ChatRecordResultProjection",
     "ChatRecordStatus",
     "ConversationBinding",

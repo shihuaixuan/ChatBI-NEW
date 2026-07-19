@@ -72,6 +72,7 @@ class RecordingQueryService:
                 "row_count": 2,
                 "stats_summary": {"amount": {"sum": 30.0}},
                 "full_data": [{"amount": 10}, {"amount": 20}],
+                "artifact_ref": {"artifact_id": "result-1"},
             },
         )
 
@@ -187,6 +188,15 @@ def test_finish_no_note_for_compiled_sql_and_builds_chart():
     assert "非标准" not in output.payload["answer"]
     assert output.payload["chart"] == {"type": "bar", "x": "city", "y": ["gmv"]}
     assert output.payload["non_standard"] is False
+
+
+def test_execute_sql_preserves_artifact_reference_for_record_projection():
+    ctx = _ctx(query_service=RecordingQueryService())
+
+    output = ExecuteSqlTool().execute(ctx, ExecuteSqlArgs(sql="select amount from orders"))
+
+    assert output.success
+    assert ctx.state["last_execution"]["artifact_ref"] == {"artifact_id": "result-1"}
 
 
 def test_compile_requires_semantic_package_first():

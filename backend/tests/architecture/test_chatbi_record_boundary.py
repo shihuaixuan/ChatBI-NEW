@@ -98,3 +98,16 @@ def test_legacy_analysis_and_predict_record_uses_chatbi_create_service():
     assert "build_chat_record_service" in source
     assert "ChatRecordCreateData" in source
     assert "record = ChatRecord()" not in source
+
+
+def test_chat_record_service_owns_final_result_size_policy():
+    service_source = (
+        BACKEND_DIR / "apps/chatbi/services/chat_record_service.py"
+    ).read_text(encoding="utf-8")
+    agent_loop_source = (
+        BACKEND_DIR / "apps/agent/loop.py"
+    ).read_text(encoding="utf-8")
+
+    assert "ChatRecordResultLimits" in service_source
+    assert "CHAT_RECORD_DATA_TOO_LARGE" in service_source
+    assert 'record_payload["artifact_ref"]' in agent_loop_source

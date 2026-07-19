@@ -712,12 +712,13 @@ class AgentLoop:
     def _finish(self, run, record, messages, budget, *, answer, chart, sql, step_id=None, full_data=None, execution=None) -> Iterator[str]:
         record_data = None
         if full_data is not None and execution:
-            record_data = orjson.dumps(
-                {
-                    "fields": execution.get("fields") or [],
-                    "data": full_data,
-                }
-            ).decode()
+            record_payload = {
+                "fields": execution.get("fields") or [],
+                "data": full_data,
+            }
+            if execution.get("artifact_ref") is not None:
+                record_payload["artifact_ref"] = execution["artifact_ref"]
+            record_data = orjson.dumps(record_payload).decode()
         crud.complete_record(
             self.session,
             record,
