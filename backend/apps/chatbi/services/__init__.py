@@ -52,6 +52,16 @@ from apps.chatbi.services.execution_binding_service import (
     ExecutionBindingError,
     ExecutionBindingService,
 )
+from apps.chatbi.services.final_reply_projection_service import (
+    FinalReplyProjectionError,
+    FinalReplyProjectionService,
+)
+from apps.chatbi.services.generation_history_projection_service import (
+    GenerationHistoryProjectionService,
+)
+from apps.chatbi.services.generation_context_scope_service import (
+    GenerationContextScopeService,
+)
 from apps.chatbi.services.permission_sql_generation_service import (
     PermissionSQLGenerationError,
     PermissionSQLGenerationModelClient,
@@ -170,6 +180,10 @@ __all__ = [
     "DatasourceSelectionService",
     "ExecutionBindingError",
     "ExecutionBindingService",
+    "FinalReplyProjectionService",
+    "FinalReplyProjectionError",
+    "GenerationHistoryProjectionService",
+    "GenerationContextScopeService",
     "DynamicSQLGenerationError",
     "DynamicSQLGenerationModelClient",
     "DynamicSQLGenerationPromptBuilder",

@@ -80,7 +80,7 @@ def test_legacy_analysis_and_prediction_sse_contract_is_unchanged():
 
 
 def test_legacy_chat_question_no_longer_owns_analysis_prediction_templates():
-    tree = _tree("apps/chat/models/chat_model.py")
+    tree = _tree("apps/chatbi/models/dto/legacy_query.py")
     imports = _imports(tree)
     class_node = next(
         node

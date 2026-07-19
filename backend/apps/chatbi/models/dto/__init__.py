@@ -20,6 +20,11 @@ from apps.chatbi.models.dto.chart_generation import (
     ChartGenerationMessage,
     ChartGenerationModelChunk,
 )
+from apps.chatbi.models.dto.chat_history import (
+    ChatLogHistory,
+    ChatLogHistoryItem,
+    ChatRecordResult,
+)
 from apps.chatbi.models.dto.chat_record import (
     ChatRecordAuxiliaryProjection,
     ChatRecordAuxiliaryType,
@@ -51,6 +56,23 @@ from apps.chatbi.models.dto.execution_binding import (
     ExecutionBinding,
     ExecutionBindingData,
 )
+from apps.chatbi.models.dto.final_reply import (
+    FinalReplyProjectionData,
+    FinalReplyProjectionResult,
+    QueryFinalReplyProjectionData,
+    QueryFinalReplyProjectionResult,
+)
+from apps.chatbi.models.dto.generation_history import (
+    GenerationHistoryLog,
+    GenerationHistoryProjectionData,
+    GenerationHistoryProjectionResult,
+)
+from apps.chatbi.models.dto.generation_context import (
+    GenerationAssistantContext,
+    GenerationContextScope,
+    GenerationContextScopeData,
+)
+from apps.chatbi.models.dto.legacy_query import AiModelQuestion, ChatQuestion
 from apps.chatbi.models.dto.permission_sql_generation import (
     PermissionSQLFilter,
     PermissionSQLGenerationData,
@@ -123,7 +145,11 @@ __all__ = [
     "AnalysisPredictionGenerationEvent",
     "AnalysisPredictionMessage",
     "AnalysisPredictionModelChunk",
+    "AiModelQuestion",
     "ChatInfo",
+    "ChatQuestion",
+    "ChatLogHistory",
+    "ChatLogHistoryItem",
     "ChatBIResultArtifactRef",
     "ChatRecordAuxiliaryProjection",
     "ChatRecordAuxiliaryType",
@@ -131,6 +157,7 @@ __all__ = [
     "ChatRecordExecutionType",
     "ChatRecordResultLimits",
     "ChatRecordResultProjection",
+    "ChatRecordResult",
     "ChatRecordStatus",
     "ChartGenerationData",
     "ChartGenerationEvent",
@@ -150,6 +177,14 @@ __all__ = [
     "DynamicSQLSubqueryMapping",
     "ExecutionBinding",
     "ExecutionBindingData",
+    "FinalReplyProjectionData",
+    "FinalReplyProjectionResult",
+    "GenerationHistoryLog",
+    "GenerationHistoryProjectionData",
+    "GenerationHistoryProjectionResult",
+    "GenerationAssistantContext",
+    "GenerationContextScope",
+    "GenerationContextScopeData",
     "IntentRecognitionOutput",
     "IntentValidationOutput",
     "NaturalLanguageIntentOutputBase",
@@ -174,6 +209,8 @@ __all__ = [
     "QuestionUnderstandingOutcome",
     "QuestionUnderstandingOutput",
     "QueryResultProjectionData",
+    "QueryFinalReplyProjectionData",
+    "QueryFinalReplyProjectionResult",
     "RecommendedQuestionGenerationData",
     "RecommendedQuestionGenerationEvent",
     "RecommendedQuestionMessage",

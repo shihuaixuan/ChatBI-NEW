@@ -27,9 +27,9 @@ from apps.agent.service import (
     create_agent_start_stream,
 )
 from apps.chat.composition import build_conversation_service
-from apps.chat.models.chat_model import ChatStart, McpDs, McpQuestion
 from apps.chatbi.models import CreateChat
 from apps.datasource.composition import build_datasource_service
+from apps.mcp.schemas import ChatStart, McpDs, McpQuestion
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
 from common.core.schemas import Token, XOAuth2PasswordBearer

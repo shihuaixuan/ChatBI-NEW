@@ -86,7 +86,7 @@ def test_legacy_permission_sources_use_stable_filter_dto():
 
 
 def test_legacy_chat_question_no_longer_owns_permission_sql_templates():
-    tree = _tree("apps/chat/models/chat_model.py")
+    tree = _tree("apps/chatbi/models/dto/legacy_query.py")
     imports = _imports(tree)
     class_node = next(
         node

@@ -6,19 +6,20 @@ from apps.chatbi.models import (
     AnswerGenerationData,
     AnswerGenerationMode,
     AnswerProjectionData,
+    FinalReplyProjectionData,
 )
 from apps.chatbi.services import (
     AnswerGenerationService,
     AnswerModelClient,
     AnswerProjectionService,
     CallableAnswerModelClient,
+    FinalReplyProjectionService,
     QuestionModelService,
 )
 from apps.chatbi.services import (
     build_answer_generation_prompt as build_answer_generation_prompt,
 )
 from apps.workflow.capabilities.context import ChatBIRunContext
-from apps.workflow.schemas.v1 import FinalReplyOutput
 from infrastructure.question_model import build_question_model_service
 
 
@@ -51,6 +52,7 @@ class AnswerAdapter:
         model_client: AnswerModelClient | None = None,
         answer_generation_service: AnswerGenerationService | None = None,
         answer_projection_service: AnswerProjectionService | None = None,
+        final_reply_projection_service: FinalReplyProjectionService | None = None,
     ) -> None:
         if model_client is not None and answer_generation_service is not None:
             raise ValueError("ANSWER_MODEL_SOURCE_CONFLICT")
@@ -66,6 +68,9 @@ class AnswerAdapter:
             )
         self._answer_projection_service = (
             answer_projection_service or AnswerProjectionService()
+        )
+        self._final_reply_projection_service = (
+            final_reply_projection_service or FinalReplyProjectionService()
         )
 
     def reject(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -87,12 +92,12 @@ class AnswerAdapter:
         """本地合成最终回复，保持前端响应契约稳定。"""
 
         ctx = ChatBIRunContext(request)
-        final_answer = str(ctx.answer.get("answer") or "暂时无法生成完整回答，请稍后重试。")
-        return FinalReplyOutput(
-            final_answer=final_answer,
-            recommendations=list(ctx.recommendations.get("questions") or []),
-            chart=ctx.image_profile,
-            metadata={"source": "real_chatbi_v1"},
+        return self._final_reply_projection_service.project(
+            FinalReplyProjectionData(
+                answer=ctx.answer,
+                recommendations=ctx.recommendations,
+                chart=ctx.image_profile,
+            )
         ).model_dump(mode="json")
 
     def _generate(

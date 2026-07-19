@@ -79,7 +79,7 @@ def test_sql_model_adapter_uses_shared_model_stream_parser():
 
 
 def test_legacy_chat_question_no_longer_owns_recommendation_templates():
-    tree = _tree("apps/chat/models/chat_model.py")
+    tree = _tree("apps/chatbi/models/dto/legacy_query.py")
     imports = _imports(tree)
     class_node = next(
         node

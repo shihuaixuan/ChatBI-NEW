@@ -29,6 +29,20 @@ def _function_source(tree: ast.Module, name: str) -> str:
     return ast.unparse(function)
 
 
+def _class_method_source(tree: ast.Module, class_name: str, method_name: str) -> str:
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    method = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == method_name
+    )
+    return ast.unparse(method)
+
+
 def test_chat_record_service_has_no_runtime_or_session_dependency():
     imports = _imports(_tree("apps/chatbi/services/chat_record_service.py"))
 
@@ -36,6 +50,54 @@ def test_chat_record_service_has_no_runtime_or_session_dependency():
     assert not any(module.startswith("apps.agent.") for module in imports)
     assert not any(module.startswith("apps.workflow_engine.") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
+
+
+def test_chat_history_dto_has_no_legacy_chat_or_framework_dependency():
+    imports = _imports(_tree("apps/chatbi/models/dto/chat_history.py"))
+
+    assert not any(module.startswith("apps.chat") for module in imports)
+    assert not any(module.startswith("apps.agent") for module in imports)
+    assert not any(module.startswith("apps.workflow") for module in imports)
+    assert "fastapi" not in imports
+    assert "langchain" not in imports
+    assert "sqlmodel" not in imports
+
+
+def test_legacy_chat_history_models_are_only_compatibility_exports():
+    tree = _tree("apps/chat/models/chat_model.py")
+    class_names = {
+        node.name for node in tree.body if isinstance(node, ast.ClassDef)
+    }
+
+    assert "ChatRecordResult" not in class_names
+    assert "ChatLogHistoryItem" not in class_names
+    assert "ChatLogHistory" not in class_names
+
+
+def test_legacy_query_dto_has_no_transport_or_model_framework_dependency():
+    imports = _imports(_tree("apps/chatbi/models/dto/legacy_query.py"))
+
+    assert not any(module.startswith("apps.chat") for module in imports)
+    assert not any(module.startswith("apps.agent") for module in imports)
+    assert not any(module.startswith("apps.workflow") for module in imports)
+    assert "fastapi" not in imports
+    assert "langchain" not in imports
+    assert "sqlmodel" not in imports
+
+
+def test_legacy_chat_model_only_keeps_query_context_compatibility_exports():
+    tree = _tree("apps/chat/models/chat_model.py")
+    class_names = {
+        node.name for node in tree.body if isinstance(node, ast.ClassDef)
+    }
+
+    assert "AiModelQuestion" not in class_names
+    assert "ChatQuestion" not in class_names
+    assert "ChatMcp" not in class_names
+    assert "ExcelData" not in class_names
+    assert "SystemPromptMessage" not in class_names
+    assert "HumanPromptMessage" not in class_names
+    assert "AIPromptMessage" not in class_names
 
 
 def test_agent_record_terminal_projection_uses_chatbi_service():
@@ -89,6 +151,17 @@ def test_legacy_chat_record_finish_functions_only_forward_state_changes():
         source = _function_source(tree, name)
         assert "build_chat_record_service" in source
         assert "update(ChatRecord)" not in source
+
+
+def test_legacy_chat_run_does_not_finish_after_failure():
+    source = _class_method_source(
+        _tree("apps/chat/task/llm.py"),
+        "LLMService",
+        "run_task",
+    )
+
+    assert "run_failed = True" in source
+    assert "if _session and (not run_failed)" in source
 
 
 def test_legacy_analysis_and_predict_record_uses_chatbi_create_service():

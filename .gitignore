@@ -30,10 +30,15 @@ backend/tests/*
 !backend/tests/datasource/**
 !backend/tests/knowledge/
 !backend/tests/knowledge/**
+!backend/tests/mcp/
+!backend/tests/mcp/**
 !backend/tests/architecture/
 !backend/tests/architecture/**
 !backend/tests/chat/
 backend/tests/chat/*
+!backend/tests/chat/test_axis_obj_schema.py
+!backend/tests/chat/test_legacy_llm_adapter.py
+!backend/tests/chat/test_legacy_chat_run_finalization.py
 !backend/tests/chat/test_semantic_term_context.py
 !backend/tests/retrieval/
 !backend/tests/retrieval/**

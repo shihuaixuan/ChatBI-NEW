@@ -12,10 +12,7 @@ from apps.chat.models.chat_model import (
     Chat,
     ChatInfo,
     ChatLog,
-    ChatLogHistory,
-    ChatLogHistoryItem,
     ChatRecord,
-    ChatRecordResult,
     CreateChat,
     OperationEnum,
     RenameChat,
@@ -26,8 +23,11 @@ from apps.chat.services.semantic_binding import (
 )
 from apps.chatbi.chat_record import build_chat_record_service
 from apps.chatbi.models import (
+    ChatLogHistory,
+    ChatLogHistoryItem,
     ChatRecordAuxiliaryProjection,
     ChatRecordAuxiliaryType,
+    ChatRecordResult,
     ChatRecordResultProjection,
     ChatRecordStatus,
 )

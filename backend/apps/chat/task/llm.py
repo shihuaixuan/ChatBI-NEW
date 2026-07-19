@@ -51,27 +51,36 @@ from apps.chat.curd.chat import (
     trigger_log_error,
 )
 from apps.chat.models.chat_model import (
-    AxisObj,
     Chat,
     ChatFinishStep,
     ChatLog,
-    ChatQuestion,
     ChatRecord,
     OperationEnum,
     RenameChat,
 )
 from apps.chat.services.semantic_binding import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
 from apps.chat.services.term_context import ChatTermContextService
+from apps.chat.task.legacy_adapter import (
+    build_context_prompt_log,
+    build_role_prompt_log,
+    encode_sse_event,
+)
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
     ChartGenerationData,
     ChartGenerationMessage,
+    ChatQuestion,
     ChatRecordAuxiliaryType,
     DatasourceSelectionCandidate,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
     DynamicSQLGenerationData,
     DynamicSQLSubqueryMapping,
+    GenerationAssistantContext,
+    GenerationContextScope,
+    GenerationContextScopeData,
+    GenerationHistoryLog,
+    GenerationHistoryProjectionData,
     PermissionSQLFilter,
     PermissionSQLGenerationData,
     QueryResultProjectionData,
@@ -83,6 +92,8 @@ from apps.chatbi.services import (
     ChartGenerationError,
     DatasourceSelectionError,
     DynamicSQLGenerationError,
+    GenerationContextScopeService,
+    GenerationHistoryProjectionService,
     PermissionSQLGenerationError,
     SQLGenerationError,
 )
@@ -107,6 +118,7 @@ from common.error import (
     SQLBotDBError,
 )
 from common.utils.data_format import DataFormat
+from common.utils.data_format_schema import AxisObj
 from common.utils.locale import I18n, I18nHelper
 from common.utils.utils import SQLBotLogUtil, extract_nested_json
 from infrastructure.analysis_prediction import build_analysis_prediction_service
@@ -298,74 +310,29 @@ class LLMService:
             return True
 
     def init_messages(self, session: Session):
-
         self.choose_table_schema(session)
-
-        last_sql_messages: List[dict[str, Any]] = self.generate_sql_logs[-1].messages if len(
-            self.generate_sql_logs) > 0 else []
-        if self.chat_question.regenerate_record_id:
-            # filter record before regenerate_record_id
-            _temp_log = next(
-                filter(lambda obj: obj.pid == self.chat_question.regenerate_record_id, self.generate_sql_logs), None)
-            last_sql_messages: List[dict[str, Any]] = _temp_log.messages if _temp_log else []
-
-        # 排除所有的系统提示词
-        last_sql_messages = [obj for obj in last_sql_messages if obj.get("sqlbot_system") != True]
-
-        count_limit = self.base_message_round_count_limit
-
-        self.sql_history = []
-        if last_sql_messages is not None and len(last_sql_messages) > 0:
-            last_rounds = get_last_conversation_rounds(last_sql_messages, rounds=count_limit)
-
-            for _msg_dict in last_rounds:
-                if _msg_dict.get('type') == 'human':
-                    self.sql_history.append(
-                        SQLGenerationMessage(
-                            role='human',
-                            content=cast(str, _msg_dict.get('content')),
-                        )
+        projection = GenerationHistoryProjectionService().project(
+            GenerationHistoryProjectionData(
+                sql_logs=[
+                    GenerationHistoryLog(
+                        record_id=log.pid,
+                        messages=log.messages,
                     )
-                elif _msg_dict.get('type') == 'ai':
-                    self.sql_history.append(
-                        SQLGenerationMessage(
-                            role='ai',
-                            content=cast(str, _msg_dict.get('content')),
-                        )
+                    for log in self.generate_sql_logs
+                ],
+                chart_logs=[
+                    GenerationHistoryLog(
+                        record_id=log.pid,
+                        messages=log.messages,
                     )
-
-        last_chart_messages: List[dict[str, Any]] = self.generate_chart_logs[-1].messages if len(
-            self.generate_chart_logs) > 0 else []
-        if self.chat_question.regenerate_record_id:
-            # filter record before regenerate_record_id
-            _temp_log = next(
-                filter(lambda obj: obj.pid == self.chat_question.regenerate_record_id, self.generate_chart_logs), None)
-            last_chart_messages: List[dict[str, Any]] = _temp_log.messages if _temp_log else []
-
-        # 排除所有的系统提示词
-        last_chart_messages = [obj for obj in last_chart_messages if obj.get("sqlbot_system") != True]
-
-        count_chart_limit = self.base_message_round_count_limit
-
-        self.chart_history = []
-        if last_chart_messages is not None and len(last_chart_messages) > 0:
-            last_rounds = get_last_conversation_rounds(last_chart_messages, rounds=count_chart_limit)
-
-            for _msg_dict in last_rounds:
-                if _msg_dict.get('type') == 'human':
-                    self.chart_history.append(
-                        ChartGenerationMessage(
-                            role='human',
-                            content=cast(str, _msg_dict.get('content')),
-                        )
-                    )
-                elif _msg_dict.get('type') == 'ai':
-                    self.chart_history.append(
-                        ChartGenerationMessage(
-                            role='ai',
-                            content=cast(str, _msg_dict.get('content')),
-                        )
-                    )
+                    for log in self.generate_chart_logs
+                ],
+                regenerate_record_id=self.chat_question.regenerate_record_id,
+                round_limit=self.base_message_round_count_limit,
+            )
+        )
+        self.sql_history = projection.sql_history
+        self.chart_history = projection.chart_history
 
     def get_record(self):
         return self.record
@@ -401,22 +368,38 @@ class LLMService:
                                                                 log=self.current_logs[OperationEnum.FILTER_TERMS],
                                                                 full_message=term_list)
 
+    def resolve_generation_context_scope(
+            self,
+            workspace_id: int | None,
+            datasource_id: int | None,
+    ) -> GenerationContextScope:
+        assistant = None
+        if self.current_assistant:
+            assistant = GenerationAssistantContext(
+                assistant_id=self.current_assistant.id,
+                workspace_id=self.current_assistant.oid,
+                assistant_type=self.current_assistant.type,
+            )
+        return GenerationContextScopeService().project(
+            GenerationContextScopeData(
+                default_workspace_id=workspace_id,
+                current_user_workspace_id=self.current_user.oid,
+                datasource_id=datasource_id,
+                assistant=assistant,
+            )
+        )
+
     def filter_custom_prompts(self, _session: Session, custom_prompt_type: CustomPromptTypeEnum, oid: int = None,
                               ds_id: int = None):
         if SQLBotLicenseUtil.valid():
-            calculate_oid = oid
-            calculate_ds_id = ds_id
-            if self.current_assistant:
-                calculate_oid = self.current_assistant.oid if self.current_assistant.type != 4 else self.current_user.oid
-                if self.current_assistant.type == 1:
-                    calculate_ds_id = None
+            scope = self.resolve_generation_context_scope(oid, ds_id)
             self.current_logs[OperationEnum.FILTER_CUSTOM_PROMPT] = start_log(session=_session,
                                                                               operate=OperationEnum.FILTER_CUSTOM_PROMPT,
                                                                               record_id=self.record.id,
                                                                               local_operation=True)
             self.chat_question.custom_prompt, prompt_list = find_custom_prompts(_session, custom_prompt_type,
-                                                                                calculate_oid,
-                                                                                calculate_ds_id)
+                                                                                scope.workspace_id,
+                                                                                scope.datasource_id)
             self.current_logs[OperationEnum.FILTER_CUSTOM_PROMPT] = end_log(session=_session,
                                                                             log=self.current_logs[
                                                                                 OperationEnum.FILTER_CUSTOM_PROMPT],
@@ -427,26 +410,21 @@ class LLMService:
                                                                         operate=OperationEnum.FILTER_SQL_EXAMPLE,
                                                                         record_id=self.record.id,
                                                                         local_operation=True)
-        calculate_oid = oid
-        calculate_ds_id = ds_id
-        if self.current_assistant:
-            calculate_oid = self.current_assistant.oid if self.current_assistant.type != 4 else self.current_user.oid
-            if self.current_assistant.type == 1:
-                calculate_ds_id = None
-        if self.current_assistant and self.current_assistant.type == 1:
+        scope = self.resolve_generation_context_scope(oid, ds_id)
+        if scope.use_assistant_sql_examples:
             self.chat_question.data_training, example_list = (
                 build_sql_example_query_service(_session).build_prompt(
                     self.chat_question.question,
-                    calculate_oid,
-                    assistant_id=self.current_assistant.id,
+                    scope.workspace_id,
+                    assistant_id=scope.sql_example_assistant_id,
                 )
             )
         else:
             self.chat_question.data_training, example_list = (
                 build_sql_example_query_service(_session).build_prompt(
                     self.chat_question.question,
-                    calculate_oid,
-                    datasource_id=calculate_ds_id,
+                    scope.workspace_id,
+                    datasource_id=scope.datasource_id,
                 )
             )
         self.current_logs[OperationEnum.FILTER_SQL_EXAMPLE] = end_log(session=_session,
@@ -506,14 +484,7 @@ class LLMService:
                                                               ai_modal_name=self.chat_question.ai_modal_name,
                                                               operate=OperationEnum.ANALYSIS,
                                                               record_id=self.record.id,
-                                                              full_message=[
-                                                                  {
-                                                                      'type': message.role,
-                                                                      'sqlbot_system': message.role == 'system',
-                                                                      'content': message.content,
-                                                                  }
-                                                                  for message in messages
-                                                              ])
+                                                              full_message=build_role_prompt_log(messages))
         for event in service.generate(generation_data, messages):
             if event.kind == 'chunk':
                 yield {
@@ -525,21 +496,7 @@ class LLMService:
             self.current_logs[OperationEnum.ANALYSIS] = end_log(
                 session=_session,
                 log=self.current_logs[OperationEnum.ANALYSIS],
-                full_message=[
-                    *[
-                        {
-                            'type': message.role,
-                            'sqlbot_system': message.role == 'system',
-                            'content': message.content,
-                        }
-                        for message in messages
-                    ],
-                    {
-                        'type': 'ai',
-                        'sqlbot_system': False,
-                        'content': event.content,
-                    },
-                ],
+                full_message=build_role_prompt_log(messages, event.content),
                 reasoning_content=event.reasoning_content,
                 token_usage=event.token_usage,
             )
@@ -570,14 +527,7 @@ class LLMService:
                                                                   ai_modal_name=self.chat_question.ai_modal_name,
                                                                   operate=OperationEnum.PREDICT_DATA,
                                                                   record_id=self.record.id,
-                                                                  full_message=[
-                                                                      {
-                                                                          'type': message.role,
-                                                                          'sqlbot_system': message.role == 'system',
-                                                                          'content': message.content,
-                                                                      }
-                                                                      for message in messages
-                                                                  ])
+                                                                  full_message=build_role_prompt_log(messages))
         for event in service.generate(generation_data, messages):
             if event.kind == 'chunk':
                 yield {
@@ -589,21 +539,7 @@ class LLMService:
             self.current_logs[OperationEnum.PREDICT_DATA] = end_log(
                 session=_session,
                 log=self.current_logs[OperationEnum.PREDICT_DATA],
-                full_message=[
-                    *[
-                        {
-                            'type': message.role,
-                            'sqlbot_system': message.role == 'system',
-                            'content': message.content,
-                        }
-                        for message in messages
-                    ],
-                    {
-                        'type': 'ai',
-                        'sqlbot_system': False,
-                        'content': event.content,
-                    },
-                ],
+                full_message=build_role_prompt_log(messages, event.content),
                 reasoning_content=event.reasoning_content,
                 token_usage=event.token_usage,
             )
@@ -643,14 +579,8 @@ class LLMService:
                                                                                     ai_modal_name=self.chat_question.ai_modal_name,
                                                                                     operate=OperationEnum.GENERATE_RECOMMENDED_QUESTIONS,
                                                                                     record_id=self.record.id,
-                                                                                    full_message=[
-                                                                                        {
-                                                                                            'type': message.role,
-                                                                                            'sqlbot_system': message.role == 'system',
-                                                                                            'content': message.content,
-                                                                                        }
-                                                                                        for message in messages
-                                                                                    ])
+                                                                                    full_message=build_role_prompt_log(
+                                                                                        messages))
         for event in service.generate(data, messages):
             if event.kind == 'chunk':
                 yield {
@@ -662,21 +592,7 @@ class LLMService:
             self.current_logs[OperationEnum.GENERATE_RECOMMENDED_QUESTIONS] = end_log(
                 session=_session,
                 log=self.current_logs[OperationEnum.GENERATE_RECOMMENDED_QUESTIONS],
-                full_message=[
-                    *[
-                        {
-                            'type': message.role,
-                            'sqlbot_system': message.role == 'system',
-                            'content': message.content,
-                        }
-                        for message in messages
-                    ],
-                    {
-                        'type': 'ai',
-                        'sqlbot_system': False,
-                        'content': event.content,
-                    },
-                ],
+                full_message=build_role_prompt_log(messages, event.content),
                 reasoning_content=event.reasoning_content,
                 token_usage=event.token_usage,
             )
@@ -730,14 +646,8 @@ class LLMService:
                                                                            ai_modal_name=self.chat_question.ai_modal_name,
                                                                            operate=OperationEnum.CHOOSE_DATASOURCE,
                                                                            record_id=self.record.id,
-                                                                           full_message=[
-                                                                               {
-                                                                                   'type': message.role,
-                                                                                   'sqlbot_system': message.role == 'system',
-                                                                                   'content': message.content,
-                                                                               }
-                                                                               for message in messages
-                                                                           ])
+                                                                           full_message=build_role_prompt_log(
+                                                                               messages))
 
         selection_event: DatasourceSelectionEvent | None = None
         for event in service.generate(selection_data, messages):
@@ -756,21 +666,10 @@ class LLMService:
             self.current_logs[OperationEnum.CHOOSE_DATASOURCE] = end_log(session=_session,
                                                                          log=self.current_logs[
                                                                              OperationEnum.CHOOSE_DATASOURCE],
-                                                                         full_message=[
-                                                                             *[
-                                                                                 {
-                                                                                     'type': message.role,
-                                                                                     'sqlbot_system': message.role == 'system',
-                                                                                     'content': message.content,
-                                                                                 }
-                                                                                 for message in messages
-                                                                             ],
-                                                                             {
-                                                                                 'type': 'ai',
-                                                                                 'sqlbot_system': False,
-                                                                                 'content': selection_event.content,
-                                                                             },
-                                                                         ],
+                                                                         full_message=build_role_prompt_log(
+                                                                             messages,
+                                                                             selection_event.content,
+                                                                         ),
                                                                          reasoning_content=selection_event.reasoning_content,
                                                                          token_usage=selection_event.token_usage)
 
@@ -863,14 +762,7 @@ class LLMService:
                                                                   ai_modal_name=self.chat_question.ai_modal_name,
                                                                   operate=OperationEnum.GENERATE_SQL,
                                                                   record_id=self.record.id,
-                                                                  full_message=[
-                                                                      {
-                                                                          'type': message.role,
-                                                                          'sqlbot_system': message.system_context,
-                                                                          'content': message.content,
-                                                                      }
-                                                                      for message in messages
-                                                                  ])
+                                                                  full_message=build_context_prompt_log(messages))
         for event in service.generate(generation_data, messages):
             if event.kind == 'chunk':
                 yield event
@@ -879,21 +771,7 @@ class LLMService:
             self.current_logs[OperationEnum.GENERATE_SQL] = end_log(
                 session=_session,
                 log=self.current_logs[OperationEnum.GENERATE_SQL],
-                full_message=[
-                    *[
-                        {
-                            'type': message.role,
-                            'sqlbot_system': message.system_context,
-                            'content': message.content,
-                        }
-                        for message in messages
-                    ],
-                    {
-                        'type': 'ai',
-                        'sqlbot_system': False,
-                        'content': event.content,
-                    },
-                ],
+                full_message=build_context_prompt_log(messages, event.content),
                 reasoning_content=event.reasoning_content,
                 token_usage=event.token_usage,
             )
@@ -923,14 +801,8 @@ class LLMService:
                                                                           ai_modal_name=self.chat_question.ai_modal_name,
                                                                           operate=OperationEnum.GENERATE_DYNAMIC_SQL,
                                                                           record_id=self.record.id,
-                                                                          full_message=[
-                                                                              {
-                                                                                  'type': message.role,
-                                                                                  'sqlbot_system': message.system_context,
-                                                                                  'content': message.content,
-                                                                              }
-                                                                              for message in messages
-                                                                          ])
+                                                                          full_message=build_context_prompt_log(
+                                                                              messages))
         dynamic_result = None
         for event in service.generate(generation_data, messages):
             if event.kind == 'chunk':
@@ -938,21 +810,7 @@ class LLMService:
             self.current_logs[OperationEnum.GENERATE_DYNAMIC_SQL] = end_log(
                 session=session,
                 log=self.current_logs[OperationEnum.GENERATE_DYNAMIC_SQL],
-                full_message=[
-                    *[
-                        {
-                            'type': message.role,
-                            'sqlbot_system': message.system_context,
-                            'content': message.content,
-                        }
-                        for message in messages
-                    ],
-                    {
-                        'type': 'ai',
-                        'sqlbot_system': False,
-                        'content': event.content,
-                    },
-                ],
+                full_message=build_context_prompt_log(messages, event.content),
                 reasoning_content=event.reasoning_content,
                 token_usage=event.token_usage,
             )
@@ -1014,14 +872,8 @@ class LLMService:
                                                                                    ai_modal_name=self.chat_question.ai_modal_name,
                                                                                    operate=OperationEnum.GENERATE_SQL_WITH_PERMISSIONS,
                                                                                    record_id=self.record.id,
-                                                                                   full_message=[
-                                                                                       {
-                                                                                           'type': message.role,
-                                                                                           'sqlbot_system': message.system_context,
-                                                                                           'content': message.content,
-                                                                                       }
-                                                                                       for message in messages
-                                                                                   ])
+                                                                                   full_message=build_context_prompt_log(
+                                                                                       messages))
         permission_result = None
         for event in service.generate(generation_data, messages):
             if event.kind == 'chunk':
@@ -1029,21 +881,7 @@ class LLMService:
             self.current_logs[OperationEnum.GENERATE_SQL_WITH_PERMISSIONS] = end_log(
                 session=session,
                 log=self.current_logs[OperationEnum.GENERATE_SQL_WITH_PERMISSIONS],
-                full_message=[
-                    *[
-                        {
-                            'type': message.role,
-                            'sqlbot_system': message.system_context,
-                            'content': message.content,
-                        }
-                        for message in messages
-                    ],
-                    {
-                        'type': 'ai',
-                        'sqlbot_system': False,
-                        'content': event.content,
-                    },
-                ],
+                full_message=build_context_prompt_log(messages, event.content),
                 reasoning_content=event.reasoning_content,
                 token_usage=event.token_usage,
             )
@@ -1115,14 +953,7 @@ class LLMService:
                                                                     ai_modal_name=self.chat_question.ai_modal_name,
                                                                     operate=OperationEnum.GENERATE_CHART,
                                                                     record_id=self.record.id,
-                                                                    full_message=[
-                                                                        {
-                                                                            'type': message.role,
-                                                                            'sqlbot_system': message.system_context,
-                                                                            'content': message.content,
-                                                                        }
-                                                                        for message in messages
-                                                                    ])
+                                                                    full_message=build_context_prompt_log(messages))
         for event in service.generate(generation_data, messages):
             if event.kind == 'chunk':
                 yield event
@@ -1131,21 +962,7 @@ class LLMService:
             self.current_logs[OperationEnum.GENERATE_CHART] = end_log(
                 session=_session,
                 log=self.current_logs[OperationEnum.GENERATE_CHART],
-                full_message=[
-                    *[
-                        {
-                            'type': message.role,
-                            'sqlbot_system': message.system_context,
-                            'content': message.content,
-                        }
-                        for message in messages
-                    ],
-                    {
-                        'type': 'ai',
-                        'sqlbot_system': False,
-                        'content': event.content,
-                    },
-                ],
+                full_message=build_context_prompt_log(messages, event.content),
                 reasoning_content=event.reasoning_content,
                 token_usage=event.token_usage,
             )
@@ -1242,6 +1059,7 @@ class LLMService:
                  finish_step: ChatFinishStep = ChatFinishStep.GENERATE_CHART, return_img: bool = True):
         json_result: Dict[str, Any] = {'success': True}
         _session = None
+        run_failed = False
         try:
             _session = session_maker()
             if self.ds:
@@ -1258,12 +1076,13 @@ class LLMService:
 
             # return id
             if in_chat:
-                yield 'data:' + orjson.dumps({'type': 'id', 'id': self.get_record().id}).decode() + '\n\n'
+                yield encode_sse_event('id', id=self.get_record().id)
                 if self.get_record().regenerate_record_id:
-                    yield 'data:' + orjson.dumps({'type': 'regenerate_record_id',
-                                                  'regenerate_record_id': self.get_record().regenerate_record_id}).decode() + '\n\n'
-                yield 'data:' + orjson.dumps(
-                    {'type': 'question', 'question': self.get_record().question}).decode() + '\n\n'
+                    yield encode_sse_event(
+                        'regenerate_record_id',
+                        regenerate_record_id=self.get_record().regenerate_record_id,
+                    )
+                yield encode_sse_event('question', question=self.get_record().question)
             else:
                 if stream:
                     yield '> ' + self.trans('i18n_chat.record_id_in_mcp') + str(self.get_record().id) + '\n'
@@ -1278,13 +1097,18 @@ class LLMService:
                 for chunk in ds_res:
                     SQLBotLogUtil.info(chunk)
                     if in_chat:
-                        yield 'data:' + orjson.dumps(
-                            {'content': chunk.get('content'), 'reasoning_content': chunk.get('reasoning_content'),
-                             'type': 'datasource-result'}).decode() + '\n\n'
+                        yield encode_sse_event(
+                            'datasource-result',
+                            content=chunk.get('content'),
+                            reasoning_content=chunk.get('reasoning_content'),
+                        )
                 if in_chat:
-                    yield 'data:' + orjson.dumps({'id': self.ds.id, 'datasource_name': self.ds.name,
-                                                  'engine_type': self.ds.type_name or self.ds.type,
-                                                  'type': 'datasource'}).decode() + '\n\n'
+                    yield encode_sse_event(
+                        'datasource',
+                        id=self.ds.id,
+                        datasource_name=self.ds.name,
+                        engine_type=self.ds.type_name or self.ds.type,
+                    )
 
             else:
                 self.validate_history_ds(_session)
@@ -1304,16 +1128,18 @@ class LLMService:
                 if event.kind == 'chunk':
                     full_sql_text += event.content
                     if in_chat:
-                        yield 'data:' + orjson.dumps(
-                            {'content': event.content, 'reasoning_content': event.reasoning_content,
-                             'type': 'sql-result'}).decode() + '\n\n'
+                        yield encode_sse_event(
+                            'sql-result',
+                            content=event.content,
+                            reasoning_content=event.reasoning_content,
+                        )
                     continue
                 if event.error:
                     trigger_log_error(_session, self.current_logs[OperationEnum.GENERATE_SQL])
                     raise SingleMessageError(event.error)
                 sql_generation_result = event.result
             if in_chat:
-                yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'sql generated'}).decode() + '\n\n'
+                yield encode_sse_event('info', msg='sql generated')
             # filter sql
             SQLBotLogUtil.info(full_sql_text)
 
@@ -1337,7 +1163,7 @@ class LLMService:
                         ),
                     )
                     if in_chat:
-                        yield 'data:' + orjson.dumps({'type': 'brief', 'brief': brief}).decode() + '\n\n'
+                        yield encode_sse_event('brief', brief=brief)
                     if not stream:
                         json_result['title'] = brief
 
@@ -1390,7 +1216,7 @@ class LLMService:
 
             format_sql = sqlparse.format(sql, reindent=True)
             if in_chat:
-                yield 'data:' + orjson.dumps({'content': format_sql, 'type': 'sql'}).decode() + '\n\n'
+                yield encode_sse_event('sql', content=format_sql)
             else:
                 if stream:
                     yield f'```sql\n{format_sql}\n```\n\n'
@@ -1406,7 +1232,7 @@ class LLMService:
 
             if finish_step.value <= ChatFinishStep.GENERATE_SQL.value:
                 if in_chat:
-                    yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
+                    yield encode_sse_event('finish')
                 if not stream:
                     yield json_result
                 return
@@ -1448,14 +1274,14 @@ class LLMService:
                 raise
             _data = result.get("data") or []
             if in_chat:
-                yield 'data:' + orjson.dumps({'content': 'execute-success', 'type': 'sql-data'}).decode() + '\n\n'
+                yield encode_sse_event('sql-data', content='execute-success')
             if not stream:
                 json_result['data'] = get_chat_chart_data(_session, self.record.id)
 
             if finish_step.value <= ChatFinishStep.QUERY_DATA.value:
                 if stream:
                     if in_chat:
-                        yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
+                        yield encode_sse_event('finish')
                     else:
                         _column_list = []
                         for field in result.get('fields'):
@@ -1492,15 +1318,17 @@ class LLMService:
             for event in chart_res:
                 if event.kind == 'chunk':
                     if in_chat:
-                        yield 'data:' + orjson.dumps(
-                            {'content': event.content, 'reasoning_content': event.reasoning_content,
-                             'type': 'chart-result'}).decode() + '\n\n'
+                        yield encode_sse_event(
+                            'chart-result',
+                            content=event.content,
+                            reasoning_content=event.reasoning_content,
+                        )
                     continue
                 if event.error:
                     raise SingleMessageError(event.error)
                 chart = event.chart
             if in_chat:
-                yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'chart generated'}).decode() + '\n\n'
+                yield encode_sse_event('info', msg='chart generated')
 
             if chart is None:
                 raise SingleMessageError('CHART_GENERATION_RESULT_REQUIRED')
@@ -1510,8 +1338,7 @@ class LLMService:
                 json_result['chart'] = chart
 
             if in_chat:
-                yield 'data:' + orjson.dumps(
-                    {'content': orjson.dumps(chart).decode(), 'type': 'chart'}).decode() + '\n\n'
+                yield encode_sse_event('chart', content=orjson.dumps(chart).decode())
             else:
                 if stream:
                     md_data, _fields_list = DataFormat.convert_data_fields_for_pandas(chart, result.get('fields'),
@@ -1527,7 +1354,7 @@ class LLMService:
                         yield markdown_table + '\n\n'
 
             if in_chat:
-                yield 'data:' + orjson.dumps({'type': 'finish'}).decode() + '\n\n'
+                yield encode_sse_event('finish')
             else:
                 # generate picture
                 try:
@@ -1561,6 +1388,7 @@ class LLMService:
                 yield json_result
 
         except Exception as e:
+            run_failed = True
             traceback.print_exc()
             error_msg: str
             if isinstance(e, SingleMessageError):
@@ -1576,7 +1404,7 @@ class LLMService:
             if _session:
                 self.save_error(session=_session, message=error_msg)
             if in_chat:
-                yield 'data:' + orjson.dumps({'content': error_msg, 'type': 'error'}).decode() + '\n\n'
+                yield encode_sse_event('error', content=error_msg)
             else:
                 if stream:
                     yield f'&#x274c; **ERROR:**\n'
@@ -1586,7 +1414,9 @@ class LLMService:
                     json_result['message'] = error_msg
                     yield json_result
         finally:
-            self.finish(_session)
+            # 失败终态已经由 save_error 写入，不能再覆盖为成功。
+            if _session and not run_failed:
+                self.finish(_session)
             session_maker.remove()
 
     def run_recommend_questions_task_async(self):
@@ -1603,13 +1433,16 @@ class LLMService:
 
             for chunk in res:
                 if chunk.get('recommended_question'):
-                    yield 'data:' + orjson.dumps(
-                        {'content': chunk.get('recommended_question'),
-                         'type': 'recommended_question'}).decode() + '\n\n'
+                    yield encode_sse_event(
+                        'recommended_question',
+                        content=chunk.get('recommended_question'),
+                    )
                 else:
-                    yield 'data:' + orjson.dumps(
-                        {'content': chunk.get('content'), 'reasoning_content': chunk.get('reasoning_content'),
-                         'type': 'recommended_question_result'}).decode() + '\n\n'
+                    yield encode_sse_event(
+                        'recommended_question_result',
+                        content=chunk.get('content'),
+                        reasoning_content=chunk.get('reasoning_content'),
+                    )
         except Exception:
             traceback.print_exc()
         finally:
@@ -1630,7 +1463,7 @@ class LLMService:
         try:
             _session = session_maker()
             if in_chat:
-                yield 'data:' + orjson.dumps({'type': 'id', 'id': self.get_record().id}).decode() + '\n\n'
+                yield encode_sse_event('id', id=self.get_record().id)
             else:
                 if stream:
                     yield '> ' + self.trans('i18n_chat.record_id_in_mcp') + str(self.get_record().id) + '\n'
@@ -1645,15 +1478,17 @@ class LLMService:
                 for chunk in analysis_res:
                     full_text += chunk.get('content')
                     if in_chat:
-                        yield 'data:' + orjson.dumps(
-                            {'content': chunk.get('content'), 'reasoning_content': chunk.get('reasoning_content'),
-                             'type': 'analysis-result'}).decode() + '\n\n'
+                        yield encode_sse_event(
+                            'analysis-result',
+                            content=chunk.get('content'),
+                            reasoning_content=chunk.get('reasoning_content'),
+                        )
                     else:
                         if stream:
                             yield chunk.get('content')
                 if in_chat:
-                    yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'analysis generated'}).decode() + '\n\n'
-                    yield 'data:' + orjson.dumps({'type': 'analysis_finish'}).decode() + '\n\n'
+                    yield encode_sse_event('info', msg='analysis generated')
+                    yield encode_sse_event('analysis_finish')
                 else:
                     if stream:
                         yield '\n\n'
@@ -1667,16 +1502,18 @@ class LLMService:
                 for chunk in analysis_res:
                     full_text += chunk.get('content')
                     if in_chat:
-                        yield 'data:' + orjson.dumps(
-                            {'content': chunk.get('content'), 'reasoning_content': chunk.get('reasoning_content'),
-                             'type': 'predict-result'}).decode() + '\n\n'
+                        yield encode_sse_event(
+                            'predict-result',
+                            content=chunk.get('content'),
+                            reasoning_content=chunk.get('reasoning_content'),
+                        )
                 if in_chat:
-                    yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'predict generated'}).decode() + '\n\n'
+                    yield encode_sse_event('info', msg='predict generated')
 
                 has_data = self.check_save_predict_data(session=_session, res=full_text)
                 if has_data:
                     if in_chat:
-                        yield 'data:' + orjson.dumps({'type': 'predict-success'}).decode() + '\n\n'
+                        yield encode_sse_event('predict-success')
                     else:
                         chart = get_chat_chart_config(_session, self.record.id)
                         origin_data = get_chat_chart_data(_session, self.record.id)
@@ -1722,7 +1559,7 @@ class LLMService:
                                 raise e
                 else:
                     if in_chat:
-                        yield 'data:' + orjson.dumps({'type': 'predict-failed'}).decode() + '\n\n'
+                        yield encode_sse_event('predict-failed')
                     else:
                         if stream:
                             yield full_text + '\n\n'
@@ -1730,7 +1567,7 @@ class LLMService:
                         json_result['success'] = False
                         json_result['message'] = full_text
                 if in_chat:
-                    yield 'data:' + orjson.dumps({'type': 'predict_finish'}).decode() + '\n\n'
+                    yield encode_sse_event('predict_finish')
 
             self.finish(_session)
 
@@ -1746,7 +1583,7 @@ class LLMService:
             if _session:
                 self.save_error(session=_session, message=error_msg)
             if in_chat:
-                yield 'data:' + orjson.dumps({'content': error_msg, 'type': 'error'}).decode() + '\n\n'
+                yield encode_sse_event('error', content=error_msg)
             else:
                 if stream:
                     yield f'&#x274c; **ERROR:**\n'
@@ -1879,29 +1716,3 @@ def get_lang_name(lang: str):
     if normalized.startswith('ko'):
         return '韩语'
     return '简体中文'
-
-
-def get_last_conversation_rounds(messages, rounds=settings.GENERATE_SQL_QUERY_HISTORY_ROUND_COUNT):
-    """获取最后N轮对话，处理不完整对话的情况"""
-    if not messages or rounds <= 0:
-        return []
-
-    # 找到所有用户消息的位置
-    human_indices = []
-    for index, msg in enumerate(messages):
-        if msg.get('type') == 'human':
-            human_indices.append(index)
-
-    # 如果没有用户消息，返回空
-    if not human_indices:
-        return []
-
-    # 计算从哪个索引开始
-    if len(human_indices) <= rounds:
-        # 如果用户消息数少于等于需要的轮数，从第一个用户消息开始
-        start_index = human_indices[0]
-    else:
-        # 否则，从倒数第N个用户消息开始
-        start_index = human_indices[-rounds]
-
-    return messages[start_index:]

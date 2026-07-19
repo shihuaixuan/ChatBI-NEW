@@ -1,6 +1,6 @@
 import pandas as pd
 
-from apps.chat.models.chat_model import AxisObj
+from common.utils.data_format_schema import AxisObj
 
 
 class DataFormat:
@@ -94,13 +94,13 @@ class DataFormat:
     @staticmethod
     def convert_object_array_for_pandas(column_list: list, data_list: list):
         _fields_list = []
-        for field_idx, field in enumerate(column_list):
+        for field in column_list:
             _fields_list.append(field.name)
 
         md_data = []
         for inner_data in data_list:
             _row = []
-            for field_idx, field in enumerate(column_list):
+            for field in column_list:
                 value = inner_data.get(field.value)
                 _row.append(value)
             md_data.append(_row)

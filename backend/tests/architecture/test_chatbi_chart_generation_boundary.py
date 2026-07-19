@@ -81,7 +81,7 @@ def test_legacy_run_task_keeps_chart_sse_contract():
 
 
 def test_legacy_chat_question_no_longer_owns_chart_templates():
-    tree = _tree("apps/chat/models/chat_model.py")
+    tree = _tree("apps/chatbi/models/dto/legacy_query.py")
     imports = _imports(tree)
     class_node = next(
         node

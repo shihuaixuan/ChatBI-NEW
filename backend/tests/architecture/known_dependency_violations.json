@@ -8,7 +8,6 @@
     "apps/chat/services/semantic_binding.py -> apps.semantic.models.orm",
     "apps/chat/task/llm.py -> apps.datasource.models.datasource",
     "apps/data_training/models/data_training_model.py -> apps.knowledge.models.orm.sql_example",
-    "apps/mcp/mcp.py -> apps.chat.models.chat_model",
     "apps/semantic/repository/datasource/metadata_discovery.py -> apps.datasource.models.datasource",
     "apps/semantic/repository/datasource/metadata_repository.py -> apps.datasource.models.datasource",
     "apps/semantic/repository/datasource_metadata_repository.py -> apps.datasource.models.datasource",

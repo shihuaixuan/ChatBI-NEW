@@ -15,11 +15,14 @@ from apps.agent.tools.base import (
 from apps.capabilities.time_slots import normalize_time_range
 from apps.chatbi.models import (
     ChatRecordExecutionType,
+    QueryFinalReplyProjectionData,
     ResultArtifactWriteData,
     SemanticQueryCompileData,
     SemanticRetrievalData,
 )
 from apps.chatbi.services import (
+    FinalReplyProjectionError,
+    FinalReplyProjectionService,
     QueryService,
     ResultArtifactWriteError,
     SemanticQueryCompileError,
@@ -469,30 +472,27 @@ class FinishTool(AgentTool):
     args_model = FinishArgs
 
     def execute(self, ctx: AgentToolContext, args: FinishArgs) -> ToolOutput:
-        execution = ctx.state.get("last_execution")
-        if not execution:
+        try:
+            result = FinalReplyProjectionService.project_query_answer(
+                QueryFinalReplyProjectionData(
+                    answer_markdown=args.answer_markdown,
+                    execution=ctx.state.get("last_execution"),
+                    chart_type=args.chart_type,
+                    x_field=args.x_field,
+                    y_fields=args.y_fields,
+                )
+            )
+        except FinalReplyProjectionError as exc:
             return ToolOutput(
                 success=False,
-                summary="尚无成功的 execute_sql 结果，禁止凭空作答。请先执行查询，或如实说明无法完成。",
-                error_code="execution_required_before_finish",
+                summary=str(exc),
+                error_code=exc.error_code,
             )
-        answer = args.answer_markdown
-        if execution.get("sql_source") == "manual":
-            answer += "\n\n> 注：本次 SQL 由 AI 直接生成（非标准指标口径），结果口径可能与指标定义存在差异。"
-        chart = {}
-        if args.chart_type and args.chart_type != "table":
-            chart = {
-                "type": args.chart_type,
-                "x": args.x_field or (execution.get("fields") or [None])[0],
-                "y": args.y_fields or list((execution.get("fields") or [])[1:2]),
-            }
-        payload = {
-            "answer": answer,
-            "chart": chart,
-            "sql": execution.get("sql"),
-            "non_standard": execution.get("sql_source") == "manual",
-        }
-        return ToolOutput(success=True, summary="finish", payload=payload)
+        return ToolOutput(
+            success=True,
+            summary="finish",
+            payload=result.model_dump(mode="json"),
+        )
 
 
 def _normalize(sql: str) -> str:

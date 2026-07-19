@@ -3,7 +3,6 @@ import io
 import traceback
 from typing import List, Optional
 
-import orjson
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Path
 from fastapi.responses import StreamingResponse
@@ -27,21 +26,22 @@ from apps.chat.curd.chat import (
     list_recent_questions,
 )
 from apps.chat.models.chat_model import (
-    AxisObj,
     Chat,
     ChatInfo,
-    ChatQuestion,
     ChatRecord,
     CreateChat,
     RenameChat,
 )
 from apps.chat.services.semantic_binding import DatasetBindingError
+from apps.chat.task.legacy_adapter import encode_sse_event
 from apps.chat.task.llm import LLMService
+from apps.chatbi.models import ChatQuestion
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.deps import CurrentAssistant, CurrentUser, SessionDep, Trans
 from common.utils.data_format import DataFormat
+from common.utils.data_format_schema import AxisObj
 
 router = APIRouter(tags=["Data Q&A"], prefix="/chat")
 
@@ -252,7 +252,7 @@ async def assistant_start_chat(
 async def ask_recommend_questions(session: SessionDep, current_user: CurrentUser, chat_record_id: int,
                                   current_assistant: CurrentAssistant, articles_number: Optional[int] = 4):
     def _return_empty():
-        yield 'data:' + orjson.dumps({'content': '[]', 'type': 'recommended_question'}).decode() + '\n\n'
+        yield encode_sse_event('recommended_question', content='[]')
 
     try:
         record = get_chat_record_by_id(session, chat_record_id)
@@ -270,7 +270,7 @@ async def ask_recommend_questions(session: SessionDep, current_user: CurrentUser
         traceback.print_exc()
 
         def _err(_e: Exception):
-            yield 'data:' + orjson.dumps({'content': str(_e), 'type': 'error'}).decode() + '\n\n'
+            yield encode_sse_event('error', content=str(_e))
 
         return StreamingResponse(_err(e), media_type="text/event-stream")
 
@@ -326,7 +326,7 @@ async def analysis_or_predict(session: SessionDep, current_user: CurrentUser, ch
         if stream:
             def _err(_e: Exception):
                 if in_chat:
-                    yield 'data:' + orjson.dumps({'content': str(_e), 'type': 'error'}).decode() + '\n\n'
+                    yield encode_sse_event('error', content=str(_e))
                 else:
                     yield '&#x274c; **ERROR:**\n'
                     yield f'> {str(_e)}\n'

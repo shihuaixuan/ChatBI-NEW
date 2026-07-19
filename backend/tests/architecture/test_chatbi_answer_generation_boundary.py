@@ -69,7 +69,6 @@ def test_graph_keeps_answer_context_projection_and_final_composition():
 
     assert "def build_answer_projection" in graph_source
     assert "def compose" in graph_source
-    assert "FinalReplyOutput" in graph_source
     assert "ChatBIRunContext" in graph_source
 
 
@@ -91,7 +90,6 @@ def test_graph_answer_projection_only_reads_context_and_calls_chatbi_service():
 
     assert "AnswerProjectionService" in graph_source
     assert "AnswerProjectionData" in graph_source
-    assert "projection_service.project" not in graph_source
     assert "service.project" in graph_source
     assert "def _project_plan" not in graph_source
     assert "def _project_execution_result" not in graph_source
@@ -102,3 +100,49 @@ def test_graph_answer_projection_only_reads_context_and_calls_chatbi_service():
     assert "def _comparison_analysis" not in graph_source
     assert "def _numeric_value" not in graph_source
     assert "def _project_error" not in graph_source
+
+
+def test_final_reply_projection_service_has_no_executor_or_framework_dependency():
+    imports = _imports("apps/chatbi/services/final_reply_projection_service.py")
+
+    assert not any(module.startswith("apps.agent") for module in imports)
+    assert not any(module.startswith("apps.workflow") for module in imports)
+    assert not any(module.startswith("apps.ai_model") for module in imports)
+    assert not any(module.startswith("infrastructure") for module in imports)
+    assert not any(module.startswith("langchain") for module in imports)
+    assert "sqlmodel" not in imports
+
+
+def test_final_reply_contract_and_composition_are_owned_by_chatbi():
+    graph_source = (
+        BACKEND_DIR / "apps/workflow/capabilities/adapters/answer.py"
+    ).read_text(encoding="utf-8")
+    service_source = (
+        BACKEND_DIR / "apps/chatbi/services/final_reply_projection_service.py"
+    ).read_text(encoding="utf-8")
+    schema_source = (BACKEND_DIR / "apps/workflow/schemas/v1.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "FinalReplyProjectionService" in graph_source
+    assert "FinalReplyProjectionData" in graph_source
+    assert "FinalReplyOutput" not in graph_source
+    assert "real_chatbi_v1" not in graph_source
+    assert "real_chatbi_v1" in service_source
+    assert "class FinalReplyOutput(FinalReplyProjectionResult)" in schema_source
+
+
+def test_agent_finish_uses_chatbi_final_reply_projection():
+    agent_source = (BACKEND_DIR / "apps/agent/tools/core.py").read_text(
+        encoding="utf-8"
+    )
+    service_source = (
+        BACKEND_DIR / "apps/chatbi/services/final_reply_projection_service.py"
+    ).read_text(encoding="utf-8")
+
+    assert "FinalReplyProjectionService.project_query_answer" in agent_source
+    assert "QueryFinalReplyProjectionData" in agent_source
+    assert "非标准指标口径" not in agent_source
+    assert "execution_required_before_finish" not in agent_source
+    assert "非标准指标口径" in service_source
+    assert "execution_required_before_finish" in service_source

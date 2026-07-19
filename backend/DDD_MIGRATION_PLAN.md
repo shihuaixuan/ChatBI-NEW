@@ -1197,7 +1197,12 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 第十三批分析和预测生成流程收敛、第十四批数据源选择流程收敛、第十五批图表生成流程收敛、第十六批
 主 SQL 生成模型编排收敛、第十七批动态 SQL 生成编排收敛、第十八批权限 SQL 生成编排收敛，以及第十九批
 旧 Chat SQL 执行入口收敛、第二十批旧 Chat 查询结果标准化与记录投影收敛、第二十一批问题理解模型调用边界收敛，
-第二十二批问题理解业务 DTO 与提示词规则收敛、第二十三批问题理解 Service 归属收敛，以及第二十四批 Graph 意图投影规则收敛：
+第二十二批问题理解业务 DTO 与提示词规则收敛、第二十三批问题理解 Service 归属收敛、第二十四批 Graph 意图投影规则收敛、
+第二十五批 Graph 意图校验收敛、第二十六批 Graph 问题输入投影收敛、第二十七批 Graph 意图降级推断收敛、第二十八批
+结构化回答生成收敛、第二十九批回答上下文投影收敛、第三十批最终回复组合收敛、第三十一批 Agent 查询最终回答
+投影收敛、第三十二批旧 Chat 主查询终态一致性收敛、第三十三批会话历史与日志响应 DTO 收敛，以及第三十四批旧 LLM
+查询上下文 DTO 收敛、第三十五批 MCP 请求 Schema 归属收敛、第三十六批图表展示列 DTO 收敛、第三十七批旧 Chat
+SSE 与模型日志适配收敛、第三十八批生成历史消息投影收敛，以及第三十九批生成上下文范围投影收敛：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1550,6 +1555,104 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 122. 第二十九批定向测试 84 项、架构测试 94 项、Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 690 项
     通过，完整后端回归 1119 项通过；新增和修改代码通过定向 Ruff，回答投影 DTO、Service 和 Graph Adapter 通过严格
     Mypy，应用导入和 `git diff --check` 通过，OpenAPI 保持 154 个路径。
+123. ChatBI 新增 `FinalReplyProjectionData`、`FinalReplyProjectionResult` 和 `FinalReplyProjectionService`，统一组合
+    最终回答、推荐问题、图表和来源元数据；前端最终回复契约不再由 Graph Schema 独立定义，`FinalReplyOutput` 只继承
+    ChatBI 稳定结果 DTO。
+124. 最终回答缺失时继续使用“暂时无法生成完整回答，请稍后重试。”，推荐问题保持原有顺序，图表内容原样投影，来源
+    元数据固定为 `real_chatbi_v1`；既有字符串转换、空推荐和空图表行为保持不变。
+125. Graph `compose` 只负责从 `ChatBIRunContext` 读取回答、推荐问题和图表，并调用
+    `FinalReplyProjectionService`；最终回复字段构造、默认回答和来源元数据已从 `AnswerAdapter` 删除。Graph 继续负责
+    节点上下文读取、流程路由和节点结果写入。
+126. 第三十批定向测试 97 项、架构测试 96 项、Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 695 项
+    通过，完整后端回归 1124 项通过；新增和修改代码通过定向 Ruff，最终回复 DTO、Service、Graph Adapter 和 Schema
+    通过严格 Mypy，应用导入和 `git diff --check` 通过，OpenAPI 保持 154 个路径。
+127. ChatBI 最终回复契约新增 `QueryFinalReplyProjectionData` 和 `QueryFinalReplyProjectionResult`，并由
+    `FinalReplyProjectionService.project_query_answer` 统一处理查询执行完成后的回答、图表、SQL 和非标准口径标记；
+    Graph 最终回复组合与 Agent 查询最终回答不再分别维护两套投影入口。
+128. 成功执行结果是查询最终回答的统一前置条件，缺少结果继续返回 `execution_required_before_finish`；手写 SQL 的
+    非标准指标口径提示、编译 SQL 不追加提示、非表格图表的横轴和数值系列默认选择规则均迁入 ChatBI，既有文案、字段
+    和空图表行为保持不变。
+129. Agent `FinishTool` 只负责把工具参数和运行状态交给 ChatBI 最终回复 Service，并把稳定 DTO 投影回原有工具载荷；
+    Agent Loop 继续负责 ChatRecord 成功写入和 `answer`、`run-finished`、`finish` 三类 SSE 事件，不改变持久化及事件契约。
+130. 第三十一批定向测试 49 项、架构测试 97 项、Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 719 项
+    通过，完整后端回归 1128 项通过；新增和修改代码通过定向 Ruff，新增最终回复 DTO 和 Service 通过严格 Mypy，应用
+    导入和 `git diff --check` 通过，OpenAPI 保持 154 个路径。
+131. 旧 Chat 主查询链经复核没有独立的自然语言最终回答模型；SQL、数据、图表生成和 ChatRecord 写入已分别接入 ChatBI
+    Service。当前剩余问题是终态顺序：异常分支先通过 `save_error` 写入失败，`finally` 随后仍无条件调用 `finish` 尝试写入
+    成功，违反失败终态不能直接转为成功的统一不变量。
+132. `LLMService.run_task` 现在显式记录本次运行是否失败。异常继续先保存原有错误内容并发送既有 `error` 输出，最终清理
+    阶段只为未失败的运行调用成功入口；SQL 生成、查询数据和图表阶段的提前结束仍保持原有成功终态、输出顺序和字段。
+133. 新增旧 Chat 主查询终态测试，分别覆盖数据源选择失败和 SQL 生成阶段正常结束；架构守卫锁定失败标记与条件成功入口，
+    防止再次恢复为无条件成功。旧 `save_error_message` 和 `finish_record` 继续作为 ChatBI `ChatRecordService` 的兼容转发。
+134. 第三十二批定向测试 20 项、架构测试 98 项、Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 722 项
+    通过，完整后端回归 1131 项通过；本批差异通过定向 Ruff，应用导入和 `git diff --check` 通过，OpenAPI 保持 154 个路径。
+135. ChatBI 新增会话历史 DTO 模块，迁入 `ChatRecordResult`、`ChatLogHistoryItem` 和 `ChatLogHistory`；历史记录字段、
+    执行类型可选兼容、步骤消息结构、耗时和 token 字段保持不变，步骤列表改用独立默认工厂，避免实例间共享可变默认值。
+136. 旧 `apps.chat.models.chat_model` 删除三类重复定义，只保留指向 ChatBI DTO 的同一对象兼容导出；旧 Chat 历史查询实现
+    已直接依赖 ChatBI 公开 DTO，不再通过兼容模型路径获取业务响应契约。Graph 历史迁移测试也改用 ChatBI 公开响应模型。
+137. 新增 DTO 对象身份、执行类型兼容和步骤列表隔离测试；架构守卫禁止历史 DTO 导入旧 Chat、Agent、Workflow、FastAPI、
+    LangChain 或 SQLModel，并锁定旧模型文件不能重新定义历史响应类。
+138. 第三十三批定向测试 28 项、架构测试 100 项、Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 727 项
+    通过，完整后端回归 1136 项通过；新增 DTO 通过严格 Mypy，本批差异通过定向 Ruff，应用导入和 `git diff --check`
+    通过，OpenAPI 保持 154 个路径。
+139. ChatBI 新增旧查询上下文 DTO 模块，迁入 `AiModelQuestion` 和 `ChatQuestion`；问题、模型、数据库、Schema、SQL、
+    术语、自定义提示、训练样例、错误、会话和数据源字段保持原有默认行为，`filter` 同时兼容历史字符串输入和默认列表。
+140. 旧 Chat API 和 `LLMService` 已直接依赖 ChatBI `ChatQuestion`，旧 `apps.chat.models.chat_model` 删除重复定义，只保留
+    同一对象兼容导出；原有 SQL、图表、推荐、分析、预测、数据源选择、动态 SQL 和权限 SQL 架构守卫改为检查 ChatBI
+    查询上下文，确保 DTO 不重新承载提示词或生成方法。
+141. 经全仓引用检查，未使用的 `ChatMcp`、`ExcelData`、`SystemPromptMessage`、`HumanPromptMessage` 和
+    `AIPromptMessage` 已删除，旧 Chat 模型模块不再依赖 LangChain。仍被图表展示使用的 `AxisObj`，以及带 FastAPI
+    `Body` 声明的 MCP 请求模型继续保留在传输适配层。
+142. 第三十四批定向测试 26 项、架构测试 102 项、Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 733 项
+    通过，完整后端回归 1142 项通过；新增 DTO 通过严格 Mypy，本批差异通过定向 Ruff，应用导入和 `git diff --check`
+    通过，OpenAPI 保持 154 个路径。
+143. MCP 新增独立请求 Schema 模块，迁入 `ChatStart`、`McpDs` 和 `McpQuestion`；用户名、密码、token、组织、问题、
+    会话、语言、流式开关、数据源和图片返回字段保持原有必填关系、默认值及说明，数据源 ID 继续同时兼容整数和字符串。
+144. MCP 路由已直接依赖自身 Schema，不再跨领域导入旧 Chat 模型；旧 `apps.chat.models.chat_model` 删除 MCP 请求定义
+    和 FastAPI `Body` 依赖。OpenAPI 继续使用 `ChatStart`、`McpDs`、`McpQuestion` 三个原组件名，请求路径和引用不变。
+145. 架构守卫禁止 MCP Schema 依赖旧 Chat、FastAPI 或 SQLModel，并锁定 MCP 路由的 Schema 归属和旧 Chat 模型边界；
+    依赖基线同步删除 `apps/mcp/mcp.py -> apps.chat.models.chat_model` 历史违规项。
+146. 第三十五批定向测试 3 项、架构测试 105 项、Chat、Agent、Graph、ChatBI、MCP、Workflow Engine 和架构组合回归
+    739 项通过，完整后端回归 1148 项通过；新增 Schema 通过严格 Mypy，本批差异通过 Ruff，应用导入和
+    `git diff --check` 通过，OpenAPI 保持 154 个路径。
+147. 中立数据格式 Schema 新增 `AxisObj`，统一表格与图表展示列的名称、字段值和可选类型；旧 Chat API、旧 LLM
+    Markdown 表格投影和 `DataFormat` 已直接使用该稳定 DTO，字段默认值和数据转换结果保持不变。
+148. `common.utils.data_format` 不再反向导入旧 Chat 模型，列遍历同时移除无用途的索引变量；旧 `chat_model.py` 删除
+    最后一个本地类定义。因 `sqlbot_xpack` 仍使用旧 `AxisObj` 导入路径，旧模块保留指向中立 Schema 同一对象的兼容导出。
+149. 新增展示列序列化、默认值、数据转换及兼容对象身份测试；架构守卫锁定 Common 不得依赖 Chat、旧 Chat 模型不得
+    重新定义类，以及 API 和旧 LLM 必须从中立 Schema 使用 `AxisObj`。
+150. 第三十六批定向测试 7 项、架构测试 108 项、Chat、Agent、Graph、ChatBI、MCP、Workflow Engine 和架构组合回归
+    746 项通过，完整后端回归 1155 项通过；新增 Schema 通过严格 Mypy，本批差异通过定向 Ruff，应用导入和
+    `git diff --check` 通过，OpenAPI 保持 154 个路径。
+151. 旧 Chat 新增任务适配模块，统一 SSE 帧的 `data:` 前缀、JSON 编码和双换行终止符；主查询、推荐问题、分析预测及
+    Chat API 错误响应均改用同一编码入口，`id`、`question`、`info`、`finish`、`error` 等事件类型、字段和发送顺序保持不变。
+152. 分析、预测、推荐问题、数据源选择、主 SQL、动态 SQL、权限 SQL 和图表生成的提示词日志已统一通过适配函数转换；
+    按消息角色和按显式 `system_context` 标记的两类历史规则分别保留，完成事件继续追加相同的 AI 消息、推理内容和 token 用量。
+153. 新增 SSE 帧、两类提示词日志和空 AI 内容契约测试；架构守卫禁止旧 LLM 与 Chat API 恢复直接拼装 SSE，并确保适配
+    模块只依赖标准类型与 `orjson`，不反向进入 ChatBI、数据库或 Web 框架边界。
+154. 第三十七批定向测试 17 项、架构测试 111 项、Chat、Agent、Graph、ChatBI、MCP、Workflow Engine 和架构组合回归
+    752 项通过，完整后端回归 1161 项通过；新增适配模块通过严格 Mypy，本批差异通过定向 Ruff，应用导入和
+    `git diff --check` 通过，OpenAPI 保持 154 个路径。
+155. ChatBI 新增生成历史 DTO，统一承载日志记录 ID、原始消息快照、重生成目标、历史轮数限制，以及可直接用于主 SQL
+    和图表生成的历史消息结果；DTO 不依赖 Chat ORM、Session、LangChain 或模板实现。
+156. 新增生成历史投影 Service，统一“默认选择最新日志、重生成时选择指定记录、过滤系统上下文、从最后 N 个用户消息
+    开始截取、只保留 human/ai 消息”的确定性规则；旧 `LLMService.init_messages` 只负责日志 ORM 到稳定输入的转换和结果赋值，
+    原 `get_last_conversation_rounds` 本地实现已删除。
+157. 新增最新日志选择、指定重生成记录、缺失重生成记录不回退、系统消息过滤、历史轮数和无用户消息测试；架构守卫禁止
+    投影 Service 依赖旧 Chat、Workflow、Datasource、SQLModel 或 LangChain，并锁定旧 LLM 必须使用 ChatBI 投影入口。
+158. 第三十八批定向测试 17 项、架构测试 114 项、Chat、Agent、Graph、ChatBI、MCP、Workflow Engine 和架构组合回归
+    759 项通过，完整后端回归 1168 项通过；新增 DTO 与 Service 通过严格 Mypy，本批差异通过定向 Ruff，应用导入和
+    `git diff --check` 通过，OpenAPI 保持 154 个路径。
+159. ChatBI 新增生成上下文范围 DTO，稳定承载默认工作空间、当前用户工作空间、数据源，以及助手 ID、助手工作空间和
+    助手类型；结果明确区分提示词查询范围、数据源 SQL 示例范围和助手 SQL 示例分支。
+160. 新增生成上下文范围 Service，统一普通调用沿用传入范围、普通助手使用助手工作空间、页面嵌入助手使用当前用户
+    工作空间、高级助手清空数据源并按助手 ID 查询 SQL 示例的规则；旧 `filter_custom_prompts` 与
+    `filter_training_template` 已删除重复的助手类型判断，只消费同一投影结果。
+161. 新增无助手、普通助手、高级助手和页面嵌入助手范围测试，其中高级助手即使 ID 暂时为空也保持助手示例分支；架构
+    守卫锁定 Service 只依赖 ChatBI DTO，并禁止旧提示词与 SQL 示例方法重新维护助手类型分支。
+162. 第三十九批定向测试 7 项、架构测试 117 项、Chat、Agent、Graph、ChatBI、MCP、Workflow Engine 和架构组合回归
+    766 项通过，完整后端回归 1175 项通过；新增 DTO 与 Service 通过严格 Mypy，本批差异通过定向 Ruff，应用导入和
+    `git diff --check` 通过，OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1559,24 +1662,32 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 
 1. 创建 ChatBI 公开 QueryService 和 ConversationService。QueryService 已完成第一批 SQL 查询能力收敛，
    ConversationService 已完成第二批基础会话生命周期收敛。
-2. 迁移 Chat、ChatRecord 和 ChatLog，并拆分 ORM 与 DTO。核心 ORM 和创建、重命名、会话信息 DTO 已迁移，
-   历史记录、日志响应及旧 LLM 请求 DTO 待后续批次继续拆分。
+2. 迁移 Chat、ChatRecord 和 ChatLog，并拆分 ORM 与 DTO。核心 ORM，以及创建、重命名、会话信息、历史记录、日志响应、
+   旧 LLM 查询上下文、MCP 请求和图表展示 DTO 已完成归属拆分；旧 `chat_model.py` 只保留 ChatBI 和中立展示类型的兼容导出。
 3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。检索、SQL 语义
    编译、SQL 校验、权限应用和执行已统一；问题理解的确定性校验规则、Graph 意图校验结果投影、数据源选择、推荐问题以及分析预测模型调用
    编排、主 SQL 生成编排、动态 SQL 生成编排、权限 SQL 生成编排和图表生成编排已统一；Agent 问题理解编排已迁入
    ChatBI，Graph 的通用意图字段清洗、子任务合并、必需槽位和用户反馈写回已接入 ChatBI 投影 Service，Graph 特有候选
-   映射与编排继续保留；Graph 结构化回答生成已迁入 ChatBI，Agent 最终回答工具和统一最终回复投影待后续批次收敛。
+   映射与编排继续保留；Graph 的回答上下文投影、结构化回答生成和最终回复组合，以及 Agent 查询最终回答投影已迁入
+   ChatBI。
    问题理解的模型调用、默认模型适配、JSON 解析边界、自然语言业务
    DTO、提示词业务规则、Graph 分类与重写确定性投影、自然语言意图降级推断、修复提示、重试计数、澄清槽位投影、
-   回答上下文投影和结构化回答生成已统一；旧 Chat 查询结果标准化和 ChatRecord 数据投影已统一。
+   回答上下文投影、结构化回答生成、最终回复组合和 Agent 查询最终回答投影已统一；旧 Chat 查询结果标准化和
+   ChatRecord 数据投影已统一。
 4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。SQL 校验和执行工具
    已完成，语义 SQL 编译、物理 Schema、Semantic 检索、执行绑定和问题理解校验已接入统一入口；问题理解 Service、
-   模型调用、提示词与输出 DTO 已迁入统一 ChatBI 边界，旧路径只保留兼容导出，回答工具待后续处理。
+   模型调用、提示词与输出 DTO 已迁入统一 ChatBI 边界，旧路径只保留兼容导出；查询最终回答工具已接入 ChatBI 最终回复
+   投影 Service。
 5. Graph Adapter 改为调用相同 Service。问题理解校验、Semantic 检索、SQL 编译和执行 Adapter 已完成，其余
    Adapter 待后续迁移；问题分类、重写、三类意图子任务和结构化回答生成已接入统一模型调用边界、公共 DTO、提示词规则、输入投影、
-   意图投影、意图降级推断、确定性意图校验、回答上下文投影和回答生成 Service，Graph 特有的模型失败路由、候选
-   主题域、候选维度、并行、模型重试循环、降级触发与备用载荷拆分、上下文读取和最终节点投影继续由 Graph 编排层负责。
-6. 旧 `chat/task/llm.py` 调整为兼容入口或直接删除，不能继续维护独立业务逻辑。
+   意图投影、意图降级推断、确定性意图校验、回答上下文投影、回答生成和最终回复投影 Service，Graph 特有的模型失败
+   路由、候选主题域、候选维度、并行、模型重试循环、降级触发与备用载荷拆分、上下文读取和最终节点写入继续由 Graph
+   编排层负责。
+6. 旧 `chat/task/llm.py` 调整为兼容入口或直接删除，不能继续维护独立业务逻辑。SQL、图表、推荐、分析、预测、数据源选择、
+   权限 SQL、动态 SQL、查询执行和结果投影均已接入统一 Service；主查询成功与失败终态不再互相覆盖，SSE 编码与模型提示词
+   日志转换已迁入旧 Chat 适配模块，SQL 与图表生成历史的日志选择、系统消息过滤和轮数截取已迁入 ChatBI 投影 Service；
+   自定义提示词与 SQL 示例使用的工作空间、数据源和助手范围已迁入 ChatBI 范围 Service，传输流程编排和其余历史兼容
+   入口待后续继续拆分。
 7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期、所有权、Agent 与 Graph 的
    记录状态、澄清等待状态及最终结果投影已统一；执行器内部 Run 状态继续保持各自语义。
 8. SQL、数据结果和制品保存建立统一大小限制和清理规则。Agent 与 Graph 的 ChatRecord 最终快照大小边界已统一，

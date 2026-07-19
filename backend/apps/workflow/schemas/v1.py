@@ -2,7 +2,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from apps.chatbi.models import AnswerGenerationResult
+from apps.chatbi.models import AnswerGenerationResult, FinalReplyProjectionResult
 from apps.chatbi.models.dto.question_understanding import (
     NaturalLanguageIntentOutputBase,
     QuestionClassificationOutputBase,
@@ -248,13 +248,8 @@ class FinalReplyInput(BaseModel):
     chart: dict[str, Any] = Field(default_factory=dict)
 
 
-class FinalReplyOutput(BaseModel):
+class FinalReplyOutput(FinalReplyProjectionResult):
     """最终回复节点输出。"""
-
-    final_answer: str
-    recommendations: list[str] = Field(default_factory=list)
-    chart: dict[str, Any] = Field(default_factory=dict)
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 CHATBI_V1_OUTPUT_MODELS = {
