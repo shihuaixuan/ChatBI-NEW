@@ -7,6 +7,7 @@ from sqlalchemy import and_, desc, func, select, update
 from sqlalchemy.orm import aliased
 
 from apps.assistant.public import AssistantOutDsFactory
+from apps.chat.composition import build_conversation_service
 from apps.chat.models.chat_model import (
     Chat,
     ChatInfo,
@@ -20,18 +21,12 @@ from apps.chat.models.chat_model import (
     RenameChat,
     TypeEnum,
 )
-from apps.chat.services.deletion import ChatDeletionService
 from apps.chat.services.semantic_binding import (
     DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
-    DatasetBindingError,
-    apply_binding_to_chat,
-    apply_binding_to_record,
-    resolve_dataset_chat_binding,
-    validate_assistant_dataset_binding,
 )
+from apps.chatbi.services import ConversationNotFoundError
 from apps.datasource.composition import build_datasource_connection_service
 from apps.datasource.models.datasource import CoreDatasource
-from apps.knowledge.composition import build_recommended_problem_service
 from apps.semantic.models.orm import SemanticDataset
 from common.core.deps import CurrentAssistant, CurrentUser, SessionDep, Trans
 from common.utils.data_format import DataFormat
@@ -52,17 +47,22 @@ def get_chat_record_by_id(session: SessionDep, record_id: int):
     return record
 
 
-def get_chat(session: SessionDep, chat_id: int) -> Chat:
-    statement = select(Chat).where(Chat.id == chat_id)
-    chat = session.exec(statement).scalars().first()
-    return chat
+def get_chat(session: SessionDep, chat_id: int) -> Chat | None:
+    """兼容旧查询入口，业务规则由 ConversationService 维护。"""
+
+    try:
+        return build_conversation_service(session).get(chat_id)
+    except ConversationNotFoundError:
+        return None
 
 
 def list_chats(session: SessionDep, current_user: CurrentUser) -> List[Chat]:
-    oid = current_user.oid if current_user.oid is not None else 1
-    chart_list = session.query(Chat).filter(and_(Chat.create_by == current_user.id, Chat.oid == oid)).order_by(
-        Chat.create_time.desc()).all()
-    return chart_list
+    """兼容旧列表入口，业务规则由 ConversationService 维护。"""
+
+    return build_conversation_service(session).list_for_owner(
+        current_user.id,
+        current_user.oid,
+    )
 
 
 def list_recent_questions(session: SessionDep, current_user: CurrentUser, dataset_id: int) -> List[str]:
@@ -85,53 +85,18 @@ def list_recent_questions(session: SessionDep, current_user: CurrentUser, datase
 
 
 def rename_chat_with_user(session: SessionDep, current_user: CurrentUser, rename_object: RenameChat) -> str:
-    chat = session.get(Chat, rename_object.id)
-    if not chat:
-        raise Exception(f"Chat with id {rename_object.id} not found")
-    if chat.create_by != current_user.id:
-        raise Exception(f"Chat with id {rename_object.id} not Owned by the current user")
-    chat.brief = rename_object.brief.strip()[:20]
-    chat.brief_generate = rename_object.brief_generate
-    session.add(chat)
-    session.flush()
-    session.refresh(chat)
+    """兼容旧重命名入口，业务规则由 ConversationService 维护。"""
 
-    brief = chat.brief
-    session.commit()
-    return brief
-
-
-def rename_chat(session: SessionDep, rename_object: RenameChat) -> str:
-    chat = session.get(Chat, rename_object.id)
-    if not chat:
-        raise Exception(f"Chat with id {rename_object.id} not found")
-
-    chat.brief = rename_object.brief.strip()[:20]
-    chat.brief_generate = rename_object.brief_generate
-    session.add(chat)
-    session.flush()
-    session.refresh(chat)
-
-    brief = chat.brief
-    session.commit()
-    return brief
-
-
-def delete_chat(session, chart_id) -> str:
-    chat = session.query(Chat).filter(Chat.id == chart_id).first()
-    if not chat:
-        return f'Chat with id {chart_id} has been deleted'
-
-    session.delete(chat)
-    session.commit()
-
-    return f'Chat with id {chart_id} has been deleted'
+    return build_conversation_service(session).rename(
+        current_user.id,
+        rename_object,
+    )
 
 
 def delete_chat_with_user(session, current_user: CurrentUser, chart_id) -> str:
-    """删除会话及其关联的 Graph 执行数据。"""
+    """兼容旧删除入口，业务规则由 ConversationService 维护。"""
 
-    return ChatDeletionService(session).delete_for_user(current_user, chart_id)
+    return build_conversation_service(session).delete(current_user.id, chart_id)
 
 
 def get_chart_config(session: SessionDep, chart_record_id: int):
@@ -315,11 +280,7 @@ def get_chat_with_records_with_data(session: SessionDep, chart_id: int, current_
 def get_chat_with_records(session: SessionDep, chart_id: int, current_user: CurrentUser,
                           current_assistant: CurrentAssistant, with_data: bool = False,
                           trans: Trans = None) -> ChatInfo:
-    chat = session.get(Chat, chart_id)
-    if not chat:
-        raise Exception(f"Chat with id {chart_id} not found")
-    if chat.create_by != current_user.id:
-        raise Exception(f"Chat with id {chart_id} not Owned by the current user")
+    chat = build_conversation_service(session).get_owned(current_user.id, chart_id)
     chat_info = ChatInfo(**chat.model_dump())
 
     dataset = session.get(SemanticDataset, chat.dataset_id) if chat.dataset_id else None
@@ -727,74 +688,17 @@ def list_generate_chart_logs(session: SessionDep, chart_id: int) -> List[ChatLog
 
 def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj: CreateChat,
                 require_datasource: bool = True, _current_assistant: CurrentAssistant = None) -> ChatInfo:
-    validate_assistant_dataset_binding(
-        create_chat_obj.dataset_id,
-        _current_assistant.type if _current_assistant else None,
+    """兼容旧创建入口，创建与欢迎记录在同一事务中提交。"""
+
+    return build_conversation_service(session).create(
+        user_id=current_user.id,
+        workspace_id=current_user.oid,
+        request=create_chat_obj,
+        require_dataset=require_datasource,
+        assistant_type=(
+            _current_assistant.type if _current_assistant is not None else None
+        ),
     )
-    if not create_chat_obj.dataset_id and require_datasource:
-        raise DatasetBindingError("请选择数据集")
-
-    if not create_chat_obj.question or create_chat_obj.question.strip() == '':
-        create_chat_obj.question = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    binding = None
-    chat = Chat(create_time=datetime.datetime.now(),
-                create_by=current_user.id,
-                oid=current_user.oid if current_user.oid is not None else 1,
-                brief=create_chat_obj.question.strip()[:20],
-                origin=create_chat_obj.origin if create_chat_obj.origin is not None else 0)
-    if create_chat_obj.dataset_id:
-        binding = resolve_dataset_chat_binding(session, current_user, create_chat_obj.dataset_id)
-        apply_binding_to_chat(chat, binding)
-    else:
-        chat.engine_type = ''
-
-    chat_info = ChatInfo(**chat.model_dump())
-
-    session.add(chat)
-    session.flush()
-    session.refresh(chat)
-    chat_info.id = chat.id
-    session.commit()
-
-    if binding:
-        chat_info.dataset_id = binding.dataset_id
-        chat_info.dataset_name = binding.dataset_name
-        chat_info.dataset_exists = True
-        chat_info.datasource_exists = True
-        chat_info.datasource_name = binding.datasource_name
-        chat_info.ds_type = binding.datasource_type
-
-    if require_datasource and binding:
-        record = ChatRecord()
-        # 首条欢迎记录不触发问数，统一使用默认 Graph 类型。
-        record.execution_type = "graph"
-        record.chat_id = chat.id
-        apply_binding_to_record(record, binding)
-        record.first_chat = True
-        record.finish = True
-        record.create_time = datetime.datetime.now()
-        record.create_by = current_user.id
-        questions = build_recommended_problem_service(session).list_for_chat(
-            binding.datasource_id
-        )
-        if questions is not None:
-            record.recommended_question = orjson.dumps(questions).decode()
-            record.recommended_question_answer = orjson.dumps({
-                "content": questions
-            }).decode()
-
-        _record = ChatRecord(**record.model_dump())
-
-        session.add(record)
-        session.flush()
-        session.refresh(record)
-        _record.id = record.id
-        session.commit()
-
-        chat_info.records.append(_record)
-
-    return chat_info
 
 
 def save_analysis_predict_record(session: SessionDep, base_record: ChatRecord, action_type: str) -> ChatRecord:
@@ -979,7 +883,7 @@ def save_recommend_question_answer(session: SessionDep, record_id: int,
 
             if not json_str:
                 json_str = '[]'
-        except Exception as e:
+        except Exception:
             pass
     recommended_question = json_str
 

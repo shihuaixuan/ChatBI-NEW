@@ -46,6 +46,8 @@ from apps.capabilities.question_understanding import (
     apply_question_understanding_clarification,
 )
 from apps.chat.models.chat_model import ChatRecord
+from apps.chatbi.composition import build_query_service
+from apps.chatbi.services import QueryService
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
 
@@ -85,6 +87,7 @@ class AgentLoop:
         registry: ToolRegistry | None = None,
         understanding_service: QuestionUnderstandingService | None = None,
         term_query_service: SemanticTermQueryService | None = None,
+        query_service: QueryService | None = None,
     ):
         self.session = session
         self.current_user = current_user
@@ -94,6 +97,11 @@ class AgentLoop:
         self.understanding_service = understanding_service or QuestionUnderstandingService()
         self.term_query_service = term_query_service or build_semantic_term_query_service(
             session
+        )
+        self.query_service = query_service or build_query_service(
+            session,
+            default_limit=self.config.default_limit,
+            sample_rows=self.config.sample_rows,
         )
 
     def _build_registry(self) -> ToolRegistry:
@@ -314,6 +322,7 @@ class AgentLoop:
             datasource_id=record.datasource,
             dataset_id=record.dataset_id,
             term_query_service=self.term_query_service,
+            query_service=self.query_service,
             config=self.config,
             state={"question": record.question or ""},
         )

@@ -6,6 +6,7 @@ from typing import Protocol
 from sqlmodel import Session, col, select
 
 from apps.chat.models.chat_model import Chat, ChatRecord
+from apps.chatbi.services import ConversationBindingError
 from apps.datasource.models.datasource import CoreDatasource
 from apps.semantic.models.orm import (
     SemanticDataset,
@@ -13,9 +14,7 @@ from apps.semantic.models.orm import (
     SemanticModel,
 )
 
-
-class DatasetBindingError(ValueError):
-    pass
+DatasetBindingError = ConversationBindingError
 
 
 DYNAMIC_DATASOURCE_ASSISTANT_TYPES = frozenset({1, 3})

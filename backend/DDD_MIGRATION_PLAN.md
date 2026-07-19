@@ -1188,19 +1188,53 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 ### 6.6 阶段 P5：建立统一 ChatBI 领域
 
+**实施状态：进行中**
+
+截至 2026-07-19，已完成第一批统一 SQL 查询链路和第二批会话生命周期收敛：
+
+1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
+   和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
+2. Graph 原 `PermissionAdapter` 的行列权限实现迁入 ChatBI `SQLPermissionService`，旧路径只保留对象身份一致的
+   兼容转发；真实运行时继续使用 Access Control 的 `SessionDataPolicyProvider`，权限策略不在 ChatBI 内重复实现。
+3. Agent 的 `validate_sql` 和 `execute_sql` 工具已改为调用同一个 `QueryService`，执行时明确传入工作空间、用户、
+   数据源和允许表范围；不再直接组装 `GuardedSqlExecutor`、`SqlValidateTool` 或权限工具。
+4. Graph `SqlAdapter` 的单查询和拆分查询已改为调用同一个 `QueryService`；权限改写后的 SQL 会再次经过只读校验，
+   避免行级过滤改写绕过安全检查。完整结果仍由 Graph Artifact 端口保存，QueryService 不依赖 Workflow Engine。
+5. 旧 `GuardedSqlExecutor` 已收敛为 `QueryService` 兼容包装，数据库查询适配器独立为 `SqlExecuteTool`，不再维护
+   第二套“权限→校验→执行→采样”流程。
+6. 新增架构守卫，禁止 Agent SQL 工具重新直接依赖旧 SQL 能力实现，并禁止 Graph `SqlAdapter` 恢复独立执行链。
+   第一批 ChatBI、Agent、Graph、Capabilities 和架构定向回归 107 项通过。
+7. 建立 `ConversationService`、会话 Repository 端口和 SQLModel 仓储，统一会话创建、所有权读取、列表、重命名
+   和删除入口；Service 不依赖 Session，也不直接导入 Semantic、Datasource、Knowledge 或 Workflow Engine。
+8. `Chat`、`ChatRecord`、`ChatLog` 及其枚举迁入 `apps/chatbi/models/orm`，`CreateChat`、`RenameChat` 和
+   `ChatInfo` 迁入 `models/dto`；旧 `apps.chat.models.chat_model` 保留同一对象的兼容导出，不重复注册 ORM 表。
+9. 会话与首条欢迎记录由仓储一次 flush、Service 一次 commit，任一持久化步骤失败统一 rollback，不再分两次提交
+   产生只有会话、没有欢迎记录的部分状态。推荐问题和 Semantic 数据集绑定通过端口组装。
+10. Chat HTTP API、Assistant 会话入口和 MCP 会话创建已直接调用 `ConversationService`；Agent 会话所有权校验也改用
+    ChatBI 读取 Service，删除继续通过端口复用现有 Graph Run 与 Artifact 级联清理能力。
+11. 旧 `apps/chat/curd/chat.py` 的创建、列表、重命名和用户删除函数只保留兼容转发；基础读取和历史读取的所有权规则
+    均由 `ConversationService` 表达。MCP 不再跨领域导入 Chat API，相关依赖基线已移除。
+12. 第二批 ChatBI、Chat、Agent、MCP 和架构定向回归 52 项通过；当前完整后端回归 836 项通过，新增代码通过
+    Ruff 和严格 Mypy，`git diff --check` 通过，OpenAPI 保持 154 个路径。
+
 **目标**
 
 把 Chat、Agent、Graph 和 Capabilities 收敛为一个 ChatBI 业务领域，保留不同执行方式但消除能力重复。
 
 **任务**
 
-1. 创建 ChatBI 公开 QueryService 和 ConversationService。
-2. 迁移 Chat、ChatRecord 和 ChatLog，并拆分 ORM 与 DTO。
-3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。
-4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。
-5. Graph Adapter 改为调用相同 Service。
+1. 创建 ChatBI 公开 QueryService 和 ConversationService。QueryService 已完成第一批 SQL 查询能力收敛，
+   ConversationService 已完成第二批基础会话生命周期收敛。
+2. 迁移 Chat、ChatRecord 和 ChatLog，并拆分 ORM 与 DTO。核心 ORM 和创建、重命名、会话信息 DTO 已迁移，
+   历史记录、日志响应及旧 LLM 请求 DTO 待后续批次继续拆分。
+3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。SQL 校验、
+   权限应用和执行已统一，问题理解、检索、语义编译和回答待后续批次收敛。
+4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。SQL 校验和执行工具
+   已完成，Schema、Semantic 检索与编译工具尚待迁移。
+5. Graph Adapter 改为调用相同 Service。SQL 执行 Adapter 已完成，其余 Adapter 待后续迁移。
 6. 旧 `chat/task/llm.py` 调整为兼容入口或直接删除，不能继续维护独立业务逻辑。
-7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。
+7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期与所有权规则已统一，记录状态、
+   澄清和最终结果投影仍待后续批次收敛。
 8. SQL、数据结果和制品保存建立统一大小限制和清理规则。
 9. 推荐、分析和预测作为 ChatBI 应用能力调用 AI Model，不放入 ORM 方法或模板模块。
 

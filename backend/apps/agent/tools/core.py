@@ -17,9 +17,8 @@ from apps.capabilities.semantic.compile import (
     resolve_dataset_by_datasource,
 )
 from apps.capabilities.semantic.retrieval import retrieve_semantic_assets
-from apps.capabilities.sql.executor import GuardedSqlExecutor
-from apps.capabilities.sql.validator import SqlValidateTool
 from apps.capabilities.time_slots import normalize_time_range
+from apps.chatbi.services import QueryService
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
 
@@ -314,8 +313,13 @@ class ValidateSqlTool(AgentTool):
         blocked = _execution_gate(ctx)
         if blocked:
             return blocked
-        validator = SqlValidateTool(default_limit=getattr(ctx.config, "default_limit", 100))
-        result = validator.run({"sql": args.sql, "allowed_tables": ctx.state.get("allowed_tables") or []})
+        service = ctx.query_service or QueryService(
+            default_limit=getattr(ctx.config, "default_limit", 100),
+        )
+        result = service.validate_sql(
+            args.sql,
+            allowed_tables=ctx.state.get("allowed_tables") or [],
+        )
         if not result.success:
             return ToolOutput(success=False, summary=result.message or "SQL 校验失败", error_code=result.error_code)
         return ToolOutput(success=True, summary=json_summary(result.payload, _summary_limit(ctx)), payload=result.payload)
@@ -339,14 +343,17 @@ class ExecuteSqlTool(AgentTool):
             return blocked
         if not ctx.datasource_id:
             return ToolOutput(success=False, summary="缺少数据源，无法执行。", error_code="datasource_required")
-        executor = GuardedSqlExecutor(
-            ctx.session,
-            default_limit=getattr(ctx.config, "default_limit", 100),
-            sample_rows=getattr(ctx.config, "sample_rows", 10),
-        )
-        result = executor.run(
+        if ctx.query_service is None:
+            return ToolOutput(
+                success=False,
+                summary="ChatBI 查询服务未配置。",
+                error_code="query_service_required",
+            )
+        result = ctx.query_service.execute_sql(
             sql=args.sql,
             datasource_id=ctx.datasource_id,
+            workspace_id=ctx.oid,
+            user_id=ctx.user_id,
             allowed_tables=ctx.state.get("allowed_tables") or [],
         )
         if not result.success:

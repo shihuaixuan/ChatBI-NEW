@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from apps.chat.models.chat_model import Chat, ChatLog, ChatRecord
+from apps.chatbi.models import Chat, ChatLog, ChatRecord
 from apps.workflow_engine.infrastructure.artifacts.cleanup import ArtifactCleanupService
 from apps.workflow_engine.infrastructure.persistence.models import (
     InteractionRequestModel,

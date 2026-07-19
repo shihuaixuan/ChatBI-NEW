@@ -3,9 +3,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from apps.capabilities.sql.executor import SqlExecuteTool
 from apps.capabilities.sql.repair import SQLRepairStrategy
 from apps.capabilities.sql.validator import SqlValidateTool
+from apps.chatbi.services import QueryService, SQLExecutor
 from apps.semantic.models.dto import DatasetSchema
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.semantic.services.sql_compiler import (
@@ -32,7 +32,7 @@ class SqlAdapter:
         self,
         schema_provider: DatasetSchemaProvider | None = None,
         compiler: SemanticSQLCompiler | None = None,
-        execute_tool: SqlExecuteTool | None = None,
+        execute_tool: SQLExecutor | None = None,
         validate_tool: SqlValidateTool | None = None,
         permission_adapter: PermissionAdapter | None = None,
         repair_strategy: SQLRepairStrategy | None = None,
@@ -40,12 +40,11 @@ class SqlAdapter:
         sample_row_limit: int | None = None,
         max_parallel_queries: int | None = None,
         config: ChatBIConfig | None = None,
+        query_service: QueryService | None = None,
     ) -> None:
         config = config or ChatBIConfig()
         self._schema_provider = schema_provider
         self._compiler = compiler or SemanticSQLCompiler()
-        self._execute_tool = execute_tool
-        self._validate_tool = validate_tool or SqlValidateTool()
         self._permission_adapter = permission_adapter or PermissionAdapter()
         self._repair_strategy = repair_strategy or SQLRepairStrategy()
         self._artifact_store = artifact_store
@@ -56,6 +55,12 @@ class SqlAdapter:
         self._max_parallel_queries = max(
             max_parallel_queries if max_parallel_queries is not None else config.sql_max_parallel_queries,
             1,
+        )
+        self._query_service = query_service or QueryService(
+            sample_rows=self._sample_row_limit,
+            permission_service=self._permission_adapter,
+            validate_tool=validate_tool,
+            execute_tool=execute_tool,
         )
 
     def generate(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -103,7 +108,10 @@ class SqlAdapter:
             )
         )
         self._reject_same_repair_sql(result.sql, repair_context)
-        validated = self._validate_tool.run({"sql": result.sql, "allowed_tables": result.tables})
+        validated = self._query_service.validate_sql(
+            result.sql,
+            allowed_tables=result.tables,
+        )
         if not validated.success:
             raise ValueError(validated.error_code or "SQL_VALIDATE_FAILED")
         validated_sql = (validated.payload or {}).get("sql") or result.sql
@@ -153,30 +161,11 @@ class SqlAdapter:
         ctx: ChatBIRunContext,
         query: ExecutionQuery,
     ) -> ExecutionResult:
-        if self._execute_tool is None:
-            return self._failed_result(
-                query.query_id,
-                "SQL_EXECUTE_TOOL_REQUIRED",
-                "SQL 执行工具未配置",
-            )
-        permission = self._permission_adapter.apply(
-            {
-                "sql": query.sql,
-                "datasource_id": query.datasource_id,
-                "tenant_id": ctx.request_value("tenant_id"),
-                "user_id": ctx.request_value("user_id"),
-            }
-        )
-        if not permission.get("allowed"):
-            return self._failed_result(
-                query.query_id,
-                str(permission.get("error_code") or "permission_denied"),
-                str(permission.get("reason") or "权限校验拒绝"),
-            )
-        permitted_sql = str(permission.get("sql") or query.sql)
-
-        result = self._execute_tool.run(
-            {"sql": permitted_sql, "datasource_id": query.datasource_id}
+        result = self._query_service.execute_sql(
+            sql=query.sql,
+            datasource_id=query.datasource_id,
+            workspace_id=self._int_or_none(ctx.request_value("tenant_id")),
+            user_id=self._int_or_none(ctx.request_value("user_id")),
         )
         if not result.success:
             return self._failed_result(
@@ -185,10 +174,10 @@ class SqlAdapter:
                 result.message or "SQL 执行失败",
             )
         payload = result.payload or {}
-        rows = payload.get("data") or payload.get("rows") or []
+        rows = payload.get("full_data") or []
         fields = payload.get("fields") or []
         row_count = int(payload.get("row_count") or len(rows))
-        sample_rows = rows[: self._sample_row_limit]
+        sample_rows = payload.get("sample_rows") or []
         artifact_ref = payload.get("artifact_ref")
         if self._artifact_store is not None:
             try:
@@ -258,7 +247,10 @@ class SqlAdapter:
                     having=planning.slot_items(slots.get("having") or plan.get("having")),
                 )
             )
-            validated = self._validate_tool.run({"sql": compiled.sql, "allowed_tables": compiled.tables})
+            validated = self._query_service.validate_sql(
+                compiled.sql,
+                allowed_tables=compiled.tables,
+            )
             if not validated.success:
                 raise ValueError(validated.error_code or "SQL_VALIDATE_FAILED")
             sql = (validated.payload or {}).get("sql") or compiled.sql

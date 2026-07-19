@@ -1,7 +1,7 @@
 import asyncio
 import io
 import traceback
-from typing import Optional, List
+from typing import List, Optional
 
 import orjson
 import pandas as pd
@@ -10,24 +10,48 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, select
 from starlette.responses import JSONResponse
 
-from apps.chat.curd.chat import delete_chat_with_user, get_chart_data_with_user, get_chat_predict_data_with_user, \
-    list_chats, get_chat_with_records, create_chat, get_chat_chart_data, get_chat_predict_data, get_chat_with_records_with_data, get_chat_record_by_id, \
-    format_json_data, format_json_list_data, get_chart_config, list_recent_questions, rename_chat_with_user, get_chat_log_history, get_chart_data_with_user_live
-from apps.chat.models.chat_model import AxisObj, Chat, ChatInfo, ChatQuestion, ChatRecord, CreateChat, RenameChat
+from apps.chat.composition import build_conversation_service
+from apps.chat.curd.chat import (
+    format_json_data,
+    format_json_list_data,
+    get_chart_config,
+    get_chart_data_with_user,
+    get_chart_data_with_user_live,
+    get_chat_chart_data,
+    get_chat_log_history,
+    get_chat_predict_data,
+    get_chat_predict_data_with_user,
+    get_chat_record_by_id,
+    get_chat_with_records,
+    get_chat_with_records_with_data,
+    list_recent_questions,
+)
+from apps.chat.models.chat_model import (
+    AxisObj,
+    Chat,
+    ChatInfo,
+    ChatQuestion,
+    ChatRecord,
+    CreateChat,
+    RenameChat,
+)
 from apps.chat.services.semantic_binding import DatasetBindingError
 from apps.chat.task.llm import LLMService
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
-from common.core.deps import CurrentAssistant, SessionDep, CurrentUser, Trans
-from common.utils.data_format import DataFormat
-from common.audit.models.log_model import OperationType, OperationModules
+from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
+from common.core.deps import CurrentAssistant, CurrentUser, SessionDep, Trans
+from common.utils.data_format import DataFormat
 
 router = APIRouter(tags=["Data Q&A"], prefix="/chat")
 
 
 @router.get("/list", response_model=List[Chat], summary=f"{PLACEHOLDER_PREFIX}get_chat_list")
 async def chats(session: SessionDep, current_user: CurrentUser):
-    return list_chats(session, current_user)
+    return build_conversation_service(session).list_for_owner(
+        current_user.id,
+        current_user.oid,
+    )
 
 
 @router.get("/{chart_id}", response_model=ChatInfo, summary=f"{PLACEHOLDER_PREFIX}get_chat")
@@ -136,7 +160,7 @@ async def rename(session: SessionDep, chat: RenameChat):
 ))
 async def rename(session: SessionDep, current_user: CurrentUser, chat: RenameChat):
     try:
-        return rename_chat_with_user(session=session, current_user=current_user, rename_object=chat)
+        return build_conversation_service(session).rename(current_user.id, chat)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -170,7 +194,7 @@ async def delete(session: SessionDep, chart_id: int, brief: str):
 ))
 async def delete(session: SessionDep, current_user: CurrentUser, chart_id: int, brief: str):
     # 删除服务保留明确的权限、数据库冲突和 Artifact 清理错误，不在 API 层宽泛吞掉。
-    return delete_chat_with_user(session=session, current_user=current_user, chart_id=chart_id)
+    return build_conversation_service(session).delete(current_user.id, chart_id)
 
 
 @router.post("/start", response_model=ChatInfo, summary=f"{PLACEHOLDER_PREFIX}start_chat")
@@ -181,7 +205,11 @@ async def delete(session: SessionDep, current_user: CurrentUser, chart_id: int, 
 ))
 async def start_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj: CreateChat):
     try:
-        return create_chat(session, current_user, create_chat_obj)
+        return build_conversation_service(session).create(
+            user_id=current_user.id,
+            workspace_id=current_user.oid,
+            request=create_chat_obj,
+        )
     except DatasetBindingError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -197,11 +225,20 @@ async def start_chat(session: SessionDep, current_user: CurrentUser, create_chat
     module=OperationModules.CHAT,
     result_id_expr="id"
 ))
-async def start_chat(session: SessionDep, current_user: CurrentUser, current_assistant: CurrentAssistant,
-                     create_chat_obj: CreateChat = CreateChat(origin=2)):
+async def assistant_start_chat(
+    session: SessionDep,
+    current_user: CurrentUser,
+    current_assistant: CurrentAssistant,
+    create_chat_obj: CreateChat = CreateChat(origin=2),
+):
     try:
-        return create_chat(session, current_user, create_chat_obj, create_chat_obj and create_chat_obj.dataset_id,
-                           current_assistant)
+        return build_conversation_service(session).create(
+            user_id=current_user.id,
+            workspace_id=current_user.oid,
+            request=create_chat_obj,
+            require_dataset=bool(create_chat_obj.dataset_id),
+            assistant_type=current_assistant.type if current_assistant else None,
+        )
     except DatasetBindingError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -291,7 +328,7 @@ async def analysis_or_predict(session: SessionDep, current_user: CurrentUser, ch
                 if in_chat:
                     yield 'data:' + orjson.dumps({'content': str(_e), 'type': 'error'}).decode() + '\n\n'
                 else:
-                    yield f'&#x274c; **ERROR:**\n'
+                    yield '&#x274c; **ERROR:**\n'
                     yield f'> {str(_e)}\n'
 
             return StreamingResponse(_err(e), media_type="text/event-stream")

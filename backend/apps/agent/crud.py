@@ -12,7 +12,8 @@ from apps.agent.models import (
     ChatbiAgentTraceEvent,
 )
 from apps.agent.schemas import AgentQuestionRequest
-from apps.chat.models.chat_model import Chat, ChatRecord
+from apps.chatbi.conversation import build_conversation_reader_service
+from apps.chatbi.models import Chat, ChatRecord
 
 
 def now() -> datetime:
@@ -20,10 +21,10 @@ def now() -> datetime:
 
 
 def get_chat_for_user(session, chat_id: int, current_user) -> Chat:
-    chat = session.get(Chat, chat_id)
-    if not chat or chat.create_by != current_user.id:
-        raise ValueError(f"Chat with id {chat_id} not found")
-    return chat
+    return build_conversation_reader_service(session).get_owned(
+        current_user.id,
+        chat_id,
+    )
 
 
 def create_record_and_run(

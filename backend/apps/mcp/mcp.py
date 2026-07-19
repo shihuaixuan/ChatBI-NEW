@@ -26,8 +26,9 @@ from apps.agent.service import (
     AgentNotEnabledError,
     create_agent_start_stream,
 )
-from apps.chat.api.chat import create_chat
-from apps.chat.models.chat_model import ChatStart, CreateChat, McpDs, McpQuestion
+from apps.chat.composition import build_conversation_service
+from apps.chat.models.chat_model import ChatStart, McpDs, McpQuestion
+from apps.chatbi.models import CreateChat
 from apps.datasource.composition import build_datasource_service
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
@@ -98,7 +99,12 @@ async def mcp_start(session: SessionDep, chat: ChatStart):
     t = Token(access_token=create_access_token(
         user_dict, expires_delta=access_token_expires
     ))
-    c = create_chat(session, user, CreateChat(origin=1), False)
+    c = build_conversation_service(session).create(
+        user_id=user.id,
+        workspace_id=user.oid,
+        request=CreateChat(origin=1),
+        require_dataset=False,
+    )
     return {"access_token": t.access_token, "chat_id": c.id}
 
 

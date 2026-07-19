@@ -754,7 +754,10 @@ def test_sql_adapter_executes_sql_and_normalizes_result_rows():
 
     assert execute_tool.payloads == [
         {
-            "sql": "select sum(visit_uv) as visit_uv from stall_traffic_1d",
+            "sql": (
+                "select sum(visit_uv) as visit_uv "
+                "from stall_traffic_1d limit 100"
+            ),
             "datasource_id": 5,
         }
     ]

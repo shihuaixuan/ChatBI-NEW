@@ -36,6 +36,7 @@ from apps.assistant.public import (
     AssistantOutDsFactory,
     get_assistant_ds,
 )
+from apps.chat.composition import build_conversation_service
 from apps.chat.curd.chat import (
     end_log,
     finish_record,
@@ -50,7 +51,6 @@ from apps.chat.curd.chat import (
     get_old_questions,
     list_generate_chart_logs,
     list_generate_sql_logs,
-    rename_chat,
     save_analysis_answer,
     save_analysis_predict_record,
     save_chart,
@@ -1332,9 +1332,14 @@ class LLMService:
                 if llm_brief_generated or (self.chat_question.question and self.chat_question.question.strip() != ''):
                     save_brief = llm_brief if (llm_brief and llm_brief != '') else self.chat_question.question.strip()[
                                                                                    :20]
-                    brief = rename_chat(session=_session,
-                                        rename_object=RenameChat(id=self.get_record().chat_id,
-                                                                 brief=save_brief, brief_generate=llm_brief_generated))
+                    brief = build_conversation_service(_session).rename(
+                        self.current_user.id,
+                        RenameChat(
+                            id=self.get_record().chat_id,
+                            brief=save_brief,
+                            brief_generate=llm_brief_generated,
+                        ),
+                    )
                     if in_chat:
                         yield 'data:' + orjson.dumps({'type': 'brief', 'brief': brief}).decode() + '\n\n'
                     if not stream:

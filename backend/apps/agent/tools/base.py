@@ -32,6 +32,27 @@ class TermQueryService(Protocol):
     ) -> list[TermSearchResult]: ...
 
 
+class QueryService(Protocol):
+    """Agent 对 ChatBI 查询服务的最小依赖。"""
+
+    def validate_sql(
+        self,
+        sql: str,
+        *,
+        allowed_tables: list[str] | None = None,
+    ) -> Any: ...
+
+    def execute_sql(
+        self,
+        *,
+        sql: str,
+        datasource_id: int,
+        workspace_id: int | None,
+        user_id: int | None,
+        allowed_tables: list[str] | None = None,
+    ) -> Any: ...
+
+
 @dataclass
 class AgentToolContext:
     """一次 run 的执行上下文（由 API 层组装，工具只读）。"""
@@ -42,6 +63,7 @@ class AgentToolContext:
     datasource_id: int | None
     dataset_id: int | None = None
     term_query_service: TermQueryService | None = None
+    query_service: QueryService | None = None
     config: Any = None
     # 循环内跨工具共享的运行时状态（语义包、执行结果标记等），由 loop 维护。
     state: dict[str, Any] = field(default_factory=dict)

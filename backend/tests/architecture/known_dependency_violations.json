@@ -1,7 +1,6 @@
 {
   "cross_domain_internal_models": [
     "apps/agent/api.py -> apps.chat.models.chat_model",
-    "apps/agent/crud.py -> apps.chat.models.chat_model",
     "apps/agent/loop.py -> apps.chat.models.chat_model",
     "apps/agent/tools/core.py -> apps.datasource.models.datasource",
     "apps/capabilities/semantic/compile.py -> apps.semantic.models.orm",
@@ -39,9 +38,7 @@
     "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.persistence.node_execution_repository",
     "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.persistence.run_repository"
   ],
-  "cross_domain_api_imports": [
-    "apps/mcp/mcp.py -> apps.chat.api.chat"
-  ],
+  "cross_domain_api_imports": [],
   "workflow_engine_business_imports": [
     "apps/workflow_engine/api/chat_history.py -> apps.chat.models.chat_model",
     "apps/workflow_engine/api/service.py -> apps.chat.models.chat_model",

@@ -6,15 +6,19 @@ from apps.agent.tools.base import AgentToolContext
 from apps.agent.tools.core import (
     CompileSemanticSqlArgs,
     CompileSemanticSqlTool,
+    ExecuteSqlArgs,
+    ExecuteSqlTool,
     FinishArgs,
     FinishTool,
     SearchSemanticAssetsArgs,
     SearchSemanticAssetsTool,
+    ValidateSqlArgs,
+    ValidateSqlTool,
 )
 from apps.capabilities.schemas import ToolResult
 
 
-def _ctx(**state):
+def _ctx(query_service=None, **state):
     values = {
         "question_understanding": {
             "rewritten_question": "本月销售额",
@@ -23,13 +27,86 @@ def _ctx(**state):
         }
     }
     values.update(state)
-    return AgentToolContext(session=None, oid=1, user_id=1, datasource_id=5, state=values)
+    return AgentToolContext(
+        session=None,
+        oid=1,
+        user_id=1,
+        datasource_id=5,
+        query_service=query_service,
+        state=values,
+    )
+
+
+class RecordingQueryService:
+    def __init__(self) -> None:
+        self.validate_calls: list[tuple[str, list[str]]] = []
+        self.execute_calls: list[dict] = []
+
+    def validate_sql(self, sql: str, *, allowed_tables=None) -> ToolResult:
+        self.validate_calls.append((sql, allowed_tables or []))
+        return ToolResult(success=True, payload={"sql": f"{sql} limit 100"})
+
+    def execute_sql(self, **payload) -> ToolResult:
+        self.execute_calls.append(payload)
+        return ToolResult(
+            success=True,
+            payload={
+                "sql": "select amount from orders limit 100",
+                "fields": ["amount"],
+                "sample_rows": [{"amount": 10}],
+                "row_count": 2,
+                "stats_summary": {"amount": {"sum": 30.0}},
+                "full_data": [{"amount": 10}, {"amount": 20}],
+            },
+        )
 
 
 def test_finish_rejected_without_execution():
     output = FinishTool().execute(_ctx(), FinishArgs(answer_markdown="答案"))
     assert not output.success
     assert output.error_code == "execution_required_before_finish"
+
+
+def test_validate_sql_uses_chatbi_query_service():
+    service = RecordingQueryService()
+    ctx = _ctx(query_service=service, allowed_tables=["orders"])
+
+    output = ValidateSqlTool().execute(
+        ctx,
+        ValidateSqlArgs(sql="select amount from orders"),
+    )
+
+    assert output.success
+    assert service.validate_calls == [
+        ("select amount from orders", ["orders"])
+    ]
+
+
+def test_execute_sql_uses_chatbi_query_service_with_identity_scope():
+    service = RecordingQueryService()
+    ctx = _ctx(
+        query_service=service,
+        allowed_tables=["orders"],
+        compiled_sql="select amount from orders",
+    )
+
+    output = ExecuteSqlTool().execute(
+        ctx,
+        ExecuteSqlArgs(sql="select amount from orders"),
+    )
+
+    assert output.success
+    assert service.execute_calls == [
+        {
+            "sql": "select amount from orders",
+            "datasource_id": 5,
+            "workspace_id": 1,
+            "user_id": 1,
+            "allowed_tables": ["orders"],
+        }
+    ]
+    assert ctx.state["full_data"] == [{"amount": 10}, {"amount": 20}]
+    assert output.payload["sql_source"] == "compiled"
 
 
 def test_finish_appends_non_standard_note_for_manual_sql():

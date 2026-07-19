@@ -1,15 +1,40 @@
 from datetime import datetime
-from enum import Enum
-from typing import List, Optional, Any, Union
+from typing import Any, List, Optional, Union
 
 from fastapi import Body
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
-from sqlalchemy import Column, Integer, Text, BigInteger, DateTime, Identity, Boolean
-from sqlalchemy import Enum as SQLAlchemyEnum
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import SQLModel, Field
 
+from apps.chatbi.models import (
+    Chat as Chat,
+)
+from apps.chatbi.models import (
+    ChatFinishStep as ChatFinishStep,
+)
+from apps.chatbi.models import (
+    ChatInfo as ChatInfo,
+)
+from apps.chatbi.models import (
+    ChatLog as ChatLog,
+)
+from apps.chatbi.models import (
+    ChatRecord as ChatRecord,
+)
+from apps.chatbi.models import (
+    CreateChat as CreateChat,
+)
+from apps.chatbi.models import (
+    OperationEnum as OperationEnum,
+)
+from apps.chatbi.models import (
+    QuickCommand as QuickCommand,
+)
+from apps.chatbi.models import (
+    RenameChat as RenameChat,
+)
+from apps.chatbi.models import (
+    TypeEnum as TypeEnum,
+)
 from apps.datasource.database import DB
 from apps.template.filter.generator import get_permissions_template
 from apps.template.generate_analysis.generator import get_analysis_template
@@ -17,125 +42,11 @@ from apps.template.generate_chart.generator import get_chart_template
 from apps.template.generate_dynamic.generator import get_dynamic_template
 from apps.template.generate_guess_question.generator import get_guess_question_template
 from apps.template.generate_predict.generator import get_predict_template
-from apps.template.generate_sql.generator import get_sql_template, get_sql_example_template
+from apps.template.generate_sql.generator import (
+    get_sql_example_template,
+    get_sql_template,
+)
 from apps.template.select_datasource.generator import get_datasource_template
-
-
-def enum_values(enum_class: type[Enum]) -> list:
-    """Get values for enum."""
-    return [status.value for status in enum_class]
-
-
-class TypeEnum(Enum):
-    CHAT = "0"
-
-
-#     TODO other usage
-
-class OperationEnum(Enum):
-    GENERATE_SQL = '0'
-    GENERATE_CHART = '1'
-    ANALYSIS = '2'
-    PREDICT_DATA = '3'
-    GENERATE_RECOMMENDED_QUESTIONS = '4'
-    GENERATE_SQL_WITH_PERMISSIONS = '5'
-    CHOOSE_DATASOURCE = '6'
-    GENERATE_DYNAMIC_SQL = '7'
-    CHOOSE_TABLE = '8'
-    FILTER_TERMS = '9'
-    FILTER_SQL_EXAMPLE = '10'
-    FILTER_CUSTOM_PROMPT = '11'
-    EXECUTE_SQL = '12'
-    GENERATE_PICTURE = '13'
-    FILTER_SEMANTIC_ASSET = '14'
-
-
-class ChatFinishStep(Enum):
-    GENERATE_SQL = 1
-    QUERY_DATA = 2
-    GENERATE_CHART = 3
-
-
-class QuickCommand(Enum):
-    REGENERATE = '/regenerate'
-    ANALYSIS = '/analysis'
-    PREDICT_DATA = '/predict'
-
-
-#     TODO choose table / check connection / generate description
-
-class ChatLog(SQLModel, table=True):
-    __tablename__ = "chat_log"
-    id: Optional[int] = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
-    type: TypeEnum = Field(
-        sa_column=Column(SQLAlchemyEnum(TypeEnum, native_enum=False, values_callable=enum_values, length=3)))
-    operate: OperationEnum = Field(
-        sa_column=Column(SQLAlchemyEnum(OperationEnum, native_enum=False, values_callable=enum_values, length=3)))
-    pid: Optional[int] = Field(sa_column=Column(BigInteger, nullable=True))
-    ai_modal_id: Optional[int] = Field(sa_column=Column(BigInteger))
-    base_modal: Optional[str] = Field(max_length=255)
-    messages: Optional[list[dict]] = Field(sa_column=Column(JSONB))
-    reasoning_content: Optional[str | None] = Field(sa_column=Column(Text, nullable=True))
-    start_time: datetime = Field(sa_column=Column(DateTime(timezone=False), nullable=True))
-    finish_time: datetime = Field(sa_column=Column(DateTime(timezone=False), nullable=True))
-    token_usage: Optional[dict | None | int] = Field(sa_column=Column(JSONB))
-    local_operation: bool = Field(default=False)
-    error: bool = Field(default=False)
-
-
-class Chat(SQLModel, table=True):
-    __tablename__ = "chat"
-    id: Optional[int] = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
-    oid: Optional[int] = Field(sa_column=Column(BigInteger, nullable=True, default=1))
-    create_time: datetime = Field(sa_column=Column(DateTime(timezone=False), nullable=True))
-    create_by: int = Field(sa_column=Column(BigInteger, nullable=True))
-    brief: str = Field(max_length=64, nullable=True)
-    chat_type: str = Field(max_length=20, default="chat")  # chat, datasource
-    dataset_id: Optional[int] = Field(default=None, sa_column=Column(BigInteger, nullable=True))
-    datasource: int = Field(sa_column=Column(BigInteger, nullable=True))
-    engine_type: str = Field(max_length=64)
-    origin: Optional[int] = Field(
-        sa_column=Column(Integer, nullable=False, default=0))  # 0: default, 1: mcp, 2: assistant
-    brief_generate: bool = Field(default=False)
-    recommended_question_answer: str = Field(sa_column=Column(Text, nullable=True))
-    recommended_question: str = Field(sa_column=Column(Text, nullable=True))
-    recommended_generate: bool = Field(default=False)
-
-
-class ChatRecord(SQLModel, table=True):
-    __tablename__ = "chat_record"
-    id: Optional[int] = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
-    chat_id: int = Field(sa_column=Column(BigInteger, nullable=False))
-    ai_modal_id: Optional[int] = Field(sa_column=Column(BigInteger))
-    first_chat: bool = Field(sa_column=Column(Boolean, nullable=True, default=False))
-    create_time: datetime = Field(sa_column=Column(DateTime(timezone=False), nullable=True))
-    finish_time: datetime = Field(sa_column=Column(DateTime(timezone=False), nullable=True))
-    create_by: int = Field(sa_column=Column(BigInteger, nullable=True))
-    dataset_id: Optional[int] = Field(default=None, sa_column=Column(BigInteger, nullable=True))
-    datasource: int = Field(sa_column=Column(BigInteger, nullable=True))
-    engine_type: str = Field(max_length=64, nullable=True)
-    question: str = Field(sa_column=Column(Text, nullable=True))
-    sql_answer: str = Field(sa_column=Column(Text, nullable=True))
-    sql: str = Field(sa_column=Column(Text, nullable=True))
-    sql_exec_result: str = Field(sa_column=Column(Text, nullable=True))
-    data: str = Field(sa_column=Column(Text, nullable=True))
-    chart_answer: str = Field(sa_column=Column(Text, nullable=True))
-    chart: str = Field(sa_column=Column(Text, nullable=True))
-    analysis: str = Field(sa_column=Column(Text, nullable=True))
-    predict: str = Field(sa_column=Column(Text, nullable=True))
-    predict_data: str = Field(sa_column=Column(Text, nullable=True))
-    recommended_question_answer: str = Field(sa_column=Column(Text, nullable=True))
-    recommended_question: str = Field(sa_column=Column(Text, nullable=True))
-    datasource_select_answer: str = Field(sa_column=Column(Text, nullable=True))
-    finish: bool = Field(sa_column=Column(Boolean, nullable=True, default=False))
-    status: str | None = Field(default=None, max_length=32, nullable=True)
-    trace_id: str | None = Field(default=None, max_length=64, nullable=True)
-    # 新记录默认进入 Graph；Agent 入口会显式覆盖为 agent。
-    execution_type: str = Field(default="graph", max_length=32, nullable=False)
-    error: str = Field(sa_column=Column(Text, nullable=True))
-    analysis_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
-    predict_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
-    regenerate_record_id: int = Field(sa_column=Column(BigInteger, nullable=True))
 
 
 class ChatRecordResult(BaseModel):
@@ -173,39 +84,6 @@ class ChatRecordResult(BaseModel):
     predict_reasoning_content: Optional[str] = None
     duration: Optional[float] = None  # 耗时字段（单位：秒）
     total_tokens: Optional[int] = None  # token总消耗
-
-
-class CreateChat(BaseModel):
-    id: int = None
-    question: str = None
-    dataset_id: Optional[int] = None
-    datasource: int = None
-    origin: Optional[int] = 0  # 0是页面上，mcp是1，小助手是2
-
-
-class RenameChat(BaseModel):
-    id: int = None
-    brief: str = ''
-    brief_generate: bool = True
-
-
-class ChatInfo(BaseModel):
-    id: Optional[int] = None
-    create_time: datetime = None
-    create_by: int = None
-    brief: str = ''
-    chat_type: str = "chat"
-    dataset_id: Optional[int] = None
-    dataset_name: str = ''
-    dataset_exists: bool = True
-    datasource: Optional[int] = None
-    engine_type: str = ''
-    ds_type: str = ''
-    datasource_name: str = ''
-    datasource_exists: bool = True
-    recommended_question: Optional[str] = None
-    recommended_generate: Optional[bool] = False
-    records: List[ChatRecord | dict] = []
 
 
 class ChatLogHistoryItem(BaseModel):

@@ -24,6 +24,8 @@ backend/tests/*
 !backend/tests/assistant/**
 !backend/tests/capabilities/
 !backend/tests/capabilities/**
+!backend/tests/chatbi/
+!backend/tests/chatbi/**
 !backend/tests/datasource/
 !backend/tests/datasource/**
 !backend/tests/knowledge/

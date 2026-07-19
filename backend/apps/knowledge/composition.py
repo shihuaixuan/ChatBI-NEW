@@ -1,33 +1,20 @@
 from sqlmodel import Session
 
-from apps.datasource.composition import (
-    build_datasource_recommendation_config_store,
+from apps.knowledge.recommended import (
+    build_recommended_problem_service as build_recommended_problem_service,
 )
 from apps.knowledge.repository.reference_catalog import (
     PublicSQLExampleReferenceCatalog,
 )
 from apps.knowledge.repository.sqlmodel import (
-    SQLModelRecommendedProblemRepository,
     SQLModelSQLExampleRepository,
 )
 from apps.knowledge.services import (
-    RecommendedProblemService,
     SQLExampleQueryService,
     SQLExampleService,
 )
 from apps.retrieval.sql_example_indexing import SQLExampleIndexCoordinator
 from apps.retrieval.sql_example_query import SQLExampleRetriever
-
-
-def build_recommended_problem_service(
-    session: Session,
-) -> RecommendedProblemService:
-    """装配推荐问题 Service 与共享事务所需的数据源配置端口。"""
-
-    datasource_config_store = build_datasource_recommendation_config_store(session)
-    return RecommendedProblemService(
-        SQLModelRecommendedProblemRepository(session, datasource_config_store)
-    )
 
 
 def build_sql_example_service(session: Session) -> SQLExampleService:
