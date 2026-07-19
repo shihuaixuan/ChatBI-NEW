@@ -1191,7 +1191,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 **实施状态：进行中**
 
 截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛、第三批会话记录状态与结果投影统一、
-第四批语义 SQL 编译入口收敛、第五批语义检索与物理 Schema 查询收敛，以及第六批执行绑定规则统一：
+第四批语义 SQL 编译入口收敛、第五批语义检索与物理 Schema 查询收敛、第六批执行绑定规则统一，以及第七批
+问题理解确定性校验规则收敛：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1263,6 +1264,16 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     保持 `CHAT_NOT_FOUND` 和 `CHAT_DATASET_MISMATCH` HTTP 契约不变，没有新增 Workflow Engine 业务依赖基线。
 30. 第六批 Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 447 项通过，完整后端回归 871 项通过；新增
     服务和 DTO 通过 Ruff 与严格 Mypy，`git diff --check` 通过。
+31. ChatBI 新增 `QuestionUnderstandingValidationService` 和稳定校验 DTO，统一表达重写上下文缺失、未知意图、
+    指标缺失、意图冲突、时间范围不支持、主题域歧义、维度角色歧义、筛选值缺失以及普通维度误用时间值等规则；
+    校验结果与 Agent、Graph 的展示和节点契约解耦，各执行器只负责投影既有输出结构。
+32. Agent 的问题理解和澄清恢复已改为调用统一校验服务，原 `_validate` 重复规则已删除；问题重写、意图识别和
+    维度识别仍保持严格模型输出，不增加静默降级，澄清后只重新执行无模型副作用的统一校验。
+33. Graph `IntentPostProcessor` 和维度子任务重试已调用同一校验服务，主题域与维度槽位继续投影为原有
+    `slot_issues`，时间表达误入普通维度仍按原契约触发模型重试；Graph 的分类、重写、意图识别节点和路由顺序
+    保持不变。时间表达识别与归一化的权威实现迁入 ChatBI，旧 Capabilities 和 Graph 路径只保留兼容导出。
+34. 第七批 Agent、Graph、ChatBI、Workflow、Workflow Engine 和架构组合回归 434 项通过，完整后端回归
+    878 项通过；新增和修改代码通过定向 Ruff 与严格 Mypy，`git diff --check` 通过，OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1275,10 +1286,12 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 2. 迁移 Chat、ChatRecord 和 ChatLog，并拆分 ORM 与 DTO。核心 ORM 和创建、重命名、会话信息 DTO 已迁移，
    历史记录、日志响应及旧 LLM 请求 DTO 待后续批次继续拆分。
 3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。检索、SQL 语义
-   编译、SQL 校验、权限应用和执行已统一，问题理解和回答待后续批次收敛。
+   编译、SQL 校验、权限应用和执行已统一；问题理解的确定性校验规则已统一，模型调用编排和回答待后续批次收敛。
 4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。SQL 校验和执行工具
-   已完成，语义 SQL 编译、物理 Schema、Semantic 检索和执行绑定已接入统一入口；问题理解和回答工具待后续迁移。
-5. Graph Adapter 改为调用相同 Service。Semantic 检索、SQL 编译和执行 Adapter 已完成，其余 Adapter 待后续迁移。
+   已完成，语义 SQL 编译、物理 Schema、Semantic 检索、执行绑定和问题理解校验已接入统一入口；问题理解模型编排
+   和回答工具待后续迁移。
+5. Graph Adapter 改为调用相同 Service。问题理解校验、Semantic 检索、SQL 编译和执行 Adapter 已完成，其余
+   Adapter 待后续迁移。
 6. 旧 `chat/task/llm.py` 调整为兼容入口或直接删除，不能继续维护独立业务逻辑。
 7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期、所有权、Agent 与 Graph 的
    记录状态、澄清等待状态及最终结果投影已统一；执行器内部 Run 状态继续保持各自语义。

@@ -910,32 +910,6 @@ def _dimension_candidate_by_text(
     return by_text
 
 
-def _is_time_expression(value: Any) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return False
-    normalized = _dimension_text_key(text)
-    time_keywords = {
-        "今天",
-        "今日",
-        "昨日",
-        "昨天",
-        "本周",
-        "上周",
-        "本月",
-        "上月",
-        "最近7天",
-        "近7天",
-        "近30天",
-        "最近30天",
-        "去年同期",
-        "按天",
-        "按周",
-        "按月",
-    }
-    return normalized in time_keywords
-
-
 class DefaultQuestionClassificationModelClient:
     """默认问题分类模型客户端，复用项目已有 LLM 配置。"""
 
@@ -1374,6 +1348,15 @@ class QuestionAdapter:
         available_dimensions: list[dict[str, Any]],
     ) -> dict[str, Any]:
         normalized = self._normalize_dimension_slots_payload(payload, available_dimensions)
+        shared_validation = self._intent_post_processor.validate(normalized)
+        if shared_validation["status"] == "invalid":
+            return {
+                "status": "invalid",
+                "retryable": bool(shared_validation["retryable"]),
+                "reason_code": shared_validation["reason_code"],
+                "repair_hint": shared_validation["repair_hint"],
+                "payload": normalized,
+            }
         violation = self._first_dimension_slot_violation(normalized, available_dimensions)
         if violation is None:
             return {"status": "valid", "retryable": False, "reason_code": "VALID", "repair_hint": None, "payload": normalized}
@@ -1479,11 +1462,6 @@ class QuestionAdapter:
             if not isinstance(slot, dict):
                 continue
             value = slot.get("value")
-            if str(slot.get("value_status") or "").lower() == "provided" and _is_time_expression(value):
-                return {
-                    "reason_code": "DIMENSION_VALUE_IS_TIME_EXPRESSION",
-                    "repair_hint": "普通维度值不能是时间表达，请把时间表达放入 time_mentions/time_range。",
-                }
             candidate = candidate_by_name.get(str(slot.get("name") or ""))
             if candidate is None:
                 continue

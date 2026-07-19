@@ -20,6 +20,11 @@ from apps.chatbi.models.dto.physical_schema import (
     PhysicalSchemaResult,
     PhysicalSchemaTable,
 )
+from apps.chatbi.models.dto.question_understanding import (
+    QuestionUnderstandingValidationData,
+    QuestionUnderstandingValidationIssue,
+    QuestionUnderstandingValidationResult,
+)
 from apps.chatbi.models.dto.semantic_query import (
     SemanticQueryCompileData,
     SemanticQueryCompileResult,
@@ -41,6 +46,9 @@ __all__ = [
     "PhysicalSchemaField",
     "PhysicalSchemaResult",
     "PhysicalSchemaTable",
+    "QuestionUnderstandingValidationData",
+    "QuestionUnderstandingValidationIssue",
+    "QuestionUnderstandingValidationResult",
     "RenameChat",
     "SemanticRetrievalData",
     "SemanticQueryCompileData",

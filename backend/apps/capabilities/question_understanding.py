@@ -7,10 +7,17 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeVar
 
 import orjson
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from apps.capabilities.time_slots import normalize_time_range_payload
+from apps.chatbi.models.dto.question_understanding import (
+    QuestionUnderstandingValidationData,
+)
+from apps.chatbi.services.question_understanding_validation_service import (
+    QuestionUnderstandingValidationService,
+)
+from apps.chatbi.services.time_range import normalize_time_range_payload
 
 
 class QuestionUnderstandingError(RuntimeError):
@@ -163,7 +170,7 @@ class DefaultQuestionUnderstandingModelClient:
     """默认问题理解模型客户端，按需加载系统默认模型。"""
 
     def __init__(self) -> None:
-        self._llm = None
+        self._llm: BaseChatModel | None = None
 
     def invoke(self, system_prompt: str, user_prompt: str) -> QuestionUnderstandingModelResponse:
         response = self._get_llm().invoke(
@@ -177,7 +184,7 @@ class DefaultQuestionUnderstandingModelClient:
             usage_metadata=dict(getattr(response, "usage_metadata", None) or {}),
         )
 
-    def _get_llm(self):
+    def _get_llm(self) -> BaseChatModel:
         if self._llm is None:
             from apps.ai_model.model_factory import LLMFactory, get_default_config
 
@@ -306,8 +313,13 @@ DIMENSION_SYSTEM_PROMPT = """
 class QuestionUnderstandingService:
     """严格执行重写、意图识别和确定性校验，不提供静默降级。"""
 
-    def __init__(self, model_client: QuestionUnderstandingModelClient | None = None) -> None:
+    def __init__(
+        self,
+        model_client: QuestionUnderstandingModelClient | None = None,
+        validation_service: QuestionUnderstandingValidationService | None = None,
+    ) -> None:
         self._model_client = model_client or DefaultQuestionUnderstandingModelClient()
+        self._validation_service = validation_service or QuestionUnderstandingValidationService()
 
     def understand(
         self,
@@ -371,7 +383,7 @@ class QuestionUnderstandingService:
                 ),
             }
         )
-        validation = self._validate(rewrite, intent)
+        validation = _validate_understanding(self._validation_service, rewrite, intent)
         output = QuestionUnderstandingOutput(
             original_question=question,
             message_type=rewrite.message_type,
@@ -388,66 +400,6 @@ class QuestionUnderstandingService:
                 dimension_response.usage_metadata,
             ),
         )
-
-    @staticmethod
-    def _validate(
-        rewrite: QuestionRewriteOutput,
-        intent: IntentRecognitionOutput,
-    ) -> IntentValidationOutput:
-        reason_codes: list[str] = []
-        clarification_slots: list[str] = []
-
-        if rewrite.need_user_input:
-            reason_codes.append("rewrite_context_incomplete")
-            clarification_slots.extend(rewrite.missing_slots)
-        if intent.intent_type == "unknown":
-            reason_codes.append("intent_unknown")
-            clarification_slots.append("intent")
-        if intent.intent_type != "detail_query" and not intent.metric_mentions:
-            reason_codes.append("metric_missing")
-            clarification_slots.append("metric")
-        if intent.conflict_slots:
-            reason_codes.append("intent_conflict")
-            clarification_slots.extend(intent.conflict_slots)
-        if intent.time_range.value_status == "provided":
-            normalized_time = intent.time_range.normalized or {}
-            if not normalized_time or normalized_time.get("kind") == "unsupported":
-                reason_codes.append("time_range_unsupported")
-                clarification_slots.append("time_range")
-        ambiguous_dimension_names = {
-            slot.name
-            for slot in intent.dimension_slots
-            if slot.role == "ambiguous"
-        }
-        if intent.ambiguous_slots:
-            reason_codes.append("intent_ambiguous")
-            clarification_slots.extend(
-                slot_name
-                for slot_name in intent.ambiguous_slots
-                if slot_name not in ambiguous_dimension_names
-            )
-        for slot in intent.dimension_slots:
-            if slot.role == "ambiguous":
-                reason_codes.append("dimension_role_ambiguous")
-                clarification_slots.append("dimension")
-            if slot.role == "filter" and slot.value_status == "ambiguous":
-                reason_codes.append("dimension_value_ambiguous")
-                clarification_slots.append("filter_value")
-            if slot.role == "filter" and (
-                slot.value_status != "provided"
-                or slot.value is None
-                or (isinstance(slot.value, str) and not slot.value.strip())
-            ):
-                # 筛选维度没有值时不可执行，不能让错误意图继续污染语义资产检索。
-                reason_codes.append("dimension_filter_value_missing")
-                clarification_slots.append("filter_value")
-
-        return IntentValidationOutput(
-            status="clarification_required" if reason_codes else "valid",
-            reason_codes=_unique_strings(reason_codes),
-            clarification_slots=_unique_strings(clarification_slots),
-        )
-
 
 def apply_question_understanding_clarification(
     *,
@@ -525,8 +477,38 @@ def apply_question_understanding_clarification(
         inherited_context=previous.inherited_context,
         confidence=1.0,
     )
-    validation = QuestionUnderstandingService._validate(rewrite, updated_intent)
+    validation = _validate_understanding(
+        QuestionUnderstandingValidationService(),
+        rewrite,
+        updated_intent,
+    )
     return previous.model_copy(update={"intent": updated_intent, "validation": validation})
+
+
+def _validate_understanding(
+    service: QuestionUnderstandingValidationService,
+    rewrite: QuestionRewriteOutput,
+    intent: IntentRecognitionOutput,
+) -> IntentValidationOutput:
+    result = service.validate(
+        QuestionUnderstandingValidationData(
+            rewrite_need_user_input=rewrite.need_user_input,
+            rewrite_missing_slots=tuple(rewrite.missing_slots),
+            intent_type=intent.intent_type,
+            metric_mentions=tuple(intent.metric_mentions),
+            dimension_slots=tuple(
+                slot.model_dump(mode="json") for slot in intent.dimension_slots
+            ),
+            time_range=intent.time_range.model_dump(mode="json"),
+            ambiguous_slots=tuple(intent.ambiguous_slots),
+            conflict_slots=tuple(intent.conflict_slots),
+        )
+    )
+    return IntentValidationOutput(
+        status="clarification_required" if result.issues else "valid",
+        reason_codes=result.reason_codes,
+        clarification_slots=result.clarification_slots,
+    )
 
 
 def _single_clarification_selection(answer: dict[str, Any]) -> str:

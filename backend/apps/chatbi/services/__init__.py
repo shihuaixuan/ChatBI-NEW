@@ -26,6 +26,9 @@ from apps.chatbi.services.physical_schema_service import (
     PhysicalSchemaService,
 )
 from apps.chatbi.services.query_service import QueryService, SQLExecutor
+from apps.chatbi.services.question_understanding_validation_service import (
+    QuestionUnderstandingValidationService,
+)
 from apps.chatbi.services.semantic_query_service import (
     SemanticCompilationGateway,
     SemanticQueryCompileError,
@@ -60,6 +63,7 @@ __all__ = [
     "PermissionPolicyProvider",
     "PhysicalSchemaService",
     "QueryService",
+    "QuestionUnderstandingValidationService",
     "RecommendedQuestionProvider",
     "SQLExecutor",
     "SQLPermissionService",
