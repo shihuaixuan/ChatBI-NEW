@@ -7,6 +7,7 @@ from apps.semantic.models.dto.dataset_index import (
     DatasetIndexRebuildResult,
     DatasetIndexVersion,
 )
+from apps.semantic.models.dto.dataset_reference import SemanticDatasetReference
 from apps.semantic.models.dto.dataset_schema import (
     DatasetModelConfig,
     DatasetSchema,
@@ -69,6 +70,7 @@ __all__ = [
     "SchemaMapRequest",
     "SemanticBaseDTO",
     "SemanticColumnMeta",
+    "SemanticDatasetReference",
     "SemanticTableMeta",
     "TermPayload",
     "TermSearchResult",

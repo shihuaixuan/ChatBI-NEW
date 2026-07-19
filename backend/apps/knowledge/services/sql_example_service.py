@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from apps.knowledge.errors import (
     SQLExampleDuplicateError,
@@ -14,6 +15,7 @@ from apps.knowledge.models.dto import (
     SQLExampleRecord,
     SQLExampleResult,
     SQLExampleSourceSnapshot,
+    SQLExampleVerificationStatus,
 )
 from apps.knowledge.repository import (
     SQLExampleIndexGateway,
@@ -195,10 +197,16 @@ class SQLExampleService:
         description = (request.description or "").strip()
         if not description:
             raise SQLExampleError("i18n_data_training.description_cannot_be_empty")
-        if request.datasource is None and request.advanced_application is None:
-            raise SQLExampleError(
-                "i18n_data_training.datasource_assistant_cannot_be_none"
+        if all(
+            value is None
+            for value in (
+                request.datasource,
+                request.advanced_application,
+                request.dataset_id,
             )
+        ):
+            raise SQLExampleError("i18n_data_training.reference_cannot_be_none")
+        linked_assets = self._validated_references(workspace_id, request)
         return SQLExampleRecord(
             id=example_id,
             oid=workspace_id,
@@ -208,11 +216,84 @@ class SQLExampleService:
             description=description,
             example_type=request.example_type or "QUESTION_EXAMPLE",
             sql=request.sql,
-            linked_assets=request.linked_assets or [],
+            linked_assets=linked_assets,
             dataset_id=request.dataset_id,
             enabled=request.enabled if request.enabled is not None else True,
             advanced_application=request.advanced_application,
+            verification_status=SQLExampleVerificationStatus.VERIFIED,
         )
+
+    def _validated_references(
+        self,
+        workspace_id: int,
+        request: SQLExampleInput,
+    ) -> list[dict[str, Any]]:
+        """统一校验数据源、助手、数据集及数据集内的关联资产。"""
+
+        if request.datasource is not None:
+            datasource_names = self._reference_catalog.datasource_names(
+                workspace_id,
+                [request.datasource],
+            )
+            if request.datasource not in datasource_names:
+                raise SQLExampleError(
+                    "i18n_data_training.datasource_not_found",
+                    request.datasource,
+                )
+        if request.advanced_application is not None:
+            assistant_names = self._reference_catalog.assistant_names(
+                workspace_id,
+                [request.advanced_application],
+            )
+            if request.advanced_application not in assistant_names:
+                raise SQLExampleError(
+                    "i18n_data_training.advanced_application_not_found",
+                    request.advanced_application,
+                )
+
+        assets_by_key = {
+            (asset.asset_type, asset.asset_id): asset
+            for asset in request.linked_assets or []
+        }
+        linked_assets = list(assets_by_key.values())
+        if request.dataset_id is None:
+            if linked_assets:
+                raise SQLExampleError(
+                    "i18n_data_training.linked_assets_require_dataset"
+                )
+            return []
+
+        dataset_scope = self._reference_catalog.dataset_scope(
+            workspace_id,
+            request.dataset_id,
+        )
+        if dataset_scope is None:
+            raise SQLExampleError(
+                "i18n_data_training.dataset_not_found",
+                request.dataset_id,
+            )
+        if (
+            request.datasource is not None
+            and request.datasource not in dataset_scope.datasource_ids
+        ):
+            raise SQLExampleError(
+                "i18n_data_training.dataset_datasource_mismatch",
+                request.dataset_id,
+                request.datasource,
+            )
+
+        valid_asset_ids = {
+            "METRIC": set(dataset_scope.metric_ids),
+            "DIMENSION": set(dataset_scope.dimension_ids),
+        }
+        for asset in linked_assets:
+            if asset.asset_id not in valid_asset_ids[asset.asset_type]:
+                raise SQLExampleError(
+                    "i18n_data_training.linked_asset_not_found",
+                    asset.asset_type,
+                    asset.asset_id,
+                )
+        return [asset.model_dump(mode="json") for asset in linked_assets]
 
     def _ensure_not_duplicate(
         self,
@@ -270,6 +351,7 @@ class SQLExampleService:
                 linked_assets=item.linked_assets,
                 dataset_id=item.dataset_id,
                 enabled=item.enabled,
+                verification_status=item.verification_status,
                 advanced_application=(
                     str(item.advanced_application)
                     if item.advanced_application is not None
@@ -322,26 +404,6 @@ class SQLExampleService:
                 "advanced_application": assistant_id,
             }
         )
-        if datasource_id is None and assistant_id is None:
-            errors.append(
-                SQLExampleErrorDetail(
-                    message_key=(
-                        "i18n_data_training.datasource_assistant_cannot_be_none"
-                    )
-                )
-            )
-        if not (request.question or "").strip():
-            errors.append(
-                SQLExampleErrorDetail(
-                    message_key="i18n_data_training.question_cannot_be_empty"
-                )
-            )
-        if not (request.description or "").strip():
-            errors.append(
-                SQLExampleErrorDetail(
-                    message_key="i18n_data_training.description_cannot_be_empty"
-                )
-            )
         return normalized, errors
 
     @staticmethod

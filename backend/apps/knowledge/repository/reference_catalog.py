@@ -2,6 +2,8 @@ from sqlmodel import Session
 
 from apps.assistant.public import list_assistant_references
 from apps.datasource import build_datasource_catalog
+from apps.knowledge.models.dto import SQLExampleDatasetScope
+from apps.semantic.composition import build_semantic_dataset_reference_service
 
 
 class PublicSQLExampleReferenceCatalog:
@@ -9,6 +11,7 @@ class PublicSQLExampleReferenceCatalog:
 
     def __init__(self, session: Session) -> None:
         self._datasource_catalog = build_datasource_catalog(session)
+        self._semantic_catalog = build_semantic_dataset_reference_service(session)
 
     def datasource_names(
         self,
@@ -36,3 +39,18 @@ class PublicSQLExampleReferenceCatalog:
                 assistant_type=1,
             )
         }
+
+    def dataset_scope(
+        self,
+        workspace_id: int,
+        dataset_id: int,
+    ) -> SQLExampleDatasetScope | None:
+        reference = self._semantic_catalog.get(workspace_id, dataset_id)
+        if reference is None:
+            return None
+        return SQLExampleDatasetScope(
+            dataset_id=reference.dataset_id,
+            datasource_ids=reference.datasource_ids,
+            metric_ids=reference.metric_ids,
+            dimension_ids=reference.dimension_ids,
+        )

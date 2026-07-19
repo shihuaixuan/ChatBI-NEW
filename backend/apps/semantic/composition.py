@@ -10,6 +10,9 @@ from apps.semantic.repository.sqlmodel.domain_repository import (
 )
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
 from apps.semantic.repository.sqlmodel.term_repository import SqlModelTermRepository
+from apps.semantic.services.dataset_reference_service import (
+    SemanticDatasetReferenceService,
+)
 from apps.semantic.services.schema_service import SemanticSchemaService
 from apps.semantic.services.term_compatibility_service import (
     LegacyTerminologyCompatibilityService,
@@ -25,6 +28,16 @@ def build_semantic_term_query_service(
     """为跨领域调用方装配只读术语查询服务。"""
 
     return SemanticTermQueryService(
+        SemanticSchemaService(SemanticSchemaLoader(session))
+    )
+
+
+def build_semantic_dataset_reference_service(
+    session: Session,
+) -> SemanticDatasetReferenceService:
+    """为跨领域引用校验装配数据集只读目录。"""
+
+    return SemanticDatasetReferenceService(
         SemanticSchemaService(SemanticSchemaLoader(session))
     )
 
@@ -57,6 +70,7 @@ def build_semantic_term_excel_service(
 
 
 __all__ = [
+    "build_semantic_dataset_reference_service",
     "build_legacy_terminology_compatibility_service",
     "build_semantic_term_query_service",
     "build_semantic_term_excel_service",

@@ -59,6 +59,7 @@ backend/alembic/versions/*
 !backend/alembic/versions/091_access_api_key_constraints.py
 !backend/alembic/versions/092_assistant_constraints.py
 !backend/alembic/versions/093_access_policy_constraints.py
+!backend/alembic/versions/094_sql_example_verification.py
 .codex_run_logs
 .idea
 data/sqlbot

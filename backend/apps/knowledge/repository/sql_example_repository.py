@@ -1,6 +1,7 @@
 from typing import Protocol
 
 from apps.knowledge.models.dto import (
+    SQLExampleDatasetScope,
     SQLExampleIndexEnqueueResult,
     SQLExampleMatch,
     SQLExampleRecord,
@@ -58,11 +59,15 @@ class SQLExampleRepository(Protocol):
         assistant_id: int | None,
     ) -> list[int]: ...
 
-    def get_matches(self, example_ids: list[int]) -> list[SQLExampleMatch]: ...
+    def get_matches(
+        self,
+        workspace_id: int,
+        example_ids: list[int],
+    ) -> list[SQLExampleMatch]: ...
 
 
 class SQLExampleReferenceCatalog(Protocol):
-    """SQL 示例展示和导入使用的跨领域名称目录。"""
+    """SQL 示例展示和引用校验使用的跨领域公开目录。"""
 
     def datasource_names(
         self,
@@ -75,6 +80,12 @@ class SQLExampleReferenceCatalog(Protocol):
         workspace_id: int,
         assistant_ids: list[int] | None = None,
     ) -> dict[int, str]: ...
+
+    def dataset_scope(
+        self,
+        workspace_id: int,
+        dataset_id: int,
+    ) -> SQLExampleDatasetScope | None: ...
 
 
 class SQLExampleRetrievalSearch(Protocol):

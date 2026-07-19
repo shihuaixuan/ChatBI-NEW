@@ -4,14 +4,17 @@ import pytest
 
 from apps.knowledge.errors import (
     SQLExampleDuplicateError,
+    SQLExampleError,
     SQLExampleNotFoundError,
 )
 from apps.knowledge.models.dto import (
+    SQLExampleDatasetScope,
     SQLExampleIndexEnqueueResult,
     SQLExampleInput,
     SQLExampleMatch,
     SQLExampleRecord,
     SQLExampleSourceSnapshot,
+    SQLExampleVerificationStatus,
 )
 from apps.knowledge.services import SQLExampleService
 
@@ -103,12 +106,26 @@ class RecordingSQLExampleRepository:
         _ = workspace_id, question, datasource_id, assistant_id
         return []
 
-    def get_matches(self, example_ids: list[int]) -> list[SQLExampleMatch]:
-        _ = example_ids
+    def get_matches(
+        self,
+        workspace_id: int,
+        example_ids: list[int],
+    ) -> list[SQLExampleMatch]:
+        _ = workspace_id, example_ids
         return []
 
 
 class FakeReferenceCatalog:
+    def __init__(self) -> None:
+        self.dataset_scopes = {
+            30: SQLExampleDatasetScope(
+                dataset_id=30,
+                datasource_ids=(8,),
+                metric_ids=(100,),
+                dimension_ids=(200,),
+            )
+        }
+
     def datasource_names(
         self,
         workspace_id: int,
@@ -130,6 +147,14 @@ class FakeReferenceCatalog:
         if assistant_ids is None:
             return values
         return {key: values[key] for key in assistant_ids if key in values}
+
+    def dataset_scope(
+        self,
+        workspace_id: int,
+        dataset_id: int,
+    ) -> SQLExampleDatasetScope | None:
+        _ = workspace_id
+        return self.dataset_scopes.get(dataset_id)
 
 
 class RecordingIndexGateway:
@@ -193,9 +218,102 @@ def test_create_normalizes_content_and_owns_workspace_fields():
     assert created.question == "本月销售额"
     assert created.description == "SELECT SUM(amount) FROM orders"
     assert created.create_time is not None
+    assert created.verification_status == SQLExampleVerificationStatus.VERIFIED
     assert [item.id for item in index_gateway.snapshots[0].examples] == [100]
     assert index_gateway.submissions == [(11,)]
     assert repository.commit_count == 1
+
+
+def test_create_normalizes_and_validates_dataset_linked_assets():
+    repository = RecordingSQLExampleRepository()
+    service = _service(repository)
+
+    service.create(
+        3,
+        SQLExampleInput(
+            question="本月销售额",
+            description="SELECT 1",
+            datasource=8,
+            dataset_id=30,
+            linked_assets=[
+                {"type": "metric", "id": 100},
+                {"assetType": "METRIC", "assetId": 100},
+                {"asset_type": "DIMENSION", "asset_id": 200},
+            ],
+        ),
+    )
+
+    created = repository.created[0]
+    assert created.linked_assets == [
+        {"asset_type": "METRIC", "asset_id": 100},
+        {"asset_type": "DIMENSION", "asset_id": 200},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("payload", "message_key"),
+    [
+        (
+            SQLExampleInput(
+                question="销售额",
+                description="SELECT 1",
+                datasource=99,
+            ),
+            "i18n_data_training.datasource_not_found",
+        ),
+        (
+            SQLExampleInput(
+                question="销售额",
+                description="SELECT 1",
+                advanced_application=99,
+            ),
+            "i18n_data_training.advanced_application_not_found",
+        ),
+        (
+            SQLExampleInput(
+                question="销售额",
+                description="SELECT 1",
+                dataset_id=99,
+            ),
+            "i18n_data_training.dataset_not_found",
+        ),
+        (
+            SQLExampleInput(
+                question="销售额",
+                description="SELECT 1",
+                datasource=9,
+                dataset_id=30,
+            ),
+            "i18n_data_training.dataset_datasource_mismatch",
+        ),
+        (
+            SQLExampleInput(
+                question="销售额",
+                description="SELECT 1",
+                datasource=8,
+                linked_assets=[{"asset_type": "METRIC", "asset_id": 100}],
+            ),
+            "i18n_data_training.linked_assets_require_dataset",
+        ),
+        (
+            SQLExampleInput(
+                question="销售额",
+                description="SELECT 1",
+                dataset_id=30,
+                linked_assets=[{"asset_type": "METRIC", "asset_id": 999}],
+            ),
+            "i18n_data_training.linked_asset_not_found",
+        ),
+    ],
+)
+def test_create_rejects_invalid_cross_domain_references(payload, message_key):
+    repository = RecordingSQLExampleRepository()
+
+    with pytest.raises(SQLExampleError) as exc_info:
+        _service(repository).create(3, payload)
+
+    assert exc_info.value.message_key == message_key
+    assert repository.created == []
 
 
 def test_duplicate_is_rejected_before_create_and_index():

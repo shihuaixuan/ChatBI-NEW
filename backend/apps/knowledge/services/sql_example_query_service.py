@@ -45,7 +45,10 @@ class SQLExampleQueryService:
                 )
             )
         unique_ids = list(dict.fromkeys(example_ids))
-        return [item.to_legacy_dict() for item in self._repository.get_matches(unique_ids)]
+        return [
+            item.to_legacy_dict()
+            for item in self._repository.get_matches(workspace_id, unique_ids)
+        ]
 
     def build_prompt(
         self,

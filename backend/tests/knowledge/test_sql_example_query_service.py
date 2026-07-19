@@ -19,7 +19,12 @@ class QueryRepository:
         self.search_calls += 1
         return list(self.lexical_ids)
 
-    def get_matches(self, example_ids: list[int]) -> list[SQLExampleMatch]:
+    def get_matches(
+        self,
+        workspace_id: int,
+        example_ids: list[int],
+    ) -> list[SQLExampleMatch]:
+        assert workspace_id == 3
         return [
             SQLExampleMatch(
                 id=example_id,

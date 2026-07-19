@@ -8,7 +8,11 @@ from datetime import timedelta
 import pytest
 from sqlmodel import Session, col, select
 
-from apps.knowledge.models.dto import SQLExampleRecord, SQLExampleSourceSnapshot
+from apps.knowledge.models.dto import (
+    SQLExampleRecord,
+    SQLExampleSourceSnapshot,
+    SQLExampleVerificationStatus,
+)
 from apps.retrieval.indexing import (
     IndexEmbeddingProfile,
     RetrievalIndexingService,
@@ -86,6 +90,7 @@ def _example(
         linked_assets=[{"asset_type": "METRIC", "asset_id": 100}],
         dataset_id=20,
         enabled=enabled,
+        verification_status=SQLExampleVerificationStatus.VERIFIED,
     )
 
 
@@ -138,6 +143,19 @@ def test_source_version_is_stable_for_same_enabled_snapshot():
 
     assert first.source_version == second.source_version
     assert [item.id for item in first.examples] == [101, 102]
+
+
+def test_unverified_example_is_excluded_from_retrieval_snapshot():
+    unverified = _example(103).model_copy(
+        update={
+            "linked_assets": [{"legacy_invalid": True}],
+            "verification_status": SQLExampleVerificationStatus.UNVERIFIED,
+        }
+    )
+
+    snapshot = _snapshot(_example(101), unverified)
+
+    assert [item.id for item in snapshot.examples] == [101]
 
 
 def test_full_snapshot_disables_missing_resource_and_activates_new_generation(

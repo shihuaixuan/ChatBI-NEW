@@ -1098,9 +1098,9 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 ### 6.5 阶段 P4：建立 Knowledge，并隔离 Retrieval 来源
 
-**实施状态：进行中**
+**实施状态：核心任务已完成**
 
-截至 2026-07-19，已完成五批推荐问题、SQL 示例资源迁移和 Retrieval 来源隔离：
+截至 2026-07-19，已完成六批推荐问题、SQL 示例资源迁移和 Retrieval 来源隔离：
 
 1. 已建立 Knowledge 的推荐问题 DTO、ORM、Repository、Service、API 和组装入口，推荐问题源数据只有一个
    权威写入实现。
@@ -1145,6 +1145,19 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 19. `apps.retrieval.models` 包和 `apps.retrieval.schemas` 文件只保留兼容转发，旧导入与新定义保持同一对象身份；
     新增架构守卫禁止 Retrieval 运行时代码重新使用兼容入口。第五批 Retrieval 和架构定向回归 105 项通过，
     完整后端回归 807 项通过；Retrieval 全目录通过 Ruff 和严格 Mypy。
+20. SQL 示例新增独立 `verification_status`，状态只允许 `UNVERIFIED` 和 `VERIFIED`；启停状态继续只表达是否
+    对外生效，不能代替内容与引用验证。Alembic `094_sql_example_verification` 会校验历史记录的必填内容、
+    工作空间引用和关联资产结构，满足条件的记录迁移为 `VERIFIED`，其余记录保留为 `UNVERIFIED`，避免把
+    无效历史数据静默纳入检索。
+21. Semantic 新增数据集引用公开 DTO 和只读 Service，向 Knowledge 返回数据集所属数据源、可用指标和维度 ID；
+    Knowledge 不导入 Semantic ORM 或具体仓储。数据源和高级应用仍分别通过 Datasource、Assistant 公开目录校验。
+22. 创建、更新和 Excel 批量导入已统一经过 SQL 示例引用校验入口：数据源和高级应用必须属于当前工作空间，
+    数据集必须有效，数据源与数据集范围必须一致，关联资产必须使用 `METRIC` 或 `DIMENSION` 且属于指定数据集。
+    历史 `type/id`、`assetType/assetId` 输入会在 DTO 边界统一转换为 `asset_type/asset_id`，重复引用只保留一份。
+23. Retrieval 完整快照、源表即时词法查询和最终命中读取均只接受已启用且 `VERIFIED` 的记录；最终命中再次使用
+    工作空间条件过滤，避免旧 generation、跨工作空间 ID 或未验证记录绕过 Knowledge 状态规则。
+24. 第六批 Knowledge、Semantic、Retrieval 和架构定向回归 268 项通过，完整后端回归 817 项通过；相关代码
+    通过 Ruff 和严格 Mypy，Alembic head 为 `094_sql_example_verification`，OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1155,10 +1168,10 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 1. 创建 `knowledge`，将 `data_training` 重命名并迁移为 SQL 示例资源。已完成源数据、维护 API 和查询入口
    迁移；只保留 XPack 所需的旧模型导入别名。
 2. 将 `DsRecommendedProblem` 迁入 Knowledge 的推荐问题资源。已完成，保留原表名兼容。
-3. 定义 SQL 示例状态、验证状态、适用数据集和关联资产规则。现有启停状态、`dataset_id` 和
-   `linked_assets` 已进入 Knowledge 契约，独立验证状态及完整关联资产校验尚待实施。
-4. 为 Semantic、Knowledge 和可选 Schema 定义独立 Retrieval Source Adapter。Semantic 和 Knowledge 已完成，
-   可选 Schema 来源待后续按实际检索需求接入。
+3. 定义 SQL 示例状态、验证状态、适用数据集和关联资产规则。已完成独立验证状态、历史数据兼容迁移、
+   数据源/高级应用/数据集范围校验、关联资产规范化及检索前状态过滤。
+4. 为 Semantic、Knowledge 和可选 Schema 定义独立 Retrieval Source Adapter。Semantic 和 Knowledge 已完成；
+   当前没有确认独立 Schema 检索来源需求，因此不创建无调用方的可选适配器。
 5. Retrieval 只读取公开资源快照，不导入对方 ORM 和具体仓储。Semantic 和 SQL 示例来源已完成。
 6. 内容变更后通过事件或索引端口提交重建请求。SQL 示例已接入 Retrieval durable job，并与源数据使用同一
    事务；旧向量读写链路已删除。

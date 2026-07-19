@@ -9,7 +9,11 @@ import httpx
 import pytest
 from sqlmodel import Session
 
-from apps.knowledge.models.dto import SQLExampleRecord, SQLExampleSourceSnapshot
+from apps.knowledge.models.dto import (
+    SQLExampleRecord,
+    SQLExampleSourceSnapshot,
+    SQLExampleVerificationStatus,
+)
 from apps.retrieval.errors import RetrievalProviderUnavailableError
 from apps.retrieval.indexing import IndexEmbeddingProfile, RetrievalIndexingService
 from apps.retrieval.models.dto import RetrievalChannel, RetrievalChannelStatus
@@ -113,6 +117,7 @@ def _example(
         question=question,
         description=f"SELECT {example_id}",
         enabled=enabled,
+        verification_status=SQLExampleVerificationStatus.VERIFIED,
     )
 
 

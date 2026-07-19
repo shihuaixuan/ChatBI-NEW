@@ -107,7 +107,12 @@
     "question_cannot_be_empty": "問題不能為空",
     "description_cannot_be_empty": "範例 SQL 不能為空",
     "datasource_not_found": "找不到數據源",
-    "advanced_application_not_found": "找不到高級應用"
+    "advanced_application_not_found": "找不到高級應用",
+    "reference_cannot_be_none": "數據源、高級應用或數據集不能都為空",
+    "dataset_not_found": "找不到數據集 {0}",
+    "dataset_datasource_mismatch": "數據集 {0} 不包含數據源 {1}",
+    "linked_assets_require_dataset": "關聯資產必須指定數據集",
+    "linked_asset_not_found": "數據集內找不到關聯資產 {0}:{1}"
   },
   "i18n_custom_prompt": {
     "exists_in_db": "模版名稱已存在",

@@ -2,7 +2,16 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import VECTOR  # type: ignore[import-untyped]
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, Identity, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Identity,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -53,6 +62,14 @@ class SQLExampleModel(SQLModel, table=True):
     enabled: bool | None = Field(
         default=True,
         sa_column=Column(Boolean, default=True),
+    )
+    verification_status: str = Field(
+        default="UNVERIFIED",
+        sa_column=Column(
+            String(32),
+            nullable=False,
+            server_default=text("'UNVERIFIED'"),
+        ),
     )
     advanced_application: int | None = Field(
         default=None,

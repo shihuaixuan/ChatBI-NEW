@@ -107,7 +107,12 @@
     "question_cannot_be_empty": "Question cannot be empty",
     "description_cannot_be_empty": "Sample SQL cannot be empty",
     "datasource_not_found": "Datasource not found",
-    "advanced_application_not_found": "Advanced application not found"
+    "advanced_application_not_found": "Advanced application not found",
+    "reference_cannot_be_none": "Datasource, advanced application, and dataset cannot all be empty",
+    "dataset_not_found": "Dataset {0} not found",
+    "dataset_datasource_mismatch": "Dataset {0} does not contain datasource {1}",
+    "linked_assets_require_dataset": "Linked assets require a dataset",
+    "linked_asset_not_found": "Linked asset {0}:{1} was not found in the dataset"
   },
   "i18n_custom_prompt": {
     "exists_in_db": "Template name already exists",

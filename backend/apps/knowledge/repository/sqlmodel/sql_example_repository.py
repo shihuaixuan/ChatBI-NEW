@@ -2,7 +2,11 @@ from sqlalchemy import delete, func, or_, text
 from sqlmodel import Session, col, select
 
 from apps.knowledge.errors import SQLExampleNotFoundError
-from apps.knowledge.models.dto import SQLExampleMatch, SQLExampleRecord
+from apps.knowledge.models.dto import (
+    SQLExampleMatch,
+    SQLExampleRecord,
+    SQLExampleVerificationStatus,
+)
 from apps.knowledge.models.orm import SQLExampleModel
 
 
@@ -118,6 +122,7 @@ class SQLModelSQLExampleRepository:
             "linked_assets",
             "dataset_id",
             "enabled",
+            "verification_status",
             "advanced_application",
         ):
             setattr(row, field, getattr(example, field))
@@ -175,6 +180,8 @@ class SQLModelSQLExampleRepository:
             ),
             col(SQLExampleModel.oid) == workspace_id,
             col(SQLExampleModel.enabled).is_(True),
+            col(SQLExampleModel.verification_status)
+            == SQLExampleVerificationStatus.VERIFIED.value,
         )
         if assistant_id is not None:
             statement = statement.where(
@@ -190,11 +197,21 @@ class SQLModelSQLExampleRepository:
         ).scalars().all()
         return [int(value) for value in rows]
 
-    def get_matches(self, example_ids: list[int]) -> list[SQLExampleMatch]:
+    def get_matches(
+        self,
+        workspace_id: int,
+        example_ids: list[int],
+    ) -> list[SQLExampleMatch]:
         if not example_ids:
             return []
         rows = self._session.exec(
-            select(SQLExampleModel).where(col(SQLExampleModel.id).in_(example_ids))
+            select(SQLExampleModel).where(
+                col(SQLExampleModel.id).in_(example_ids),
+                col(SQLExampleModel.oid) == workspace_id,
+                col(SQLExampleModel.enabled).is_(True),
+                col(SQLExampleModel.verification_status)
+                == SQLExampleVerificationStatus.VERIFIED.value,
+            )
         ).all()
         by_id = {row.id: row for row in rows if row.id is not None}
         return [

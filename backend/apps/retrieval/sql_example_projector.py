@@ -49,7 +49,9 @@ class SQLExampleSourceProjector:
             "datasource_id": example.datasource_id,
             "assistant_id": example.assistant_id,
             "dataset_id": example.dataset_id,
-            "linked_assets": list(example.linked_assets),
+            "linked_assets": [
+                asset.model_dump(mode="json") for asset in example.linked_assets
+            ],
         }
         contextual_text = (
             f"参考 SQL：\n{example.sql}"
