@@ -14,6 +14,9 @@ from apps.chatbi.workflow_gateway import (
     ChatRecord,
     ChatRecordCreateData,
     ChatRecordExecutionType,
+    ExecutionBindingData,
+    ExecutionBindingError,
+    ExecutionBindingService,
     build_chat_record_service,
     build_workflow_chat_record_gateway,
 )
@@ -201,9 +204,20 @@ class GraphApiService:
         chat = self._session.get(Chat, chat_id)
         if chat is None or chat.oid != current_user.oid or chat.create_by != current_user.id:
             raise HTTPException(status_code=404, detail="CHAT_NOT_FOUND")
-        if chat.dataset_id is None or int(chat.dataset_id) != dataset_id:
-            raise HTTPException(status_code=400, detail="CHAT_DATASET_MISMATCH")
-        return chat, dataset_id
+        try:
+            binding = ExecutionBindingService().resolve(
+                ExecutionBindingData(
+                    conversation_dataset_id=chat.dataset_id,
+                    conversation_datasource_id=chat.datasource,
+                    requested_dataset_id=dataset_id,
+                    require_dataset=True,
+                )
+            )
+        except ExecutionBindingError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if binding.dataset_id is None:
+            raise HTTPException(status_code=400, detail="CHAT_DATASET_REQUIRED")
+        return chat, binding.dataset_id
 
     def _build_conversation_context(
         self,

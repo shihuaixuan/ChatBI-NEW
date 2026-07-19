@@ -1191,7 +1191,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 **实施状态：进行中**
 
 截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛、第三批会话记录状态与结果投影统一、
-第四批语义 SQL 编译入口收敛，以及第五批语义检索与物理 Schema 查询收敛：
+第四批语义 SQL 编译入口收敛、第五批语义检索与物理 Schema 查询收敛，以及第六批执行绑定规则统一：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1253,6 +1253,16 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     基线同步减少 Agent 到 Datasource 内部模型和函数内导入两条历史违规。
 26. 第五批 Agent、Graph、ChatBI、Retrieval、Workflow 和架构组合回归 538 项通过，完整后端回归 861 项通过；新增
     服务和 DTO 通过 Ruff 与严格 Mypy，`git diff --check` 通过。
+27. ChatBI 新增 `ExecutionBindingService` 和稳定 DTO，统一根据会话绑定、请求数据集和请求数据源确定执行上下文；
+    数据集或数据源与会话不一致时分别返回 `CHAT_DATASET_MISMATCH`、`CHAT_DATASOURCE_MISMATCH`，必需绑定缺失时
+    返回明确错误，不再由不同执行器自行选择或覆盖。
+28. Agent 创建 ChatRecord 前先通过统一绑定服务校验，请求指定的数据源不能覆盖会话已有数据源；未绑定数据集的
+    会话仍可显式使用数据源执行非语义查询，但 Semantic 检索和编译不会再按数据源自动选择排序第一的数据集，避免
+    多数据集环境下绑定到错误口径。
+29. Graph 交互式会话的数据集边界也改为调用同一服务，并通过现有 ChatBI Workflow Gateway 暴露给通用引擎 API，
+    保持 `CHAT_NOT_FOUND` 和 `CHAT_DATASET_MISMATCH` HTTP 契约不变，没有新增 Workflow Engine 业务依赖基线。
+30. 第六批 Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 447 项通过，完整后端回归 871 项通过；新增
+    服务和 DTO 通过 Ruff 与严格 Mypy，`git diff --check` 通过。
 
 **目标**
 
@@ -1267,7 +1277,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。检索、SQL 语义
    编译、SQL 校验、权限应用和执行已统一，问题理解和回答待后续批次收敛。
 4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。SQL 校验和执行工具
-   已完成，语义 SQL 编译、物理 Schema 和 Semantic 检索工具已接入统一入口；问题理解和回答工具待后续迁移。
+   已完成，语义 SQL 编译、物理 Schema、Semantic 检索和执行绑定已接入统一入口；问题理解和回答工具待后续迁移。
 5. Graph Adapter 改为调用相同 Service。Semantic 检索、SQL 编译和执行 Adapter 已完成，其余 Adapter 待后续迁移。
 6. 旧 `chat/task/llm.py` 调整为兼容入口或直接删除，不能继续维护独立业务逻辑。
 7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期、所有权、Agent 与 Graph 的

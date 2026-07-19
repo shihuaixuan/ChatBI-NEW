@@ -10,6 +10,11 @@ from apps.chatbi.models import (
     ChatRecordCreateData,
     ChatRecordExecutionType,
     ChatRecordResultProjection,
+    ExecutionBindingData,
+)
+from apps.chatbi.services import (
+    ExecutionBindingError,
+    ExecutionBindingService,
 )
 
 
@@ -79,6 +84,9 @@ __all__ = [
     "ChatRecord",
     "ChatRecordCreateData",
     "ChatRecordExecutionType",
+    "ExecutionBindingData",
+    "ExecutionBindingError",
+    "ExecutionBindingService",
     "build_chat_record_service",
     "build_workflow_chat_record_gateway",
 ]

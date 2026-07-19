@@ -62,6 +62,26 @@ def test_workflow_projector_is_generic_and_chatbi_logic_stays_in_gateway():
     assert "apps.chat.models.chat_model" not in service_imports
 
 
+def test_graph_chat_binding_rule_is_forwarded_through_chatbi_gateway():
+    tree = _tree("apps/workflow_engine/api/service.py")
+    service_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "GraphApiService"
+    )
+    method = next(
+        node
+        for node in service_class.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_resolve_chat_query_context"
+    )
+    service_source = ast.unparse(method)
+
+    assert "ExecutionBindingService" in service_source
+    assert "chat.dataset_id" in service_source
+    assert "CHAT_DATASET_MISMATCH" not in service_source
+
+
 def test_legacy_chat_record_finish_functions_only_forward_state_changes():
     tree = _tree("apps/chat/curd/chat.py")
 

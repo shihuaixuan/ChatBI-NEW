@@ -21,7 +21,9 @@ from apps.chatbi.models import (
     ChatRecordExecutionType,
     ChatRecordResultProjection,
     ChatRecordStatus,
+    ExecutionBindingData,
 )
+from apps.chatbi.services import ExecutionBindingService
 
 
 def now() -> datetime:
@@ -42,7 +44,13 @@ def create_record_and_run(
     config: dict,
 ) -> tuple[ChatRecord, ChatbiAgentRun]:
     chat = get_chat_for_user(session, request.chat_id, current_user)
-    datasource_id = request.datasource_id or chat.datasource
+    binding = ExecutionBindingService().resolve(
+        ExecutionBindingData(
+            conversation_dataset_id=chat.dataset_id,
+            conversation_datasource_id=chat.datasource,
+            requested_datasource_id=request.datasource_id,
+        )
+    )
     created_at = now()
     record_service = build_chat_record_service(session)
     record = record_service.create(
@@ -50,8 +58,8 @@ def create_record_and_run(
             chat_id=request.chat_id,
             user_id=current_user.id,
             question=request.question,
-            dataset_id=chat.dataset_id,
-            datasource_id=datasource_id,
+            dataset_id=binding.dataset_id,
+            datasource_id=binding.datasource_id,
             engine_type=chat.engine_type,
             execution_type=ChatRecordExecutionType.AGENT,
         )

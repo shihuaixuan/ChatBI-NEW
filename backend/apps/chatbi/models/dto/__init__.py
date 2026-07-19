@@ -11,6 +11,10 @@ from apps.chatbi.models.dto.conversation import (
     CreateChat,
     RenameChat,
 )
+from apps.chatbi.models.dto.execution_binding import (
+    ExecutionBinding,
+    ExecutionBindingData,
+)
 from apps.chatbi.models.dto.physical_schema import (
     PhysicalSchemaField,
     PhysicalSchemaResult,
@@ -32,6 +36,8 @@ __all__ = [
     "ConversationBinding",
     "ConversationCreateData",
     "CreateChat",
+    "ExecutionBinding",
+    "ExecutionBindingData",
     "PhysicalSchemaField",
     "PhysicalSchemaResult",
     "PhysicalSchemaTable",

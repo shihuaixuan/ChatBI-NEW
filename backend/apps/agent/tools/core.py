@@ -12,7 +12,6 @@ from apps.agent.tools.base import (
     ToolOutput,
     json_summary,
 )
-from apps.capabilities.semantic.compile import resolve_dataset_by_datasource
 from apps.capabilities.time_slots import normalize_time_range
 from apps.chatbi.models import SemanticQueryCompileData, SemanticRetrievalData
 from apps.chatbi.services import QueryService, SemanticQueryCompileError
@@ -52,18 +51,20 @@ def _execution_gate(ctx: AgentToolContext) -> ToolOutput | None:
 
 
 def _ensure_dataset_id(ctx: AgentToolContext) -> int | None:
-    if ctx.dataset_id:
+    if (
+        isinstance(ctx.dataset_id, int)
+        and not isinstance(ctx.dataset_id, bool)
+        and ctx.dataset_id > 0
+    ):
         return ctx.dataset_id
     cached = ctx.state.get("dataset_id")
-    if cached:
+    if (
+        isinstance(cached, int)
+        and not isinstance(cached, bool)
+        and cached > 0
+    ):
         return cached
-    if not ctx.datasource_id:
-        return None
-    dataset = resolve_dataset_by_datasource(ctx.session, oid=ctx.oid, datasource_id=ctx.datasource_id)
-    if dataset is None:
-        return None
-    ctx.state["dataset_id"] = dataset.id
-    return dataset.id
+    return None
 
 
 class SearchSemanticAssetsArgs(BaseModel):

@@ -17,6 +17,10 @@ from apps.chatbi.services.conversation_service import (
     ConversationServiceConfigurationError,
     RecommendedQuestionProvider,
 )
+from apps.chatbi.services.execution_binding_service import (
+    ExecutionBindingError,
+    ExecutionBindingService,
+)
 from apps.chatbi.services.physical_schema_service import (
     DatasourceMetadataReader,
     PhysicalSchemaService,
@@ -51,6 +55,8 @@ __all__ = [
     "ConversationService",
     "ConversationServiceConfigurationError",
     "DatasourceMetadataReader",
+    "ExecutionBindingError",
+    "ExecutionBindingService",
     "PermissionPolicyProvider",
     "PhysicalSchemaService",
     "QueryService",

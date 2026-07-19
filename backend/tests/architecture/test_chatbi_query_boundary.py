@@ -98,3 +98,21 @@ def test_chatbi_retrieval_and_schema_services_have_no_runtime_dependency():
         assert "sqlmodel" not in imports
         assert not any(".repository" in module for module in imports)
         assert not any(".models.orm" in module for module in imports)
+
+
+def test_agent_dataset_context_does_not_resolve_arbitrary_dataset_by_datasource():
+    imports = _imports("apps/agent/tools/core.py")
+    source = (
+        BACKEND_DIR / "apps/agent/tools/core.py"
+    ).read_text(encoding="utf-8")
+
+    assert "apps.capabilities.semantic.compile" not in imports
+    assert "resolve_dataset_by_datasource" not in source
+
+
+def test_execution_binding_service_has_no_runtime_or_repository_dependency():
+    imports = _imports("apps/chatbi/services/execution_binding_service.py")
+
+    assert "sqlmodel" not in imports
+    assert not any(".repository" in module for module in imports)
+    assert not any(".models.orm" in module for module in imports)

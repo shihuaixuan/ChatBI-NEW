@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from apps.agent import crud
 from apps.agent.schemas import AgentQuestionRequest
 from apps.agent.tools.base import AgentToolContext
@@ -90,6 +92,29 @@ def test_agent_record_inherits_chat_semantic_dataset():
 
     assert record.dataset_id == 20
     assert record.datasource == 30
+
+
+def test_agent_record_rejects_datasource_outside_conversation_binding():
+    chat = Chat(
+        id=3,
+        oid=1,
+        create_by=2,
+        dataset_id=20,
+        datasource=30,
+        engine_type="PostgreSQL",
+    )
+
+    with pytest.raises(ValueError, match="CHAT_DATASOURCE_MISMATCH"):
+        crud.create_record_and_run(
+            _RecordSession(chat),
+            SimpleNamespace(id=2, oid=1),
+            AgentQuestionRequest(
+                chat_id=3,
+                question="GMV",
+                datasource_id=31,
+            ),
+            {},
+        )
 
 
 class _RecordSession:
