@@ -72,6 +72,11 @@ from apps.chatbi.models.dto.generation_context import (
     GenerationContextScope,
     GenerationContextScopeData,
 )
+from apps.chatbi.models.dto.generation_custom_prompt import (
+    GenerationCustomPromptQuery,
+    GenerationCustomPromptResult,
+    GenerationCustomPromptType,
+)
 from apps.chatbi.models.dto.legacy_query import AiModelQuestion, ChatQuestion
 from apps.chatbi.models.dto.permission_sql_generation import (
     PermissionSQLFilter,
@@ -185,6 +190,9 @@ __all__ = [
     "GenerationAssistantContext",
     "GenerationContextScope",
     "GenerationContextScopeData",
+    "GenerationCustomPromptQuery",
+    "GenerationCustomPromptResult",
+    "GenerationCustomPromptType",
     "IntentRecognitionOutput",
     "IntentValidationOutput",
     "NaturalLanguageIntentOutputBase",

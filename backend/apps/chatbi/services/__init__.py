@@ -62,6 +62,10 @@ from apps.chatbi.services.generation_history_projection_service import (
 from apps.chatbi.services.generation_context_scope_service import (
     GenerationContextScopeService,
 )
+from apps.chatbi.services.generation_custom_prompt_service import (
+    GenerationCustomPromptProvider,
+    GenerationCustomPromptService,
+)
 from apps.chatbi.services.permission_sql_generation_service import (
     PermissionSQLGenerationError,
     PermissionSQLGenerationModelClient,
@@ -184,6 +188,8 @@ __all__ = [
     "FinalReplyProjectionError",
     "GenerationHistoryProjectionService",
     "GenerationContextScopeService",
+    "GenerationCustomPromptProvider",
+    "GenerationCustomPromptService",
     "DynamicSQLGenerationError",
     "DynamicSQLGenerationModelClient",
     "DynamicSQLGenerationPromptBuilder",

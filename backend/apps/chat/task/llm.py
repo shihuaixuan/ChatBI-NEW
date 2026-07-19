@@ -16,9 +16,6 @@ from langchain_community.utilities import SQLDatabase
 from sqlalchemy import and_, select
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlbot_xpack.config.model import SysArgModel
-from sqlbot_xpack.custom_prompt.curd.custom_prompt import find_custom_prompts
-from sqlbot_xpack.custom_prompt.models.custom_prompt_model import CustomPromptTypeEnum
-from sqlbot_xpack.license.license_manage import SQLBotLicenseUtil
 from sqlmodel import Session
 
 from apps.access_control.data_policy import requires_data_policy, resolve_data_policy
@@ -79,6 +76,8 @@ from apps.chatbi.models import (
     GenerationAssistantContext,
     GenerationContextScope,
     GenerationContextScopeData,
+    GenerationCustomPromptQuery,
+    GenerationCustomPromptType,
     GenerationHistoryLog,
     GenerationHistoryProjectionData,
     PermissionSQLFilter,
@@ -126,6 +125,9 @@ from infrastructure.chart_generation import build_chart_generation_service
 from infrastructure.datasource_selection import build_datasource_selection_service
 from infrastructure.dynamic_sql_generation import (
     build_dynamic_sql_generation_service,
+)
+from infrastructure.generation_custom_prompt import (
+    build_generation_custom_prompt_service,
 )
 from infrastructure.permission_sql_generation import (
     build_permission_sql_generation_service,
@@ -389,21 +391,28 @@ class LLMService:
             )
         )
 
-    def filter_custom_prompts(self, _session: Session, custom_prompt_type: CustomPromptTypeEnum, oid: int = None,
+    def filter_custom_prompts(self, _session: Session, custom_prompt_type: GenerationCustomPromptType, oid: int = None,
                               ds_id: int = None):
-        if SQLBotLicenseUtil.valid():
-            scope = self.resolve_generation_context_scope(oid, ds_id)
-            self.current_logs[OperationEnum.FILTER_CUSTOM_PROMPT] = start_log(session=_session,
-                                                                              operate=OperationEnum.FILTER_CUSTOM_PROMPT,
-                                                                              record_id=self.record.id,
-                                                                              local_operation=True)
-            self.chat_question.custom_prompt, prompt_list = find_custom_prompts(_session, custom_prompt_type,
-                                                                                scope.workspace_id,
-                                                                                scope.datasource_id)
-            self.current_logs[OperationEnum.FILTER_CUSTOM_PROMPT] = end_log(session=_session,
-                                                                            log=self.current_logs[
-                                                                                OperationEnum.FILTER_CUSTOM_PROMPT],
-                                                                            full_message=prompt_list)
+        service = build_generation_custom_prompt_service(_session)
+        if not service.enabled:
+            return
+        scope = self.resolve_generation_context_scope(oid, ds_id)
+        self.current_logs[OperationEnum.FILTER_CUSTOM_PROMPT] = start_log(session=_session,
+                                                                          operate=OperationEnum.FILTER_CUSTOM_PROMPT,
+                                                                          record_id=self.record.id,
+                                                                          local_operation=True)
+        result = service.query(
+            GenerationCustomPromptQuery(
+                prompt_type=custom_prompt_type,
+                workspace_id=scope.workspace_id,
+                datasource_id=scope.datasource_id,
+            )
+        )
+        self.chat_question.custom_prompt = result.prompt
+        self.current_logs[OperationEnum.FILTER_CUSTOM_PROMPT] = end_log(session=_session,
+                                                                        log=self.current_logs[
+                                                                            OperationEnum.FILTER_CUSTOM_PROMPT],
+                                                                        full_message=result.items)
 
     def filter_training_template(self, _session: Session, oid: int = None, ds_id: int = None):
         self.current_logs[OperationEnum.FILTER_SQL_EXAMPLE] = start_log(session=_session,
@@ -464,7 +473,12 @@ class LLMService:
 
         self.load_term_context(_session)
 
-        self.filter_custom_prompts(_session, CustomPromptTypeEnum.ANALYSIS, self.current_user.oid, ds_id)
+        self.filter_custom_prompts(
+            _session,
+            GenerationCustomPromptType.ANALYSIS,
+            self.current_user.oid,
+            ds_id,
+        )
 
         generation_data = AnalysisPredictionGenerationData(
             record_id=self.record.id or 0,
@@ -508,7 +522,12 @@ class LLMService:
         self.chat_question.data = orjson.dumps(data.get('data')).decode()
 
         ds_id = self.ds.id if isinstance(self.ds, CoreDatasource) else None
-        self.filter_custom_prompts(_session, CustomPromptTypeEnum.PREDICT_DATA, self.current_user.oid, ds_id)
+        self.filter_custom_prompts(
+            _session,
+            GenerationCustomPromptType.PREDICT_DATA,
+            self.current_user.oid,
+            ds_id,
+        )
 
         generation_data = AnalysisPredictionGenerationData(
             record_id=self.record.id or 0,
@@ -726,7 +745,12 @@ class LLMService:
 
             self.filter_training_template(_session, oid, ds_id)
 
-            self.filter_custom_prompts(_session, CustomPromptTypeEnum.GENERATE_SQL, oid, ds_id)
+            self.filter_custom_prompts(
+                _session,
+                GenerationCustomPromptType.GENERATE_SQL,
+                oid,
+                ds_id,
+            )
 
             self.init_messages(_session)
 
@@ -1070,7 +1094,12 @@ class LLMService:
 
                 self.filter_training_template(_session, oid, ds_id)
 
-                self.filter_custom_prompts(_session, CustomPromptTypeEnum.GENERATE_SQL, oid, ds_id)
+                self.filter_custom_prompts(
+                    _session,
+                    GenerationCustomPromptType.GENERATE_SQL,
+                    oid,
+                    ds_id,
+                )
 
                 self.init_messages(_session)
 
