@@ -3,6 +3,12 @@ from apps.chatbi.services.analysis_prediction_service import (
     AnalysisPredictionPromptBuilder,
     AnalysisPredictionService,
 )
+from apps.chatbi.services.chart_generation_service import (
+    ChartGenerationError,
+    ChartGenerationModelClient,
+    ChartGenerationPromptBuilder,
+    ChartGenerationService,
+)
 from apps.chatbi.services.chat_record_service import (
     ChatRecordError,
     ChatRecordNotFoundError,
@@ -62,6 +68,12 @@ from apps.chatbi.services.semantic_retrieval_service import (
     SemanticRetrievalGateway,
     SemanticRetrievalService,
 )
+from apps.chatbi.services.sql_generation_service import (
+    SQLGenerationError,
+    SQLGenerationModelClient,
+    SQLGenerationPromptBuilder,
+    SQLGenerationService,
+)
 from apps.chatbi.services.sql_permission import (
     PermissionPolicyProvider,
     SQLPermissionService,
@@ -77,6 +89,10 @@ __all__ = [
     "ChatRecordResultTooLargeError",
     "ChatRecordService",
     "ChatRecordTransitionError",
+    "ChartGenerationError",
+    "ChartGenerationModelClient",
+    "ChartGenerationPromptBuilder",
+    "ChartGenerationService",
     "ConversationBindingError",
     "ConversationBindingProvider",
     "ConversationDeletionProvider",
@@ -106,6 +122,10 @@ __all__ = [
     "ResultArtifactService",
     "ResultArtifactWriteError",
     "SQLExecutor",
+    "SQLGenerationError",
+    "SQLGenerationModelClient",
+    "SQLGenerationPromptBuilder",
+    "SQLGenerationService",
     "SQLPermissionService",
     "SemanticCompilationGateway",
     "SemanticQueryCompileError",

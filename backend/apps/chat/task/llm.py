@@ -51,25 +51,20 @@ from apps.chat.curd.chat import (
     list_generate_chart_logs,
     list_generate_sql_logs,
     save_analysis_predict_record,
-    save_chart,
-    save_chart_answer,
     save_error_message,
     save_predict_data,
     save_sql,
-    save_sql_answer,
     save_sql_exec_data,
     start_log,
     trigger_log_error,
 )
 from apps.chat.models.chat_model import (
-    AIPromptMessage,
     AxisObj,
     Chat,
     ChatFinishStep,
     ChatLog,
     ChatQuestion,
     ChatRecord,
-    HumanPromptMessage,
     OperationEnum,
     RenameChat,
     SystemPromptMessage,
@@ -78,13 +73,21 @@ from apps.chat.services.semantic_binding import DYNAMIC_DATASOURCE_ASSISTANT_TYP
 from apps.chat.services.term_context import ChatTermContextService
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
+    ChartGenerationData,
+    ChartGenerationMessage,
     ChatRecordAuxiliaryType,
     DatasourceSelectionCandidate,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
     RecommendedQuestionGenerationData,
+    SQLGenerationData,
+    SQLGenerationMessage,
 )
-from apps.chatbi.services import DatasourceSelectionError
+from apps.chatbi.services import (
+    ChartGenerationError,
+    DatasourceSelectionError,
+    SQLGenerationError,
+)
 from apps.datasource import (
     DatasourceConnection,
     build_external_datasource_connection,
@@ -109,10 +112,12 @@ from common.utils.data_format import DataFormat
 from common.utils.locale import I18n, I18nHelper
 from common.utils.utils import SQLBotLogUtil, extract_nested_json, prepare_for_orjson
 from infrastructure.analysis_prediction import build_analysis_prediction_service
+from infrastructure.chart_generation import build_chart_generation_service
 from infrastructure.datasource_selection import build_datasource_selection_service
 from infrastructure.recommended_questions import (
     build_recommended_question_service,
 )
+from infrastructure.sql_generation import build_sql_generation_service
 
 warnings.filterwarnings("ignore")
 
@@ -132,8 +137,8 @@ class LLMService:
     record: ChatRecord
     config: LLMConfig
     llm: BaseChatModel
-    sql_message: List[Union[BaseMessage, dict[str, Any]]]
-    chart_message: List[Union[BaseMessage, dict[str, Any]]]
+    sql_history: list[SQLGenerationMessage]
+    chart_history: list[ChartGenerationMessage]
 
     # session: Session = db_session
     current_user: CurrentUser
@@ -159,8 +164,8 @@ class LLMService:
     def __init__(self, session: Session, current_user: CurrentUser, chat_question: ChatQuestion,
                  current_assistant: Optional[CurrentAssistant] = None, no_reasoning: bool = False,
                  embedding: bool = False, config: LLMConfig = None):
-        self.sql_message = []
-        self.chart_message = []
+        self.sql_history = []
+        self.chart_history = []
         self.generate_sql_logs = []
         self.generate_chart_logs = []
         self.current_logs = {}
@@ -301,37 +306,25 @@ class LLMService:
 
         count_limit = self.base_message_round_count_limit
 
-        self.sql_message = []
-        # add sys prompt
-        _system_templates = self.chat_question.sql_sys_question(self.ds.type, self.enable_sql_row_limit)
-        self.sql_message.append(SystemPromptMessage(content=_system_templates['system']))
-        self.sql_message.append(HumanPromptMessage(content=_system_templates['rules']))
-        self.sql_message.append(
-            AIPromptMessage(content='我已掌握所有规则，包括表结构、SQL规范、安全限制和输出格式，我会严格遵守这些规则。'))
-        self.sql_message.append(HumanPromptMessage(content=_system_templates['schema']))
-        self.sql_message.append(
-            AIPromptMessage(content='我已确认您提供的数据库信息与表结构schema，我生成的SQL不会超出您提供的范围。'))
-        if _system_templates.get('custom_prompt'):
-            self.sql_message.append(HumanPromptMessage(content=_system_templates['custom_prompt']))
-            self.sql_message.append(AIPromptMessage(content='我已确认您提供的额外信息，我会进行参考。'))
-        if _system_templates.get('terminologies'):
-            self.sql_message.append(HumanPromptMessage(content=_system_templates['terminologies']))
-            self.sql_message.append(AIPromptMessage(content='我已确认您提供的术语信息，我会进行参考。'))
-        if _system_templates.get('data_training'):
-            self.sql_message.append(HumanPromptMessage(content=_system_templates['data_training']))
-            self.sql_message.append(AIPromptMessage(content='我已确认您提供的SQL示例，我会进行参考。'))
-
+        self.sql_history = []
         if last_sql_messages is not None and len(last_sql_messages) > 0:
             last_rounds = get_last_conversation_rounds(last_sql_messages, rounds=count_limit)
 
             for _msg_dict in last_rounds:
-                _msg: BaseMessage
                 if _msg_dict.get('type') == 'human':
-                    _msg = HumanMessage(content=_msg_dict.get('content'))
-                    self.sql_message.append(_msg)
+                    self.sql_history.append(
+                        SQLGenerationMessage(
+                            role='human',
+                            content=cast(str, _msg_dict.get('content')),
+                        )
+                    )
                 elif _msg_dict.get('type') == 'ai':
-                    _msg = AIMessage(content=_msg_dict.get('content'))
-                    self.sql_message.append(_msg)
+                    self.sql_history.append(
+                        SQLGenerationMessage(
+                            role='ai',
+                            content=cast(str, _msg_dict.get('content')),
+                        )
+                    )
 
         last_chart_messages: List[dict[str, Any]] = self.generate_chart_logs[-1].messages if len(
             self.generate_chart_logs) > 0 else []
@@ -346,23 +339,25 @@ class LLMService:
 
         count_chart_limit = self.base_message_round_count_limit
 
-        self.chart_message = []
-        # add sys prompt
-        _chart_system_templates = self.chat_question.chart_sys_question()
-        self.chart_message.append(SystemPromptMessage(content=_chart_system_templates['system']))
-        self.chart_message.append(HumanPromptMessage(content=_chart_system_templates['rules']))
-        self.chart_message.append(AIPromptMessage(content='我已掌握所有规则，我会严格遵守这些规则来生成符合要求的JSON。'))
+        self.chart_history = []
         if last_chart_messages is not None and len(last_chart_messages) > 0:
             last_rounds = get_last_conversation_rounds(last_chart_messages, rounds=count_chart_limit)
 
             for _msg_dict in last_rounds:
-                _msg: BaseMessage
                 if _msg_dict.get('type') == 'human':
-                    _msg = HumanMessage(content=_msg_dict.get('content'))
-                    self.chart_message.append(_msg)
+                    self.chart_history.append(
+                        ChartGenerationMessage(
+                            role='human',
+                            content=cast(str, _msg_dict.get('content')),
+                        )
+                    )
                 elif _msg_dict.get('type') == 'ai':
-                    _msg = AIMessage(content=_msg_dict.get('content'))
-                    self.chart_message.append(_msg)
+                    self.chart_history.append(
+                        ChartGenerationMessage(
+                            role='ai',
+                            content=cast(str, _msg_dict.get('content')),
+                        )
+                    )
 
     def get_record(self):
         return self.record
@@ -829,10 +824,31 @@ class LLMService:
             self.init_messages(_session)
 
     def generate_sql(self, _session: Session):
-        # append current question
-        self.sql_message.append(HumanMessage(
-            self.chat_question.sql_user_question(current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                                 change_title=self.change_title)))
+        generation_data = SQLGenerationData(
+            record_id=self.record.id or 0,
+            question=self.chat_question.question or "",
+            database_type=self.ds.type,
+            engine=self.chat_question.engine,
+            schema=self.chat_question.db_schema,
+            sample_data=self.chat_question.sample_data,
+            language=self.chat_question.lang,
+            assistant_name=self.chat_question.sqlbot_name,
+            current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            rule=self.chat_question.rule,
+            error_message=self.chat_question.error_msg,
+            custom_prompt=self.chat_question.custom_prompt,
+            terminologies=self.chat_question.terminologies,
+            data_training=self.chat_question.data_training,
+            enable_query_limit=self.enable_sql_row_limit,
+            change_title=self.change_title,
+            regenerate=self.chat_question.regenerate_record_id is not None,
+            history=list(self.sql_history),
+        )
+        service = build_sql_generation_service(_session, self.llm)
+        try:
+            messages = service.prepare(generation_data)
+        except SQLGenerationError as exc:
+            raise SingleMessageError(str(exc)) from exc
 
         self.current_logs[OperationEnum.GENERATE_SQL] = start_log(session=_session,
                                                                   ai_modal_id=self.chat_question.ai_modal_id,
@@ -840,36 +856,40 @@ class LLMService:
                                                                   operate=OperationEnum.GENERATE_SQL,
                                                                   record_id=self.record.id,
                                                                   full_message=[
-                                                                      {'type': msg.type,
-                                                                       'sqlbot_system': getattr(msg, 'sqlbot_system',
-                                                                                                False) is True,
-                                                                       'content': msg.content} for msg
-                                                                      in self.sql_message])
-        full_thinking_text = ''
-        full_sql_text = ''
-        token_usage = {}
-        res = process_stream(self.llm.stream(self.sql_message), token_usage)
-        for chunk in res:
-            if chunk.get('content'):
-                full_sql_text += chunk.get('content')
-            if chunk.get('reasoning_content'):
-                full_thinking_text += chunk.get('reasoning_content')
-            yield chunk
+                                                                      {
+                                                                          'type': message.role,
+                                                                          'sqlbot_system': message.system_context,
+                                                                          'content': message.content,
+                                                                      }
+                                                                      for message in messages
+                                                                  ])
+        for event in service.generate(generation_data, messages):
+            if event.kind == 'chunk':
+                yield event
+                continue
 
-        self.sql_message.append(AIMessage(full_sql_text))
-
-        self.current_logs[OperationEnum.GENERATE_SQL] = end_log(session=_session,
-                                                                log=self.current_logs[OperationEnum.GENERATE_SQL],
-                                                                full_message=[{'type': msg.type,
-                                                                               'sqlbot_system': getattr(msg,
-                                                                                                        'sqlbot_system',
-                                                                                                        False) is True,
-                                                                               'content': msg.content}
-                                                                              for msg in self.sql_message],
-                                                                reasoning_content=full_thinking_text,
-                                                                token_usage=token_usage)
-        self.record = save_sql_answer(session=_session, record_id=self.record.id,
-                                      answer=orjson.dumps({'content': full_sql_text}).decode())
+            self.current_logs[OperationEnum.GENERATE_SQL] = end_log(
+                session=_session,
+                log=self.current_logs[OperationEnum.GENERATE_SQL],
+                full_message=[
+                    *[
+                        {
+                            'type': message.role,
+                            'sqlbot_system': message.system_context,
+                            'content': message.content,
+                        }
+                        for message in messages
+                    ],
+                    {
+                        'type': 'ai',
+                        'sqlbot_system': False,
+                        'content': event.content,
+                    },
+                ],
+                reasoning_content=event.reasoning_content,
+                token_usage=event.token_usage,
+            )
+            yield event
 
     def generate_with_sub_sql(self, session: Session, sql, sub_mappings: list):
         sub_query = json.dumps(sub_mappings, ensure_ascii=False)
@@ -1011,8 +1031,22 @@ class LLMService:
         return self.build_table_filter(session=_session, sql=sql, filters=filters)
 
     def generate_chart(self, _session: Session, chart_type: Optional[str] = '', schema: Optional[str] = ''):
-        # append current question
-        self.chart_message.append(HumanMessage(self.chat_question.chart_user_question(chart_type, schema)))
+        generation_data = ChartGenerationData(
+            record_id=self.record.id or 0,
+            question=self.chat_question.question or "",
+            sql=self.chat_question.sql,
+            schema=schema or "",
+            chart_type=chart_type or "",
+            language=self.chat_question.lang,
+            assistant_name=self.chat_question.sqlbot_name,
+            rule=self.chat_question.rule,
+            history=list(self.chart_history),
+        )
+        service = build_chart_generation_service(_session, self.llm)
+        try:
+            messages = service.prepare(generation_data)
+        except ChartGenerationError as exc:
+            raise SingleMessageError(str(exc)) from exc
 
         self.current_logs[OperationEnum.GENERATE_CHART] = start_log(session=_session,
                                                                     ai_modal_id=self.chat_question.ai_modal_id,
@@ -1020,37 +1054,40 @@ class LLMService:
                                                                     operate=OperationEnum.GENERATE_CHART,
                                                                     record_id=self.record.id,
                                                                     full_message=[
-                                                                        {'type': msg.type,
-                                                                         'sqlbot_system': getattr(msg, 'sqlbot_system',
-                                                                                                  False) is True,
-                                                                         'content': msg.content} for
-                                                                        msg
-                                                                        in self.chart_message])
-        full_thinking_text = ''
-        full_chart_text = ''
-        token_usage = {}
-        res = process_stream(self.llm.stream(self.chart_message), token_usage)
-        for chunk in res:
-            if chunk.get('content'):
-                full_chart_text += chunk.get('content')
-            if chunk.get('reasoning_content'):
-                full_thinking_text += chunk.get('reasoning_content')
-            yield chunk
+                                                                        {
+                                                                            'type': message.role,
+                                                                            'sqlbot_system': message.system_context,
+                                                                            'content': message.content,
+                                                                        }
+                                                                        for message in messages
+                                                                    ])
+        for event in service.generate(generation_data, messages):
+            if event.kind == 'chunk':
+                yield event
+                continue
 
-        self.chart_message.append(AIMessage(full_chart_text))
-
-        self.record = save_chart_answer(session=_session, record_id=self.record.id,
-                                        answer=orjson.dumps({'content': full_chart_text}).decode())
-        self.current_logs[OperationEnum.GENERATE_CHART] = end_log(session=_session,
-                                                                  log=self.current_logs[OperationEnum.GENERATE_CHART],
-                                                                  full_message=[
-                                                                      {'type': msg.type,
-                                                                       'sqlbot_system': getattr(msg, 'sqlbot_system',
-                                                                                                False) is True,
-                                                                       'content': msg.content}
-                                                                      for msg in self.chart_message],
-                                                                  reasoning_content=full_thinking_text,
-                                                                  token_usage=token_usage)
+            self.current_logs[OperationEnum.GENERATE_CHART] = end_log(
+                session=_session,
+                log=self.current_logs[OperationEnum.GENERATE_CHART],
+                full_message=[
+                    *[
+                        {
+                            'type': message.role,
+                            'sqlbot_system': message.system_context,
+                            'content': message.content,
+                        }
+                        for message in messages
+                    ],
+                    {
+                        'type': 'ai',
+                        'sqlbot_system': False,
+                        'content': event.content,
+                    },
+                ],
+                reasoning_content=event.reasoning_content,
+                token_usage=event.token_usage,
+            )
+            yield event
 
     def check_sql(self, session: Session, res: str, operate: OperationEnum) -> tuple[str, Optional[list]]:
         json_str = extract_nested_json(res)
@@ -1084,46 +1121,6 @@ class LLMService:
             raise SingleMessageError("SQL query is empty")
         return sql, data.get('tables')
 
-    @staticmethod
-    def get_chart_type_from_sql_answer(res: str) -> Optional[str]:
-        json_str = extract_nested_json(res)
-        if json_str is None:
-            return None
-
-        chart_type: Optional[str]
-        data: dict
-        try:
-            data = orjson.loads(json_str)
-
-            if data['success']:
-                chart_type = data['chart-type']
-            else:
-                return None
-        except Exception:
-            return None
-
-        return chart_type
-
-    @staticmethod
-    def get_brief_from_sql_answer(res: str) -> Optional[str]:
-        json_str = extract_nested_json(res)
-        if json_str is None:
-            return None
-
-        brief: Optional[str]
-        data: dict
-        try:
-            data = orjson.loads(json_str)
-
-            if data['success']:
-                brief = data['brief']
-            else:
-                return None
-        except Exception:
-            return None
-
-        return brief
-
     def check_save_sql(self, session: Session, res: str, operate: OperationEnum) -> str:
         sql, *_ = self.check_sql(session=session, res=res, operate=operate)
         save_sql(session=session, sql=sql, record_id=self.record.id)
@@ -1131,67 +1128,6 @@ class LLMService:
         self.chat_question.sql = sql
 
         return sql
-
-    def check_save_chart(self, session: Session, res: str) -> Dict[str, Any]:
-
-        json_str = extract_nested_json(res)
-        if json_str is None:
-            raise SingleMessageError(orjson.dumps({'message': 'Cannot parse chart config from answer',
-                                                   'traceback': "Cannot parse chart config from answer:\n" + res}).decode())
-        data: dict
-
-        chart: Dict[str, Any] = {}
-        message = ''
-        error = False
-
-        try:
-            data = orjson.loads(json_str)
-            if data['type'] and data['type'] != 'error':
-                # todo type check
-                chart = data
-                if chart.get('columns'):
-                    for v in chart.get('columns'):
-                        v['value'] = v.get('value').lower()
-                if chart.get('axis'):
-                    if chart.get('axis').get('x'):
-                        chart.get('axis').get('x')['value'] = chart.get('axis').get('x').get('value').lower()
-                    y_axis = chart.get('axis').get('y')
-                    if y_axis:
-                        if isinstance(y_axis, list):
-                            # 数组格式: y: [{name, value}, ...]
-                            for item in y_axis:
-                                if item.get('value'):
-                                    item['value'] = item['value'].lower()
-                        elif isinstance(y_axis, dict) and y_axis.get('value'):
-                            # 旧格式: y: {name, value}
-                            y_axis['value'] = y_axis['value'].lower()
-                    if chart.get('axis').get('series'):
-                        chart.get('axis').get('series')['value'] = chart.get('axis').get('series').get('value').lower()
-                if chart.get('axis') and chart['axis'].get('multi-quota'):
-                    multi_quota = chart['axis']['multi-quota']
-                    if multi_quota.get('value'):
-                        if isinstance(multi_quota['value'], list):
-                            # 将数组中的每个值转换为小写
-                            multi_quota['value'] = [v.lower() if v else v for v in multi_quota['value']]
-                        elif isinstance(multi_quota['value'], str):
-                            # 如果是字符串，也转换为小写
-                            multi_quota['value'] = multi_quota['value'].lower()
-            elif data['type'] == 'error':
-                message = data['reason']
-                error = True
-            else:
-                raise Exception('Chart is empty')
-        except Exception:
-            error = True
-            message = orjson.dumps({'message': 'Cannot parse chart config from answer',
-                                    'traceback': "Cannot parse chart config from answer:\n" + res}).decode()
-
-        if error:
-            raise SingleMessageError(message)
-
-        save_chart(session=session, chart=orjson.dumps(chart).decode(), record_id=self.record.id)
-
-        return chart
 
     def check_save_predict_data(self, session: Session, res: str) -> bool:
 
@@ -1347,22 +1283,31 @@ class LLMService:
             # generate sql
             sql_res = self.generate_sql(_session)
             full_sql_text = ''
-            for chunk in sql_res:
-                full_sql_text += chunk.get('content')
-                if in_chat:
-                    yield 'data:' + orjson.dumps(
-                        {'content': chunk.get('content'), 'reasoning_content': chunk.get('reasoning_content'),
-                         'type': 'sql-result'}).decode() + '\n\n'
+            sql_generation_result = None
+            for event in sql_res:
+                if event.kind == 'chunk':
+                    full_sql_text += event.content
+                    if in_chat:
+                        yield 'data:' + orjson.dumps(
+                            {'content': event.content, 'reasoning_content': event.reasoning_content,
+                             'type': 'sql-result'}).decode() + '\n\n'
+                    continue
+                if event.error:
+                    trigger_log_error(_session, self.current_logs[OperationEnum.GENERATE_SQL])
+                    raise SingleMessageError(event.error)
+                sql_generation_result = event.result
             if in_chat:
                 yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'sql generated'}).decode() + '\n\n'
             # filter sql
             SQLBotLogUtil.info(full_sql_text)
 
-            chart_type = self.get_chart_type_from_sql_answer(full_sql_text)
+            if sql_generation_result is None:
+                raise SingleMessageError('SQL_GENERATION_RESULT_REQUIRED')
+            chart_type = sql_generation_result.chart_type
 
             # return title
             if self.change_title:
-                llm_brief = self.get_brief_from_sql_answer(full_sql_text)
+                llm_brief = sql_generation_result.brief
                 llm_brief_generated = bool(llm_brief)
                 if llm_brief_generated or (self.chat_question.question and self.chat_question.question.strip() != ''):
                     save_brief = llm_brief if (llm_brief and llm_brief != '') else self.chat_question.question.strip()[
@@ -1392,7 +1337,8 @@ class LLMService:
             # row permission
 
             sql_operate = OperationEnum.GENERATE_SQL
-            sql, tables = self.check_sql(session=_session, res=full_sql_text, operate=sql_operate)
+            sql = sql_generation_result.sql
+            tables = sql_generation_result.tables
             if ((not self.current_assistant or is_page_embedded) and requires_data_policy(
                     self.current_user)) or use_dynamic_ds:
                 sql_result = None
@@ -1413,9 +1359,11 @@ class LLMService:
                     assistant_dynamic_sql = self.check_save_sql(session=_session, res=sqlbot_temp_sql_text,
                                                                 operate=sql_operate)
                 else:
-                    sql = self.check_save_sql(session=_session, res=full_sql_text, operate=sql_operate)
+                    save_sql(session=_session, sql=sql, record_id=self.record.id)
+                    self.chat_question.sql = sql
             else:
-                sql = self.check_save_sql(session=_session, res=full_sql_text, operate=sql_operate)
+                save_sql(session=_session, sql=sql, record_id=self.record.id)
+                self.chat_question.sql = sql
 
             SQLBotLogUtil.info('sql: ' + sql)
 
@@ -1500,19 +1448,22 @@ class LLMService:
                 embedding=False, table_list=tables)
             SQLBotLogUtil.info('used_tables_schema: \n' + used_tables_schema)
             chart_res = self.generate_chart(_session, chart_type, used_tables_schema)
-            full_chart_text = ''
-            for chunk in chart_res:
-                full_chart_text += chunk.get('content')
-                if in_chat:
-                    yield 'data:' + orjson.dumps(
-                        {'content': chunk.get('content'), 'reasoning_content': chunk.get('reasoning_content'),
-                         'type': 'chart-result'}).decode() + '\n\n'
+            chart: dict[str, Any] | None = None
+            for event in chart_res:
+                if event.kind == 'chunk':
+                    if in_chat:
+                        yield 'data:' + orjson.dumps(
+                            {'content': event.content, 'reasoning_content': event.reasoning_content,
+                             'type': 'chart-result'}).decode() + '\n\n'
+                    continue
+                if event.error:
+                    raise SingleMessageError(event.error)
+                chart = event.chart
             if in_chat:
                 yield 'data:' + orjson.dumps({'type': 'info', 'msg': 'chart generated'}).decode() + '\n\n'
 
-            # filter chart
-            SQLBotLogUtil.info(full_chart_text)
-            chart = self.check_save_chart(session=_session, res=full_chart_text)
+            if chart is None:
+                raise SingleMessageError('CHART_GENERATION_RESULT_REQUIRED')
             SQLBotLogUtil.info(chart)
 
             if not stream:

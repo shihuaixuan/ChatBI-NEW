@@ -1194,7 +1194,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 第四批语义 SQL 编译入口收敛、第五批语义检索与物理 Schema 查询收敛、第六批执行绑定规则统一，以及第七批
 问题理解确定性校验规则收敛、第八批会话最终结果大小边界统一、第九批旧 Chat 核心结果写入收敛，以及第十批
 Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助结果写入收敛、第十二批推荐问题生成流程收敛，
-第十三批分析和预测生成流程收敛，以及第十四批数据源选择流程收敛：
+第十三批分析和预测生成流程收敛、第十四批数据源选择流程收敛、第十五批图表生成流程收敛，以及第十六批
+主 SQL 生成模型编排收敛：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1358,6 +1359,35 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
 62. 第十四批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 511 项通过，完整后端回归 940 项通过；
     新增和修改代码通过定向 Ruff，新 DTO、Service、仓储扩展和外层适配器通过严格 Mypy，`git diff --check` 通过，
     OpenAPI 保持 154 个路径。
+63. ChatBI 新增图表生成输入、稳定消息、模型分块和生成事件 DTO，以及 `ChartGenerationService`；Service 统一校验
+    记录 ID、问题和 SQL，通过提示词与模型流端口累计正文、思考内容和 token 用量，并从模型输出中提取首个合法
+    JSON 对象。模板、LangChain 消息转换和模型流适配均位于中立基础设施，ChatBI Service 不导入模板、LangChain、
+    旧 Chat、Session、ORM 或 Workflow Engine。
+64. 图表配置字段标准化迁入 ChatBI，统一处理表格 `columns[].value`，图表 `axis.x.value`、`axis.y[].value`、
+    `axis.y.value`、`axis.series.value` 和 `axis.multi-quota.value` 的小写归一化；模型返回 `type=error` 时保留明确原因，
+    非法图表继续返回原有错误 JSON。失败时仍保存 `chart_answer`，成功时通过一次结果投影同时保存 `chart_answer` 和
+    `chart`，继续复用 `ChatRecordService` 的大小边界和外层事务。
+65. 旧 `LLMService.generate_chart` 只保留 Schema 输入准备、生成日志、SSE 投影以及后续图表和图片展示；提示词构造、
+    历史消息、模型流消费、图表解析、标准化和 ChatRecord 结果写入均转交 ChatBI Service。旧 `check_save_chart`、
+    `chart_sys_question` 和 `chart_user_question` 已删除，`chart-result`、`chart` 和 `finish` SSE 契约保持不变。
+66. 第十五批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 528 项通过，完整后端回归 957 项通过；
+    新增和修改代码通过定向 Ruff，新 DTO、Service 和外层适配器通过严格 Mypy，应用导入和 `git diff --check` 通过，
+    OpenAPI 保持 154 个路径。
+67. ChatBI 新增主 SQL 生成输入、稳定消息、模型分块、结构化结果和生成事件 DTO，以及 `SQLGenerationService`；
+    Service 统一校验记录、问题、数据库引擎、Schema 和当前时间，通过提示词与模型流端口累计正文、思考内容和
+    token 用量，并在同一入口解析 SQL、表范围、建议图表类型和会话标题。模型业务失败、非法 JSON、非法字段结构和
+    空 SQL 均返回明确错误，不再由旧入口多次解析同一模型回答。
+68. 现有数据库方言模板、基础 SQL 模板、限行规则、样例 SQL、Schema、样例数据、自定义提示、术语、训练示例、
+    历史消息和重新生成提示的组装迁入中立基础设施适配器；LangChain 消息转换和模型流也由适配器实现。ChatBI Service
+    不导入模板、LangChain、旧 Chat、Session、ORM 或 Workflow Engine，生成原文通过 `ChatRecordService` 投影到
+    `sql_answer`，继续受统一大小边界和外层事务控制。
+69. 旧 `LLMService.generate_sql` 只保留稳定输入准备、生成日志和 SSE 投影，主 SQL 提示词构造、历史消息、模型流、
+    回答解析和 `sql_answer` 写入均转交 ChatBI Service；旧 `sql_sys_question`、`sql_user_question`、
+    `get_chart_type_from_sql_answer` 和 `get_brief_from_sql_answer` 已删除。`sql-result`、`sql` 和 `finish` SSE 契约保持
+    不变；动态 SQL 与权限 SQL 仍保留在外层，待后续按各自职责迁移。
+70. 第十六批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 550 项通过，完整后端回归 979 项通过；
+    新增和修改代码通过定向 Ruff，新 DTO、Service 和外层适配器通过严格 Mypy，应用导入和 `git diff --check` 通过，
+    OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1371,7 +1401,8 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
    历史记录、日志响应及旧 LLM 请求 DTO 待后续批次继续拆分。
 3. 将问题理解、检索调用、SQL 语义编译、SQL 校验、权限应用、执行和回答形成统一 Service 链路。检索、SQL 语义
    编译、SQL 校验、权限应用和执行已统一；问题理解的确定性校验规则、数据源选择、推荐问题以及分析预测模型调用
-   编排已统一，问题理解模型编排和最终回答待后续批次收敛。
+   编排、主 SQL 生成编排和图表生成编排已统一，问题理解模型编排、动态与权限 SQL 模型编排和最终回答待后续批次
+   收敛。
 4. Agent 工具改为调用这些 Service，不直接导入 Datasource、Semantic、Knowledge 内部模型。SQL 校验和执行工具
    已完成，语义 SQL 编译、物理 Schema、Semantic 检索、执行绑定和问题理解校验已接入统一入口；问题理解模型编排
    和回答工具待后续迁移。

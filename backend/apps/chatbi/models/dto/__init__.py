@@ -4,6 +4,12 @@ from apps.chatbi.models.dto.analysis_prediction import (
     AnalysisPredictionMessage,
     AnalysisPredictionModelChunk,
 )
+from apps.chatbi.models.dto.chart_generation import (
+    ChartGenerationData,
+    ChartGenerationEvent,
+    ChartGenerationMessage,
+    ChartGenerationModelChunk,
+)
 from apps.chatbi.models.dto.chat_record import (
     ChatRecordAuxiliaryProjection,
     ChatRecordAuxiliaryType,
@@ -57,6 +63,13 @@ from apps.chatbi.models.dto.semantic_query import (
     SemanticQueryUsedAsset,
 )
 from apps.chatbi.models.dto.semantic_retrieval import SemanticRetrievalData
+from apps.chatbi.models.dto.sql_generation import (
+    SQLGenerationData,
+    SQLGenerationEvent,
+    SQLGenerationMessage,
+    SQLGenerationModelChunk,
+    SQLGenerationResult,
+)
 
 __all__ = [
     "AnalysisPredictionGenerationData",
@@ -72,6 +85,10 @@ __all__ = [
     "ChatRecordResultLimits",
     "ChatRecordResultProjection",
     "ChatRecordStatus",
+    "ChartGenerationData",
+    "ChartGenerationEvent",
+    "ChartGenerationMessage",
+    "ChartGenerationModelChunk",
     "ConversationBinding",
     "ConversationCreateData",
     "CreateChat",
@@ -98,4 +115,9 @@ __all__ = [
     "SemanticQueryCompileData",
     "SemanticQueryCompileResult",
     "SemanticQueryUsedAsset",
+    "SQLGenerationData",
+    "SQLGenerationEvent",
+    "SQLGenerationMessage",
+    "SQLGenerationModelChunk",
+    "SQLGenerationResult",
 ]
