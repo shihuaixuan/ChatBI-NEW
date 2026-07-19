@@ -1,12 +1,14 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from apps.datasource.models.dto.physical_schema import PhysicalField, PhysicalTable
 
 
 class DatasourceConnection(BaseModel):
     """连接器所需的最小数据源快照，不向调用方暴露 ORM。"""
+
+    model_config = ConfigDict(from_attributes=True)
 
     id: int | None = None
     type: str

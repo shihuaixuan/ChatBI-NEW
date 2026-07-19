@@ -1,11 +1,18 @@
 # Author: Junjun
 # Date: 2025/8/20
+from typing import Protocol
+
 from apps.datasource.models.dto import DatasourceConf
-from apps.datasource.models.orm import CoreDatasource
 from common.utils.utils import equals_ignore_case
 
 
-def get_version_sql(ds: CoreDatasource, _conf: DatasourceConf):
+class DatasourceType(Protocol):
+    """SQL 模板选择所需的最小数据源类型。"""
+
+    type: str
+
+
+def get_version_sql(ds: DatasourceType, _conf: DatasourceConf) -> str | None:
     if equals_ignore_case(ds.type, "mysql", "doris", "starrocks"):
         return """
                 SELECT VERSION()
@@ -32,9 +39,14 @@ def get_version_sql(ds: CoreDatasource, _conf: DatasourceConf):
                 """
     elif equals_ignore_case(ds.type, "redshift", "sqlite", "hive"):
         return ""
+    return None
 
 
-def get_table_sql(ds: CoreDatasource, conf: DatasourceConf, db_version: str = ""):
+def get_table_sql(
+    ds: DatasourceType,
+    conf: DatasourceConf,
+    db_version: str = "",
+) -> tuple[str, str | None]:
     if equals_ignore_case(ds.type, "mysql"):
         return (
             """
@@ -210,9 +222,14 @@ def get_table_sql(ds: CoreDatasource, conf: DatasourceConf, db_version: str = ""
                 """,
             None,
         )
+    raise ValueError(f"Unsupported datasource type: {ds.type}")
 
 
-def get_field_sql(ds: CoreDatasource, conf: DatasourceConf, table_name: str = None):
+def get_field_sql(
+    ds: DatasourceType,
+    conf: DatasourceConf,
+    table_name: str | None = None,
+) -> tuple[str, str | None, str | None]:
     if equals_ignore_case(ds.type, "mysql"):
         sql1 = """
                 SELECT
@@ -400,3 +417,4 @@ def get_field_sql(ds: CoreDatasource, conf: DatasourceConf, table_name: str = No
     elif equals_ignore_case(ds.type, "hive"):
         sql1 = f"DESCRIBE {table_name}"
         return sql1, None, None
+    raise ValueError(f"Unsupported datasource type: {ds.type}")

@@ -4,15 +4,30 @@ import sqlite3
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from apps.datasource.models.dto import DatasourceConnection
+from apps.datasource.contracts import ExternalDatasource
+from apps.datasource.external_connection import (
+    build_external_datasource_connection,
+)
+from apps.datasource.models.dto import (
+    ColumnSchema,
+    DatasourceConf,
+    DatasourceConnection,
+    TableSchema,
+)
 from apps.datasource.repository.connectors.connection_gateway import (
     DatabaseDriverConnectionGateway,
+)
+from apps.datasource.repository.connectors.database import check_sql_read
+from apps.datasource.repository.connectors.database_types import DB
+from apps.datasource.repository.connectors.sql_templates import (
+    get_field_sql,
+    get_table_sql,
 )
 from apps.datasource.services import (
     DatasourceConnectionService,
     DatasourceNotFoundError,
 )
-from apps.datasource.utils.utils import aes_encrypt
+from apps.datasource.utils.utils import aes_decrypt, aes_encrypt
 
 
 class FakeDatasourceConnectionRepository:
@@ -28,18 +43,27 @@ class FakeDatasourceConnectionRepository:
 class RecordingConnectionGateway:
     def __init__(self) -> None:
         self.executed: tuple[DatasourceConnection, str, bool] | None = None
+        self.calls: list[tuple[str, str]] = []
 
     def check_connection(self, datasource: DatasourceConnection) -> bool:
+        self.calls.append(("check", datasource.type))
         return True
 
     def get_version(self, datasource: DatasourceConnection) -> str:
+        self.calls.append(("version", datasource.type))
         return "3.45"
 
-    def get_tables(self, datasource: DatasourceConnection) -> list:
-        return []
+    def get_tables(self, datasource: DatasourceConnection) -> list[TableSchema]:
+        self.calls.append(("tables", datasource.type))
+        return [TableSchema("orders", "订单")]
 
-    def get_fields(self, datasource: DatasourceConnection, table_name: str) -> list:
-        return []
+    def get_fields(
+        self,
+        datasource: DatasourceConnection,
+        table_name: str,
+    ) -> list[ColumnSchema]:
+        self.calls.append((f"fields:{table_name}", datasource.type))
+        return [ColumnSchema("id", "bigint", "主键")]
 
     def execute_query(
         self,
@@ -48,8 +72,26 @@ class RecordingConnectionGateway:
         *,
         origin_column: bool = False,
     ) -> dict:
+        self.calls.append(("query", datasource.type))
         self.executed = (datasource, sql, origin_column)
         return {"fields": ["value"], "data": [{"value": 1}], "sql": ""}
+
+
+def _external_connection(database: DB) -> DatasourceConnection:
+    return build_external_datasource_connection(
+        ExternalDatasource(
+            id=9,
+            name=f"{database.db_name} 数据源",
+            type=database.type,
+            host="db.example.com",
+            port=5432,
+            dataBase="analytics",
+            user="sqlbot",
+            password="secret",
+            db_schema="public",
+        ),
+        timeout=12,
+    )
 
 
 def test_connection_service_uses_single_repository_and_gateway_boundary():
@@ -79,6 +121,93 @@ def test_connection_service_rejects_missing_datasource_before_driver_call():
 
     with pytest.raises(DatasourceNotFoundError):
         service.list_tables(404)
+
+
+@pytest.mark.parametrize("database", list(DB))
+def test_every_database_type_uses_the_same_connection_service_contract(database):
+    connection = _external_connection(database)
+    gateway = RecordingConnectionGateway()
+    service = DatasourceConnectionService(
+        FakeDatasourceConnectionRepository(connection),
+        gateway,
+    )
+
+    assert service.check_connection(9)
+    assert service.get_version(9) == "3.45"
+    assert service.list_tables(9)[0].tableName == "orders"
+    assert service.list_fields(9, "orders")[0].fieldName == "id"
+    assert service.execute_query(9, "select 1")["data"] == [{"value": 1}]
+    assert connection.type_name == database.db_name
+    assert [operation for operation, _ in gateway.calls] == [
+        "check",
+        "version",
+        "tables",
+        "fields:orders",
+        "query",
+    ]
+
+
+@pytest.mark.parametrize("database", list(DB))
+def test_every_database_type_has_metadata_and_read_query_contract(database):
+    connection = _external_connection(database)
+    configuration = DatasourceConf(
+        host="db.example.com",
+        port=5432,
+        username="sqlbot",
+        password="secret",
+        database="analytics",
+        dbSchema="public",
+        filename="/tmp/sqlbot.db",
+    )
+
+    table_sql, _table_parameter = get_table_sql(
+        connection,
+        configuration,
+        "23.1",
+    )
+    field_sql, _field_parameter_1, _field_parameter_2 = get_field_sql(
+        connection,
+        configuration,
+        "orders",
+    )
+
+    if database is DB.es:
+        assert table_sql == ""
+        assert field_sql == ""
+    else:
+        assert table_sql.strip()
+        assert field_sql.strip()
+    assert check_sql_read("select * from orders", connection)
+    assert not check_sql_read("delete from orders", connection)
+
+
+def test_external_connection_adapter_does_not_mutate_source_configuration():
+    datasource = ExternalDatasource(
+        id=9,
+        name="销售库",
+        type="pg",
+        host="db.example.com",
+        port=5432,
+        dataBase="analytics",
+        user="sqlbot",
+        password="secret",
+        db_schema="reporting",
+    )
+
+    connection = build_external_datasource_connection(datasource, timeout=17)
+    configuration = json.loads(aes_decrypt(connection.configuration))
+
+    assert datasource.configuration is None
+    assert configuration["database"] == "analytics"
+    assert configuration["dbSchema"] == "reporting"
+    assert configuration["timeout"] == 17
+
+
+def test_external_connection_adapter_rejects_unknown_database_type():
+    with pytest.raises(ValueError, match="Unsupported datasource type"):
+        build_external_datasource_connection(
+            ExternalDatasource(name="未知库", type="unknown")
+        )
 
 
 def test_sqlite_connector_supports_detection_metadata_and_query(tmp_path):

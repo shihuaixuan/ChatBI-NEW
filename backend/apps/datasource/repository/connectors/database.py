@@ -19,8 +19,6 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlglot import expressions as exp
 
-from apps.datasource.contracts import ExternalDatasource as AssistantOutDsSchema
-from apps.datasource.external_connection import build_external_datasource_configuration
 from apps.datasource.models.dto import (
     ColumnSchema,
     DatasourceConf,
@@ -220,12 +218,7 @@ def get_engine(ds: DatasourceTarget, timeout: int = 0) -> Engine:
     return engine
 
 
-def get_session(ds: DatasourceTarget | AssistantOutDsSchema):
-    # engine = get_engine(ds) if isinstance(ds, CoreDatasource) else get_ds_engine(ds)
-    if isinstance(ds, AssistantOutDsSchema):
-        out_conf = build_external_datasource_configuration(ds, 30)
-        ds.configuration = out_conf
-
+def get_session(ds: DatasourceTarget):
     engine = get_engine(ds)
     session_maker = sessionmaker(bind=engine)
     session = session_maker()
@@ -234,13 +227,9 @@ def get_session(ds: DatasourceTarget | AssistantOutDsSchema):
 
 def check_connection(
     trans: Trans | None,
-    ds: DatasourceTarget | AssistantOutDsSchema,
+    ds: DatasourceTarget,
     is_raise: bool = False,
 ):
-    if isinstance(ds, AssistantOutDsSchema):
-        out_conf = build_external_datasource_configuration(ds, 10)
-        ds.configuration = out_conf
-
     db = DB.get_db(ds.type)
     if db.connect_type == ConnectType.sqlalchemy:
         conn = get_engine(ds, 10)
@@ -406,27 +395,13 @@ def check_connection(
     return False
 
 
-def get_version(ds: DatasourceTarget | AssistantOutDsSchema):
+def get_version(ds: DatasourceTarget):
     version = ""
-    if isinstance(ds, AssistantOutDsSchema):
-        conf = DatasourceConf(
-            **json.loads(aes_decrypt(build_external_datasource_configuration(ds, 10)))
-        )
-    else:
-        conf = (
-            DatasourceConf(**json.loads(aes_decrypt(ds.configuration)))
-            if not equals_ignore_case(ds.type, "excel")
-            else get_engine_config()
-        )
-    # if isinstance(ds, AssistantOutDsSchema):
-    #     conf = DatasourceConf()
-    #     conf.host = ds.host
-    #     conf.port = ds.port
-    #     conf.username = ds.user
-    #     conf.password = ds.password
-    #     conf.database = ds.dataBase
-    #     conf.dbSchema = ds.db_schema
-    #     conf.timeout = 10
+    conf = (
+        DatasourceConf(**json.loads(aes_decrypt(ds.configuration)))
+        if not equals_ignore_case(ds.type, "excel")
+        else get_engine_config()
+    )
     db = DB.get_db(ds.type)
     sql = get_version_sql(ds, conf)
     if not sql:
@@ -848,7 +823,7 @@ def convert_value(value, datetime_format="space"):
 
 
 def exec_sql(
-    ds: DatasourceTarget | AssistantOutDsSchema,
+    ds: DatasourceTarget,
     sql: str,
     origin_column=False,
 ):
@@ -1086,7 +1061,7 @@ def exec_sql(
                     raise ParseSQLResultError(str(ex))
 
 
-def check_sql_read(sql: str, ds: CoreDatasource | AssistantOutDsSchema):
+def check_sql_read(sql: str, ds: DatasourceTarget):
     try:
         normalized_sql = sql.strip().lstrip("(").strip()
         first_keyword = (

@@ -82,6 +82,10 @@ from apps.chat.models.chat_model import (
 from apps.chat.services.semantic_binding import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
 from apps.chat.services.term_context import ChatTermContextService
 from apps.data_training.curd.data_training import get_training_template
+from apps.datasource import (
+    DatasourceConnection,
+    build_external_datasource_connection,
+)
 from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data
 from apps.datasource.embedding.ds_embedding import get_ds_embedding
 from apps.datasource.models.datasource import CoreDatasource
@@ -113,7 +117,8 @@ i18n = I18n()
 
 
 class LLMService:
-    ds: CoreDatasource
+    ds: CoreDatasource | AssistantOutDsSchema | None
+    connection: DatasourceConnection | None
     chat_question: ChatQuestion
     record: ChatRecord
     config: LLMConfig
@@ -159,6 +164,7 @@ class LLMService:
             raise SingleMessageError(f"Chat with id {chat_id} not found")
         self.chat_oid = chat.oid or current_user.oid or 1
         ds: CoreDatasource | AssistantOutDsSchema | None = None
+        connection: DatasourceConnection | None = None
         if not chat.datasource and chat_question.datasource_id:
             _ds = session.get(CoreDatasource, chat_question.datasource_id)
             if _ds:
@@ -183,12 +189,14 @@ class LLMService:
                 ds = self.out_ds_instance.get_ds(chat.datasource)
                 if not ds:
                     raise SingleMessageError("No available datasource configuration found")
-                chat_question.engine = ds.type + get_version(ds)
+                connection = build_external_datasource_connection(ds, 10)
+                chat_question.engine = connection.type + get_version(connection)
             else:
                 ds = session.get(CoreDatasource, chat.datasource)
                 if not ds:
                     raise SingleMessageError("No available datasource configuration found")
-                chat_question.engine = (ds.type_name if ds.type != 'excel' else 'PostgreSQL') + get_version(ds)
+                connection = DatasourceConnection.model_validate(ds)
+                chat_question.engine = (ds.type_name if ds.type != 'excel' else 'PostgreSQL') + get_version(connection)
 
         self.generate_sql_logs = list_generate_sql_logs(session=session, chart_id=chat_id)
         self.generate_chart_logs = list_generate_chart_logs(session=session, chart_id=chat_id)
@@ -200,6 +208,7 @@ class LLMService:
 
         self.ds = (
             ds if isinstance(ds, AssistantOutDsSchema) else CoreDatasource(**ds.model_dump())) if ds else None
+        self.connection = connection
         self.chat_question = chat_question
         self.config = config
         if no_reasoning:
@@ -719,7 +728,10 @@ class LLMService:
                 ):
                     _ds = self.out_ds_instance.get_ds(data['id'])
                     self.ds = _ds
-                    self.chat_question.engine = _ds.type + get_version(self.ds)
+                    self.connection = build_external_datasource_connection(_ds, 10)
+                    self.chat_question.engine = self.connection.type + get_version(
+                        self.connection
+                    )
 
                     _engine_type = self.chat_question.engine
                     _chat.engine_type = _ds.type
@@ -729,8 +741,9 @@ class LLMService:
                         _datasource = None
                         raise SingleMessageError(f"Datasource configuration with id {_datasource} not found")
                     self.ds = CoreDatasource(**_ds.model_dump())
+                    self.connection = DatasourceConnection.model_validate(_ds)
                     self.chat_question.engine = (_ds.type_name if _ds.type != 'excel' else 'PostgreSQL') + get_version(
-                        self.ds)
+                        self.connection)
 
                     _engine_type = self.chat_question.engine
                     _chat.engine_type = _ds.type_name
@@ -1186,9 +1199,13 @@ class LLMService:
         Returns:
             Query results
         """
-        SQLBotLogUtil.info(f"Executing SQL on ds_id {self.ds.id}: {sql}")
+        if self.connection is None:
+            raise SQLBotDBError("Datasource connection is not initialized")
+        SQLBotLogUtil.info(
+            f"Executing SQL on ds_id {self.connection.id}: {sql}"
+        )
         try:
-            return exec_sql(ds=self.ds, sql=sql, origin_column=False)
+            return exec_sql(ds=self.connection, sql=sql, origin_column=False)
         except Exception as e:
             if isinstance(e, ParseSQLResultError):
                 raise e
@@ -1280,7 +1297,9 @@ class LLMService:
                 self.validate_history_ds(_session)
 
             # check connection
-            connected = check_connection(ds=self.ds, trans=None)
+            if self.connection is None:
+                raise SQLBotDBConnectionError("Datasource connection is not initialized")
+            connected = check_connection(ds=self.connection, trans=None)
             if not connected:
                 raise SQLBotDBConnectionError('Connect DB failed')
 

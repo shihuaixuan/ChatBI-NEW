@@ -4,8 +4,9 @@ import json
 from typing import cast
 
 from apps.datasource.contracts import ExternalDatasource
-from apps.datasource.utils.utils import aes_encrypt
+from apps.datasource.models.dto import DatasourceConnection
 from apps.datasource.repository.connectors.database_types import DB
+from apps.datasource.utils.utils import aes_encrypt
 
 
 def build_external_datasource_configuration(
@@ -44,3 +45,22 @@ def get_database_type_name(database_type: str | None) -> str | None:
         )
     except ValueError:
         return None
+
+
+def build_external_datasource_connection(
+    datasource: ExternalDatasource,
+    timeout: int = 30,
+) -> DatasourceConnection:
+    """把外部数据源转换为驱动层唯一使用的连接快照。"""
+
+    if not datasource.type:
+        raise ValueError("External datasource type is required")
+    type_name = get_database_type_name(datasource.type)
+    if type_name is None:
+        raise ValueError(f"Unsupported datasource type: {datasource.type}")
+    return DatasourceConnection(
+        id=datasource.id,
+        type=datasource.type,
+        type_name=type_name,
+        configuration=build_external_datasource_configuration(datasource, timeout),
+    )

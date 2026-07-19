@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 from apps.datasource.models.dto import (
     ColumnSchema,
     DatasourceConnection,
@@ -16,20 +18,20 @@ class DatabaseDriverConnectionGateway:
     """现有多数据库驱动实现的统一网关适配器。"""
 
     def check_connection(self, datasource: DatasourceConnection) -> bool:
-        return check_connection(None, datasource)
+        return cast(bool, check_connection(None, datasource))
 
     def get_version(self, datasource: DatasourceConnection) -> str:
-        return get_version(datasource)
+        return cast(str, get_version(datasource))
 
     def get_tables(self, datasource: DatasourceConnection) -> list[TableSchema]:
-        return get_tables(datasource)
+        return cast(list[TableSchema], get_tables(datasource))
 
     def get_fields(
         self,
         datasource: DatasourceConnection,
         table_name: str,
     ) -> list[ColumnSchema]:
-        return get_fields(datasource, table_name)
+        return cast(list[ColumnSchema], get_fields(datasource, table_name))
 
     def execute_query(
         self,
@@ -37,5 +39,8 @@ class DatabaseDriverConnectionGateway:
         sql: str,
         *,
         origin_column: bool = False,
-    ) -> dict:
-        return exec_sql(datasource, sql, origin_column=origin_column)
+    ) -> dict[str, Any]:
+        return cast(
+            dict[str, Any],
+            exec_sql(datasource, sql, origin_column=origin_column),
+        )
