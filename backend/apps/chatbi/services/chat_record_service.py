@@ -133,6 +133,40 @@ class ChatRecordService:
             result=result,
         )
 
+    def project_result_by_id(
+        self,
+        record_id: int,
+        result: ChatRecordResultProjection,
+        *,
+        expected_chat_id: int | None = None,
+    ) -> ChatRecord:
+        """保存执行过程中的受控结果，不改变 ChatRecord 状态。"""
+
+        return self.project_result(
+            self.get(record_id),
+            result,
+            expected_chat_id=expected_chat_id,
+        )
+
+    def project_result(
+        self,
+        record: ChatRecord,
+        result: ChatRecordResultProjection,
+        *,
+        expected_chat_id: int | None = None,
+    ) -> ChatRecord:
+        """统一处理 Agent、Graph 和旧 Chat 的中间结果投影。"""
+
+        if expected_chat_id is not None and record.chat_id != expected_chat_id:
+            raise ChatRecordOwnershipError("CHAT_RECORD_CHAT_MISMATCH")
+        current = _STATUS_ALIASES.get(record.status) if record.status else None
+        if bool(record.finish) or current in _TERMINAL_STATUSES:
+            raise ChatRecordTransitionError("CHAT_RECORD_RESULT_UPDATE_TERMINAL")
+        bounded_result = self._bounded_result(result)
+        self._apply_result(record, bounded_result)
+        self._repository.save(record)
+        return record
+
     def transition(
         self,
         record: ChatRecord,

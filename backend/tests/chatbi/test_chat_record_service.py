@@ -176,6 +176,63 @@ def test_oversized_non_json_data_returns_clear_error():
         )
 
 
+def test_draft_result_projection_does_not_change_record_status():
+    record = _record("running")
+    service = ChatRecordService(FakeChatRecordRepository(record))
+
+    service.project_result(
+        record,
+        ChatRecordResultProjection(
+            answer="SQL 生成中",
+            sql="select amount from orders",
+            chart='{"type":"table"}',
+            data='{"fields":["amount"],"data":[{"amount":10}]}',
+        ),
+    )
+
+    assert record.status == "running"
+    assert record.finish is False
+    assert record.sql_answer == "SQL 生成中"
+    assert record.sql == "select amount from orders"
+    assert record.chart == '{"type":"table"}'
+
+
+def test_draft_result_projection_rejects_terminal_record():
+    record = _record("succeeded")
+    record.finish = True
+    service = ChatRecordService(FakeChatRecordRepository(record))
+
+    with pytest.raises(
+        ChatRecordTransitionError,
+        match="CHAT_RECORD_RESULT_UPDATE_TERMINAL",
+    ):
+        service.project_result(
+            record,
+            ChatRecordResultProjection(sql="select changed"),
+        )
+
+    assert record.sql is None
+
+
+def test_draft_result_projection_applies_same_size_limits_as_final_result():
+    record = _record("running")
+    service = ChatRecordService(
+        FakeChatRecordRepository(record),
+        result_limits=ChatRecordResultLimits(max_sql_chars=5),
+    )
+
+    with pytest.raises(
+        ChatRecordResultTooLargeError,
+        match="CHAT_RECORD_SQL_TOO_LARGE",
+    ):
+        service.project_result(
+            record,
+            ChatRecordResultProjection(sql="select amount from orders"),
+        )
+
+    assert record.sql is None
+
+
 def test_failed_retry_clears_stale_terminal_snapshot():
     record = _record("failed")
     record.finish = True

@@ -1192,7 +1192,7 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 截至 2026-07-19，已完成第一批统一 SQL 查询链路、第二批会话生命周期收敛、第三批会话记录状态与结果投影统一、
 第四批语义 SQL 编译入口收敛、第五批语义检索与物理 Schema 查询收敛、第六批执行绑定规则统一，以及第七批
-问题理解确定性校验规则收敛和第八批会话最终结果大小边界统一：
+问题理解确定性校验规则收敛、第八批会话最终结果大小边界统一和第九批旧 Chat 核心结果写入收敛：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1283,6 +1283,15 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
     继续由既有 Artifact Store 保存完整执行结果，并通过同一个 ChatRecordService 保存最终会话快照。
 38. 第八批 Agent、Graph、ChatBI、Workflow、Workflow Engine 和架构组合回归 439 项通过，完整后端回归
     883 项通过；新增和修改代码通过定向 Ruff 与严格 Mypy，`git diff --check` 通过，OpenAPI 保持 154 个路径。
+39. `ChatRecordService` 新增不改变记录状态的 `project_result` 和 `project_result_by_id`，统一处理中间 SQL 回答、
+    SQL、图表回答、图表配置和执行数据；中间投影与最终成功投影复用同一大小策略，但不会提前设置 `succeeded`。
+40. 旧 `apps/chat/curd/chat.py` 的 `save_sql_answer`、`save_sql`、`save_chart_answer`、`save_chart` 和
+    `save_sql_exec_data` 已改为兼容转发，不再直接更新 ChatRecord 核心结果字段。分析和预测记录复制来源图表、数据时
+    也经过统一投影入口，避免绕过第八批建立的大小边界。
+41. 已完成的终态记录禁止再次写入中间结果，统一返回 `CHAT_RECORD_RESULT_UPDATE_TERMINAL`；大小校验失败时记录状态
+    和原结果保持不变。新增架构守卫，防止旧 Chat 恢复对核心结果字段的直接赋值或 `update(ChatRecord)`。
+42. 第九批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 443 项通过，完整后端回归 887 项通过；
+    新增和修改代码通过定向 Ruff 与严格 Mypy，`git diff --check` 通过，OpenAPI 保持 154 个路径。
 
 **目标**
 
@@ -1305,7 +1314,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 7. ChatBI 统一管理会话记录状态、澄清状态、错误分类和最终结果投影。会话生命周期、所有权、Agent 与 Graph 的
    记录状态、澄清等待状态及最终结果投影已统一；执行器内部 Run 状态继续保持各自语义。
 8. SQL、数据结果和制品保存建立统一大小限制和清理规则。Agent 与 Graph 的 ChatRecord 最终快照大小边界已统一，
-   Graph 完整结果继续使用 Artifact；旧 Chat 的直接字段写入和跨执行器 Artifact 清理策略待后续批次收敛。
+   Graph 完整结果继续使用 Artifact；旧 Chat 的核心 SQL、图表和执行数据写入已接入相同边界，分析、预测、推荐等
+   辅助结果字段和跨执行器 Artifact 清理策略待后续批次收敛。
 9. 推荐、分析和预测作为 ChatBI 应用能力调用 AI Model，不放入 ORM 方法或模板模块。
 
 **完成标准**

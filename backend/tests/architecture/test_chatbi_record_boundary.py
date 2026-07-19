@@ -97,7 +97,30 @@ def test_legacy_analysis_and_predict_record_uses_chatbi_create_service():
 
     assert "build_chat_record_service" in source
     assert "ChatRecordCreateData" in source
+    assert "record_service.project_result" in source
     assert "record = ChatRecord()" not in source
+    assert "record.chart =" not in source
+    assert "record.data =" not in source
+
+
+def test_legacy_core_result_writes_forward_to_chatbi_service():
+    tree = _tree("apps/chat/curd/chat.py")
+
+    for name in (
+        "save_sql_answer",
+        "save_sql",
+        "save_chart_answer",
+        "save_chart",
+        "save_sql_exec_data",
+    ):
+        source = _function_source(tree, name)
+        assert "project_result_by_id" in source
+        assert "update(ChatRecord)" not in source
+        assert ".sql_answer =" not in source
+        assert ".sql =" not in source
+        assert ".chart_answer =" not in source
+        assert ".chart =" not in source
+        assert ".data =" not in source
 
 
 def test_chat_record_service_owns_final_result_size_policy():
