@@ -23,6 +23,12 @@ from apps.chatbi.services.conversation_service import (
     ConversationServiceConfigurationError,
     RecommendedQuestionProvider,
 )
+from apps.chatbi.services.datasource_selection_service import (
+    DatasourceSelectionError,
+    DatasourceSelectionModelClient,
+    DatasourceSelectionPromptBuilder,
+    DatasourceSelectionService,
+)
 from apps.chatbi.services.execution_binding_service import (
     ExecutionBindingError,
     ExecutionBindingService,
@@ -80,6 +86,10 @@ __all__ = [
     "ConversationService",
     "ConversationServiceConfigurationError",
     "DatasourceMetadataReader",
+    "DatasourceSelectionError",
+    "DatasourceSelectionModelClient",
+    "DatasourceSelectionPromptBuilder",
+    "DatasourceSelectionService",
     "ExecutionBindingError",
     "ExecutionBindingService",
     "PermissionPolicyProvider",

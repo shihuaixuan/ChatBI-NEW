@@ -6,7 +6,7 @@ import urllib.parse
 import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, cast
 
 import orjson
 import pandas as pd
@@ -55,7 +55,6 @@ from apps.chat.curd.chat import (
     save_chart_answer,
     save_error_message,
     save_predict_data,
-    save_select_datasource_answer,
     save_sql,
     save_sql_answer,
     save_sql_exec_data,
@@ -80,8 +79,12 @@ from apps.chat.services.term_context import ChatTermContextService
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
     ChatRecordAuxiliaryType,
+    DatasourceSelectionCandidate,
+    DatasourceSelectionData,
+    DatasourceSelectionEvent,
     RecommendedQuestionGenerationData,
 )
+from apps.chatbi.services import DatasourceSelectionError
 from apps.datasource import (
     DatasourceConnection,
     build_external_datasource_connection,
@@ -106,6 +109,7 @@ from common.utils.data_format import DataFormat
 from common.utils.locale import I18n, I18nHelper
 from common.utils.utils import SQLBotLogUtil, extract_nested_json, prepare_for_orjson
 from infrastructure.analysis_prediction import build_analysis_prediction_service
+from infrastructure.datasource_selection import build_datasource_selection_service
 from infrastructure.recommended_questions import (
     build_recommended_question_service,
 )
@@ -676,8 +680,6 @@ class LLMService:
             yield {'recommended_question': event.recommended_question}
 
     def select_datasource(self, _session: Session):
-        datasource_msg: List[Union[BaseMessage, dict[str, Any]]] = []
-        datasource_msg.append(SystemPromptMessage(self.chat_question.datasource_sys_question()))
         if self.current_assistant and self.current_assistant.type != 4:
             _ds_list = get_assistant_ds(session=_session, llm_service=self)
         else:
@@ -691,128 +693,129 @@ class LLMService:
                 }
                 for ds in _session.exec(stmt)
             ]
-        if not _ds_list:
-            raise SingleMessageError('No available datasource configuration found')
-        ignore_auto_select = _ds_list and len(_ds_list) == 1
-        # ignore auto select ds
-
-        full_thinking_text = ''
-        full_text = ''
-        if not ignore_auto_select:
+        auto_select = len(_ds_list) == 1
+        if not auto_select:
             if settings.TABLE_EMBEDDING_ENABLED and (
                     not self.current_assistant or (self.current_assistant and self.current_assistant.type != 1)):
                 _ds_list = get_ds_embedding(_session, self.current_user, _ds_list, self.out_ds_instance,
                                             self.chat_question.question, self.current_assistant)
-                # yield {'content': '{"id":' + str(ds.get('id')) + '}'}
 
-            _ds_list_dict = []
-            for _ds in _ds_list:
-                _ds_list_dict.append(_ds)
-            datasource_msg.append(
-                HumanMessage(self.chat_question.datasource_user_question(orjson.dumps(_ds_list_dict).decode())))
+        selection_data = DatasourceSelectionData(
+            record_id=self.record.id or 0,
+            question=self.chat_question.question or "",
+            candidates=[
+                DatasourceSelectionCandidate(
+                    id=cast(int, candidate.get("id")),
+                    name=cast(str, candidate.get("name")),
+                    description=cast(str | None, candidate.get("description")),
+                )
+                for candidate in _ds_list
+            ],
+            language=self.chat_question.lang,
+            assistant_name=self.chat_question.sqlbot_name,
+            auto_select=auto_select,
+        )
+        service = build_datasource_selection_service(_session, self.llm)
+        try:
+            messages = service.prepare(selection_data)
+        except DatasourceSelectionError as exc:
+            raise SingleMessageError(str(exc)) from exc
 
+        if not auto_select:
             self.current_logs[OperationEnum.CHOOSE_DATASOURCE] = start_log(session=_session,
                                                                            ai_modal_id=self.chat_question.ai_modal_id,
                                                                            ai_modal_name=self.chat_question.ai_modal_name,
                                                                            operate=OperationEnum.CHOOSE_DATASOURCE,
                                                                            record_id=self.record.id,
-                                                                           full_message=[{'type': msg.type,
-                                                                                          'sqlbot_system': getattr(msg,
-                                                                                                                   'sqlbot_system',
-                                                                                                                   False) is True,
-                                                                                          'content': msg.content}
-                                                                                         for
-                                                                                         msg in datasource_msg])
+                                                                           full_message=[
+                                                                               {
+                                                                                   'type': message.role,
+                                                                                   'sqlbot_system': message.role == 'system',
+                                                                                   'content': message.content,
+                                                                               }
+                                                                               for message in messages
+                                                                           ])
 
-            token_usage = {}
-            res = process_stream(self.llm.stream(datasource_msg), token_usage)
-            for chunk in res:
-                if chunk.get('content'):
-                    full_text += chunk.get('content')
-                if chunk.get('reasoning_content'):
-                    full_thinking_text += chunk.get('reasoning_content')
-                yield chunk
-            datasource_msg.append(AIMessage(full_text))
+        selection_event: DatasourceSelectionEvent | None = None
+        for event in service.generate(selection_data, messages):
+            if event.kind == 'chunk':
+                yield {
+                    'content': event.content,
+                    'reasoning_content': event.reasoning_content,
+                }
+                continue
+            selection_event = event
+
+        if not auto_select:
+            if selection_event is None:
+                raise SingleMessageError('DATASOURCE_SELECTION_RESULT_REQUIRED')
 
             self.current_logs[OperationEnum.CHOOSE_DATASOURCE] = end_log(session=_session,
                                                                          log=self.current_logs[
                                                                              OperationEnum.CHOOSE_DATASOURCE],
                                                                          full_message=[
-                                                                             {'type': msg.type,
-                                                                              'sqlbot_system': getattr(msg,
-                                                                                                       'sqlbot_system',
-                                                                                                       False) is True,
-                                                                              'content': msg.content}
-                                                                             for msg in datasource_msg],
-                                                                         reasoning_content=full_thinking_text,
-                                                                         token_usage=token_usage)
+                                                                             *[
+                                                                                 {
+                                                                                     'type': message.role,
+                                                                                     'sqlbot_system': message.role == 'system',
+                                                                                     'content': message.content,
+                                                                                 }
+                                                                                 for message in messages
+                                                                             ],
+                                                                             {
+                                                                                 'type': 'ai',
+                                                                                 'sqlbot_system': False,
+                                                                                 'content': selection_event.content,
+                                                                             },
+                                                                         ],
+                                                                         reasoning_content=selection_event.reasoning_content,
+                                                                         token_usage=selection_event.token_usage)
 
-            json_str = extract_nested_json(full_text)
-            if json_str is None:
-                raise SingleMessageError(f'Cannot parse datasource from answer: {full_text}')
-            ds = orjson.loads(json_str)
+        if selection_event is None:
+            raise SingleMessageError('DATASOURCE_SELECTION_RESULT_REQUIRED')
+        if selection_event.error:
+            raise SingleMessageError(selection_event.error)
+        selected_datasource_id = selection_event.selected_datasource_id
+        if selected_datasource_id is None:
+            raise SingleMessageError('DATASOURCE_SELECTION_RESULT_REQUIRED')
 
-        _error: Exception | None = None
-        _datasource: int | None = None
-        _engine_type: str | None = None
+        if (
+            self.current_assistant
+            and self.current_assistant.type in DYNAMIC_DATASOURCE_ASSISTANT_TYPES
+        ):
+            _ds = self.out_ds_instance.get_ds(selected_datasource_id)
+            self.ds = _ds
+            self.connection = build_external_datasource_connection(_ds, 10)
+            self.chat_question.engine = self.connection.type + get_version(
+                self.connection
+            )
+            conversation_engine_type = _ds.type
+        else:
+            _ds = _session.get(CoreDatasource, selected_datasource_id)
+            if not _ds:
+                raise SingleMessageError(
+                    f"Datasource configuration with id {selected_datasource_id} not found"
+                )
+            self.ds = CoreDatasource(**_ds.model_dump())
+            self.connection = DatasourceConnection.model_validate(_ds)
+            self.chat_question.engine = (
+                _ds.type_name if _ds.type != 'excel' else 'PostgreSQL'
+            ) + get_version(self.connection)
+            conversation_engine_type = _ds.type_name
+
         try:
-            data: dict = _ds_list[0] if ignore_auto_select else ds
+            self.record = service.bind_selection(
+                selection_data,
+                selection_event,
+                record_engine_type=self.chat_question.engine,
+                conversation_engine_type=conversation_engine_type,
+            )
+            _session.commit()
+        except Exception:
+            # 会话与记录必须在同一事务中完成绑定。
+            _session.rollback()
+            raise
 
-            if data.get('id') and data.get('id') != 0:
-                _datasource = data['id']
-                _chat = _session.get(Chat, self.record.chat_id)
-                _chat.datasource = _datasource
-                if (
-                    self.current_assistant
-                    and self.current_assistant.type
-                    in DYNAMIC_DATASOURCE_ASSISTANT_TYPES
-                ):
-                    _ds = self.out_ds_instance.get_ds(data['id'])
-                    self.ds = _ds
-                    self.connection = build_external_datasource_connection(_ds, 10)
-                    self.chat_question.engine = self.connection.type + get_version(
-                        self.connection
-                    )
-
-                    _engine_type = self.chat_question.engine
-                    _chat.engine_type = _ds.type
-                else:
-                    _ds = _session.get(CoreDatasource, _datasource)
-                    if not _ds:
-                        _datasource = None
-                        raise SingleMessageError(f"Datasource configuration with id {_datasource} not found")
-                    self.ds = CoreDatasource(**_ds.model_dump())
-                    self.connection = DatasourceConnection.model_validate(_ds)
-                    self.chat_question.engine = (_ds.type_name if _ds.type != 'excel' else 'PostgreSQL') + get_version(
-                        self.connection)
-
-                    _engine_type = self.chat_question.engine
-                    _chat.engine_type = _ds.type_name
-                # save chat
-                with _session.begin_nested():
-                    # 为了能继续记日志，先单独处理下事务
-                    try:
-                        _session.add(_chat)
-                        _session.flush()
-                        _session.refresh(_chat)
-                        _session.commit()
-                    except Exception as e:
-                        _session.rollback()
-                        raise e
-
-            elif data['fail']:
-                raise SingleMessageError(data['fail'])
-            else:
-                raise SingleMessageError('No available datasource configuration found')
-
-        except Exception as e:
-            _error = e
-
-        if not ignore_auto_select and not settings.TABLE_EMBEDDING_ENABLED:
-            self.record = save_select_datasource_answer(session=_session, record_id=self.record.id,
-                                                        answer=orjson.dumps({'content': full_text}).decode(),
-                                                        datasource=_datasource,
-                                                        engine_type=_engine_type)
         if self.ds:
             oid = self.ds.oid if isinstance(self.ds, CoreDatasource) else 1
             ds_id = self.ds.id if isinstance(self.ds, CoreDatasource) else None
@@ -824,9 +827,6 @@ class LLMService:
             self.filter_custom_prompts(_session, CustomPromptTypeEnum.GENERATE_SQL, oid, ds_id)
 
             self.init_messages(_session)
-
-        if _error:
-            raise _error
 
     def generate_sql(self, _session: Session):
         # append current question

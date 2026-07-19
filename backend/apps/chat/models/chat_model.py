@@ -43,7 +43,6 @@ from apps.template.generate_sql.generator import (
     get_sql_example_template,
     get_sql_template,
 )
-from apps.template.select_datasource.generator import get_datasource_template
 
 
 class ChatRecordResult(BaseModel):
@@ -190,12 +189,6 @@ class AiModelQuestion(BaseModel):
     def chart_user_question(self, chart_type: Optional[str] = '', schema: Optional[str] = ''):
         return get_chart_template()['user'].format(lang=self.lang, sql=self.sql, question=self.question, rule=self.rule,
                                                    chart_type=chart_type, schema=schema)
-
-    def datasource_sys_question(self):
-        return get_datasource_template()['system'].format(lang=self.lang, sqlbot_name=self.sqlbot_name)
-
-    def datasource_user_question(self, datasource_list: str = "[]"):
-        return get_datasource_template()['user'].format(lang=self.lang, question=self.question, data=datasource_list)
 
     def filter_sys_question(self):
         return get_permissions_template()['system'].format(lang=self.lang, engine=self.engine, sqlbot_name=self.sqlbot_name)

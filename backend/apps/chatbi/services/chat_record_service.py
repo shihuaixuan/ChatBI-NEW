@@ -213,6 +213,36 @@ class ChatRecordService:
             )
         return record
 
+    def bind_datasource_selection_by_id(
+        self,
+        record_id: int,
+        *,
+        datasource_id: int,
+        record_engine_type: str,
+        conversation_engine_type: str,
+        answer: str | None,
+    ) -> ChatRecord:
+        """把已验证的数据源同时绑定到 ChatRecord 和所属会话。"""
+
+        if not conversation_engine_type.strip():
+            raise ChatRecordError("CHAT_DATASOURCE_ENGINE_TYPE_REQUIRED")
+        record = self.get(record_id)
+        bounded_result = self._bounded_auxiliary(
+            ChatRecordAuxiliaryProjection(
+                datasource_select_answer=answer,
+                datasource_id=datasource_id,
+                engine_type=record_engine_type,
+            )
+        )
+        self._apply_auxiliary(record, bounded_result)
+        self._repository.save(record)
+        self._repository.bind_conversation_datasource(
+            record.chat_id,
+            datasource_id=datasource_id,
+            engine_type=conversation_engine_type,
+        )
+        return record
+
     def transition_by_id(
         self,
         record_id: int,

@@ -20,6 +20,13 @@ from apps.chatbi.models.dto.conversation import (
     CreateChat,
     RenameChat,
 )
+from apps.chatbi.models.dto.datasource_selection import (
+    DatasourceSelectionCandidate,
+    DatasourceSelectionData,
+    DatasourceSelectionEvent,
+    DatasourceSelectionMessage,
+    DatasourceSelectionModelChunk,
+)
 from apps.chatbi.models.dto.execution_binding import (
     ExecutionBinding,
     ExecutionBindingData,
@@ -68,6 +75,11 @@ __all__ = [
     "ConversationBinding",
     "ConversationCreateData",
     "CreateChat",
+    "DatasourceSelectionCandidate",
+    "DatasourceSelectionData",
+    "DatasourceSelectionEvent",
+    "DatasourceSelectionMessage",
+    "DatasourceSelectionModelChunk",
     "ExecutionBinding",
     "ExecutionBindingData",
     "PhysicalSchemaField",

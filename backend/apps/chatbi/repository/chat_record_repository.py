@@ -20,5 +20,13 @@ class ChatRecordRepository(Protocol):
         questions: str,
     ) -> None: ...
 
+    def bind_conversation_datasource(
+        self,
+        chat_id: int,
+        *,
+        datasource_id: int,
+        engine_type: str,
+    ) -> None: ...
+
 
 __all__ = ["ChatRecordRepository"]

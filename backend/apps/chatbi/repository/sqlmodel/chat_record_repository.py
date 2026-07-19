@@ -54,5 +54,20 @@ class SQLModelChatRecordRepository:
         self._session.add(chat)
         self._session.flush()
 
+    def bind_conversation_datasource(
+        self,
+        chat_id: int,
+        *,
+        datasource_id: int,
+        engine_type: str,
+    ) -> None:
+        chat = self._session.get(Chat, chat_id)
+        if not isinstance(chat, Chat):
+            raise ValueError(f"Chat with id {chat_id} not found")
+        chat.datasource = datasource_id
+        chat.engine_type = engine_type
+        self._session.add(chat)
+        self._session.flush()
+
 
 __all__ = ["SQLModelChatRecordRepository"]
