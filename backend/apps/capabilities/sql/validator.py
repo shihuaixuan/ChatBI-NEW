@@ -10,7 +10,7 @@ from apps.capabilities.schemas import ToolResult
 class SqlValidateTool:
     name = "sql.validate"
 
-    def __init__(self, default_limit: int = 100):
+    def __init__(self, default_limit: int | None = 100):
         self.default_limit = default_limit
 
     def run(self, payload: dict) -> ToolResult:
@@ -77,6 +77,10 @@ class SqlValidateTool:
             tables.add(name)
 
     def _ensure_limit(self, sql: str) -> str:
-        if re.search(r"\blimit\s+\d+\b", sql, flags=re.IGNORECASE):
+        if self.default_limit is None or re.search(
+            r"\blimit\s+\d+\b",
+            sql,
+            flags=re.IGNORECASE,
+        ):
             return sql
         return f"{sql} limit {self.default_limit}"

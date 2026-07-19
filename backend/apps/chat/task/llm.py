@@ -91,7 +91,7 @@ from apps.datasource import (
     build_external_datasource_connection,
 )
 from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data
-from apps.datasource.database import check_connection, exec_sql, get_version
+from apps.datasource.database import check_connection, get_version
 from apps.datasource.embedding.ds_embedding import get_ds_embedding
 from apps.datasource.models.datasource import CoreDatasource
 from apps.knowledge.composition import build_sql_example_query_service
@@ -118,6 +118,7 @@ from infrastructure.dynamic_sql_generation import (
 from infrastructure.permission_sql_generation import (
     build_permission_sql_generation_service,
 )
+from infrastructure.query_execution import build_legacy_chat_query_service
 from infrastructure.recommended_questions import (
     build_recommended_question_service,
 )
@@ -1184,29 +1185,40 @@ class LLMService:
     def finish(self, session: Session):
         return finish_record(session=session, record_id=self.record.id)
 
-    def execute_sql(self, sql: str):
-        """Execute SQL query
-
-        Args:
-            ds: Data source instance
-            sql: SQL query statement
-
-        Returns:
-            Query results
-        """
-        if self.connection is None:
+    def execute_sql(
+            self,
+            sql: str,
+            *,
+            allowed_tables: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """通过 ChatBI 统一查询入口执行旧 Chat SQL。"""
+        if self.connection is None or self.connection.id is None:
             raise SQLBotDBError("Datasource connection is not initialized")
         SQLBotLogUtil.info(
             f"Executing SQL on ds_id {self.connection.id}: {sql}"
         )
-        try:
-            return exec_sql(ds=self.connection, sql=sql, origin_column=False)
-        except Exception as e:
-            if isinstance(e, ParseSQLResultError):
-                raise e
-            else:
-                err = traceback.format_exc(limit=1, chain=True)
-                raise SQLBotDBError(err)
+        query_result = build_legacy_chat_query_service(
+            self.connection,
+            enable_query_limit=self.enable_sql_row_limit,
+        ).execute_sql(
+            sql=sql,
+            datasource_id=self.connection.id,
+            workspace_id=self.current_user.oid,
+            user_id=self.current_user.id,
+            allowed_tables=allowed_tables,
+        )
+        if not query_result.success:
+            message = query_result.message or query_result.error_code or "SQL 执行失败"
+            if query_result.error_code == "sql_result_parse_error":
+                raise ParseSQLResultError(message)
+            raise SQLBotDBError(message)
+
+        payload = query_result.payload
+        metadata = payload.get("execution_metadata")
+        result = dict(metadata) if isinstance(metadata, dict) else {}
+        result["fields"] = payload.get("fields") or []
+        result["data"] = payload.get("full_data") or []
+        return result
 
     def pop_chunk(self):
         try:
@@ -1416,7 +1428,10 @@ class LLMService:
             self.current_logs[OperationEnum.EXECUTE_SQL] = start_log(session=_session,
                                                                      operate=OperationEnum.EXECUTE_SQL,
                                                                      record_id=self.record.id, local_operation=True)
-            result = self.execute_sql(sql=real_execute_sql)
+            result = self.execute_sql(
+                sql=real_execute_sql,
+                allowed_tables=None if use_dynamic_ds else tables,
+            )
             self.current_logs[OperationEnum.EXECUTE_SQL] = end_log(session=_session,
                                                                    log=self.current_logs[OperationEnum.EXECUTE_SQL],
                                                                    full_message={'sql': real_execute_sql,

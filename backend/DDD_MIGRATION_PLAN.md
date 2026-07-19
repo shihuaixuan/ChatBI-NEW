@@ -1195,7 +1195,8 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 问题理解确定性校验规则收敛、第八批会话最终结果大小边界统一、第九批旧 Chat 核心结果写入收敛，以及第十批
 Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助结果写入收敛、第十二批推荐问题生成流程收敛，
 第十三批分析和预测生成流程收敛、第十四批数据源选择流程收敛、第十五批图表生成流程收敛、第十六批
-主 SQL 生成模型编排收敛、第十七批动态 SQL 生成编排收敛，以及第十八批权限 SQL 生成编排收敛：
+主 SQL 生成模型编排收敛、第十七批动态 SQL 生成编排收敛、第十八批权限 SQL 生成编排收敛，以及第十九批
+旧 Chat SQL 执行入口收敛：
 
 1. 新增 `apps/chatbi` 公开领域入口和 `QueryService`，统一执行权限应用、只读 SQL 校验、数据源查询、结果采样
    和数值摘要；Service 只依赖执行端口，不直接依赖 Session、Datasource ORM 或数据库驱动。
@@ -1414,6 +1415,19 @@ Agent、Graph 结果 Artifact 生命周期统一、第十一批旧 Chat 辅助�
     权限条件为空时不调用模型的既有规则保持不变。
 78. 第十八批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 586 项通过，完整后端回归 1015 项通过；
     新增和修改代码通过定向 Ruff，新 DTO、Service 和外层适配器通过严格 Mypy，应用导入和 `git diff --check` 通过，
+    OpenAPI 保持 154 个路径。
+79. ChatBI `QueryService` 支持显式关闭自动 LIMIT，并保留执行器返回的非数据元信息；默认行为保持自动补充 LIMIT，
+    Agent 和 Graph 的既有调用不变。旧 Chat 开启查询限制时统一补充 `LIMIT 1000`，关闭限制时不再强制追加 LIMIT；
+    字段、完整数据、行数、数值摘要和驱动元信息继续通过同一查询结果返回。
+80. 新增连接快照 SQL 执行适配器，使用稳定 `DatasourceConnection` DTO 承接内部数据源和外部助手数据源执行；适配器
+    校验请求数据源与连接快照一致，区分结果解析失败和一般执行失败，并把具体数据库驱动调用限制在基础设施层。
+    旧 Chat 已在执行前完成权限 SQL 改写，因此通过无额外策略来源的 `SQLPermissionService` 进入 QueryService，避免
+    重复追加同一行权限条件。
+81. 旧 `LLMService.execute_sql` 改为调用连接快照装配的 `QueryService`，不再直接调用 `exec_sql`；内部数据源继续传入
+    模型确认的表范围，外部助手动态子查询因真实来源表由助手配置控制，不使用主查询表范围重复拒绝。旧结果中的字段、
+    数据和编码 SQL 元信息得到保留，`execute-success`、`sql-data`、查询结果保存及后续图表生成契约保持不变。
+82. 第十九批 Chat、Agent、Graph、ChatBI、Workflow Engine 和架构组合回归 597 项通过，完整后端回归 1026 项通过；
+    新增和修改代码通过定向 Ruff，QueryService 和连接快照适配器通过严格 Mypy，应用导入和 `git diff --check` 通过，
     OpenAPI 保持 154 个路径。
 
 **目标**

@@ -129,3 +129,54 @@ def test_query_service_revalidates_permission_rewritten_sql():
 
 def test_old_graph_permission_import_is_same_service_object():
     assert PermissionAdapter is SQLPermissionService
+
+
+def test_query_service_preserves_execution_metadata():
+    executor = RecordingExecutor()
+    executor.run = lambda payload: ToolResult(
+        success=True,
+        payload={
+            "fields": ["amount"],
+            "data": [{"amount": 10}],
+            "sql": "encoded-sql",
+            "driver": "mysql",
+        },
+    )
+    service = QueryService(
+        permission_service=SQLPermissionService(),
+        execute_tool=executor,
+    )
+
+    result = service.execute_sql(
+        sql="select amount from orders",
+        datasource_id=8,
+        workspace_id=3,
+        user_id=9,
+    )
+
+    assert result.success
+    assert result.payload["execution_metadata"] == {
+        "sql": "encoded-sql",
+        "driver": "mysql",
+    }
+
+
+def test_query_service_can_validate_without_adding_limit():
+    executor = RecordingExecutor()
+    service = QueryService(
+        default_limit=None,
+        permission_service=SQLPermissionService(),
+        execute_tool=executor,
+    )
+
+    result = service.execute_sql(
+        sql="select amount from orders",
+        datasource_id=8,
+        workspace_id=3,
+        user_id=9,
+    )
+
+    assert result.success
+    assert executor.payloads == [
+        {"sql": "select amount from orders", "datasource_id": 8}
+    ]

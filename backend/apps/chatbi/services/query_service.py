@@ -21,7 +21,7 @@ class QueryService:
     def __init__(
         self,
         *,
-        default_limit: int = 100,
+        default_limit: int | None = 100,
         sample_rows: int = 10,
         permission_service: SQLPermissionApplier | None = None,
         validate_tool: SqlValidateTool | None = None,
@@ -107,6 +107,11 @@ class QueryService:
             if isinstance(raw_row_count, int) and not isinstance(raw_row_count, bool)
             else len(data)
         )
+        execution_metadata = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"fields", "data", "rows"}
+        }
         return ToolResult(
             success=True,
             payload={
@@ -118,6 +123,7 @@ class QueryService:
                 "full_data": data,
                 "execution_ms": int(payload.get("execution_ms") or 0),
                 "artifact_ref": payload.get("artifact_ref"),
+                "execution_metadata": execution_metadata,
             },
         )
 
