@@ -1,54 +1,31 @@
-import datetime
 import json
-from typing import List, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import and_, text
+from sqlalchemy import and_
 from sqlmodel import select
 
 from apps.access_control.data_policy import resolve_data_policy
+from apps.datasource.database import (
+    DB,
+    check_connection,
+    exec_sql,
+    get_engine_config,
+    get_tables,
+)
 from apps.datasource.embedding.table_embedding import calc_table_embedding
 from apps.datasource.utils.utils import aes_decrypt
-from apps.db.constant import DB
-from apps.db.db import check_connection, exec_sql, get_fields, get_tables
-from apps.db.engine import get_engine_config, get_engine_conn
 from common.core.cache_keys import CacheName, CacheNamespace
 from common.core.config import settings
 from common.core.deps import CurrentUser, SessionDep, Trans
 from common.core.sqlbot_cache import cache, clear_cache
-from common.utils.embedding_threads import (
-    run_save_ds_embeddings,
-    run_save_table_embeddings,
-)
-from common.utils.utils import SQLBotLogUtil, deepcopy_ignore_extra, equals_ignore_case
+from common.utils.utils import SQLBotLogUtil, equals_ignore_case
 
-from ..crud.field import delete_field_by_ds_id, update_field
-from ..crud.table import delete_table_by_ds_id, update_table
-from ..models.datasource import (
-    ColumnSchema,
-    CoreDatasource,
-    CoreField,
-    CoreTable,
-    CreateDatasource,
+from ..models.dto import (
     DatasourceConf,
     TableAndFields,
     TableObj,
 )
-from .table import get_tables_by_ds_id
-
-
-def get_datasource_list(session: SessionDep, user: CurrentUser, oid: Optional[int] = None) -> List[CoreDatasource]:
-    current_oid = user.oid if user.oid is not None else 1
-    if user.isAdmin and oid:
-        current_oid = oid
-    return session.exec(
-        select(CoreDatasource).where(CoreDatasource.oid == int(current_oid)).order_by(CoreDatasource.name)).all()
-
-
-def get_ds(session: SessionDep, id: int):
-    statement = select(CoreDatasource).where(CoreDatasource.id == id)
-    datasource = session.exec(statement).first()
-    return datasource
+from ..models.orm import CoreDatasource, CoreField, CoreTable
 
 
 def check_status_by_id(session: SessionDep, trans: Trans, ds_id: int, is_raise: bool = False):
@@ -60,67 +37,8 @@ def check_status_by_id(session: SessionDep, trans: Trans, ds_id: int, is_raise: 
     return check_status(session, trans, ds, is_raise)
 
 
-def check_status(session: SessionDep, trans: Trans, ds: CoreDatasource, is_raise: bool = False):
+def check_status(_session: SessionDep, trans: Trans, ds: CoreDatasource, is_raise: bool = False):
     return check_connection(trans, ds, is_raise)
-
-
-def check_name(session: SessionDep, trans: Trans, user: CurrentUser, ds: CoreDatasource):
-    if ds.id is not None:
-        ds_list = session.query(CoreDatasource).filter(
-            and_(CoreDatasource.name == ds.name, CoreDatasource.id != ds.id, CoreDatasource.oid == user.oid)).all()
-        if ds_list is not None and len(ds_list) > 0:
-            raise HTTPException(status_code=500, detail=trans('i18n_ds_name_exist'))
-    else:
-        ds_list = session.query(CoreDatasource).filter(
-            and_(CoreDatasource.name == ds.name, CoreDatasource.oid == user.oid)).all()
-        if ds_list is not None and len(ds_list) > 0:
-            raise HTTPException(status_code=500, detail=trans('i18n_ds_name_exist'))
-
-@clear_cache(namespace=CacheNamespace.AUTH_INFO, cacheName=CacheName.DS_ID_LIST, keyExpression="user.oid")
-async def create_ds(session: SessionDep, trans: Trans, user: CurrentUser, create_ds: CreateDatasource):
-    ds = CoreDatasource()
-    deepcopy_ignore_extra(create_ds, ds)
-    check_name(session, trans, user, ds)
-    ds.create_time = datetime.datetime.now()
-    # status = check_status(session, ds)
-    ds.create_by = user.id
-    ds.oid = user.oid if user.oid is not None else 1
-    ds.status = "Success"
-    ds.type_name = DB.get_db(ds.type).db_name
-    record = CoreDatasource(**ds.model_dump())
-    session.add(record)
-    session.flush()
-    session.refresh(record)
-    ds.id = record.id
-    session.commit()
-
-    # save tables and fields
-    sync_table(session, ds, create_ds.tables)
-    updateNum(session, ds)
-    return ds
-
-
-def chooseTables(session: SessionDep, trans: Trans, id: int, tables: List[CoreTable]):
-    ds = session.query(CoreDatasource).filter(CoreDatasource.id == id).first()
-    check_status(session, trans, ds, True)
-    sync_table(session, ds, tables)
-    updateNum(session, ds)
-
-
-def update_ds(session: SessionDep, trans: Trans, user: CurrentUser, ds: CoreDatasource):
-    ds.id = int(ds.id)
-    check_name(session, trans, user, ds)
-    # status = check_status(session, trans, ds)
-    ds.status = "Success"
-    record = session.exec(select(CoreDatasource).where(CoreDatasource.id == ds.id)).first()
-    update_data = ds.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(record, field, value)
-    session.add(record)
-    session.commit()
-
-    run_save_ds_embeddings([ds.id])
-    return ds
 
 
 def update_ds_recommended_config(session: SessionDep, datasource_id: int, recommended_config: int):
@@ -129,178 +47,10 @@ def update_ds_recommended_config(session: SessionDep, datasource_id: int, recomm
     session.add(record)
     session.commit()
 
-
-async def delete_ds(session: SessionDep, id: int):
-    term = session.exec(select(CoreDatasource).where(CoreDatasource.id == id)).first()
-    if term.type == "excel":
-        # drop all tables for current datasource
-        engine = get_engine_conn()
-        conf = DatasourceConf(**json.loads(aes_decrypt(term.configuration)))
-        with engine.connect() as conn:
-            for sheet in conf.sheets:
-                conn.execute(text(f'DROP TABLE IF EXISTS "{sheet["tableName"]}"'))
-            conn.commit()
-
-    session.delete(term)
-    session.commit()
-    delete_table_by_ds_id(session, id)
-    delete_field_by_ds_id(session, id)
-    if term:
-        await clear_ws_ds_cache(term.oid)
-    return {
-        "message": f"Datasource with ID {id} deleted successfully."
-    }
-
-
-def getTables(session: SessionDep, id: int):
-    ds = session.exec(select(CoreDatasource).where(CoreDatasource.id == id)).first()
-    tables = get_tables(ds)
-    return tables
-
-
-def getTablesByDs(session: SessionDep, ds: CoreDatasource):
+def getTablesByDs(_session: SessionDep, ds: CoreDatasource):
     # check_status(session, ds, True)
     tables = get_tables(ds)
     return tables
-
-
-def getFields(session: SessionDep, id: int, table_name: str):
-    ds = session.exec(select(CoreDatasource).where(CoreDatasource.id == id)).first()
-    fields = get_fields(ds, table_name)
-    return fields
-
-
-def getFieldsByDs(session: SessionDep, ds: CoreDatasource, table_name: str):
-    fields = get_fields(ds, table_name)
-    return fields
-
-
-def execSql(session: SessionDep, id: int, sql: str):
-    ds = session.exec(select(CoreDatasource).where(CoreDatasource.id == id)).first()
-    return exec_sql(ds, sql, True)
-
-
-def sync_single_fields(session: SessionDep, trans: Trans, id: int):
-    table = session.query(CoreTable).filter(CoreTable.id == id).first()
-    ds = session.query(CoreDatasource).filter(CoreDatasource.id == table.ds_id).first()
-
-    tables = getTablesByDs(session, ds)
-    t_name = []
-    for _t in tables:
-        t_name.append(_t.tableName)
-
-    if not table.table_name in t_name:
-        raise HTTPException(status_code=500, detail=trans('i18n_table_not_exist'))
-
-    # sync field
-    fields = getFieldsByDs(session, ds, table.table_name)
-    sync_fields(session, ds, table, fields)
-
-    # do table embedding
-    run_save_table_embeddings([table.id])
-    run_save_ds_embeddings([ds.id])
-
-
-def sync_table(session: SessionDep, ds: CoreDatasource, tables: List[CoreTable]):
-    id_list = []
-    for item in tables:
-        statement = select(CoreTable).where(and_(CoreTable.ds_id == ds.id, CoreTable.table_name == item.table_name))
-        record = session.exec(statement).first()
-        # update exist table, only update table_comment
-        if record is not None:
-            item.id = record.id
-            id_list.append(record.id)
-
-            record.table_comment = item.table_comment
-            session.add(record)
-            session.commit()
-        else:
-            # save new table
-            table = CoreTable(ds_id=ds.id, checked=True, table_name=item.table_name, table_comment=item.table_comment,
-                              custom_comment=item.table_comment)
-            session.add(table)
-            session.flush()
-            session.refresh(table)
-            item.id = table.id
-            id_list.append(table.id)
-            session.commit()
-
-        # sync field
-        fields = getFieldsByDs(session, ds, item.table_name)
-        sync_fields(session, ds, item, fields)
-
-    if len(id_list) > 0:
-        session.query(CoreTable).filter(and_(CoreTable.ds_id == ds.id, CoreTable.id.not_in(id_list))).delete(
-            synchronize_session=False)
-        session.query(CoreField).filter(and_(CoreField.ds_id == ds.id, CoreField.table_id.not_in(id_list))).delete(
-            synchronize_session=False)
-        session.commit()
-    else:  # delete all tables and fields in this ds
-        session.query(CoreTable).filter(CoreTable.ds_id == ds.id).delete(synchronize_session=False)
-        session.query(CoreField).filter(CoreField.ds_id == ds.id).delete(synchronize_session=False)
-        session.commit()
-
-    # do table embedding
-    run_save_table_embeddings(id_list)
-    run_save_ds_embeddings([ds.id])
-
-
-def sync_fields(session: SessionDep, ds: CoreDatasource, table: CoreTable, fields: List[ColumnSchema]):
-    id_list = []
-    for index, item in enumerate(fields):
-        statement = select(CoreField).where(
-            and_(CoreField.table_id == table.id, CoreField.field_name == item.fieldName))
-        record = session.exec(statement).first()
-        if record is not None:
-            item.id = record.id
-            id_list.append(record.id)
-
-            record.field_comment = item.fieldComment
-            record.field_index = index
-            record.field_type = item.fieldType
-            session.add(record)
-            session.commit()
-        else:
-            field = CoreField(ds_id=ds.id, table_id=table.id, checked=True, field_name=item.fieldName,
-                              field_type=item.fieldType, field_comment=item.fieldComment,
-                              custom_comment=item.fieldComment, field_index=index)
-            session.add(field)
-            session.flush()
-            session.refresh(field)
-            item.id = field.id
-            id_list.append(field.id)
-            session.commit()
-
-    if len(id_list) > 0:
-        session.query(CoreField).filter(and_(CoreField.table_id == table.id, CoreField.id.not_in(id_list))).delete(
-            synchronize_session=False)
-        session.commit()
-
-
-def update_table_and_fields(session: SessionDep, data: TableObj):
-    update_table(session, data.table)
-    for field in data.fields:
-        update_field(session, field)
-
-    # do table embedding
-    run_save_table_embeddings([data.table.id])
-    run_save_ds_embeddings([data.table.ds_id])
-
-
-def updateTable(session: SessionDep, table: CoreTable):
-    update_table(session, table)
-
-    # do table embedding
-    run_save_table_embeddings([table.id])
-    run_save_ds_embeddings([table.ds_id])
-
-
-def updateField(session: SessionDep, field: CoreField):
-    update_field(session, field)
-
-    # do table embedding
-    run_save_table_embeddings([field.table_id])
-    run_save_ds_embeddings([field.ds_id])
 
 
 def preview(session: SessionDep, current_user: CurrentUser, id: int, data: TableObj):
@@ -342,16 +92,16 @@ def preview(session: SessionDep, current_user: CurrentUser, id: int, data: Table
     conf = DatasourceConf(**json.loads(aes_decrypt(ds.configuration))) if ds.type != "excel" else get_engine_config()
     sql: str = ""
     if ds.type == "mysql" or ds.type == "doris" or ds.type == "starrocks" or ds.type == "hive":
-        sql = f"""SELECT `{"`, `".join(fields)}` FROM `{data.table.table_name}` 
-            {where} 
+        sql = f"""SELECT `{"`, `".join(fields)}` FROM `{data.table.table_name}`
+            {where}
             LIMIT 100"""
     elif ds.type == "sqlServer":
         sql = f"""SELECT TOP 100 [{"], [".join(fields)}] FROM [{conf.dbSchema}].[{data.table.table_name}]
-            {where} 
+            {where}
             """
     elif ds.type == "pg" or ds.type == "excel" or ds.type == "redshift" or ds.type == "kingbase":
-        sql = f"""SELECT "{'", "'.join(fields)}" FROM "{conf.dbSchema}"."{data.table.table_name}" 
-            {where} 
+        sql = f"""SELECT "{'", "'.join(fields)}" FROM "{conf.dbSchema}"."{data.table.table_name}"
+            {where}
             LIMIT 100"""
     elif ds.type == "oracle":
         # sql = f"""SELECT "{'", "'.join(fields)}" FROM "{conf.dbSchema}"."{data.table.table_name}"
@@ -360,13 +110,13 @@ def preview(session: SessionDep, current_user: CurrentUser, id: int, data: Table
         #     OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY"""
         sql = f"""SELECT * FROM
                     (SELECT "{'", "'.join(fields)}" FROM "{conf.dbSchema}"."{data.table.table_name}"
-                    {where} 
+                    {where}
                     ORDER BY "{fields[0]}")
                     WHERE ROWNUM <= 100
                     """
     elif ds.type == "ck":
-        sql = f"""SELECT "{'", "'.join(fields)}" FROM "{data.table.table_name}" 
-            {where} 
+        sql = f"""SELECT "{'", "'.join(fields)}" FROM "{data.table.table_name}"
+            {where}
             LIMIT 100"""
     elif ds.type == "dm":
         sql = f"""SELECT "{'", "'.join(fields)}" FROM "{conf.dbSchema}"."{data.table.table_name}"
@@ -400,24 +150,10 @@ def fieldEnum(session: SessionDep, id: int):
     return [item.get(res.get('fields')[0]) for item in res.get('data')]
 
 
-def updateNum(session: SessionDep, ds: CoreDatasource):
-    all_tables = get_tables(ds) if ds.type != 'excel' else json.loads(aes_decrypt(ds.configuration)).get('sheets')
-    selected_tables = get_tables_by_ds_id(session, ds.id)
-    num = f'{len(selected_tables)}/{len(all_tables)}'
-
-    record = session.exec(select(CoreDatasource).where(CoreDatasource.id == ds.id)).first()
-    update_data = ds.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(record, field, value)
-    record.num = num
-    session.add(record)
-    session.commit()
-
-
-def get_table_obj_by_ds(session: SessionDep, current_user: CurrentUser, ds: CoreDatasource) -> List[TableAndFields]:
-    _list: List = []
+def get_table_obj_by_ds(session: SessionDep, current_user: CurrentUser, ds: CoreDatasource) -> list[TableAndFields]:
+    _list: list = []
     tables = session.query(CoreTable).filter(
-        and_(CoreTable.ds_id == ds.id, CoreTable.checked == True)
+        and_(CoreTable.ds_id == ds.id, CoreTable.checked)
     ).all()
     conf = DatasourceConf(**json.loads(aes_decrypt(ds.configuration))) if ds.type != "excel" else get_engine_config()
     schema = conf.dbSchema if conf.dbSchema is not None and conf.dbSchema != "" else conf.database
@@ -425,7 +161,7 @@ def get_table_obj_by_ds(session: SessionDep, current_user: CurrentUser, ds: Core
     # get all field
     table_ids = [table.id for table in tables]
     all_fields = session.query(CoreField).filter(
-        and_(CoreField.table_id.in_(table_ids), CoreField.checked == True)).all()
+        and_(CoreField.table_id.in_(table_ids), CoreField.checked)).all()
     # build dict
     fields_dict = {}
     for field in all_fields:

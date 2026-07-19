@@ -37,7 +37,6 @@ from common.core.response_middleware import ResponseMiddleware, exception_handle
 from common.core.sqlbot_cache import init_sqlbot_cache
 from common.utils.embedding_threads import (
     fill_empty_data_training_embeddings,
-    fill_empty_table_and_ds_embeddings,
 )
 from common.utils.utils import SQLBotLogUtil
 
@@ -58,10 +57,6 @@ def init_data_training_embedding_data():
     fill_empty_data_training_embeddings()
 
 
-def init_table_and_ds_embedding():
-    fill_empty_table_and_ds_embeddings()
-
-
 def mount_xpack_static(app: FastAPI):
     static_path = Path(sqlbot_xpack.__file__).resolve().parent / "static"
     app.mount(
@@ -78,7 +73,6 @@ async def lifespan(app: FastAPI):
     init_sqlbot_cache()
     init_dynamic_cors(app)
     init_data_training_embedding_data()
-    init_table_and_ds_embedding()
     submit_pending_semantic_index_jobs()
     SQLBotLogUtil.info("✅ Numora 初始化完成")
     await sqlbot_xpack.core.clean_xpack_cache()

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
-from apps.datasource.models.datasource import CoreDatasource, CoreField, CoreTable
+from apps.datasource.composition import build_datasource_connection_service
+from apps.datasource.models.datasource import CoreField, CoreTable
 from apps.semantic.errors import SemanticDataAccessError
 from apps.semantic.models.dto import SemanticColumnMeta, SemanticTableMeta
 from apps.semantic.repository.sqlmodel.results import all_results, first_result
@@ -24,18 +24,17 @@ def discover_datasource_tables(
     persisted_tables = all_results(
         session.exec(
             select(CoreTable)
-            .where(CoreTable.ds_id == datasource_id)
-            .order_by(CoreTable.table_name)
+            .where(col(CoreTable.ds_id) == datasource_id)
+            .order_by(col(CoreTable.table_name))
         )
     )
     if persisted_tables:
         return table_metas_from_persisted_tables(persisted_tables)
 
     try:
-        from apps.db.db import get_tables
-
-        datasource = session.get(CoreDatasource, datasource_id)
-        live_tables = get_tables(datasource)
+        live_tables = build_datasource_connection_service(session).list_tables(
+            datasource_id
+        )
         return [
             SemanticTableMeta(
                 table_name=item.tableName,
@@ -55,7 +54,8 @@ def discover_datasource_columns(
     table = first_result(
         session.exec(
             select(CoreTable).where(
-                CoreTable.ds_id == datasource_id, CoreTable.table_name == table_name
+                col(CoreTable.ds_id) == datasource_id,
+                col(CoreTable.table_name) == table_name,
             )
         )
     )
@@ -65,17 +65,17 @@ def discover_datasource_columns(
         persisted_fields = all_results(
             session.exec(
                 select(CoreField)
-                .where(CoreField.table_id == table.id)
-                .order_by(CoreField.field_index)
+                .where(col(CoreField.table_id) == table.id)
+                .order_by(col(CoreField.field_index))
             )
         )
         return column_metas_from_persisted_fields(persisted_fields)
 
     try:
-        from apps.db.db import get_fields
-
-        datasource = session.get(CoreDatasource, datasource_id)
-        live_fields = get_fields(datasource, table_name)
+        live_fields = build_datasource_connection_service(session).list_fields(
+            datasource_id,
+            table_name,
+        )
         return [
             SemanticColumnMeta(
                 field_name=item.fieldName,

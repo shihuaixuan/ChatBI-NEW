@@ -7,7 +7,7 @@ from base64 import b64encode
 import requests
 from elasticsearch import Elasticsearch
 
-from apps.datasource.models.datasource import DatasourceConf
+from apps.datasource.models.dto import DatasourceConf
 from common.error import SingleMessageError
 
 
@@ -20,7 +20,7 @@ def get_es_auth(conf: DatasourceConf):
 
     return {
         "Content-Type": "application/json",
-        "Authorization": f"Basic {encoded_credentials}"
+        "Authorization": f"Basic {encoded_credentials}",
     }
 
 
@@ -30,7 +30,7 @@ def get_es_connect(conf: DatasourceConf):
         basic_auth=(conf.username, conf.password),
         verify_certs=False,
         compatibility_mode=True,
-        headers=get_es_auth(conf)
+        headers=get_es_auth(conf),
     )
     return es_client
 
@@ -42,13 +42,13 @@ def get_es_index(conf: DatasourceConf):
     res = []
     if indices is not None:
         for idx in indices:
-            index_name = idx.get('index')
-            desc = ''
+            index_name = idx.get("index")
+            desc = ""
             # get mapping
             mapping = es_client.indices.get_mapping(index=index_name)
             mappings = mapping.get(index_name).get("mappings")
-            if mappings.get('_meta'):
-                desc = mappings.get('_meta').get('description')
+            if mappings.get("_meta"):
+                desc = mappings.get("_meta").get("description")
             res.append((index_name, desc))
     return res
 
@@ -63,15 +63,15 @@ def get_es_fields(conf: DatasourceConf, table_name: str):
     if properties is not None:
         for field, config in properties.items():
             field_type = config.get("type")
-            desc = ''
+            desc = ""
             if config.get("_meta"):
-                desc = config.get("_meta").get('description')
+                desc = config.get("_meta").get("description")
 
             if field_type:
                 res.append((field, field_type, desc))
             else:
                 # object、nested...
-                res.append((field, ','.join(list(config.keys())), desc))
+                res.append((field, ",".join(list(config.keys())), desc))
     return res
 
 
@@ -105,28 +105,28 @@ def get_es_fields(conf: DatasourceConf, table_name: str):
 
 def get_es_data_by_http(conf: DatasourceConf, sql: str):
     url = conf.host
-    while url.endswith('/'):
+    while url.endswith("/"):
         url = url[:-1]
 
-    host = f'{url}/_sql?format=json'
+    host = f"{url}/_sql?format=json"
 
     # Security improvement: Enable SSL certificate verification
     # Note: In production, always set verify=True or provide path to CA bundle
     # If using self-signed certificates, provide the cert path: verify='/path/to/cert.pem'
     # verify_ssl = True if not url.startswith('https://localhost') else False
-    
+
     response = requests.post(
-        host, 
-        data=json.dumps({"query": sql}), 
-        headers=get_es_auth(conf), 
+        host,
+        data=json.dumps({"query": sql}),
+        headers=get_es_auth(conf),
         verify=False,
-        timeout=30  # Add timeout to prevent hanging
+        timeout=30,  # Add timeout to prevent hanging
     )
 
     # print(response.json())
     res = response.json()
-    if res.get('error'):
+    if res.get("error"):
         raise SingleMessageError(json.dumps(res))
-    fields = res.get('columns')
-    result = res.get('rows')
+    fields = res.get("columns")
+    result = res.get("rows")
     return result, fields

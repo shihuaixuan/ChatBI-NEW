@@ -1,6 +1,6 @@
 from typing import Union
 
-from apps.db.constant import DB
+from apps.datasource.database import DB
 from apps.template.template import get_base_template, get_sql_template as get_base_sql_template
 
 

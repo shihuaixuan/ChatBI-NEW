@@ -3,7 +3,7 @@ from pathlib import Path
 from functools import cache
 from typing import Union
 
-from apps.db.constant import DB
+from apps.datasource.database import DB
 
 # 基础路径配置
 PROJECT_ROOT = Path(__file__).parent.parent.parent

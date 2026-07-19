@@ -4,7 +4,7 @@ from typing import List
 
 from fastapi import APIRouter, Path
 
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource.models.orm import CoreDatasource
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from apps.access_control.permission import SqlbotPermission, require_permissions
 from common.core.deps import SessionDep

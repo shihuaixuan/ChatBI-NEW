@@ -1,19 +1,25 @@
 # Author: Junjun
 # Date: 2025/5/19
 import urllib.parse
-from typing import List
+from typing import Any
 
-from sqlalchemy import create_engine, text, MetaData, Table
+from sqlalchemy import MetaData, Table, create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from apps.datasource.models.datasource import DatasourceConf
+from apps.datasource.models.dto import DatasourceConf
 from common.core.config import settings
 
 
 def get_engine_config():
-    return DatasourceConf(username=settings.POSTGRES_USER, password=settings.POSTGRES_PASSWORD,
-                          host=settings.POSTGRES_SERVER, port=settings.POSTGRES_PORT, database=settings.POSTGRES_DB,
-                          dbSchema="public", timeout=30) # read engine config
+    return DatasourceConf(
+        username=settings.POSTGRES_USER,
+        password=settings.POSTGRES_PASSWORD,
+        host=settings.POSTGRES_SERVER,
+        port=settings.POSTGRES_PORT,
+        database=settings.POSTGRES_DB,
+        dbSchema="public",
+        timeout=30,
+    )  # read engine config
 
 
 def get_engine_uri(conf: DatasourceConf):
@@ -23,9 +29,14 @@ def get_engine_uri(conf: DatasourceConf):
 def get_engine_conn():
     conf = get_engine_config()
     db_url = get_engine_uri(conf)
-    engine = create_engine(db_url,
-                           connect_args={"options": f"-c search_path={conf.dbSchema}", "connect_timeout": conf.timeout},
-                           pool_timeout=conf.timeout)
+    engine = create_engine(
+        db_url,
+        connect_args={
+            "options": f"-c search_path={conf.dbSchema}",
+            "connect_timeout": conf.timeout,
+        },
+        pool_timeout=conf.timeout,
+    )
     return engine
 
 
@@ -36,7 +47,7 @@ def get_data_engine():
     return session
 
 
-def create_table(session, table_name: str, fields: List[any]):
+def create_table(session, table_name: str, fields: list[Any]):
     # field type relation
     list = []
     for f in fields:
@@ -61,7 +72,7 @@ def create_table(session, table_name: str, fields: List[any]):
     session.commit()
 
 
-def insert_data(session, table_name: str, fields: List[any], data: List[any]):
+def insert_data(_session, table_name: str, _fields: list[Any], data: list[Any]):
     engine = get_engine_conn()
     metadata = MetaData()
     table = Table(table_name, metadata, autoload_with=engine)

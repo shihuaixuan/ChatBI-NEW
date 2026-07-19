@@ -3,7 +3,7 @@
 from sqlmodel import Session, col, select
 
 from apps.datasource.contracts import DatasourceCatalog, DatasourceSummary
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource.models.orm import CoreDatasource
 
 
 class SQLModelDatasourceCatalog:

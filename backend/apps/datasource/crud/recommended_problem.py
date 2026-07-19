@@ -3,7 +3,8 @@ import datetime
 from sqlmodel import select
 
 from common.core.deps import SessionDep, CurrentUser, Trans
-from ..models.datasource import DsRecommendedProblem, RecommendedProblemBase, CoreDatasource, RecommendedProblemResponse
+from ..models.dto import RecommendedProblemBase, RecommendedProblemResponse
+from ..models.orm import CoreDatasource, DsRecommendedProblem
 import orjson
 
 

@@ -1003,19 +1003,65 @@ Excel 已迁入 `/semantic/terms`。旧 `apps/terminology` 业务实现已删除
 
 ### 6.4 阶段 P3：收敛 Datasource 与数据库连接实现
 
+**实施状态：进行中**
+
+截至 2026-07-19，已完成三批基础边界、元数据和数据源维护应用流程迁移：
+
+1. `CoreDatasource`、`CoreTable`、`CoreField` 和 `DsRecommendedProblem` 已迁入
+   `datasource/models/orm`，连接、元数据、导入和推荐问题请求对象已迁入 `models/dto`。旧
+   `models/datasource.py` 只保留同对象导入兼容，不再定义 ORM 或 DTO。
+2. 原 `apps/db` 中数据库类型、SQL 模板、本地数据引擎、Elasticsearch 和多数据库驱动实现已迁入
+   `datasource/repository/connectors`，生产代码不再导入 `apps.db`，原目录已删除。
+3. 新增 `DatasourceConnectionRepository`、`DatasourceConnectionGateway`、最小连接快照 DTO 和
+   `DatasourceConnectionService`。Service 统一提供连接检测、版本读取、表字段发现和只读查询执行，
+   不直接依赖数据库驱动或 SQLModel ORM。
+4. Capabilities SQL 执行和 Semantic 实时元数据发现已改用 Datasource 公开 Service，清除 1 条跨领域
+   具体实现依赖和 3 条函数内业务模块导入；架构基线同时移除原 DB 模块的 4 条反向依赖。
+5. Assistant 外部数据源继续使用 `ExternalDatasource` 公开 DTO，连接配置转换位于 Datasource 边界；
+   未知数据库类型和缺失达梦驱动均抛出明确错误，不使用 `None` 或静默回退。
+6. Datasource 表和数据源 Embedding 的新增写入、后台补写及应用启动任务已删除。旧数据库列暂时保留，
+   只用于数据库兼容；旧 Chat 读取链路将在统一 ChatBI 阶段接入 Retrieval 后删除。
+7. 新增 SQLite 连接检测、元数据读取、字段读取、只读查询和驱动错误传播测试。驱动错误不会被转换为空表
+   或空字段列表。
+8. 新增物理元数据 DTO、`DatasourceMetadataRepository` 和 `DatasourceMetadataService`。表选择、表字段
+   查询、字段同步和本地注释编辑接口已改用公开 Service，旧 `crud/table.py`、`crud/field.py` 已删除。
+9. 表选择与字段同步改为先完整读取远端元数据，再一次性替换本地快照；表、字段和 `datasource.num` 在
+   同一个仓储事务中更新，远端读取或数据库提交失败时不会留下部分同步结果。
+10. 创建数据源时先 `flush` 数据源记录，再由 Metadata Service 在同一事务保存物理元数据；删除数据源时，
+    数据源、表和字段也在同一个本地元数据事务中删除。
+11. 新增 `ExcelImportGateway` 和 `ExcelImportService`。所有 Sheet 会先完成解析，再使用同一个数据库事务
+    建表和写入；任一 Sheet 失败时整体回滚，导入成功或失败都会清理临时文件，并拒绝访问上传目录之外的路径。
+12. `/parseExcel` 使用安全文件名并在预览失败时清理临时文件；`/importToDb` 和旧 `/uploadExcel` 已接入
+    同一 Excel Service。原 `to_sql` 后再次 `COPY` 的重复写入逻辑已删除。
+13. Datasource、Assistant、Semantic、Capabilities、Chat 和架构定向回归 195 项通过；完整后端回归
+    727 项通过。应用 OpenAPI 继续生成 154 个路径，Datasource 既有主要接口保持不变。
+14. 新增 `DatasourceRecord`、`UpdateDatasource`、`DatasourceRepository`、`DatasourceService` 和
+    `DatasourceMaintenanceGateway`。数据源列表、详情、创建、更新和删除接口不再调用旧维护 CRUD，
+    API 也不再使用 ORM 作为这些接口的请求或响应模型。
+15. 数据源名称唯一性、类型名称解析、创建时数据源与物理元数据共同回滚、删除时本地表字段事务已统一到
+    Datasource Service 和仓储。Excel 物理表清理由维护网关负责，并使用数据库方言转义表名。
+16. MCP 数据源列表改用 `DatasourceService`，Chat 实时图表查询改用 `DatasourceConnectionService`，已从
+    架构基线移除 2 条跨领域具体实现依赖。
+17. 新增数据源创建、回滚、名称冲突、更新和外部清理失败测试。第三批跨模块定向回归 201 项通过，完整
+    后端回归 732 项通过；Ruff、Mypy、应用导入和 154 个 OpenAPI 路径验证通过。
+
 **目标**
 
 让 Datasource 成为物理数据连接和元数据的唯一边界，消除 `db` 对业务模块的反向依赖。
 
 **任务**
 
-1. 将 CoreDatasource、CoreTable、CoreField 的 ORM 与 DTO 分开。
-2. 为数据源维护、元数据发现、连接检测和查询执行定义最小仓储或网关接口。
-3. 将 `apps/db` 中各数据库连接实现迁入 Datasource 技术实现目录。
-4. 将 Assistant 外部数据源转换为统一连接 DTO，不再让普通 DB 模块导入 Assistant。
-5. 将 Excel 文件导入与数据源创建放入同一应用流程，明确文件清理和失败回滚。
+1. 将 CoreDatasource、CoreTable、CoreField 的 ORM 与 DTO 分开。已完成第一轮拆分。
+2. 为数据源维护、元数据发现、连接检测和查询执行定义最小仓储或网关接口。数据源基本信息、连接、
+   物理元数据和查询接口已完成。
+3. 将 `apps/db` 中各数据库连接实现迁入 Datasource 技术实现目录。已完成。
+4. 将 Assistant 外部数据源转换为统一连接 DTO，不再让普通 DB 模块导入 Assistant。边界迁移已完成，
+   后续继续收敛外部连接与本地连接的内部适配。
+5. 将 Excel 文件导入与数据源创建放入同一应用流程，明确文件清理和失败回滚。Excel 导入事务、临时文件
+   清理及数据源创建时的元数据事务已完成；现有两步 API 契约暂时保留。
 6. 物理表关系保留在 Datasource；业务模型 Join 只保留在 Semantic。
-7. 删除数据源内部旧 Embedding 写入逻辑，统一由 Retrieval 的 Schema Source 投影负责。
+7. 删除数据源内部旧 Embedding 写入逻辑，统一由 Retrieval 的 Schema Source 投影负责。新增写入和后台
+   补写已删除；旧 Chat 读取兼容待 P5 删除。
 8. 把推荐问题移出 Datasource，迁入 Knowledge。
 
 **完成标准**

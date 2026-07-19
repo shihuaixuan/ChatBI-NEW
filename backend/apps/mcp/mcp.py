@@ -28,7 +28,7 @@ from apps.agent.service import (
 )
 from apps.chat.api.chat import create_chat
 from apps.chat.models.chat_model import ChatStart, CreateChat, McpDs, McpQuestion
-from apps.datasource.crud.datasource import get_datasource_list
+from apps.datasource.composition import build_datasource_service
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
 from common.core.schemas import Token, XOAuth2PasswordBearer
@@ -113,14 +113,18 @@ async def datasource_list(session: SessionDep, mcp_ds: McpDs):
     session_user = get_user(session, mcp_ds.token)
     if mcp_ds.oid:
         session_user.oid = int(mcp_ds.oid)
-    ds_list = get_datasource_list(session=session, user=session_user)
+    workspace_id = session_user.oid if session_user.oid is not None else 1
+    ds_list = build_datasource_service(session).list_by_workspace(workspace_id)
     result = []
     for item in ds_list:
-        dic = item.__dict__
-        dic.pop('embedding', None)
-        dic.pop('table_relation', None)
-        dic.pop('recommended_config', None)
-        dic.pop('configuration', None)
+        dic = item.model_dump(
+            exclude={
+                "embedding",
+                "table_relation",
+                "recommended_config",
+                "configuration",
+            }
+        )
         result.append(dic)
     return result
 

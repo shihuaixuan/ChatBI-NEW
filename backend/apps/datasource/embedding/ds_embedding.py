@@ -8,7 +8,7 @@ from typing import Optional, Protocol
 from apps.ai_model.embedding import EmbeddingModelCache
 from apps.datasource import ExternalDatasource
 from apps.datasource.embedding.utils import cosine_similarity
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource.models.orm import CoreDatasource
 from common.core.config import settings
 from common.core.deps import CurrentAssistant, CurrentUser, SessionDep
 from common.utils.utils import SQLBotLogUtil

@@ -10,7 +10,7 @@ from sqlalchemy import Enum as SQLAlchemyEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import SQLModel, Field
 
-from apps.db.constant import DB
+from apps.datasource.database import DB
 from apps.template.filter.generator import get_permissions_template
 from apps.template.generate_analysis.generator import get_analysis_template
 from apps.template.generate_chart.generator import get_chart_template

@@ -1,29 +1,52 @@
 from typing import Any
 
+from sqlmodel import Session
+
 from apps.capabilities.schemas import ToolResult
 from apps.capabilities.sql.permission import PermissionTool
 from apps.capabilities.sql.validator import SqlValidateTool
+from apps.datasource.composition import build_datasource_connection_service
+from apps.datasource.services import DatasourceNotFoundError
 
 
 class SqlExecuteTool:
     name = "sql.execute"
 
-    def __init__(self, session):
-        self.session = session
+    def __init__(self, session: Session) -> None:
+        self._service = build_datasource_connection_service(session)
 
-    def run(self, payload: dict) -> ToolResult:
-        from apps.datasource.crud.datasource import get_ds
-        from apps.db.db import exec_sql
-
+    def run(self, payload: dict[str, Any]) -> ToolResult:
         datasource_id = payload.get("datasource_id")
         sql = payload.get("sql")
-        ds = get_ds(self.session, datasource_id) if datasource_id else None
-        if not ds:
-            return ToolResult(success=False, error_code="datasource_not_found", message="数据源不存在")
+        if not isinstance(datasource_id, int) or not datasource_id:
+            return ToolResult(
+                success=False, error_code="datasource_not_found", message="数据源不存在"
+            )
+        if not isinstance(sql, str) or not sql.strip():
+            return ToolResult(
+                success=False,
+                error_code="sql_execute_error",
+                message="SQL 不能为空",
+            )
         try:
-            return ToolResult(success=True, payload=exec_sql(ds, sql, origin_column=False))
+            return ToolResult(
+                success=True,
+                payload=self._service.execute_query(
+                    datasource_id,
+                    sql,
+                    origin_column=False,
+                ),
+            )
+        except DatasourceNotFoundError:
+            return ToolResult(
+                success=False,
+                error_code="datasource_not_found",
+                message="数据源不存在",
+            )
         except Exception as exc:
-            return ToolResult(success=False, error_code="sql_execute_error", message=str(exc))
+            return ToolResult(
+                success=False, error_code="sql_execute_error", message=str(exc)
+            )
 
 
 class GuardedSqlExecutor:
@@ -35,17 +58,22 @@ class GuardedSqlExecutor:
 
     def __init__(
         self,
-        session,
+        session: Session | None,
         *,
         default_limit: int = 100,
         sample_rows: int = 10,
         permission_tool: PermissionTool | None = None,
         validate_tool: SqlValidateTool | None = None,
         execute_tool: SqlExecuteTool | None = None,
-    ):
+    ) -> None:
         self._permission = permission_tool or PermissionTool()
         self._validator = validate_tool or SqlValidateTool(default_limit=default_limit)
-        self._executor = execute_tool or SqlExecuteTool(session)
+        if execute_tool is not None:
+            self._executor = execute_tool
+        elif session is not None:
+            self._executor = SqlExecuteTool(session)
+        else:
+            raise ValueError("未提供 SQL 执行器或数据库会话")
         self._sample_rows = max(sample_rows, 0)
 
     def run(
@@ -58,11 +86,15 @@ class GuardedSqlExecutor:
         permitted = self._permission.run({"sql": sql})
         if not permitted.success:
             return permitted
-        validated = self._validator.run({"sql": permitted.payload["sql"], "allowed_tables": allowed_tables or []})
+        validated = self._validator.run(
+            {"sql": permitted.payload["sql"], "allowed_tables": allowed_tables or []}
+        )
         if not validated.success:
             return validated
         final_sql = validated.payload["sql"]
-        executed = self._executor.run({"sql": final_sql, "datasource_id": datasource_id})
+        executed = self._executor.run(
+            {"sql": final_sql, "datasource_id": datasource_id}
+        )
         if not executed.success:
             return executed
         fields = executed.payload.get("fields") or []
@@ -80,7 +112,9 @@ class GuardedSqlExecutor:
         )
 
 
-def _numeric_stats(fields: list[str], rows: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+def _numeric_stats(
+    fields: list[str], rows: list[dict[str, Any]]
+) -> dict[str, dict[str, float]]:
     """数值列的 min/max/sum/avg 摘要，供 LLM 在不见全量数据时判断结果形态。"""
 
     stats: dict[str, dict[str, float]] = {}

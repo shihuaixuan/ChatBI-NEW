@@ -29,10 +29,9 @@ from apps.chat.services.semantic_binding import (
     resolve_dataset_chat_binding,
     validate_assistant_dataset_binding,
 )
-from apps.datasource.crud.datasource import get_ds
+from apps.datasource.composition import build_datasource_connection_service
 from apps.datasource.crud.recommended_problem import get_datasource_recommended_chart
 from apps.datasource.models.datasource import CoreDatasource
-from apps.db.db import exec_sql
 from apps.semantic.models.orm import SemanticDataset
 from common.core.deps import CurrentAssistant, CurrentUser, SessionDep, Trans
 from common.utils.data_format import DataFormat
@@ -258,17 +257,15 @@ def get_chart_data_with_user_live(session: SessionDep, current_user: CurrentUser
 def get_chart_data_ds(session: SessionDep,ds_id,sql):
     json_result: Dict[str, Any] = {'status': 'success','data':[],'message':''}
     try:
-        datasource = get_ds(session,ds_id)
-        if datasource is None:
-            json_result['status'] = 'failed'
-            json_result['message'] = 'Datasource not found'
-            return json_result
-        else:
-            result = exec_sql(ds=datasource,sql=sql, origin_column=False)
-            _data = DataFormat.convert_large_numbers_in_object_array(result.get('data'))
-            _data = DataFormat.normalize_qualified_sql_column_keys_in_object_array(_data)
-            json_result['data'] = _data
-            return json_result
+        result = build_datasource_connection_service(session).execute_query(
+            ds_id,
+            sql,
+            origin_column=False,
+        )
+        _data = DataFormat.convert_large_numbers_in_object_array(result.get('data'))
+        _data = DataFormat.normalize_qualified_sql_column_keys_in_object_array(_data)
+        json_result['data'] = _data
+        return json_result
     except Exception as e:
         SQLBotLogUtil.error(f"Function failed: {e}")
         json_result['status'] = 'failed'

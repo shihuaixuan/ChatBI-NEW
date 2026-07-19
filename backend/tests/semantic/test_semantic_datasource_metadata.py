@@ -1,5 +1,4 @@
-import sys
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -7,6 +6,7 @@ from fastapi import HTTPException
 from apps.datasource.models.datasource import CoreField, CoreTable
 from apps.semantic.api.datasources import list_datasource_columns
 from apps.semantic.errors import SemanticForbiddenError
+from apps.semantic.repository.datasource import metadata_discovery
 from apps.semantic.repository.datasource.metadata_discovery import (
     column_metas_from_persisted_fields,
     table_metas_from_persisted_tables,
@@ -122,13 +122,15 @@ async def test_list_datasource_columns_unwraps_sqlalchemy_row_to_table_entity():
 
 @pytest.mark.anyio
 async def test_list_datasource_columns_maps_live_discovery_failure(monkeypatch):
-    db_module = ModuleType("apps.db.db")
+    class FailingConnectionService:
+        def list_fields(self, _datasource_id, _table_name):
+            raise RuntimeError("连接失败")
 
-    def failed_get_fields(_datasource, _table_name):
-        raise RuntimeError("连接失败")
-
-    db_module.get_fields = failed_get_fields
-    monkeypatch.setitem(sys.modules, "apps.db.db", db_module)
+    monkeypatch.setattr(
+        metadata_discovery,
+        "build_datasource_connection_service",
+        lambda _session: FailingConnectionService(),
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await list_datasource_columns(

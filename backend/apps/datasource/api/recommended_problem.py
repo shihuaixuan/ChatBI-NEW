@@ -3,7 +3,7 @@ from fastapi import APIRouter
 from apps.datasource.crud.datasource import update_ds_recommended_config
 from apps.datasource.crud.recommended_problem import get_datasource_recommended, \
     save_recommended_problem, get_datasource_recommended_base
-from apps.datasource.models.datasource import RecommendedProblemBase
+from apps.datasource.models.dto import RecommendedProblemBase
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from common.audit.models.log_model import OperationType, OperationModules
 from common.audit.schemas.logger_decorator import LogConfig, system_log

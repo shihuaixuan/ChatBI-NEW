@@ -5,7 +5,7 @@ from typing import cast
 
 from apps.datasource.contracts import ExternalDatasource
 from apps.datasource.utils.utils import aes_encrypt
-from apps.db.constant import DB
+from apps.datasource.repository.connectors.database_types import DB
 
 
 def build_external_datasource_configuration(

@@ -2,7 +2,7 @@
 
 from sqlmodel import Session, select
 
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource.models.orm import CoreDatasource
 from common.core.cache_keys import CacheName, CacheNamespace
 from common.core.db import engine
 from common.core.sqlbot_cache import cache

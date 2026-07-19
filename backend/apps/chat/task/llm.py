@@ -85,7 +85,7 @@ from apps.data_training.curd.data_training import get_training_template
 from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data
 from apps.datasource.embedding.ds_embedding import get_ds_embedding
 from apps.datasource.models.datasource import CoreDatasource
-from apps.db.db import check_connection, exec_sql, get_version
+from apps.datasource.database import check_connection, exec_sql, get_version
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.system.crud.parameter_manage import get_groups
 from common.core.config import settings

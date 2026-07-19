@@ -11,8 +11,8 @@ from apps.datasource.contracts import (
     DatasourcePolicySchema,
     DatasourcePolicyTable,
 )
-from apps.datasource.models.datasource import CoreDatasource, CoreField, CoreTable
-from apps.db.constant import DB
+from apps.datasource.models.orm import CoreDatasource, CoreField, CoreTable
+from apps.datasource.database import DB
 
 
 class _IdentifierDialect(Protocol):
