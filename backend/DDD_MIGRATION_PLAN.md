@@ -1,6 +1,6 @@
 # SQLBot 后端架构迁移计划（现行版）
 
-> 状态：进行中（R0–R2、R3-a 已完成，当前推进 R3-b）
+> 状态：进行中（R0–R2、R3-a/b 已完成，当前推进 R3-c）
 > 更新：2026-07-20
 > 定位：**边界清晰的模块化单体**。DDD 战略半边（限界上下文、数据所有权、公开契约、依赖方向）全局保留；战术模式按子域分级使用（见 `apps/AGENTS.md` v2）。
 > 本文是唯一现行计划。历史批次日志（含 P0–P5 前 43 批全文）见 `DDD_MIGRATION_CHANGELOG.md`；兼容入口台账见 `COMPAT_LEDGER.md`；评审依据见 `docs/tech/12/13/14`。
@@ -83,8 +83,8 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 | 1 ✅ | 模型运行时装配 | `apps/ai_model/runtime.py` 公开运行能力（R3-a 完成） | R3-a |
 | 2 ✅ | 数据源运行时/连接检测 | 包装删除，直调 Datasource 公开 Service（R3-a 完成） | R3-a |
 | 3 ✅ | 外部助手 Schema 读取 | 收拢至 `apps/chat/task/external_datasource.py`（台账 B3，随 R3-c 删除） | R3-a |
-| 4 | `run_task` 主流程编排（llm.py:1066–1440） | 改写为子域 Service 顺序调用 | R3-b |
-| 5 | 分析/预测/推荐任务编排（llm.py） | 同上 | R3-b |
+| 4 ✅ | `run_task` 主流程编排 | 拆为 12 个阶段方法的顺序调用，特征测试锁行为（R3-b 完成） | R3-b |
+| 5 ✅ | 分析/预测/推荐任务编排 | 拆为 4 个阶段方法（R3-b 完成；推荐任务原本已薄） | R3-b |
 | 6 | SSE 协议与错误格式（legacy_adapter + 投影） | `chatbi/api/legacy_sse.py` | R3-c |
 | 7 | `validate_history_ds`/图片/语言工具 | 归入子域或 legacy_sse | R3-c |
 | 8 | `api/chat.py` 路由与鉴权 | 迁 `chatbi/api/` | R3-c/R4 |

@@ -121,10 +121,15 @@ def test_legacy_analysis_and_prediction_delegate_generation_to_chatbi():
 
 def test_legacy_analysis_and_prediction_sse_contract_is_unchanged():
     tree = _tree__analysis_prediction("apps/chat/task/llm.py")
-    source = _class_method_source__analysis_prediction(
-        tree,
-        "LLMService",
-        "run_analysis_or_predict_task",
+    # R3-b 起流程拆为阶段方法；契约仍由 legacy 流程整体持有。
+    source = "\n".join(
+        _class_method_source__analysis_prediction(tree, "LLMService", name)
+        for name in (
+            "run_analysis_or_predict_task",
+            "_analysis_stage",
+            "_predict_stage",
+            "_predict_success_output",
+        )
     )
 
     for event_type in (
@@ -439,7 +444,10 @@ def test_legacy_chart_parser_and_writer_are_removed():
 
 def test_legacy_run_task_keeps_chart_sse_contract():
     tree = _tree__chart_generation("apps/chat/task/llm.py")
-    source = _class_method_source__chart_generation(tree, "LLMService", "run_task")
+    source = "\n".join(
+        _class_method_source__chart_generation(tree, "LLMService", name)
+        for name in ("run_task", "_generate_chart_stage", "_render_final_output")
+    )
 
     for event_type in ("chart-result", "chart", "finish"):
         assert event_type in source
@@ -596,7 +604,10 @@ def test_legacy_datasource_selection_delegates_model_and_binding_to_chatbi():
 
 def test_legacy_datasource_selection_sse_contract_is_unchanged():
     tree = _tree__datasource_selection("apps/chat/task/llm.py")
-    source = _class_method_source__datasource_selection(tree, "LLMService", "run_task")
+    source = "\n".join(
+        _class_method_source__datasource_selection(tree, "LLMService", name)
+        for name in ("run_task", "_resolve_datasource_stage")
+    )
 
     assert "datasource-result" in source
     assert "datasource_name" in source
@@ -1311,7 +1322,10 @@ def test_query_result_projection_service_only_depends_on_stable_boundaries():
 
 def test_legacy_chat_run_task_delegates_result_projection_and_owns_transaction():
     tree = _tree__query_result_projection("apps/chat/task/llm.py")
-    source = _class_method_source__query_result_projection(tree, "LLMService", "run_task")
+    source = "\n".join(
+        _class_method_source__query_result_projection(tree, "LLMService", name)
+        for name in ("run_task", "_execute_sql_stage")
+    )
 
     assert "build_query_result_projection_service" in source
     assert "QueryResultProjectionData" in source
@@ -1341,10 +1355,18 @@ def test_legacy_chat_result_writer_is_removed():
 
 
 def test_legacy_chat_result_flow_keeps_existing_output_contract():
-    source = _class_method_source__query_result_projection(
-        _tree__query_result_projection("apps/chat/task/llm.py"),
-        "LLMService",
-        "run_task",
+    source = "\n".join(
+        _class_method_source__query_result_projection(
+            _tree__query_result_projection("apps/chat/task/llm.py"),
+            "LLMService",
+            name,
+        )
+        for name in (
+            "run_task",
+            "_finish_query_data_stage",
+            "_generate_chart_stage",
+            "_render_final_output",
+        )
     )
 
     assert "execute-success" in source
@@ -2078,7 +2100,10 @@ def test_legacy_main_sql_parsing_helpers_are_removed():
 
 def test_legacy_run_task_keeps_sql_sse_contract():
     tree = _tree__sql_generation("apps/chat/task/llm.py")
-    source = _class_method_source__sql_generation(tree, "LLMService", "run_task")
+    source = "\n".join(
+        _class_method_source__sql_generation(tree, "LLMService", name)
+        for name in ("run_task", "_generate_sql_stage", "_emit_sql")
+    )
 
     for event_type in ("sql-result", "sql", "finish"):
         assert event_type in source
@@ -2187,9 +2212,15 @@ def test_legacy_chat_sql_execution_delegates_to_query_service():
 
 def test_legacy_chat_run_task_keeps_table_scope_for_internal_datasource():
     tree = _tree__legacy_chat_query_service("apps/chat/task/llm.py")
-    source = _class_method_source__legacy_chat_query_service(tree, "LLMService", "run_task")
+    source = "\n".join(
+        _class_method_source__legacy_chat_query_service(tree, "LLMService", name)
+        for name in ("run_task", "_execute_sql_stage")
+    )
 
-    assert "allowed_tables=None if use_dynamic_ds else tables" in source
+    assert (
+        "allowed_tables=None if prepared['use_dynamic_ds'] else prepared['tables']"
+        in source
+    )
     assert "execute-success" in source
     assert "sql-data" in source
 

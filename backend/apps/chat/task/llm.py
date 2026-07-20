@@ -1063,190 +1063,26 @@ class LLMService:
 
     def run_task(self, in_chat: bool = True, stream: bool = True,
                  finish_step: ChatFinishStep = ChatFinishStep.GENERATE_CHART, return_img: bool = True):
+        """旧主查询主流程：按子域 Service 顺序推进（R3-b 阶段化拆解）。
+
+        各阶段方法保持原有协议输出与终态语义；SSE/Markdown/JSON 协议剥离安排在 R3-c。
+        """
         json_result: dict[str, Any] = {'success': True}
         _session = None
         run_failed = False
         try:
             _session = session_maker()
-            if self.ds:
-                oid = self.ds.oid if isinstance(self.ds, DatasourceRecord) else 1
-                ds_id = self.ds.id if isinstance(self.ds, DatasourceRecord) else None
-
-                self.load_term_context(_session)
-
-                self.filter_training_template(_session, oid, ds_id)
-
-                self.filter_custom_prompts(
-                    _session,
-                    GenerationCustomPromptType.GENERATE_SQL,
-                    oid,
-                    ds_id,
-                )
-
-                self.init_messages(_session)
-
-            # return id
-            if in_chat:
-                yield encode_sse_event('id', id=self.get_record().id)
-                if self.get_record().regenerate_record_id:
-                    yield encode_sse_event(
-                        'regenerate_record_id',
-                        regenerate_record_id=self.get_record().regenerate_record_id,
-                    )
-                yield encode_sse_event('question', question=self.get_record().question)
-            else:
-                if stream:
-                    yield '> ' + self.trans('i18n_chat.record_id_in_mcp') + str(self.get_record().id) + '\n'
-                    yield '> ' + self.get_record().question + '\n\n'
-            if not stream:
-                json_result['record_id'] = self.get_record().id
-
-                # select datasource if datasource is none
-            if not self.ds:
-                ds_res = self.select_datasource(_session)
-
-                for chunk in ds_res:
-                    SQLBotLogUtil.info(chunk)
-                    if in_chat:
-                        yield encode_sse_event(
-                            'datasource-result',
-                            content=chunk.get('content'),
-                            reasoning_content=chunk.get('reasoning_content'),
-                        )
-                if in_chat:
-                    yield encode_sse_event(
-                        'datasource',
-                        id=self.ds.id,
-                        datasource_name=self.ds.name,
-                        engine_type=self.ds.type_name or self.ds.type,
-                    )
-
-            else:
-                self.validate_history_ds(_session)
-
-            # check connection
-            if self.connection is None:
-                raise SQLBotDBConnectionError("Datasource connection is not initialized")
-            if self.datasource_runtime is None:
-                raise SQLBotDBConnectionError(
-                    "Datasource runtime is not initialized"
-                )
-            connected = check_legacy_datasource_connection(
-                _session,
-                self.datasource_runtime,
+            self._prepare_generation_inputs(_session)
+            yield from self._emit_record_header(in_chat, stream, json_result)
+            yield from self._resolve_datasource_stage(_session, in_chat)
+            self._check_datasource_connection(_session)
+            sql_generation_result = yield from self._generate_sql_stage(_session, in_chat)
+            yield from self._rename_brief_stage(
+                _session, sql_generation_result, in_chat, stream, json_result
             )
-            if not connected:
-                raise SQLBotDBConnectionError('Connect DB failed')
-
-            # generate sql
-            sql_res = self.generate_sql(_session)
-            full_sql_text = ''
-            sql_generation_result = None
-            for event in sql_res:
-                if event.kind == 'chunk':
-                    full_sql_text += event.content
-                    if in_chat:
-                        yield encode_sse_event(
-                            'sql-result',
-                            content=event.content,
-                            reasoning_content=event.reasoning_content,
-                        )
-                    continue
-                if event.error:
-                    trigger_log_error(_session, self.current_logs[OperationEnum.GENERATE_SQL])
-                    raise SingleMessageError(event.error)
-                sql_generation_result = event.result
-            if in_chat:
-                yield encode_sse_event('info', msg='sql generated')
-            # filter sql
-            SQLBotLogUtil.info(full_sql_text)
-
-            if sql_generation_result is None:
-                raise SingleMessageError('SQL_GENERATION_RESULT_REQUIRED')
-            chart_type = sql_generation_result.chart_type
-
-            # return title
-            if self.change_title:
-                llm_brief = sql_generation_result.brief
-                llm_brief_generated = bool(llm_brief)
-                if llm_brief_generated or (self.chat_question.question and self.chat_question.question.strip() != ''):
-                    save_brief = llm_brief if (llm_brief and llm_brief != '') else self.chat_question.question.strip()[
-                                                                                   :20]
-                    brief = build_conversation_service(_session).rename(
-                        self.current_user.id,
-                        RenameChat(
-                            id=self.get_record().chat_id,
-                            brief=save_brief,
-                            brief_generate=llm_brief_generated,
-                        ),
-                    )
-                    if in_chat:
-                        yield encode_sse_event('brief', brief=brief)
-                    if not stream:
-                        json_result['title'] = brief
-
-            use_dynamic_ds: bool = (
-                self.current_assistant
-                and self.current_assistant.type
-                in DYNAMIC_DATASOURCE_ASSISTANT_TYPES
-            )
-            is_page_embedded: bool = self.current_assistant and self.current_assistant.type == 4
-            dynamic_sql_result = None
-            sqlbot_temp_sql_text = None
-            assistant_dynamic_sql = None
-            # row permission
-
-            sql = sql_generation_result.sql
-            tables = sql_generation_result.tables
-            if ((not self.current_assistant or is_page_embedded) and requires_data_policy(
-                    self.current_user)) or use_dynamic_ds:
-                sql_result = None
-
-                if use_dynamic_ds:
-                    dynamic_sql_result = self.generate_assistant_dynamic_sql(_session, sql, tables)
-                    sqlbot_temp_sql_text = dynamic_sql_result.get(
-                        'sqlbot_temp_sql_text') if dynamic_sql_result else None
-                else:
-                    sql_result = self.generate_filter(_session, sql, tables)  # maybe no sql and tables
-
-                if sql_result:
-                    SQLBotLogUtil.info(sql_result)
-                    sql = sql_result
-                elif dynamic_sql_result and sqlbot_temp_sql_text:
-                    assistant_dynamic_sql = sqlbot_temp_sql_text
-                    save_sql(
-                        session=_session,
-                        sql=assistant_dynamic_sql,
-                        record_id=self.record.id,
-                    )
-                    self.chat_question.sql = assistant_dynamic_sql
-                else:
-                    save_sql(session=_session, sql=sql, record_id=self.record.id)
-                    self.chat_question.sql = sql
-            else:
-                save_sql(session=_session, sql=sql, record_id=self.record.id)
-                self.chat_question.sql = sql
-
-            SQLBotLogUtil.info('sql: ' + sql)
-
-            if not stream:
-                json_result['sql'] = sql
-
-            format_sql = sqlparse.format(sql, reindent=True)
-            if in_chat:
-                yield encode_sse_event('sql', content=format_sql)
-            else:
-                if stream:
-                    yield f'```sql\n{format_sql}\n```\n\n'
-
-            # execute sql
-            real_execute_sql = sql
-            if sqlbot_temp_sql_text and assistant_dynamic_sql:
-                dynamic_sql_result.pop('sqlbot_temp_sql_text')
-                for origin_table, subsql in dynamic_sql_result.items():
-                    assistant_dynamic_sql = assistant_dynamic_sql.replace(f'{dynamic_subsql_prefix}{origin_table}',
-                                                                          subsql)
-                real_execute_sql = assistant_dynamic_sql
+            prepared = self._apply_sql_policies(_session, sql_generation_result)
+            yield from self._emit_sql(prepared['sql'], in_chat, stream, json_result)
+            real_execute_sql = self._resolve_real_execute_sql(prepared)
 
             if finish_step.value <= ChatFinishStep.GENERATE_SQL.value:
                 if in_chat:
@@ -1255,41 +1091,7 @@ class LLMService:
                     yield json_result
                 return
 
-            self.current_logs[OperationEnum.EXECUTE_SQL] = start_log(session=_session,
-                                                                     operate=OperationEnum.EXECUTE_SQL,
-                                                                     record_id=self.record.id, local_operation=True)
-            result = self.execute_sql(
-                sql=real_execute_sql,
-                allowed_tables=None if use_dynamic_ds else tables,
-            )
-            self.current_logs[OperationEnum.EXECUTE_SQL] = end_log(session=_session,
-                                                                   log=self.current_logs[OperationEnum.EXECUTE_SQL],
-                                                                   full_message={'sql': real_execute_sql,
-                                                                                 'count': len(result.get('data'))})
-
-            datasource_id = self.connection.id if self.connection else None
-            if datasource_id is None:
-                raise SQLBotDBError("Datasource connection is not initialized")
-            execution_metadata = {
-                key: value
-                for key, value in result.items()
-                if key not in {"fields", "data"}
-            }
-            try:
-                result = build_query_result_projection_service(_session).project(
-                    QueryResultProjectionData(
-                        record_id=self.record.id or 0,
-                        datasource_id=datasource_id,
-                        fields=result.get("fields") or [],
-                        rows=result.get("data") or [],
-                        execution_metadata=execution_metadata,
-                        enable_row_limit=self.enable_sql_row_limit,
-                    )
-                )
-                _session.commit()
-            except Exception:
-                _session.rollback()
-                raise
+            result = self._execute_sql_stage(_session, real_execute_sql, prepared)
             _data = result.get("data") or []
             if in_chat:
                 yield encode_sse_event('sql-data', content='execute-success')
@@ -1297,143 +1099,393 @@ class LLMService:
                 json_result['data'] = get_chat_chart_data(_session, self.record.id)
 
             if finish_step.value <= ChatFinishStep.QUERY_DATA.value:
-                if stream:
-                    if in_chat:
-                        yield encode_sse_event('finish')
-                    else:
-                        _column_list = []
-                        for field in result.get('fields'):
-                            _column_list.append(AxisObj(name=field, value=field))
-
-                        md_data, _fields_list = DataFormat.convert_object_array_for_pandas(_column_list,
-                                                                                           result.get('data'))
-
-                        # data, _fields_list, col_formats = self.format_pd_data(_column_list, result.get('data'))
-
-                        if not _data or not _fields_list:
-                            yield 'The SQL execution result is empty.\n\n'
-                        else:
-                            df = pd.DataFrame(_data, columns=_fields_list)
-                            df_safe = DataFormat.safe_convert_to_string(df)
-                            markdown_table = df_safe.to_markdown(index=False)
-                            yield markdown_table + '\n\n'
-                else:
-                    yield json_result
+                yield from self._finish_query_data_stage(
+                    result, _data, in_chat, stream, json_result
+                )
                 return
 
-            # generate chart
-            used_tables_schema = self.load_schema_context(
+            chart = yield from self._generate_chart_stage(
                 _session,
-                embedding=False,
-                table_names=tables,
-                include_sample_data=False,
-            ).schema
-            SQLBotLogUtil.info('used_tables_schema: \n' + used_tables_schema)
-            chart_res = self.generate_chart(_session, chart_type, used_tables_schema)
-            chart: dict[str, Any] | None = None
-            for event in chart_res:
-                if event.kind == 'chunk':
-                    if in_chat:
-                        yield encode_sse_event(
-                            'chart-result',
-                            content=event.content,
-                            reasoning_content=event.reasoning_content,
-                        )
-                    continue
-                if event.error:
-                    raise SingleMessageError(event.error)
-                chart = event.chart
-            if in_chat:
-                yield encode_sse_event('info', msg='chart generated')
-
-            if chart is None:
-                raise SingleMessageError('CHART_GENERATION_RESULT_REQUIRED')
-            SQLBotLogUtil.info(chart)
-
-            if not stream:
-                json_result['chart'] = chart
-
-            if in_chat:
-                yield encode_sse_event('chart', content=orjson.dumps(chart).decode())
-            else:
-                if stream:
-                    md_data, _fields_list = DataFormat.convert_data_fields_for_pandas(chart, result.get('fields'),
-                                                                                      result.get('data'))
-                    # data, _fields_list, col_formats = self.format_pd_data(_column_list, result.get('data'))
-
-                    if not md_data or not _fields_list:
-                        yield 'The SQL execution result is empty.\n\n'
-                    else:
-                        df = pd.DataFrame(md_data, columns=_fields_list)
-                        df_safe = DataFormat.safe_convert_to_string(df)
-                        markdown_table = df_safe.to_markdown(index=False)
-                        yield markdown_table + '\n\n'
-
-            if in_chat:
-                yield encode_sse_event('finish')
-            else:
-                # generate picture
-                try:
-                    if chart.get('type') != 'table' and return_img:
-                        # yield '### generated chart picture\n\n'
-                        self.current_logs[OperationEnum.GENERATE_PICTURE] = start_log(session=_session,
-                                                                                      operate=OperationEnum.GENERATE_PICTURE,
-                                                                                      record_id=self.record.id,
-                                                                                      local_operation=True)
-                        image_url, error = request_picture(self.record.chat_id, self.record.id, chart,
-                                                           format_json_data(result))
-                        SQLBotLogUtil.info(image_url)
-                        if stream:
-                            yield f'![{chart.get("type")}]({image_url})'
-                        else:
-                            json_result['image_url'] = image_url
-                        if error is not None:
-                            raise error
-
-                        self.current_logs[OperationEnum.GENERATE_PICTURE] = end_log(session=_session,
-                                                                                    log=self.current_logs[
-                                                                                        OperationEnum.GENERATE_PICTURE],
-                                                                                    full_message=image_url)
-                except Exception as e:
-                    if stream:
-                        if chart.get('type') != 'table':
-                            yield 'generate or fetch chart picture error.\n\n'
-                        raise e
-
+                prepared['tables'],
+                sql_generation_result.chart_type,
+                in_chat,
+            )
+            yield from self._render_final_output(
+                _session, chart, result, in_chat, stream, return_img, json_result
+            )
             if not stream:
                 yield json_result
-
         except Exception as e:
             run_failed = True
-            traceback.print_exc()
-            if isinstance(e, SingleMessageError):
-                error_kind = "single_message"
-            elif isinstance(e, SQLBotDBConnectionError):
-                error_kind = "db_connection"
-            elif isinstance(e, SQLBotDBError):
-                error_kind = "db_execution"
-            else:
-                error_kind = "unexpected"
-            error_msg = build_run_error_message(
-                error_kind,
-                str(e),
-                traceback.format_exc(limit=1),
-            )
-            if _session:
-                self.save_error(session=_session, message=error_msg)
-            if in_chat:
-                yield encode_sse_event('error', content=error_msg)
-            else:
-                if stream:
-                    yield '&#x274c; **ERROR:**\n'
-                    yield f'> {error_msg}\n'
-                else:
-                    json_result['success'] = False
-                    json_result['message'] = error_msg
-                    yield json_result
+            yield from self._emit_run_error(_session, e, in_chat, stream, json_result)
         finally:
             finalize_legacy_run(_session, run_failed, self.finish)
             session_maker.remove()
+
+    def _prepare_generation_inputs(self, _session):
+        """术语、SQL 示例、自定义提示词与历史消息准备。"""
+        if self.ds:
+            oid = self.ds.oid if isinstance(self.ds, DatasourceRecord) else 1
+            ds_id = self.ds.id if isinstance(self.ds, DatasourceRecord) else None
+
+            self.load_term_context(_session)
+
+            self.filter_training_template(_session, oid, ds_id)
+
+            self.filter_custom_prompts(
+                _session,
+                GenerationCustomPromptType.GENERATE_SQL,
+                oid,
+                ds_id,
+            )
+
+            self.init_messages(_session)
+
+    def _emit_record_header(self, in_chat, stream, json_result):
+        if in_chat:
+            yield encode_sse_event('id', id=self.get_record().id)
+            if self.get_record().regenerate_record_id:
+                yield encode_sse_event(
+                    'regenerate_record_id',
+                    regenerate_record_id=self.get_record().regenerate_record_id,
+                )
+            yield encode_sse_event('question', question=self.get_record().question)
+        else:
+            if stream:
+                yield '> ' + self.trans('i18n_chat.record_id_in_mcp') + str(self.get_record().id) + '\n'
+                yield '> ' + self.get_record().question + '\n\n'
+        if not stream:
+            json_result['record_id'] = self.get_record().id
+
+    def _resolve_datasource_stage(self, _session, in_chat):
+        """数据源缺失时执行模型选择，否则校验历史绑定。"""
+        if not self.ds:
+            ds_res = self.select_datasource(_session)
+
+            for chunk in ds_res:
+                SQLBotLogUtil.info(chunk)
+                if in_chat:
+                    yield encode_sse_event(
+                        'datasource-result',
+                        content=chunk.get('content'),
+                        reasoning_content=chunk.get('reasoning_content'),
+                    )
+            if in_chat:
+                yield encode_sse_event(
+                    'datasource',
+                    id=self.ds.id,
+                    datasource_name=self.ds.name,
+                    engine_type=self.ds.type_name or self.ds.type,
+                )
+
+        else:
+            self.validate_history_ds(_session)
+
+    def _check_datasource_connection(self, _session):
+        if self.connection is None:
+            raise SQLBotDBConnectionError("Datasource connection is not initialized")
+        if self.datasource_runtime is None:
+            raise SQLBotDBConnectionError(
+                "Datasource runtime is not initialized"
+            )
+        connected = check_legacy_datasource_connection(
+            _session,
+            self.datasource_runtime,
+        )
+        if not connected:
+            raise SQLBotDBConnectionError('Connect DB failed')
+
+    def _generate_sql_stage(self, _session, in_chat):
+        sql_res = self.generate_sql(_session)
+        full_sql_text = ''
+        sql_generation_result = None
+        for event in sql_res:
+            if event.kind == 'chunk':
+                full_sql_text += event.content
+                if in_chat:
+                    yield encode_sse_event(
+                        'sql-result',
+                        content=event.content,
+                        reasoning_content=event.reasoning_content,
+                    )
+                continue
+            if event.error:
+                trigger_log_error(_session, self.current_logs[OperationEnum.GENERATE_SQL])
+                raise SingleMessageError(event.error)
+            sql_generation_result = event.result
+        if in_chat:
+            yield encode_sse_event('info', msg='sql generated')
+        SQLBotLogUtil.info(full_sql_text)
+
+        if sql_generation_result is None:
+            raise SingleMessageError('SQL_GENERATION_RESULT_REQUIRED')
+        return sql_generation_result
+
+    def _rename_brief_stage(self, _session, sql_generation_result, in_chat, stream, json_result):
+        if not self.change_title:
+            return
+        llm_brief = sql_generation_result.brief
+        llm_brief_generated = bool(llm_brief)
+        if llm_brief_generated or (self.chat_question.question and self.chat_question.question.strip() != ''):
+            save_brief = llm_brief if (llm_brief and llm_brief != '') else self.chat_question.question.strip()[
+                                                                           :20]
+            brief = build_conversation_service(_session).rename(
+                self.current_user.id,
+                RenameChat(
+                    id=self.get_record().chat_id,
+                    brief=save_brief,
+                    brief_generate=llm_brief_generated,
+                ),
+            )
+            if in_chat:
+                yield encode_sse_event('brief', brief=brief)
+            if not stream:
+                json_result['title'] = brief
+
+    def _apply_sql_policies(self, _session, sql_generation_result):
+        """行权限 / 动态数据源 SQL 改写与记录保存。"""
+        use_dynamic_ds: bool = (
+            self.current_assistant
+            and self.current_assistant.type
+            in DYNAMIC_DATASOURCE_ASSISTANT_TYPES
+        )
+        is_page_embedded: bool = self.current_assistant and self.current_assistant.type == 4
+        dynamic_sql_result = None
+        sqlbot_temp_sql_text = None
+        assistant_dynamic_sql = None
+
+        sql = sql_generation_result.sql
+        tables = sql_generation_result.tables
+        if ((not self.current_assistant or is_page_embedded) and requires_data_policy(
+                self.current_user)) or use_dynamic_ds:
+            sql_result = None
+
+            if use_dynamic_ds:
+                dynamic_sql_result = self.generate_assistant_dynamic_sql(_session, sql, tables)
+                sqlbot_temp_sql_text = dynamic_sql_result.get(
+                    'sqlbot_temp_sql_text') if dynamic_sql_result else None
+            else:
+                sql_result = self.generate_filter(_session, sql, tables)  # maybe no sql and tables
+
+            if sql_result:
+                SQLBotLogUtil.info(sql_result)
+                sql = sql_result
+            elif dynamic_sql_result and sqlbot_temp_sql_text:
+                assistant_dynamic_sql = sqlbot_temp_sql_text
+                save_sql(
+                    session=_session,
+                    sql=assistant_dynamic_sql,
+                    record_id=self.record.id,
+                )
+                self.chat_question.sql = assistant_dynamic_sql
+            else:
+                save_sql(session=_session, sql=sql, record_id=self.record.id)
+                self.chat_question.sql = sql
+        else:
+            save_sql(session=_session, sql=sql, record_id=self.record.id)
+            self.chat_question.sql = sql
+
+        return {
+            'sql': sql,
+            'tables': tables,
+            'use_dynamic_ds': use_dynamic_ds,
+            'dynamic_sql_result': dynamic_sql_result,
+            'sqlbot_temp_sql_text': sqlbot_temp_sql_text,
+            'assistant_dynamic_sql': assistant_dynamic_sql,
+        }
+
+    def _emit_sql(self, sql, in_chat, stream, json_result):
+        SQLBotLogUtil.info('sql: ' + sql)
+
+        if not stream:
+            json_result['sql'] = sql
+
+        format_sql = sqlparse.format(sql, reindent=True)
+        if in_chat:
+            yield encode_sse_event('sql', content=format_sql)
+        else:
+            if stream:
+                yield f'```sql\n{format_sql}\n```\n\n'
+
+    def _resolve_real_execute_sql(self, prepared):
+        """外部助手动态 SQL 在执行前替换为真实子查询。"""
+        real_execute_sql = prepared['sql']
+        dynamic_sql_result = prepared['dynamic_sql_result']
+        assistant_dynamic_sql = prepared['assistant_dynamic_sql']
+        if prepared['sqlbot_temp_sql_text'] and assistant_dynamic_sql:
+            dynamic_sql_result.pop('sqlbot_temp_sql_text')
+            for origin_table, subsql in dynamic_sql_result.items():
+                assistant_dynamic_sql = assistant_dynamic_sql.replace(f'{dynamic_subsql_prefix}{origin_table}',
+                                                                      subsql)
+            real_execute_sql = assistant_dynamic_sql
+        return real_execute_sql
+
+    def _execute_sql_stage(self, _session, real_execute_sql, prepared):
+        self.current_logs[OperationEnum.EXECUTE_SQL] = start_log(session=_session,
+                                                                 operate=OperationEnum.EXECUTE_SQL,
+                                                                 record_id=self.record.id, local_operation=True)
+        result = self.execute_sql(
+            sql=real_execute_sql,
+            allowed_tables=None if prepared['use_dynamic_ds'] else prepared['tables'],
+        )
+        self.current_logs[OperationEnum.EXECUTE_SQL] = end_log(session=_session,
+                                                               log=self.current_logs[OperationEnum.EXECUTE_SQL],
+                                                               full_message={'sql': real_execute_sql,
+                                                                             'count': len(result.get('data'))})
+
+        datasource_id = self.connection.id if self.connection else None
+        if datasource_id is None:
+            raise SQLBotDBError("Datasource connection is not initialized")
+        execution_metadata = {
+            key: value
+            for key, value in result.items()
+            if key not in {"fields", "data"}
+        }
+        try:
+            result = build_query_result_projection_service(_session).project(
+                QueryResultProjectionData(
+                    record_id=self.record.id or 0,
+                    datasource_id=datasource_id,
+                    fields=result.get("fields") or [],
+                    rows=result.get("data") or [],
+                    execution_metadata=execution_metadata,
+                    enable_row_limit=self.enable_sql_row_limit,
+                )
+            )
+            _session.commit()
+        except Exception:
+            _session.rollback()
+            raise
+        return result
+
+    def _finish_query_data_stage(self, result, _data, in_chat, stream, json_result):
+        if stream:
+            if in_chat:
+                yield encode_sse_event('finish')
+            else:
+                _column_list = []
+                for field in result.get('fields'):
+                    _column_list.append(AxisObj(name=field, value=field))
+
+                md_data, _fields_list = DataFormat.convert_object_array_for_pandas(_column_list,
+                                                                                   result.get('data'))
+
+                if not _data or not _fields_list:
+                    yield 'The SQL execution result is empty.\n\n'
+                else:
+                    df = pd.DataFrame(_data, columns=_fields_list)
+                    df_safe = DataFormat.safe_convert_to_string(df)
+                    markdown_table = df_safe.to_markdown(index=False)
+                    yield markdown_table + '\n\n'
+        else:
+            yield json_result
+
+    def _generate_chart_stage(self, _session, tables, chart_type, in_chat):
+        used_tables_schema = self.load_schema_context(
+            _session,
+            embedding=False,
+            table_names=tables,
+            include_sample_data=False,
+        ).schema
+        SQLBotLogUtil.info('used_tables_schema: \n' + used_tables_schema)
+        chart_res = self.generate_chart(_session, chart_type, used_tables_schema)
+        chart: dict[str, Any] | None = None
+        for event in chart_res:
+            if event.kind == 'chunk':
+                if in_chat:
+                    yield encode_sse_event(
+                        'chart-result',
+                        content=event.content,
+                        reasoning_content=event.reasoning_content,
+                    )
+                continue
+            if event.error:
+                raise SingleMessageError(event.error)
+            chart = event.chart
+        if in_chat:
+            yield encode_sse_event('info', msg='chart generated')
+
+        if chart is None:
+            raise SingleMessageError('CHART_GENERATION_RESULT_REQUIRED')
+        SQLBotLogUtil.info(chart)
+        return chart
+
+    def _render_final_output(self, _session, chart, result, in_chat, stream, return_img, json_result):
+        if not stream:
+            json_result['chart'] = chart
+
+        if in_chat:
+            yield encode_sse_event('chart', content=orjson.dumps(chart).decode())
+        else:
+            if stream:
+                md_data, _fields_list = DataFormat.convert_data_fields_for_pandas(chart, result.get('fields'),
+                                                                                  result.get('data'))
+
+                if not md_data or not _fields_list:
+                    yield 'The SQL execution result is empty.\n\n'
+                else:
+                    df = pd.DataFrame(md_data, columns=_fields_list)
+                    df_safe = DataFormat.safe_convert_to_string(df)
+                    markdown_table = df_safe.to_markdown(index=False)
+                    yield markdown_table + '\n\n'
+
+        if in_chat:
+            yield encode_sse_event('finish')
+        else:
+            # generate picture
+            try:
+                if chart.get('type') != 'table' and return_img:
+                    self.current_logs[OperationEnum.GENERATE_PICTURE] = start_log(session=_session,
+                                                                                  operate=OperationEnum.GENERATE_PICTURE,
+                                                                                  record_id=self.record.id,
+                                                                                  local_operation=True)
+                    image_url, error = request_picture(self.record.chat_id, self.record.id, chart,
+                                                       format_json_data(result))
+                    SQLBotLogUtil.info(image_url)
+                    if stream:
+                        yield f'![{chart.get("type")}]({image_url})'
+                    else:
+                        json_result['image_url'] = image_url
+                    if error is not None:
+                        raise error
+
+                    self.current_logs[OperationEnum.GENERATE_PICTURE] = end_log(session=_session,
+                                                                                log=self.current_logs[
+                                                                                    OperationEnum.GENERATE_PICTURE],
+                                                                                full_message=image_url)
+            except Exception as e:
+                if stream:
+                    if chart.get('type') != 'table':
+                        yield 'generate or fetch chart picture error.\n\n'
+                    raise e
+
+    def _emit_run_error(self, _session, e, in_chat, stream, json_result):
+        traceback.print_exc()
+        if isinstance(e, SingleMessageError):
+            error_kind = "single_message"
+        elif isinstance(e, SQLBotDBConnectionError):
+            error_kind = "db_connection"
+        elif isinstance(e, SQLBotDBError):
+            error_kind = "db_execution"
+        else:
+            error_kind = "unexpected"
+        error_msg = build_run_error_message(
+            error_kind,
+            str(e),
+            traceback.format_exc(limit=1),
+        )
+        if _session:
+            self.save_error(session=_session, message=error_msg)
+        if in_chat:
+            yield encode_sse_event('error', content=error_msg)
+        else:
+            if stream:
+                yield '&#x274c; **ERROR:**\n'
+                yield f'> {error_msg}\n'
+            else:
+                json_result['success'] = False
+                json_result['message'] = error_msg
+                yield json_result
 
     def run_recommend_questions_task_async(self):
         self.future = executor.submit(self.run_recommend_questions_task_cache)
@@ -1474,116 +1526,17 @@ class LLMService:
             self.chunk_list.append(chunk)
 
     def run_analysis_or_predict_task(self, action_type: str, in_chat: bool = True, stream: bool = True):
+        """分析/预测辅助流程：按阶段顺序推进（R3-b 拆解），协议输出保持不变。"""
         json_result: dict[str, Any] = {'success': True}
         _session = None
         try:
             _session = session_maker()
-            if in_chat:
-                yield encode_sse_event('id', id=self.get_record().id)
-            else:
-                if stream:
-                    yield '> ' + self.trans('i18n_chat.record_id_in_mcp') + str(self.get_record().id) + '\n'
-                    yield '> ' + self.get_record().question + '\n\n'
-            if not stream:
-                json_result['record_id'] = self.get_record().id
+            yield from self._emit_auxiliary_header(in_chat, stream, json_result)
 
             if action_type == 'analysis':
-                # generate analysis
-                analysis_res = self.generate_analysis(_session)
-                full_text = ''
-                for chunk in analysis_res:
-                    full_text += chunk.get('content')
-                    if in_chat:
-                        yield encode_sse_event(
-                            'analysis-result',
-                            content=chunk.get('content'),
-                            reasoning_content=chunk.get('reasoning_content'),
-                        )
-                    else:
-                        if stream:
-                            yield chunk.get('content')
-                if in_chat:
-                    yield encode_sse_event('info', msg='analysis generated')
-                    yield encode_sse_event('analysis_finish')
-                else:
-                    if stream:
-                        yield '\n\n'
-                if not stream:
-                    json_result['content'] = full_text
-
+                yield from self._analysis_stage(_session, in_chat, stream, json_result)
             elif action_type == 'predict':
-                # generate predict
-                analysis_res = self.generate_predict(_session)
-                full_text = ''
-                for chunk in analysis_res:
-                    full_text += chunk.get('content')
-                    if in_chat:
-                        yield encode_sse_event(
-                            'predict-result',
-                            content=chunk.get('content'),
-                            reasoning_content=chunk.get('reasoning_content'),
-                        )
-                if in_chat:
-                    yield encode_sse_event('info', msg='predict generated')
-
-                has_data = self.check_save_predict_data(session=_session, res=full_text)
-                if has_data:
-                    if in_chat:
-                        yield encode_sse_event('predict-success')
-                    else:
-                        chart = get_chat_chart_config(_session, self.record.id)
-                        origin_data = get_chat_chart_data(_session, self.record.id)
-                        predict_data = get_chat_predict_data(_session, self.record.id)
-
-                        if stream:
-                            md_data, _fields_list = DataFormat.convert_data_fields_for_pandas(chart,
-                                                                                              origin_data.get('fields'),
-                                                                                              predict_data)
-                            if not md_data or not _fields_list:
-                                yield 'Predict data result is empty.\n\n'
-                            else:
-                                df = pd.DataFrame(md_data, columns=_fields_list)
-                                df_safe = DataFormat.safe_convert_to_string(df)
-                                markdown_table = df_safe.to_markdown(index=False)
-                                yield markdown_table + '\n\n'
-
-                        else:
-                            json_result['origin_data'] = origin_data
-                            json_result['predict_data'] = predict_data
-
-                        # generate picture
-                        try:
-                            if chart.get('type') != 'table':
-                                # yield '### generated chart picture\n\n'
-
-                                _data = get_chat_chart_data(_session, self.record.id)
-                                _data['data'] = _data.get('data') + predict_data
-
-                                image_url, error = request_picture(self.record.chat_id, self.record.id, chart,
-                                                                   format_json_data(_data))
-                                SQLBotLogUtil.info(image_url)
-                                if stream:
-                                    yield f'![{chart.get("type")}]({image_url})'
-                                else:
-                                    json_result['image_url'] = image_url
-                                if error is not None:
-                                    raise error
-                        except Exception as e:
-                            if stream:
-                                if chart.get('type') != 'table':
-                                    yield 'generate or fetch chart picture error.\n\n'
-                                raise e
-                else:
-                    if in_chat:
-                        yield encode_sse_event('predict-failed')
-                    else:
-                        if stream:
-                            yield full_text + '\n\n'
-                    if not stream:
-                        json_result['success'] = False
-                        json_result['message'] = full_text
-                if in_chat:
-                    yield encode_sse_event('predict_finish')
+                yield from self._predict_stage(_session, in_chat, stream, json_result)
 
             self.finish(_session)
 
@@ -1611,6 +1564,113 @@ class LLMService:
         finally:
             # end
             session_maker.remove()
+
+    def _emit_auxiliary_header(self, in_chat, stream, json_result):
+        if in_chat:
+            yield encode_sse_event('id', id=self.get_record().id)
+        else:
+            if stream:
+                yield '> ' + self.trans('i18n_chat.record_id_in_mcp') + str(self.get_record().id) + '\n'
+                yield '> ' + self.get_record().question + '\n\n'
+        if not stream:
+            json_result['record_id'] = self.get_record().id
+
+    def _analysis_stage(self, _session, in_chat, stream, json_result):
+        analysis_res = self.generate_analysis(_session)
+        full_text = ''
+        for chunk in analysis_res:
+            full_text += chunk.get('content')
+            if in_chat:
+                yield encode_sse_event(
+                    'analysis-result',
+                    content=chunk.get('content'),
+                    reasoning_content=chunk.get('reasoning_content'),
+                )
+            else:
+                if stream:
+                    yield chunk.get('content')
+        if in_chat:
+            yield encode_sse_event('info', msg='analysis generated')
+            yield encode_sse_event('analysis_finish')
+        else:
+            if stream:
+                yield '\n\n'
+        if not stream:
+            json_result['content'] = full_text
+
+    def _predict_stage(self, _session, in_chat, stream, json_result):
+        analysis_res = self.generate_predict(_session)
+        full_text = ''
+        for chunk in analysis_res:
+            full_text += chunk.get('content')
+            if in_chat:
+                yield encode_sse_event(
+                    'predict-result',
+                    content=chunk.get('content'),
+                    reasoning_content=chunk.get('reasoning_content'),
+                )
+        if in_chat:
+            yield encode_sse_event('info', msg='predict generated')
+
+        has_data = self.check_save_predict_data(session=_session, res=full_text)
+        if has_data:
+            yield from self._predict_success_output(_session, in_chat, stream, json_result)
+        else:
+            if in_chat:
+                yield encode_sse_event('predict-failed')
+            else:
+                if stream:
+                    yield full_text + '\n\n'
+            if not stream:
+                json_result['success'] = False
+                json_result['message'] = full_text
+        if in_chat:
+            yield encode_sse_event('predict_finish')
+
+    def _predict_success_output(self, _session, in_chat, stream, json_result):
+        if in_chat:
+            yield encode_sse_event('predict-success')
+        else:
+            chart = get_chat_chart_config(_session, self.record.id)
+            origin_data = get_chat_chart_data(_session, self.record.id)
+            predict_data = get_chat_predict_data(_session, self.record.id)
+
+            if stream:
+                md_data, _fields_list = DataFormat.convert_data_fields_for_pandas(chart,
+                                                                                  origin_data.get('fields'),
+                                                                                  predict_data)
+                if not md_data or not _fields_list:
+                    yield 'Predict data result is empty.\n\n'
+                else:
+                    df = pd.DataFrame(md_data, columns=_fields_list)
+                    df_safe = DataFormat.safe_convert_to_string(df)
+                    markdown_table = df_safe.to_markdown(index=False)
+                    yield markdown_table + '\n\n'
+
+            else:
+                json_result['origin_data'] = origin_data
+                json_result['predict_data'] = predict_data
+
+            # generate picture
+            try:
+                if chart.get('type') != 'table':
+                    _data = get_chat_chart_data(_session, self.record.id)
+                    _data['data'] = _data.get('data') + predict_data
+
+                    image_url, error = request_picture(self.record.chat_id, self.record.id, chart,
+                                                       format_json_data(_data))
+                    SQLBotLogUtil.info(image_url)
+                    if stream:
+                        yield f'![{chart.get("type")}]({image_url})'
+                    else:
+                        json_result['image_url'] = image_url
+                    if error is not None:
+                        raise error
+            except Exception as e:
+                if stream:
+                    if chart.get('type') != 'table':
+                        yield 'generate or fetch chart picture error.\n\n'
+                    raise e
 
     def validate_history_ds(self, session: Session):
         _ds = self.ds

@@ -2200,3 +2200,22 @@ DDD 迁移完成需要同时满足：
 5. 验证：chat/architecture/chatbi/agent/workflow 定向 664 项、完整后端回归 1,221 项通过；
    应用导入通过；`apps/ai_model/runtime.py` 严格 Mypy 通过；Ruff 通过。
    无行为变化、无数据库变更。台账 B3 由 external_datasource.py 承接。
+
+## R3-b（2026-07-20）：run_task 与分析/预测编排阶段化拆解（关账表 #4/#5）
+
+1. **特征测试先行**：新增 in_chat 模式到 GENERATE_SQL 提前结束的完整 SSE 事件序列特征测试
+   （id/question/sql-result/info/sql/finish 逐帧断言），与既有 2 个终态特征测试共同锁定行为，
+   先在旧实现上跑绿再改写。
+2. **#4 run_task（374 行）拆为 12 个阶段方法**：主流程收敛为约 50 行的可读顺序调用
+   （准备上下文 → 记录头 → 数据源解析 → 连接检查 → SQL 生成 → 标题 → 权限/动态 SQL 策略 →
+   SQL 输出 → 提前结束判定 → 执行与投影 → 图表生成 → 最终输出 → 错误投影），阶段方法逐段
+   转录原实现、协议输出与终态语义逐位保持；生成器 `yield from` + 返回值传递阶段结果。
+   异常分类与错误投影收敛到 `_emit_run_error`，成功/失败终态互斥语义不变。
+3. **#5 分析/预测任务同样拆解**：`_emit_auxiliary_header` / `_analysis_stage` / `_predict_stage` /
+   `_predict_success_output` 四个阶段方法，SSE、Markdown、JSON 三种输出模式与错误路径保持不变。
+4. 7 个基于方法源码的 SSE 契约守卫改为跨阶段方法聚合断言（契约仍由 legacy 流程整体持有），
+   表范围断言表达式同步更新。
+5. 验证：3 个特征测试全绿（改写前后行为一致）；chat/chatbi/architecture/agent/workflow/mcp
+   定向 668 项、**完整后端回归 1,222 项**通过；应用导入通过；Ruff 通过。
+   无行为变化、无数据库变更。协议剥离（SSE → chatbi/api/legacy_sse.py）与旧入口收口按计划
+   留待 R3-c。
