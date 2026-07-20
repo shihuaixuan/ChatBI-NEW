@@ -22,10 +22,10 @@ from apps.chatbi.models import (
 )
 from apps.chatbi.services import (
     FinalReplyProjectionError,
-    FinalReplyProjectionService,
     QueryService,
     ResultArtifactWriteError,
     SemanticQueryCompileError,
+    project_query_final_reply,
 )
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
@@ -473,7 +473,7 @@ class FinishTool(AgentTool):
 
     def execute(self, ctx: AgentToolContext, args: FinishArgs) -> ToolOutput:
         try:
-            result = FinalReplyProjectionService.project_query_answer(
+            result = project_query_final_reply(
                 QueryFinalReplyProjectionData(
                     answer_markdown=args.answer_markdown,
                     execution=ctx.state.get("last_execution"),

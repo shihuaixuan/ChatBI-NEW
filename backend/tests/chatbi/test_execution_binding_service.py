@@ -1,11 +1,11 @@
 import pytest
 
 from apps.chatbi.models import ExecutionBindingData
-from apps.chatbi.services import ExecutionBindingError, ExecutionBindingService
+from apps.chatbi.services import ExecutionBindingError, resolve_execution_binding
 
 
 def test_execution_binding_keeps_conversation_dataset_and_datasource():
-    binding = ExecutionBindingService().resolve(
+    binding = resolve_execution_binding(
         ExecutionBindingData(
             conversation_dataset_id=20,
             conversation_datasource_id=30,
@@ -57,11 +57,11 @@ def test_execution_binding_keeps_conversation_dataset_and_datasource():
 )
 def test_execution_binding_rejects_inconsistent_context(data, error_code):
     with pytest.raises(ExecutionBindingError, match=error_code):
-        ExecutionBindingService().resolve(data)
+        resolve_execution_binding(data)
 
 
 def test_unbound_conversation_can_use_explicit_datasource_without_fake_dataset():
-    binding = ExecutionBindingService().resolve(
+    binding = resolve_execution_binding(
         ExecutionBindingData(
             conversation_dataset_id=None,
             conversation_datasource_id=None,

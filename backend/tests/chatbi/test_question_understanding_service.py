@@ -1,7 +1,7 @@
 import pytest
 
 from apps.capabilities import question_understanding as legacy_question_understanding
-from apps.chatbi.services.question_understanding_service import (
+from apps.chatbi.services.understanding.understanding_service import (
     QuestionUnderstandingError,
     QuestionUnderstandingService,
     apply_question_understanding_clarification,

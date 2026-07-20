@@ -2,11 +2,11 @@ from apps.chatbi.models import (
     GenerationAssistantContext,
     GenerationContextScopeData,
 )
-from apps.chatbi.services import GenerationContextScopeService
+from apps.chatbi.services import resolve_generation_scope
 
 
 def test_scope_without_assistant_keeps_requested_workspace_and_datasource():
-    result = GenerationContextScopeService().project(
+    result = resolve_generation_scope(
         GenerationContextScopeData(
             default_workspace_id=10,
             current_user_workspace_id=20,
@@ -21,7 +21,7 @@ def test_scope_without_assistant_keeps_requested_workspace_and_datasource():
 
 
 def test_regular_assistant_uses_assistant_workspace_and_datasource_scope():
-    result = GenerationContextScopeService().project(
+    result = resolve_generation_scope(
         GenerationContextScopeData(
             default_workspace_id=10,
             current_user_workspace_id=20,
@@ -41,7 +41,7 @@ def test_regular_assistant_uses_assistant_workspace_and_datasource_scope():
 
 
 def test_advanced_assistant_uses_assistant_sql_examples_without_datasource():
-    result = GenerationContextScopeService().project(
+    result = resolve_generation_scope(
         GenerationContextScopeData(
             default_workspace_id=10,
             current_user_workspace_id=20,
@@ -61,7 +61,7 @@ def test_advanced_assistant_uses_assistant_sql_examples_without_datasource():
 
 
 def test_page_embedded_assistant_uses_current_user_workspace():
-    result = GenerationContextScopeService().project(
+    result = resolve_generation_scope(
         GenerationContextScopeData(
             default_workspace_id=10,
             current_user_workspace_id=20,

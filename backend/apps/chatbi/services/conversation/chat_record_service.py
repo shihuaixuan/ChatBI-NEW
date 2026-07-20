@@ -3,6 +3,13 @@ from typing import Any
 
 import orjson
 
+from apps.chatbi.errors import (
+    ChatRecordError,
+    ChatRecordNotFoundError,
+    ChatRecordOwnershipError,
+    ChatRecordResultTooLargeError,
+    ChatRecordTransitionError,
+)
 from apps.chatbi.models import (
     ChatRecord,
     ChatRecordAuxiliaryProjection,
@@ -14,27 +21,6 @@ from apps.chatbi.models import (
     ChatRecordStatus,
 )
 from apps.chatbi.repository import ChatRecordRepository
-
-
-class ChatRecordError(ValueError):
-    """ChatRecord 业务错误基类。"""
-
-
-class ChatRecordNotFoundError(ChatRecordError):
-    """ChatRecord 不存在。"""
-
-
-class ChatRecordOwnershipError(ChatRecordError):
-    """ChatRecord 不属于指定会话。"""
-
-
-class ChatRecordTransitionError(ChatRecordError):
-    """ChatRecord 状态转换不合法。"""
-
-
-class ChatRecordResultTooLargeError(ChatRecordError):
-    """最终结果无法在会话快照边界内安全保存。"""
-
 
 _TERMINAL_STATUSES = {
     ChatRecordStatus.SUCCEEDED,

@@ -1,11 +1,11 @@
 import json
 
 from apps.chatbi.models import AnswerProjectionData
-from apps.chatbi.services import AnswerProjectionService
+from apps.chatbi.services import project_answer_context
 
 
 def test_answer_projection_applies_plan_result_and_error_whitelists():
-    result = AnswerProjectionService().project(
+    result = project_answer_context(
         AnswerProjectionData(
             raw_question="今日访问量",
             rewritten_question="今日访问量是多少",
@@ -67,7 +67,7 @@ def test_answer_projection_applies_plan_result_and_error_whitelists():
 
 
 def test_answer_projection_converts_legacy_flat_execution_result():
-    result = AnswerProjectionService().project(
+    result = project_answer_context(
         AnswerProjectionData(
             raw_question="今日访问量",
             rewritten_question="今日访问量",
@@ -98,7 +98,7 @@ def test_answer_projection_converts_legacy_flat_execution_result():
 
 
 def test_answer_projection_calculates_share_analysis():
-    result = AnswerProjectionService().project(
+    result = project_answer_context(
         AnswerProjectionData(
             raw_question="各店铺访问人数占比",
             rewritten_question="各店铺访问人数占比",
@@ -145,7 +145,6 @@ def test_answer_projection_calculates_share_analysis():
 
 
 def test_answer_projection_calculates_comparison_delta_and_zero_baseline():
-    service = AnswerProjectionService()
     common = {
         "queries": [
             {"query_id": "query-0", "role": "current"},
@@ -153,7 +152,7 @@ def test_answer_projection_calculates_comparison_delta_and_zero_baseline():
         ]
     }
 
-    result = service.project(
+    result = project_answer_context(
         AnswerProjectionData(
             raw_question="本月访问人数环比",
             rewritten_question="本月访问人数环比",
@@ -167,7 +166,7 @@ def test_answer_projection_calculates_comparison_delta_and_zero_baseline():
             },
         )
     ).payload
-    zero_baseline = service.project(
+    zero_baseline = project_answer_context(
         AnswerProjectionData(
             raw_question="本月访问人数环比",
             rewritten_question="本月访问人数环比",
@@ -194,7 +193,7 @@ def test_answer_projection_calculates_comparison_delta_and_zero_baseline():
 
 
 def test_answer_projection_ignores_boolean_and_invalid_numeric_values():
-    result = AnswerProjectionService().project(
+    result = project_answer_context(
         AnswerProjectionData(
             raw_question="各店铺访问人数占比",
             rewritten_question="各店铺访问人数占比",

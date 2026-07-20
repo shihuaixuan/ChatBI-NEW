@@ -1,23 +1,16 @@
-from typing import Any, Protocol
+from typing import Any
 
 from apps.chatbi.models import SemanticRetrievalData
-from apps.retrieval.models.dto import RetrievalRequest
 from apps.retrieval.service import (
-    RetrievalServiceResult,
+    RetrievalService,
     build_semantic_binding_request,
 )
 
 
-class SemanticRetrievalGateway(Protocol):
-    """ChatBI 调用 Retrieval 的最小端口。"""
-
-    def retrieve(self, request: RetrievalRequest) -> RetrievalServiceResult: ...
-
-
 class SemanticRetrievalService:
-    """Agent 与 Graph 共用的语义资产检索入口。"""
+    """Agent 与 Graph 共用的语义资产检索入口（直连 Retrieval 公开服务）。"""
 
-    def __init__(self, gateway: SemanticRetrievalGateway) -> None:
+    def __init__(self, gateway: RetrievalService) -> None:
         self._gateway = gateway
 
     def retrieve(self, data: SemanticRetrievalData) -> dict[str, Any]:
@@ -126,4 +119,4 @@ class SemanticRetrievalService:
         return "semantic_ambiguous"
 
 
-__all__ = ["SemanticRetrievalGateway", "SemanticRetrievalService"]
+__all__ = ["SemanticRetrievalService"]

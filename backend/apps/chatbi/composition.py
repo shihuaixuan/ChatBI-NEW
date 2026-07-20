@@ -3,23 +3,30 @@ from sqlmodel import Session
 from apps.access_control.composition import build_data_policy_service
 from apps.access_control.data_policy import SessionDataPolicyProvider
 from apps.assistant.composition import build_assistant_service
-from apps.capabilities.sql.execution_gateway import SqlExecuteTool
 from apps.chatbi.adapters.embedding_ranking import (
     EmbeddingDatasourceSelectionCandidateRanker,
     EmbeddingGenerationSchemaTableRanker,
 )
+from apps.chatbi.adapters.execution import DatasourceQueryExecutor
 from apps.chatbi.adapters.question_model import build_question_model_service
-from apps.chatbi.conversation import build_conversation_reader_service
+from apps.chatbi.repository.sqlmodel import (
+    SQLModelChatRecordRepository,
+    SQLModelConversationRepository,
+)
 from apps.chatbi.services import (
+    ChatRecordService,
+    ConversationBindingProvider,
+    ConversationDeletionProvider,
+    ConversationService,
     DatasourceSelectionCandidateService,
     GenerationContextService,
     GenerationSchemaContextService,
     PhysicalSchemaService,
     QueryService,
     QuestionUnderstandingService,
+    RecommendedQuestionProvider,
     ResultArtifactService,
     SemanticQueryService,
-    SemanticRetrievalGateway,
     SemanticRetrievalService,
     SQLPermissionService,
 )
@@ -29,7 +36,7 @@ from apps.datasource.composition import (
     build_datasource_service,
 )
 from apps.knowledge.composition import build_sql_example_query_service
-from apps.retrieval.service import build_retrieval_service
+from apps.retrieval.service import RetrievalService, build_retrieval_service
 from apps.semantic.composition import (
     build_semantic_sql_compilation_service,
     build_semantic_term_query_service,
@@ -56,7 +63,7 @@ def build_query_service(
         permission_service=SQLPermissionService(
             policy_provider=SessionDataPolicyProvider(policy_session_factory)
         ),
-        execute_tool=SqlExecuteTool(session),
+        execute_tool=DatasourceQueryExecutor(session),
     )
 
 
@@ -69,7 +76,7 @@ def build_semantic_query_service(session: Session) -> SemanticQueryService:
 def build_semantic_retrieval_service(
     session: Session,
     *,
-    retrieval_gateway: SemanticRetrievalGateway | None = None,
+    retrieval_gateway: RetrievalService | None = None,
 ) -> SemanticRetrievalService:
     """装配 Agent 与 Graph 共用的语义资产检索入口。"""
 
@@ -138,8 +145,40 @@ def build_question_understanding_service() -> QuestionUnderstandingService:
     )
 
 
+
+def build_chat_record_service(session: Session) -> ChatRecordService:
+    """在 ChatBI 边界内装配 ChatRecord 仓储。"""
+
+    return ChatRecordService(SQLModelChatRecordRepository(session))
+
+
+def build_conversation_service(
+    session: Session,
+    *,
+    binding_provider: ConversationBindingProvider | None = None,
+    recommended_question_provider: RecommendedQuestionProvider | None = None,
+    deletion_provider: ConversationDeletionProvider | None = None,
+) -> ConversationService:
+    """在 ChatBI 边界内装配会话仓储和外部端口。"""
+
+    return ConversationService(
+        SQLModelConversationRepository(session),
+        binding_provider=binding_provider,
+        recommended_question_provider=recommended_question_provider,
+        deletion_provider=deletion_provider,
+    )
+
+
+def build_conversation_reader_service(session: Session) -> ConversationService:
+    """装配只需要会话读取与所有权校验的 Service。"""
+
+    return build_conversation_service(session)
+
+
 __all__ = [
+    "build_chat_record_service",
     "build_conversation_reader_service",
+    "build_conversation_service",
     "build_datasource_selection_candidate_service",
     "build_generation_context_service",
     "build_generation_schema_context_service",

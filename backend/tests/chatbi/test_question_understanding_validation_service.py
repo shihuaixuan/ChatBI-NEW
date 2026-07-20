@@ -1,9 +1,9 @@
 from apps.chatbi.models import QuestionUnderstandingValidationData
-from apps.chatbi.services import QuestionUnderstandingValidationService
+from apps.chatbi.services.understanding import validate_question_understanding
 
 
 def test_validation_collects_rewrite_intent_metric_and_time_issues():
-    result = QuestionUnderstandingValidationService().validate(
+    result = validate_question_understanding(
         QuestionUnderstandingValidationData(
             rewrite_need_user_input=True,
             rewrite_missing_slots=("context",),
@@ -28,7 +28,7 @@ def test_validation_collects_rewrite_intent_metric_and_time_issues():
 
 
 def test_validation_keeps_dimension_role_and_filter_value_rules_in_one_result():
-    result = QuestionUnderstandingValidationService().validate(
+    result = validate_question_understanding(
         QuestionUnderstandingValidationData(
             intent_type="metric_query",
             metric_mentions=("客户数",),
@@ -59,7 +59,7 @@ def test_validation_keeps_dimension_role_and_filter_value_rules_in_one_result():
 
 
 def test_validation_marks_time_expression_in_dimension_value_as_repair_issue():
-    result = QuestionUnderstandingValidationService().validate(
+    result = validate_question_understanding(
         QuestionUnderstandingValidationData(
             intent_type="metric_query",
             metric_mentions=("访问人数",),
@@ -84,7 +84,7 @@ def test_validation_marks_time_expression_in_dimension_value_as_repair_issue():
 
 
 def test_validation_exposes_subject_domain_as_graph_slot_issue():
-    result = QuestionUnderstandingValidationService().validate(
+    result = validate_question_understanding(
         QuestionUnderstandingValidationData(
             intent_type="detail_query",
             subject_domain={

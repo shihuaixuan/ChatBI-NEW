@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
 
+from apps.chatbi.errors import (
+    ConversationBindingError,
+    ConversationError,
+    ConversationNotFoundError,
+    ConversationOwnershipError,
+    ConversationServiceConfigurationError,
+)
 from apps.chatbi.models import (
     Chat,
     ChatInfo,
@@ -12,44 +18,11 @@ from apps.chatbi.models import (
     RenameChat,
 )
 from apps.chatbi.repository import ConversationRepository
-
-
-class ConversationError(ValueError):
-    """会话业务错误基类。"""
-
-
-class ConversationBindingError(ConversationError):
-    """会话数据集绑定不合法。"""
-
-
-class ConversationNotFoundError(ConversationError):
-    """会话不存在。"""
-
-
-class ConversationOwnershipError(ConversationError):
-    """当前用户不拥有会话。"""
-
-
-class ConversationServiceConfigurationError(RuntimeError):
-    """会话 Service 缺少必需端口。"""
-
-
-class ConversationBindingProvider(Protocol):
-    def resolve(
-        self,
-        *,
-        workspace_id: int,
-        dataset_id: int,
-        assistant_type: int | None,
-    ) -> ConversationBinding: ...
-
-
-class RecommendedQuestionProvider(Protocol):
-    def list_for_chat(self, datasource_id: int) -> list[str] | None: ...
-
-
-class ConversationDeletionProvider(Protocol):
-    def delete_for_user(self, user_id: int, chat_id: int) -> str: ...
+from apps.chatbi.services.conversation.ports import (
+    ConversationBindingProvider,
+    ConversationDeletionProvider,
+    RecommendedQuestionProvider,
+)
 
 
 class ConversationService:

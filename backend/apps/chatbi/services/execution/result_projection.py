@@ -6,19 +6,16 @@ from typing import Any
 
 import orjson
 
+from apps.chatbi.errors import QueryResultProjectionError
 from apps.chatbi.models import (
     ChatRecordResultProjection,
     QueryResultProjectionData,
 )
-from apps.chatbi.services.chat_record_service import ChatRecordService
+from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 
 _LARGE_INTEGER_THRESHOLD = 10**15
 _LARGE_FLOAT_THRESHOLD = 1e10
 _SMALL_FLOAT_THRESHOLD = 1e-6
-
-
-class QueryResultProjectionError(ValueError):
-    """查询结果标准化或投影输入不合法。"""
 
 
 class QueryResultProjectionService:

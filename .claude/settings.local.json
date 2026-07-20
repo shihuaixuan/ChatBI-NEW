@@ -33,7 +33,10 @@
       "Bash(python3 *)",
       "Bash(npx eslint *)",
       "Bash(uv run *)",
-      "Bash(git -C /Users/twenty/LLM/ChatBI/SQLBot status --porcelain)"
+      "Bash(git -C /Users/twenty/LLM/ChatBI/SQLBot status --porcelain)",
+      "Bash(sed -i '' 's|apps/chatbi/services/conversation_service.py|apps/chatbi/services/conversation/conversation_service.py|' tests/architecture/test_chatbi_conversation_boundary.py)",
+      "Bash(sed -i '' 's|apps/chatbi/services/chat_record_service.py|apps/chatbi/services/conversation/chat_record_service.py|g' tests/architecture/test_chatbi_record_boundary.py)",
+      "Bash(.venv/bin/ruff check *)"
     ]
   }
 }

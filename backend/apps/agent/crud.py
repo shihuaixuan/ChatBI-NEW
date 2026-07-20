@@ -12,8 +12,10 @@ from apps.agent.models import (
     ChatbiAgentTraceEvent,
 )
 from apps.agent.schemas import AgentQuestionRequest
-from apps.chatbi.chat_record import build_chat_record_service
-from apps.chatbi.conversation import build_conversation_reader_service
+from apps.chatbi.composition import (
+    build_chat_record_service,
+    build_conversation_reader_service,
+)
 from apps.chatbi.models import (
     Chat,
     ChatRecord,
@@ -23,7 +25,7 @@ from apps.chatbi.models import (
     ChatRecordStatus,
     ExecutionBindingData,
 )
-from apps.chatbi.services import ExecutionBindingService
+from apps.chatbi.services import resolve_execution_binding
 
 
 def now() -> datetime:
@@ -44,7 +46,7 @@ def create_record_and_run(
     config: dict,
 ) -> tuple[ChatRecord, ChatbiAgentRun]:
     chat = get_chat_for_user(session, request.chat_id, current_user)
-    binding = ExecutionBindingService().resolve(
+    binding = resolve_execution_binding(
         ExecutionBindingData(
             conversation_dataset_id=chat.dataset_id,
             conversation_datasource_id=chat.datasource,

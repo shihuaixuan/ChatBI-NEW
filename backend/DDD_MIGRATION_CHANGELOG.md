@@ -2048,3 +2048,107 @@ DDD 迁移完成需要同时满足：
 - `backend/apps/AGENTS.md` 升级为 v2 分级规则（全局边界 + 子域风格分级 + 横切规则）。
 - 新建 `backend/COMPAT_LEDGER.md` 兼容台账，首批登记存量兼容入口。
 - 新建 `tests/architecture/test_structure_rules.py` 表驱动结构守卫（首批 3 条规则验证机制）。
+
+## R1-a（2026-07-20）：chatbi 理解与会话子域分包
+
+1. 新建 `apps/chatbi/errors.py`：`ChatBIError` 基类 + 会话、会话记录、问题理解 15 个错误类型迁入；
+   原有 ValueError/RuntimeError 基类保留为多继承，调用方 except 行为不变。
+2. 新建 `services/understanding/` 包：understanding_service（Agent 三阶段编排）、model_invocation
+   （`QuestionModelService` 改名 `StructuredModelService`，旧名别名入台账 E3）、validation（校验函数化）、
+   intent_projection（投影函数化）、intent_fallback（保留类）、graph_contracts（input_projection 与
+   intent_validation 两服务函数化合并 + 兼容薄包装 E4）、prompts、time_range。7 个 Question* 服务
+   收敛为 2 个 Service 类 + 1 个模型边界类 + 4 个函数/规则模块。
+3. 新建 `services/conversation/` 包：conversation_service、chat_record_service、ports.py（3 个端口
+   Protocol 迁出 service 文件）。`ChatRecordResultLimits` 已在 DTO 层，无需另拆 record_limits。
+4. `models/orm/conversation.py` 拆为 chat.py、chat_record.py、chat_log.py；`orm/__init__` 导出不变。
+5. `services/__init__.py` 降级为兼容导出层（台账 E1），删除
+   `QuestionUnderstandingValidationService`、`QuestionInputProjectionService`、
+   `QuestionIntentProjectionService` 三个已函数化符号，新增 `StructuredModelService` 与
+   `validate_question_understanding`。
+6. Graph `QuestionAdapter` 移除 intent_post_processor / intent_projection_service /
+   input_projection_service 三个注入参数（无任何注入方），改为直接调用
+   `graph_contracts.*` 与 `intent_projection.*` 共享函数；`QuestionUnderstandingService` 移除
+   validation_service 注入参数，直接调用共享校验函数。
+7. 调用方同批切换：capabilities/question_understanding、time_slots、workflow adapters/intent_validation、
+   answer_generation_service、7 个生成服务的 chat_record_service 导入路径。
+8. 测试同批改写：5 个 chatbi 单测改为函数式调用/新路径；question_understanding、conversation、record
+   三个边界守卫更新到新路径与函数契约。
+9. 验证：tests/chatbi + tests/architecture 376 项、agent/chat/workflow/workflow_engine/capabilities/mcp
+   429 项全部通过；应用导入与 OpenAPI 154 路径核对通过；Ruff 全过；6 个新模块严格 Mypy 通过。
+   本批无行为变化、无数据库变更；全量回归按 R0 分层策略留待 R1-d 收尾批执行。
+
+## R1-b（2026-07-20）：chatbi 生成子域分包
+
+1. 新建 `services/generation/` 包：sql/dynamic_sql/permission_sql/chart/analysis_prediction/
+   recommended_questions/answer_generation 七个生成 Service 迁入（git mv 保历史）；
+   dynamic/permission 与主 SQL 生成的物理合并推迟到 R2 流式骨架统一时一并做。
+2. 新建 `services/generation/context/` 包（Generation* 家族归位）：
+   - **函数化 3 个**：`resolve_generation_scope()`（scope.py）、`resolve_runtime_settings()`
+     （runtime_settings.py）、`project_generation_history()`（history.py）；
+   - `knowledge.py` 承载 `GenerationContextService` 并吸收 `GenerationCustomPromptService`
+     （模块级合并，类 API 不变）；`schema_context.py` 保留 `GenerationSchemaContextService`
+     （改名 SchemaContextService 推迟到 R1-d 统一改名批）。
+3. **函数化 2 个回答投影**：`project_answer_context()`（answer_projection.py）、
+   `project_final_reply()` / `project_query_final_reply()`（final_reply.py）；
+   `FinalReplyProjectionError` 迁入 `errors.py`。
+4. 调用方同批切换：llm.py（3 处 context 调用改函数）、Graph AnswerAdapter（删除 2 个无人注入的
+   服务参数，改调函数）、Agent FinishTool（改调 `project_query_final_reply`）。
+5. `services/__init__.py` 兼容层同步：删除 5 个已函数化类符号（AnswerProjectionService、
+   FinalReplyProjectionService、GenerationContextScopeService、GenerationRuntimeSettingsService、
+   GenerationHistoryProjectionService），新增 6 个函数导出。
+6. adapters 按技术分组推迟到 R2（六个 LangChain 客户端合并后再分组，避免二次搬动）——计划文档
+   R1-b 行同步勾注。
+7. 测试同批改写：5 个单测改函数式调用；11 个架构守卫文件路径与断言更新。
+8. 验证：chatbi+architecture 376 项、agent/chat/workflow 等 429 项通过；应用导入与 OpenAPI 154
+   路径核对通过；Ruff 通过（剩余 3 条为 legacy apps/chat 存量告警，随 R3 删除）；5 个函数化新
+   模块严格 Mypy 通过。无行为变化、无数据库变更。
+
+## R1-c（2026-07-20）：chatbi 规划与执行子域分包，解除 capabilities 依赖，取消 1:1 端口
+
+1. 新建 `services/planning/` 包：datasource_selection、datasource_candidates、semantic_retrieval、
+   semantic_compilation（`SemanticQueryService` 改名 `SemanticCompilationService`，旧名别名 E6）、
+   physical_schema、execution_binding（**函数化** `resolve_execution_binding()`，Error 迁 errors.py）。
+2. 新建 `services/execution/` 包：guarded_query_service（`QueryService` 改名 `GuardedQueryService`，
+   旧名别名 E5）、sql_permission（`PermissionTool` 收编入模块）、sql_validator（自 capabilities 迁入）、
+   result_projection、result_artifacts、ports.py（`SQLExecutor` 技术缝端口）。
+3. **解除 chatbi → capabilities 依赖（A2 清零）**：`ToolResult` 迁入 `models/dto/tool_result.py`；
+   `SqlValidateTool`、`PermissionTool` 迁入执行子域；`SqlExecuteTool` 重写为
+   `adapters/execution.py::DatasourceQueryExecutor`（行为逐行保持）。`capabilities` 的 schemas、
+   validator、permission、execution_gateway 降级为纯转发桩（台账 B6 更新）；executor/repair 为
+   workflow 持有，R4-c 归位。
+4. **取消 4 组 1:1 跨域包装端口**（目标设计 §1.2）：`SemanticRetrievalGateway` → 直连
+   `RetrievalService`；`SemanticCompilationGateway` → 直连 `SemanticSQLCompilationService`；
+   `PermissionPolicyProvider` → 直连 access_control `SessionDataPolicyProvider`；
+   `DatasourceMetadataReader` + `PhysicalTableView`/`PhysicalFieldView` → 直连
+   `DatasourceMetadataService` 与其公开 DTO（`PhysicalTable`/`PhysicalField` 为公开 DTO，无 ORM 泄漏）。
+   `SQLPermissionApplier`（自身 Service 的 1:1 协议）一并取消。
+5. 调用方同批切换：composition、workflow_gateway、agent/crud、workflow_engine/api/service、
+   workflow/runtime、capabilities/sql/executor、workflow 权限兼容入口、chatbi/adapters/query_execution。
+6. 测试同批更新：6 个守卫/单测文件路径与断言、execution_binding 单测函数化。
+7. 验证：chatbi+architecture+capabilities 396 项、agent/chat/workflow/engine/mcp 409 项全部通过；
+   应用导入与 OpenAPI 154 路径核对通过；Ruff 通过；5 个新增/重写核心模块严格 Mypy 通过。
+   `services/` 顶层业务文件清零（仅余兼容 `__init__`），chatbi 对 `apps.capabilities` 导入为 0。
+   无行为变化、无数据库变更。
+
+## R1-d（2026-07-20）：组装与公共面收口，守卫整合，R1 收尾
+
+1. 包根游离 builder（`chatbi/conversation.py`、`chat_record.py`）并入唯一组合根 `composition.py`
+   并删除；12 处调用方（chat/agent/workflow_gateway/8 个 adapters）同批切换。
+2. 建立领域公共面 `apps/chatbi/__init__.py`：26 个符号（≤40）。因旧 Chat 兼容层（台账 B2）仍在
+   access_control 初始化链路中导入本包，公共面按 PEP 562 惰性解析以避免放大历史导入链；
+   `sql_permission` 对 access_control 策略类型的依赖改为 TYPE_CHECKING 注解专用导入。
+   两者动机均已在代码内注明，R3-d 删除 B2 后可回归直接导入。
+3. 剩余执行子域错误迁入 `errors.py`（QueryResultProjectionError、ResultArtifactError/WriteError）；
+   `ResultArtifactGateway`（防腐端口）迁入 `execution/ports.py`；
+   `GenerationSchemaContextService` 改名 `SchemaContextService`（旧名别名，台账 E7）。
+   生成子域 6 组 PromptBuilder/ModelClient 内联协议与错误类型随 R2 流式骨架重写一并收口（已计划）。
+4. **守卫测试整合**：22 个逐批边界守卫文件合并为 `test_boundaries.py` 单容器（122 条规则逐条保留、
+   按来源分节、帮助函数按文件加后缀防冲突）；`tests/architecture` 收敛为 3 个测试文件 + 基线 JSON。
+   新增规则只允许进 `test_structure_rules.py` 规则表；各能力被 R2+ 重写时对应小节转表驱动并删除。
+5. 验证：架构套件 130 项（数量与合并前一致）；**完整后端回归 1,221 项全部通过**；xpack 导入、
+   应用导入与 OpenAPI 154 路径核对通过；Ruff 通过（剩余 3 条 legacy apps/chat 存量）；
+   公共面、errors、ports 严格 Mypy 通过。无行为变化、无数据库变更。
+
+**R1 阶段完成。** 度量：services 顶层业务文件 37→0（6 个子域包）；Service 类 37→约 21；
+函数化贫血服务 13 个；内联 Protocol 36→约 17（余量为 R2 重写对象）；chatbi→capabilities 依赖 4→0；
+1:1 跨域包装端口 ≥6→0；守卫文件 24→3；chatbi 公共面 26 符号。

@@ -2,11 +2,11 @@ from apps.chatbi.models import (
     GenerationRuntimeSettings,
     GenerationRuntimeSettingsData,
 )
-from apps.chatbi.services import GenerationRuntimeSettingsService
+from apps.chatbi.services import resolve_runtime_settings
 
 
 def test_runtime_settings_service_normalizes_values():
-    result = GenerationRuntimeSettingsService().project(
+    result = resolve_runtime_settings(
         GenerationRuntimeSettingsData("Numora", False, 5),
         {
             "chat.sqlbot_name": " SQLBot ",
@@ -23,6 +23,6 @@ def test_runtime_settings_service_normalizes_values():
 def test_runtime_settings_service_keeps_defaults_for_missing_values():
     defaults = GenerationRuntimeSettingsData("Numora", True, 5)
 
-    assert GenerationRuntimeSettingsService().project(defaults, {}) == (
+    assert resolve_runtime_settings(defaults, {}) == (
         GenerationRuntimeSettings("Numora", True, 5)
     )

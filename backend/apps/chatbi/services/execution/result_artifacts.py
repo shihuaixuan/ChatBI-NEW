@@ -1,40 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Protocol
+from typing import Any
 
 from pydantic import BaseModel
 
+from apps.chatbi.errors import ResultArtifactError, ResultArtifactWriteError
 from apps.chatbi.models import ChatBIResultArtifactRef, ResultArtifactWriteData
-
-
-class ResultArtifactError(RuntimeError):
-    """结果 Artifact 处理错误基类。"""
-
-
-class ResultArtifactWriteError(ResultArtifactError):
-    """完整结果正文或元数据写入失败。"""
-
-
-class ResultArtifactGateway(Protocol):
-    """ChatBI 依赖的通用 Artifact 存储与清理端口。"""
-
-    def put_json(
-        self,
-        run_id: str,
-        kind: str,
-        payload: dict[str, Any],
-        metadata: dict[str, Any] | None = None,
-    ) -> Any: ...
-
-    def schedule_cleanup(
-        self,
-        *,
-        metadata: dict[str, str | int],
-        execution_ids: list[str] | None = None,
-    ) -> int: ...
-
-    def process_pending_cleanup(self) -> int: ...
+from apps.chatbi.services.execution.ports import ResultArtifactGateway
 
 
 class ResultArtifactService:

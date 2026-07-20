@@ -7,7 +7,7 @@ from apps.chatbi.composition import (
     build_semantic_query_service,
     build_semantic_retrieval_service,
 )
-from apps.chatbi.services.sql_permission import PermissionAdapter
+from apps.chatbi.services.execution.sql_permission import PermissionAdapter
 from apps.retrieval.service import build_retrieval_service
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
 from apps.semantic.services.schema_service import SemanticSchemaService

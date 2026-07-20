@@ -4,13 +4,12 @@ from apps.chatbi.models import (
     GenerationHistoryProjectionData,
     SQLGenerationMessage,
 )
-from apps.chatbi.services import GenerationHistoryProjectionService
+from apps.chatbi.services import project_generation_history
 
 
 def test_projection_uses_latest_log_and_last_requested_round():
-    service = GenerationHistoryProjectionService()
 
-    result = service.project(
+    result = project_generation_history(
         GenerationHistoryProjectionData(
             sql_logs=[
                 GenerationHistoryLog(
@@ -60,7 +59,6 @@ def test_projection_uses_latest_log_and_last_requested_round():
 
 
 def test_projection_uses_regenerate_record_instead_of_latest_log():
-    service = GenerationHistoryProjectionService()
     logs = [
         GenerationHistoryLog(
             record_id=10,
@@ -78,7 +76,7 @@ def test_projection_uses_regenerate_record_instead_of_latest_log():
         ),
     ]
 
-    result = service.project(
+    result = project_generation_history(
         GenerationHistoryProjectionData(
             sql_logs=logs,
             regenerate_record_id=10,
@@ -93,7 +91,7 @@ def test_projection_uses_regenerate_record_instead_of_latest_log():
 
 
 def test_projection_does_not_fall_back_when_regenerate_record_is_missing():
-    result = GenerationHistoryProjectionService().project(
+    result = project_generation_history(
         GenerationHistoryProjectionData(
             sql_logs=[
                 GenerationHistoryLog(
@@ -110,15 +108,14 @@ def test_projection_does_not_fall_back_when_regenerate_record_is_missing():
 
 
 def test_projection_returns_empty_history_without_positive_round_limit_or_human_message():
-    service = GenerationHistoryProjectionService()
     log = GenerationHistoryLog(
         record_id=10,
         messages=[{"type": "ai", "content": "answer without question"}],
     )
 
-    assert service.project(
+    assert project_generation_history(
         GenerationHistoryProjectionData(sql_logs=[log], round_limit=0)
     ).sql_history == []
-    assert service.project(
+    assert project_generation_history(
         GenerationHistoryProjectionData(sql_logs=[log], round_limit=1)
     ).sql_history == []

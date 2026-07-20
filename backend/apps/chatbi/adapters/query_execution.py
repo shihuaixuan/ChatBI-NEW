@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from apps.capabilities.schemas import ToolResult
+from apps.chatbi.models.dto.tool_result import ToolResult
 from apps.chatbi.services import QueryService, SQLPermissionService
 from apps.datasource import DatasourceConnection
 from apps.datasource.database import exec_sql

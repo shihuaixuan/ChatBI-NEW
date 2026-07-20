@@ -14,7 +14,7 @@ from apps.chatbi.models import (
     DatasourceSelectionMessage,
     DatasourceSelectionModelChunk,
 )
-from apps.chatbi.services.chat_record_service import ChatRecordService
+from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 
 
 class DatasourceSelectionError(ValueError):

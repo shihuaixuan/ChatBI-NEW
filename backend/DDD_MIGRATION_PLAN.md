@@ -1,7 +1,7 @@
 # SQLBot 后端架构迁移计划（现行版）
 
-> 状态：进行中（R0 已完成，R1 待启动）
-> 更新：2026-07-19
+> 状态：进行中（R0、R1 已完成，当前推进 R2）
+> 更新：2026-07-20
 > 定位：**边界清晰的模块化单体**。DDD 战略半边（限界上下文、数据所有权、公开契约、依赖方向）全局保留；战术模式按子域分级使用（见 `apps/AGENTS.md` v2）。
 > 本文是唯一现行计划。历史批次日志（含 P0–P5 前 43 批全文）见 `DDD_MIGRATION_CHANGELOG.md`；兼容入口台账见 `COMPAT_LEDGER.md`；评审依据见 `docs/tech/12/13/14`。
 
@@ -63,12 +63,12 @@ P5 的剩余工作由 R1–R4 承接（下节），完成 R3 即视为 P5 验收
 
 | 批 | 范围 | 要点 |
 | --- | --- | --- |
-| R1-a | `understanding/` + `conversation/` 分包 | Question* 七服务按共享/Graph 专用归位（4 个函数化）；`orm/conversation.py` 拆 3 文件；建 `errors.py` |
-| R1-b | `generation/`（含 `context/`）分包 | Generation* 家族归位（4 个函数化、custom_prompt 并入）；adapters 按技术分组 |
-| R1-c | `planning/` + `execution/` | QueryService→GuardedQueryService、semantic_query→SemanticCompilationService；`adapters/execution/DatasourceQueryExecutor` 替代 `capabilities.SqlExecuteTool`；取消 1:1 跨域包装端口（检索/编译/策略/元数据直连公开 Service） |
-| R1-d | 组装与公共面收口 | 包根 builder 并入 `composition.py`；`services/__init__` 降为台账内兼容层；领域公共面 ≤40 符号；守卫测试迁入表驱动文件并删除逐批守卫 |
+| R1-a ✅ | `understanding/` + `conversation/` 分包（2026-07-20 完成） | Question* 七服务按共享/Graph 专用归位（validation/intent_projection/input_projection/intent_validation 函数化）；`orm/conversation.py` 拆 3 文件；`errors.py` 建立并迁入会话/理解错误；`QuestionModelService → StructuredModelService` 改名（旧名别名入台账） |
+| R1-b ✅ | `generation/`（含 `context/`）分包（2026-07-20 完成） | 7 个生成 Service 迁入；context 家族归位（scope/runtime_settings/history 函数化，custom_prompt 并入 knowledge.py，answer_projection/final_reply 函数化）；dynamic/permission 与主 SQL 模块合并、adapters 技术分组、SchemaContextService 改名 → 顺延至 R2/R1-d |
+| R1-c ✅ | `planning/` + `execution/` 分包（2026-07-20 完成） | QueryService→GuardedQueryService、SemanticQueryService→SemanticCompilationService（旧名别名入台账）；`adapters/execution/DatasourceQueryExecutor` 替代 `capabilities.SqlExecuteTool`，ToolResult/SqlValidateTool/PermissionTool 迁入 chatbi，**chatbi→capabilities 依赖清零**；取消 4 组 1:1 跨域包装端口（检索/编译/策略/元数据直连公开 Service）；execution_binding 函数化 |
+| R1-d ✅ | 组装与公共面收口（2026-07-20 完成，R1 收官） | 包根 builder 并入 `composition.py`；领域公共面 26 符号（惰性解析，B2 删除后转直接导入）；执行子域错误/端口收口；SchemaContextService 改名；守卫测试 24 文件 → 3（122 条规则合并进 `test_boundaries.py`，新规则只进 `test_structure_rules.py`）；**全量回归 1,221 项通过** |
 
-验收：services 顶层无业务文件、Service 类 ≤16；service 文件内无内联 Protocol 与 Error 定义；1:1 包装端口清零；chatbi 不再 import `apps.capabilities`；`tests/architecture` 文件数 ≤4 且规则无丢失；全量回归通过、基线不增。
+R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capabilities 依赖 0；1:1 包装端口 0；守卫文件 3；剩余内联 Protocol（生成子域 6 组 PromptBuilder/ModelClient）与生成子域错误随 R2 重写收口。
 
 ### R2：统一流式生成骨架（1–2 批）
 
@@ -121,17 +121,17 @@ P5 的剩余工作由 R1–R4 承接（下节），完成 R3 即视为 P5 验收
 
 ## 6. 度量看板（每阶段收尾更新）
 
-| 指标 | 基线 2026-07-19 | R1 后 | R4 后 | R6 后 |
+| 指标 | 基线 2026-07-19 | R1 后（实际 2026-07-20） | R4 后 | R6 后 |
 | --- | --- | --- | --- | --- |
-| chatbi services 文件数 / Service 类数 | 37 / 37 | ≤28 / ≤16 | 同左 | 同左 |
+| chatbi services 文件数 / Service 类数 | 37 / 37 | 0 顶层（6 子域包）/ ~21 | 同左 | 同左 |
 | ChatBI 占用顶级目录数 | 5 | 5 | 1 | 1 |
-| services 内联 Protocol 数 | 36 | 0 | 0 | 0 |
-| 跨域 1:1 包装端口 | ≥6 | 0 | 0 | 0 |
-| 守卫测试文件数 | 24 | ≤4 | ≤4 | ≤4 |
+| services 内联 Protocol 数 | 36 | ~17（R2 重写对象） | 0 | 0 |
+| 跨域 1:1 包装端口 | ≥6 | 0 ✅ | 0 | 0 |
+| 守卫测试文件数 | 24 | 3 ✅ | ≤4 | ≤4 |
 | llm.py 行数 | 1,724 | 1,724 | 0 | 0 |
-| 依赖基线余额（模型/实现/引擎/函数内） | 15/9/5/1 | 不增 | ≤10/≤5/5/0 | 0/0/0/0 |
-| 兼容台账未销账条目 | 全量登记 | 全量登记 | ≤20% | 0 |
-| 计划文档行数 | ≤400 | ≤400 | ≤400 | ≤400 |
+| 依赖基线余额（模型/实现/引擎/函数内） | 15/9/5/1 | 15/9/5/1（不增 ✅） | ≤10/≤5/5/0 | 0/0/0/0 |
+| 兼容台账未销账条目 | 全量登记 | 33 条活跃 | ≤20% | 0 |
+| 计划文档行数 | ≤400 | ≤400 ✅ | ≤400 | ≤400 |
 
 ## 7. 测试与验收
 

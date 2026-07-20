@@ -5,9 +5,8 @@
 随 R2+ 各能力重写，对应小节应改写为 test_structure_rules 的表驱动规则并删除。
 """
 
-from pathlib import Path
 import ast
-
+from pathlib import Path
 
 # ======================================================================
 # 来源：test_chat_model_compatibility_boundary.py

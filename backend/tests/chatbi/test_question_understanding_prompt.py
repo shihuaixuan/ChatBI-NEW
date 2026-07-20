@@ -1,9 +1,9 @@
-from apps.chatbi.services.question_understanding_prompt import (
+from apps.chatbi.services.understanding.prompts import (
     DIMENSION_EXTRACTION_RULES,
     METRIC_TIME_EXTRACTION_RULES,
     QUESTION_REWRITE_BUSINESS_RULES,
 )
-from apps.chatbi.services.question_understanding_service import (
+from apps.chatbi.services.understanding.understanding_service import (
     DIMENSION_SYSTEM_PROMPT,
     INTENT_SYSTEM_PROMPT,
     REWRITE_SYSTEM_PROMPT,

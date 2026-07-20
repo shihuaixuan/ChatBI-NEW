@@ -1,11 +1,9 @@
 from apps.chatbi.models import QuestionIntentProjectionData
-from apps.chatbi.services import QuestionIntentProjectionService
+from apps.chatbi.services.understanding import intent_projection
 
 
 def test_projection_service_normalizes_shape_and_semantic_payloads():
-    service = QuestionIntentProjectionService()
-
-    shape = service.normalize_shape(
+    shape = intent_projection.normalize_shape(
         {
             "intent_type": "invalid",
             "confidence": 2,
@@ -15,7 +13,7 @@ def test_projection_service_normalizes_shape_and_semantic_payloads():
         },
         subject_domain={"status": "selected", "domain_id": 1},
     )
-    semantic = service.normalize_semantic(
+    semantic = intent_projection.normalize_semantic(
         {
             "metric_mentions": "销售额",
             "time_mentions": ["最近7天"],
@@ -44,9 +42,7 @@ def test_projection_service_normalizes_shape_and_semantic_payloads():
 
 
 def test_projection_service_centralizes_required_slots_and_confirmed_intent():
-    service = QuestionIntentProjectionService()
-
-    result = service.project(
+    result = intent_projection.project_question_intent(
         QuestionIntentProjectionData(
             shape={
                 "intent_type": "trend_analysis",

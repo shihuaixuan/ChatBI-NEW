@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import orjson
 import sqlparse
@@ -21,7 +21,7 @@ from apps.chat.models.chat_model import (
 from apps.chat.services.semantic_binding import (
     DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
 )
-from apps.chatbi.chat_record import build_chat_record_service
+from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.models import (
     ChatLogHistory,
     ChatLogHistoryItem,
@@ -63,7 +63,7 @@ def get_chat(session: SessionDep, chat_id: int) -> Chat | None:
         return None
 
 
-def list_chats(session: SessionDep, current_user: CurrentUser) -> List[Chat]:
+def list_chats(session: SessionDep, current_user: CurrentUser) -> list[Chat]:
     """兼容旧列表入口，业务规则由 ConversationService 维护。"""
 
     return build_conversation_service(session).list_for_owner(
@@ -72,7 +72,7 @@ def list_chats(session: SessionDep, current_user: CurrentUser) -> List[Chat]:
     )
 
 
-def list_recent_questions(session: SessionDep, current_user: CurrentUser, dataset_id: int) -> List[str]:
+def list_recent_questions(session: SessionDep, current_user: CurrentUser, dataset_id: int) -> list[str]:
     chat_records = (
         session.query(
             ChatRecord.question
@@ -227,7 +227,7 @@ def get_chart_data_with_user_live(session: SessionDep, current_user: CurrentUser
     return get_chart_data_ds(session,row.datasource, row.sql)
 
 def get_chart_data_ds(session: SessionDep,ds_id,sql):
-    json_result: Dict[str, Any] = {'status': 'success','data':[],'message':''}
+    json_result: dict[str, Any] = {'status': 'success','data':[],'message':''}
     try:
         result = build_datasource_connection_service(session).execute_query(
             ds_id,
@@ -667,7 +667,7 @@ def get_chat_brief_generate(session: SessionDep, chat_id: int):
         return False
 
 
-def list_generate_sql_logs(session: SessionDep, chart_id: int) -> List[ChatLog]:
+def list_generate_sql_logs(session: SessionDep, chart_id: int) -> list[ChatLog]:
     stmt = select(ChatLog).where(
         and_(ChatLog.pid.in_(select(ChatRecord.id).where(and_(ChatRecord.chat_id == chart_id))),
              ChatLog.type == TypeEnum.CHAT, ChatLog.operate == OperationEnum.GENERATE_SQL)).order_by(
@@ -680,7 +680,7 @@ def list_generate_sql_logs(session: SessionDep, chart_id: int) -> List[ChatLog]:
     return _list
 
 
-def list_generate_chart_logs(session: SessionDep, chart_id: int) -> List[ChatLog]:
+def list_generate_chart_logs(session: SessionDep, chart_id: int) -> list[ChatLog]:
     stmt = select(ChatLog).where(
         and_(ChatLog.pid.in_(select(ChatRecord.id).where(and_(ChatRecord.chat_id == chart_id))),
              ChatLog.type == TypeEnum.CHAT, ChatLog.operate == OperationEnum.GENERATE_CHART)).order_by(
@@ -718,7 +718,7 @@ def save_analysis_predict_record(session: SessionDep, base_record: ChatRecord, a
 
 
 def start_log(session: SessionDep, ai_modal_id: int = None, ai_modal_name: str = None, operate: OperationEnum = None,
-              record_id: int = None, full_message: Union[list[dict], dict] = None,
+              record_id: int = None, full_message: list[dict] | dict = None,
               local_operation: bool = False) -> ChatLog:
     log = ChatLog(type=TypeEnum.CHAT, operate=operate, pid=record_id, ai_modal_id=ai_modal_id, base_modal=ai_modal_name,
                   messages=full_message, start_time=datetime.datetime.now(), local_operation=local_operation)
@@ -734,7 +734,7 @@ def start_log(session: SessionDep, ai_modal_id: int = None, ai_modal_name: str =
     return result
 
 
-def end_log(session: SessionDep, log: ChatLog, full_message: Union[list[dict], dict, str],
+def end_log(session: SessionDep, log: ChatLog, full_message: list[dict] | dict | str,
             reasoning_content: str = None,
             token_usage=None) -> ChatLog:
     if token_usage is None:
@@ -820,7 +820,7 @@ def save_select_datasource_answer(session: SessionDep, record_id: int, answer: s
 
 
 def save_recommend_question_answer(session: SessionDep, record_id: int,
-                                   answer: dict = None, articles_number: Optional[int] = 4) -> ChatRecord:
+                                   answer: dict = None, articles_number: int | None = 4) -> ChatRecord:
     if not record_id:
         raise Exception("Record id cannot be None")
 

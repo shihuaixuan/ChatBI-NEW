@@ -117,11 +117,11 @@ from apps.chatbi.services import (
     ChartGenerationError,
     DatasourceSelectionError,
     DynamicSQLGenerationError,
-    GenerationContextScopeService,
-    GenerationHistoryProjectionService,
-    GenerationRuntimeSettingsService,
     PermissionSQLGenerationError,
     SQLGenerationError,
+    project_generation_history,
+    resolve_generation_scope,
+    resolve_runtime_settings,
 )
 from apps.datasource import (
     DatasourceConnection,
@@ -291,7 +291,7 @@ class LLMService:
         parameter_values = await build_system_parameter_service(
             args[0]
         ).list_group("chat")
-        runtime_settings = GenerationRuntimeSettingsService().project(
+        runtime_settings = resolve_runtime_settings(
             GenerationRuntimeSettingsData(
                 assistant_name=instance.chat_question.sqlbot_name,
                 enable_sql_row_limit=instance.enable_sql_row_limit,
@@ -318,7 +318,7 @@ class LLMService:
 
     def init_messages(self, session: Session):
         self.choose_table_schema(session)
-        projection = GenerationHistoryProjectionService().project(
+        projection = project_generation_history(
             GenerationHistoryProjectionData(
                 sql_logs=[
                     GenerationHistoryLog(
@@ -382,7 +382,7 @@ class LLMService:
                 workspace_id=self.current_assistant.oid,
                 assistant_type=self.current_assistant.type,
             )
-        return GenerationContextScopeService().project(
+        return resolve_generation_scope(
             GenerationContextScopeData(
                 default_workspace_id=workspace_id,
                 current_user_workspace_id=self.current_user.oid,

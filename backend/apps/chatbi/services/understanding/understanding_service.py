@@ -7,6 +7,12 @@ from typing import Any, Protocol, TypeVar
 import orjson
 from pydantic import BaseModel, ValidationError
 
+from apps.chatbi.errors import (
+    QuestionModelCallError,
+    QuestionModelError,
+    QuestionModelOutputError,
+    QuestionUnderstandingError,
+)
 from apps.chatbi.models.dto.question_model import (
     QuestionModelInvocationData,
     QuestionModelResponse,
@@ -22,26 +28,16 @@ from apps.chatbi.models.dto.question_understanding import (
     QuestionUnderstandingValidationData,
     TimeRange,
 )
-from apps.chatbi.services.question_model_service import (
-    QuestionModelCallError,
-    QuestionModelError,
-    QuestionModelOutputError,
-    QuestionModelService,
-)
-from apps.chatbi.services.question_understanding_prompt import (
+from apps.chatbi.services.understanding.model_invocation import StructuredModelService
+from apps.chatbi.services.understanding.prompts import (
     DIMENSION_EXTRACTION_RULES,
     METRIC_TIME_EXTRACTION_RULES,
     QUESTION_REWRITE_BUSINESS_RULES,
 )
-from apps.chatbi.services.question_understanding_validation_service import (
-    QuestionUnderstandingValidationService,
+from apps.chatbi.services.understanding.time_range import normalize_time_range_payload
+from apps.chatbi.services.understanding.validation import (
+    validate_question_understanding,
 )
-from apps.chatbi.services.time_range import normalize_time_range_payload
-
-
-class QuestionUnderstandingError(RuntimeError):
-    """问题理解阶段失败，调用方应明确终止当前问数流程。"""
-
 
 QuestionUnderstandingModelResponse = QuestionModelResponse
 
@@ -168,18 +164,16 @@ class QuestionUnderstandingService:
     def __init__(
         self,
         model_client: QuestionUnderstandingModelClient | None = None,
-        validation_service: QuestionUnderstandingValidationService | None = None,
-        question_model_service: QuestionModelService | None = None,
+        question_model_service: StructuredModelService | None = None,
     ) -> None:
         if model_client is not None and question_model_service is not None:
             raise ValueError("QUESTION_UNDERSTANDING_MODEL_SOURCE_CONFLICT")
         if model_client is not None:
-            self._question_model_service = QuestionModelService(model_client)
+            self._question_model_service = StructuredModelService(model_client)
         elif question_model_service is not None:
             self._question_model_service = question_model_service
         else:
             raise ValueError("QUESTION_UNDERSTANDING_MODEL_SERVICE_REQUIRED")
-        self._validation_service = validation_service or QuestionUnderstandingValidationService()
 
     def understand(
         self,
@@ -256,7 +250,7 @@ class QuestionUnderstandingService:
                 ),
             }
         )
-        validation = _validate_understanding(self._validation_service, rewrite, intent)
+        validation = _validate_understanding(rewrite, intent)
         output = QuestionUnderstandingOutput(
             original_question=question,
             message_type=rewrite.message_type,
@@ -388,20 +382,15 @@ def apply_question_understanding_clarification(
         inherited_context=previous.inherited_context,
         confidence=1.0,
     )
-    validation = _validate_understanding(
-        QuestionUnderstandingValidationService(),
-        rewrite,
-        updated_intent,
-    )
+    validation = _validate_understanding(rewrite, updated_intent)
     return previous.model_copy(update={"intent": updated_intent, "validation": validation})
 
 
 def _validate_understanding(
-    service: QuestionUnderstandingValidationService,
     rewrite: QuestionRewriteOutput,
     intent: IntentRecognitionOutput,
 ) -> IntentValidationOutput:
-    result = service.validate(
+    result = validate_question_understanding(
         QuestionUnderstandingValidationData(
             rewrite_need_user_input=rewrite.need_user_input,
             rewrite_missing_slots=tuple(rewrite.missing_slots),

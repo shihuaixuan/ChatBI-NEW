@@ -5,8 +5,11 @@ from sqlmodel import Session
 from apps.capabilities.sql.execution_gateway import SqlExecuteTool
 from apps.capabilities.sql.permission import PermissionTool
 from apps.capabilities.sql.validator import SqlValidateTool
-from apps.chatbi.services.query_service import QueryService, numeric_stats
-from apps.chatbi.services.sql_permission import SQLPermissionService
+from apps.chatbi.services.execution.guarded_query_service import (
+    QueryService,
+    numeric_stats,
+)
+from apps.chatbi.services.execution.sql_permission import SQLPermissionService
 
 
 class GuardedSqlExecutor(QueryService):

@@ -13,7 +13,7 @@ from apps.chatbi.models import (
     ChartGenerationModelChunk,
     ChatRecordResultProjection,
 )
-from apps.chatbi.services.chat_record_service import ChatRecordService
+from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 
 
 class ChartGenerationError(ValueError):

@@ -3,7 +3,7 @@ from typing import Any
 import orjson
 from sqlmodel import Session
 
-from apps.chatbi.chat_record import build_chat_record_service
+from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.models import (
     Chat,
     ChatRecord,
@@ -14,7 +14,7 @@ from apps.chatbi.models import (
 )
 from apps.chatbi.services import (
     ExecutionBindingError,
-    ExecutionBindingService,
+    resolve_execution_binding,
 )
 
 
@@ -86,7 +86,7 @@ __all__ = [
     "ChatRecordExecutionType",
     "ExecutionBindingData",
     "ExecutionBindingError",
-    "ExecutionBindingService",
+    "resolve_execution_binding",
     "build_chat_record_service",
     "build_workflow_chat_record_gateway",
 ]

@@ -1,5 +1,6 @@
-from typing import Any, Protocol
+from typing import Any
 
+from apps.chatbi.errors import SemanticQueryCompileError
 from apps.chatbi.models import (
     SemanticQueryCompileData,
     SemanticQueryCompileResult,
@@ -12,25 +13,13 @@ from apps.semantic.models.dto import (
 from apps.semantic.models.dto import (
     SemanticQueryCompileResult as SemanticCompileResult,
 )
+from apps.semantic.services import SemanticSQLCompilationService
 
 
-class SemanticCompilationGateway(Protocol):
-    """ChatBI 调用 Semantic 编译服务的最小端口。"""
+class SemanticCompilationService:
+    """Agent 与 Graph 共用的语义 SQL 编译入口（直连 Semantic 公开编译服务）。"""
 
-    def compile(
-        self,
-        request: SemanticQueryCompileRequest,
-    ) -> SemanticCompileResult: ...
-
-
-class SemanticQueryCompileError(ValueError):
-    """语义查询计划无法编译。"""
-
-
-class SemanticQueryService:
-    """Agent 与 Graph 共用的语义 SQL 编译入口。"""
-
-    def __init__(self, gateway: SemanticCompilationGateway) -> None:
+    def __init__(self, gateway: SemanticSQLCompilationService) -> None:
         self._gateway = gateway
 
     def compile(
@@ -145,8 +134,11 @@ class SemanticQueryService:
         return None
 
 
+# 旧名兼容（台账 E1）。
+SemanticQueryService = SemanticCompilationService
+
 __all__ = [
-    "SemanticCompilationGateway",
+    "SemanticCompilationService",
     "SemanticQueryCompileError",
     "SemanticQueryService",
 ]

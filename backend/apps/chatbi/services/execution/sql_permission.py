@@ -1,18 +1,26 @@
 from __future__ import annotations
 
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import sqlglot
 from sqlglot import exp
 
-from apps.capabilities.schemas import ToolResult
-from apps.capabilities.sql.permission import PermissionTool
+from apps.chatbi.models.dto.tool_result import ToolResult
+
+if TYPE_CHECKING:
+    from apps.access_control.data_policy import SessionDataPolicyProvider
 
 
-class PermissionPolicyProvider(Protocol):
-    """SQL 权限策略提供端口。"""
+class PermissionTool:
+    """权限改写钩子：当前透传，保留接入行列权限改写的位置。"""
 
-    def get_policy(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+    name = "permission.apply"
+
+    def run(self, payload: dict[str, Any]) -> ToolResult:
+        sql = payload.get("sql")
+        if not sql:
+            return ToolResult(success=False, error_code="empty_sql", message="SQL 不能为空")
+        return ToolResult(success=True, payload={"sql": sql})
 
 
 class SQLPermissionService:
@@ -21,7 +29,7 @@ class SQLPermissionService:
     def __init__(
         self,
         permission_tool: PermissionTool | None = None,
-        policy_provider: PermissionPolicyProvider | None = None,
+        policy_provider: SessionDataPolicyProvider | None = None,
     ) -> None:
         self._permission_tool = permission_tool or PermissionTool()
         self._policy_provider = policy_provider
@@ -206,6 +214,6 @@ PermissionAdapter = SQLPermissionService
 
 __all__ = [
     "PermissionAdapter",
-    "PermissionPolicyProvider",
+    "PermissionTool",
     "SQLPermissionService",
 ]

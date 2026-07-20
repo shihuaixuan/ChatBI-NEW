@@ -10,8 +10,8 @@ from apps.chatbi.models import (
     SQLGenerationMessage,
     SQLGenerationModelChunk,
 )
-from apps.chatbi.services.chat_record_service import ChatRecordService
-from apps.chatbi.services.sql_generation_service import (
+from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
+from apps.chatbi.services.generation.sql_generation import (
     SQLGenerationError,
     parse_sql_generation_result,
 )

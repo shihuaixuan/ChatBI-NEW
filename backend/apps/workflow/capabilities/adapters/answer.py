@@ -12,10 +12,10 @@ from apps.chatbi.models import (
 from apps.chatbi.services import (
     AnswerGenerationService,
     AnswerModelClient,
-    AnswerProjectionService,
     CallableAnswerModelClient,
-    FinalReplyProjectionService,
     QuestionModelService,
+    project_answer_context,
+    project_final_reply,
 )
 from apps.chatbi.services import (
     build_answer_generation_prompt as build_answer_generation_prompt,
@@ -23,15 +23,11 @@ from apps.chatbi.services import (
 from apps.workflow.capabilities.context import ChatBIRunContext
 
 
-def build_answer_projection(
-    request: dict[str, Any],
-    projection_service: AnswerProjectionService | None = None,
-) -> dict[str, Any]:
-    """读取 Graph 上下文并调用 ChatBI 回答投影服务。"""
+def build_answer_projection(request: dict[str, Any]) -> dict[str, Any]:
+    """读取 Graph 上下文并调用 ChatBI 回答上下文投影。"""
 
-    service = projection_service or AnswerProjectionService()
     ctx = ChatBIRunContext(request)
-    return service.project(
+    return project_answer_context(
         AnswerProjectionData(
             raw_question=ctx.raw_question,
             rewritten_question=ctx.question,
@@ -51,8 +47,6 @@ class AnswerAdapter:
         self,
         model_client: AnswerModelClient | None = None,
         answer_generation_service: AnswerGenerationService | None = None,
-        answer_projection_service: AnswerProjectionService | None = None,
-        final_reply_projection_service: FinalReplyProjectionService | None = None,
     ) -> None:
         if model_client is not None and answer_generation_service is not None:
             raise ValueError("ANSWER_MODEL_SOURCE_CONFLICT")
@@ -66,12 +60,6 @@ class AnswerAdapter:
             self._answer_generation_service = AnswerGenerationService(
                 build_question_model_service()
             )
-        self._answer_projection_service = (
-            answer_projection_service or AnswerProjectionService()
-        )
-        self._final_reply_projection_service = (
-            final_reply_projection_service or FinalReplyProjectionService()
-        )
 
     def reject(self, request: dict[str, Any]) -> dict[str, Any]:
         """生成拒绝回复，模型不可用时返回稳定安全文案。"""
@@ -92,7 +80,7 @@ class AnswerAdapter:
         """本地合成最终回复，保持前端响应契约稳定。"""
 
         ctx = ChatBIRunContext(request)
-        return self._final_reply_projection_service.project(
+        return project_final_reply(
             FinalReplyProjectionData(
                 answer=ctx.answer,
                 recommendations=ctx.recommendations,
@@ -110,9 +98,6 @@ class AnswerAdapter:
             AnswerGenerationData(
                 mode=mode,
                 question=ctx.raw_question,
-                projection=build_answer_projection(
-                    request,
-                    self._answer_projection_service,
-                ),
+                projection=build_answer_projection(request),
             )
         ).model_dump(mode="json")

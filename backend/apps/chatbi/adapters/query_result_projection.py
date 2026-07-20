@@ -1,6 +1,6 @@
 from sqlmodel import Session
 
-from apps.chatbi.chat_record import build_chat_record_service
+from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.services import QueryResultProjectionService
 
 

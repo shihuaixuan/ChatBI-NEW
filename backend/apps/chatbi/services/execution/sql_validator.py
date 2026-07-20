@@ -4,7 +4,7 @@ import sqlparse
 from sqlparse.sql import Identifier, IdentifierList
 from sqlparse.tokens import Keyword
 
-from apps.capabilities.schemas import ToolResult
+from apps.chatbi.models.dto.tool_result import ToolResult
 
 
 class SqlValidateTool:

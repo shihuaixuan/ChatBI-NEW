@@ -1,167 +1,125 @@
-from apps.chatbi.services.analysis_prediction_service import (
-    AnalysisPredictionModelClient,
-    AnalysisPredictionPromptBuilder,
-    AnalysisPredictionService,
-)
-from apps.chatbi.services.answer_generation_service import (
-    AnswerGenerationService,
-    AnswerModelClient,
-    CallableAnswerModelClient,
-    build_answer_generation_prompt,
-)
-from apps.chatbi.services.answer_projection_service import AnswerProjectionService
-from apps.chatbi.services.chart_generation_service import (
-    ChartGenerationError,
-    ChartGenerationModelClient,
-    ChartGenerationPromptBuilder,
-    ChartGenerationService,
-)
-from apps.chatbi.services.chat_record_service import (
+"""ChatBI services 兼容导出层（台账 E1）。
+
+R1-a 起 services 按子域分包（conversation/ understanding/ generation/ …）。本文件只为
+既有调用方保留旧符号路径；新代码应从子域包导入（如 apps.chatbi.services.generation），
+本层随 R4-d 兼容清偿收缩为最小公共面。
+"""
+
+from apps.chatbi.errors import (
     ChatRecordError,
     ChatRecordNotFoundError,
     ChatRecordOwnershipError,
     ChatRecordResultTooLargeError,
-    ChatRecordService,
     ChatRecordTransitionError,
-    normalize_chat_record_status,
-)
-from apps.chatbi.services.conversation_service import (
     ConversationBindingError,
-    ConversationBindingProvider,
-    ConversationDeletionProvider,
     ConversationError,
     ConversationNotFoundError,
     ConversationOwnershipError,
-    ConversationService,
     ConversationServiceConfigurationError,
-    RecommendedQuestionProvider,
-)
-from apps.chatbi.services.datasource_selection_candidate_service import (
-    DatasourceSelectionCandidateRanker,
-    DatasourceSelectionCandidateService,
-)
-from apps.chatbi.services.datasource_selection_service import (
-    DatasourceSelectionError,
-    DatasourceSelectionModelClient,
-    DatasourceSelectionPromptBuilder,
-    DatasourceSelectionService,
-)
-from apps.chatbi.services.dynamic_sql_generation_service import (
-    DynamicSQLGenerationError,
-    DynamicSQLGenerationModelClient,
-    DynamicSQLGenerationPromptBuilder,
-    DynamicSQLGenerationService,
-)
-from apps.chatbi.services.execution_binding_service import (
-    ExecutionBindingError,
-    ExecutionBindingService,
-)
-from apps.chatbi.services.final_reply_projection_service import (
     FinalReplyProjectionError,
-    FinalReplyProjectionService,
-)
-from apps.chatbi.services.generation_context_scope_service import (
-    DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
-    GenerationContextScopeService,
-)
-from apps.chatbi.services.generation_context_service import GenerationContextService
-from apps.chatbi.services.generation_custom_prompt_service import (
-    GenerationCustomPromptProvider,
-    GenerationCustomPromptService,
-)
-from apps.chatbi.services.generation_history_projection_service import (
-    GenerationHistoryProjectionService,
-)
-from apps.chatbi.services.generation_runtime_settings_service import (
-    GenerationRuntimeSettingsService,
-)
-from apps.chatbi.services.generation_schema_context_service import (
-    GenerationSchemaContextService,
-    GenerationSchemaTableRanker,
-)
-from apps.chatbi.services.permission_sql_generation_service import (
-    PermissionSQLGenerationError,
-    PermissionSQLGenerationModelClient,
-    PermissionSQLGenerationPromptBuilder,
-    PermissionSQLGenerationService,
-)
-from apps.chatbi.services.physical_schema_service import (
-    DatasourceMetadataReader,
-    PhysicalSchemaService,
-)
-from apps.chatbi.services.query_result_projection_service import (
-    QueryResultProjectionError,
-    QueryResultProjectionService,
-)
-from apps.chatbi.services.query_service import QueryService, SQLExecutor
-from apps.chatbi.services.question_input_projection_service import (
-    QuestionInputProjectionService,
-)
-from apps.chatbi.services.question_intent_fallback_service import (
-    QuestionIntentFallbackService,
-)
-from apps.chatbi.services.question_intent_projection_service import (
-    QuestionIntentProjectionService,
-)
-from apps.chatbi.services.question_intent_validation_service import (
-    QuestionIntentValidationService,
-)
-from apps.chatbi.services.question_model_service import (
     QuestionModelCallError,
-    QuestionModelClient,
     QuestionModelError,
     QuestionModelOutputError,
-    QuestionModelService,
-)
-from apps.chatbi.services.question_understanding_prompt import (
-    DIMENSION_EXTRACTION_RULES,
-    METRIC_TIME_EXTRACTION_RULES,
-    QUESTION_REWRITE_BUSINESS_RULES,
-)
-from apps.chatbi.services.question_understanding_service import (
-    DIMENSION_SYSTEM_PROMPT,
-    INTENT_SYSTEM_PROMPT,
-    REWRITE_SYSTEM_PROMPT,
     QuestionUnderstandingError,
-    QuestionUnderstandingModelClient,
-    QuestionUnderstandingModelResponse,
-    QuestionUnderstandingService,
-    apply_question_understanding_clarification,
 )
-from apps.chatbi.services.question_understanding_validation_service import (
-    QuestionUnderstandingValidationService,
+from apps.chatbi.services.conversation import (
+    ChatRecordService,
+    ConversationBindingProvider,
+    ConversationDeletionProvider,
+    ConversationService,
+    RecommendedQuestionProvider,
+    normalize_chat_record_status,
 )
-from apps.chatbi.services.recommended_question_service import (
-    RecommendedQuestionHistoryProvider,
-    RecommendedQuestionModelClient,
-    RecommendedQuestionPromptBuilder,
-    RecommendedQuestionService,
-)
-from apps.chatbi.services.result_artifact_service import (
+from apps.chatbi.services.execution import (
+    GuardedQueryService,
+    PermissionAdapter,
+    PermissionTool,
+    QueryResultProjectionError,
+    QueryResultProjectionService,
+    QueryService,
     ResultArtifactError,
     ResultArtifactGateway,
     ResultArtifactService,
     ResultArtifactWriteError,
+    SQLExecutor,
+    SQLPermissionService,
+    SqlValidateTool,
 )
-from apps.chatbi.services.semantic_query_service import (
-    SemanticCompilationGateway,
-    SemanticQueryCompileError,
-    SemanticQueryService,
-)
-from apps.chatbi.services.semantic_retrieval_service import (
-    SemanticRetrievalGateway,
-    SemanticRetrievalService,
-)
-from apps.chatbi.services.sql_generation_service import (
+from apps.chatbi.services.generation import (
+    DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
+    AnalysisPredictionModelClient,
+    AnalysisPredictionPromptBuilder,
+    AnalysisPredictionService,
+    AnswerGenerationService,
+    AnswerModelClient,
+    CallableAnswerModelClient,
+    ChartGenerationError,
+    ChartGenerationModelClient,
+    ChartGenerationPromptBuilder,
+    ChartGenerationService,
+    DynamicSQLGenerationError,
+    DynamicSQLGenerationModelClient,
+    DynamicSQLGenerationPromptBuilder,
+    DynamicSQLGenerationService,
+    GenerationContextService,
+    GenerationCustomPromptProvider,
+    GenerationCustomPromptService,
+    GenerationSchemaContextService,
+    GenerationSchemaTableRanker,
+    PermissionSQLGenerationError,
+    PermissionSQLGenerationModelClient,
+    PermissionSQLGenerationPromptBuilder,
+    PermissionSQLGenerationService,
+    RecommendedQuestionHistoryProvider,
+    RecommendedQuestionModelClient,
+    RecommendedQuestionPromptBuilder,
+    RecommendedQuestionService,
+    SchemaContextService,
     SQLGenerationError,
     SQLGenerationModelClient,
     SQLGenerationPromptBuilder,
     SQLGenerationService,
+    build_answer_generation_prompt,
     parse_sql_generation_result,
+    project_answer_context,
+    project_final_reply,
+    project_generation_history,
+    project_query_final_reply,
+    resolve_generation_scope,
+    resolve_runtime_settings,
 )
-from apps.chatbi.services.sql_permission import (
-    PermissionPolicyProvider,
-    SQLPermissionService,
+from apps.chatbi.services.planning import (
+    DatasourceSelectionCandidateRanker,
+    DatasourceSelectionCandidateService,
+    DatasourceSelectionError,
+    DatasourceSelectionModelClient,
+    DatasourceSelectionPromptBuilder,
+    DatasourceSelectionService,
+    ExecutionBindingError,
+    PhysicalSchemaService,
+    SemanticCompilationService,
+    SemanticQueryCompileError,
+    SemanticQueryService,
+    SemanticRetrievalService,
+    resolve_execution_binding,
+)
+from apps.chatbi.services.understanding import (
+    DIMENSION_EXTRACTION_RULES,
+    DIMENSION_SYSTEM_PROMPT,
+    INTENT_SYSTEM_PROMPT,
+    METRIC_TIME_EXTRACTION_RULES,
+    QUESTION_REWRITE_BUSINESS_RULES,
+    REWRITE_SYSTEM_PROMPT,
+    QuestionIntentFallbackService,
+    QuestionIntentValidationService,
+    QuestionModelClient,
+    QuestionModelService,
+    QuestionUnderstandingModelClient,
+    QuestionUnderstandingModelResponse,
+    QuestionUnderstandingService,
+    StructuredModelService,
+    apply_question_understanding_clarification,
+    validate_question_understanding,
 )
 
 __all__ = [
@@ -170,7 +128,6 @@ __all__ = [
     "AnalysisPredictionService",
     "AnswerGenerationService",
     "AnswerModelClient",
-    "AnswerProjectionService",
     "CallableAnswerModelClient",
     "ChatRecordError",
     "ChatRecordNotFoundError",
@@ -190,7 +147,6 @@ __all__ = [
     "ConversationOwnershipError",
     "ConversationService",
     "ConversationServiceConfigurationError",
-    "DatasourceMetadataReader",
     "DatasourceSelectionError",
     "DatasourceSelectionCandidateRanker",
     "DatasourceSelectionCandidateService",
@@ -198,45 +154,42 @@ __all__ = [
     "DatasourceSelectionPromptBuilder",
     "DatasourceSelectionService",
     "ExecutionBindingError",
-    "ExecutionBindingService",
-    "FinalReplyProjectionService",
+    "resolve_execution_binding",
     "FinalReplyProjectionError",
-    "GenerationHistoryProjectionService",
     "GenerationContextService",
     "DYNAMIC_DATASOURCE_ASSISTANT_TYPES",
-    "GenerationContextScopeService",
     "GenerationCustomPromptProvider",
     "GenerationCustomPromptService",
-    "GenerationRuntimeSettingsService",
     "GenerationSchemaContextService",
     "GenerationSchemaTableRanker",
+    "SchemaContextService",
     "DynamicSQLGenerationError",
     "DynamicSQLGenerationModelClient",
     "DynamicSQLGenerationPromptBuilder",
     "DynamicSQLGenerationService",
-    "PermissionPolicyProvider",
+    "PermissionAdapter",
+    "PermissionTool",
     "PhysicalSchemaService",
     "PermissionSQLGenerationError",
     "PermissionSQLGenerationModelClient",
     "PermissionSQLGenerationPromptBuilder",
     "PermissionSQLGenerationService",
     "QueryService",
+    "GuardedQueryService",
     "QueryResultProjectionError",
     "QueryResultProjectionService",
-    "QuestionUnderstandingValidationService",
     "QuestionModelCallError",
     "QuestionModelClient",
     "QuestionModelError",
     "QuestionModelOutputError",
     "QuestionModelService",
-    "QuestionIntentProjectionService",
     "QuestionIntentValidationService",
-    "QuestionInputProjectionService",
     "QuestionIntentFallbackService",
     "QuestionUnderstandingError",
     "QuestionUnderstandingModelClient",
     "QuestionUnderstandingModelResponse",
     "QuestionUnderstandingService",
+    "StructuredModelService",
     "DIMENSION_EXTRACTION_RULES",
     "METRIC_TIME_EXTRACTION_RULES",
     "QUESTION_REWRITE_BUSINESS_RULES",
@@ -253,18 +206,25 @@ __all__ = [
     "ResultArtifactService",
     "ResultArtifactWriteError",
     "SQLExecutor",
+    "SqlValidateTool",
     "SQLGenerationError",
     "SQLGenerationModelClient",
     "SQLGenerationPromptBuilder",
     "SQLGenerationService",
     "SQLPermissionService",
-    "SemanticCompilationGateway",
+    "SemanticCompilationService",
     "SemanticQueryCompileError",
     "SemanticQueryService",
-    "SemanticRetrievalGateway",
     "SemanticRetrievalService",
     "normalize_chat_record_status",
     "apply_question_understanding_clarification",
     "build_answer_generation_prompt",
     "parse_sql_generation_result",
+    "project_answer_context",
+    "project_final_reply",
+    "project_generation_history",
+    "project_query_final_reply",
+    "resolve_generation_scope",
+    "resolve_runtime_settings",
+    "validate_question_understanding",
 ]

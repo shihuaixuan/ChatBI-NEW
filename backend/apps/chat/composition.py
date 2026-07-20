@@ -7,7 +7,7 @@ from apps.chat.services.semantic_binding import (
     resolve_dataset_chat_binding,
     validate_assistant_dataset_binding,
 )
-from apps.chatbi.conversation import build_conversation_service as build_chatbi_service
+from apps.chatbi.composition import build_conversation_service as build_chatbi_service
 from apps.chatbi.models import ConversationBinding
 from apps.chatbi.services import ConversationService
 from apps.knowledge.recommended import build_recommended_problem_service

@@ -16,9 +16,9 @@ from apps.chatbi.workflow_gateway import (
     ChatRecordExecutionType,
     ExecutionBindingData,
     ExecutionBindingError,
-    ExecutionBindingService,
     build_chat_record_service,
     build_workflow_chat_record_gateway,
+    resolve_execution_binding,
 )
 from apps.semantic.models.orm import (
     SemanticDataset,
@@ -205,7 +205,7 @@ class GraphApiService:
         if chat is None or chat.oid != current_user.oid or chat.create_by != current_user.id:
             raise HTTPException(status_code=404, detail="CHAT_NOT_FOUND")
         try:
-            binding = ExecutionBindingService().resolve(
+            binding = resolve_execution_binding(
                 ExecutionBindingData(
                     conversation_dataset_id=chat.dataset_id,
                     conversation_datasource_id=chat.datasource,

@@ -10,7 +10,7 @@ from apps.chatbi.models.dto.question_understanding import (
     QuestionUnderstandingOutput,
     TimeRange,
 )
-from apps.chatbi.services.question_understanding_service import (
+from apps.chatbi.services.understanding.understanding_service import (
     DIMENSION_SYSTEM_PROMPT,
     INTENT_SYSTEM_PROMPT,
     REWRITE_SYSTEM_PROMPT,

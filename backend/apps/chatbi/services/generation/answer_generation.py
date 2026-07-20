@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from apps.chatbi.errors import QuestionModelCallError, QuestionModelError
 from apps.chatbi.models.dto.answer_generation import (
     AnswerGenerationData,
     AnswerGenerationMode,
@@ -18,10 +19,8 @@ from apps.chatbi.models.dto.question_model import (
     QuestionModelJSONMode,
     QuestionModelResponse,
 )
-from apps.chatbi.services.question_model_service import (
-    QuestionModelCallError,
-    QuestionModelError,
-    QuestionModelService,
+from apps.chatbi.services.understanding.model_invocation import (
+    StructuredModelService as QuestionModelService,
 )
 
 

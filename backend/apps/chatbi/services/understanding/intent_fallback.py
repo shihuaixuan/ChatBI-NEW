@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from apps.chatbi.services.question_intent_projection_service import (
-    QuestionIntentProjectionService,
+from apps.chatbi.services.understanding.intent_projection import (
+    time_range_from_mentions,
 )
 
 
@@ -47,7 +47,7 @@ class QuestionIntentFallbackService:
             question,
             dimension_mentions,
         )
-        time_range = QuestionIntentProjectionService.time_range_from_mentions(
+        time_range = time_range_from_mentions(
             time_mentions
         )
 

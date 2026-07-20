@@ -1,12 +1,5 @@
-from apps.capabilities.schemas import ToolResult
+"""兼容导出（台账 B6）：权限透传钩子已迁入 ChatBI 执行子域。"""
 
+from apps.chatbi.services.execution.sql_permission import PermissionTool
 
-class PermissionTool:
-    name = "permission.apply"
-
-    def run(self, payload: dict) -> ToolResult:
-        sql = payload.get("sql")
-        if not sql:
-            return ToolResult(success=False, error_code="empty_sql", message="SQL 不能为空")
-        # 当前先透传，保留接入行列权限改写的位置。
-        return ToolResult(success=True, payload={"sql": sql})
+__all__ = ["PermissionTool"]

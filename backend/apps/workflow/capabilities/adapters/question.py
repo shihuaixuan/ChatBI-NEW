@@ -9,22 +9,20 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from apps.chatbi.adapters.question_model import build_question_model_service
+from apps.chatbi.errors import QuestionModelCallError, QuestionModelError
 from apps.chatbi.models import (
     QuestionIntentProjectionData,
     QuestionModelInvocationData,
     QuestionModelJSONMode,
     QuestionModelResponse,
 )
-from apps.chatbi.services import (
-    QuestionInputProjectionService,
+from apps.chatbi.services.understanding import (
     QuestionIntentFallbackService,
-    QuestionIntentProjectionService,
-    QuestionIntentValidationService,
-    QuestionModelCallError,
-    QuestionModelError,
-    QuestionModelService,
+    StructuredModelService,
+    graph_contracts,
+    intent_projection,
 )
-from apps.chatbi.services.question_understanding_prompt import (
+from apps.chatbi.services.understanding.prompts import (
     DIMENSION_EXTRACTION_RULES,
     METRIC_TIME_EXTRACTION_RULES,
     QUESTION_REWRITE_BUSINESS_RULES,
@@ -807,31 +805,19 @@ class QuestionAdapter:
         self,
         model_client: QuestionClassificationModelClient | None = None,
         schema_provider: DatasetSchemaProvider | None = None,
-        intent_post_processor: QuestionIntentValidationService | None = None,
         intent_subtask_config: IntentSubtaskConfig | None = None,
-        question_model_service: QuestionModelService | None = None,
-        intent_projection_service: QuestionIntentProjectionService | None = None,
-        input_projection_service: QuestionInputProjectionService | None = None,
+        question_model_service: StructuredModelService | None = None,
         intent_fallback_service: QuestionIntentFallbackService | None = None,
     ) -> None:
         if model_client is not None and question_model_service is not None:
             raise ValueError("QUESTION_MODEL_SOURCE_CONFLICT")
         self._model_client = model_client
         self._question_model_service = (
-            QuestionModelService(CallableQuestionModelClient(model_client))
+            StructuredModelService(CallableQuestionModelClient(model_client))
             if model_client is not None
             else question_model_service or build_question_model_service()
         )
         self._schema_provider = schema_provider
-        self._intent_validation_service = (
-            intent_post_processor or QuestionIntentValidationService()
-        )
-        self._intent_projection_service = (
-            intent_projection_service or QuestionIntentProjectionService()
-        )
-        self._input_projection_service = (
-            input_projection_service or QuestionInputProjectionService()
-        )
         self._intent_fallback_service = (
             intent_fallback_service or QuestionIntentFallbackService()
         )
@@ -862,7 +848,7 @@ class QuestionAdapter:
         ctx = ChatBIRunContext(request)
         question = ctx.raw_question
 
-        precondition = self._input_projection_service.classification_precondition(
+        precondition = graph_contracts.classification_precondition(
             question,
             ctx.dataset_id,
         )
@@ -881,7 +867,7 @@ class QuestionAdapter:
         except QuestionModelError as exc:
             raise ValueError("CLASSIFICATION_MODEL_OUTPUT_INVALID") from exc
         try:
-            return self._input_projection_service.project_classification(payload)
+            return graph_contracts.project_classification(payload)
         except Exception as exc:
             raise ValueError("CLASSIFICATION_MODEL_OUTPUT_INVALID") from exc
 
@@ -892,7 +878,7 @@ class QuestionAdapter:
         question = ctx.raw_question
         user_feedback = ctx.rewrite_response
         if not question:
-            return self._input_projection_service.empty_rewrite()
+            return graph_contracts.empty_rewrite()
 
         prompt = build_question_rewrite_prompt(
             question=question,
@@ -902,12 +888,12 @@ class QuestionAdapter:
         )
         try:
             payload = self._invoke_prompt(prompt, "rewrite")
-            return self._input_projection_service.project_rewrite(
+            return graph_contracts.project_rewrite(
                 payload,
                 dataset_id=ctx.dataset_id,
             )
         except Exception:
-            return self._input_projection_service.fallback_rewrite(
+            return graph_contracts.fallback_rewrite(
                 question,
                 user_feedback,
             )
@@ -961,7 +947,7 @@ class QuestionAdapter:
         shape = subtask_results["shape"].payload
         semantic = subtask_results["semantic"].payload
         dimensions = subtask_results["dimensions"].payload
-        projection = self._intent_projection_service.project(
+        projection = intent_projection.project_question_intent(
             QuestionIntentProjectionData(
                 shape=shape,
                 semantic=semantic,
@@ -970,7 +956,7 @@ class QuestionAdapter:
             )
         )
         output = IntentRecognitionOutput.model_validate(projection.payload)
-        validation = self._intent_validation_service.validate(
+        validation = graph_contracts.validate_intent(
             output.model_dump(mode="json"),
             retry_count=0,
         )
@@ -1202,12 +1188,12 @@ class QuestionAdapter:
     ) -> dict[str, Any]:
         result: dict[str, Any] = fallback_payload
         retry_feedback: dict[str, Any] = {}
-        for retry_count in range(self._intent_validation_service.max_retry_count):
+        for retry_count in range(graph_contracts.DEFAULT_MAX_INTENT_RETRY):
             prompt = prompt_builder({**user_feedback, **retry_feedback})
             result = self._invoke_prompt(prompt, stage)
             validation = validator(result)
             result = validation["payload"]
-            if validation["status"] == "invalid" and validation["retryable"] and retry_count + 1 < self._intent_validation_service.max_retry_count:
+            if validation["status"] == "invalid" and validation["retryable"] and retry_count + 1 < graph_contracts.DEFAULT_MAX_INTENT_RETRY:
                 retry_feedback = {
                     "reason_code": validation["reason_code"],
                     "feedback": validation["repair_hint"],
@@ -1235,7 +1221,7 @@ class QuestionAdapter:
         payload: dict[str, Any],
         subject_domains: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        normalized = self._intent_projection_service.normalize_shape(
+        normalized = intent_projection.normalize_shape(
             payload,
             subject_domain=self._normalize_subject_domain_output(
                 payload.get("subject_domain"),
@@ -1245,7 +1231,7 @@ class QuestionAdapter:
         return {"status": "valid", "retryable": False, "reason_code": "VALID", "repair_hint": None, "payload": normalized}
 
     def _validate_semantic_mentions_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        normalized = self._intent_projection_service.normalize_semantic(payload)
+        normalized = intent_projection.normalize_semantic(payload)
         return {"status": "valid", "retryable": False, "reason_code": "VALID", "repair_hint": None, "payload": normalized}
 
     def _validate_dimension_slots_payload(
@@ -1254,7 +1240,7 @@ class QuestionAdapter:
         available_dimensions: list[dict[str, Any]],
     ) -> dict[str, Any]:
         normalized = self._normalize_dimension_slots_payload(payload, available_dimensions)
-        shared_validation = self._intent_validation_service.validate(normalized)
+        shared_validation = graph_contracts.validate_intent(normalized)
         if shared_validation["status"] == "invalid":
             return {
                 "status": "invalid",
@@ -1284,9 +1270,9 @@ class QuestionAdapter:
         candidate_by_text_with_time = _dimension_candidate_by_text(normalized_candidates, include_time=True)
         if not normalized_candidates:
             slots = [dict(slot) for slot in payload.get("dimension_slots") or [] if isinstance(slot, dict)]
-            mentions = self._intent_projection_service.unique_strings(
+            mentions = intent_projection.unique_strings(
                 [
-                    *self._intent_projection_service.normalize_text_list(
+                    *intent_projection.normalize_text_list(
                         payload.get("dimension_mentions")
                     ),
                     *[str(slot.get("name")) for slot in slots if slot.get("name")],
@@ -1298,15 +1284,15 @@ class QuestionAdapter:
                 "residual_filter_mentions": [
                     item for item in payload.get("residual_filter_mentions") or [] if isinstance(item, dict)
                 ],
-                "ambiguous_slots": self._intent_projection_service.normalize_text_list(
+                "ambiguous_slots": intent_projection.normalize_text_list(
                     payload.get("ambiguous_slots")
                 ),
-                "conflict_slots": self._intent_projection_service.normalize_text_list(
+                "conflict_slots": intent_projection.normalize_text_list(
                     payload.get("conflict_slots")
                 ),
             }
         mentions: list[str] = []
-        for mention in self._intent_projection_service.normalize_text_list(
+        for mention in intent_projection.normalize_text_list(
             payload.get("dimension_mentions")
         ):
             mention_key = _dimension_text_key(mention)
@@ -1332,17 +1318,17 @@ class QuestionAdapter:
             if candidate is None:
                 normalized_slot = {
                     "name": slot_name,
-                    "role": self._intent_projection_service.normalize_dimension_role(
+                    "role": intent_projection.normalize_dimension_role(
                         slot.get("role")
                     ),
                     "value": slot.get("value"),
-                    "value_status": self._intent_projection_service.normalize_value_status(
+                    "value_status": intent_projection.normalize_value_status(
                         slot.get("value_status"), slot.get("value")
                     ),
                 }
                 if "value_confidence" in slot:
                     normalized_slot["value_confidence"] = (
-                        self._intent_projection_service.normalize_confidence(
+                        intent_projection.normalize_confidence(
                             slot.get("value_confidence")
                         )
                     )
@@ -1352,17 +1338,17 @@ class QuestionAdapter:
                 continue
             normalized_slot = {
                 "name": slot_name,
-                "role": self._intent_projection_service.normalize_dimension_role(
+                "role": intent_projection.normalize_dimension_role(
                     slot.get("role")
                 ),
                 "value": slot.get("value"),
-                "value_status": self._intent_projection_service.normalize_value_status(
+                "value_status": intent_projection.normalize_value_status(
                     slot.get("value_status"), slot.get("value")
                 ),
             }
             if "value_confidence" in slot:
                 normalized_slot["value_confidence"] = (
-                    self._intent_projection_service.normalize_confidence(
+                    intent_projection.normalize_confidence(
                         slot.get("value_confidence")
                     )
                 )
@@ -1376,10 +1362,10 @@ class QuestionAdapter:
             "residual_filter_mentions": [
                 item for item in payload.get("residual_filter_mentions") or [] if isinstance(item, dict)
             ],
-            "ambiguous_slots": self._intent_projection_service.normalize_text_list(
+            "ambiguous_slots": intent_projection.normalize_text_list(
                 payload.get("ambiguous_slots")
             ),
-            "conflict_slots": self._intent_projection_service.normalize_text_list(
+            "conflict_slots": intent_projection.normalize_text_list(
                 payload.get("conflict_slots")
             ),
         }

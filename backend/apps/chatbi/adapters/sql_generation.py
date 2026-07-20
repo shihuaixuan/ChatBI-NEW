@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from sqlmodel import Session
 
 from apps.ai_model.streaming import process_stream
-from apps.chatbi.chat_record import build_chat_record_service
+from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.models import (
     SQLGenerationData,
     SQLGenerationMessage,

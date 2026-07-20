@@ -6,12 +6,13 @@ from apps.chatbi.models import (
 )
 from apps.chatbi.services import (
     FinalReplyProjectionError,
-    FinalReplyProjectionService,
+    project_final_reply,
+    project_query_final_reply,
 )
 
 
 def test_final_reply_projection_combines_answer_recommendations_and_chart():
-    result = FinalReplyProjectionService().project(
+    result = project_final_reply(
         FinalReplyProjectionData(
             answer={"answer": "今日访问量为 1,234。", "warnings": []},
             recommendations={"questions": ["查看昨日访问量", "按店铺分析"]},
@@ -28,7 +29,7 @@ def test_final_reply_projection_combines_answer_recommendations_and_chart():
 
 
 def test_final_reply_projection_uses_stable_default_answer():
-    result = FinalReplyProjectionService().project(FinalReplyProjectionData())
+    result = project_final_reply(FinalReplyProjectionData())
 
     assert result.final_answer == "暂时无法生成完整回答，请稍后重试。"
     assert result.recommendations == []
@@ -37,7 +38,7 @@ def test_final_reply_projection_uses_stable_default_answer():
 
 
 def test_final_reply_projection_preserves_existing_answer_string_conversion():
-    result = FinalReplyProjectionService().project(
+    result = project_final_reply(
         FinalReplyProjectionData(
             answer={"answer": 1234},
             recommendations={"questions": ("查看昨日访问量",)},
@@ -50,7 +51,7 @@ def test_final_reply_projection_preserves_existing_answer_string_conversion():
 
 def test_query_final_reply_requires_successful_execution():
     with pytest.raises(FinalReplyProjectionError) as exc_info:
-        FinalReplyProjectionService.project_query_answer(
+        project_query_final_reply(
             QueryFinalReplyProjectionData(
                 answer_markdown="答案",
                 execution=None,
@@ -61,7 +62,7 @@ def test_query_final_reply_requires_successful_execution():
 
 
 def test_query_final_reply_appends_manual_sql_note():
-    result = FinalReplyProjectionService.project_query_answer(
+    result = project_query_final_reply(
         QueryFinalReplyProjectionData(
             answer_markdown="答案",
             execution={
@@ -78,7 +79,7 @@ def test_query_final_reply_appends_manual_sql_note():
 
 
 def test_query_final_reply_builds_chart_from_execution_fields():
-    result = FinalReplyProjectionService.project_query_answer(
+    result = project_query_final_reply(
         QueryFinalReplyProjectionData(
             answer_markdown="答案",
             execution={

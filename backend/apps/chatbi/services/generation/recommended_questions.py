@@ -12,7 +12,7 @@ from apps.chatbi.models import (
     RecommendedQuestionMessage,
     RecommendedQuestionModelChunk,
 )
-from apps.chatbi.services.chat_record_service import ChatRecordService
+from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 
 
 class RecommendedQuestionHistoryProvider(Protocol):

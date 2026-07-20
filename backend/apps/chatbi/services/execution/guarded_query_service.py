@@ -1,21 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any
 
-from apps.capabilities.schemas import ToolResult
-from apps.capabilities.sql.validator import SqlValidateTool
-from apps.chatbi.services.sql_permission import SQLPermissionService
-
-
-class SQLExecutor(Protocol):
-    def run(self, payload: dict[str, Any]) -> ToolResult: ...
+from apps.chatbi.models.dto.tool_result import ToolResult
+from apps.chatbi.services.execution.ports import SQLExecutor
+from apps.chatbi.services.execution.sql_permission import SQLPermissionService
+from apps.chatbi.services.execution.sql_validator import SqlValidateTool
 
 
-class SQLPermissionApplier(Protocol):
-    def apply(self, payload: dict[str, Any]) -> dict[str, Any]: ...
-
-
-class QueryService:
+class GuardedQueryService:
     """Agent 与 Graph 共用的 SQL 校验、权限和执行入口。"""
 
     def __init__(
@@ -23,7 +16,7 @@ class QueryService:
         *,
         default_limit: int | None = 100,
         sample_rows: int = 10,
-        permission_service: SQLPermissionApplier | None = None,
+        permission_service: SQLPermissionService | None = None,
         validate_tool: SqlValidateTool | None = None,
         execute_tool: SQLExecutor | None = None,
     ) -> None:
@@ -173,4 +166,7 @@ def numeric_stats(
     return stats
 
 
-__all__ = ["QueryService", "SQLExecutor", "numeric_stats"]
+# 旧名兼容（台账 E1）。
+QueryService = GuardedQueryService
+
+__all__ = ["GuardedQueryService", "QueryService", "SQLExecutor", "numeric_stats"]

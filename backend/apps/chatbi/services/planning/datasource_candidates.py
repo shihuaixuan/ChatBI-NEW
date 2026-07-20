@@ -10,7 +10,7 @@ from apps.chatbi.models import (
     DatasourceSelectionCandidate,
     DatasourceSelectionRankingCandidate,
 )
-from apps.chatbi.services.datasource_selection_service import (
+from apps.chatbi.services.planning.datasource_selection import (
     DatasourceSelectionError,
 )
 from apps.datasource import ExternalDatasource

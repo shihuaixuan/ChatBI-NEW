@@ -1,48 +1,15 @@
-from collections.abc import Sequence
-from typing import Protocol
-
 from apps.chatbi.models import (
     PhysicalSchemaField,
     PhysicalSchemaResult,
     PhysicalSchemaTable,
 )
-
-
-class PhysicalTableView(Protocol):
-    id: int | None
-    checked: bool
-    table_name: str
-    table_comment: str | None
-    custom_comment: str | None
-
-
-class PhysicalFieldView(Protocol):
-    checked: bool
-    field_name: str
-    field_type: str | None
-    field_comment: str | None
-    custom_comment: str | None
-
-
-class DatasourceMetadataReader(Protocol):
-    """ChatBI 读取数据源物理 Schema 的最小端口。"""
-
-    def list_tables(
-        self,
-        datasource_id: int,
-    ) -> Sequence[PhysicalTableView]: ...
-
-    def list_fields(
-        self,
-        table_id: int,
-        keyword: str | None = None,
-    ) -> Sequence[PhysicalFieldView]: ...
+from apps.datasource.services import DatasourceMetadataService
 
 
 class PhysicalSchemaService:
-    """统一读取 Agent 手写 SQL 所需的已启用物理表和字段。"""
+    """统一读取 Agent 手写 SQL 所需的已启用物理表和字段（直连 Datasource 公开元数据服务）。"""
 
-    def __init__(self, metadata_reader: DatasourceMetadataReader) -> None:
+    def __init__(self, metadata_reader: DatasourceMetadataService) -> None:
         self._metadata_reader = metadata_reader
 
     def get(
@@ -82,4 +49,4 @@ class PhysicalSchemaService:
         return PhysicalSchemaResult(tables=tables)
 
 
-__all__ = ["DatasourceMetadataReader", "PhysicalSchemaService"]
+__all__ = ["PhysicalSchemaService"]

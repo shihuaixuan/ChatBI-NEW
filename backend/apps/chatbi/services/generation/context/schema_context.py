@@ -31,7 +31,7 @@ class GenerationSchemaTableRanker(Protocol):
     ) -> list[int]: ...
 
 
-class GenerationSchemaContextService:
+class SchemaContextService:
     """从公开领域 Service 构造 SQL 生成需要的物理 Schema 上下文。"""
 
     def __init__(
@@ -275,4 +275,11 @@ class GenerationSchemaContextService:
         return value
 
 
-__all__ = ["GenerationSchemaContextService", "GenerationSchemaTableRanker"]
+# 旧名兼容（台账 E1）。
+GenerationSchemaContextService = SchemaContextService
+
+__all__ = [
+    "GenerationSchemaContextService",
+    "GenerationSchemaTableRanker",
+    "SchemaContextService",
+]

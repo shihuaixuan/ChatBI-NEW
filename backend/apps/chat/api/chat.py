@@ -1,7 +1,6 @@
 import asyncio
 import io
 import traceback
-from typing import List, Optional
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Path
@@ -46,7 +45,7 @@ from common.utils.data_format_schema import AxisObj
 router = APIRouter(tags=["Data Q&A"], prefix="/chat")
 
 
-@router.get("/list", response_model=List[Chat], summary=f"{PLACEHOLDER_PREFIX}get_chat_list")
+@router.get("/list", response_model=list[Chat], summary=f"{PLACEHOLDER_PREFIX}get_chat_list")
 async def chats(session: SessionDep, current_user: CurrentUser):
     return build_conversation_service(session).list_for_owner(
         current_user.id,
@@ -250,7 +249,7 @@ async def assistant_start_chat(
 
 @router.post("/recommend_questions/{chat_record_id}", summary=f"{PLACEHOLDER_PREFIX}ask_recommend_questions")
 async def ask_recommend_questions(session: SessionDep, current_user: CurrentUser, chat_record_id: int,
-                                  current_assistant: CurrentAssistant, articles_number: Optional[int] = 4):
+                                  current_assistant: CurrentAssistant, articles_number: int | None = 4):
     def _return_empty():
         yield encode_sse_event('recommended_question', content='[]')
 
@@ -277,7 +276,7 @@ async def ask_recommend_questions(session: SessionDep, current_user: CurrentUser
     return StreamingResponse(llm_service.await_result(), media_type="text/event-stream")
 
 
-@router.get("/recent_questions/{dataset_id}", response_model=List[str],
+@router.get("/recent_questions/{dataset_id}", response_model=list[str],
             summary=f"{PLACEHOLDER_PREFIX}get_recommend_questions")
 async def recommend_questions(session: SessionDep, current_user: CurrentUser,
                               dataset_id: int = Path(..., description=f"{PLACEHOLDER_PREFIX}dataset_id")):

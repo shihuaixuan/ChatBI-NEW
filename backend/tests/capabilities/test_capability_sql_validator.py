@@ -1,6 +1,6 @@
 """能力层 SQL 校验器契约测试（平移自 v1，行为不得回归）。"""
 
-from apps.capabilities.sql.validator import SqlValidateTool
+from apps.chatbi.services.execution.sql_validator import SqlValidateTool
 
 
 def test_rejects_empty_sql():
