@@ -1,12 +1,11 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
+from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
 
-@dataclass(frozen=True, slots=True)
-class SQLGenerationMessage:
-    role: Literal["system", "human", "ai"]
-    content: str
-    system_context: bool = False
+# 旧名兼容（台账 E2）：Message/Chunk 已统一到 streaming 共享 DTO。
+SQLGenerationMessage = ModelMessage
+SQLGenerationModelChunk = ModelStreamChunk
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,13 +30,6 @@ class SQLGenerationData:
     change_title: bool = False
     regenerate: bool = False
     history: list[SQLGenerationMessage] = field(default_factory=list)
-
-
-@dataclass(frozen=True, slots=True)
-class SQLGenerationModelChunk:
-    content: str = ""
-    reasoning_content: str = ""
-    token_usage: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

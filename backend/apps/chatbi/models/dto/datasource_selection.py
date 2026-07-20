@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
+from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
+
 
 @dataclass(frozen=True, slots=True)
 class DatasourceSelectionCandidate:
@@ -29,17 +31,9 @@ class DatasourceSelectionData:
     auto_select: bool
 
 
-@dataclass(frozen=True, slots=True)
-class DatasourceSelectionMessage:
-    role: Literal["system", "human", "ai"]
-    content: str
-
-
-@dataclass(frozen=True, slots=True)
-class DatasourceSelectionModelChunk:
-    content: str = ""
-    reasoning_content: str = ""
-    token_usage: dict[str, int] = field(default_factory=dict)
+# 旧名兼容（台账 E2）。
+DatasourceSelectionMessage = ModelMessage
+DatasourceSelectionModelChunk = ModelStreamChunk
 
 
 @dataclass(frozen=True, slots=True)

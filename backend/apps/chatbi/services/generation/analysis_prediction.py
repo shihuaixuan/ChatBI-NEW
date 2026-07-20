@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Protocol
 
 import orjson
 
@@ -9,25 +8,18 @@ from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
     AnalysisPredictionGenerationEvent,
     AnalysisPredictionMessage,
-    AnalysisPredictionModelChunk,
     ChatRecordAuxiliaryProjection,
     ChatRecordAuxiliaryType,
 )
 from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
-
-
-class AnalysisPredictionPromptBuilder(Protocol):
-    def build(
-        self,
-        data: AnalysisPredictionGenerationData,
-    ) -> list[AnalysisPredictionMessage]: ...
-
-
-class AnalysisPredictionModelClient(Protocol):
-    def stream(
-        self,
-        messages: list[AnalysisPredictionMessage],
-    ) -> Iterator[AnalysisPredictionModelChunk]: ...
+from apps.chatbi.services.generation.ports import (
+    AnalysisPredictionPromptBuilder,
+    GenerationModelClient,
+)
+from apps.chatbi.services.generation.streaming import (
+    StreamAccumulator,
+    stream_generation,
+)
 
 
 class AnalysisPredictionService:
@@ -37,7 +29,7 @@ class AnalysisPredictionService:
         self,
         *,
         prompt_builder: AnalysisPredictionPromptBuilder,
-        model_client: AnalysisPredictionModelClient,
+        model_client: GenerationModelClient,
         chat_record_service: ChatRecordService,
     ) -> None:
         self._prompt_builder = prompt_builder
@@ -61,21 +53,16 @@ class AnalysisPredictionService:
         self._validate_data(data)
         prepared_messages = self.prepare(data) if messages is None else messages
         self._validate_messages(prepared_messages)
-        full_content = ""
-        full_reasoning = ""
-        token_usage: dict[str, int] = {}
-        for chunk in self._model_client.stream(prepared_messages):
-            full_content += chunk.content
-            full_reasoning += chunk.reasoning_content
-            token_usage.update(chunk.token_usage)
+        stream = StreamAccumulator()
+        for chunk in stream_generation(prepared_messages, self._model_client, stream):
             yield AnalysisPredictionGenerationEvent(
                 kind="chunk",
                 content=chunk.content,
                 reasoning_content=chunk.reasoning_content,
-                token_usage=dict(token_usage),
+                token_usage=dict(stream.token_usage),
             )
 
-        answer = orjson.dumps({"content": full_content}).decode()
+        answer = orjson.dumps({"content": stream.content}).decode()
         if data.generation_type is ChatRecordAuxiliaryType.ANALYSIS:
             projection = ChatRecordAuxiliaryProjection(analysis=answer)
         else:
@@ -86,9 +73,9 @@ class AnalysisPredictionService:
         )
         yield AnalysisPredictionGenerationEvent(
             kind="completed",
-            content=full_content,
-            reasoning_content=full_reasoning,
-            token_usage=token_usage,
+            content=stream.content,
+            reasoning_content=stream.reasoning_content,
+            token_usage=stream.token_usage,
         )
 
     @staticmethod
@@ -104,8 +91,4 @@ class AnalysisPredictionService:
             raise ValueError("ANALYSIS_PREDICTION_PROMPT_INVALID")
 
 
-__all__ = [
-    "AnalysisPredictionModelClient",
-    "AnalysisPredictionPromptBuilder",
-    "AnalysisPredictionService",
-]
+__all__ = ["AnalysisPredictionPromptBuilder", "AnalysisPredictionService"]

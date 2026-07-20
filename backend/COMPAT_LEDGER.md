@@ -22,7 +22,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | B1 | `apps/chat/curd/chat.py` | `save_*`、创建/列表/重命名等兼容转发 → ChatBI Service | 旧 Chat 内部、dashboard（基线在案） | 调用方切换公开 Service | R3-d | 活跃 |
 | B2 | `apps/chat/models/chat_model.py`（除 A7 外） | Chat/ChatRecord/DTO 同对象兼容导出 | `common/utils/command_utils.py`、`common/audit/schemas/log_utils.py` 等 | common 调用方改用 `apps.chatbi.models` | R3-d | 活跃 |
-| B3 | `apps/chat/task/legacy_dependencies.py` | 旧 LLMService 运行依赖（模型运行时/数据源运行时/外部 Schema） | `apps/chat/task/llm.py` | R3-a 关账表 #1–#3 完成 | R3-a | 活跃 |
+| B3 | `apps/chat/task/external_datasource.py`（原 legacy_dependencies.py 的存留部分；模型运行时已转正为 `apps/ai_model/runtime.py`，本地数据源包装已删除） | 旧流程外部/本地数据源装配与外部 Schema 读取 | `apps/chat/task/llm.py` | run_task 收口（R3-b/c）或 Assistant 外部契约重构 | R3-c | 活跃 |
 | B4 | `apps/capabilities/question_understanding.py`、`time_slots.py` | ChatBI 同一身份兼容导出 | 旧测试与历史导入 | 调用方切 `apps.chatbi.services` | R4-d | 活跃 |
 | B5 | `apps/capabilities/semantic/compile.py`、`retrieval.py` | 兼容函数转发至 Semantic/ChatBI 公开服务 | 旧测试与历史导入 | 同上 | R4-d | 活跃 |
 | B6 | `apps/capabilities/sql/`、`apps/capabilities/schemas.py` | R1-c 起 schemas/validator/permission/execution_gateway 均为**纯转发桩**（实现已迁入 chatbi models/execution/adapters）；executor.py、repair.py 为 workflow 调用方持有的活代码 | apps/workflow、旧测试 | executor/repair 随 R4-c 归位后整目录删除 | R4-d | 活跃 |
@@ -56,7 +56,7 @@
 | # | 路径 | 内容 | 调用方 | 删除条件 | 目标阶段 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | E1 | `apps/chatbi/services/__init__.py` | R1-a 起降级为兼容导出层（旧符号 → 子域包新位置） | agent/workflow/chat/composition 等既有调用方 | 调用方改从子域包导入 | R4-d | 活跃 |
-| E2 | （预留）流式 DTO 旧名别名 | R2 产生 | 同上 | R4-d 清偿 | R4-d | 未产生 |
+| E2 | 5 套流式 DTO 旧名别名（`{X}Message`/`{X}ModelChunk` → streaming 共享 DTO）、7 个旧 Client 协议名别名（generation/ports.py）、5 个旧 LangChain 客户端类名别名（各 adapter 文件） | R2 统一产生 | llm.py、旧测试、adapters | 调用方改用共享名 | R4-d | 活跃 |
 | E3 | `understanding/model_invocation.py` 中 `QuestionModelService = StructuredModelService` 别名 | 类改名的旧名兼容 | question.py、composition、旧测试 | 调用方改用 `StructuredModelService` | R4-d | 活跃 |
 | E4 | `understanding/graph_contracts.py` 中 `QuestionIntentValidationService` 薄包装类 | 意图校验函数化后的旧类形态兼容 | `workflow/capabilities/adapters/intent_validation.py`（B7）、旧测试 | B7 删除时一并清偿 | R4-c | 活跃 |
 | E5 | `execution/guarded_query_service.py` 中 `QueryService = GuardedQueryService` 别名 | 类改名旧名兼容 | agent/workflow/legacy 调用方 | 调用方改用新名 | R4-d | 活跃 |

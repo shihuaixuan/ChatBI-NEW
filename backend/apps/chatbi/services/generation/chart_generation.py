@@ -2,36 +2,27 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from typing import Any, Protocol
+from typing import Any
 
 import orjson
 
+from apps.chatbi.errors import ChartGenerationError
 from apps.chatbi.models import (
     ChartGenerationData,
     ChartGenerationEvent,
     ChartGenerationMessage,
-    ChartGenerationModelChunk,
     ChatRecordResultProjection,
 )
 from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
-
-
-class ChartGenerationError(ValueError):
-    """图表生成输入或模型结果不合法。"""
-
-
-class ChartGenerationPromptBuilder(Protocol):
-    def build(
-        self,
-        data: ChartGenerationData,
-    ) -> list[ChartGenerationMessage]: ...
-
-
-class ChartGenerationModelClient(Protocol):
-    def stream(
-        self,
-        messages: list[ChartGenerationMessage],
-    ) -> Iterator[ChartGenerationModelChunk]: ...
+from apps.chatbi.services.generation.ports import (
+    ChartGenerationPromptBuilder,
+    GenerationModelClient,
+)
+from apps.chatbi.services.generation.streaming import (
+    StreamAccumulator,
+    ensure_prompt_messages,
+    stream_generation,
+)
 
 
 class ChartGenerationService:
@@ -41,7 +32,7 @@ class ChartGenerationService:
         self,
         *,
         prompt_builder: ChartGenerationPromptBuilder,
-        model_client: ChartGenerationModelClient,
+        model_client: GenerationModelClient,
         chat_record_service: ChatRecordService,
     ) -> None:
         self._prompt_builder = prompt_builder
@@ -65,28 +56,23 @@ class ChartGenerationService:
     ) -> Iterator[ChartGenerationEvent]:
         self._validate_data(data)
         prepared_messages = self.prepare(data) if messages is None else messages
-        if not prepared_messages or any(
-            not message.content.strip() for message in prepared_messages
-        ):
-            raise ChartGenerationError("CHART_GENERATION_PROMPT_INVALID")
+        ensure_prompt_messages(
+            prepared_messages,
+            ChartGenerationError("CHART_GENERATION_PROMPT_INVALID"),
+        )
 
-        full_content = ""
-        full_reasoning = ""
-        token_usage: dict[str, int] = {}
-        for chunk in self._model_client.stream(prepared_messages):
-            full_content += chunk.content
-            full_reasoning += chunk.reasoning_content
-            token_usage.update(chunk.token_usage)
+        stream = StreamAccumulator()
+        for chunk in stream_generation(prepared_messages, self._model_client, stream):
             yield ChartGenerationEvent(
                 kind="chunk",
                 content=chunk.content,
                 reasoning_content=chunk.reasoning_content,
-                token_usage=dict(token_usage),
+                token_usage=dict(stream.token_usage),
             )
 
-        answer = orjson.dumps({"content": full_content}).decode()
+        answer = orjson.dumps({"content": stream.content}).decode()
         try:
-            chart = _normalize_chart(full_content)
+            chart = _normalize_chart(stream.content)
         except ChartGenerationError as exc:
             self._chat_record_service.project_result_by_id(
                 data.record_id,
@@ -94,10 +80,10 @@ class ChartGenerationService:
             )
             yield ChartGenerationEvent(
                 kind="completed",
-                content=full_content,
-                reasoning_content=full_reasoning,
+                content=stream.content,
+                reasoning_content=stream.reasoning_content,
                 error=str(exc),
-                token_usage=token_usage,
+                token_usage=stream.token_usage,
             )
             return
 
@@ -110,10 +96,10 @@ class ChartGenerationService:
         )
         yield ChartGenerationEvent(
             kind="completed",
-            content=full_content,
-            reasoning_content=full_reasoning,
+            content=stream.content,
+            reasoning_content=stream.reasoning_content,
             chart=chart,
-            token_usage=token_usage,
+            token_usage=stream.token_usage,
         )
 
     @staticmethod
@@ -225,7 +211,6 @@ def _invalid_chart_message(content: str) -> str:
 
 __all__ = [
     "ChartGenerationError",
-    "ChartGenerationModelClient",
     "ChartGenerationPromptBuilder",
     "ChartGenerationService",
 ]

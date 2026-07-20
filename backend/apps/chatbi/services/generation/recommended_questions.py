@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from typing import Protocol
 
 import orjson
 
@@ -10,33 +9,18 @@ from apps.chatbi.models import (
     RecommendedQuestionGenerationData,
     RecommendedQuestionGenerationEvent,
     RecommendedQuestionMessage,
-    RecommendedQuestionModelChunk,
 )
 from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
-
-
-class RecommendedQuestionHistoryProvider(Protocol):
-    def list_recent(
-        self,
-        datasource_id: int | None,
-        *,
-        limit: int = 20,
-    ) -> list[str]: ...
-
-
-class RecommendedQuestionPromptBuilder(Protocol):
-    def build(
-        self,
-        data: RecommendedQuestionGenerationData,
-        old_questions: list[str],
-    ) -> list[RecommendedQuestionMessage]: ...
-
-
-class RecommendedQuestionModelClient(Protocol):
-    def stream(
-        self,
-        messages: list[RecommendedQuestionMessage],
-    ) -> Iterator[RecommendedQuestionModelChunk]: ...
+from apps.chatbi.services.generation.ports import (
+    GenerationModelClient,
+    RecommendedQuestionHistoryProvider,
+    RecommendedQuestionPromptBuilder,
+)
+from apps.chatbi.services.generation.streaming import (
+    StreamAccumulator,
+    ensure_prompt_messages,
+    stream_generation,
+)
 
 
 class RecommendedQuestionService:
@@ -47,7 +31,7 @@ class RecommendedQuestionService:
         *,
         history_provider: RecommendedQuestionHistoryProvider,
         prompt_builder: RecommendedQuestionPromptBuilder,
-        model_client: RecommendedQuestionModelClient,
+        model_client: GenerationModelClient,
         chat_record_service: ChatRecordService,
     ) -> None:
         self._history_provider = history_provider
@@ -80,41 +64,36 @@ class RecommendedQuestionService:
     ) -> Iterator[RecommendedQuestionGenerationEvent]:
         self._validate_data(data)
         prepared_messages = self.prepare(data) if messages is None else messages
-        if not prepared_messages or any(
-            not message.content.strip() for message in prepared_messages
-        ):
-            raise ValueError("RECOMMENDED_QUESTION_PROMPT_INVALID")
-        full_content = ""
-        full_reasoning = ""
-        token_usage: dict[str, int] = {}
-        for chunk in self._model_client.stream(prepared_messages):
-            full_content += chunk.content
-            full_reasoning += chunk.reasoning_content
-            token_usage.update(chunk.token_usage)
+        ensure_prompt_messages(
+            prepared_messages,
+            ValueError("RECOMMENDED_QUESTION_PROMPT_INVALID"),
+        )
+        stream = StreamAccumulator()
+        for chunk in stream_generation(prepared_messages, self._model_client, stream):
             yield RecommendedQuestionGenerationEvent(
                 kind="chunk",
                 content=chunk.content,
                 reasoning_content=chunk.reasoning_content,
-                token_usage=dict(token_usage),
+                token_usage=dict(stream.token_usage),
             )
 
         questions = _normalize_questions(
-            full_content,
+            stream.content,
             limit=data.articles_number,
         )
         questions_json = orjson.dumps(questions).decode()
         self._chat_record_service.project_recommendation_by_id(
             data.record_id,
-            answer=orjson.dumps({"content": full_content}).decode(),
+            answer=orjson.dumps({"content": stream.content}).decode(),
             questions=questions_json,
             articles_number=data.articles_number,
         )
         yield RecommendedQuestionGenerationEvent(
             kind="completed",
-            content=full_content,
-            reasoning_content=full_reasoning,
+            content=stream.content,
+            reasoning_content=stream.reasoning_content,
             recommended_question=questions_json,
-            token_usage=token_usage,
+            token_usage=stream.token_usage,
         )
 
     @staticmethod
@@ -147,9 +126,4 @@ def _normalize_questions(content: str, *, limit: int) -> list[str]:
     return []
 
 
-__all__ = [
-    "RecommendedQuestionHistoryProvider",
-    "RecommendedQuestionModelClient",
-    "RecommendedQuestionPromptBuilder",
-    "RecommendedQuestionService",
-]
+__all__ = ["RecommendedQuestionService"]

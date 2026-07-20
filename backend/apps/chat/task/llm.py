@@ -15,6 +15,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlmodel import Session
 
 from apps.access_control.data_policy import requires_data_policy, resolve_data_policy
+from apps.ai_model.runtime import LLMRuntime, build_llm_runtime
 from apps.assistant import AssistantOutDsSchema
 from apps.chat.composition import build_conversation_service
 from apps.chat.curd.chat import (
@@ -45,22 +46,19 @@ from apps.chat.models.chat_model import (
     OperationEnum,
     RenameChat,
 )
+from apps.chat.task.external_datasource import (
+    LegacyDatasourceRuntime,
+    build_legacy_external_datasource_catalog,
+    check_legacy_datasource_connection,
+    load_legacy_external_schema_context,
+    resolve_legacy_datasource,
+)
 from apps.chat.task.legacy_adapter import (
     build_context_prompt_log,
     build_role_prompt_log,
     build_run_error_message,
     encode_sse_event,
     finalize_legacy_run,
-)
-from apps.chat.task.legacy_dependencies import (
-    LegacyDatasourceRuntime,
-    LegacyModelRuntime,
-    build_legacy_external_datasource_catalog,
-    build_legacy_model_runtime,
-    check_legacy_datasource_connection,
-    get_legacy_local_datasource,
-    load_legacy_external_schema_context,
-    resolve_legacy_datasource,
 )
 from apps.chatbi.adapters.analysis_prediction import build_analysis_prediction_service
 from apps.chatbi.adapters.chart_generation import build_chart_generation_service
@@ -127,6 +125,7 @@ from apps.datasource import (
     DatasourceConnection,
     DatasourceRecord,
 )
+from apps.datasource.composition import build_datasource_service
 from apps.system.composition import build_system_parameter_service
 from common.core.config import settings
 from common.core.db import engine
@@ -187,7 +186,7 @@ class LLMService:
 
     def __init__(self, session: Session, current_user: CurrentUser, chat_question: ChatQuestion,
                  current_assistant: CurrentAssistant | None = None, no_reasoning: bool = False,
-                 embedding: bool = False, model_runtime: LegacyModelRuntime | None = None):
+                 embedding: bool = False, model_runtime: LLMRuntime | None = None):
         self.sql_history = []
         self.chart_history = []
         self.generate_sql_logs = []
@@ -206,9 +205,8 @@ class LLMService:
         datasource_runtime: LegacyDatasourceRuntime | None = None
         if not chat.datasource and chat_question.datasource_id:
             try:
-                requested_datasource = get_legacy_local_datasource(
-                    session,
-                    chat_question.datasource_id,
+                requested_datasource = build_datasource_service(session).get(
+                    chat_question.datasource_id
                 )
             except ValueError:
                 requested_datasource = None
@@ -281,7 +279,7 @@ class LLMService:
         no_reasoning = bool(args[4]) if len(args) > 4 else bool(
             kwargs.get("no_reasoning", False)
         )
-        model_runtime = await build_legacy_model_runtime(
+        model_runtime = await build_llm_runtime(
             specialized_model_id,
             no_reasoning=no_reasoning,
         )
@@ -1620,7 +1618,7 @@ class LLMService:
             raise SingleMessageError("chat.ds_is_invalid")
         if not self.current_assistant or self.current_assistant.type == 4:
             try:
-                get_legacy_local_datasource(session, int(_ds.id))
+                build_datasource_service(session).get(int(_ds.id))
             except ValueError as exc:
                 raise SingleMessageError("chat.ds_is_invalid") from exc
         else:

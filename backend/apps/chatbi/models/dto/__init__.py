@@ -147,8 +147,11 @@ from apps.chatbi.models.dto.sql_generation import (
     SQLGenerationModelChunk,
     SQLGenerationResult,
 )
+from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
 
 __all__ = [
+    "ModelMessage",
+    "ModelStreamChunk",
     "AnswerGenerationData",
     "AnswerGenerationMode",
     "AnswerGenerationPrompt",

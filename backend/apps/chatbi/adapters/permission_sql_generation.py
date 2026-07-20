@@ -7,7 +7,9 @@ from typing import cast
 from langchain.chat_models.base import BaseChatModel
 from sqlmodel import Session
 
-from apps.chatbi.adapters.sql_generation import LangChainSQLGenerationModelClient
+from apps.chatbi.adapters.langchain import (
+    LangChainGenerationModelClient as LangChainSQLGenerationModelClient,
+)
 from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.models import PermissionSQLGenerationData, SQLGenerationMessage
 from apps.chatbi.services import PermissionSQLGenerationService

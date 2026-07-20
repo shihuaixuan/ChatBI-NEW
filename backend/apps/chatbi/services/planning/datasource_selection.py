@@ -2,37 +2,26 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from typing import Protocol
 
 import orjson
 
+from apps.chatbi.errors import DatasourceSelectionError
 from apps.chatbi.models import (
     ChatRecord,
     DatasourceSelectionCandidate,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
     DatasourceSelectionMessage,
-    DatasourceSelectionModelChunk,
 )
 from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
-
-
-class DatasourceSelectionError(ValueError):
-    """数据源选择输入或模型结果不合法。"""
-
-
-class DatasourceSelectionPromptBuilder(Protocol):
-    def build(
-        self,
-        data: DatasourceSelectionData,
-    ) -> list[DatasourceSelectionMessage]: ...
-
-
-class DatasourceSelectionModelClient(Protocol):
-    def stream(
-        self,
-        messages: list[DatasourceSelectionMessage],
-    ) -> Iterator[DatasourceSelectionModelChunk]: ...
+from apps.chatbi.services.generation.ports import (
+    DatasourceSelectionPromptBuilder,
+    GenerationModelClient,
+)
+from apps.chatbi.services.generation.streaming import (
+    StreamAccumulator,
+    stream_generation,
+)
 
 
 class DatasourceSelectionService:
@@ -42,7 +31,7 @@ class DatasourceSelectionService:
         self,
         *,
         prompt_builder: DatasourceSelectionPromptBuilder,
-        model_client: DatasourceSelectionModelClient,
+        model_client: GenerationModelClient,
         chat_record_service: ChatRecordService,
     ) -> None:
         self._prompt_builder = prompt_builder
@@ -76,43 +65,38 @@ class DatasourceSelectionService:
 
         prepared_messages = self.prepare(data) if messages is None else messages
         self._validate_messages(prepared_messages)
-        full_content = ""
-        full_reasoning = ""
-        token_usage: dict[str, int] = {}
-        for chunk in self._model_client.stream(prepared_messages):
-            full_content += chunk.content
-            full_reasoning += chunk.reasoning_content
-            token_usage.update(chunk.token_usage)
+        stream = StreamAccumulator()
+        for chunk in stream_generation(prepared_messages, self._model_client, stream):
             yield DatasourceSelectionEvent(
                 kind="chunk",
                 content=chunk.content,
                 reasoning_content=chunk.reasoning_content,
                 model_used=True,
-                token_usage=dict(token_usage),
+                token_usage=dict(stream.token_usage),
             )
 
         try:
             selected_id = _parse_selected_datasource(
-                full_content,
+                stream.content,
                 candidates=data.candidates,
             )
         except DatasourceSelectionError as exc:
             yield DatasourceSelectionEvent(
                 kind="completed",
-                content=full_content,
-                reasoning_content=full_reasoning,
+                content=stream.content,
+                reasoning_content=stream.reasoning_content,
                 model_used=True,
                 error=str(exc),
-                token_usage=token_usage,
+                token_usage=stream.token_usage,
             )
             return
         yield DatasourceSelectionEvent(
             kind="completed",
-            content=full_content,
-            reasoning_content=full_reasoning,
+            content=stream.content,
+            reasoning_content=stream.reasoning_content,
             selected_datasource_id=selected_id,
             model_used=True,
-            token_usage=token_usage,
+            token_usage=stream.token_usage,
         )
 
     def bind_selection(
@@ -227,9 +211,4 @@ def _parse_selected_datasource(
     raise DatasourceSelectionError("No available datasource configuration found")
 
 
-__all__ = [
-    "DatasourceSelectionError",
-    "DatasourceSelectionModelClient",
-    "DatasourceSelectionPromptBuilder",
-    "DatasourceSelectionService",
-]
+__all__ = ["DatasourceSelectionError", "DatasourceSelectionService"]

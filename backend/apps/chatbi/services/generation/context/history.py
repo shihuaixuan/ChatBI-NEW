@@ -1,21 +1,13 @@
 """旧生成日志到稳定历史消息的投影规则（纯函数）。"""
 
-from collections.abc import Callable
-from typing import Any, Literal, TypeVar, cast
+from typing import Any, Literal, cast
 
-from apps.chatbi.models.dto.chart_generation import ChartGenerationMessage
 from apps.chatbi.models.dto.generation_history import (
     GenerationHistoryLog,
     GenerationHistoryProjectionData,
     GenerationHistoryProjectionResult,
 )
-from apps.chatbi.models.dto.sql_generation import SQLGenerationMessage
-
-GenerationMessage = TypeVar(
-    "GenerationMessage",
-    SQLGenerationMessage,
-    ChartGenerationMessage,
-)
+from apps.chatbi.models.dto.streaming import ModelMessage
 
 
 def project_generation_history(
@@ -26,16 +18,8 @@ def project_generation_history(
     sql_messages = _select_messages(data.sql_logs, data.regenerate_record_id)
     chart_messages = _select_messages(data.chart_logs, data.regenerate_record_id)
     return GenerationHistoryProjectionResult(
-        sql_history=_project_messages(
-            sql_messages,
-            data.round_limit,
-            SQLGenerationMessage,
-        ),
-        chart_history=_project_messages(
-            chart_messages,
-            data.round_limit,
-            ChartGenerationMessage,
-        ),
+        sql_history=_project_messages(sql_messages, data.round_limit),
+        chart_history=_project_messages(chart_messages, data.round_limit),
     )
 
 
@@ -61,15 +45,14 @@ def _select_messages(
 def _project_messages(
     messages: list[dict[str, Any]],
     round_limit: int,
-    message_factory: Callable[..., GenerationMessage],
-) -> list[GenerationMessage]:
-    projected: list[GenerationMessage] = []
+) -> list[ModelMessage]:
+    projected: list[ModelMessage] = []
     for message in _last_conversation_rounds(messages, round_limit):
         role = message.get("type")
         if role not in ("human", "ai"):
             continue
         projected.append(
-            message_factory(
+            ModelMessage(
                 role=cast(Literal["human", "ai"], role),
                 content=cast(str, message.get("content")),
             )

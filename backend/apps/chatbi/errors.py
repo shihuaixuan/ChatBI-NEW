@@ -68,6 +68,10 @@ class SemanticQueryCompileError(ChatBIError, ValueError):
     """语义查询计划无法编译。"""
 
 
+class DatasourceSelectionError(ChatBIError, ValueError):
+    """数据源选择输入或模型结果不合法。"""
+
+
 # --- 执行（execution） ---
 
 
@@ -84,6 +88,22 @@ class ResultArtifactWriteError(ResultArtifactError):
 
 
 # --- 生成（generation） ---
+
+
+class SQLGenerationError(ChatBIError, ValueError):
+    """SQL 生成输入或模型结果不合法。"""
+
+
+class DynamicSQLGenerationError(ChatBIError, ValueError):
+    """动态 SQL 生成输入不合法。"""
+
+
+class PermissionSQLGenerationError(ChatBIError, ValueError):
+    """权限 SQL 生成输入不合法。"""
+
+
+class ChartGenerationError(ChatBIError, ValueError):
+    """图表生成输入或模型结果不合法。"""
 
 
 class FinalReplyProjectionError(ChatBIError, ValueError):
@@ -129,10 +149,15 @@ __all__ = [
     "ConversationError",
     "ConversationNotFoundError",
     "ConversationOwnershipError",
+    "ChartGenerationError",
     "ConversationServiceConfigurationError",
+    "DatasourceSelectionError",
+    "DynamicSQLGenerationError",
     "ExecutionBindingError",
     "FinalReplyProjectionError",
+    "PermissionSQLGenerationError",
     "QueryResultProjectionError",
+    "SQLGenerationError",
     "QuestionModelCallError",
     "QuestionModelError",
     "QuestionModelOutputError",

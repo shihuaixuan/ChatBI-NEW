@@ -1,12 +1,11 @@
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
 
-@dataclass(frozen=True, slots=True)
-class ChartGenerationMessage:
-    role: Literal["system", "human", "ai"]
-    content: str
-    system_context: bool = False
+# 旧名兼容（台账 E2）。
+ChartGenerationMessage = ModelMessage
+ChartGenerationModelChunk = ModelStreamChunk
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,13 +21,6 @@ class ChartGenerationData:
     assistant_name: str
     rule: str = ""
     history: list[ChartGenerationMessage] = field(default_factory=list)
-
-
-@dataclass(frozen=True, slots=True)
-class ChartGenerationModelChunk:
-    content: str = ""
-    reasoning_content: str = ""
-    token_usage: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,13 +1,15 @@
 """规划子域：数据源选择、执行绑定、语义检索与编译、物理 Schema。"""
 
+from apps.chatbi.services.generation.ports import (
+    DatasourceSelectionModelClient,
+    DatasourceSelectionPromptBuilder,
+)
 from apps.chatbi.services.planning.datasource_candidates import (
     DatasourceSelectionCandidateRanker,
     DatasourceSelectionCandidateService,
 )
 from apps.chatbi.services.planning.datasource_selection import (
     DatasourceSelectionError,
-    DatasourceSelectionModelClient,
-    DatasourceSelectionPromptBuilder,
     DatasourceSelectionService,
 )
 from apps.chatbi.services.planning.execution_binding import (

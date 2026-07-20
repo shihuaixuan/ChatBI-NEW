@@ -2152,3 +2152,51 @@ DDD 迁移完成需要同时满足：
 **R1 阶段完成。** 度量：services 顶层业务文件 37→0（6 个子域包）；Service 类 37→约 21；
 函数化贫血服务 13 个；内联 Protocol 36→约 17（余量为 R2 重写对象）；chatbi→capabilities 依赖 4→0；
 1:1 跨域包装端口 ≥6→0；守卫文件 24→3；chatbi 公共面 26 符号。
+
+## R2（2026-07-20）：统一流式生成骨架与共享 DTO
+
+1. 新建 `models/dto/streaming.py`：`ModelMessage` + `ModelStreamChunk` 共享 DTO；5 套同构的
+   `{X}Message` / `{X}ModelChunk`（sql/chart/analysis_prediction/recommended_question/
+   datasource_selection）全部改为共享类型别名（台账 E2）。事件信封按能力保留——各家族
+   completed 事件的载荷字段（result/chart/recommended_question/selected_datasource_id）本就不同，
+   强行泛型化会迫使 SSE 消费方改字段名，收益为负（目标设计 §4.3 防过度抽象边界的应用）。
+2. 新建 `generation/streaming.py`：`StreamAccumulator` + `stream_generation()` +
+   `ensure_prompt_messages()`。七个生成/选择 Service（sql/dynamic/permission/chart/
+   analysis_prediction/recommended_questions/datasource_selection）切换到唯一累计实现；
+   全仓 `reasoning_content +=` 累计逻辑仅剩 streaming.py 一处；六处 prepare/generate
+   双重校验的复制噪声一并消除。
+3. 新建 `generation/ports.py`：共享 `GenerationModelClient` 端口 + 7 个能力 PromptBuilder +
+   `RecommendedQuestionHistoryProvider`；服务文件内联 Protocol 清零，旧的按能力命名的
+   7 个 Client 协议名以别名保留（E2）。
+4. 新建 `adapters/langchain.py`：`LangChainGenerationModelClient` 共享客户端；5 个适配器中
+   逐字重复的消息转换 + process_stream 循环删除，旧类名以别名保留；dynamic/permission
+   适配器的转发导入重定向。
+5. 生成/选择家族 6 个错误类型迁入 `errors.py`（SQLGenerationError、DynamicSQLGenerationError、
+   PermissionSQLGenerationError、ChartGenerationError、DatasourceSelectionError 均挂
+   ChatBIError 基类，except ValueError 行为不变）。`context/history.py` 随消息类型统一删除
+   TypeVar 与 factory 参数。
+6. 决策记录：dynamic/permission 与主 SQL 的模块物理合并**取消**（骨架统一后各模块已很薄，
+   合并只省两个文件名却要动守卫与历史，收益为负）；adapters 目录技术分组顺延至 R4-d
+   （与 test_boundaries 对应小节改写同批）。
+7. 验证：chatbi/architecture/chat/agent/workflow/capabilities 684 项通过；**完整后端回归
+   1,221 项通过**（含 Ruff 修复后复跑）；SSE 契约测试全绿；OpenAPI 154 路径；新增 5 个
+   核心模块严格 Mypy 通过。无行为变化、无数据库变更。
+
+## R3-a（2026-07-20）：legacy 关账表 #1–#3，删除 legacy_dependencies.py
+
+1. **#1 模型运行时**：新建 AI Model 公开运行能力 `apps/ai_model/runtime.py`
+   （`LLMRuntime` + `build_llm_runtime()`，含 no_reasoning 关闭思考行为）。原
+   `LegacyModelRuntime`/`build_legacy_model_runtime` 删除——长期能力不再用 Legacy 包装
+   （AGENTS.md v2 §8.3 命名规则落地）。
+2. **#2 数据源运行时**：1:1 包装 `get_legacy_local_datasource` 删除，两处调用点改为
+   `build_datasource_service(session).get(...)` 直调公开 Service。
+3. **#3 外部助手 Schema 与数据源装配**：真正随旧流程死亡的部分（LegacyDatasourceRuntime、
+   resolve/check/catalog、外部 Schema 读取）收拢到显式命名的
+   `apps/chat/task/external_datasource.py`，模块 docstring 标明台账 B3 与删除条件
+   （run_task 收口或 Assistant 外部契约重构）。
+4. `apps/chat/task/legacy_dependencies.py` **删除**；llm.py 导入与调用点同批切换；
+   适配器测试 monkeypatch 目标改指 ai_model.runtime；边界守卫对应小节更新
+   （新增 llm.py 必须依赖 `apps.ai_model.runtime` 的断言）。
+5. 验证：chat/architecture/chatbi/agent/workflow 定向 664 项、完整后端回归 1,221 项通过；
+   应用导入通过；`apps/ai_model/runtime.py` 严格 Mypy 通过；Ruff 通过。
+   无行为变化、无数据库变更。台账 B3 由 external_datasource.py 承接。

@@ -4,8 +4,6 @@
 """
 
 from apps.chatbi.services.generation.analysis_prediction import (
-    AnalysisPredictionModelClient,
-    AnalysisPredictionPromptBuilder,
     AnalysisPredictionService,
 )
 from apps.chatbi.services.generation.answer_generation import (
@@ -17,8 +15,6 @@ from apps.chatbi.services.generation.answer_generation import (
 from apps.chatbi.services.generation.answer_projection import project_answer_context
 from apps.chatbi.services.generation.chart_generation import (
     ChartGenerationError,
-    ChartGenerationModelClient,
-    ChartGenerationPromptBuilder,
     ChartGenerationService,
 )
 from apps.chatbi.services.generation.context import (
@@ -37,8 +33,6 @@ from apps.chatbi.services.generation.context import (
 )
 from apps.chatbi.services.generation.dynamic_sql_generation import (
     DynamicSQLGenerationError,
-    DynamicSQLGenerationModelClient,
-    DynamicSQLGenerationPromptBuilder,
     DynamicSQLGenerationService,
 )
 from apps.chatbi.services.generation.final_reply import (
@@ -48,22 +42,36 @@ from apps.chatbi.services.generation.final_reply import (
 )
 from apps.chatbi.services.generation.permission_sql_generation import (
     PermissionSQLGenerationError,
-    PermissionSQLGenerationModelClient,
-    PermissionSQLGenerationPromptBuilder,
     PermissionSQLGenerationService,
 )
-from apps.chatbi.services.generation.recommended_questions import (
+from apps.chatbi.services.generation.ports import (
+    AnalysisPredictionModelClient,
+    AnalysisPredictionPromptBuilder,
+    ChartGenerationModelClient,
+    ChartGenerationPromptBuilder,
+    DynamicSQLGenerationModelClient,
+    DynamicSQLGenerationPromptBuilder,
+    GenerationModelClient,
+    PermissionSQLGenerationModelClient,
+    PermissionSQLGenerationPromptBuilder,
     RecommendedQuestionHistoryProvider,
     RecommendedQuestionModelClient,
     RecommendedQuestionPromptBuilder,
+    SQLGenerationModelClient,
+    SQLGenerationPromptBuilder,
+)
+from apps.chatbi.services.generation.recommended_questions import (
     RecommendedQuestionService,
 )
 from apps.chatbi.services.generation.sql_generation import (
     SQLGenerationError,
-    SQLGenerationModelClient,
-    SQLGenerationPromptBuilder,
     SQLGenerationService,
     parse_sql_generation_result,
+)
+from apps.chatbi.services.generation.streaming import (
+    StreamAccumulator,
+    ensure_prompt_messages,
+    stream_generation,
 )
 
 __all__ = [
@@ -84,6 +92,7 @@ __all__ = [
     "DynamicSQLGenerationPromptBuilder",
     "DynamicSQLGenerationService",
     "FinalReplyProjectionError",
+    "GenerationModelClient",
     "GenerationContextService",
     "GenerationCustomPromptProvider",
     "GenerationCustomPromptService",
@@ -103,6 +112,9 @@ __all__ = [
     "SQLGenerationModelClient",
     "SQLGenerationPromptBuilder",
     "SQLGenerationService",
+    "StreamAccumulator",
+    "ensure_prompt_messages",
+    "stream_generation",
     "build_answer_generation_prompt",
     "parse_sql_generation_result",
     "project_answer_context",

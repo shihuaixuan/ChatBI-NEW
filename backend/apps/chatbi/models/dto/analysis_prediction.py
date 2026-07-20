@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from apps.chatbi.models.dto.chat_record import ChatRecordAuxiliaryType
+from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,17 +19,9 @@ class AnalysisPredictionGenerationData:
     terminologies: str = ""
 
 
-@dataclass(frozen=True, slots=True)
-class AnalysisPredictionMessage:
-    role: Literal["system", "human", "ai"]
-    content: str
-
-
-@dataclass(frozen=True, slots=True)
-class AnalysisPredictionModelChunk:
-    content: str = ""
-    reasoning_content: str = ""
-    token_usage: dict[str, int] = field(default_factory=dict)
+# 旧名兼容（台账 E2）。
+AnalysisPredictionMessage = ModelMessage
+AnalysisPredictionModelChunk = ModelStreamChunk
 
 
 @dataclass(frozen=True, slots=True)

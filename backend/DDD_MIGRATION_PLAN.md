@@ -1,6 +1,6 @@
 # SQLBot 后端架构迁移计划（现行版）
 
-> 状态：进行中（R0、R1 已完成，当前推进 R2）
+> 状态：进行中（R0–R2、R3-a 已完成，当前推进 R3-b）
 > 更新：2026-07-20
 > 定位：**边界清晰的模块化单体**。DDD 战略半边（限界上下文、数据所有权、公开契约、依赖方向）全局保留；战术模式按子域分级使用（见 `apps/AGENTS.md` v2）。
 > 本文是唯一现行计划。历史批次日志（含 P0–P5 前 43 批全文）见 `DDD_MIGRATION_CHANGELOG.md`；兼容入口台账见 `COMPAT_LEDGER.md`；评审依据见 `docs/tech/12/13/14`。
@@ -70,10 +70,9 @@ P5 的剩余工作由 R1–R4 承接（下节），完成 R3 即视为 P5 验收
 
 R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capabilities 依赖 0；1:1 包装端口 0；守卫文件 3；剩余内联 Protocol（生成子域 6 组 PromptBuilder/ModelClient）与生成子域错误随 R2 重写收口。
 
-### R2：统一流式生成骨架（1–2 批）
+### R2：统一流式生成骨架（✅ 2026-07-20 完成）
 
-`models/dto/streaming.py`（ModelMessage/ModelStreamChunk/GenerationEvent[R]）+ `generation/streaming.py::run_generation()`；六个生成 Service 切换共享类型，旧 5 套四件套改别名入台账；六个 LangChain 适配器合并。
-验收：手写流消费循环仅剩一处；SSE 契约测试全绿。
+`models/dto/streaming.py`（ModelMessage/ModelStreamChunk）+ `generation/streaming.py`（StreamAccumulator/stream_generation/ensure_prompt_messages）+ `generation/ports.py`（共享 GenerationModelClient + 7 PromptBuilder）+ `adapters/langchain.py` 共享客户端。7 个流式 Service 切换；5 套 Message/Chunk 改别名（台账 E2）；生成家族 6 个错误迁入 errors.py；服务内联 Protocol 清零。事件信封按能力保留（载荷字段本不相同，泛型化收益为负）；dynamic/permission 模块物理合并取消（决策见 changelog）；adapters 目录分组顺延 R4-d。验收达成：累计循环唯一、SSE 契约全绿、全量 1,221 项通过。
 
 ### R3：legacy 有界收口（3–4 批；完成即 P5 验收）
 
@@ -81,9 +80,9 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 
 | # | 剩余职责 | 目标 | 批 |
 | --- | --- | --- | --- |
-| 1 | 模型运行时装配（legacy_dependencies） | `ai_model` 公开运行能力 | R3-a |
-| 2 | 数据源运行时/连接检测（legacy_dependencies） | Datasource 公开 Service 直调 | R3-a |
-| 3 | 外部助手 Schema 读取（legacy_dependencies） | orchestration 边界显式 legacy 适配 | R3-a |
+| 1 ✅ | 模型运行时装配 | `apps/ai_model/runtime.py` 公开运行能力（R3-a 完成） | R3-a |
+| 2 ✅ | 数据源运行时/连接检测 | 包装删除，直调 Datasource 公开 Service（R3-a 完成） | R3-a |
+| 3 ✅ | 外部助手 Schema 读取 | 收拢至 `apps/chat/task/external_datasource.py`（台账 B3，随 R3-c 删除） | R3-a |
 | 4 | `run_task` 主流程编排（llm.py:1066–1440） | 改写为子域 Service 顺序调用 | R3-b |
 | 5 | 分析/预测/推荐任务编排（llm.py） | 同上 | R3-b |
 | 6 | SSE 协议与错误格式（legacy_adapter + 投影） | `chatbi/api/legacy_sse.py` | R3-c |

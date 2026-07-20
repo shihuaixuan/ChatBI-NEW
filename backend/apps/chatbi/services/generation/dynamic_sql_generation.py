@@ -1,36 +1,23 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Protocol
 
+from apps.chatbi.errors import DynamicSQLGenerationError, SQLGenerationError
 from apps.chatbi.models import (
     DynamicSQLGenerationData,
     SQLGenerationEvent,
     SQLGenerationMessage,
-    SQLGenerationModelChunk,
 )
-from apps.chatbi.services.generation.sql_generation import (
-    SQLGenerationError,
-    parse_sql_generation_result,
+from apps.chatbi.services.generation.ports import (
+    DynamicSQLGenerationPromptBuilder,
+    GenerationModelClient,
 )
-
-
-class DynamicSQLGenerationError(ValueError):
-    """动态 SQL 生成输入不合法。"""
-
-
-class DynamicSQLGenerationPromptBuilder(Protocol):
-    def build(
-        self,
-        data: DynamicSQLGenerationData,
-    ) -> list[SQLGenerationMessage]: ...
-
-
-class DynamicSQLGenerationModelClient(Protocol):
-    def stream(
-        self,
-        messages: list[SQLGenerationMessage],
-    ) -> Iterator[SQLGenerationModelChunk]: ...
+from apps.chatbi.services.generation.sql_generation import parse_sql_generation_result
+from apps.chatbi.services.generation.streaming import (
+    StreamAccumulator,
+    ensure_prompt_messages,
+    stream_generation,
+)
 
 
 class DynamicSQLGenerationService:
@@ -40,7 +27,7 @@ class DynamicSQLGenerationService:
         self,
         *,
         prompt_builder: DynamicSQLGenerationPromptBuilder,
-        model_client: DynamicSQLGenerationModelClient,
+        model_client: GenerationModelClient,
     ) -> None:
         self._prompt_builder = prompt_builder
         self._model_client = model_client
@@ -62,43 +49,35 @@ class DynamicSQLGenerationService:
     ) -> Iterator[SQLGenerationEvent]:
         self._validate_data(data)
         prepared_messages = self.prepare(data) if messages is None else messages
-        if not prepared_messages or any(
-            not message.content.strip() for message in prepared_messages
-        ):
-            raise DynamicSQLGenerationError("DYNAMIC_SQL_GENERATION_PROMPT_INVALID")
+        ensure_prompt_messages(prepared_messages, DynamicSQLGenerationError("DYNAMIC_SQL_GENERATION_PROMPT_INVALID"))
 
-        full_content = ""
-        full_reasoning = ""
-        token_usage: dict[str, int] = {}
-        for chunk in self._model_client.stream(prepared_messages):
-            full_content += chunk.content
-            full_reasoning += chunk.reasoning_content
-            token_usage.update(chunk.token_usage)
+        stream = StreamAccumulator()
+        for chunk in stream_generation(prepared_messages, self._model_client, stream):
             yield SQLGenerationEvent(
                 kind="chunk",
                 content=chunk.content,
                 reasoning_content=chunk.reasoning_content,
-                token_usage=dict(token_usage),
+                token_usage=dict(stream.token_usage),
             )
 
         try:
-            result = parse_sql_generation_result(full_content)
+            result = parse_sql_generation_result(stream.content)
         except SQLGenerationError as exc:
             yield SQLGenerationEvent(
                 kind="completed",
-                content=full_content,
-                reasoning_content=full_reasoning,
+                content=stream.content,
+                reasoning_content=stream.reasoning_content,
                 error=str(exc),
-                token_usage=token_usage,
+                token_usage=stream.token_usage,
             )
             return
 
         yield SQLGenerationEvent(
             kind="completed",
-            content=full_content,
-            reasoning_content=full_reasoning,
+            content=stream.content,
+            reasoning_content=stream.reasoning_content,
             result=result,
-            token_usage=token_usage,
+            token_usage=stream.token_usage,
         )
 
     @staticmethod
@@ -120,7 +99,6 @@ class DynamicSQLGenerationService:
 
 __all__ = [
     "DynamicSQLGenerationError",
-    "DynamicSQLGenerationModelClient",
     "DynamicSQLGenerationPromptBuilder",
     "DynamicSQLGenerationService",
 ]

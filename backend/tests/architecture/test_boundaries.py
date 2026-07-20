@@ -789,12 +789,12 @@ def test_datasource_selection_candidates_use_public_domain_services_only():
 
 
 def test_legacy_dependencies_no_longer_read_local_schema_through_crud():
-    imports = _imports__generation_context("apps/chat/task/legacy_dependencies.py")
+    imports = _imports__generation_context("apps/chat/task/external_datasource.py")
 
     assert "apps.datasource.crud.datasource" not in imports
     assert "apps.datasource.embedding.ds_embedding" not in imports
     assert "get_assistant_ds" not in (
-        BACKEND_DIR__generation_context / "apps/chat/task/legacy_dependencies.py"
+        BACKEND_DIR__generation_context / "apps/chat/task/external_datasource.py"
     ).read_text(encoding="utf-8")
     assert "get_assistant_ds" not in (
         BACKEND_DIR__generation_context / "apps/chat/task/llm.py"
@@ -807,7 +807,8 @@ def test_legacy_dependencies_no_longer_read_local_schema_through_crud():
 def test_legacy_llm_keeps_unmigrated_dependencies_in_legacy_module():
     imports = _imports__generation_context("apps/chat/task/llm.py")
 
-    assert "apps.chat.task.legacy_dependencies" in imports
+    assert "apps.chat.task.external_datasource" in imports
+    assert "apps.ai_model.runtime" in imports
     assert "apps.chatbi.composition" in imports
     assert "apps.system.composition" in imports
     assert "apps.knowledge.composition" not in imports
@@ -1730,7 +1731,8 @@ def test_legacy_recommendation_task_only_keeps_schema_log_and_sse_projection():
 
 
 def test_sql_model_adapter_uses_shared_model_stream_parser():
-    adapter_tree = _tree__recommended_question("apps/chatbi/adapters/sql_generation.py")
+    # R2 起共享流解析统一收敛在 chatbi/adapters/langchain.py 的共享客户端。
+    adapter_tree = _tree__recommended_question("apps/chatbi/adapters/langchain.py")
     adapter_imports = _imports__recommended_question(adapter_tree)
     legacy_tree = _tree__recommended_question("apps/chat/task/llm.py")
 

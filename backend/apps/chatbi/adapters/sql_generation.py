@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import cast
 
 from langchain.chat_models.base import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from sqlmodel import Session
 
-from apps.ai_model.streaming import process_stream
+from apps.chatbi.adapters.langchain import LangChainGenerationModelClient
 from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.models import (
     SQLGenerationData,
     SQLGenerationMessage,
-    SQLGenerationModelChunk,
 )
 from apps.chatbi.services import SQLGenerationService
 from apps.template.generate_sql.generator import (
@@ -179,35 +177,8 @@ class TemplateSQLGenerationPromptBuilder:
         return messages
 
 
-class LangChainSQLGenerationModelClient:
-    """把 SQL 消息 DTO 适配到现有 LangChain 流式模型。"""
-
-    def __init__(self, llm: BaseChatModel) -> None:
-        self._llm = llm
-
-    def stream(
-        self,
-        messages: list[SQLGenerationMessage],
-    ) -> Iterator[SQLGenerationModelChunk]:
-        langchain_messages: list[BaseMessage] = []
-        for message in messages:
-            if message.role == "system":
-                langchain_messages.append(SystemMessage(content=message.content))
-            elif message.role == "human":
-                langchain_messages.append(HumanMessage(content=message.content))
-            else:
-                langchain_messages.append(AIMessage(content=message.content))
-
-        token_usage: dict[str, int] = {}
-        for chunk in process_stream(
-            self._llm.stream(langchain_messages),
-            token_usage,
-        ):
-            yield SQLGenerationModelChunk(
-                content=chunk["content"],
-                reasoning_content=chunk["reasoning_content"],
-                token_usage=dict(token_usage),
-            )
+# 共享客户端（R2 合并）；旧名保留（台账 E2）。
+LangChainSQLGenerationModelClient = LangChainGenerationModelClient
 
 
 def build_sql_generation_service(

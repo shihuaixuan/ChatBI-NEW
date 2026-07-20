@@ -1,38 +1,25 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Protocol
 
+from apps.chatbi.errors import PermissionSQLGenerationError, SQLGenerationError
 from apps.chatbi.models import (
     ChatRecordResultProjection,
     PermissionSQLGenerationData,
     SQLGenerationEvent,
     SQLGenerationMessage,
-    SQLGenerationModelChunk,
 )
 from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
-from apps.chatbi.services.generation.sql_generation import (
-    SQLGenerationError,
-    parse_sql_generation_result,
+from apps.chatbi.services.generation.ports import (
+    GenerationModelClient,
+    PermissionSQLGenerationPromptBuilder,
 )
-
-
-class PermissionSQLGenerationError(ValueError):
-    """权限 SQL 生成输入不合法。"""
-
-
-class PermissionSQLGenerationPromptBuilder(Protocol):
-    def build(
-        self,
-        data: PermissionSQLGenerationData,
-    ) -> list[SQLGenerationMessage]: ...
-
-
-class PermissionSQLGenerationModelClient(Protocol):
-    def stream(
-        self,
-        messages: list[SQLGenerationMessage],
-    ) -> Iterator[SQLGenerationModelChunk]: ...
+from apps.chatbi.services.generation.sql_generation import parse_sql_generation_result
+from apps.chatbi.services.generation.streaming import (
+    StreamAccumulator,
+    ensure_prompt_messages,
+    stream_generation,
+)
 
 
 class PermissionSQLGenerationService:
@@ -42,7 +29,7 @@ class PermissionSQLGenerationService:
         self,
         *,
         prompt_builder: PermissionSQLGenerationPromptBuilder,
-        model_client: PermissionSQLGenerationModelClient,
+        model_client: GenerationModelClient,
         chat_record_service: ChatRecordService,
     ) -> None:
         self._prompt_builder = prompt_builder
@@ -68,36 +55,26 @@ class PermissionSQLGenerationService:
     ) -> Iterator[SQLGenerationEvent]:
         self._validate_data(data)
         prepared_messages = self.prepare(data) if messages is None else messages
-        if not prepared_messages or any(
-            not message.content.strip() for message in prepared_messages
-        ):
-            raise PermissionSQLGenerationError(
-                "PERMISSION_SQL_GENERATION_PROMPT_INVALID"
-            )
+        ensure_prompt_messages(prepared_messages, PermissionSQLGenerationError("PERMISSION_SQL_GENERATION_PROMPT_INVALID"))
 
-        full_content = ""
-        full_reasoning = ""
-        token_usage: dict[str, int] = {}
-        for chunk in self._model_client.stream(prepared_messages):
-            full_content += chunk.content
-            full_reasoning += chunk.reasoning_content
-            token_usage.update(chunk.token_usage)
+        stream = StreamAccumulator()
+        for chunk in stream_generation(prepared_messages, self._model_client, stream):
             yield SQLGenerationEvent(
                 kind="chunk",
                 content=chunk.content,
                 reasoning_content=chunk.reasoning_content,
-                token_usage=dict(token_usage),
+                token_usage=dict(stream.token_usage),
             )
 
         try:
-            result = parse_sql_generation_result(full_content)
+            result = parse_sql_generation_result(stream.content)
         except SQLGenerationError as exc:
             yield SQLGenerationEvent(
                 kind="completed",
-                content=full_content,
-                reasoning_content=full_reasoning,
+                content=stream.content,
+                reasoning_content=stream.reasoning_content,
                 error=str(exc),
-                token_usage=token_usage,
+                token_usage=stream.token_usage,
             )
             return
 
@@ -107,10 +84,10 @@ class PermissionSQLGenerationService:
         )
         yield SQLGenerationEvent(
             kind="completed",
-            content=full_content,
-            reasoning_content=full_reasoning,
+            content=stream.content,
+            reasoning_content=stream.reasoning_content,
             result=result,
-            token_usage=token_usage,
+            token_usage=stream.token_usage,
         )
 
     @staticmethod
@@ -142,7 +119,6 @@ class PermissionSQLGenerationService:
 
 __all__ = [
     "PermissionSQLGenerationError",
-    "PermissionSQLGenerationModelClient",
     "PermissionSQLGenerationPromptBuilder",
     "PermissionSQLGenerationService",
 ]

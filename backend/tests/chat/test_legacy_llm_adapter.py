@@ -6,20 +6,21 @@ from typing import cast
 import orjson
 from sqlmodel import Session
 
-from apps.chat.task import legacy_dependencies as dependency_module
+from apps.ai_model import runtime as model_runtime_module
+from apps.ai_model.runtime import build_llm_runtime
+from apps.chat.task import external_datasource as dependency_module
+from apps.chat.task.external_datasource import (
+    LegacySchemaContext,
+    check_legacy_datasource_connection,
+    load_legacy_external_schema_context,
+    resolve_legacy_datasource,
+)
 from apps.chat.task.legacy_adapter import (
     build_context_prompt_log,
     build_role_prompt_log,
     build_run_error_message,
     encode_sse_event,
     finalize_legacy_run,
-)
-from apps.chat.task.legacy_dependencies import (
-    LegacySchemaContext,
-    build_legacy_model_runtime,
-    check_legacy_datasource_connection,
-    load_legacy_external_schema_context,
-    resolve_legacy_datasource,
 )
 from apps.datasource import DatasourceConnection, DatasourceRecord, ExternalDatasource
 
@@ -220,17 +221,17 @@ def test_legacy_model_runtime_selects_model_and_disables_reasoning(monkeypatch):
         return config
 
     monkeypatch.setattr(
-        dependency_module,
+        model_runtime_module,
         "get_default_config",
         fake_get_default_config,
     )
     monkeypatch.setattr(
-        dependency_module.LLMFactory,
+        model_runtime_module.LLMFactory,
         "create_llm",
         staticmethod(lambda runtime_config: SimpleNamespace(llm=runtime_config)),
     )
 
-    runtime = asyncio.run(build_legacy_model_runtime("17", no_reasoning=True))
+    runtime = asyncio.run(build_llm_runtime("17", no_reasoning=True))
 
     assert calls == [17]
     assert runtime.config is config
