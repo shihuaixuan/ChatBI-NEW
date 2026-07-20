@@ -65,6 +65,23 @@ class RecordingConnectionGateway:
         self.calls.append((f"fields:{table_name}", datasource.type))
         return [ColumnSchema("id", "bigint", "主键")]
 
+    def get_database_name(self, datasource: DatasourceConnection) -> str:
+        self.calls.append(("database_name", datasource.type))
+        return "analytics"
+
+    def sample_rows(
+        self,
+        datasource: DatasourceConnection,
+        table_name: str,
+        field_names: list[str],
+        *,
+        limit: int,
+    ) -> list[dict]:
+        self.calls.append((f"sample:{table_name}", datasource.type))
+        assert field_names == ["id"]
+        assert limit == 3
+        return [{"id": 1}]
+
     def execute_query(
         self,
         datasource: DatasourceConnection,
@@ -123,6 +140,49 @@ def test_connection_service_rejects_missing_datasource_before_driver_call():
         service.list_tables(404)
 
 
+@pytest.mark.parametrize(
+    ("datasource_type", "expected_sql"),
+    [
+        ("pg", 'SELECT "id" FROM "orders" LIMIT 3'),
+        ("mysql", "SELECT `id` FROM `orders` LIMIT 3"),
+        ("sqlServer", "SELECT TOP 3 [id] FROM [orders]"),
+        ("oracle", 'SELECT "id" FROM "orders" WHERE ROWNUM <= 3'),
+        ("hive", "SELECT `id` FROM orders LIMIT 3"),
+    ],
+)
+def test_driver_gateway_builds_bounded_sample_query(
+    monkeypatch,
+    datasource_type: str,
+    expected_sql: str,
+):
+    datasource = DatasourceConnection(
+        id=7,
+        type=datasource_type,
+        configuration="encrypted",
+    )
+    gateway = DatabaseDriverConnectionGateway()
+    calls: list[tuple[str, bool]] = []
+
+    def fake_execute_query(
+        _datasource,
+        sql: str,
+        *,
+        origin_column: bool = False,
+    ) -> dict:
+        calls.append((sql, origin_column))
+        return {"data": [{"id": 1}]}
+
+    monkeypatch.setattr(gateway, "execute_query", fake_execute_query)
+
+    assert gateway.sample_rows(
+        datasource,
+        "orders",
+        ["id"],
+        limit=3,
+    ) == [{"id": 1}]
+    assert calls == [(expected_sql, True)]
+
+
 @pytest.mark.parametrize("database", list(DB))
 def test_every_database_type_uses_the_same_connection_service_contract(database):
     connection = _external_connection(database)
@@ -137,6 +197,8 @@ def test_every_database_type_uses_the_same_connection_service_contract(database)
     assert service.list_tables(9)[0].tableName == "orders"
     assert service.list_fields(9, "orders")[0].fieldName == "id"
     assert service.execute_query(9, "select 1")["data"] == [{"value": 1}]
+    assert service.get_database_name(9) == "analytics"
+    assert service.sample_rows(9, "orders", ["id"]) == [{"id": 1}]
     assert connection.type_name == database.db_name
     assert [operation for operation, _ in gateway.calls] == [
         "check",
@@ -144,6 +206,8 @@ def test_every_database_type_uses_the_same_connection_service_contract(database)
         "tables",
         "fields:orders",
         "query",
+        "database_name",
+        "sample:orders",
     ]
 
 

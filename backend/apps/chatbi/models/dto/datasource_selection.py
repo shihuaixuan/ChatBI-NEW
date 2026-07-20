@@ -10,6 +10,14 @@ class DatasourceSelectionCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class DatasourceSelectionRankingCandidate:
+    """数据源候选相关性排序使用的稳定输入。"""
+
+    id: int
+    embedding: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class DatasourceSelectionData:
     """数据源自动选择或模型选择所需的稳定业务输入。"""
 
@@ -51,4 +59,5 @@ __all__ = [
     "DatasourceSelectionEvent",
     "DatasourceSelectionMessage",
     "DatasourceSelectionModelChunk",
+    "DatasourceSelectionRankingCandidate",
 ]

@@ -46,6 +46,28 @@ class DatasourceConnectionService:
             table_name,
         )
 
+    def get_database_name(self, datasource_id: int) -> str:
+        return self._gateway.get_database_name(
+            self._get_connection(datasource_id)
+        )
+
+    def sample_rows(
+        self,
+        datasource_id: int,
+        table_name: str,
+        field_names: list[str],
+        *,
+        limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        if limit <= 0:
+            raise ValueError("DATASOURCE_SAMPLE_LIMIT_INVALID")
+        return self._gateway.sample_rows(
+            self._get_connection(datasource_id),
+            table_name,
+            field_names,
+            limit=limit,
+        )
+
     def execute_query(
         self,
         datasource_id: int,

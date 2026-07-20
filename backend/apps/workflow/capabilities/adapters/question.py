@@ -8,6 +8,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.models import (
     QuestionIntentProjectionData,
     QuestionModelInvocationData,
@@ -34,7 +35,6 @@ from apps.workflow.capabilities.adapters.time_slots import (
 )
 from apps.workflow.capabilities.context import ChatBIRunContext
 from apps.workflow.schemas.v1 import IntentRecognitionOutput
-from infrastructure.question_model import build_question_model_service
 
 
 @dataclass(frozen=True)

@@ -18,6 +18,11 @@ class DatasourceMetadataRepository(Protocol):
         keyword: str | None = None,
     ) -> list[PhysicalField]: ...
 
+    def list_fields_by_table_ids(
+        self,
+        table_ids: list[int],
+    ) -> dict[int, list[PhysicalField]]: ...
+
     def get_table(self, table_id: int) -> PhysicalTable | None: ...
 
     def replace_schema(

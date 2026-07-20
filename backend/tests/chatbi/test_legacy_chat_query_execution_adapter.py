@@ -1,10 +1,10 @@
-from apps.datasource.models.dto.connection import DatasourceConnection
-from common.error import ParseSQLResultError
-from infrastructure import query_execution
-from infrastructure.query_execution import (
+from apps.chatbi.adapters import query_execution
+from apps.chatbi.adapters.query_execution import (
     ConnectionSnapshotSQLExecutor,
     build_legacy_chat_query_service,
 )
+from apps.datasource.models.dto.connection import DatasourceConnection
+from common.error import ParseSQLResultError
 
 
 def _connection() -> DatasourceConnection:

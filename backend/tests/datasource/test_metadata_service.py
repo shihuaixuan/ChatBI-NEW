@@ -38,6 +38,21 @@ class RecordingMetadataRepository:
     ) -> list[PhysicalField]:
         return []
 
+    def list_fields_by_table_ids(
+        self,
+        table_ids: list[int],
+    ) -> dict[int, list[PhysicalField]]:
+        return {
+            table_id: [
+                PhysicalField(
+                    id=table_id + 100,
+                    table_id=table_id,
+                    field_name="id",
+                )
+            ]
+            for table_id in table_ids
+        }
+
     def get_table(self, table_id: int) -> PhysicalTable | None:
         return None
 

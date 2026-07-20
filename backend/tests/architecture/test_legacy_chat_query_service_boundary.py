@@ -43,9 +43,9 @@ def test_legacy_chat_run_task_keeps_table_scope_for_internal_datasource():
     assert "sql-data" in source
 
 
-def test_connection_driver_dependency_stays_in_infrastructure_adapter():
+def test_connection_driver_dependency_stays_in_chatbi_adapter():
     legacy_tree = _tree("apps/chat/task/llm.py")
-    adapter_tree = _tree("infrastructure/query_execution.py")
+    adapter_tree = _tree("apps/chatbi/adapters/query_execution.py")
     legacy_source = ast.unparse(legacy_tree)
     adapter_source = ast.unparse(adapter_tree)
 

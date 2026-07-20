@@ -5,27 +5,17 @@ import urllib.parse
 import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
-from typing import Any, Dict, List, Optional, cast
+from typing import Any
 
 import orjson
 import pandas as pd
 import requests
 import sqlparse
-from langchain.chat_models.base import BaseChatModel
-from langchain_community.utilities import SQLDatabase
-from sqlalchemy import and_, select
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlbot_xpack.config.model import SysArgModel
 from sqlmodel import Session
 
 from apps.access_control.data_policy import requires_data_policy, resolve_data_policy
-from apps.ai_model.model_factory import LLMConfig, LLMFactory, get_default_config
 from apps.assistant import AssistantOutDsSchema
-from apps.assistant.public import (
-    AssistantOutDs,
-    AssistantOutDsFactory,
-    get_assistant_ds,
-)
 from apps.chat.composition import build_conversation_service
 from apps.chat.curd.chat import (
     end_log,
@@ -55,12 +45,47 @@ from apps.chat.models.chat_model import (
     OperationEnum,
     RenameChat,
 )
-from apps.chat.services.semantic_binding import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
-from apps.chat.services.term_context import ChatTermContextService
 from apps.chat.task.legacy_adapter import (
     build_context_prompt_log,
     build_role_prompt_log,
+    build_run_error_message,
     encode_sse_event,
+    finalize_legacy_run,
+)
+from apps.chat.task.legacy_dependencies import (
+    LegacyDatasourceRuntime,
+    LegacyModelRuntime,
+    build_legacy_external_datasource_catalog,
+    build_legacy_model_runtime,
+    check_legacy_datasource_connection,
+    get_legacy_local_datasource,
+    load_legacy_external_schema_context,
+    resolve_legacy_datasource,
+)
+from apps.chatbi.adapters.analysis_prediction import build_analysis_prediction_service
+from apps.chatbi.adapters.chart_generation import build_chart_generation_service
+from apps.chatbi.adapters.datasource_selection import build_datasource_selection_service
+from apps.chatbi.adapters.dynamic_sql_generation import (
+    build_dynamic_sql_generation_service,
+)
+from apps.chatbi.adapters.generation_custom_prompt import (
+    build_generation_custom_prompt_service,
+)
+from apps.chatbi.adapters.permission_sql_generation import (
+    build_permission_sql_generation_service,
+)
+from apps.chatbi.adapters.query_execution import build_legacy_chat_query_service
+from apps.chatbi.adapters.query_result_projection import (
+    build_query_result_projection_service,
+)
+from apps.chatbi.adapters.recommended_questions import (
+    build_recommended_question_service,
+)
+from apps.chatbi.adapters.sql_generation import build_sql_generation_service
+from apps.chatbi.composition import (
+    build_datasource_selection_candidate_service,
+    build_generation_context_service,
+    build_generation_schema_context_service,
 )
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
@@ -68,7 +93,6 @@ from apps.chatbi.models import (
     ChartGenerationMessage,
     ChatQuestion,
     ChatRecordAuxiliaryType,
-    DatasourceSelectionCandidate,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
     DynamicSQLGenerationData,
@@ -80,6 +104,7 @@ from apps.chatbi.models import (
     GenerationCustomPromptType,
     GenerationHistoryLog,
     GenerationHistoryProjectionData,
+    GenerationRuntimeSettingsData,
     PermissionSQLFilter,
     PermissionSQLGenerationData,
     QueryResultProjectionData,
@@ -88,25 +113,21 @@ from apps.chatbi.models import (
     SQLGenerationMessage,
 )
 from apps.chatbi.services import (
+    DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
     ChartGenerationError,
     DatasourceSelectionError,
     DynamicSQLGenerationError,
     GenerationContextScopeService,
     GenerationHistoryProjectionService,
+    GenerationRuntimeSettingsService,
     PermissionSQLGenerationError,
     SQLGenerationError,
 )
 from apps.datasource import (
     DatasourceConnection,
-    build_external_datasource_connection,
+    DatasourceRecord,
 )
-from apps.datasource.crud.datasource import get_table_schema, get_tables_sample_data
-from apps.datasource.database import check_connection, get_version
-from apps.datasource.embedding.ds_embedding import get_ds_embedding
-from apps.datasource.models.datasource import CoreDatasource
-from apps.knowledge.composition import build_sql_example_query_service
-from apps.semantic.composition import build_semantic_term_query_service
-from apps.system.crud.parameter_manage import get_groups
+from apps.system.composition import build_system_parameter_service
 from common.core.config import settings
 from common.core.db import engine
 from common.core.deps import CurrentAssistant, CurrentUser
@@ -120,26 +141,6 @@ from common.utils.data_format import DataFormat
 from common.utils.data_format_schema import AxisObj
 from common.utils.locale import I18n, I18nHelper
 from common.utils.utils import SQLBotLogUtil, extract_nested_json
-from infrastructure.analysis_prediction import build_analysis_prediction_service
-from infrastructure.chart_generation import build_chart_generation_service
-from infrastructure.datasource_selection import build_datasource_selection_service
-from infrastructure.dynamic_sql_generation import (
-    build_dynamic_sql_generation_service,
-)
-from infrastructure.generation_custom_prompt import (
-    build_generation_custom_prompt_service,
-)
-from infrastructure.permission_sql_generation import (
-    build_permission_sql_generation_service,
-)
-from infrastructure.query_execution import build_legacy_chat_query_service
-from infrastructure.query_result_projection import (
-    build_query_result_projection_service,
-)
-from infrastructure.recommended_questions import (
-    build_recommended_question_service,
-)
-from infrastructure.sql_generation import build_sql_generation_service
 
 warnings.filterwarnings("ignore")
 
@@ -153,26 +154,27 @@ i18n = I18n()
 
 
 class LLMService:
-    ds: CoreDatasource | AssistantOutDsSchema | None
+    ds: DatasourceRecord | AssistantOutDsSchema | None
     connection: DatasourceConnection | None
+    datasource_runtime: LegacyDatasourceRuntime | None
     chat_question: ChatQuestion
     record: ChatRecord
-    config: LLMConfig
-    llm: BaseChatModel
+    config: Any
+    llm: Any
     sql_history: list[SQLGenerationMessage]
     chart_history: list[ChartGenerationMessage]
 
     # session: Session = db_session
     current_user: CurrentUser
     chat_oid: int
-    current_assistant: Optional[CurrentAssistant] = None
-    out_ds_instance: Optional[AssistantOutDs] = None
+    current_assistant: CurrentAssistant | None = None
+    out_ds_instance: Any | None = None
     change_title: bool = False
 
-    generate_sql_logs: List[ChatLog]
-    generate_chart_logs: List[ChatLog]
+    generate_sql_logs: list[ChatLog]
+    generate_chart_logs: list[ChatLog]
     current_logs: dict[OperationEnum, ChatLog]
-    chunk_list: List[str]
+    chunk_list: list[str]
     future: Future
 
     trans: I18nHelper = None
@@ -184,8 +186,8 @@ class LLMService:
     base_message_round_count_limit: int = settings.GENERATE_SQL_QUERY_HISTORY_ROUND_COUNT
 
     def __init__(self, session: Session, current_user: CurrentUser, chat_question: ChatQuestion,
-                 current_assistant: Optional[CurrentAssistant] = None, no_reasoning: bool = False,
-                 embedding: bool = False, config: LLMConfig = None):
+                 current_assistant: CurrentAssistant | None = None, no_reasoning: bool = False,
+                 embedding: bool = False, model_runtime: LegacyModelRuntime | None = None):
         self.sql_history = []
         self.chart_history = []
         self.generate_sql_logs = []
@@ -199,40 +201,44 @@ class LLMService:
         if not chat:
             raise SingleMessageError(f"Chat with id {chat_id} not found")
         self.chat_oid = chat.oid or current_user.oid or 1
-        ds: CoreDatasource | AssistantOutDsSchema | None = None
+        ds: DatasourceRecord | AssistantOutDsSchema | None = None
         connection: DatasourceConnection | None = None
+        datasource_runtime: LegacyDatasourceRuntime | None = None
         if not chat.datasource and chat_question.datasource_id:
-            _ds = session.get(CoreDatasource, chat_question.datasource_id)
-            if _ds:
-                if _ds.oid != current_user.oid:
+            try:
+                requested_datasource = get_legacy_local_datasource(
+                    session,
+                    chat_question.datasource_id,
+                )
+            except ValueError:
+                requested_datasource = None
+            if requested_datasource:
+                if requested_datasource.oid != current_user.oid:
                     raise SingleMessageError(
                         f"Datasource with id {chat_question.datasource_id} does not belong to current workspace")
-                chat.datasource = _ds.id
-                chat.engine_type = _ds.type_name
-                # save chat
+                chat.datasource = requested_datasource.id
+                chat.engine_type = requested_datasource.type_name
+                # 保存会话绑定，保持旧入口事务行为不变。
                 session.add(chat)
                 session.flush()
                 session.refresh(chat)
                 session.commit()
 
         if chat.datasource:
-            # Get available datasource
-            if (
-                current_assistant
-                and current_assistant.type in DYNAMIC_DATASOURCE_ASSISTANT_TYPES
-            ):
-                self.out_ds_instance = AssistantOutDsFactory.get_instance(current_assistant)
-                ds = self.out_ds_instance.get_ds(chat.datasource)
-                if not ds:
-                    raise SingleMessageError("No available datasource configuration found")
-                connection = build_external_datasource_connection(ds, 10)
-                chat_question.engine = connection.type + get_version(connection)
-            else:
-                ds = session.get(CoreDatasource, chat.datasource)
-                if not ds:
-                    raise SingleMessageError("No available datasource configuration found")
-                connection = DatasourceConnection.model_validate(ds)
-                chat_question.engine = (ds.type_name if ds.type != 'excel' else 'PostgreSQL') + get_version(connection)
+            try:
+                datasource_runtime = resolve_legacy_datasource(
+                    session,
+                    chat.datasource,
+                    current_assistant,
+                )
+            except ValueError as exc:
+                raise SingleMessageError(
+                    "No available datasource configuration found"
+                ) from exc
+            ds = datasource_runtime.datasource
+            connection = datasource_runtime.connection
+            self.out_ds_instance = datasource_runtime.external_catalog
+            chat_question.engine = datasource_runtime.engine
 
         self.generate_sql_logs = list_generate_sql_logs(session=session, chart_id=chat_id)
         self.generate_chart_logs = list_generate_chart_logs(session=session, chart_id=chat_id)
@@ -242,24 +248,18 @@ class LLMService:
         chat_question.lang = get_lang_name(current_user.language)
         self.trans = i18n(lang=current_user.language)
 
-        self.ds = (
-            ds if isinstance(ds, AssistantOutDsSchema) else CoreDatasource(**ds.model_dump())) if ds else None
+        self.ds = ds
         self.connection = connection
+        self.datasource_runtime = datasource_runtime
         self.chat_question = chat_question
-        self.config = config
-        if no_reasoning:
-            # only work while using qwen
-            if self.config.additional_params:
-                if self.config.additional_params.get('extra_body'):
-                    if self.config.additional_params.get('extra_body').get('enable_thinking'):
-                        del self.config.additional_params['extra_body']['enable_thinking']
+        if model_runtime is None:
+            raise ValueError("Generation model runtime is required")
+        self.config = model_runtime.config
 
         self.chat_question.ai_modal_id = self.config.model_id
         self.chat_question.ai_modal_name = self.config.model_name
 
-        # Create LLM instance through factory
-        llm_instance = LLMFactory.create_llm(self.config)
-        self.llm = llm_instance.llm
+        self.llm = model_runtime.llm
 
         # get last_execute_sql_error
         last_execute_sql_error = get_last_execute_sql_error(session, self.chat_question.chat_id)
@@ -272,33 +272,38 @@ class LLMService:
 
     @classmethod
     async def create(cls, *args, **kwargs):
-        specialized_model_id = None
+        specialized_model_id: str | int | None = None
         if args[3]:
             if args[3].enable_custom_model:
                 if args[3].custom_model:
                     specialized_model_id = args[3].custom_model
                     print("use custom model: id[" + args[3].custom_model + "]")
-        config: LLMConfig = await get_default_config(specialized_model_id)
-        instance = cls(*args, **kwargs, config=config)
+        no_reasoning = bool(args[4]) if len(args) > 4 else bool(
+            kwargs.get("no_reasoning", False)
+        )
+        model_runtime = await build_legacy_model_runtime(
+            specialized_model_id,
+            no_reasoning=no_reasoning,
+        )
+        kwargs.pop("model_runtime", None)
+        instance = cls(*args, **kwargs, model_runtime=model_runtime)
 
-        chat_params: list[SysArgModel] = await get_groups(args[0], "chat")
-        for config in chat_params:
-            if config.pkey == 'chat.sqlbot_name':
-                if config.pval.strip():
-                    instance.chat_question.sqlbot_name = config.pval
-            if config.pkey == 'chat.limit_rows':
-                if config.pval.lower().strip() == 'true':
-                    instance.enable_sql_row_limit = True
-                else:
-                    instance.enable_sql_row_limit = False
-            if config.pkey == 'chat.context_record_count':
-                count_value = config.pval
-                if count_value is None:
-                    count_value = settings.GENERATE_SQL_QUERY_HISTORY_ROUND_COUNT
-                count_value = int(count_value)
-                if count_value < 0:
-                    count_value = 0
-                instance.base_message_round_count_limit = count_value
+        parameter_values = await build_system_parameter_service(
+            args[0]
+        ).list_group("chat")
+        runtime_settings = GenerationRuntimeSettingsService().project(
+            GenerationRuntimeSettingsData(
+                assistant_name=instance.chat_question.sqlbot_name,
+                enable_sql_row_limit=instance.enable_sql_row_limit,
+                history_round_limit=instance.base_message_round_count_limit,
+            ),
+            parameter_values,
+        )
+        instance.chat_question.sqlbot_name = runtime_settings.assistant_name
+        instance.enable_sql_row_limit = runtime_settings.enable_sql_row_limit
+        instance.base_message_round_count_limit = (
+            runtime_settings.history_round_limit
+        )
         return instance
 
     def is_running(self, timeout=0.5):
@@ -353,22 +358,17 @@ class LLMService:
         self.current_logs[OperationEnum.FILTER_TERMS] = start_log(session=_session,
                                                                   operate=OperationEnum.FILTER_TERMS,
                                                                   record_id=self.record.id, local_operation=True)
-
-        if self.record.dataset_id is None:
-            self.chat_question.terminologies = ""
-            term_list = []
-        else:
-            term_context_service = ChatTermContextService(
-                build_semantic_term_query_service(_session)
-            )
-            self.chat_question.terminologies, term_list = term_context_service.build(
-                self.chat_oid,
-                self.record.dataset_id,
-                self.chat_question.question,
-            )
+        prompt, term_items = build_generation_context_service(
+            _session
+        ).build_term_context(
+            self.chat_oid,
+            self.record.dataset_id,
+            self.chat_question.question or "",
+        )
+        self.chat_question.terminologies = prompt
         self.current_logs[OperationEnum.FILTER_TERMS] = end_log(session=_session,
                                                                 log=self.current_logs[OperationEnum.FILTER_TERMS],
-                                                                full_message=term_list)
+                                                                full_message=term_items)
 
     def resolve_generation_context_scope(
             self,
@@ -420,45 +420,53 @@ class LLMService:
                                                                         record_id=self.record.id,
                                                                         local_operation=True)
         scope = self.resolve_generation_context_scope(oid, ds_id)
-        if scope.use_assistant_sql_examples:
-            self.chat_question.data_training, example_list = (
-                build_sql_example_query_service(_session).build_prompt(
-                    self.chat_question.question,
-                    scope.workspace_id,
-                    assistant_id=scope.sql_example_assistant_id,
-                )
-            )
-        else:
-            self.chat_question.data_training, example_list = (
-                build_sql_example_query_service(_session).build_prompt(
-                    self.chat_question.question,
-                    scope.workspace_id,
-                    datasource_id=scope.datasource_id,
-                )
-            )
+        prompt, example_items = build_generation_context_service(
+            _session
+        ).build_sql_examples(
+            self.chat_question.question or "",
+            scope,
+        )
+        self.chat_question.data_training = prompt
         self.current_logs[OperationEnum.FILTER_SQL_EXAMPLE] = end_log(session=_session,
                                                                       log=self.current_logs[
                                                                           OperationEnum.FILTER_SQL_EXAMPLE],
-                                                                      full_message=example_list)
+                                                                      full_message=example_items)
+
+    def load_schema_context(
+            self,
+            _session: Session,
+            *,
+            embedding: bool = True,
+            table_names: list[str] | None = None,
+            include_sample_data: bool = True,
+    ):
+        if self.ds is None or self.ds.id is None:
+            raise SingleMessageError("Datasource configuration is required")
+        if self.out_ds_instance is not None:
+            return load_legacy_external_schema_context(
+                self.out_ds_instance,
+                datasource_id=int(self.ds.id),
+                question=self.chat_question.question or "",
+                embedding=embedding,
+                table_names=table_names,
+            )
+        return build_generation_schema_context_service(_session).build(
+            self.current_user,
+            int(self.ds.id),
+            self.chat_question.question or "",
+            embedding=embedding,
+            table_names=table_names,
+            include_sample_data=include_sample_data,
+        )
 
     def choose_table_schema(self, _session: Session):
         self.current_logs[OperationEnum.CHOOSE_TABLE] = start_log(session=_session,
                                                                   operate=OperationEnum.CHOOSE_TABLE,
                                                                   record_id=self.record.id,
                                                                   local_operation=True)
-        self.chat_question.db_schema = self.out_ds_instance.get_db_schema(
-            self.ds.id, self.chat_question.question) if self.out_ds_instance else get_table_schema(
-            session=_session,
-            current_user=self.current_user,
-            ds=self.ds,
-            question=self.chat_question.question)
-
-        # Get sample data for all tables
-        if not self.out_ds_instance:
-            self.chat_question.sample_data = get_tables_sample_data(
-                session=_session,
-                current_user=self.current_user,
-                ds=self.ds)
+        context = self.load_schema_context(_session)
+        self.chat_question.db_schema = context.schema
+        self.chat_question.sample_data = context.sample_data
 
         self.current_logs[OperationEnum.CHOOSE_TABLE] = end_log(session=_session,
                                                                 log=self.current_logs[OperationEnum.CHOOSE_TABLE],
@@ -469,7 +477,7 @@ class LLMService:
         self.chat_question.fields = orjson.dumps(fields).decode()
         data = get_chat_chart_data(_session, self.record.id)
         self.chat_question.data = orjson.dumps(data.get('data')).decode()
-        ds_id = self.ds.id if isinstance(self.ds, CoreDatasource) else None
+        ds_id = self.ds.id if self.out_ds_instance is None and self.ds else None
 
         self.load_term_context(_session)
 
@@ -521,7 +529,7 @@ class LLMService:
         data = get_chat_chart_data(_session, self.record.id)
         self.chat_question.data = orjson.dumps(data.get('data')).decode()
 
-        ds_id = self.ds.id if isinstance(self.ds, CoreDatasource) else None
+        ds_id = self.ds.id if self.out_ds_instance is None and self.ds else None
         self.filter_custom_prompts(
             _session,
             GenerationCustomPromptType.PREDICT_DATA,
@@ -567,19 +575,9 @@ class LLMService:
 
         # get schema
         if self.ds and not self.chat_question.db_schema:
-            self.chat_question.db_schema = self.out_ds_instance.get_db_schema(
-                self.ds.id, self.chat_question.question) if self.out_ds_instance else get_table_schema(
-                session=_session,
-                current_user=self.current_user, ds=self.ds,
-                question=self.chat_question.question,
-                embedding=False)
-
-            # Get sample data for all tables
-            if not self.out_ds_instance:
-                self.chat_question.sample_data = get_tables_sample_data(
-                    session=_session,
-                    current_user=self.current_user,
-                    ds=self.ds)
+            context = self.load_schema_context(_session, embedding=False)
+            self.chat_question.db_schema = context.schema
+            self.chat_question.sample_data = context.sample_data
 
         data = RecommendedQuestionGenerationData(
             record_id=self.record.id or 0,
@@ -618,37 +616,29 @@ class LLMService:
             yield {'recommended_question': event.recommended_question}
 
     def select_datasource(self, _session: Session):
-        if self.current_assistant and self.current_assistant.type != 4:
-            _ds_list = get_assistant_ds(session=_session, llm_service=self)
-        else:
-            stmt = select(CoreDatasource.id, CoreDatasource.name, CoreDatasource.description).where(
-                and_(CoreDatasource.oid == self.current_user.oid))
-            _ds_list = [
-                {
-                    "id": ds.id,
-                    "name": ds.name,
-                    "description": ds.description
-                }
-                for ds in _session.exec(stmt)
-            ]
-        auto_select = len(_ds_list) == 1
-        if not auto_select:
-            if settings.TABLE_EMBEDDING_ENABLED and (
-                    not self.current_assistant or (self.current_assistant and self.current_assistant.type != 1)):
-                _ds_list = get_ds_embedding(_session, self.current_user, _ds_list, self.out_ds_instance,
-                                            self.chat_question.question, self.current_assistant)
+        external_catalog = self.out_ds_instance
+        if external_catalog is None:
+            external_catalog = build_legacy_external_datasource_catalog(
+                self.current_assistant
+            )
+            self.out_ds_instance = external_catalog
+        external_datasources = (
+            external_catalog.ds_list if external_catalog is not None else None
+        )
+        candidates = build_datasource_selection_candidate_service(
+            _session
+        ).list_candidates(
+            self.current_user.oid,
+            self.current_assistant,
+            self.chat_question.question or "",
+            external_datasources=external_datasources,
+        )
+        auto_select = len(candidates) == 1
 
         selection_data = DatasourceSelectionData(
             record_id=self.record.id or 0,
             question=self.chat_question.question or "",
-            candidates=[
-                DatasourceSelectionCandidate(
-                    id=cast(int, candidate.get("id")),
-                    name=cast(str, candidate.get("name")),
-                    description=cast(str | None, candidate.get("description")),
-                )
-                for candidate in _ds_list
-            ],
+            candidates=candidates,
             language=self.chat_question.lang,
             assistant_name=self.chat_question.sqlbot_name,
             auto_select=auto_select,
@@ -700,29 +690,23 @@ class LLMService:
         if selected_datasource_id is None:
             raise SingleMessageError('DATASOURCE_SELECTION_RESULT_REQUIRED')
 
-        if (
-            self.current_assistant
-            and self.current_assistant.type in DYNAMIC_DATASOURCE_ASSISTANT_TYPES
-        ):
-            _ds = self.out_ds_instance.get_ds(selected_datasource_id)
-            self.ds = _ds
-            self.connection = build_external_datasource_connection(_ds, 10)
-            self.chat_question.engine = self.connection.type + get_version(
-                self.connection
+        try:
+            runtime = resolve_legacy_datasource(
+                _session,
+                selected_datasource_id,
+                self.current_assistant,
+                self.out_ds_instance,
             )
-            conversation_engine_type = _ds.type
-        else:
-            _ds = _session.get(CoreDatasource, selected_datasource_id)
-            if not _ds:
-                raise SingleMessageError(
-                    f"Datasource configuration with id {selected_datasource_id} not found"
-                )
-            self.ds = CoreDatasource(**_ds.model_dump())
-            self.connection = DatasourceConnection.model_validate(_ds)
-            self.chat_question.engine = (
-                _ds.type_name if _ds.type != 'excel' else 'PostgreSQL'
-            ) + get_version(self.connection)
-            conversation_engine_type = _ds.type_name
+        except ValueError as exc:
+            raise SingleMessageError(
+                f"Datasource configuration with id {selected_datasource_id} not found"
+            ) from exc
+        self.datasource_runtime = runtime
+        self.ds = runtime.datasource
+        self.connection = runtime.connection
+        self.out_ds_instance = runtime.external_catalog
+        self.chat_question.engine = runtime.engine
+        conversation_engine_type = runtime.conversation_engine_type
 
         try:
             self.record = service.bind_selection(
@@ -738,8 +722,8 @@ class LLMService:
             raise
 
         if self.ds:
-            oid = self.ds.oid if isinstance(self.ds, CoreDatasource) else 1
-            ds_id = self.ds.id if isinstance(self.ds, CoreDatasource) else None
+            oid = self.ds.oid if isinstance(self.ds, DatasourceRecord) else 1
+            ds_id = self.ds.id if isinstance(self.ds, DatasourceRecord) else None
 
             self.load_term_context(_session)
 
@@ -851,7 +835,7 @@ class LLMService:
             raise SingleMessageError('DYNAMIC_SQL_GENERATION_RESULT_REQUIRED')
         return dynamic_result.sql
 
-    def generate_assistant_dynamic_sql(self, _session: Session, sql, tables: List):
+    def generate_assistant_dynamic_sql(self, _session: Session, sql, tables: list):
         ds: AssistantOutDsSchema = self.ds
         sub_query: list[DynamicSQLSubqueryMapping] = []
         result_dict = {}
@@ -923,7 +907,7 @@ class LLMService:
         self.chat_question.sql = permission_result.sql
         return permission_result.sql
 
-    def generate_filter(self, _session: Session, sql: str, tables: List):
+    def generate_filter(self, _session: Session, sql: str, tables: list):
         # 行权限只通过 Access Control 的公开数据策略解析。
         policy = resolve_data_policy(
             _session,
@@ -939,7 +923,7 @@ class LLMService:
             return None
         return self.build_table_filter(session=_session, sql=sql, filters=filters)
 
-    def generate_assistant_filter(self, _session: Session, sql, tables: List):
+    def generate_assistant_filter(self, _session: Session, sql, tables: list):
         ds: AssistantOutDsSchema = self.ds
         filters: list[PermissionSQLFilter] = []
         for table in ds.tables:
@@ -954,7 +938,7 @@ class LLMService:
             return None
         return self.build_table_filter(session=_session, sql=sql, filters=filters)
 
-    def generate_chart(self, _session: Session, chart_type: Optional[str] = '', schema: Optional[str] = ''):
+    def generate_chart(self, _session: Session, chart_type: str | None = '', schema: str | None = ''):
         generation_data = ChartGenerationData(
             record_id=self.record.id or 0,
             question=self.chat_question.question or "",
@@ -1081,14 +1065,14 @@ class LLMService:
 
     def run_task(self, in_chat: bool = True, stream: bool = True,
                  finish_step: ChatFinishStep = ChatFinishStep.GENERATE_CHART, return_img: bool = True):
-        json_result: Dict[str, Any] = {'success': True}
+        json_result: dict[str, Any] = {'success': True}
         _session = None
         run_failed = False
         try:
             _session = session_maker()
             if self.ds:
-                oid = self.ds.oid if isinstance(self.ds, CoreDatasource) else 1
-                ds_id = self.ds.id if isinstance(self.ds, CoreDatasource) else None
+                oid = self.ds.oid if isinstance(self.ds, DatasourceRecord) else 1
+                ds_id = self.ds.id if isinstance(self.ds, DatasourceRecord) else None
 
                 self.load_term_context(_session)
 
@@ -1145,7 +1129,14 @@ class LLMService:
             # check connection
             if self.connection is None:
                 raise SQLBotDBConnectionError("Datasource connection is not initialized")
-            connected = check_connection(ds=self.connection, trans=None)
+            if self.datasource_runtime is None:
+                raise SQLBotDBConnectionError(
+                    "Datasource runtime is not initialized"
+                )
+            connected = check_legacy_datasource_connection(
+                _session,
+                self.datasource_runtime,
+            )
             if not connected:
                 raise SQLBotDBConnectionError('Connect DB failed')
 
@@ -1333,14 +1324,12 @@ class LLMService:
                 return
 
             # generate chart
-            used_tables_schema = self.out_ds_instance.get_db_schema(
-                self.ds.id, self.chat_question.question, embedding=False,
-                table_list=tables) if self.out_ds_instance else get_table_schema(
-                session=_session,
-                current_user=self.current_user,
-                ds=self.ds,
-                question=self.chat_question.question,
-                embedding=False, table_list=tables)
+            used_tables_schema = self.load_schema_context(
+                _session,
+                embedding=False,
+                table_names=tables,
+                include_sample_data=False,
+            ).schema
             SQLBotLogUtil.info('used_tables_schema: \n' + used_tables_schema)
             chart_res = self.generate_chart(_session, chart_type, used_tables_schema)
             chart: dict[str, Any] | None = None
@@ -1419,33 +1408,33 @@ class LLMService:
         except Exception as e:
             run_failed = True
             traceback.print_exc()
-            error_msg: str
             if isinstance(e, SingleMessageError):
-                error_msg = str(e)
+                error_kind = "single_message"
             elif isinstance(e, SQLBotDBConnectionError):
-                error_msg = orjson.dumps(
-                    {'message': str(e), 'type': 'db-connection-err'}).decode()
+                error_kind = "db_connection"
             elif isinstance(e, SQLBotDBError):
-                error_msg = orjson.dumps(
-                    {'message': 'Execute SQL Failed', 'traceback': str(e), 'type': 'exec-sql-err'}).decode()
+                error_kind = "db_execution"
             else:
-                error_msg = orjson.dumps({'message': str(e), 'traceback': traceback.format_exc(limit=1)}).decode()
+                error_kind = "unexpected"
+            error_msg = build_run_error_message(
+                error_kind,
+                str(e),
+                traceback.format_exc(limit=1),
+            )
             if _session:
                 self.save_error(session=_session, message=error_msg)
             if in_chat:
                 yield encode_sse_event('error', content=error_msg)
             else:
                 if stream:
-                    yield f'&#x274c; **ERROR:**\n'
+                    yield '&#x274c; **ERROR:**\n'
                     yield f'> {error_msg}\n'
                 else:
                     json_result['success'] = False
                     json_result['message'] = error_msg
                     yield json_result
         finally:
-            # 失败终态已经由 save_error 写入，不能再覆盖为成功。
-            if _session and not run_failed:
-                self.finish(_session)
+            finalize_legacy_run(_session, run_failed, self.finish)
             session_maker.remove()
 
     def run_recommend_questions_task_async(self):
@@ -1487,7 +1476,7 @@ class LLMService:
             self.chunk_list.append(chunk)
 
     def run_analysis_or_predict_task(self, action_type: str, in_chat: bool = True, stream: bool = True):
-        json_result: Dict[str, Any] = {'success': True}
+        json_result: dict[str, Any] = {'success': True}
         _session = None
         try:
             _session = session_maker()
@@ -1615,7 +1604,7 @@ class LLMService:
                 yield encode_sse_event('error', content=error_msg)
             else:
                 if stream:
-                    yield f'&#x274c; **ERROR:**\n'
+                    yield '&#x274c; **ERROR:**\n'
                     yield f'> {error_msg}\n'
                 else:
                     json_result['success'] = False
@@ -1627,49 +1616,37 @@ class LLMService:
 
     def validate_history_ds(self, session: Session):
         _ds = self.ds
+        if _ds is None or _ds.id is None:
+            raise SingleMessageError("chat.ds_is_invalid")
         if not self.current_assistant or self.current_assistant.type == 4:
             try:
-                current_ds = session.get(CoreDatasource, _ds.id)
-                if not current_ds:
-                    raise SingleMessageError('chat.ds_is_invalid')
-            except Exception:
-                raise SingleMessageError("chat.ds_is_invalid")
+                get_legacy_local_datasource(session, int(_ds.id))
+            except ValueError as exc:
+                raise SingleMessageError("chat.ds_is_invalid") from exc
         else:
-            try:
-                _ds_list: list[dict] = get_assistant_ds(session=session, llm_service=self)
-                match_ds = any(item.get("id") == _ds.id for item in _ds_list)
-                if not match_ds:
-                    type = self.current_assistant.type
-                    msg = f"[please check ds list and public ds list]" if type == 0 else f"[please check ds api]"
-                    raise SingleMessageError(msg)
-            except Exception as e:
-                raise SingleMessageError(f"ds is invalid [{str(e)}]")
-
-
-def execute_sql_with_db(db: SQLDatabase, sql: str) -> str:
-    """Execute SQL query using SQLDatabase
-
-    Args:
-        db: SQLDatabase instance
-        sql: SQL query statement
-
-    Returns:
-        str: Query results formatted as string
-    """
-    try:
-        # Execute query
-        result = db.run(sql)
-
-        if not result:
-            return "Query executed successfully but returned no results."
-
-        # Format results
-        return str(result)
-
-    except Exception as e:
-        error_msg = f"SQL execution failed: {str(e)}"
-        SQLBotLogUtil.exception(error_msg)
-        raise RuntimeError(error_msg)
+            external_datasources = (
+                self.out_ds_instance.ds_list
+                if self.out_ds_instance is not None
+                else None
+            )
+            candidates = build_datasource_selection_candidate_service(
+                session
+            ).list_candidates(
+                self.current_user.oid,
+                self.current_assistant,
+                self.chat_question.question or "",
+                embedding=False,
+                external_datasources=external_datasources,
+            )
+            match_ds = any(item.id == _ds.id for item in candidates)
+            if not match_ds:
+                assistant_type = self.current_assistant.type
+                msg = (
+                    "[please check ds list and public ds list]"
+                    if assistant_type == 0
+                    else "[please check ds api]"
+                )
+                raise SingleMessageError(msg)
 
 
 def request_picture(chat_id: int, record_id: int, chart: dict, data: dict):

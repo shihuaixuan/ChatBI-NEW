@@ -161,7 +161,7 @@ def test_legacy_chat_run_does_not_finish_after_failure():
     )
 
     assert "run_failed = True" in source
-    assert "if _session and (not run_failed)" in source
+    assert "finalize_legacy_run(_session, run_failed, self.finish)" in source
 
 
 def test_legacy_analysis_and_predict_record_uses_chatbi_create_service():

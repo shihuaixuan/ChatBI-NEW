@@ -6,5 +6,10 @@ from apps.semantic.services.dataset_reference_service import (
 from apps.semantic.services.sql_compilation_service import (
     SemanticSQLCompilationService,
 )
+from apps.semantic.services.term_query_service import SemanticTermQueryService
 
-__all__ = ["SemanticDatasetReferenceService", "SemanticSQLCompilationService"]
+__all__ = [
+    "SemanticDatasetReferenceService",
+    "SemanticSQLCompilationService",
+    "SemanticTermQueryService",
+]

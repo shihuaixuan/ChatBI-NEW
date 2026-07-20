@@ -1,10 +1,10 @@
+from apps.chatbi.adapters import dynamic_sql_generation
+from apps.chatbi.adapters.dynamic_sql_generation import (
+    TemplateDynamicSQLGenerationPromptBuilder,
+)
 from apps.chatbi.models import (
     DynamicSQLGenerationData,
     DynamicSQLSubqueryMapping,
-)
-from infrastructure import dynamic_sql_generation
-from infrastructure.dynamic_sql_generation import (
-    TemplateDynamicSQLGenerationPromptBuilder,
 )
 
 

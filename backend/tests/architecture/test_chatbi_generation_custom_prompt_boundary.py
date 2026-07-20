@@ -44,8 +44,10 @@ def test_generation_custom_prompt_service_only_depends_on_chatbi_dto():
     assert not any(module.startswith("apps.workflow") for module in imports)
 
 
-def test_xpack_custom_prompt_dependency_is_owned_by_infrastructure_adapter():
-    imports = _imports(_tree("infrastructure/generation_custom_prompt.py"))
+def test_xpack_custom_prompt_dependency_is_owned_by_chatbi_adapter():
+    imports = _imports(
+        _tree("apps/chatbi/adapters/generation_custom_prompt.py")
+    )
 
     assert "sqlbot_xpack.custom_prompt.curd.custom_prompt" in imports
     assert "sqlbot_xpack.custom_prompt.models.custom_prompt_model" in imports

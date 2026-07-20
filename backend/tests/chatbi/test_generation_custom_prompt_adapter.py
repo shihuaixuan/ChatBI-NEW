@@ -5,13 +5,13 @@ from sqlbot_xpack.custom_prompt.models.custom_prompt_model import (
 )
 from sqlmodel import Session
 
+from apps.chatbi.adapters import generation_custom_prompt as adapter_module
+from apps.chatbi.adapters.generation_custom_prompt import (
+    XPackGenerationCustomPromptProvider,
+)
 from apps.chatbi.models import (
     GenerationCustomPromptQuery,
     GenerationCustomPromptType,
-)
-from infrastructure import generation_custom_prompt as adapter_module
-from infrastructure.generation_custom_prompt import (
-    XPackGenerationCustomPromptProvider,
 )
 
 

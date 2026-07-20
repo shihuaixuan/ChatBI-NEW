@@ -1,9 +1,9 @@
+from apps.chatbi.adapters.analysis_prediction import (
+    TemplateAnalysisPredictionPromptBuilder,
+)
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
     ChatRecordAuxiliaryType,
-)
-from infrastructure.analysis_prediction import (
-    TemplateAnalysisPredictionPromptBuilder,
 )
 
 

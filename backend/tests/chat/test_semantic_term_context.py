@@ -1,4 +1,3 @@
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -8,68 +7,66 @@ from apps.chat.services.semantic_binding import (
     validate_assistant_dataset_binding,
 )
 from apps.chat.task import llm as llm_module
-from apps.semantic.models.dto import TermSearchResult
 
 
-class _TermQuery:
+class _GenerationContextService:
     def __init__(self) -> None:
         self.calls: list[tuple[int, int, str, int]] = []
 
-    def search(
+    def build_term_context(
         self,
-        oid: int,
-        dataset_id: int,
-        query: str,
-        limit: int = 10,
-    ) -> list[TermSearchResult]:
-        self.calls.append((oid, dataset_id, query, limit))
-        return [
-            TermSearchResult(
-                term_id=7,
-                dataset_id=dataset_id,
-                words=["销售额", "GMV"],
-                description="支付成功订单金额",
-            )
+        workspace_id: int,
+        dataset_id: int | None,
+        question: str,
+    ) -> tuple[str, list[dict[str, object]]]:
+        if dataset_id is None:
+            return "", []
+        self.calls.append(
+            (workspace_id, dataset_id, question, 10)
+        )
+        items: list[dict[str, object]] = [
+            {
+                "words": ["销售额", "GMV"],
+                "description": "支付成功订单金额",
+            }
         ]
+        return '[{"words":["销售额","GMV"]}]', items
 
 
 def test_dataset_bound_chat_uses_semantic_term_context(monkeypatch):
-    query = _TermQuery()
+    context_service = _GenerationContextService()
     service = _service(dataset_id=20)
     _patch_logs(monkeypatch)
     monkeypatch.setattr(
         llm_module,
-        "build_semantic_term_query_service",
-        lambda _session: query,
+        "build_generation_context_service",
+        lambda _session: context_service,
     )
 
     service.load_term_context(object())
 
-    assert query.calls == [(1, 20, "GMV是多少", 10)]
-    assert json.loads(service.chat_question.terminologies) == [
-        {
-            "words": ["销售额", "GMV"],
-            "description": "支付成功订单金额",
-        }
-    ]
+    assert context_service.calls == [(1, 20, "GMV是多少", 10)]
+    assert service.chat_question.terminologies == (
+        '[{"words":["销售额","GMV"]}]'
+    )
 
 
 def test_unbound_assistant_has_no_semantic_term_context(monkeypatch):
+    context_service = _GenerationContextService()
     service = _service(dataset_id=None)
     service.current_assistant = SimpleNamespace(oid=9, type=1)
     _patch_logs(monkeypatch)
     monkeypatch.setattr(
         llm_module,
-        "build_semantic_term_query_service",
-        lambda _session: (_ for _ in ()).throw(
-            AssertionError("未绑定数据集时不能调用 Semantic 查询")
-        ),
+        "build_generation_context_service",
+        lambda _session: context_service,
     )
 
     service.chat_question.terminologies = "stale context"
     service.load_term_context(object())
 
     assert service.chat_question.terminologies == ""
+    assert context_service.calls == []
 
 
 def test_dynamic_datasource_assistant_rejects_local_semantic_dataset():

@@ -47,6 +47,7 @@ from apps.chatbi.models.dto.datasource_selection import (
     DatasourceSelectionEvent,
     DatasourceSelectionMessage,
     DatasourceSelectionModelChunk,
+    DatasourceSelectionRankingCandidate,
 )
 from apps.chatbi.models.dto.dynamic_sql_generation import (
     DynamicSQLGenerationData,
@@ -62,11 +63,6 @@ from apps.chatbi.models.dto.final_reply import (
     QueryFinalReplyProjectionData,
     QueryFinalReplyProjectionResult,
 )
-from apps.chatbi.models.dto.generation_history import (
-    GenerationHistoryLog,
-    GenerationHistoryProjectionData,
-    GenerationHistoryProjectionResult,
-)
 from apps.chatbi.models.dto.generation_context import (
     GenerationAssistantContext,
     GenerationContextScope,
@@ -76,6 +72,19 @@ from apps.chatbi.models.dto.generation_custom_prompt import (
     GenerationCustomPromptQuery,
     GenerationCustomPromptResult,
     GenerationCustomPromptType,
+)
+from apps.chatbi.models.dto.generation_history import (
+    GenerationHistoryLog,
+    GenerationHistoryProjectionData,
+    GenerationHistoryProjectionResult,
+)
+from apps.chatbi.models.dto.generation_runtime_settings import (
+    GenerationRuntimeSettings,
+    GenerationRuntimeSettingsData,
+)
+from apps.chatbi.models.dto.generation_schema_context import (
+    GenerationSchemaContext,
+    GenerationSchemaTableCandidate,
 )
 from apps.chatbi.models.dto.legacy_query import AiModelQuestion, ChatQuestion
 from apps.chatbi.models.dto.permission_sql_generation import (
@@ -176,6 +185,7 @@ __all__ = [
     "DatasourceSelectionEvent",
     "DatasourceSelectionMessage",
     "DatasourceSelectionModelChunk",
+    "DatasourceSelectionRankingCandidate",
     "DimensionRecognitionOutput",
     "DimensionSlot",
     "DynamicSQLGenerationData",
@@ -193,6 +203,10 @@ __all__ = [
     "GenerationCustomPromptQuery",
     "GenerationCustomPromptResult",
     "GenerationCustomPromptType",
+    "GenerationRuntimeSettings",
+    "GenerationRuntimeSettingsData",
+    "GenerationSchemaContext",
+    "GenerationSchemaTableCandidate",
     "IntentRecognitionOutput",
     "IntentValidationOutput",
     "NaturalLanguageIntentOutputBase",

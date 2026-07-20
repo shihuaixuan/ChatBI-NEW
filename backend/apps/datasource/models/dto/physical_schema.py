@@ -33,3 +33,10 @@ class PhysicalTableSnapshot(BaseModel):
     table_name: str
     table_comment: str | None = ""
     fields: list[PhysicalField] = Field(default_factory=list)
+
+
+class PhysicalTableDetail(BaseModel):
+    """包含字段的物理表查询快照。"""
+
+    table: PhysicalTable
+    fields: list[PhysicalField] = Field(default_factory=list)

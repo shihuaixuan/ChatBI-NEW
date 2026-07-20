@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import FastAPI, Request
 from sqlmodel import Session
 
@@ -45,14 +47,26 @@ def get_assistant_user(*, id: int):
     return create_assistant_user(id)
 
 
-def get_assistant_ds(session: Session, llm_service) -> list[dict[str, object]]:
+def get_assistant_ds(
+    session: Session,
+    llm_service: Any,
+) -> list[dict[str, object]]:
+    """兼容扩展包旧导入；内部 ChatBI 流程不再调用此入口。"""
+
     service = build_assistant_service(session)
     assistant: AssistantHeader = llm_service.current_assistant
+    external_datasources = None
     if assistant.type in {1, 3}:
         external_catalog = service.build_external_datasource_catalog(assistant)
         llm_service.out_ds_instance = external_catalog
-        return external_catalog.get_simple_ds_list()
-    return [item.model_dump() for item in service.list_datasources(assistant)]
+        external_datasources = external_catalog.ds_list
+    return [
+        item.model_dump()
+        for item in service.list_datasources(
+            assistant,
+            external_datasources=external_datasources,
+        )
+    ]
 
 
 def get_out_ds_conf(

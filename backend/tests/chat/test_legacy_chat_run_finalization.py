@@ -51,13 +51,18 @@ def test_legacy_chat_run_does_not_overwrite_failed_record(monkeypatch):
 def test_legacy_chat_run_preserves_successful_finalization(monkeypatch):
     session_maker = FakeSessionMaker()
     monkeypatch.setattr(llm_module, "session_maker", session_maker)
-    monkeypatch.setattr(llm_module, "check_connection", lambda **kwargs: True)
+    monkeypatch.setattr(
+        llm_module,
+        "check_legacy_datasource_connection",
+        lambda *_args: True,
+    )
     monkeypatch.setattr(llm_module, "requires_data_policy", lambda user: False)
     monkeypatch.setattr(llm_module, "save_sql", lambda **kwargs: None)
 
     service = object.__new__(llm_module.LLMService)
     service.ds = SimpleNamespace(type="postgres")
     service.connection = object()
+    service.datasource_runtime = object()
     service.record = SimpleNamespace(id=7)
     service.chat_question = SimpleNamespace(question="查询订单", sql=None)
     service.current_user = object()

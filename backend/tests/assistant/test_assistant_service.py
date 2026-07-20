@@ -1,10 +1,12 @@
 """Assistant 领域业务规则测试。"""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
+from apps.assistant import public as assistant_public
 from apps.assistant.errors import (
     AssistantConfigurationError,
     AssistantCustomModelError,
@@ -19,7 +21,7 @@ from apps.assistant.models.dto import (
     AssistantUiSchema,
 )
 from apps.assistant.services import AssistantService
-from apps.datasource import DatasourceSummary
+from apps.datasource import DatasourceSummary, ExternalDatasource
 
 
 def _record(
@@ -175,6 +177,94 @@ def test_offline_assistant_only_lists_public_datasources() -> None:
 
     assert [item.id for item in result] == [2]
     datasource_catalog.list_for_workspace.assert_called_once_with(7, [2])
+
+
+def test_external_datasource_list_reuses_loaded_snapshot() -> None:
+    external_factory = Mock()
+    service = AssistantService(
+        Mock(),
+        Mock(),
+        model_exists=lambda _model_id: True,
+        generate_app_id=lambda: "app-id",
+        generate_app_secret=lambda: "app-secret",
+        external_datasource_factory=external_factory,
+    )
+    assistant = AssistantHeader(
+        id=10,
+        name="外部助手",
+        domain="https://example.com",
+        type=1,
+        configuration=json.dumps({"endpoint": "/datasources"}),
+        oid=7,
+    )
+    external_datasources = [
+        ExternalDatasource(
+            id=8,
+            name="外部订单库",
+            description="订单数据",
+            type="mysql",
+        )
+    ]
+
+    result = service.list_datasources(
+        assistant,
+        external_datasources=external_datasources,
+    )
+
+    assert [(item.id, item.name) for item in result] == [(8, "外部订单库")]
+    external_factory.assert_not_called()
+
+
+def test_legacy_datasource_list_compatibility_forwards_to_assistant_service(
+    monkeypatch,
+) -> None:
+    assistant = AssistantHeader(
+        id=10,
+        name="外部助手",
+        domain="https://example.com",
+        type=1,
+        configuration=json.dumps({"endpoint": "/datasources"}),
+        oid=7,
+    )
+    external_datasources = [
+        ExternalDatasource(id=8, name="外部订单库", type="mysql")
+    ]
+    external_catalog = SimpleNamespace(ds_list=external_datasources)
+    service = Mock()
+    service.build_external_datasource_catalog.return_value = external_catalog
+    service.list_datasources.return_value = [
+        DatasourceSummary(id=8, name="外部订单库")
+    ]
+    monkeypatch.setattr(
+        assistant_public,
+        "build_assistant_service",
+        lambda _session: service,
+    )
+    llm_service = SimpleNamespace(
+        current_assistant=assistant,
+        out_ds_instance=None,
+    )
+
+    result = assistant_public.get_assistant_ds(
+        SimpleNamespace(),
+        llm_service,
+    )
+
+    assert result == [
+        {
+            "id": 8,
+            "name": "外部订单库",
+            "description": None,
+            "type": None,
+            "type_name": None,
+            "num": None,
+        }
+    ]
+    assert llm_service.out_ds_instance is external_catalog
+    service.list_datasources.assert_called_once_with(
+        assistant,
+        external_datasources=external_datasources,
+    )
 
 
 def test_datasource_list_rejects_inconsistent_workspace_configuration() -> None:

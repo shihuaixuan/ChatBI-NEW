@@ -44,6 +44,7 @@ from apps.chatbi.composition import (
     build_physical_schema_service,
     build_query_service,
     build_question_understanding_service,
+    build_result_artifact_service,
     build_semantic_query_service,
     build_semantic_retrieval_service,
 )
@@ -60,7 +61,6 @@ from apps.chatbi.services import (
 )
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
-from infrastructure.result_artifacts import build_workflow_artifact_gateway
 
 FOLDED_PLACEHOLDER = "（此前的工具结果已折叠归档，如需请重新调用工具）"
 
@@ -132,7 +132,7 @@ class AgentLoop:
         )
         self.result_artifact_service = (
             result_artifact_service
-            or ResultArtifactService(build_workflow_artifact_gateway(session))
+            or build_result_artifact_service(session)
         )
 
     def _build_registry(self) -> ToolRegistry:

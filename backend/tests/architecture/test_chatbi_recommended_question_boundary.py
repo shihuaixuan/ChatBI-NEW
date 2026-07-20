@@ -66,7 +66,7 @@ def test_legacy_recommendation_task_only_keeps_schema_log_and_sse_projection():
 
 
 def test_sql_model_adapter_uses_shared_model_stream_parser():
-    adapter_tree = _tree("infrastructure/sql_generation.py")
+    adapter_tree = _tree("apps/chatbi/adapters/sql_generation.py")
     adapter_imports = _imports(adapter_tree)
     legacy_tree = _tree("apps/chat/task/llm.py")
 

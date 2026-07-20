@@ -1,4 +1,4 @@
-"""结果 Artifact 的外层存储与清理适配。"""
+"""Workflow Engine Artifact 的公开存储与清理实现。"""
 
 from __future__ import annotations
 

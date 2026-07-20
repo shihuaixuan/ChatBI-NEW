@@ -1,0 +1,95 @@
+"""表驱动的架构结构守卫（R0 批次建立）。
+
+规则即数据：新增结构规则 = 在下方规则表追加一行；禁止再按批次/按能力新增守卫测试文件
+（见 apps/AGENTS.md v2 §9）。依赖基线棘轮仍由 test_dependency_baseline.py 负责，
+本文件负责"当前必须为零违规"的结构性规则。
+"""
+
+from __future__ import annotations
+
+import ast
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import pytest
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
+
+@dataclass(frozen=True)
+class ForbiddenImportRule:
+    """scope 内的模块禁止导入 forbidden 前缀（模块边界对齐，允许 allowed 前缀豁免）。"""
+
+    rule_id: str
+    scope: str
+    forbidden: tuple[str, ...]
+    allowed: tuple[str, ...] = field(default_factory=tuple)
+    reason: str = ""
+
+
+FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
+    ForbiddenImportRule(
+        rule_id="chatbi-no-executor-imports",
+        scope="apps/chatbi",
+        forbidden=("apps.agent", "apps.workflow", "apps.chat"),
+        reason="ChatBI 是被执行器调用的一方，不得反向依赖 agent/workflow/旧 chat。",
+    ),
+    ForbiddenImportRule(
+        rule_id="engine-domain-no-business-imports",
+        scope="apps/workflow_engine/domain",
+        forbidden=("apps",),
+        allowed=("apps.workflow_engine",),
+        reason="通用引擎的 domain 层不得依赖任何业务模块（api 层历史违规由依赖基线管理）。",
+    ),
+    ForbiddenImportRule(
+        rule_id="mcp-no-chat-internals",
+        scope="apps/mcp",
+        forbidden=(
+            "apps.chat.models",
+            "apps.chat.api",
+            "apps.chat.curd",
+            "apps.chat.task",
+        ),
+        reason="MCP 只能使用公开契约；对 apps.chat.composition 的过渡依赖见台账 B10。",
+    ),
+)
+
+
+def _module_matches(module: str, prefix: str) -> bool:
+    return module == prefix or module.startswith(prefix + ".")
+
+
+def _iter_absolute_imports(path: Path):
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield node.lineno, alias.name
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            yield node.lineno, node.module
+
+
+def _find_violations(rule: ForbiddenImportRule) -> list[str]:
+    scope_dir = BACKEND_ROOT / rule.scope
+    assert scope_dir.is_dir(), f"规则 {rule.rule_id} 的 scope 不存在: {rule.scope}"
+    violations: list[str] = []
+    for py_file in sorted(scope_dir.rglob("*.py")):
+        if "__pycache__" in py_file.parts:
+            continue
+        for lineno, module in _iter_absolute_imports(py_file):
+            if any(_module_matches(module, allow) for allow in rule.allowed):
+                continue
+            if any(_module_matches(module, bad) for bad in rule.forbidden):
+                rel = py_file.relative_to(BACKEND_ROOT)
+                violations.append(f"{rel}:{lineno} -> {module}")
+    return violations
+
+
+@pytest.mark.parametrize(
+    "rule", FORBIDDEN_IMPORT_RULES, ids=[r.rule_id for r in FORBIDDEN_IMPORT_RULES]
+)
+def test_forbidden_imports(rule: ForbiddenImportRule) -> None:
+    violations = _find_violations(rule)
+    assert not violations, (
+        f"结构规则 {rule.rule_id} 违规（{rule.reason}）:\n" + "\n".join(violations)
+    )

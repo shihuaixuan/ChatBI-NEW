@@ -11,7 +11,7 @@ from apps.chatbi.chat_record import build_chat_record_service
 from apps.chatbi.models import PermissionSQLGenerationData, SQLGenerationMessage
 from apps.chatbi.services import PermissionSQLGenerationService
 from apps.template.filter.generator import get_permissions_template
-from infrastructure.sql_generation import LangChainSQLGenerationModelClient
+from apps.chatbi.adapters.sql_generation import LangChainSQLGenerationModelClient
 
 
 class TemplatePermissionSQLGenerationPromptBuilder:

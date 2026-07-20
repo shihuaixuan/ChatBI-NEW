@@ -1,6 +1,6 @@
+from apps.chatbi.adapters import sql_generation
+from apps.chatbi.adapters.sql_generation import TemplateSQLGenerationPromptBuilder
 from apps.chatbi.models import SQLGenerationData, SQLGenerationMessage
-from infrastructure import sql_generation
-from infrastructure.sql_generation import TemplateSQLGenerationPromptBuilder
 
 
 def _base_template() -> dict[str, str]:

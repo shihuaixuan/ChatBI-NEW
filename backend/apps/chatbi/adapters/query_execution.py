@@ -4,8 +4,8 @@ from typing import Any, cast
 
 from apps.capabilities.schemas import ToolResult
 from apps.chatbi.services import QueryService, SQLPermissionService
+from apps.datasource import DatasourceConnection
 from apps.datasource.database import exec_sql
-from apps.datasource.models.dto.connection import DatasourceConnection
 from common.error import ParseSQLResultError
 
 

@@ -38,6 +38,26 @@ class SQLModelDatasourceMetadataRepository:
         rows = self._session.exec(statement.order_by(col(CoreField.field_index))).all()
         return [self._field_dto(row) for row in rows]
 
+    def list_fields_by_table_ids(
+        self,
+        table_ids: list[int],
+    ) -> dict[int, list[PhysicalField]]:
+        if not table_ids:
+            return {}
+        rows = self._session.exec(
+            select(CoreField)
+            .where(col(CoreField.table_id).in_(table_ids))
+            .order_by(col(CoreField.table_id), col(CoreField.field_index))
+        ).all()
+        fields_by_table: dict[int, list[PhysicalField]] = {}
+        for row in rows:
+            if row.table_id is None:
+                continue
+            fields_by_table.setdefault(row.table_id, []).append(
+                self._field_dto(row)
+            )
+        return fields_by_table
+
     def get_table(self, table_id: int) -> PhysicalTable | None:
         row = self._session.get(CoreTable, table_id)
         return self._table_dto(row) if row is not None else None

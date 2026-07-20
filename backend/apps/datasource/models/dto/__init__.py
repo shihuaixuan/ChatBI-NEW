@@ -30,6 +30,7 @@ from apps.datasource.models.dto.physical_relation import (
 from apps.datasource.models.dto.physical_schema import (
     PhysicalField,
     PhysicalTable,
+    PhysicalTableDetail,
     PhysicalTableSnapshot,
 )
 
@@ -51,6 +52,7 @@ __all__ = [
     "PhysicalRelationEndpoint",
     "PhysicalRelationResources",
     "PhysicalTable",
+    "PhysicalTableDetail",
     "PhysicalTableSnapshot",
     "SheetFields",
     "TableAndFields",

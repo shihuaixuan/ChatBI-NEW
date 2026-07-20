@@ -22,6 +22,17 @@ class DatasourceConnectionGateway(Protocol):
         table_name: str,
     ) -> list[ColumnSchema]: ...
 
+    def get_database_name(self, datasource: DatasourceConnection) -> str: ...
+
+    def sample_rows(
+        self,
+        datasource: DatasourceConnection,
+        table_name: str,
+        field_names: list[str],
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]: ...
+
     def execute_query(
         self,
         datasource: DatasourceConnection,

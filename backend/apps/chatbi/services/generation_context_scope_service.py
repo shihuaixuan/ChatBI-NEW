@@ -4,6 +4,7 @@ from apps.chatbi.models.dto.generation_context import (
 )
 
 ADVANCED_ASSISTANT_TYPE = 1
+DYNAMIC_DATASOURCE_ASSISTANT_TYPES = frozenset({1, 3})
 PAGE_EMBEDDED_ASSISTANT_TYPE = 4
 
 
@@ -36,4 +37,7 @@ class GenerationContextScopeService:
         )
 
 
-__all__ = ["GenerationContextScopeService"]
+__all__ = [
+    "DYNAMIC_DATASOURCE_ASSISTANT_TYPES",
+    "GenerationContextScopeService",
+]

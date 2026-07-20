@@ -1,6 +1,7 @@
 from apps.datasource.models.dto import (
     PhysicalField,
     PhysicalTable,
+    PhysicalTableDetail,
     PhysicalTableSnapshot,
 )
 from apps.datasource.repository.metadata_repository import (
@@ -37,6 +38,24 @@ class DatasourceMetadataService:
         keyword: str | None = None,
     ) -> list[PhysicalField]:
         return self._repository.list_fields(table_id, keyword)
+
+    def get_schema(self, datasource_id: int) -> list[PhysicalTableDetail]:
+        """一次读取数据源的物理表与字段快照。"""
+
+        tables = self._repository.list_tables(datasource_id)
+        table_ids = [table.id for table in tables if table.id is not None]
+        fields_by_table = self._repository.list_fields_by_table_ids(table_ids)
+        return [
+            PhysicalTableDetail(
+                table=table,
+                fields=(
+                    fields_by_table.get(table.id, [])
+                    if table.id is not None
+                    else []
+                ),
+            )
+            for table in tables
+        ]
 
     def sync_selected_tables(
         self,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.models import (
     AnswerGenerationData,
     AnswerGenerationMode,
@@ -20,7 +21,6 @@ from apps.chatbi.services import (
     build_answer_generation_prompt as build_answer_generation_prompt,
 )
 from apps.workflow.capabilities.context import ChatBIRunContext
-from infrastructure.question_model import build_question_model_service
 
 
 def build_answer_projection(

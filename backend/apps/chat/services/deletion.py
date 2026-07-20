@@ -6,6 +6,7 @@ from sqlalchemy import delete
 from sqlmodel import Session, col, select
 
 from apps.agent.deletion import AgentExecutionDeletionService
+from apps.chatbi.composition import build_result_artifact_service
 from apps.chatbi.models import Chat, ChatLog, ChatRecord
 from apps.chatbi.services import ResultArtifactService
 from apps.workflow_engine.infrastructure.persistence.models import (
@@ -15,7 +16,6 @@ from apps.workflow_engine.infrastructure.persistence.models import (
     WorkflowEventModel,
     WorkflowRunModel,
 )
-from infrastructure.result_artifacts import build_workflow_artifact_gateway
 
 
 class ChatDeletionService:
@@ -30,7 +30,7 @@ class ChatDeletionService:
         self._session = session
         self._result_artifact_service = (
             result_artifact_service
-            or ResultArtifactService(build_workflow_artifact_gateway(session))
+            or build_result_artifact_service(session)
         )
 
     def delete_for_user(self, current_user: Any, chat_id: int) -> str:

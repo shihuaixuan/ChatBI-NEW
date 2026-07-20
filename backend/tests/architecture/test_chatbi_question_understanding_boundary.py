@@ -79,9 +79,9 @@ def test_agent_and_graph_share_question_model_service():
     assert "infrastructure.question_model" not in agent_source
 
 
-def test_default_question_model_client_stays_in_infrastructure():
+def test_default_question_model_client_stays_in_chatbi_adapter():
     adapter_source = (
-        BACKEND_DIR / "infrastructure/question_model.py"
+        BACKEND_DIR / "apps/chatbi/adapters/question_model.py"
     ).read_text(encoding="utf-8")
     agent_source = (
         BACKEND_DIR / "apps/chatbi/services/question_understanding_service.py"

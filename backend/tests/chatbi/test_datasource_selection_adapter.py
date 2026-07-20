@@ -1,9 +1,9 @@
+from apps.chatbi.adapters.datasource_selection import (
+    TemplateDatasourceSelectionPromptBuilder,
+)
 from apps.chatbi.models import (
     DatasourceSelectionCandidate,
     DatasourceSelectionData,
-)
-from infrastructure.datasource_selection import (
-    TemplateDatasourceSelectionPromptBuilder,
 )
 
 

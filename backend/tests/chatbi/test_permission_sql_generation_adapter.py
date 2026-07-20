@@ -1,10 +1,10 @@
+from apps.chatbi.adapters import permission_sql_generation
+from apps.chatbi.adapters.permission_sql_generation import (
+    TemplatePermissionSQLGenerationPromptBuilder,
+)
 from apps.chatbi.models import (
     PermissionSQLFilter,
     PermissionSQLGenerationData,
-)
-from infrastructure import permission_sql_generation
-from infrastructure.permission_sql_generation import (
-    TemplatePermissionSQLGenerationPromptBuilder,
 )
 
 

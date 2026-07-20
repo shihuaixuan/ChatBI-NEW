@@ -3,10 +3,10 @@ from sqlmodel import Session
 from apps.access_control.data_policy import SessionDataPolicyProvider
 from apps.capabilities.sql.executor import SqlExecuteTool
 from apps.chatbi.composition import (
+    build_result_artifact_service,
     build_semantic_query_service,
     build_semantic_retrieval_service,
 )
-from apps.chatbi.services import ResultArtifactService
 from apps.chatbi.services.sql_permission import PermissionAdapter
 from apps.retrieval.service import build_retrieval_service
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
@@ -60,7 +60,6 @@ from apps.workflow_engine.runtime.lease import InMemoryRunLease
 from apps.workflow_engine.runtime.router import ConditionRouter
 from apps.workflow_engine.runtime.scheduler import NodeScheduler
 from common.core.db import engine
-from infrastructure.result_artifacts import build_workflow_artifact_gateway
 
 
 def build_placeholder_chatbi_runtime(session: Session, commit_events: bool = False) -> GraphRuntime:
@@ -115,9 +114,7 @@ def build_real_chatbi_v1_runtime(
 
         return Session(engine)
 
-    result_artifact_service = ResultArtifactService(
-        build_workflow_artifact_gateway(session)
-    )
+    result_artifact_service = build_result_artifact_service(session)
     gateway = RealChatBICapabilityGateway(
         question_adapter=QuestionAdapter(
             model_client=question_model_client,

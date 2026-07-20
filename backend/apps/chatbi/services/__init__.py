@@ -36,6 +36,10 @@ from apps.chatbi.services.conversation_service import (
     ConversationServiceConfigurationError,
     RecommendedQuestionProvider,
 )
+from apps.chatbi.services.datasource_selection_candidate_service import (
+    DatasourceSelectionCandidateRanker,
+    DatasourceSelectionCandidateService,
+)
 from apps.chatbi.services.datasource_selection_service import (
     DatasourceSelectionError,
     DatasourceSelectionModelClient,
@@ -56,15 +60,24 @@ from apps.chatbi.services.final_reply_projection_service import (
     FinalReplyProjectionError,
     FinalReplyProjectionService,
 )
-from apps.chatbi.services.generation_history_projection_service import (
-    GenerationHistoryProjectionService,
-)
 from apps.chatbi.services.generation_context_scope_service import (
+    DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
     GenerationContextScopeService,
 )
+from apps.chatbi.services.generation_context_service import GenerationContextService
 from apps.chatbi.services.generation_custom_prompt_service import (
     GenerationCustomPromptProvider,
     GenerationCustomPromptService,
+)
+from apps.chatbi.services.generation_history_projection_service import (
+    GenerationHistoryProjectionService,
+)
+from apps.chatbi.services.generation_runtime_settings_service import (
+    GenerationRuntimeSettingsService,
+)
+from apps.chatbi.services.generation_schema_context_service import (
+    GenerationSchemaContextService,
+    GenerationSchemaTableRanker,
 )
 from apps.chatbi.services.permission_sql_generation_service import (
     PermissionSQLGenerationError,
@@ -179,6 +192,8 @@ __all__ = [
     "ConversationServiceConfigurationError",
     "DatasourceMetadataReader",
     "DatasourceSelectionError",
+    "DatasourceSelectionCandidateRanker",
+    "DatasourceSelectionCandidateService",
     "DatasourceSelectionModelClient",
     "DatasourceSelectionPromptBuilder",
     "DatasourceSelectionService",
@@ -187,9 +202,14 @@ __all__ = [
     "FinalReplyProjectionService",
     "FinalReplyProjectionError",
     "GenerationHistoryProjectionService",
+    "GenerationContextService",
+    "DYNAMIC_DATASOURCE_ASSISTANT_TYPES",
     "GenerationContextScopeService",
     "GenerationCustomPromptProvider",
     "GenerationCustomPromptService",
+    "GenerationRuntimeSettingsService",
+    "GenerationSchemaContextService",
+    "GenerationSchemaTableRanker",
     "DynamicSQLGenerationError",
     "DynamicSQLGenerationModelClient",
     "DynamicSQLGenerationPromptBuilder",

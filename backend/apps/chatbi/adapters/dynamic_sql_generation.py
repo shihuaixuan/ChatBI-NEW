@@ -9,7 +9,7 @@ from langchain.chat_models.base import BaseChatModel
 from apps.chatbi.models import DynamicSQLGenerationData, SQLGenerationMessage
 from apps.chatbi.services import DynamicSQLGenerationService
 from apps.template.generate_dynamic.generator import get_dynamic_template
-from infrastructure.sql_generation import LangChainSQLGenerationModelClient
+from apps.chatbi.adapters.sql_generation import LangChainSQLGenerationModelClient
 
 
 class TemplateDynamicSQLGenerationPromptBuilder:

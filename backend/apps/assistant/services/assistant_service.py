@@ -28,6 +28,7 @@ from apps.assistant.repository import AssistantRepository, ExternalDatasourceCat
 from apps.datasource import (
     DatasourceCatalog,
     DatasourceSummary,
+    ExternalDatasource,
     get_database_type_name,
 )
 from common.utils.time import get_timestamp
@@ -249,6 +250,8 @@ class AssistantService:
     def list_datasources(
         self,
         assistant: AssistantHeader,
+        *,
+        external_datasources: list[ExternalDatasource] | None = None,
     ) -> list[DatasourceSummary]:
         if assistant.type in LOCAL_DATASOURCE_ASSISTANT_TYPES:
             configuration = self._parse_configuration(
@@ -275,18 +278,23 @@ class AssistantService:
             )
 
         if assistant.type in EXTERNAL_DATASOURCE_ASSISTANT_TYPES:
-            catalog = self.build_external_datasource_catalog(assistant)
+            datasources = external_datasources
+            if datasources is None:
+                datasources = self.build_external_datasource_catalog(
+                    assistant
+                ).ds_list
             return [
                 DatasourceSummary(
-                    id=str(datasource.id),
+                    id=datasource.id if datasource.id is not None else "",
                     name=datasource.name,
                     description=datasource.description or datasource.comment,
                     type=datasource.type,
                     type_name=get_database_type_name(datasource.type),
                     num=len(datasource.tables or []),
                 )
-                for datasource in catalog.ds_list
-                if get_database_type_name(datasource.type)
+                for datasource in datasources
+                if datasource.id is not None
+                and get_database_type_name(datasource.type)
             ]
 
         return []
