@@ -1,4 +1,4 @@
-from apps.agent.budget import BudgetGuard
+from apps.chatbi.orchestration.agent.budget import BudgetGuard
 
 
 def test_step_budget_exhaustion():

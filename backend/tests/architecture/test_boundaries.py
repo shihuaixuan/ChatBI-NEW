@@ -301,7 +301,7 @@ def test_final_reply_contract_and_composition_are_owned_by_chatbi():
 
 
 def test_agent_finish_uses_chatbi_final_reply_projection():
-    agent_source = (BACKEND_DIR__answer_generation / "apps/agent/tools/core.py").read_text(
+    agent_source = (BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/agent/tools/core.py").read_text(
         encoding="utf-8"
     )
     service_source = (
@@ -346,7 +346,7 @@ def test_chatbi_artifact_service_has_no_workflow_or_persistence_dependency():
 
 def test_agent_and_graph_share_chatbi_result_artifact_service():
     agent_source = (
-        BACKEND_DIR__artifact / "apps/agent/tools/core.py"
+        BACKEND_DIR__artifact / "apps/chatbi/orchestration/agent/tools/core.py"
     ).read_text(encoding="utf-8")
     graph_source = (
         BACKEND_DIR__artifact / "apps/workflow/capabilities/adapters/sql.py"
@@ -527,12 +527,15 @@ def test_legacy_conversation_mutations_have_moved_out_of_read_projection():
 
 
 def test_agent_conversation_owner_check_uses_chatbi_service():
-    path = BACKEND_DIR__conversation / "apps/agent/crud.py"
+    path = (
+        BACKEND_DIR__conversation
+        / "apps/chatbi/orchestration/agent/service.py"
+    )
     tree = ast.parse(path.read_text(encoding="utf-8"))
     function = next(
         node
         for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "get_chat_for_user"
+        if isinstance(node, ast.FunctionDef) and node.name == "create_record_and_run"
     )
     source = ast.unparse(function)
 
@@ -1173,7 +1176,7 @@ def _imports__query(relative_path: str) -> set[str]:
 
 
 def test_agent_sql_tools_only_use_chatbi_query_service():
-    imports = _imports__query("apps/agent/tools/core.py")
+    imports = _imports__query("apps/chatbi/orchestration/agent/tools/core.py")
 
     assert "apps.chatbi.services" in imports
     assert "apps.capabilities.sql.executor" not in imports
@@ -1201,7 +1204,7 @@ def test_chatbi_query_service_has_no_session_or_datasource_dependency():
 
 def test_agent_and_graph_share_chatbi_semantic_query_service():
     agent_source = (
-        BACKEND_DIR__query / "apps/agent/tools/core.py"
+        BACKEND_DIR__query / "apps/chatbi/orchestration/agent/tools/core.py"
     ).read_text(encoding="utf-8")
     graph_source = (
         BACKEND_DIR__query / "apps/workflow/capabilities/adapters/sql.py"
@@ -1222,9 +1225,9 @@ def test_chatbi_semantic_query_service_has_no_session_or_repository_dependency()
 
 
 def test_agent_semantic_retrieval_and_physical_schema_use_chatbi_services():
-    imports = _imports__query("apps/agent/tools/core.py")
+    imports = _imports__query("apps/chatbi/orchestration/agent/tools/core.py")
     source = (
-        BACKEND_DIR__query / "apps/agent/tools/core.py"
+        BACKEND_DIR__query / "apps/chatbi/orchestration/agent/tools/core.py"
     ).read_text(encoding="utf-8")
 
     assert "apps.capabilities.semantic.retrieval" not in imports
@@ -1257,9 +1260,9 @@ def test_chatbi_retrieval_and_schema_services_have_no_runtime_dependency():
 
 
 def test_agent_dataset_context_does_not_resolve_arbitrary_dataset_by_datasource():
-    imports = _imports__query("apps/agent/tools/core.py")
+    imports = _imports__query("apps/chatbi/orchestration/agent/tools/core.py")
     source = (
-        BACKEND_DIR__query / "apps/agent/tools/core.py"
+        BACKEND_DIR__query / "apps/chatbi/orchestration/agent/tools/core.py"
     ).read_text(encoding="utf-8")
 
     assert "apps.capabilities.semantic.compile" not in imports
@@ -1536,7 +1539,7 @@ def test_old_question_understanding_path_only_reexports_chatbi_objects():
     compatibility_path = "apps/capabilities/question_understanding.py"
     compatibility_source = (BACKEND_DIR__question_understanding / compatibility_path).read_text(encoding="utf-8")
     compatibility_imports = _imports__question_understanding(compatibility_path)
-    agent_loop_source = (BACKEND_DIR__question_understanding / "apps/agent/loop.py").read_text(encoding="utf-8")
+    agent_loop_source = (BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/agent/loop.py").read_text(encoding="utf-8")
 
     assert compatibility_imports == {
         "apps.chatbi.models.dto.question_understanding",
@@ -1889,12 +1892,29 @@ def test_legacy_chat_model_only_keeps_query_context_compatibility_exports():
 
 
 def test_agent_record_terminal_projection_uses_chatbi_service():
-    tree = _tree__record("apps/agent/crud.py")
-    finish_source = _function_source__record(tree, "finish_record")
-    complete_source = _function_source__record(tree, "complete_record")
+    tree = _tree__record("apps/chatbi/orchestration/agent/loop.py")
+    loop_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "AgentLoop"
+    )
+    finish_source = ast.unparse(
+        next(
+            node
+            for node in loop_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_finish"
+        )
+    )
+    fail_source = ast.unparse(
+        next(
+            node
+            for node in loop_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_fail"
+        )
+    )
 
-    assert "build_chat_record_service" in finish_source
-    assert "build_chat_record_service" in complete_source
+    assert "self.record_service.transition" in finish_source
+    assert "self.record_service.transition" in fail_source
     assert ".status =" not in finish_source
     assert ".finish =" not in finish_source
 
@@ -2021,7 +2041,7 @@ def test_chat_record_service_owns_final_result_size_policy():
         BACKEND_DIR__record / "apps/chatbi/services/conversation/chat_record_service.py"
     ).read_text(encoding="utf-8")
     agent_loop_source = (
-        BACKEND_DIR__record / "apps/agent/loop.py"
+        BACKEND_DIR__record / "apps/chatbi/orchestration/agent/loop.py"
     ).read_text(encoding="utf-8")
 
     assert "ChatRecordResultLimits" in service_source

@@ -1,4 +1,4 @@
-"""Agentic 工具基座。
+"""Agent 工具基座。
 
 工具 = pydantic 参数 schema（喂给 bind_tools 供 LLM 选择）+ execute 实现。
 执行永远由 AgentLoop 经白名单分发，LLM 只能提名工具与参数。

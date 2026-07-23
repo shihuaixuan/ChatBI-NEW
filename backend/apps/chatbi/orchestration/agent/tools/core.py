@@ -6,12 +6,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from apps.agent.tools.base import (
-    AgentTool,
-    AgentToolContext,
-    ToolOutput,
-    json_summary,
-)
 from apps.capabilities.time_slots import normalize_time_range
 from apps.chatbi.models import (
     ChatRecordExecutionType,
@@ -19,6 +13,12 @@ from apps.chatbi.models import (
     ResultArtifactWriteData,
     SemanticQueryCompileData,
     SemanticRetrievalData,
+)
+from apps.chatbi.orchestration.agent.tools.base import (
+    AgentTool,
+    AgentToolContext,
+    ToolOutput,
+    json_summary,
 )
 from apps.chatbi.services import (
     FinalReplyProjectionError,

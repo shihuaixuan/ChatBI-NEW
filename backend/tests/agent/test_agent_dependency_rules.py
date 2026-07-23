@@ -1,9 +1,15 @@
-"""agent 依赖规则守卫：禁止 import 图运行时与 v1。"""
+"""ChatBI Agent 编排依赖规则守卫：禁止 import 图运行时与 v1。"""
 
 import ast
 from pathlib import Path
 
-AGENT_DIR = Path(__file__).resolve().parents[2] / "apps" / "agent"
+AGENT_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "apps"
+    / "chatbi"
+    / "orchestration"
+    / "agent"
+)
 FORBIDDEN = ("apps.workflow", "apps.workflow_engine", "apps.agentic_chat")
 
 

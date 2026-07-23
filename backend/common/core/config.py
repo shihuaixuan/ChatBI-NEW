@@ -123,7 +123,7 @@ class Settings(BaseSettings):
 
     RETRIEVAL_QUERY_TIMEOUT_MS: int = 1500
 
-    # Agent 问数链路（apps.agent，LLM 自主规划）
+    # Agent 问数链路（chatbi/orchestration/agent，LLM 自主规划）
     CHAT_AGENT_ENABLED: bool = False
     CHAT_AGENT_DATASOURCE_ALLOWLIST: str = ""
     CHAT_AGENT_MAX_STEPS: int = 12

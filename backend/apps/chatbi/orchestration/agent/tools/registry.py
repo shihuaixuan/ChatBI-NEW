@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from apps.agent.tools.base import AgentTool, AgentToolContext, ToolOutput
+from apps.chatbi.orchestration.agent.tools.base import (
+    AgentTool,
+    AgentToolContext,
+    ToolOutput,
+)
 
 
 class ToolRegistry:

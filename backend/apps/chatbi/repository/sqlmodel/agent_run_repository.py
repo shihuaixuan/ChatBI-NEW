@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, desc, func, select
+from sqlalchemy import and_, delete, desc, func, select
+from sqlmodel import col
 
-from apps.agent.models import (
+from apps.chatbi.models.orm.agent_run import (
     AgentClarificationStatus,
     AgentRunStatus,
     AgentStepStatus,
@@ -11,85 +12,39 @@ from apps.agent.models import (
     ChatbiAgentStep,
     ChatbiAgentTraceEvent,
 )
-from apps.agent.schemas import AgentQuestionRequest
-from apps.chatbi.composition import (
-    build_chat_record_service,
-    build_conversation_reader_service,
-)
-from apps.chatbi.models import (
-    Chat,
-    ChatRecord,
-    ChatRecordCreateData,
-    ChatRecordExecutionType,
-    ChatRecordResultProjection,
-    ChatRecordStatus,
-    ExecutionBindingData,
-)
-from apps.chatbi.services import resolve_execution_binding
+from apps.chatbi.models.orm.chat_record import ChatRecord
 
 
 def now() -> datetime:
     return datetime.now()
 
 
-def get_chat_for_user(session, chat_id: int, current_user) -> Chat:
-    return build_conversation_reader_service(session).get_owned(
-        current_user.id,
-        chat_id,
-    )
-
-
-def create_record_and_run(
+def create_run(
     session,
-    current_user,
-    request: AgentQuestionRequest,
+    *,
+    oid: int,
+    chat_id: int,
+    record_id: int,
+    user_id: int,
     config: dict,
-) -> tuple[ChatRecord, ChatbiAgentRun]:
-    chat = get_chat_for_user(session, request.chat_id, current_user)
-    binding = resolve_execution_binding(
-        ExecutionBindingData(
-            conversation_dataset_id=chat.dataset_id,
-            conversation_datasource_id=chat.datasource,
-            requested_datasource_id=request.datasource_id,
-        )
-    )
-    created_at = now()
-    record_service = build_chat_record_service(session)
-    record = record_service.create(
-        ChatRecordCreateData(
-            chat_id=request.chat_id,
-            user_id=current_user.id,
-            question=request.question,
-            dataset_id=binding.dataset_id,
-            datasource_id=binding.datasource_id,
-            engine_type=chat.engine_type,
-            execution_type=ChatRecordExecutionType.AGENT,
-        )
-    )
+) -> ChatbiAgentRun:
+    """创建 Agent 运行记录；事务提交由调用方统一控制。"""
 
+    created_at = now()
     run = ChatbiAgentRun(
-        oid=current_user.oid if current_user.oid is not None else 1,
-        chat_id=request.chat_id,
-        record_id=record.id,
+        oid=oid,
+        chat_id=chat_id,
+        record_id=record_id,
         status=AgentRunStatus.CREATED.value,
         config=config,
         created_at=created_at,
         updated_at=created_at,
-        created_by=current_user.id,
+        created_by=user_id,
     )
     session.add(run)
     session.flush()
     session.refresh(run)
-    record_service.transition(
-        record,
-        ChatRecordStatus.CREATED,
-        trace_id=str(run.id),
-        execution_type=ChatRecordExecutionType.AGENT,
-    )
-    session.commit()
-    session.refresh(record)
-    session.refresh(run)
-    return record, run
+    return run
 
 
 def start_step(session, run: ChatbiAgentRun, step_index: int, tool_name: str | None, args_summary: dict) -> ChatbiAgentStep:
@@ -151,43 +106,6 @@ def update_run(
         run.error = error
     run.updated_at = now()
     session.add(run)
-
-
-def finish_record(session, record: ChatRecord, status: str, error: str | None = None) -> None:
-    """兼容 Agent 旧调用名，状态规则由 ChatRecordService 维护。"""
-
-    build_chat_record_service(session).transition(
-        record,
-        status,
-        error=error,
-        execution_type=ChatRecordExecutionType.AGENT,
-    )
-
-
-def complete_record(
-    session,
-    record: ChatRecord,
-    *,
-    answer: str,
-    chart_answer: str,
-    sql: str | None,
-    chart: str,
-    data: str | None,
-) -> None:
-    """统一投影 Agent 成功结果和终态。"""
-
-    build_chat_record_service(session).transition(
-        record,
-        ChatRecordStatus.SUCCEEDED,
-        execution_type=ChatRecordExecutionType.AGENT,
-        result=ChatRecordResultProjection(
-            answer=answer,
-            chart_answer=chart_answer,
-            sql=sql,
-            chart=chart,
-            data=data,
-        ),
-    )
 
 
 def next_sequence(session, run_id: int) -> int:
@@ -374,3 +292,37 @@ def build_trace_response(session, record_id: int) -> dict:
             {"sequence": event.sequence, "type": event.event_type, **(event.payload or {})} for event in events
         ],
     }
+
+
+class AgentExecutionDeletionService:
+    """删除会话时清理同一会话下的 Agent 执行数据。"""
+
+    def __init__(self, session) -> None:
+        self._session = session
+
+    def delete_for_chat(self, chat_id: int) -> int:
+        run_ids = list(
+            self._session.exec(
+                select(ChatbiAgentRun.id).where(ChatbiAgentRun.chat_id == chat_id)
+            ).scalars()
+        )
+        if not run_ids:
+            return 0
+
+        self._session.execute(
+            delete(ChatbiAgentTraceEvent).where(
+                col(ChatbiAgentTraceEvent.run_id).in_(run_ids)
+            )
+        )
+        self._session.execute(
+            delete(ChatbiAgentClarification).where(
+                col(ChatbiAgentClarification.run_id).in_(run_ids)
+            )
+        )
+        self._session.execute(
+            delete(ChatbiAgentStep).where(col(ChatbiAgentStep.run_id).in_(run_ids))
+        )
+        self._session.execute(
+            delete(ChatbiAgentRun).where(col(ChatbiAgentRun.id).in_(run_ids))
+        )
+        return len(run_ids)

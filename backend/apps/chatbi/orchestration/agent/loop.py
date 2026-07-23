@@ -20,27 +20,8 @@ from langchain_core.messages import (
     messages_from_dict,
 )
 
-from apps.agent import crud
-from apps.agent.budget import BudgetGuard
-from apps.agent.events import sse_event
-from apps.agent.models import (
-    AgentClarificationResumeKind,
-    AgentErrorClass,
-    AgentRunStatus,
-    ChatbiAgentClarification,
-    ChatbiAgentRun,
-)
-from apps.agent.prompts import build_system_prompt
-from apps.agent.schemas import AgentConfig, AgentEventPayload
-from apps.agent.tools.base import AgentToolContext, ToolOutput
-from apps.agent.tools.core import build_default_tools
-from apps.agent.tools.interaction import (
-    ClarifyTool,
-    GetSqlExamplesTool,
-    SearchTerminologyTool,
-)
-from apps.agent.tools.registry import ToolRegistry
 from apps.chatbi.composition import (
+    build_chat_record_service,
     build_physical_schema_service,
     build_query_service,
     build_question_understanding_service,
@@ -48,7 +29,30 @@ from apps.chatbi.composition import (
     build_semantic_query_service,
     build_semantic_retrieval_service,
 )
-from apps.chatbi.models import ChatRecord
+from apps.chatbi.models import (
+    AgentClarificationResumeKind,
+    AgentErrorClass,
+    AgentRunStatus,
+    ChatbiAgentClarification,
+    ChatbiAgentRun,
+    ChatRecord,
+    ChatRecordExecutionType,
+    ChatRecordResultProjection,
+    ChatRecordStatus,
+)
+from apps.chatbi.models.dto.agent import AgentConfig, AgentEventPayload
+from apps.chatbi.orchestration.agent.budget import BudgetGuard
+from apps.chatbi.orchestration.agent.events import sse_event
+from apps.chatbi.orchestration.agent.prompts import build_system_prompt
+from apps.chatbi.orchestration.agent.tools.base import AgentToolContext, ToolOutput
+from apps.chatbi.orchestration.agent.tools.core import build_default_tools
+from apps.chatbi.orchestration.agent.tools.interaction import (
+    ClarifyTool,
+    GetSqlExamplesTool,
+    SearchTerminologyTool,
+)
+from apps.chatbi.orchestration.agent.tools.registry import ToolRegistry
+from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services import (
     PhysicalSchemaService,
     QueryService,
@@ -107,6 +111,7 @@ class AgentLoop:
         self.session = session
         self.current_user = current_user
         self.config = config or AgentConfig()
+        self.record_service = build_chat_record_service(session)
         self.model_client = model_client or DefaultAgentModelClient()
         self.registry = registry or self._build_registry()
         self.understanding_service = (
@@ -151,8 +156,12 @@ class AgentLoop:
         ctx = self._new_ctx(run, record)
         messages = [HumanMessage(content=record.question or "")]
 
-        crud.update_run(self.session, run, status=AgentRunStatus.RUNNING.value)
-        crud.finish_record(self.session, record, AgentRunStatus.RUNNING.value)
+        agent_run_repository.update_run(self.session, run, status=AgentRunStatus.RUNNING.value)
+        self.record_service.transition(
+            record,
+            ChatRecordStatus.RUNNING,
+            execution_type=ChatRecordExecutionType.AGENT,
+        )
         self.session.commit()
         yield self._emit(run, "record-created", {"record_id": record.id, "id": record.id, "run_id": run.id})
         yield self._emit(run, "run-started", {"record_id": record.id, "run_id": run.id})
@@ -183,7 +192,7 @@ class AgentLoop:
                 conversation_context=conversation_context,
                 question_understanding=understanding,
             )
-            crud.update_run(
+            agent_run_repository.update_run(
                 self.session,
                 run,
                 messages=_serialize_messages(messages),
@@ -283,7 +292,7 @@ class AgentLoop:
                 conversation_context=conversation_context,
                 question_understanding=understanding,
             )
-            crud.update_run(
+            agent_run_repository.update_run(
                 self.session,
                 run,
                 status=AgentRunStatus.RUNNING.value,
@@ -291,7 +300,11 @@ class AgentLoop:
                 budget_snapshot=budget.snapshot(),
                 derived_state=_persistable_state(ctx.state),
             )
-            crud.finish_record(self.session, record, AgentRunStatus.RUNNING.value)
+            self.record_service.transition(
+                record,
+                ChatRecordStatus.RUNNING,
+                execution_type=ChatRecordExecutionType.AGENT,
+            )
             self.session.commit()
             yield self._emit(run, "clarification-accepted", {"record_id": record.id, "run_id": run.id})
 
@@ -368,8 +381,8 @@ class AgentLoop:
         )
 
     def _load_conversation_context(self, run: ChatbiAgentRun, record: ChatRecord) -> dict:
-        history = crud.recent_qa_summaries(self.session, run.chat_id, record.id, limit=self.config.history_rounds)
-        previous_rewritten_question = crud.latest_successful_rewritten_question(
+        history = agent_run_repository.recent_qa_summaries(self.session, run.chat_id, record.id, limit=self.config.history_rounds)
+        previous_rewritten_question = agent_run_repository.latest_successful_rewritten_question(
             self.session,
             chat_id=run.chat_id,
             exclude_record_id=record.id,
@@ -416,7 +429,7 @@ class AgentLoop:
 
             _fold_messages(messages, self.config.context_fold_chars)
             step_index = budget.steps + 1
-            step = crud.start_step(self.session, run, step_index, None, {})
+            step = agent_run_repository.start_step(self.session, run, step_index, None, {})
             self.session.commit()
             yield self._emit(run, "step-started", {"record_id": record.id, "step_index": step_index}, step.id)
 
@@ -432,7 +445,7 @@ class AgentLoop:
             tool_calls = list(getattr(response, "tool_calls", None) or [])
             if not tool_calls:
                 # 宽松 finish：模型直接给出文本回答。
-                crud.finish_step(self.session, step, {"mode": "direct_answer"}, usage)
+                agent_run_repository.finish_step(self.session, step, {"mode": "direct_answer"}, usage)
                 yield from self._finish(
                     run, record, messages, budget,
                     answer=text or "（模型未给出回答）",
@@ -462,7 +475,7 @@ class AgentLoop:
 
                 fuse = budget.check_tool_call(tool_name, raw_args)
                 if not fuse.allowed:
-                    crud.fail_step(self.session, step, fuse.reason)
+                    agent_run_repository.fail_step(self.session, step, fuse.reason)
                     yield from self._fail(run, record, messages, budget, fuse.reason, fuse.error_class)
                     return
 
@@ -478,9 +491,9 @@ class AgentLoop:
                                 tool_call_id=call_id,
                             )
                         )
-                        crud.finish_step(self.session, step, {"tool": "clarify", "rejected": "budget"}, usage)
+                        agent_run_repository.finish_step(self.session, step, {"tool": "clarify", "rejected": "budget"}, usage)
                         continue
-                    crud.finish_step(self.session, step, {"tool": "clarify"}, usage)
+                    agent_run_repository.finish_step(self.session, step, {"tool": "clarify"}, usage)
                     yield from self._suspend_for_clarification(
                         run,
                         record,
@@ -498,7 +511,7 @@ class AgentLoop:
                 messages.append(ToolMessage(content=output.summary, tool_call_id=call_id))
 
                 if tool_name == "finish" and output.success:
-                    crud.finish_step(self.session, step, {"tool": "finish"}, usage)
+                    agent_run_repository.finish_step(self.session, step, {"tool": "finish"}, usage)
                     payload = output.payload
                     if payload.get("chart"):
                         yield self._emit(run, "chart-generated", {"record_id": record.id, "chart": payload["chart"]}, step.id)
@@ -515,9 +528,9 @@ class AgentLoop:
 
                 result_summary = _result_summary(tool_name, output)
                 if output.success:
-                    crud.finish_step(self.session, step, result_summary, usage)
+                    agent_run_repository.finish_step(self.session, step, result_summary, usage)
                 else:
-                    crud.fail_step(self.session, step, output.summary[:500])
+                    agent_run_repository.fail_step(self.session, step, output.summary[:500])
                 yield self._emit(run, "tool-result", {"record_id": record.id, "tool_name": tool_name, **result_summary}, step.id)
                 for event_type, payload in _semantic_events(tool_name, output, record.id):
                     yield self._emit(run, event_type, payload, step.id)
@@ -528,7 +541,7 @@ class AgentLoop:
                         yield from self._fail(run, record, messages, budget, retry.reason, retry.error_class)
                         return
 
-            crud.update_run(
+            agent_run_repository.update_run(
                 self.session, run,
                 messages=_serialize_messages(messages),
                 budget_snapshot=budget.snapshot(),
@@ -636,8 +649,8 @@ class AgentLoop:
             "source": "question_understanding",
         }
         reasoning_content = output.payload.get("reason") or "需要先澄清问题。"
-        step = crud.start_step(self.session, run, step_index, "understanding_clarification", args_summary)
-        crud.finish_step(
+        step = agent_run_repository.start_step(self.session, run, step_index, "understanding_clarification", args_summary)
+        agent_run_repository.finish_step(
             self.session,
             step,
             {"action": "understanding_clarification", "source": "question_understanding"},
@@ -692,7 +705,7 @@ class AgentLoop:
         resume_kind: AgentClarificationResumeKind,
         resume_payload: dict,
     ) -> Iterator[str]:
-        clarification = crud.create_clarification(
+        clarification = agent_run_repository.create_clarification(
             self.session,
             run,
             question=output.payload["question"],
@@ -702,8 +715,12 @@ class AgentLoop:
             resume_payload=resume_payload,
             user_id=self.current_user.id,
         )
-        crud.finish_record(self.session, record, AgentRunStatus.WAITING_USER.value)
-        crud.update_run(
+        self.record_service.transition(
+            record,
+            ChatRecordStatus.WAITING_USER,
+            execution_type=ChatRecordExecutionType.AGENT,
+        )
+        agent_run_repository.update_run(
             self.session, run,
             status=AgentRunStatus.WAITING_USER.value,
             messages=_serialize_messages(messages),
@@ -733,16 +750,19 @@ class AgentLoop:
             if execution.get("artifact_ref") is not None:
                 record_payload["artifact_ref"] = execution["artifact_ref"]
             record_data = orjson.dumps(record_payload).decode()
-        crud.complete_record(
-            self.session,
+        self.record_service.transition(
             record,
-            answer=answer,
-            chart_answer=answer,
-            sql=sql,
-            chart=orjson.dumps(chart or {}).decode(),
-            data=record_data,
+            ChatRecordStatus.SUCCEEDED,
+            execution_type=ChatRecordExecutionType.AGENT,
+            result=ChatRecordResultProjection(
+                answer=answer,
+                chart_answer=answer,
+                sql=sql,
+                chart=orjson.dumps(chart or {}).decode(),
+                data=record_data,
+            ),
         )
-        crud.update_run(
+        agent_run_repository.update_run(
             self.session, run,
             status=AgentRunStatus.FINISHED.value,
             messages=_serialize_messages(messages),
@@ -754,8 +774,13 @@ class AgentLoop:
         yield self._emit(run, "finish", {"record_id": record.id, "content": answer}, step_id)
 
     def _fail(self, run, record, messages, budget, message, error_class) -> Iterator[str]:
-        crud.finish_record(self.session, record, AgentRunStatus.FAILED.value, message)
-        crud.update_run(
+        self.record_service.transition(
+            record,
+            ChatRecordStatus.FAILED,
+            error=message,
+            execution_type=ChatRecordExecutionType.AGENT,
+        )
+        agent_run_repository.update_run(
             self.session, run,
             status=AgentRunStatus.FAILED.value,
             messages=_serialize_messages(messages),
@@ -768,7 +793,7 @@ class AgentLoop:
         yield self._emit(run, "error", {"record_id": record.id, "content": message, "error_class": error_class})
 
     def _emit(self, run: ChatbiAgentRun, event_type: str, payload: dict, step_id: int | None = None) -> str:
-        event = crud.append_trace(self.session, run.id, event_type, payload, step_id=step_id)
+        event = agent_run_repository.append_trace(self.session, run.id, event_type, payload, step_id=step_id)
         self.session.commit()
         return sse_event(
             AgentEventPayload(

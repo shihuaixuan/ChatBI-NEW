@@ -1,3 +1,5 @@
+"""Agent 问数入口与运行配置契约。"""
+
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator

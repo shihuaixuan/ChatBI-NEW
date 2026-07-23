@@ -180,7 +180,7 @@ backend/apps/retrieval/
 主要改动位置：
 
 - `backend/apps/workflow/runtime.py`
-- `backend/apps/agent/tools/core.py`
+- `backend/apps/chatbi/orchestration/agent/tools/core.py`
 - `backend/apps/workflow/capabilities/adapters/knowledge.py`
 - `backend/apps/retrieval/embedding.py`
 

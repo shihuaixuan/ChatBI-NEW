@@ -7,22 +7,20 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
-from apps.agent.loop import AgentLoop
-from apps.agent.models import (
+from apps.chatbi.models import (
+    AgentConfig,
     AgentRunStatus,
     ChatbiAgentRun,
     ChatbiAgentTraceEvent,
-)
-from apps.agent.schemas import AgentConfig
-from apps.agent.tools.base import AgentTool, ToolOutput
-from apps.agent.tools.registry import ToolRegistry
-from apps.chatbi.models import (
     ChatRecord,
     IntentRecognitionOutput,
     IntentValidationOutput,
     QuestionUnderstandingOutcome,
     QuestionUnderstandingOutput,
 )
+from apps.chatbi.orchestration.agent.loop import AgentLoop
+from apps.chatbi.orchestration.agent.tools.base import AgentTool, ToolOutput
+from apps.chatbi.orchestration.agent.tools.registry import ToolRegistry
 from apps.chatbi.services import (
     QuestionUnderstandingError,
     QuestionUnderstandingModelResponse,
@@ -280,7 +278,7 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
             )
 
     monkeypatch.setattr(
-        "apps.agent.loop.crud.recent_qa_summaries",
+        "apps.chatbi.orchestration.agent.loop.agent_run_repository.recent_qa_summaries",
         lambda session, chat_id, exclude_record_id, limit: [
             {
                 "question": "今天店铺的客户数",
@@ -290,7 +288,7 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
         ],
     )
     monkeypatch.setattr(
-        "apps.agent.loop.crud.latest_successful_rewritten_question",
+        "apps.chatbi.orchestration.agent.loop.agent_run_repository.latest_successful_rewritten_question",
         lambda session, **kwargs: "今天按店铺分组的销售下单客户数",
     )
 

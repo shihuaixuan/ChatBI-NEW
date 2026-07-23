@@ -20,14 +20,13 @@ from apps.access_control.errors import (
 from apps.access_control.identity import user_ws_options
 from apps.access_control.models.dto import BaseUserDTO, UserInfoDTO
 from apps.access_control.token_authentication import authenticate_bearer_token
-from apps.agent.schemas import AgentStartStreamRequest
-from apps.agent.service import (
+from apps.chatbi.composition import build_conversation_service
+from apps.chatbi.models import AgentStartStreamRequest, CreateChat
+from apps.chatbi.orchestration.agent.service import (
     AgentDatasourceNotAllowedError,
     AgentNotEnabledError,
     create_agent_start_stream,
 )
-from apps.chatbi.composition import build_conversation_service
-from apps.chatbi.models import CreateChat
 from apps.datasource.composition import build_datasource_service
 from apps.mcp.schemas import ChatStart, McpDs, McpQuestion
 from common.core.config import settings

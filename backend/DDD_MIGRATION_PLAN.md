@@ -110,7 +110,7 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 | 批 | 动作 |
 | --- | --- |
 | R4-a ✅ | 旧 `/chat` 路由拆为 conversations / queries；`apps/api.py` 只注册 ChatBI 聚合 router，Agent / Graph router 由最外层注入（路径不变）；interactions 物理归位随 R4-b/c 执行，避免 ChatBI 反向依赖执行器；`chat_model.py` 外部桩按 A7 留至 R6（2026-07-23 完成） |
-| R4-b | `apps/agent → chatbi/orchestration/agent`（ORM 入 models/orm，crud 入仓储，api 并入） |
+| R4-b ✅ | Agent 运行循环与工具迁入 `chatbi/orchestration/agent`；ORM 入 `models/orm/agent_run.py`，CRUD 入 `repository/sqlmodel/agent_run_repository.py`，API 入 `chatbi/api/interactions.py`；旧目录删除，xpack 无旧路径引用（2026-07-23 完成） |
 | R4-c | `apps/workflow → chatbi/orchestration/graph`；1,483 行 `adapters/question.py` 按节点拆分；runtime 对引擎 infrastructure 依赖改端口 |
 | R4-d | 解散 `capabilities` 与 `template`（生成器入 `chatbi/adapters/prompts/`）；平台参数迁出 `system`；清偿 R1/R2 兼容 re-export |
 

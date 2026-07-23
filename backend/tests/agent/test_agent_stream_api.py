@@ -3,19 +3,18 @@ from types import SimpleNamespace
 
 from fastapi.responses import StreamingResponse
 
-from apps.agent import api, service
-from apps.agent.models import (
+from apps.chatbi.api import interactions as api
+from apps.chatbi.models import (
+    AgentClarificationRequest,
     AgentClarificationStatus,
+    AgentResumeStreamRequest,
     AgentRunStatus,
+    AgentStartStreamRequest,
     ChatbiAgentClarification,
     ChatbiAgentRun,
+    ChatRecord,
 )
-from apps.agent.schemas import (
-    AgentClarificationRequest,
-    AgentResumeStreamRequest,
-    AgentStartStreamRequest,
-)
-from apps.chatbi.models import ChatRecord
+from apps.chatbi.orchestration.agent import service
 
 
 async def _read_stream(response: StreamingResponse) -> str:
@@ -72,7 +71,7 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
         def run(self, run_obj, record_obj):
             yield 'data:{"type":"run-started"}\n\n'
 
-    monkeypatch.setattr(service.crud, "create_record_and_run", fake_create_record_and_run)
+    monkeypatch.setattr(service, "create_record_and_run", fake_create_record_and_run)
     monkeypatch.setattr(service, "AgentLoop", FakeLoop)
 
     response = asyncio.run(
@@ -117,9 +116,13 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
     captured = {}
     _enable_agent(monkeypatch)
     _mock_stream_session(monkeypatch, record)
-    monkeypatch.setattr(api.crud, "get_latest_run_by_record", lambda session, record_id: run)
     monkeypatch.setattr(
-        api.crud,
+        api.agent_run_repository,
+        "get_latest_run_by_record",
+        lambda session, record_id: run,
+    )
+    monkeypatch.setattr(
+        api.agent_run_repository,
         "get_pending_clarification",
         lambda session, record_id: clarification,
     )

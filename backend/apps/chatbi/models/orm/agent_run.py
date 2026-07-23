@@ -1,3 +1,5 @@
+"""Agent 执行记录、步骤、轨迹与澄清的持久化模型。"""
+
 from datetime import datetime
 from enum import Enum
 

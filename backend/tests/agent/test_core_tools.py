@@ -1,7 +1,15 @@
 """核心工具的守护行为测试（不依赖真实 DB/LLM）。"""
 
-from apps.agent.tools.base import AgentToolContext
-from apps.agent.tools.core import (
+from apps.capabilities.schemas import ToolResult
+from apps.chatbi.models import (
+    ChatBIResultArtifactRef,
+    PhysicalSchemaField,
+    PhysicalSchemaResult,
+    PhysicalSchemaTable,
+    SemanticQueryCompileResult,
+)
+from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
+from apps.chatbi.orchestration.agent.tools.core import (
     CompileSemanticSqlArgs,
     CompileSemanticSqlTool,
     ExecuteSqlArgs,
@@ -14,14 +22,6 @@ from apps.agent.tools.core import (
     SearchSemanticAssetsTool,
     ValidateSqlArgs,
     ValidateSqlTool,
-)
-from apps.capabilities.schemas import ToolResult
-from apps.chatbi.models import (
-    ChatBIResultArtifactRef,
-    PhysicalSchemaField,
-    PhysicalSchemaResult,
-    PhysicalSchemaTable,
-    SemanticQueryCompileResult,
 )
 
 

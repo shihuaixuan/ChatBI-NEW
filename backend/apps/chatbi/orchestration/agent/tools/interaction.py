@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from apps.agent.tools.base import (
+from apps.chatbi.orchestration.agent.tools.base import (
     AgentTool,
     AgentToolContext,
     ToolOutput,

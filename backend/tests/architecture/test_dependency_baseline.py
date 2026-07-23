@@ -15,7 +15,6 @@ BASELINE_PATH = Path(__file__).with_name("known_dependency_violations.json")
 
 # 旧模块尚未统一 models/orm，迁移期通过这些前缀识别其内部模型。
 LEGACY_INTERNAL_MODEL_PREFIXES = (
-    "apps.agent.models",
     "apps.chat.models",
     "apps.dashboard.models",
     "apps.datasource.models",

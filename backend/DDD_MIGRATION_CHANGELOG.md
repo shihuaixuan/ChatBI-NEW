@@ -2333,3 +2333,29 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
 
 **R4-a 完成。** 下一批进入 R4-b，将 Agent 的 API、运行循环、ORM 与 CRUD 迁入
 `chatbi/orchestration/agent` 及 ChatBI 模型/仓储归属。
+
+## R4-b（2026-07-23）：Agent 编排归入 ChatBI
+
+1. Agent 运行循环、预算、事件、提示词与工具整体迁入
+   `apps/chatbi/orchestration/agent/`；MCP 和内部测试切换到新公开路径，旧
+   `apps/agent` 目录删除，不保留内部兼容导出。
+2. 四个 Agent 执行表及其状态枚举迁入 `chatbi/models/orm/agent_run.py`，入口请求、
+   运行配置与事件 DTO 迁入 `chatbi/models/dto/agent.py`，并由 ChatBI 模型公共面统一导出；
+   数据库表名、字段与索引保持不变，无数据库迁移。
+3. 原 `crud.py` 中 Run、Step、Trace、Clarification 的查询写入与删除职责迁入
+   `chatbi/repository/sqlmodel/agent_run_repository.py`。会话归属校验、执行绑定和
+   ChatRecord 创建/状态迁移不下沉仓储，继续通过 ConversationReaderService、
+   ChatRecordService 与统一执行绑定规则完成。
+4. 原 Agent API 迁入 `chatbi/api/interactions.py`，由 ChatBI 聚合 router 直接注册；
+   `apps/api.py` 不再导入 Agent 具体实现。`/chat/agent/stream`、澄清、轨迹、事件、
+   取消及旧 `/question` 路径均保持不变；Agent 删除能力在 ChatBI 组合范围内注册。
+5. 依赖基线中的旧 `apps.agent.models` 内部模型识别项删除，函数内模型工厂历史基线
+   只更新为新文件路径；未新增跨领域 ORM、具体实现或 API 依赖。
+6. xpack 安装包只读扫描结果为无 `apps.agent` 引用，因此无需新增兼容桩或台账项。
+   应用与 xpack 初始化通过；OpenAPI 保持 154 条路径，6 条
+   `/api/v1/chat/agent/*` 路径完整。
+7. 验证：Agent/会话删除/架构定向回归 197 项通过，完整后端回归 1,222 项通过；
+   变更范围 Ruff（F/I）通过。无行为变化、无数据库变更。
+
+**R4-b 完成。** 下一批进入 R4-c，将 Graph 编排归入
+`chatbi/orchestration/graph`，并处理其 Workflow Engine 基础设施依赖。

@@ -1,7 +1,11 @@
 from pydantic import BaseModel
 
-from apps.agent.tools.base import AgentTool, AgentToolContext, ToolOutput
-from apps.agent.tools.registry import ToolRegistry
+from apps.chatbi.orchestration.agent.tools.base import (
+    AgentTool,
+    AgentToolContext,
+    ToolOutput,
+)
+from apps.chatbi.orchestration.agent.tools.registry import ToolRegistry
 
 
 class EchoArgs(BaseModel):

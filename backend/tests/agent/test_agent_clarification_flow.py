@@ -5,19 +5,24 @@ from types import SimpleNamespace
 import orjson
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from apps.agent.loop import FOLDED_PLACEHOLDER, AgentLoop, _fold_messages
-from apps.agent.models import (
+from apps.ai_model.openai.llm import BaseChatOpenAI
+from apps.chatbi.models import (
     AgentClarificationResumeKind,
+    AgentConfig,
     AgentRunStatus,
     ChatbiAgentClarification,
     ChatbiAgentRun,
+    ChatRecord,
+    DimensionSlot,
 )
-from apps.agent.prompts import build_system_prompt
-from apps.agent.schemas import AgentConfig
-from apps.agent.tools.interaction import ClarifyTool
-from apps.agent.tools.registry import ToolRegistry
-from apps.ai_model.openai.llm import BaseChatOpenAI
-from apps.chatbi.models import ChatRecord, DimensionSlot
+from apps.chatbi.orchestration.agent.loop import (
+    FOLDED_PLACEHOLDER,
+    AgentLoop,
+    _fold_messages,
+)
+from apps.chatbi.orchestration.agent.prompts import build_system_prompt
+from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
+from apps.chatbi.orchestration.agent.tools.registry import ToolRegistry
 from tests.agent.test_agent_loop import (
     FakeSession,
     FinishProbeTool,

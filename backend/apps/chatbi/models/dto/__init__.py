@@ -1,3 +1,12 @@
+from apps.chatbi.models.dto.agent import (
+    AgentClarificationRequest,
+    AgentConfig,
+    AgentEventPayload,
+    AgentQuestionRequest,
+    AgentResumeStreamRequest,
+    AgentStartStreamRequest,
+    AgentStreamRequest,
+)
 from apps.chatbi.models.dto.analysis_prediction import (
     AnalysisPredictionGenerationData,
     AnalysisPredictionGenerationEvent,
@@ -150,6 +159,13 @@ from apps.chatbi.models.dto.sql_generation import (
 from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
 
 __all__ = [
+    "AgentClarificationRequest",
+    "AgentConfig",
+    "AgentEventPayload",
+    "AgentQuestionRequest",
+    "AgentResumeStreamRequest",
+    "AgentStartStreamRequest",
+    "AgentStreamRequest",
     "ModelMessage",
     "ModelStreamChunk",
     "AnswerGenerationData",

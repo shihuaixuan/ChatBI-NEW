@@ -29,6 +29,6 @@
         "apps/workflow_engine/api/service.py -> apps.workflow.runtime"
     ],
     "function_local_app_imports": [
-        "apps/agent/loop.py -> apps.ai_model.model_factory"
+        "apps/chatbi/orchestration/agent/loop.py -> apps.ai_model.model_factory"
     ]
 }

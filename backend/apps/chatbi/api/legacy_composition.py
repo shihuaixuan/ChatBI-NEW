@@ -1,7 +1,6 @@
 """旧 Chat HTTP 入口的跨模块接线。
 
-Agent 清理能力由最外层 ``apps.api`` 注入，避免 ChatBI 反向依赖尚未迁入本领域的
-``apps.agent``。R4-b 将 Agent 迁入 ``chatbi/orchestration`` 后可删除这层注册。
+Agent 清理能力由最外层 ``apps.api`` 注入，旧 Chat 兼容入口无需感知具体实现。
 """
 
 from collections.abc import Callable

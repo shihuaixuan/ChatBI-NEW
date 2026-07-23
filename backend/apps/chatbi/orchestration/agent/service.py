@@ -2,13 +2,24 @@ from collections.abc import Iterator
 
 from sqlmodel import Session
 
-from apps.agent import crud
-from apps.agent.loop import AgentLoop
-from apps.agent.schemas import (
+from apps.chatbi.composition import (
+    build_chat_record_service,
+    build_conversation_reader_service,
+)
+from apps.chatbi.models import (
+    ChatRecordCreateData,
+    ChatRecordExecutionType,
+    ChatRecordStatus,
+    ExecutionBindingData,
+)
+from apps.chatbi.models.dto.agent import (
     AgentConfig,
     AgentQuestionRequest,
     AgentStartStreamRequest,
 )
+from apps.chatbi.orchestration.agent.loop import AgentLoop
+from apps.chatbi.repository.sqlmodel import agent_run_repository
+from apps.chatbi.services import resolve_execution_binding
 from common.core.config import settings
 from common.core.db import engine
 
@@ -19,6 +30,59 @@ class AgentNotEnabledError(RuntimeError):
 
 class AgentDatasourceNotAllowedError(ValueError):
     """当前数据源不在 Agent 允许范围内。"""
+
+
+def create_record_and_run(
+    session,
+    current_user,
+    request: AgentQuestionRequest,
+    config: dict,
+):
+    """在同一事务内创建问答记录和 Agent 运行记录。"""
+
+    chat = build_conversation_reader_service(session).get_owned(
+        current_user.id,
+        request.chat_id,
+    )
+    binding = resolve_execution_binding(
+        ExecutionBindingData(
+            conversation_dataset_id=chat.dataset_id,
+            conversation_datasource_id=chat.datasource,
+            requested_datasource_id=request.datasource_id,
+        )
+    )
+    record_service = build_chat_record_service(session)
+    record = record_service.create(
+        ChatRecordCreateData(
+            chat_id=request.chat_id,
+            user_id=current_user.id,
+            question=request.question,
+            dataset_id=binding.dataset_id,
+            datasource_id=binding.datasource_id,
+            engine_type=chat.engine_type,
+            execution_type=ChatRecordExecutionType.AGENT,
+        )
+    )
+    if record.id is None:
+        raise RuntimeError("CHAT_RECORD_ID_MISSING")
+    run = agent_run_repository.create_run(
+        session,
+        oid=current_user.oid if current_user.oid is not None else 1,
+        chat_id=request.chat_id,
+        record_id=record.id,
+        user_id=current_user.id,
+        config=config,
+    )
+    record_service.transition(
+        record,
+        ChatRecordStatus.CREATED,
+        trace_id=str(run.id),
+        execution_type=ChatRecordExecutionType.AGENT,
+    )
+    session.commit()
+    session.refresh(record)
+    session.refresh(run)
+    return record, run
 
 
 def get_agent_config() -> AgentConfig:
@@ -60,7 +124,7 @@ def create_agent_start_stream(
     def stream() -> Iterator[str]:
         # SSE 流自己持有 session，避免跨响应生命周期传递 ORM 对象。
         with Session(engine) as stream_session:
-            record, run = crud.create_record_and_run(
+            record, run = create_record_and_run(
                 stream_session,
                 current_user,
                 AgentQuestionRequest(**request.model_dump(exclude={"action"})),

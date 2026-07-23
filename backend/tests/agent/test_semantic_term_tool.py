@@ -2,11 +2,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.agent import crud
-from apps.agent.schemas import AgentQuestionRequest
-from apps.agent.tools.base import AgentToolContext
-from apps.agent.tools.interaction import SearchTerminologyArgs, SearchTerminologyTool
-from apps.chatbi.models import Chat
+from apps.chatbi.models import AgentQuestionRequest, Chat
+from apps.chatbi.orchestration.agent.service import create_record_and_run
+from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
+from apps.chatbi.orchestration.agent.tools.interaction import (
+    SearchTerminologyArgs,
+    SearchTerminologyTool,
+)
 from apps.semantic.models.dto import TermSearchResult
 
 
@@ -83,7 +85,7 @@ def test_agent_record_inherits_chat_semantic_dataset():
     )
     session = _RecordSession(chat)
 
-    record, _run = crud.create_record_and_run(
+    record, _run = create_record_and_run(
         session,
         SimpleNamespace(id=2, oid=1),
         AgentQuestionRequest(chat_id=3, question="GMV"),
@@ -105,7 +107,7 @@ def test_agent_record_rejects_datasource_outside_conversation_binding():
     )
 
     with pytest.raises(ValueError, match="CHAT_DATASOURCE_MISMATCH"):
-        crud.create_record_and_run(
+        create_record_and_run(
             _RecordSession(chat),
             SimpleNamespace(id=2, oid=1),
             AgentQuestionRequest(

@@ -1,6 +1,6 @@
 import orjson
 
-from apps.agent.schemas import AgentEventPayload
+from apps.chatbi.models.dto.agent import AgentEventPayload
 
 
 def sse_event(payload: AgentEventPayload | dict) -> str:

@@ -1,4 +1,4 @@
-"""预算与熔断：步数、token、重复调用、SQL 重试、墙钟超时。"""
+"""Agent 预算与熔断：步数、token、重复调用、SQL 重试、墙钟超时。"""
 
 from __future__ import annotations
 

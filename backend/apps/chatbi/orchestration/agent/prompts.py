@@ -1,4 +1,4 @@
-"""Agentic ChatBI 工具规划提示词。"""
+"""Agent ChatBI 工具规划提示词。"""
 
 from __future__ import annotations
 

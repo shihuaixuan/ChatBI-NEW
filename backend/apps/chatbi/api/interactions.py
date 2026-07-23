@@ -2,23 +2,29 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session
 
-from apps.agent import crud
-from apps.agent.loop import AgentLoop
-from apps.agent.models import AgentClarificationStatus, AgentRunStatus
-from apps.agent.schemas import (
+from apps.chatbi.composition import build_chat_record_service
+from apps.chatbi.models import (
+    AgentClarificationStatus,
+    AgentRunStatus,
+    ChatRecord,
+    ChatRecordExecutionType,
+    ChatRecordStatus,
+)
+from apps.chatbi.models.dto.agent import (
     AgentClarificationRequest,
     AgentQuestionRequest,
     AgentResumeStreamRequest,
     AgentStartStreamRequest,
     AgentStreamRequest,
 )
-from apps.agent.service import (
+from apps.chatbi.orchestration.agent.loop import AgentLoop
+from apps.chatbi.orchestration.agent.service import (
     AgentDatasourceNotAllowedError,
     AgentNotEnabledError,
     create_agent_start_stream,
     get_agent_config,
 )
-from apps.chatbi.models import ChatRecord
+from apps.chatbi.repository.sqlmodel import agent_run_repository
 from common.core.db import engine
 from common.core.deps import CurrentUser, SessionDep
 
@@ -50,13 +56,19 @@ async def agent_stream(current_user: CurrentUser, request: AgentStreamRequest):
             record = stream_session.get(ChatRecord, request.record_id)
             if not record or record.create_by != current_user.id:
                 raise RuntimeError("Chat record not found")
-            run = crud.get_latest_run_by_record(stream_session, request.record_id)
-            clarification = crud.get_pending_clarification(stream_session, request.record_id)
+            run = agent_run_repository.get_latest_run_by_record(
+                stream_session,
+                request.record_id,
+            )
+            clarification = agent_run_repository.get_pending_clarification(
+                stream_session,
+                request.record_id,
+            )
             if not run or not clarification or run.status != AgentRunStatus.WAITING_USER.value:
                 raise RuntimeError("No pending clarification")
             clarification.status = AgentClarificationStatus.ANSWERED.value
             clarification.answer = {"selections": answer.selections, "text": answer.text}
-            clarification.answered_at = crud.now()
+            clarification.answered_at = agent_run_repository.now()
             stream_session.add(clarification)
             stream_session.commit()
             loop = AgentLoop(stream_session, current_user, config)
@@ -109,15 +121,15 @@ async def agent_trace(session: SessionDep, current_user: CurrentUser, record_id:
     record = session.get(ChatRecord, record_id)
     if not record or record.create_by != current_user.id:
         raise HTTPException(status_code=404, detail="Chat record not found")
-    return crud.build_trace_response(session, record_id)
+    return agent_run_repository.build_trace_response(session, record_id)
 
 
 @router.get("/runs/{run_id}/events")
 async def agent_events(session: SessionDep, current_user: CurrentUser, run_id: int, after_sequence: int = 0):
-    run = crud.get_run(session, run_id)
+    run = agent_run_repository.get_run(session, run_id)
     if not run or run.created_by != current_user.id:
         raise HTTPException(status_code=404, detail="Run not found")
-    events = crud.list_events_after(session, run_id, after_sequence)
+    events = agent_run_repository.list_events_after(session, run_id, after_sequence)
     return {
         "run_id": run_id,
         "status": run.status,
@@ -129,14 +141,22 @@ async def agent_events(session: SessionDep, current_user: CurrentUser, run_id: i
 
 @router.post("/runs/{run_id}/cancel")
 async def agent_cancel(session: SessionDep, current_user: CurrentUser, run_id: int):
-    run = crud.get_run(session, run_id)
+    run = agent_run_repository.get_run(session, run_id)
     if not run or run.created_by != current_user.id:
         raise HTTPException(status_code=404, detail="Run not found")
     if run.status in {AgentRunStatus.FINISHED.value, AgentRunStatus.FAILED.value, AgentRunStatus.CANCELLED.value}:
         return {"run_id": run_id, "status": run.status}
-    crud.update_run(session, run, status=AgentRunStatus.CANCELLED.value)
+    agent_run_repository.update_run(
+        session,
+        run,
+        status=AgentRunStatus.CANCELLED.value,
+    )
     record = session.get(ChatRecord, run.record_id)
     if record:
-        crud.finish_record(session, record, AgentRunStatus.CANCELLED.value)
+        build_chat_record_service(session).transition(
+            record,
+            ChatRecordStatus.CANCELLED,
+            execution_type=ChatRecordExecutionType.AGENT,
+        )
     session.commit()
     return {"run_id": run_id, "status": AgentRunStatus.CANCELLED.value}
