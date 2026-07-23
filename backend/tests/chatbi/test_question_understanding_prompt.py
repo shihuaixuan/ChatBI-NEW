@@ -1,3 +1,8 @@
+from apps.chatbi.orchestration.graph.capabilities.adapters.question import (
+    build_dimension_slots_prompt,
+    build_question_rewrite_prompt,
+    build_semantic_mentions_prompt,
+)
 from apps.chatbi.services.understanding.prompts import (
     DIMENSION_EXTRACTION_RULES,
     METRIC_TIME_EXTRACTION_RULES,
@@ -7,11 +12,6 @@ from apps.chatbi.services.understanding.understanding_service import (
     DIMENSION_SYSTEM_PROMPT,
     INTENT_SYSTEM_PROMPT,
     REWRITE_SYSTEM_PROMPT,
-)
-from apps.workflow.capabilities.adapters.question import (
-    build_dimension_slots_prompt,
-    build_question_rewrite_prompt,
-    build_semantic_mentions_prompt,
 )
 
 

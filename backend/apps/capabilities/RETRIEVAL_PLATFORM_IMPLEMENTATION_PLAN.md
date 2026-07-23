@@ -153,7 +153,7 @@ backend/apps/retrieval/
 主要改动位置：
 
 - `backend/apps/capabilities/semantic/retrieval.py`
-- `backend/apps/workflow/capabilities/adapters/knowledge.py`
+- `backend/apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py`
 - `backend/apps/semantic/asset_document.py`
 - 新增 `backend/apps/retrieval/service.py`
 - 新增 `backend/apps/retrieval/semantic_runtime.py`
@@ -179,9 +179,9 @@ backend/apps/retrieval/
 
 主要改动位置：
 
-- `backend/apps/workflow/runtime.py`
+- `backend/apps/chatbi/orchestration/graph/runtime.py`
 - `backend/apps/chatbi/orchestration/agent/tools/core.py`
-- `backend/apps/workflow/capabilities/adapters/knowledge.py`
+- `backend/apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py`
 - `backend/apps/retrieval/embedding.py`
 
 退出条件：

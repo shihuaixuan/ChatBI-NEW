@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.errors import QuestionModelCallError, QuestionModelError
@@ -14,60 +13,73 @@ from apps.chatbi.models import (
     QuestionIntentProjectionData,
     QuestionModelInvocationData,
     QuestionModelJSONMode,
-    QuestionModelResponse,
 )
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_common import (
+    CallableQuestionModelClient,
+    QuestionClassificationModelClient,
+    QuestionClassificationPrompt,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_common import (
+    default_subject_domain as _default_subject_domain,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_common import (
+    int_or_none as _int_or_none,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_common import (
+    normalize_subject_domain_candidates as _normalize_subject_domain_candidates,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_common import (
+    subject_domain_payload as _subject_domain_payload,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_common import (
+    valid_candidate_domain_ids as _valid_candidate_domain_ids,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_dimension import (
+    build_dimension_slots_prompt,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_dimension import (
+    dimension_candidate_by_text as _dimension_candidate_by_text,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_dimension import (
+    dimension_candidate_from_schema_element as _dimension_candidate_from_schema_element,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_dimension import (
+    dimension_text_key as _dimension_text_key,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_dimension import (
+    normalize_dimension_candidates as _normalize_dimension_candidates,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_input import (
+    build_question_classification_prompt,
+    build_question_rewrite_prompt,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_intent import (
+    build_intent_recognition_prompt,
+    build_intent_shape_prompt,
+    build_semantic_mentions_prompt,
+)
+from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContext
+from apps.chatbi.orchestration.graph.schemas.v1 import IntentRecognitionOutput
 from apps.chatbi.services.understanding import (
     QuestionIntentFallbackService,
     StructuredModelService,
     graph_contracts,
     intent_projection,
 )
-from apps.chatbi.services.understanding.prompts import (
-    DIMENSION_EXTRACTION_RULES,
-    METRIC_TIME_EXTRACTION_RULES,
-    QUESTION_REWRITE_BUSINESS_RULES,
-)
+from apps.chatbi.services.understanding.time_range import normalize_time_range_payload
 from apps.semantic.services.schema_service import DatasetSchemaProvider
-from apps.workflow.capabilities.adapters.time_slots import (
-    normalize_time_range_payload,
-)
-from apps.workflow.capabilities.context import ChatBIRunContext
-from apps.workflow.schemas.v1 import IntentRecognitionOutput
 
-
-@dataclass(frozen=True)
-class QuestionClassificationPrompt:
-    """问题分类模型提示词。"""
-
-    system_prompt: str
-    user_prompt: str
-
-
-class QuestionClassificationModelClient(Protocol):
-    """问题分类模型客户端协议，便于测试中替换真实大模型。"""
-
-    def __call__(self, prompt: QuestionClassificationPrompt) -> str: ...
-
-
-class CallableQuestionModelClient:
-    """把 Graph 现有可调用模型端口适配到 ChatBI 统一端口。"""
-
-    def __init__(self, client: QuestionClassificationModelClient) -> None:
-        self._client = client
-
-    def invoke(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-    ) -> QuestionModelResponse:
-        content = self._client(
-            QuestionClassificationPrompt(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-            )
-        )
-        return QuestionModelResponse(content=content)
-
+__all__ = [
+    "IntentSubtaskConfig",
+    "QuestionAdapter",
+    "QuestionClassificationModelClient",
+    "build_dimension_slots_prompt",
+    "build_intent_recognition_prompt",
+    "build_intent_shape_prompt",
+    "build_question_classification_prompt",
+    "build_question_rewrite_prompt",
+    "build_semantic_mentions_prompt",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -106,696 +118,6 @@ class IntentSubtaskResult:
         return payload
 
 
-def build_question_classification_prompt(
-    question: str,
-    dataset_id: int | None,
-    conversation_context: dict[str, Any] | None = None,
-) -> QuestionClassificationPrompt:
-    """构造稳定 JSON 输出的分类提示词。"""
-
-    context = conversation_context or {}
-    system_prompt = """
-你是 ChatBI 工作流中的问题分类器，只做问题分类，不要回答问题，不要生成 SQL，不要解释业务指标。
-
-你必须只输出一个 JSON 对象，不能输出 Markdown、前后缀文本或多余说明。JSON 字段如下：
-{
-  "category": "forbidden | chitchat | data | followup",
-  "reason": "不超过 40 个中文字符的分类原因",
-  "risk_level": "low | medium | high",
-  "confidence": 0.0
-}
-
-分类标准：
-- forbidden：越权、绕过权限、危险操作、请求访问无授权数据、明显不应进入问数链路的问题。
-- chitchat：问候、闲聊、能力咨询、非业务数据分析问题。
-- data：完整的业务数据分析、统计、查询、趋势、排名、对比、归因问题。
-- followup：依赖上文才能理解的追问，例如“那上个月呢”“按地区看一下”“继续分析利润”。
-
-稳定性要求：
-- category 只能取 forbidden、chitchat、data、followup。
-- risk_level 只能取 low、medium、high。
-- confidence 必须是 0 到 1 之间的数字。
-- 不确定但像业务数据问题时，优先选择 data。
-- 不确定但明显依赖上文时，优先选择 followup。
-""".strip()
-    user_payload = {
-        "question": question,
-        "dataset_id": dataset_id,
-        "conversation_context": context,
-    }
-    user_prompt = "请分类以下 ChatBI 用户输入，并严格返回 JSON：\n" + json.dumps(
-        user_payload,
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    return QuestionClassificationPrompt(system_prompt=system_prompt, user_prompt=user_prompt)
-
-
-def build_question_rewrite_prompt(
-    question: str,
-    dataset_id: int | None = None,
-    conversation_context: dict[str, Any] | None = None,
-    user_feedback: dict[str, Any] | None = None,
-) -> QuestionClassificationPrompt:
-    """构造问题重写节点的稳定 JSON 提示词。"""
-
-    system_prompt = """
-你是 ChatBI 工作流中的问题重写器，只做问题重写和语义保真规范化，不要回答问题，不要生成 SQL，不要解释业务指标。
-
-你必须只输出一个 JSON 对象，不能输出 Markdown、前后缀文本或多余说明。JSON 字段如下：
-{
-  "rewritten_question": "补全上下文后的用户问题",
-  "need_user_input": false,
-  "missing_slots": [],
-  "image_profile_hint": null
-}
-
-{shared_rewrite_rules}
-
-- 如果可以判断适合的展示类型，可在 image_profile_hint 中给出 table、line、bar、pie 等简短提示；不确定时返回 null。
-
-ChatBI 必需信息判定：
-- dataset_id：语义数据集必须已经存在；如果 user_payload.dataset_id 不为空，说明上游已提供语义数据集，禁止把 dataset_id 放入 missing_slots；只有 user_payload.dataset_id 为空时才允许缺失槽位使用 dataset_id。
-- metric 或 analysis_object：必须知道用户要分析什么指标、事实或业务对象，例如销售额、订单数、访问量、用户数、利润、客户、商品、订单。若问题只有“看一下情况”“分析一下”“怎么样”且上下文无法补全，need_user_input=true，missing_slots 包含 metric 或 analysis_object。
-- time_range：默认不要因为缺少时间范围而澄清；很多业务问题可以先按系统默认时间或全量口径继续执行。只有用户明确要求趋势、对比、环比、同比、排行、按维度拆解，且缺失必要时间边界会导致问题不可执行或口径明显错误时，才把 time_range 放入 missing_slots。
-- dimension：只有用户明确要求“按...看”“分...统计”“排行”“TopN”“对比不同...”但没有说明维度，且上下文无法补全时，才把 dimension 放入 missing_slots。
-- filter：只有用户提到模糊对象或条件，例如“这个地区”“那个渠道”“这些客户”，且上下文无法解析时，才把 filter 放入 missing_slots。
-- 不要为了追求完整而过度澄清；只要可以形成一个合理、可执行的数据问题，就应 need_user_input=false。
-""".strip().replace("{shared_rewrite_rules}", QUESTION_REWRITE_BUSINESS_RULES)
-    user_payload = {
-        "question": question,
-        "dataset_id": dataset_id,
-        "conversation_context": conversation_context or {},
-        "user_feedback": user_feedback or {},
-    }
-    user_prompt = "请重写以下 ChatBI 用户输入，并严格返回 JSON：\n" + json.dumps(
-        user_payload,
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    return QuestionClassificationPrompt(system_prompt=system_prompt, user_prompt=user_prompt)
-
-
-def build_intent_recognition_prompt(
-    rewritten_question: str,
-    conversation_context: dict[str, Any] | None = None,
-    user_feedback: dict[str, Any] | None = None,
-    subject_domains: list[dict[str, Any]] | None = None,
-    available_dimensions: list[dict[str, Any]] | None = None,
-) -> QuestionClassificationPrompt:
-    """构造意图识别节点的稳定 JSON 提示词。"""
-
-    domain_candidates = _normalize_subject_domain_candidates(subject_domains or [])
-    dimension_candidates = _normalize_dimension_candidates(available_dimensions or [])
-    system_prompt = """
-你是 ChatBI 工作流中的意图识别器，只做意图识别，不要回答问题，不要生成 SQL，不要解释业务指标。
-
-你必须只输出一个 JSON 对象，不能输出 Markdown、前后缀文本或多余说明。JSON 字段如下：
-{
-  "intent_type": "metric_query",
-  "confidence": 0.0,
-  "metric_mentions": [],
-  "dimension_mentions": [],
-  "dimension_slots": [],
-  "time_mentions": [],
-  "time_range": {"raw": null, "value_status": "not_provided"},
-  "filter_mentions": [],
-  "required_slot_types": [],
-  "query_shape": {},
-  "subject_domain": {"status": "not_required", "domain_id": null, "domain_name": null, "domain_biz_name": null, "confidence": 0.0, "reason": "", "candidate_domain_ids": []},
-  "ambiguous_slots": [],
-  "conflict_slots": []
-}
-
-可选 intent_type：
-- metric_query：查询指标值或统计值，例如“今日访问量”“本月销售额”。
-- trend_analysis：趋势、走势、按天、按周、按月变化。
-- ranking_analysis：排行、最高、最低、TopN、前 N、后 N。
-- comparison_analysis：同比、环比、对比、较上期、多个对象比较。
-- detail_query：明细、详情、列表、清单。
-- share_analysis：占比、构成、比例。
-- anomaly_analysis：异常、波动、下降原因、为什么上升/下降。
-- unknown：无法判断用户想做哪类分析。
-
-检索线索要求：
-- metric_mentions：用户原文或重写问题里疑似指标/事实/业务对象的自然语言短语，例如“销售额”“订单数”“访问人数”。不要输出 Semantic asset_id、biz_name 或数据库字段名。
-- dimension_mentions：用户原文或重写问题里疑似分组、排行、对比、明细展示维度的自然语言短语，例如“商品”“地区”“渠道”。不要输出 Semantic asset_id。
-- dimension_slots：对每个维度输出结构化槽位，格式为 {"name":"自然语言维度名","role":"group_by | filter | ambiguous","value":null,"value_status":"provided | not_provided | ambiguous"}。
-  - “各档口/按档口/每个档口”表示 role=group_by，value=null，value_status=not_provided。
-  - “1号档口/档口 1”表示 role=filter，value="1"，value_status=provided。
-  - “档口的访问人数”这类没有明确“各/按/每个”且没有具体值的表达，role=ambiguous，value=null，value_status=not_provided。
-- 如果 user_payload.available_dimensions 非空，dimension_mentions 和 dimension_slots[].name 只能从 user_payload.available_dimensions 的 name 或 aliases 中选择；不在候选维度中的词不能输出为维度。
-- 线上/线下/新增/活跃/累计 等词如果没有出现在 available_dimensions 中，只能作为 metric_mentions 的一部分，不能进入 dimension_mentions 或 dimension_slots。
-- 普通维度槽位的 value 不得是时间表达；今天/昨天/本月/最近7天/近30天/去年同期/按天/按月 等只能进入 time_mentions、time_range 或 query_shape.time_grain。
-- 如果用户说“今天店铺销售额”，店铺是维度名但没有提供店铺值，必须输出 {"name":"店铺","role":"ambiguous","value":null,"value_status":"not_provided"}，并将“今天”放入 time_range。
-- time_mentions：用户原文或重写问题里出现的时间范围、时间粒度或时间表达，例如“最近 7 天”“按月”“今天”。
-- time_range：如果识别到时间范围，输出 {"raw":"今天","value_status":"provided"}；没有识别到时输出 {"raw":null,"value_status":"not_provided"}。
-- filter_mentions：用户原文或重写问题里出现的筛选条件，格式为 {"name": "自然语言条件名", "value": "自然语言条件值"}；没有明确条件时返回空数组。
-- required_slot_types：后续生成可执行查询所需的槽位类型，只能使用 metric、dimension、time_dimension、time_range、filter、order、limit、comparison_target。
-- query_shape：只描述查询形态，不引用任何真实资产 ID。可包含 needs_group_by、needs_order_by、order_direction、limit、time_grain、select_mode 等字段。
-- subject_domain：如果 user_payload.subject_domains 有多个候选主题域，必须识别问题属于哪个主题域；只能从候选主题域中选择，不得编造 domain_id。
-  - 明确命中时输出 status=selected，并填写候选中的 domain_id、domain_name、domain_biz_name、confidence、reason、candidate_domain_ids。
-  - 多个主题域都可能匹配时输出 status=ambiguous，candidate_domain_ids 填写可能的候选，并在 ambiguous_slots 中加入 subject_domain。
-  - 没有任何候选主题域时输出 status=not_required。
-- 你不能选择真实指标、维度或枚举值 ID；资产确认由后续知识检索节点完成。
-
-{shared_metric_time_rules}
-
-{shared_dimension_rules}
-
-歧义和冲突判定：
-- 如果不知道用户要分析的指标或业务对象，ambiguous_slots 包含 metric。
-- 如果用户要求分组、排行或对比但没有给出维度，ambiguous_slots 包含 dimension。
-- 如果用户使用“这个/那个/这些/上面”等指代且上下文无法解析，ambiguous_slots 包含 reference。
-- 如果用户同时提出互相冲突的时间粒度或分析目标，conflict_slots 包含 time_grain 或 intent。
-- confidence 必须是 0 到 1 之间的数字；低于 0.8 会触发意图澄清。
-""".strip().replace(
-        "{shared_metric_time_rules}", METRIC_TIME_EXTRACTION_RULES
-    ).replace("{shared_dimension_rules}", DIMENSION_EXTRACTION_RULES)
-    user_payload = {
-        "rewritten_question": rewritten_question,
-        "conversation_context": conversation_context or {},
-        "user_feedback": user_feedback or {},
-        "subject_domains": domain_candidates,
-        "available_dimensions": dimension_candidates,
-    }
-    user_prompt = "请识别以下 ChatBI 问题的分析意图，并严格返回 JSON：\n" + json.dumps(
-        user_payload,
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    return QuestionClassificationPrompt(system_prompt=system_prompt, user_prompt=user_prompt)
-
-
-def build_intent_shape_prompt(
-    rewritten_question: str,
-    conversation_context: dict[str, Any] | None = None,
-    user_feedback: dict[str, Any] | None = None,
-    subject_domains: list[dict[str, Any]] | None = None,
-) -> QuestionClassificationPrompt:
-    """构造分析形态识别提示词。"""
-
-    domain_candidates = _normalize_subject_domain_candidates(subject_domains or [])
-    system_prompt = """
-# 角色
-
-你是 ChatBI 工作流中的分析形态识别器，只负责识别分析类型、查询形态、必需槽位和主题域。
-
-# 输出
-
-只输出 JSON 对象。
-
-```json
-{
-  "intent_type": "metric_query | trend_analysis | ranking_analysis | comparison_analysis | detail_query | share_analysis | anomaly_analysis | unknown",
-  "confidence": 0.0,
-  "required_slot_types": [],
-  "query_shape": {},
-  "subject_domain": {"status": "not_required | selected | ambiguous | not_matched", "domain_id": null, "domain_name": null, "domain_biz_name": null, "confidence": 0.0, "reason": "", "candidate_domain_ids": []},
-  "ambiguous_slots": [],
-  "conflict_slots": []
-}
-```
-
-# 规则
-
-- `metric_query`：查询指标值或统计值。
-- `trend_analysis`：趋势、走势、按天、按周、按月变化。
-- `ranking_analysis`：排行、最高、最低、TopN、前 N、后 N。
-- `comparison_analysis`：同比、环比、对比、较上期、多个对象比较。
-- `detail_query`：明细、详情、列表、清单。
-- `share_analysis`：占比、构成、比例。
-- `anomaly_analysis`：异常、波动、下降原因。
-- `unknown`：无法判断分析类型。
-- `required_slot_types` 只能使用 `metric`、`dimension`、`time_dimension`、`time_range`、`filter`、`order`、`limit`、`comparison_target`。
-- `query_shape` 只描述查询形态，可包含 `select_mode`、`needs_group_by`、`needs_order_by`、`order_direction`、`limit`、`time_grain`。
-""".strip()
-    user_prompt = _markdown_user_prompt(
-        rewritten_question=rewritten_question,
-        subject_domains=domain_candidates,
-        conversation_context=conversation_context or {},
-        user_feedback=user_feedback or {},
-        task="请识别分析类型、查询形态、必需槽位和主题域，并严格按指定 JSON 结构输出。",
-    )
-    return QuestionClassificationPrompt(system_prompt=system_prompt, user_prompt=user_prompt)
-
-
-def build_semantic_mentions_prompt(
-    rewritten_question: str,
-    conversation_context: dict[str, Any] | None = None,
-    user_feedback: dict[str, Any] | None = None,
-    available_dimensions: list[dict[str, Any]] | None = None,
-) -> QuestionClassificationPrompt:
-    """构造指标和时间线索识别提示词。"""
-
-    dimension_candidates = _normalize_dimension_candidates(available_dimensions or [])
-    system_prompt = """
-# 角色
-
-你是 ChatBI 工作流中的“指标线索和时间线索识别器”。
-
-你只负责从用户问题中抽取：
-1. 指标线索
-2. 时间线索
-
-你不负责识别分组、筛选、对比、排序、维度绑定、指标 ID、字段名、业务口径或 SQL 语义。
-
-# 输出格式
-
-只输出一个 JSON 对象，结构必须完全符合以下格式：
-
-{
-  "metric_mentions": [],
-  "time_mentions": [],
-  "time_range": {
-    "raw": null,
-    "value_status": "provided | not_provided"
-  },
-  "ambiguous_slots": [],
-  "conflict_slots": []
-}
-
-{shared_metric_time_rules}
-
-# Graph 线索约束
-`available_dimensions` 如果存在，只能作为辅助理解维度语义的参考，不是指标抽取的白名单或黑名单。
-不要输出指标 ID、字段名、`biz_name` 或任何系统内部标识。
-
-# 示例
-
-用户问题：
-
-最近7天销售额是多少？
-
-输出：
-
-{
-  "metric_mentions": ["销售额"],
-  "time_mentions": ["最近7天"],
-  "time_range": {
-    "raw": "最近7天",
-    "value_status": "provided"
-  },
-  "ambiguous_slots": [],
-  "conflict_slots": []
-}
-
-用户问题：
-
-按城市看本月订单数
-
-输出：
-
-{
-  "metric_mentions": ["订单数"],
-  "time_mentions": ["本月"],
-  "time_range": {
-    "raw": "本月",
-    "value_status": "provided"
-  },
-  "ambiguous_slots": [],
-  "conflict_slots": []
-}
-
-用户问题：
-
-北京 App 端的销售额
-
-输出：
-
-{
-  "metric_mentions": ["销售额"],
-  "time_mentions": [],
-  "time_range": {
-    "raw": null,
-    "value_status": "not_provided"
-  },
-  "ambiguous_slots": [],
-  "conflict_slots": []
-}
-
-用户问题：
-
-看一下北京最近7天的数据
-
-输出：
-
-{
-  "metric_mentions": [],
-  "time_mentions": ["最近7天"],
-  "time_range": {
-    "raw": "最近7天",
-    "value_status": "provided"
-  },
-  "ambiguous_slots": [],
-  "conflict_slots": []
-}
-
-用户问题：
-
-分析一下订单
-
-输出：
-
-{
-  "metric_mentions": [],
-  "time_mentions": [],
-  "time_range": {
-    "raw": null,
-    "value_status": "not_provided"
-  },
-  "ambiguous_slots": ["订单"],
-  "conflict_slots": []
-}
-
-用户问题：
-
-最近7天的上月销售额
-
-输出：
-
-{
-  "metric_mentions": ["销售额"],
-  "time_mentions": ["最近7天", "上月"],
-  "time_range": {
-    "raw": "最近7天的上月",
-    "value_status": "provided"
-  },
-  "ambiguous_slots": [],
-  "conflict_slots": ["最近7天的上月"]
-}
-""".strip().replace("{shared_metric_time_rules}", METRIC_TIME_EXTRACTION_RULES)
-    user_prompt = _markdown_user_prompt(
-        rewritten_question=rewritten_question,
-        available_dimensions=dimension_candidates,
-        conversation_context=conversation_context or {},
-        user_feedback=user_feedback or {},
-        task="请抽取指标线索和时间线索，并严格按指定 JSON 结构输出。",
-    )
-    return QuestionClassificationPrompt(system_prompt=system_prompt, user_prompt=user_prompt)
-
-
-def build_dimension_slots_prompt(
-    rewritten_question: str,
-    conversation_context: dict[str, Any] | None = None,
-    user_feedback: dict[str, Any] | None = None,
-    available_dimensions: list[dict[str, Any]] | None = None,
-) -> QuestionClassificationPrompt:
-    """构造维度槽位识别提示词。"""
-
-    dimension_candidates = _normalize_dimension_candidates(available_dimensions or [])
-    plain_dimension_candidates = [candidate for candidate in dimension_candidates if not candidate.get("is_time")]
-    time_dimension_candidates = [candidate for candidate in dimension_candidates if candidate.get("is_time")]
-    system_prompt = """
-# 角色
-
-你是 ChatBI 工作流中的维度槽位识别器，只负责识别维度、维度角色和维度值。
-
-# 输出
-
-只输出 JSON 对象。
-
-```json
-{
-  "dimension_mentions": [],
-  "dimension_slots": [
-    {"name": "自然语言维度名", "role": "group_by | filter | ambiguous", "value": null, "value_status": "provided | not_provided | ambiguous", "value_confidence": 0.0}
-  ],
-  "residual_filter_mentions": [],
-  "ambiguous_slots": [],
-  "conflict_slots": []
-}
-```
-
-# 维度候选规则
-
-{shared_dimension_rules}
-
-- 「可用维度」是普通维度候选，只作为理解用户维度表达的参考，不是输出白名单。
-- 「时间字段候选」只用于后续时间字段绑定，不能输出到 `dimension_mentions` 或 `dimension_slots`。
-- `dimension_mentions` 和 `dimension_slots[].name` 输出用户问题里的自然语言维度短语，例如“店铺”“商品”“地区”“渠道”。
-- 维度识别必须独立完成，不要依赖指标线索识别子任务的输出，也不要假设其他子任务会纠正当前结果。
-- 不要为了命中维度候选而拆分指标短语内部的业务修饰关系；当一个候选词只是修饰某个可度量业务结果时，应保留在原短语语义内，不要单独输出为维度槽位。
-- 用户表达命中「可用维度」的 `name` 或 `aliases` 时，必须输出对应的标准 `name`。
-- 用户表达没有完全命中时，应在「可用维度」中选择语义最相近、业务上最有关联的候选，并输出对应的标准 `name`。
-- 如果多个候选都可能匹配，或用户表达和全部候选差异很大，不要强行替换；保留用户原文维度短语，并在 `ambiguous_slots` 中加入 `dimension`。
-- 不输出维度 ID、字段名、`biz_name`。
-
-# 维度值规则
-
-- `dimension_slots[].value` 只填写维度值本身，不包含已命中的维度 `name` 或 `aliases`。
-- 如果用户表达由「维度名或别名 + 值」组成，且维度名或别名已经用于确定维度，则 `value` 只保留剩余值部分。
-- 如果用户表达由「值 + 维度名或别名」组成，且维度名或别名已经用于确定维度，则 `value` 只保留剩余值部分。
-- 如果无法判断值边界，输出 `value=null`、`value_status=ambiguous`，并在 `ambiguous_slots` 中加入 `filter_value`。
-- 时间表达不能作为普通维度值。
-
-# 类型提示规则
-
-- `value_kind=numeric_id`：值通常是编号、ID、数字代码；如果值部分是数字，保留数字字符串。
-- `value_kind=string_label`：值通常是名称、标签、枚举文本；不要因为包含数字就只保留数字。
-- `value_kind=enum`：值通常是枚举文本，保留用户表达的枚举值。
-- `is_time=true`：该维度是时间字段候选，不承载“今天、本月、最近7天”等时间范围值，也不能作为普通维度槽位输出。
-
-# residual_filter_mentions
-
-只有当用户表达了筛选条件，但无法归属到任何「可用维度」时，才输出到 `residual_filter_mentions`。
-
-已进入 `dimension_slots` 的筛选条件，不要重复输出到 `residual_filter_mentions`。
-""".strip().replace("{shared_dimension_rules}", DIMENSION_EXTRACTION_RULES)
-    user_prompt = _markdown_user_prompt(
-        rewritten_question=rewritten_question,
-        available_dimensions=plain_dimension_candidates,
-        time_dimensions=time_dimension_candidates,
-        conversation_context=conversation_context or {},
-        user_feedback=user_feedback or {},
-        task="请识别维度、维度角色和维度值，并严格按指定 JSON 结构输出。",
-    )
-    return QuestionClassificationPrompt(system_prompt=system_prompt, user_prompt=user_prompt)
-
-
-def _markdown_user_prompt(
-    *,
-    rewritten_question: str,
-    task: str,
-    available_dimensions: list[dict[str, Any]] | None = None,
-    time_dimensions: list[dict[str, Any]] | None = None,
-    subject_domains: list[dict[str, Any]] | None = None,
-    conversation_context: dict[str, Any] | None = None,
-    user_feedback: dict[str, Any] | None = None,
-) -> str:
-    parts = ["# 用户问题", rewritten_question]
-    if available_dimensions is not None:
-        parts.extend(["# 可用维度", _json_block(available_dimensions)])
-    if time_dimensions is not None:
-        parts.extend(["# 时间字段候选", _json_block(time_dimensions)])
-    if subject_domains is not None:
-        parts.extend(["# 候选主题域", _json_block(subject_domains)])
-    parts.extend(
-        [
-            "# 会话上下文",
-            _json_block(conversation_context or {}),
-            "# 用户反馈",
-            _json_block(user_feedback or {}),
-            "# 任务",
-            task,
-        ]
-    )
-    return "\n\n".join(parts).strip()
-
-
-def _json_block(value: Any) -> str:
-    return "```json\n" + json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n```"
-
-
-def _int_or_none(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.strip().isdigit():
-        return int(value.strip())
-    return None
-
-
-def _default_subject_domain(status: str) -> dict[str, Any]:
-    return {
-        "status": status,
-        "domain_id": None,
-        "domain_name": None,
-        "domain_biz_name": None,
-        "confidence": 0.0,
-        "reason": "",
-        "candidate_domain_ids": [],
-    }
-
-
-def _subject_domain_payload(
-    candidate: dict[str, Any],
-    status: str,
-    confidence: float,
-    reason: str,
-    candidate_domain_ids: list[int] | None = None,
-) -> dict[str, Any]:
-    domain_id = candidate["domain_id"]
-    return {
-        "status": status,
-        "domain_id": domain_id,
-        "domain_name": candidate["name"],
-        "domain_biz_name": candidate["biz_name"],
-        "confidence": confidence,
-        "reason": reason,
-        "candidate_domain_ids": candidate_domain_ids or [domain_id],
-    }
-
-
-def _valid_candidate_domain_ids(value: Any, candidate_by_id: dict[int, dict[str, Any]]) -> list[int]:
-    if not isinstance(value, list):
-        return []
-    result: list[int] = []
-    for item in value:
-        domain_id = _int_or_none(item)
-        if domain_id is not None and domain_id in candidate_by_id and domain_id not in result:
-            result.append(domain_id)
-    return result
-
-
-def _normalize_subject_domain_candidates(subject_domains: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    seen: set[int] = set()
-    for item in subject_domains:
-        if not isinstance(item, dict):
-            continue
-        domain_id = _int_or_none(item.get("domain_id") or item.get("id"))
-        if domain_id is None or domain_id in seen:
-            continue
-        seen.add(domain_id)
-        name = str(item.get("name") or item.get("domain_name") or domain_id)
-        biz_name = str(item.get("biz_name") or item.get("domain_biz_name") or domain_id)
-        candidates.append(
-            {
-                "domain_id": domain_id,
-                "name": name,
-                "biz_name": biz_name,
-                "description": item.get("description"),
-                "model_ids": [_id for _id in (_int_or_none(value) for value in item.get("model_ids") or []) if _id is not None],
-            }
-        )
-    return candidates
-
-
-def _normalize_dimension_candidates(dimensions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in dimensions:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or item.get("dimension") or "").strip()
-        if not name:
-            continue
-        key = _dimension_text_key(name)
-        if key in seen:
-            continue
-        seen.add(key)
-        aliases = _unique_texts(item.get("aliases") or item.get("alias") or [])
-        data_type = str(item.get("data_type") or item.get("dataType") or "").strip()
-        semantic_type = str(item.get("semantic_type") or item.get("semanticType") or "").strip()
-        is_time = bool(item.get("is_time"))
-        candidates.append(
-            {
-                "name": name,
-                "aliases": aliases,
-                "data_type": data_type or None,
-                "semantic_type": semantic_type or None,
-                "value_kind": item.get("value_kind") or _infer_dimension_value_kind(name, data_type, semantic_type, is_time),
-                "is_time": is_time,
-            }
-        )
-    return candidates
-
-
-def _dimension_candidate_from_schema_element(dimension: Any) -> dict[str, Any] | None:
-    name = str(getattr(dimension, "name", "") or "").strip()
-    if not name:
-        return None
-    aliases = _unique_texts([*(getattr(dimension, "alias", []) or []), *_dimension_name_variants(name)])
-    ext_info = getattr(dimension, "ext_info", {}) or {}
-    type_params = getattr(dimension, "type_params", {}) or {}
-    data_type = str(
-        getattr(dimension, "data_type", None)
-        or ext_info.get("dimension_data_type")
-        or ext_info.get("data_type")
-        or ext_info.get("dataType")
-        or ""
-    ).strip()
-    semantic_type = str(ext_info.get("semantic_type") or ext_info.get("semanticType") or "").strip()
-    is_time = bool(ext_info.get("is_default_time")) or str(ext_info.get("dimension_type") or "").lower().endswith("time")
-    is_time = is_time or bool(type_params.get("timeGranularity"))
-    return {
-        "name": name,
-        "aliases": aliases,
-        "data_type": data_type or None,
-        "semantic_type": semantic_type or ("time" if is_time else None),
-        "value_kind": _infer_dimension_value_kind(name, data_type, semantic_type, is_time),
-        "is_time": is_time,
-    }
-
-
-def _infer_dimension_value_kind(name: str, data_type: str | None, semantic_type: str | None, is_time: bool) -> str:
-    if is_time:
-        return "date"
-    normalized_semantic = str(semantic_type or "").lower()
-    if normalized_semantic in {"identifier", "id"}:
-        return "numeric_id"
-    if normalized_semantic in {"name", "label"}:
-        return "string_label"
-    normalized_type = str(data_type or "").lower()
-    if any(token in normalized_type for token in ("int", "number", "numeric", "decimal", "bigint", "smallint")):
-        return "numeric_id"
-    if name.endswith(("ID", "id", "编号")):
-        return "numeric_id"
-    return "string_label"
-
-
-def _dimension_name_variants(name: str) -> list[str]:
-    text = name.strip()
-    variants: list[str] = []
-    for suffix in ("ID", "id", "编号", "名称", "维度"):
-        if text.endswith(suffix) and len(text) > len(suffix):
-            variants.append(text[: -len(suffix)].strip())
-    return variants
-
-
-def _unique_texts(value: Any) -> list[str]:
-    raw_items = value if isinstance(value, list) else [value]
-    texts: list[str] = []
-    seen: set[str] = set()
-    for item in raw_items:
-        text = str(item or "").strip()
-        key = _dimension_text_key(text)
-        if not text or not key or key in seen:
-            continue
-        seen.add(key)
-        texts.append(text)
-    return texts
-
-
-def _dimension_text_key(value: Any) -> str:
-    return "".join(str(value or "").strip().lower().split())
-
-
-def _dimension_candidate_by_text(
-    dimensions: list[dict[str, Any]], *, include_time: bool = True
-) -> dict[str, dict[str, Any]]:
-    candidates = _normalize_dimension_candidates(dimensions)
-    by_text: dict[str, dict[str, Any]] = {}
-    for candidate in candidates:
-        if not include_time and candidate.get("is_time"):
-            continue
-        for text in [candidate.get("name"), *(candidate.get("aliases") or [])]:
-            key = _dimension_text_key(text)
-            if key:
-                by_text[key] = candidate
-    return by_text
 
 
 class QuestionAdapter:
@@ -996,6 +318,7 @@ class QuestionAdapter:
         tasks: dict[str, Callable[[], dict[str, Any]]],
         fallback_payloads: dict[str, dict[str, Any]],
     ) -> dict[str, IntentSubtaskResult]:
+        results: dict[str, IntentSubtaskResult]
         if not self._intent_subtask_config.enabled:
             results = {
                 name: self._run_intent_subtask(name, task, fallback_payloads[name])
@@ -1016,7 +339,7 @@ class QuestionAdapter:
                 self._intent_subtask_config.overall_timeout_seconds,
             )
             done, not_done = wait(future_to_name, timeout=timeout_seconds)
-            results: dict[str, IntentSubtaskResult] = {}
+            results = {}
             for future in done:
                 name = future_to_name[future]
                 try:
@@ -1181,10 +504,10 @@ class QuestionAdapter:
     def _recognize_subtask(
         self,
         stage: str,
-        prompt_builder,
+        prompt_builder: Callable[[dict[str, Any]], QuestionClassificationPrompt],
         user_feedback: dict[str, Any],
         fallback_payload: dict[str, Any],
-        validator,
+        validator: Callable[[dict[str, Any]], dict[str, Any]],
     ) -> dict[str, Any]:
         result: dict[str, Any] = fallback_payload
         retry_feedback: dict[str, Any] = {}
@@ -1269,18 +592,26 @@ class QuestionAdapter:
         candidate_by_text = _dimension_candidate_by_text(normalized_candidates, include_time=False)
         candidate_by_text_with_time = _dimension_candidate_by_text(normalized_candidates, include_time=True)
         if not normalized_candidates:
-            slots = [dict(slot) for slot in payload.get("dimension_slots") or [] if isinstance(slot, dict)]
-            mentions = intent_projection.unique_strings(
+            passthrough_slots = [
+                dict(slot)
+                for slot in payload.get("dimension_slots") or []
+                if isinstance(slot, dict)
+            ]
+            passthrough_mentions = intent_projection.unique_strings(
                 [
                     *intent_projection.normalize_text_list(
                         payload.get("dimension_mentions")
                     ),
-                    *[str(slot.get("name")) for slot in slots if slot.get("name")],
+                    *[
+                        str(slot.get("name"))
+                        for slot in passthrough_slots
+                        if slot.get("name")
+                    ],
                 ]
             )
             return {
-                "dimension_mentions": mentions,
-                "dimension_slots": slots,
+                "dimension_mentions": passthrough_mentions,
+                "dimension_slots": passthrough_slots,
                 "residual_filter_mentions": [
                     item for item in payload.get("residual_filter_mentions") or [] if isinstance(item, dict)
                 ],
@@ -1446,7 +777,11 @@ class QuestionAdapter:
         raw = raw_subject_domain if isinstance(raw_subject_domain, dict) else {}
         candidate_by_id = {candidate["domain_id"]: candidate for candidate in candidates}
         selected_domain_id = _int_or_none(raw.get("domain_id") or raw.get("id"))
-        if str(raw.get("status") or "").lower() == "selected" and selected_domain_id in candidate_by_id:
+        if (
+            str(raw.get("status") or "").lower() == "selected"
+            and selected_domain_id is not None
+            and selected_domain_id in candidate_by_id
+        ):
             candidate = candidate_by_id[selected_domain_id]
             return _subject_domain_payload(
                 candidate,

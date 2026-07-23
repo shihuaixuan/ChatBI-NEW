@@ -16,7 +16,7 @@
 ## 里程碑 1：定义 ChatBI v1 图骨架
 
 - [x] 新增 `chatbi/v1` 图定义文件。
-  - 建议文件：`backend/apps/workflow/definitions/chatbi_v1.py`
+  - 建议文件：`backend/apps/chatbi/orchestration/graph/definitions/chatbi_v1.py`
   - 节点范围：覆盖问题分类、拒绝回复、闲聊回复、问题重写、澄清、意图识别、知识检索、指标选择、SQL 生成、SQL 执行、异常处理、问题推荐、最终回复、结束。
   - 验收：图定义可以被 `WorkflowRegistry(DefinitionValidator(...)).publish()` 校验通过。
 
@@ -26,7 +26,7 @@
   - 验收：handler registry 不缺失任何图定义引用。
 
 - [x] 新增 `chatbi/v1` runtime factory。
-  - 建议文件：`backend/apps/workflow/runtime.py`
+  - 建议文件：`backend/apps/chatbi/orchestration/graph/runtime.py`
   - 建议函数：`build_placeholder_chatbi_v1_runtime(session)`
   - 验收：可以创建并执行 `definition_name="chatbi"`、`definition_version="v1"` 的 run。
 
@@ -86,7 +86,7 @@
 
 - [x] 新增问题分类条件。
   - 条件：`question.forbidden`、`question.chitchat`、`question.data_or_followup`
-  - 文件建议：`backend/apps/workflow/conditions/question.py`
+  - 文件建议：`backend/apps/chatbi/orchestration/graph/conditions/question.py`
   - 验收：三类输入分别路由到拒绝、闲聊、问题重写。
 
 - [x] 新增问题重写条件。

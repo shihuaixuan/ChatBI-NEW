@@ -1,6 +1,6 @@
-from apps.workflow.capabilities.gateway import ChatBICapabilityGateway
-from apps.workflow.conditions.core import register_chatbi_conditions
-from apps.workflow.definitions.chatbi_minimal_v1 import (
+from apps.chatbi.orchestration.graph.capabilities.gateway import ChatBICapabilityGateway
+from apps.chatbi.orchestration.graph.conditions.core import register_chatbi_conditions
+from apps.chatbi.orchestration.graph.definitions.chatbi_minimal_v1 import (
     build_chatbi_minimal_definition,
     register_chatbi_minimal_handlers,
 )

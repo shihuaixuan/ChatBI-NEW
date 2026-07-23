@@ -13,20 +13,15 @@
     ],
     "cross_domain_concrete_implementations": [
         "apps/capabilities/semantic/compile.py -> apps.semantic.repository.sqlmodel.schema_loader",
-        "apps/retrieval/semantic_binding.py -> apps.semantic.repository.sqlmodel.schema_loader",
-        "apps/workflow/runtime.py -> apps.semantic.repository.sqlmodel.schema_loader",
-        "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.events.publisher",
-        "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.persistence.interaction_manager",
-        "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.persistence.node_execution_repository",
-        "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.persistence.run_repository"
+        "apps/retrieval/semantic_binding.py -> apps.semantic.repository.sqlmodel.schema_loader"
     ],
     "cross_domain_api_imports": [],
     "workflow_engine_business_imports": [
+        "apps/workflow_engine/api/service.py -> apps.chatbi.orchestration.graph.definitions.chatbi_minimal_v1",
+        "apps/workflow_engine/api/service.py -> apps.chatbi.orchestration.graph.definitions.chatbi_v1",
+        "apps/workflow_engine/api/service.py -> apps.chatbi.orchestration.graph.runtime",
         "apps/workflow_engine/api/service.py -> apps.chatbi.workflow_gateway",
-        "apps/workflow_engine/api/service.py -> apps.semantic.models.orm",
-        "apps/workflow_engine/api/service.py -> apps.workflow.definitions.chatbi_minimal_v1",
-        "apps/workflow_engine/api/service.py -> apps.workflow.definitions.chatbi_v1",
-        "apps/workflow_engine/api/service.py -> apps.workflow.runtime"
+        "apps/workflow_engine/api/service.py -> apps.semantic.models.orm"
     ],
     "function_local_app_imports": [
         "apps/chatbi/orchestration/agent/loop.py -> apps.ai_model.model_factory"

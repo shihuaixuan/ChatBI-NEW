@@ -1,9 +1,13 @@
-from apps.semantic.models.dto import DatasetSchema, SchemaElement
-from apps.workflow.capabilities.adapters.interaction import InteractionAdapter
-from apps.workflow.capabilities.placeholder import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.interaction import (
+    InteractionAdapter,
+)
+from apps.chatbi.orchestration.graph.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
-from apps.workflow.capabilities.real import RealChatBICapabilityGateway
+from apps.chatbi.orchestration.graph.capabilities.real import (
+    RealChatBICapabilityGateway,
+)
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 
 class FakeDatasetSchemaProvider:

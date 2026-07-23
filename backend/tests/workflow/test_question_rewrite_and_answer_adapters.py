@@ -2,13 +2,12 @@ import json
 import threading
 import time
 
-from apps.semantic.models.dto import DatasetSchema, SchemaElement
-from apps.workflow.capabilities.adapters.answer import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.answer import (
     AnswerAdapter,
     build_answer_generation_prompt,
     build_answer_projection,
 )
-from apps.workflow.capabilities.adapters.question import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.question import (
     IntentSubtaskConfig,
     QuestionAdapter,
     build_dimension_slots_prompt,
@@ -17,13 +16,16 @@ from apps.workflow.capabilities.adapters.question import (
     build_question_rewrite_prompt,
     build_semantic_mentions_prompt,
 )
-from apps.workflow.capabilities.adapters.recommendation import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.recommendation import (
     RecommendationAdapter,
 )
-from apps.workflow.capabilities.placeholder import (
+from apps.chatbi.orchestration.graph.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
-from apps.workflow.capabilities.real import RealChatBICapabilityGateway
+from apps.chatbi.orchestration.graph.capabilities.real import (
+    RealChatBICapabilityGateway,
+)
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 
 class FakeModelClient:

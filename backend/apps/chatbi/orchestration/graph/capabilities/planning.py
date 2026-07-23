@@ -20,13 +20,18 @@ import copy
 import re
 from typing import Any
 
-from apps.workflow.capabilities.capability_matrix import decide_capability
-from apps.workflow.capabilities.context import ChatBIRunContext, int_or_none
-from apps.workflow.capabilities.interactions import (
+from apps.chatbi.orchestration.graph.capabilities.capability_matrix import (
+    decide_capability,
+)
+from apps.chatbi.orchestration.graph.capabilities.context import (
+    ChatBIRunContext,
+    int_or_none,
+)
+from apps.chatbi.orchestration.graph.capabilities.interactions import (
     prune_dimensions_for_selected_metric,
     selected_metric_from_response,
 )
-from apps.workflow.schemas.v1 import QueryPlanOutput
+from apps.chatbi.orchestration.graph.schemas.v1 import QueryPlanOutput
 
 _TIME_GRAINS = {"day", "week", "month", "quarter", "year"}
 

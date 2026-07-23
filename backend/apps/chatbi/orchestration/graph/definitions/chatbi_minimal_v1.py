@@ -1,8 +1,8 @@
-from apps.workflow.capabilities.gateway import ChatBICapabilityGateway
-from apps.workflow.nodes.answer import AnswerGenerateNode, FinishNode
-from apps.workflow.nodes.evidence import SchemaRetrieveNode
-from apps.workflow.nodes.query import QueryUnderstandNode
-from apps.workflow.nodes.sql import (
+from apps.chatbi.orchestration.graph.capabilities.gateway import ChatBICapabilityGateway
+from apps.chatbi.orchestration.graph.nodes.answer import AnswerGenerateNode, FinishNode
+from apps.chatbi.orchestration.graph.nodes.evidence import SchemaRetrieveNode
+from apps.chatbi.orchestration.graph.nodes.query import QueryUnderstandNode
+from apps.chatbi.orchestration.graph.nodes.sql import (
     PermissionApplyNode,
     SqlExecuteNode,
     SqlGenerateNode,

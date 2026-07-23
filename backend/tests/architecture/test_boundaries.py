@@ -196,7 +196,7 @@ def test_answer_generation_service_has_no_executor_or_framework_dependency():
 
 def test_answer_adapter_uses_chatbi_service_and_shared_model_boundary():
     graph_source = (
-        BACKEND_DIR__answer_generation / "apps/workflow/capabilities/adapters/answer.py"
+        BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/capabilities/adapters/answer.py"
     ).read_text(encoding="utf-8")
 
     assert "AnswerGenerationService" in graph_source
@@ -218,9 +218,9 @@ def test_answer_prompt_and_output_contract_are_owned_by_chatbi():
         BACKEND_DIR__answer_generation / "apps/chatbi/services/generation/answer_generation.py"
     ).read_text(encoding="utf-8")
     graph_source = (
-        BACKEND_DIR__answer_generation / "apps/workflow/capabilities/adapters/answer.py"
+        BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/capabilities/adapters/answer.py"
     ).read_text(encoding="utf-8")
-    schema_source = (BACKEND_DIR__answer_generation / "apps/workflow/schemas/v1.py").read_text(
+    schema_source = (BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/schemas/v1.py").read_text(
         encoding="utf-8"
     )
 
@@ -232,7 +232,7 @@ def test_answer_prompt_and_output_contract_are_owned_by_chatbi():
 
 def test_graph_keeps_answer_context_projection_and_final_composition():
     graph_source = (
-        BACKEND_DIR__answer_generation / "apps/workflow/capabilities/adapters/answer.py"
+        BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/capabilities/adapters/answer.py"
     ).read_text(encoding="utf-8")
 
     assert "def build_answer_projection" in graph_source
@@ -253,7 +253,7 @@ def test_answer_projection_service_has_no_executor_or_framework_dependency():
 
 def test_graph_answer_projection_only_reads_context_and_calls_chatbi_service():
     graph_source = (
-        BACKEND_DIR__answer_generation / "apps/workflow/capabilities/adapters/answer.py"
+        BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/capabilities/adapters/answer.py"
     ).read_text(encoding="utf-8")
 
     assert "project_answer_context" in graph_source
@@ -283,12 +283,12 @@ def test_final_reply_projection_service_has_no_executor_or_framework_dependency(
 
 def test_final_reply_contract_and_composition_are_owned_by_chatbi():
     graph_source = (
-        BACKEND_DIR__answer_generation / "apps/workflow/capabilities/adapters/answer.py"
+        BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/capabilities/adapters/answer.py"
     ).read_text(encoding="utf-8")
     service_source = (
         BACKEND_DIR__answer_generation / "apps/chatbi/services/generation/final_reply.py"
     ).read_text(encoding="utf-8")
-    schema_source = (BACKEND_DIR__answer_generation / "apps/workflow/schemas/v1.py").read_text(
+    schema_source = (BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/schemas/v1.py").read_text(
         encoding="utf-8"
     )
 
@@ -349,9 +349,9 @@ def test_agent_and_graph_share_chatbi_result_artifact_service():
         BACKEND_DIR__artifact / "apps/chatbi/orchestration/agent/tools/core.py"
     ).read_text(encoding="utf-8")
     graph_source = (
-        BACKEND_DIR__artifact / "apps/workflow/capabilities/adapters/sql.py"
+        BACKEND_DIR__artifact / "apps/chatbi/orchestration/graph/capabilities/adapters/sql.py"
     ).read_text(encoding="utf-8")
-    execution_imports = _imports__artifact("apps/workflow/capabilities/execution.py")
+    execution_imports = _imports__artifact("apps/chatbi/orchestration/graph/capabilities/execution.py")
 
     assert "result_artifact_service.save" in agent_source
     assert "result_artifact_service.save" in graph_source
@@ -1185,9 +1185,9 @@ def test_agent_sql_tools_only_use_chatbi_query_service():
 
 
 def test_graph_sql_adapter_does_not_maintain_second_execution_chain():
-    path = BACKEND_DIR__query / "apps/workflow/capabilities/adapters/sql.py"
+    path = BACKEND_DIR__query / "apps/chatbi/orchestration/graph/capabilities/adapters/sql.py"
     source = path.read_text(encoding="utf-8")
-    imports = _imports__query("apps/workflow/capabilities/adapters/sql.py")
+    imports = _imports__query("apps/chatbi/orchestration/graph/capabilities/adapters/sql.py")
 
     assert "apps.chatbi.services" in imports
     assert "self._execute_tool" not in source
@@ -1207,7 +1207,7 @@ def test_agent_and_graph_share_chatbi_semantic_query_service():
         BACKEND_DIR__query / "apps/chatbi/orchestration/agent/tools/core.py"
     ).read_text(encoding="utf-8")
     graph_source = (
-        BACKEND_DIR__query / "apps/workflow/capabilities/adapters/sql.py"
+        BACKEND_DIR__query / "apps/chatbi/orchestration/graph/capabilities/adapters/sql.py"
     ).read_text(encoding="utf-8")
 
     assert "semantic_query_service.compile" in agent_source
@@ -1237,9 +1237,9 @@ def test_agent_semantic_retrieval_and_physical_schema_use_chatbi_services():
 
 
 def test_graph_semantic_retrieval_uses_chatbi_service():
-    imports = _imports__query("apps/workflow/capabilities/adapters/knowledge.py")
+    imports = _imports__query("apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py")
     source = (
-        BACKEND_DIR__query / "apps/workflow/capabilities/adapters/knowledge.py"
+        BACKEND_DIR__query / "apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py"
     ).read_text(encoding="utf-8")
 
     assert "apps.chatbi.services" in imports
@@ -1410,16 +1410,17 @@ def test_agent_and_graph_share_question_understanding_validation_rules():
     assert validation_module in graph_contract_imports
 
 
-def test_graph_intent_adapter_does_not_reimplement_dimension_time_rule():
+def test_graph_layers_do_not_reimplement_dimension_time_rule():
     question_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/question.py"
+        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
-    validation_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/intent_validation.py"
+    graph_contracts_source = (
+        BACKEND_DIR__question_understanding
+        / f"{UNDERSTANDING__question_understanding}/graph_contracts.py"
     ).read_text(encoding="utf-8")
 
     assert "def _is_time_expression" not in question_source
-    assert "_dimension_time_value_violations" not in validation_source
+    assert "_dimension_time_value_violations" not in graph_contracts_source
 
 
 def test_question_validation_rules_have_no_executor_or_model_dependency():
@@ -1446,7 +1447,7 @@ def test_agent_and_graph_share_structured_model_service():
         BACKEND_DIR__question_understanding / f"{UNDERSTANDING__question_understanding}/understanding_service.py"
     ).read_text(encoding="utf-8")
     graph_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/question.py"
+        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
 
     for source in (agent_source, graph_source):
@@ -1474,7 +1475,7 @@ def test_default_question_model_client_stays_in_chatbi_adapter():
         encoding="utf-8"
     )
     graph_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/question.py"
+        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
 
     assert "class LangChainQuestionModelClient" in adapter_source
@@ -1488,7 +1489,7 @@ def test_question_understanding_dtos_are_owned_by_chatbi():
     agent_source = (
         BACKEND_DIR__question_understanding / "apps/capabilities/question_understanding.py"
     ).read_text(encoding="utf-8")
-    graph_source = (BACKEND_DIR__question_understanding / "apps/workflow/schemas/v1.py").read_text(
+    graph_source = (BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/schemas/v1.py").read_text(
         encoding="utf-8"
     )
 
@@ -1512,11 +1513,22 @@ def test_question_understanding_dtos_are_owned_by_chatbi():
 def test_question_understanding_prompt_rules_are_owned_by_chatbi():
     prompt_import = "apps.chatbi.services.understanding.prompts"
     agent_imports = _imports__question_understanding(f"{UNDERSTANDING__question_understanding}/understanding_service.py")
-    graph_imports = _imports__question_understanding("apps/workflow/capabilities/adapters/question.py")
+    graph_prompt_imports = set().union(
+        *(
+            _imports__question_understanding(
+                f"apps/chatbi/orchestration/graph/capabilities/adapters/{filename}"
+            )
+            for filename in (
+                "question_input.py",
+                "question_intent.py",
+                "question_dimension.py",
+            )
+        )
+    )
     prompt_imports = _imports__question_understanding(f"{UNDERSTANDING__question_understanding}/prompts.py")
 
     assert prompt_import in agent_imports
-    assert prompt_import in graph_imports
+    assert prompt_import in graph_prompt_imports
     assert not any(module.startswith("apps.agent") for module in prompt_imports)
     assert not any(module.startswith("apps.workflow") for module in prompt_imports)
     assert not any(module.startswith("apps.ai_model") for module in prompt_imports)
@@ -1554,7 +1566,7 @@ def test_graph_intent_projection_rules_are_owned_by_chatbi():
     service_path = f"{UNDERSTANDING__question_understanding}/intent_projection.py"
     service_imports = _imports__question_understanding(service_path)
     graph_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/question.py"
+        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
 
     assert not any(module.startswith("apps.agent") for module in service_imports)
@@ -1573,7 +1585,7 @@ def test_graph_intent_projection_rules_are_owned_by_chatbi():
 
 def test_graph_keeps_intent_orchestration_and_candidate_mapping():
     graph_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/question.py"
+        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
 
     assert "ThreadPoolExecutor" in graph_source
@@ -1597,27 +1609,31 @@ def test_graph_contracts_have_no_graph_or_framework_dependency():
 
 def test_graph_uses_chatbi_intent_validation_directly():
     graph_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/question.py"
+        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
 
     assert "graph_contracts.validate_intent" in graph_source
-    assert "apps.workflow.capabilities.adapters.intent_validation" not in graph_source
+    assert "apps.chatbi.orchestration.graph.capabilities.adapters.intent_validation" not in graph_source
 
 
-def test_old_graph_intent_validation_path_only_reexports_chatbi_contract():
-    compatibility_path = "apps/workflow/capabilities/adapters/intent_validation.py"
-    compatibility_source = (BACKEND_DIR__question_understanding / compatibility_path).read_text(encoding="utf-8")
+def test_old_graph_understanding_compatibility_paths_are_removed():
+    adapter_dir = (
+        BACKEND_DIR__question_understanding
+        / "apps/chatbi/orchestration/graph/capabilities/adapters"
+    )
+    contracts_source = (
+        BACKEND_DIR__question_understanding
+        / f"{UNDERSTANDING__question_understanding}/graph_contracts.py"
+    ).read_text(encoding="utf-8")
 
-    assert _imports__question_understanding(compatibility_path) == {
-        "apps.chatbi.services.understanding.graph_contracts"
-    }
-    assert "class IntentPostProcessor" not in compatibility_source
-    assert "def validate" not in compatibility_source
+    assert not (adapter_dir / "intent_validation.py").exists()
+    assert not (adapter_dir / "time_slots.py").exists()
+    assert "class QuestionIntentValidationService" not in contracts_source
 
 
 def test_graph_keeps_intent_model_retry_orchestration():
     graph_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/question.py"
+        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
 
     assert "def _recognize_subtask" in graph_source
@@ -1627,7 +1643,7 @@ def test_graph_keeps_intent_model_retry_orchestration():
 
 def test_question_input_projection_rules_are_owned_by_chatbi():
     graph_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/question.py"
+        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
 
     assert "graph_contracts.classification_precondition" in graph_source
@@ -1641,7 +1657,7 @@ def test_question_input_projection_rules_are_owned_by_chatbi():
 
 def test_graph_keeps_question_model_error_and_rewrite_fallback_orchestration():
     graph_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/question.py"
+        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
 
     assert "CLASSIFICATION_MODEL_CALL_FAILED" in graph_source
@@ -1654,7 +1670,7 @@ def test_question_intent_fallback_rules_are_owned_by_chatbi():
     service_path = f"{UNDERSTANDING__question_understanding}/intent_fallback.py"
     service_imports = _imports__question_understanding(service_path)
     graph_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/question.py"
+        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
 
     assert not any(module.startswith("apps.agent") for module in service_imports)
@@ -1679,7 +1695,7 @@ def test_question_intent_fallback_rules_are_owned_by_chatbi():
 
 def test_graph_keeps_intent_fallback_trigger_and_subtask_projection():
     graph_source = (
-        BACKEND_DIR__question_understanding / "apps/workflow/capabilities/adapters/question.py"
+        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
 
     assert "def _intent_subtask_fallback_payloads" in graph_source

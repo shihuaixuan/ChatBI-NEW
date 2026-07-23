@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from apps.workflow.capabilities.interactions import (
+from apps.chatbi.orchestration.graph.capabilities.interactions import (
     read_interaction_record,
     read_interaction_response,
 )

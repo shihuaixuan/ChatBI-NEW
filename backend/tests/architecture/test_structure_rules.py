@@ -29,10 +29,16 @@ class ForbiddenImportRule:
 
 FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
     ForbiddenImportRule(
-        rule_id="chatbi-no-executor-imports",
+        rule_id="chatbi-no-legacy-executor-imports",
         scope="apps/chatbi",
         forbidden=("apps.agent", "apps.workflow", "apps.chat"),
-        reason="ChatBI 是被执行器调用的一方，不得反向依赖 agent/workflow/旧 chat。",
+        reason="Agent 与 Graph 已归入 ChatBI，禁止恢复旧顶级执行器路径。",
+    ),
+    ForbiddenImportRule(
+        rule_id="chatbi-core-no-orchestration-imports",
+        scope="apps/chatbi/services",
+        forbidden=("apps.chatbi.orchestration",),
+        reason="ChatBI 核心能力不得反向依赖 Agent 或 Graph 编排。",
     ),
     ForbiddenImportRule(
         rule_id="engine-domain-no-business-imports",

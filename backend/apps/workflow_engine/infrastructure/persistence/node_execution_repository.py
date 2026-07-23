@@ -7,7 +7,7 @@ from apps.workflow_engine.domain.definition import NodeDefinition
 from apps.workflow_engine.domain.execution import NodeExecutionResult
 from apps.workflow_engine.domain.run import WorkflowRun
 from apps.workflow_engine.infrastructure.persistence.models import NodeExecutionModel
-from apps.workflow_engine.runtime.router import RouteDecision
+from apps.workflow_engine.ports.runtime_persistence import RouteDecisionView
 
 
 class NodeExecutionRepository:
@@ -21,7 +21,7 @@ class NodeExecutionRepository:
         run: WorkflowRun,
         node: NodeDefinition,
         result: NodeExecutionResult,
-        route: RouteDecision | None = None,
+        route: RouteDecisionView | None = None,
     ) -> None:
         now = datetime.now(timezone.utc)
         sequence = self._next_sequence(run.run_id)
@@ -79,7 +79,7 @@ class NodeExecutionRepository:
             return value if isinstance(value, dict) else {"value": value}
         return dict(set_values)
 
-    def _route_summary(self, route: RouteDecision | None) -> dict[str, Any]:
+    def _route_summary(self, route: RouteDecisionView | None) -> dict[str, Any]:
         if route is None:
             return {}
         return {

@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from apps.workflow.capabilities.gateway import ChatBICapabilityGateway
+from apps.chatbi.orchestration.graph.capabilities.gateway import ChatBICapabilityGateway
 from apps.workflow_engine.domain.context import ContextPatch
 from apps.workflow_engine.domain.errors import NodeError
 from apps.workflow_engine.domain.execution import (

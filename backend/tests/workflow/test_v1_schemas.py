@@ -1,5 +1,5 @@
-from apps.workflow.nodes.v1 import ChatBIV1CapabilityNode
-from apps.workflow.schemas.v1 import (
+from apps.chatbi.orchestration.graph.nodes.v1 import ChatBIV1CapabilityNode
+from apps.chatbi.orchestration.graph.schemas.v1 import (
     QuestionClassificationInput,
     QuestionClassificationOutput,
 )

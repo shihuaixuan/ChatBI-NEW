@@ -1,14 +1,16 @@
 import pytest
 
-from apps.workflow.capabilities.adapters.answer import AnswerAdapter
-from apps.workflow.capabilities.adapters.question import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.answer import AnswerAdapter
+from apps.chatbi.orchestration.graph.capabilities.adapters.question import (
     QuestionAdapter,
     build_question_classification_prompt,
 )
-from apps.workflow.capabilities.placeholder import (
+from apps.chatbi.orchestration.graph.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
-from apps.workflow.capabilities.real import RealChatBICapabilityGateway
+from apps.chatbi.orchestration.graph.capabilities.real import (
+    RealChatBICapabilityGateway,
+)
 
 
 class FakeModelClient:

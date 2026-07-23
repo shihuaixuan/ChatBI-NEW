@@ -9,6 +9,7 @@ from apps.chatbi.models import (
     AnswerProjectionData,
     FinalReplyProjectionData,
 )
+from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContext
 from apps.chatbi.services import (
     AnswerGenerationService,
     AnswerModelClient,
@@ -20,7 +21,6 @@ from apps.chatbi.services import (
 from apps.chatbi.services import (
     build_answer_generation_prompt as build_answer_generation_prompt,
 )
-from apps.workflow.capabilities.context import ChatBIRunContext
 
 
 def build_answer_projection(request: dict[str, Any]) -> dict[str, Any]:

@@ -7,47 +7,46 @@ from apps.chatbi.composition import (
     build_semantic_query_service,
     build_semantic_retrieval_service,
 )
-from apps.chatbi.services.execution.sql_permission import PermissionAdapter
-from apps.retrieval.service import build_retrieval_service
-from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
-from apps.semantic.services.schema_service import SemanticSchemaService
-from apps.workflow.capabilities.adapters.answer import (
-    AnswerAdapter,
-    AnswerModelClient,
-)
-from apps.workflow.capabilities.adapters.interaction import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.answer import AnswerAdapter
+from apps.chatbi.orchestration.graph.capabilities.adapters.interaction import (
     InteractionAdapter,
 )
-from apps.workflow.capabilities.adapters.knowledge import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.knowledge import (
     SemanticKnowledgeAdapter,
 )
-from apps.workflow.capabilities.adapters.question import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.question import (
     QuestionAdapter,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.question_common import (
     QuestionClassificationModelClient,
 )
-from apps.workflow.capabilities.adapters.sql import SqlAdapter
-from apps.workflow.capabilities.execution import SessionSqlExecutionGateway
-from apps.workflow.capabilities.placeholder import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.sql import SqlAdapter
+from apps.chatbi.orchestration.graph.capabilities.execution import (
+    SessionSqlExecutionGateway,
+)
+from apps.chatbi.orchestration.graph.capabilities.gateway import (
+    ChatBICapabilityGateway,
+)
+from apps.chatbi.orchestration.graph.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
-from apps.workflow.capabilities.real import RealChatBICapabilityGateway
-from apps.workflow.conditions.core import register_chatbi_conditions
-from apps.workflow.definitions.chatbi_minimal_v1 import (
+from apps.chatbi.orchestration.graph.capabilities.real import (
+    RealChatBICapabilityGateway,
+)
+from apps.chatbi.orchestration.graph.conditions.core import register_chatbi_conditions
+from apps.chatbi.orchestration.graph.definitions.chatbi_minimal_v1 import (
     build_chatbi_minimal_definition,
     register_chatbi_minimal_handlers,
 )
-from apps.workflow.definitions.chatbi_v1 import (
+from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
     register_chatbi_v1_handlers,
 )
-from apps.workflow_engine.infrastructure.events.publisher import DatabaseEventPublisher
-from apps.workflow_engine.infrastructure.persistence.interaction_manager import (
-    DatabaseInteractionManager,
-)
-from apps.workflow_engine.infrastructure.persistence.node_execution_repository import (
-    NodeExecutionRepository,
-)
-from apps.workflow_engine.infrastructure.persistence.run_repository import RunRepository
+from apps.chatbi.services.execution.sql_permission import PermissionAdapter
+from apps.chatbi.services.generation.answer_generation import AnswerModelClient
+from apps.retrieval.service import build_retrieval_service
+from apps.semantic.composition import build_semantic_schema_service
+from apps.workflow_engine.composition import build_persistent_runtime_services
 from apps.workflow_engine.ports.run_store import RunStore
 from apps.workflow_engine.registry.condition_registry import ConditionRegistry
 from apps.workflow_engine.registry.definition_validator import DefinitionValidator
@@ -74,17 +73,22 @@ def build_placeholder_chatbi_runtime(session: Session, commit_events: bool = Fal
     registry = WorkflowRegistry(DefinitionValidator(handlers, conditions))
     registry.publish(build_chatbi_minimal_definition())
 
-    run_store = RunRepository(session)
-    events = DatabaseEventPublisher(session, commit_on_publish=commit_events)
+    persistence = build_persistent_runtime_services(
+        session,
+        commit_events=commit_events,
+    )
     return GraphRuntime(
         registry=registry,
-        run_store=run_store,
+        run_store=persistence.run_store,
         scheduler=NodeScheduler(handlers),
         router=ConditionRouter(conditions),
         context_patcher=ContextPatcher(),
-        checkpoint_manager=CheckpointManager(run_store, events),
+        checkpoint_manager=CheckpointManager(
+            persistence.run_store,
+            persistence.event_publisher,
+        ),
         lease=InMemoryRunLease(),
-        node_execution_recorder=NodeExecutionRepository(session),
+        node_execution_recorder=persistence.node_execution_recorder,
     )
 
 
@@ -104,7 +108,7 @@ def build_real_chatbi_v1_runtime(
 ) -> GraphRuntime:
     """组装真实 classify_question + 其他占位能力回退的 ChatBI v1 运行时。"""
 
-    schema_provider = SemanticSchemaService(SemanticSchemaLoader(session))
+    schema_provider = build_semantic_schema_service(session)
     retrieval_service = build_retrieval_service(
         session, schema_provider=schema_provider
     )
@@ -151,7 +155,7 @@ def build_real_chatbi_v1_runtime(
 
 def _build_chatbi_v1_runtime(
     session: Session,
-    gateway,
+    gateway: ChatBICapabilityGateway,
     commit_events: bool = False,
     run_store: RunStore | None = None,
 ) -> GraphRuntime:
@@ -166,16 +170,22 @@ def _build_chatbi_v1_runtime(
     registry.publish(build_chatbi_v1_definition())
 
     # 应用层可注入带聊天历史投影的仓储，独立执行仍使用默认仓储。
-    effective_run_store = run_store if run_store is not None else RunRepository(session)
-    events = DatabaseEventPublisher(session, commit_on_publish=commit_events)
+    persistence = build_persistent_runtime_services(
+        session,
+        commit_events=commit_events,
+        run_store=run_store,
+    )
     return GraphRuntime(
         registry=registry,
-        run_store=effective_run_store,
+        run_store=persistence.run_store,
         scheduler=NodeScheduler(handlers),
         router=ConditionRouter(conditions),
         context_patcher=ContextPatcher(),
-        checkpoint_manager=CheckpointManager(effective_run_store, events),
+        checkpoint_manager=CheckpointManager(
+            persistence.run_store,
+            persistence.event_publisher,
+        ),
         lease=InMemoryRunLease(),
-        interaction_manager=DatabaseInteractionManager(session),
-        node_execution_recorder=NodeExecutionRepository(session),
+        interaction_manager=persistence.interaction_store,
+        node_execution_recorder=persistence.node_execution_recorder,
     )

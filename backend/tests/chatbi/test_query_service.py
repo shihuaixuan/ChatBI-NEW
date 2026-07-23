@@ -1,6 +1,6 @@
 from apps.capabilities.schemas import ToolResult
 from apps.chatbi.services import QueryService, SQLPermissionService
-from apps.workflow.capabilities.adapters.permission import PermissionAdapter
+from apps.chatbi.orchestration.graph.capabilities.adapters.permission import PermissionAdapter
 
 
 class RecordingExecutor:

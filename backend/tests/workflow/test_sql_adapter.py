@@ -4,11 +4,11 @@ import pytest
 
 from apps.capabilities.schemas import ToolResult
 from apps.chatbi.models import ChatBIResultArtifactRef
+from apps.chatbi.orchestration.graph.capabilities.adapters.sql import SqlAdapter
+from apps.chatbi.orchestration.graph.capabilities.config import ChatBIConfig
 from apps.chatbi.services import ResultArtifactWriteError
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.sql_compiler import SemanticSQLCompileResult
-from apps.workflow.capabilities.adapters.sql import SqlAdapter
-from apps.workflow.capabilities.config import ChatBIConfig
 
 
 class FakeDatasetSchemaProvider:
@@ -1309,7 +1309,9 @@ def test_execute_split_preserves_sub_plan_role_for_share_analysis_e2e():
     assert exec_result["queries"][1]["role"] == "total"
 
     # Step 3: answer projection sees the analysis block via role map.
-    from apps.workflow.capabilities.adapters.answer import build_answer_projection
+    from apps.chatbi.orchestration.graph.capabilities.adapters.answer import (
+        build_answer_projection,
+    )
 
     projection = build_answer_projection(
         {

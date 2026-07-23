@@ -7,10 +7,10 @@ from apps.chatbi.models.dto.question_understanding import (
     NaturalLanguageIntentOutputBase,
     QuestionRewriteOutputBase,
 )
-from apps.workflow.schemas.v1 import (
+from apps.chatbi.orchestration.graph.schemas.v1 import (
     IntentRecognitionOutput as GraphIntentRecognitionOutput,
 )
-from apps.workflow.schemas.v1 import (
+from apps.chatbi.orchestration.graph.schemas.v1 import (
     QuestionRewriteOutput as GraphQuestionRewriteOutput,
 )
 

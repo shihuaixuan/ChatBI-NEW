@@ -9,11 +9,11 @@
 
 from datetime import timedelta
 
-from apps.workflow.capabilities.placeholder import (
+from apps.chatbi.orchestration.graph.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
-from apps.workflow.conditions.core import register_chatbi_conditions
-from apps.workflow.definitions.chatbi_v1 import (
+from apps.chatbi.orchestration.graph.conditions.core import register_chatbi_conditions
+from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
     register_chatbi_v1_handlers,
 )

@@ -1,12 +1,11 @@
-from apps.chatbi.services import QuestionIntentValidationService
-from apps.workflow.capabilities.adapters.intent_validation import (
-    IntentPostProcessor,
-    IntentValidationAdapter,
+from apps.chatbi.services.understanding.graph_contracts import (
+    intent_retry_feedback,
+    validate_intent,
 )
 
 
 def test_intent_validation_returns_complete_valid_contract():
-    result = QuestionIntentValidationService().validate(
+    result = validate_intent(
         {
             "intent_type": "metric_query",
             "metric_mentions": ["访问人数"],
@@ -33,7 +32,6 @@ def test_intent_validation_returns_complete_valid_contract():
 
 
 def test_intent_validation_projects_dimension_time_violation_and_retry_limit():
-    service = QuestionIntentValidationService(max_retry_count=2)
     intent = {
         "intent_type": "metric_query",
         "metric_mentions": ["访问人数"],
@@ -47,8 +45,8 @@ def test_intent_validation_projects_dimension_time_violation_and_retry_limit():
         ],
     }
 
-    first_result = service.validate(intent)
-    final_result = service.validate(intent, retry_count=1)
+    first_result = validate_intent(intent, max_retry_count=2)
+    final_result = validate_intent(intent, retry_count=1, max_retry_count=2)
 
     assert first_result["status"] == "invalid"
     assert first_result["reason_code"] == "DIMENSION_VALUE_IS_TIME_EXPRESSION"
@@ -79,7 +77,7 @@ def test_intent_validation_projects_dimension_time_violation_and_retry_limit():
 
 
 def test_intent_validation_retry_feedback_keeps_stable_contract():
-    feedback = QuestionIntentValidationService.retry_feedback(
+    feedback = intent_retry_feedback(
         {
             "reason_code": "DIMENSION_VALUE_IS_TIME_EXPRESSION",
             "repair_hint": "请修复维度值",
@@ -96,8 +94,3 @@ def test_intent_validation_retry_feedback_keeps_stable_contract():
             "retry_count": 1,
         }
     }
-
-
-def test_old_graph_intent_validation_names_are_identity_compatible():
-    assert IntentPostProcessor is QuestionIntentValidationService
-    assert IntentValidationAdapter is QuestionIntentValidationService

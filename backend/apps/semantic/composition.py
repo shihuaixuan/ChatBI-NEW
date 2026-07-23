@@ -48,6 +48,12 @@ def build_semantic_term_query_service(
     )
 
 
+def build_semantic_schema_service(session: Session) -> SemanticSchemaService:
+    """装配供跨领域调用方读取语义数据集 Schema 的公开服务。"""
+
+    return SemanticSchemaService(SemanticSchemaLoader(session))
+
+
 def build_semantic_dataset_binding_service(
     session: Session,
 ) -> SemanticDatasetBindingService:
@@ -113,6 +119,7 @@ def build_semantic_term_excel_service(
 
 
 __all__ = [
+    "build_semantic_schema_service",
     "build_semantic_dataset_binding_service",
     "build_semantic_dataset_catalog_service",
     "build_semantic_dataset_reference_service",

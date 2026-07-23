@@ -10,7 +10,11 @@ AGENT_DIR = (
     / "orchestration"
     / "agent"
 )
-FORBIDDEN = ("apps.workflow", "apps.workflow_engine", "apps.agentic_chat")
+FORBIDDEN = (
+    "apps.chatbi.orchestration.graph",
+    "apps.workflow_engine",
+    "apps.agentic_chat",
+)
 
 
 def _imported_modules(path: Path) -> list[str]:

@@ -6,7 +6,7 @@ from apps.workflow_engine.domain.context import (
     ControlContext,
     WorkflowContext,
 )
-from apps.workflow_engine.domain.definition import NodeDefinition, NodeType
+from apps.workflow_engine.domain.definition import NodeDefinition, NodeType, RetryPolicy
 from apps.workflow_engine.domain.execution import NodeExecutionResult, NodeResultStatus
 from apps.workflow_engine.domain.interaction import (
     InteractionRequest,
@@ -14,20 +14,21 @@ from apps.workflow_engine.domain.interaction import (
 )
 from apps.workflow_engine.domain.run import RunStatus, WorkflowRun
 from apps.workflow_engine.ports.run_store import RunStore
+from apps.workflow_engine.ports.runtime_persistence import (
+    InteractionStore,
+    NodeExecutionRecorder,
+)
 from apps.workflow_engine.registry.workflow_registry import WorkflowRegistry
 from apps.workflow_engine.runtime.checkpoint_manager import CheckpointManager
 from apps.workflow_engine.runtime.context_patcher import ContextPatcher
-from apps.workflow_engine.runtime.interaction import (
-    InteractionError,
-    InteractionManager,
-)
+from apps.workflow_engine.runtime.interaction import InteractionError
 from apps.workflow_engine.runtime.lease import InMemoryRunLease
 from apps.workflow_engine.runtime.public_projection import (
     node_display_label,
     public_node_summary,
 )
 from apps.workflow_engine.runtime.retry import RetryController
-from apps.workflow_engine.runtime.router import ConditionRouter
+from apps.workflow_engine.runtime.router import ConditionRouter, RouteDecision
 from apps.workflow_engine.runtime.scheduler import NodeScheduler
 
 
@@ -44,8 +45,8 @@ class GraphRuntime:
         checkpoint_manager: CheckpointManager,
         lease: InMemoryRunLease,
         retry_controller: RetryController | None = None,
-        interaction_manager: InteractionManager | None = None,
-        node_execution_recorder: Any | None = None,
+        interaction_manager: InteractionStore | None = None,
+        node_execution_recorder: NodeExecutionRecorder | None = None,
     ) -> None:
         self._registry = registry
         self._run_store = run_store
@@ -191,7 +192,7 @@ class GraphRuntime:
         self,
         run_id: str,
         interaction_id: str,
-        response: dict,
+        response: dict[str, Any],
         tenant_id: int,
         user_id: int,
     ) -> WorkflowRun:
@@ -233,7 +234,10 @@ class GraphRuntime:
                 ContextPatch(set_values=patch_values),
             )
             definition = self._registry.get(run.definition_name, run.definition_version)
-            current_node = definition.nodes[run.current_node]
+            current_node_name = run.current_node
+            if current_node_name is None:
+                raise InteractionError("RUN_CURRENT_NODE_MISSING", run_id)
+            current_node = definition.nodes[current_node_name]
             route = self._router.select(
                 definition,
                 current_node,
@@ -271,7 +275,12 @@ class GraphRuntime:
             "answered_at": answered_at.isoformat(),
         }
 
-    def _execute_with_retry(self, run, node, default_policy) -> NodeExecutionResult:
+    def _execute_with_retry(
+        self,
+        run: WorkflowRun,
+        node: NodeDefinition,
+        default_policy: RetryPolicy,
+    ) -> NodeExecutionResult:
         policy = node.retry_policy or default_policy
         result: NodeExecutionResult | None = None
         for attempt in range(1, policy.max_attempts + 1):
@@ -291,7 +300,13 @@ class GraphRuntime:
             raise RuntimeError("NODE_EXECUTION_NOT_ATTEMPTED")
         return result
 
-    def _record_node_execution(self, run, node, result, route=None) -> None:
+    def _record_node_execution(
+        self,
+        run: WorkflowRun,
+        node: NodeDefinition,
+        result: NodeExecutionResult,
+        route: RouteDecision | None = None,
+    ) -> None:
         if self._node_executions is None:
             return
         self._node_executions.record(run=run, node=node, result=result, route=route)

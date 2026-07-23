@@ -1,11 +1,13 @@
-from apps.workflow.capabilities.gateway import ChatBICapabilityGateway
-from apps.workflow.capabilities.interactions import CHATBI_V1_INTERACTION_SPECS
-from apps.workflow.nodes.answer import FinishNode
-from apps.workflow.nodes.v1 import (
+from apps.chatbi.orchestration.graph.capabilities.gateway import ChatBICapabilityGateway
+from apps.chatbi.orchestration.graph.capabilities.interactions import (
+    CHATBI_V1_INTERACTION_SPECS,
+)
+from apps.chatbi.orchestration.graph.nodes.answer import FinishNode
+from apps.chatbi.orchestration.graph.nodes.v1 import (
     ChatBIV1CapabilityNode,
     ChatBIV1InteractionNode,
 )
-from apps.workflow.schemas.v1 import CHATBI_V1_OUTPUT_MODELS
+from apps.chatbi.orchestration.graph.schemas.v1 import CHATBI_V1_OUTPUT_MODELS
 from apps.workflow_engine.domain.definition import (
     EdgeDefinition,
     NodeDefinition,

@@ -114,12 +114,12 @@ GraphRuntime -> v1 node -> AgenticOrchestrator -> planner/executor/tool chain
 新增：
 
 ```text
-backend/apps/workflow/capabilities/real.py
-backend/apps/workflow/capabilities/adapters/question.py
-backend/apps/workflow/capabilities/adapters/knowledge.py
-backend/apps/workflow/capabilities/adapters/sql.py
-backend/apps/workflow/capabilities/adapters/answer.py
-backend/apps/workflow/capabilities/adapters/recommendation.py
+backend/apps/chatbi/orchestration/graph/capabilities/real.py
+backend/apps/chatbi/orchestration/graph/capabilities/adapters/question.py
+backend/apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py
+backend/apps/chatbi/orchestration/graph/capabilities/adapters/sql.py
+backend/apps/chatbi/orchestration/graph/capabilities/adapters/answer.py
+backend/apps/chatbi/orchestration/graph/capabilities/adapters/recommendation.py
 ```
 
 `RealChatBICapabilityGateway.invoke()` 只做能力分发和临时能力兜底：

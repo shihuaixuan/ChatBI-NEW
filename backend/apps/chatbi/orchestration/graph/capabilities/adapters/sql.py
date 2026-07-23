@@ -11,6 +11,18 @@ from apps.chatbi.models import (
     SemanticQueryCompileData,
     SemanticQueryCompileResult,
 )
+from apps.chatbi.orchestration.graph.capabilities import planning
+from apps.chatbi.orchestration.graph.capabilities.adapters.permission import (
+    PermissionAdapter,
+)
+from apps.chatbi.orchestration.graph.capabilities.config import ChatBIConfig
+from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContext
+from apps.chatbi.orchestration.graph.capabilities.execution import (
+    ExecutionQuery,
+    ExecutionResult,
+    build_execution_output,
+    validate_execution_output,
+)
 from apps.chatbi.services import (
     QueryService,
     ResultArtifactService,
@@ -24,16 +36,6 @@ from apps.semantic.services.sql_compilation_service import (
 )
 from apps.semantic.services.sql_compiler import (
     SemanticSQLCompiler,
-)
-from apps.workflow.capabilities import planning
-from apps.workflow.capabilities.adapters.permission import PermissionAdapter
-from apps.workflow.capabilities.config import ChatBIConfig
-from apps.workflow.capabilities.context import ChatBIRunContext
-from apps.workflow.capabilities.execution import (
-    ExecutionQuery,
-    ExecutionResult,
-    build_execution_output,
-    validate_execution_output,
 )
 
 

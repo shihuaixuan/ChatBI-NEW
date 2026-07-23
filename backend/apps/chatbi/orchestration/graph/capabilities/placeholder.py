@@ -1,7 +1,11 @@
 from typing import Any
 
-from apps.workflow.capabilities.adapters.interaction import InteractionAdapter
-from apps.workflow.capabilities.execution import validate_execution_output
+from apps.chatbi.orchestration.graph.capabilities.adapters.interaction import (
+    InteractionAdapter,
+)
+from apps.chatbi.orchestration.graph.capabilities.execution import (
+    validate_execution_output,
+)
 
 
 class PlaceholderChatBICapabilityGateway:

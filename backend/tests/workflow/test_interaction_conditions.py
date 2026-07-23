@@ -1,4 +1,4 @@
-from apps.workflow.conditions.core import (
+from apps.chatbi.orchestration.graph.conditions.core import (
     InteractionAnsweredCondition,
     InteractionResponseAnsweredCondition,
     InteractionResponseSkippedCondition,

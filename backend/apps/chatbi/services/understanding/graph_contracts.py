@@ -100,7 +100,7 @@ def fallback_rewrite(
     ).model_dump(mode="json")
 
 
-# --- 意图校验投影（原 QuestionIntentValidationService） ---
+# --- 意图校验投影 ---
 
 
 def validate_intent(
@@ -193,38 +193,8 @@ def intent_retry_feedback(validation: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class QuestionIntentValidationService:
-    """兼容薄包装（台账 E1）：旧 Graph 路径仍以类形态引用意图校验。"""
-
-    def __init__(
-        self,
-        max_retry_count: int = DEFAULT_MAX_INTENT_RETRY,
-        validation_service: object | None = None,
-    ) -> None:
-        # validation_service 参数仅为旧签名兼容；校验规则已收敛为共享函数。
-        self._max_retry_count = max_retry_count
-
-    @property
-    def max_retry_count(self) -> int:
-        return self._max_retry_count
-
-    def validate(
-        self,
-        intent: dict[str, Any],
-        retry_count: int = 0,
-    ) -> dict[str, Any]:
-        return validate_intent(
-            intent,
-            retry_count,
-            max_retry_count=self._max_retry_count,
-        )
-
-    retry_feedback = staticmethod(intent_retry_feedback)
-
-
 __all__ = [
     "DEFAULT_MAX_INTENT_RETRY",
-    "QuestionIntentValidationService",
     "classification_precondition",
     "empty_rewrite",
     "fallback_rewrite",

@@ -2359,3 +2359,32 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
 
 **R4-b 完成。** 下一批进入 R4-c，将 Graph 编排归入
 `chatbi/orchestration/graph`，并处理其 Workflow Engine 基础设施依赖。
+
+## R4-c（2026-07-23）：Graph 编排归入 ChatBI
+
+1. 原 `apps/workflow` 的图定义、节点、条件、能力适配与运行时整体迁入
+   `apps/chatbi/orchestration/graph/`；应用、Workflow Engine API、测试和维护文档统一切换新路径，
+   旧目录删除，不保留内部兼容包。已安装的 `sqlbot_xpack` 只读扫描无旧 Graph 路径引用。
+2. 原 1,469 行 `capabilities/adapters/question.py` 拆为 5 个职责文件：
+   `question.py` 保留节点编排、模型重试、并发子任务与澄清投影；
+   `question_input.py` 负责分类和重写提示词；`question_intent.py` 负责意图与语义提示词；
+   `question_dimension.py` 负责维度提示词和候选映射；`question_common.py` 保存共享模型契约与主题域规则。
+   既有导入继续由 `question.py` 明确导出，调用契约不变。
+3. Workflow Engine 新增 `ports/runtime_persistence.py`，公开交互存储、节点执行记录和路由记录最小契约；
+   `composition.py` 统一装配 Run、Event、Interaction、NodeExecution 四项数据库实现。
+   Graph runtime 改用该公开组合入口，不再直接导入引擎 infrastructure。
+4. Semantic 组合入口新增 `build_semantic_schema_service()`，Graph runtime 不再直接依赖
+   `SemanticSchemaLoader`。依赖基线同步销账 4 条 Workflow Engine infrastructure 违规和
+   1 条 Semantic repository 违规。
+5. 台账 B7/E4 清偿：Graph 时间规则直接调用 ChatBI Service；旧
+   `intent_validation.py`、`time_slots.py` 兼容导出与
+   `QuestionIntentValidationService` 类包装删除，调用方改用函数契约。
+6. 架构守卫更新为禁止恢复 `apps.workflow` 旧路径，并禁止 ChatBI Service 反向依赖
+   orchestration；Agent 与 capabilities 的执行器边界按新 Graph 路径更新。
+7. 验证：Graph、Workflow Engine、ChatBI 与架构定向回归 370 项通过；完整后端回归
+   1,222 项通过；应用与 xpack 初始化通过；OpenAPI 保持 154 条路径，
+   `/chat`、`/chat/agent`、`/graph` 三类入口完整；变更范围 Ruff（F/I）和 12 个关键模块
+   严格 Mypy 通过。无行为变化、无数据库变更。
+
+**R4-c 完成。** 下一批进入 R4-d，解散 `apps/capabilities` 与 `apps/template`，
+迁出平台参数，并清偿 R1/R2 剩余兼容导出。

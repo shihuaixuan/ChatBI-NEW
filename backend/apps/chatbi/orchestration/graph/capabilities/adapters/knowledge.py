@@ -5,13 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 from apps.chatbi.models import SemanticRetrievalData
+from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContext
+from apps.chatbi.orchestration.graph.capabilities.interactions import (
+    apply_slot_response_to_intent,
+)
 from apps.chatbi.services import (
     SemanticRetrievalService,
 )
 from apps.retrieval.errors import RetrievalConfigurationError, RetrievalQueryError
 from apps.retrieval.service import RetrievalService
-from apps.workflow.capabilities.context import ChatBIRunContext
-from apps.workflow.capabilities.interactions import apply_slot_response_to_intent
 
 
 class SemanticKnowledgeAdapter:

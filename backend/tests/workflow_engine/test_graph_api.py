@@ -19,6 +19,10 @@ from sqlalchemy import delete
 from sqlmodel import Session, select
 
 from apps.chatbi.models import Chat, ChatRecord
+from apps.chatbi.orchestration.graph import runtime as chatbi_runtime
+from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
+    build_chatbi_v1_definition,
+)
 from apps.retrieval.embedding import StaticEmbeddingProvider
 from apps.retrieval.indexing import RetrievalIndexingService
 from apps.retrieval.semantic_indexing import (
@@ -37,8 +41,6 @@ from apps.semantic.models.orm import (
 )
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
 from apps.semantic.services.schema_service import SemanticSchemaService
-from apps.workflow import runtime as chatbi_runtime
-from apps.workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
 from apps.workflow_engine.api import router as graph_router
 from apps.workflow_engine.api import service as graph_service
 from apps.workflow_engine.domain.event import WorkflowEvent

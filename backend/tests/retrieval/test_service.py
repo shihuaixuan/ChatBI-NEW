@@ -21,7 +21,7 @@ from apps.retrieval.semantic_binding import (
     SemanticBindingExecutionResult,
 )
 from apps.retrieval.service import RetrievalService, build_semantic_binding_request
-from apps.workflow.capabilities.adapters.knowledge import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.knowledge import (
     SemanticKnowledgeAdapter,
 )
 

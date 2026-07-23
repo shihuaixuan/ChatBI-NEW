@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
-from apps.workflow.capabilities.adapters.permission import PermissionAdapter
+from apps.chatbi.orchestration.graph.capabilities.adapters.permission import (
+    PermissionAdapter,
+)
 
 
 class FakePermissionTool:

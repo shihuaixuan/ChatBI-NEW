@@ -77,8 +77,8 @@ GraphApiService.create_query()
 | 节点调度 | `backend/apps/workflow_engine/runtime/scheduler.py` | 根据 `node.handler` 找到 handler 并执行 |
 | 条件路由 | `backend/apps/workflow_engine/runtime/router.py` | 按边优先级和条件判断下一个节点 |
 | 上下文写入 | `backend/apps/workflow_engine/runtime/context_patcher.py` | 将节点输出 patch 到 `WorkflowContext` |
-| 最小 ChatBI 图 | `backend/apps/workflow/definitions/chatbi_minimal_v1.py` | 声明当前最小图节点和边 |
-| 当前占位能力 | `backend/apps/workflow/capabilities/placeholder.py` | 用确定性假数据跑通完整流程 |
+| 最小 ChatBI 图 | `backend/apps/chatbi/orchestration/graph/definitions/chatbi_minimal_v1.py` | 声明当前最小图节点和边 |
+| 当前占位能力 | `backend/apps/chatbi/orchestration/graph/capabilities/placeholder.py` | 用确定性假数据跑通完整流程 |
 | 运行演示脚本 | `backend/tests/workflow_engine/run_graph_flow_demo.py` | 直接打印从输入到每个节点状态与输出的全过程 |
 
 当前最小图是：

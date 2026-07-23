@@ -9,6 +9,16 @@ from uuid import uuid4
 from fastapi import HTTPException
 from sqlmodel import Session, col, func, select
 
+from apps.chatbi.orchestration.graph.definitions.chatbi_minimal_v1 import (
+    build_chatbi_minimal_definition,
+)
+from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
+    build_chatbi_v1_definition,
+)
+from apps.chatbi.orchestration.graph.runtime import (
+    build_placeholder_chatbi_runtime,
+    build_real_chatbi_v1_runtime,
+)
 from apps.chatbi.workflow_gateway import (
     Chat,
     ChatRecord,
@@ -24,14 +34,6 @@ from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetModelConfig,
     SemanticModel,
-)
-from apps.workflow.definitions.chatbi_minimal_v1 import (
-    build_chatbi_minimal_definition,
-)
-from apps.workflow.definitions.chatbi_v1 import build_chatbi_v1_definition
-from apps.workflow.runtime import (
-    build_placeholder_chatbi_runtime,
-    build_real_chatbi_v1_runtime,
 )
 from apps.workflow_engine.api.chat_history import (
     ChatProjectingRunStore,

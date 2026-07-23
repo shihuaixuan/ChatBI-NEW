@@ -1,4 +1,4 @@
-from apps.workflow.capabilities.adapters.time_slots import (
+from apps.chatbi.services.understanding.time_range import (
     is_time_expression,
     normalize_time_range,
 )

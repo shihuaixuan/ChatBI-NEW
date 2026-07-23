@@ -1,6 +1,8 @@
 import pytest
 
-from apps.workflow.capabilities.adapters.question import QuestionAdapter
+from apps.chatbi.orchestration.graph.capabilities.adapters.question import (
+    QuestionAdapter,
+)
 
 
 class RecordingModelClient:

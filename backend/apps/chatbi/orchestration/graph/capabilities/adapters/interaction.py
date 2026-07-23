@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContext
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.schema_service import DatasetSchemaProvider
-from apps.workflow.capabilities.context import ChatBIRunContext
 
 
 @dataclass(frozen=True)

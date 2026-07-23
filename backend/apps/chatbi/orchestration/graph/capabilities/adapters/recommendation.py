@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from apps.workflow.capabilities.context import ChatBIRunContext
-from apps.workflow.schemas.v1 import RecommendationOutput
+from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContext
+from apps.chatbi.orchestration.graph.schemas.v1 import RecommendationOutput
 
 
 class RecommendationAdapter:

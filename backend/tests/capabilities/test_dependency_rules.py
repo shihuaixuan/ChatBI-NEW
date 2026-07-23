@@ -10,7 +10,12 @@ import ast
 from pathlib import Path
 
 CAPABILITIES_DIR = Path(__file__).resolve().parents[2] / "apps" / "capabilities"
-FORBIDDEN = ("apps.workflow_engine", "apps.agent", "apps.agentic_chat")
+FORBIDDEN = (
+    "apps.workflow_engine",
+    "apps.chatbi.orchestration",
+    "apps.agent",
+    "apps.agentic_chat",
+)
 SHIM_EXCEPTION_FILE = CAPABILITIES_DIR / "semantic" / "retrieval.py"
 
 
@@ -38,6 +43,9 @@ def test_capabilities_never_import_runtime_packages():
 
 def test_workflow_import_only_in_retrieval_shim():
     for path in _py_files():
-        imports_workflow = any(module.startswith("apps.workflow") for module in _imported_modules(path))
+        imports_workflow = any(
+            module.startswith("apps.chatbi.orchestration.graph")
+            for module in _imported_modules(path)
+        )
         if imports_workflow:
             assert path == SHIM_EXCEPTION_FILE, f"workflow 只允许出现在检索垫片中，违规文件: {path}"

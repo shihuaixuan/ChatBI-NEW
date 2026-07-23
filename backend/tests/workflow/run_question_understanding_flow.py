@@ -107,7 +107,9 @@ def run_question_understanding_flow(
     tenant_id: int = 1,
     user_id: int = 1,
 ) -> dict[str, Any]:
-    from apps.workflow.capabilities.adapters.question import QuestionAdapter
+    from apps.chatbi.orchestration.graph.capabilities.adapters.question import (
+        QuestionAdapter,
+    )
 
     adapter = QuestionAdapter(model_client=StableQuestionModelClient())
     context = _base_request(question, dataset_id, tenant_id, user_id)

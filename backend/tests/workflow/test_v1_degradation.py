@@ -6,11 +6,11 @@ run.failed 事件，图中的 generate_question_answer 兜底节点永远走不�
 把流程路由到解释性回答，Run 正常完成。
 """
 
-from apps.workflow.capabilities.placeholder import (
+from apps.chatbi.orchestration.graph.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
-from apps.workflow.conditions.core import register_chatbi_conditions
-from apps.workflow.definitions.chatbi_v1 import (
+from apps.chatbi.orchestration.graph.conditions.core import register_chatbi_conditions
+from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
     register_chatbi_v1_handlers,
 )
@@ -104,7 +104,9 @@ def test_sql_generation_failure_degrades_without_executing_sql():
 def test_degraded_answer_fallback_mentions_error_code():
     """回答模型本身也不可用时，兜底文案必须携带失败原因而不是通用话术。"""
 
-    from apps.workflow.capabilities.adapters.answer import AnswerAdapter
+    from apps.chatbi.orchestration.graph.capabilities.adapters.answer import (
+        AnswerAdapter,
+    )
 
     def broken_model(_prompt):
         raise RuntimeError("LLM_UNAVAILABLE")

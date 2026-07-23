@@ -2,20 +2,24 @@ from __future__ import annotations
 
 from typing import Any
 
-from apps.workflow.capabilities.adapters.answer import AnswerAdapter
-from apps.workflow.capabilities.adapters.interaction import InteractionAdapter
-from apps.workflow.capabilities.adapters.knowledge import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.answer import AnswerAdapter
+from apps.chatbi.orchestration.graph.capabilities.adapters.interaction import (
+    InteractionAdapter,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.knowledge import (
     SemanticKnowledgeAdapter,
 )
-from apps.workflow.capabilities.adapters.question import QuestionAdapter
-from apps.workflow.capabilities.adapters.recommendation import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.question import (
+    QuestionAdapter,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.recommendation import (
     RecommendationAdapter,
 )
-from apps.workflow.capabilities.adapters.sql import SqlAdapter
-from apps.workflow.capabilities.placeholder import (
+from apps.chatbi.orchestration.graph.capabilities.adapters.sql import SqlAdapter
+from apps.chatbi.orchestration.graph.capabilities.placeholder import (
     PlaceholderChatBICapabilityGateway,
 )
-from apps.workflow.capabilities.planning import QueryPlanBinder
+from apps.chatbi.orchestration.graph.capabilities.planning import QueryPlanBinder
 
 
 class RealChatBICapabilityGateway:

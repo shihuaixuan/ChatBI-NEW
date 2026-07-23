@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from apps.workflow.capabilities.interactions import (
+from apps.chatbi.orchestration.graph.capabilities.interactions import (
     build_interaction_record,
     legacy_interaction_path,
     read_interaction_response,

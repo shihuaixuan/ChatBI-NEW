@@ -6,13 +6,12 @@
 - validation：确定性校验规则（共享函数）
 - intent_projection：意图清洗/合并投影（共享函数）
 - intent_fallback：模型不可用时的规则降级（Service，规则密集）
-- graph_contracts：Graph 专用契约投影（函数 + 兼容薄包装）
+- graph_contracts：Graph 专用契约投影函数
 - prompts / time_range：共享提示词规则与时间表达规则
 """
 
 from apps.chatbi.services.understanding.graph_contracts import (
     DEFAULT_MAX_INTENT_RETRY,
-    QuestionIntentValidationService,
     classification_precondition,
     empty_rewrite,
     fallback_rewrite,
@@ -73,7 +72,6 @@ __all__ = [
     "METRIC_TIME_EXTRACTION_RULES",
     "QUESTION_REWRITE_BUSINESS_RULES",
     "QuestionIntentFallbackService",
-    "QuestionIntentValidationService",
     "QuestionModelClient",
     "QuestionModelService",
     "QuestionUnderstandingModelClient",

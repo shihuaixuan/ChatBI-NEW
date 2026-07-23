@@ -1,6 +1,8 @@
 
-from apps.workflow.capabilities.gateway import ChatBICapabilityGateway
-from apps.workflow.capabilities.interactions import standard_interaction_path
+from apps.chatbi.orchestration.graph.capabilities.gateway import ChatBICapabilityGateway
+from apps.chatbi.orchestration.graph.capabilities.interactions import (
+    standard_interaction_path,
+)
 from apps.workflow_engine.domain.context import ContextPatch
 from apps.workflow_engine.domain.errors import NodeError
 from apps.workflow_engine.domain.execution import (

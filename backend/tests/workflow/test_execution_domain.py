@@ -1,6 +1,6 @@
 import pytest
 
-from apps.workflow.capabilities.execution import (
+from apps.chatbi.orchestration.graph.capabilities.execution import (
     ExecutionQuery,
     ExecutionResult,
     build_execution_output,

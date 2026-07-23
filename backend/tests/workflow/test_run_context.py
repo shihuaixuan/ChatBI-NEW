@@ -1,4 +1,7 @@
-from apps.workflow.capabilities.context import ChatBIRunContext, int_or_none
+from apps.chatbi.orchestration.graph.capabilities.context import (
+    ChatBIRunContext,
+    int_or_none,
+)
 
 
 def _request(**overrides):

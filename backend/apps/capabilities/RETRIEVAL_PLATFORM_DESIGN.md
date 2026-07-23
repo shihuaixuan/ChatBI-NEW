@@ -572,7 +572,7 @@ flowchart LR
 
 - `apps/capabilities/question_understanding.py`：共享问题理解与槽位结构。
 - `apps/retrieval/embedding.py`：统一索引和查询共用的 embedding provider。
-- `apps/workflow/capabilities/adapters/knowledge.py`：当前文档召回和决策逻辑。
+- `apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py`：当前文档召回和决策逻辑。
 - `extra/supersonic`：元数据事件更新、周期重载、元数据过滤和 SQL 示例召回。
 - `extra/youtu-rag/utu/rag`：Document/Chunk/Retriever/VectorStore 抽象与知识库构建流程。
 

@@ -1,4 +1,4 @@
-from apps.workflow.capabilities.interactions import (
+from apps.chatbi.orchestration.graph.capabilities.interactions import (
     CHATBI_V1_INTERACTION_SPECS,
     read_interaction_response,
 )
