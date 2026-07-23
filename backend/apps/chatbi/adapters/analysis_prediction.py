@@ -33,7 +33,6 @@ class TemplateAnalysisPredictionPromptBuilder:
             system_content = template["system"].format(
                 lang=data.language,
                 terminologies=data.terminologies,
-                custom_prompt=data.custom_prompt,
                 sqlbot_name=data.assistant_name,
             )
         else:
@@ -44,7 +43,6 @@ class TemplateAnalysisPredictionPromptBuilder:
             template = template_loader()
             system_content = template["system"].format(
                 lang=data.language,
-                custom_prompt=data.custom_prompt,
                 sqlbot_name=data.assistant_name,
             )
         return [

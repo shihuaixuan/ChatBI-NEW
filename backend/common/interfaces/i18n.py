@@ -72,10 +72,6 @@ tags_metadata = [
         "name": "system_embedded",
         "description": f"{PLACEHOLDER_PREFIX}system_embedded_api"
     },
-    {
-        "name": "system_authentication",
-        "description": f"{PLACEHOLDER_PREFIX}system_authentication_api"
-    },
     {"name": "Table Relation",
      "description": f"{PLACEHOLDER_PREFIX}tr_api"
      },
@@ -90,10 +86,6 @@ tags_metadata = [
     {
         "name": "Terminology",
         "description": f"{PLACEHOLDER_PREFIX}terminology_api"
-    },
-    {
-        "name": "CustomPrompt",
-        "description": f"{PLACEHOLDER_PREFIX}custom_prompt_api"
     },
     {
         "name": "mcp",

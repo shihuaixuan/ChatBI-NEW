@@ -32,7 +32,7 @@ class OperationEnum(Enum):
     CHOOSE_TABLE = "8"
     FILTER_TERMS = "9"
     FILTER_SQL_EXAMPLE = "10"
-    FILTER_CUSTOM_PROMPT = "11"
+    FILTER_CUSTOM_PROMPT = "11"  # 仅用于读取功能下线前的历史日志
     EXECUTE_SQL = "12"
     GENERATE_PICTURE = "13"
     FILTER_SEMANTIC_ASSET = "14"

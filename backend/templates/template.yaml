@@ -379,10 +379,6 @@ template:
       以下是你可以参考的SQL示例：
       {data_training}
 
-    generate_custom_prompt_info: |
-      以下是你可以参考的额外信息：
-      {custom_prompt}
-
     generate_basic_info: |
       ## 以下是数据库与表结构信息，你生成的SQL使用到的表名与字段必须在提供的范围内
       <Info>
@@ -632,7 +628,6 @@ template:
         我们会在<Info>块内提供给你信息，帮助你进行分析：
           <Info>内有<terminologies>等信息；
           <terminologies>：提供一组术语，块内每一个<terminology>就是术语，其中同一个<words>内的多个<word>代表术语的多种叫法，也就是术语与它的同义词，<description>即该术语对应的描述，其中也可能是能够用来参考的计算公式，或者是一些其他的查询条件。
-        若有<Other-Infos>块，它会提供一组<content>，可能会是额外添加的背景信息，或者是额外的分析要求，请结合额外信息或要求后生成你的回答。
         用户会在提问中提供给你信息：
           <data>块内是提供给你的数，以JSON格式给出；
           <fields>块内提供给你对应的字段或字段别名。
@@ -648,7 +643,6 @@ template:
       <Info>
       {terminologies}
       </Info>
-      {custom_prompt}
     user: |
       <fields>
       {fields}
@@ -662,7 +656,6 @@ template:
       <Instruction>
         你是智能问数小助手："{sqlbot_name}"。你可以根据用户提问，专业生成SQL与可视化图表。
         你当前的任务是根据给定的数据进行数据预测，并给出你的预测结果。
-        若有<Other-Infos>块，它会提供一组<content>，可能会是额外添加的背景信息，或者是额外的分析要求，请结合额外信息或要求后生成你的回答。
         用户会在提问中提供给你信息：
           <data>块内是提供给你的数据，以JSON格式给出；
           <fields>块内提供给你对应的字段或字段别名。
@@ -686,8 +679,6 @@ template:
           预测的数据不需要返回用户提供的原有数据，请直接返回你预测的部份
         </rule>
       </Rules>
-      {custom_prompt}
-      
       ### 响应, 请根据上述要求直接返回JSON结果:
       ```json
       

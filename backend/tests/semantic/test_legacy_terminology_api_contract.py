@@ -42,8 +42,8 @@ def test_terminology_audit_resource_uses_semantic_term_table():
     assert "FROM headless_term" in str(session.query)
 
 
-def test_xpack_terminology_import_compatibility_uses_semantic_term_table():
-    from sqlbot_xpack.audit.curd.audit import build_resource_union_query
+def test_audit_resource_union_uses_semantic_term_table():
+    from common.audit.schemas.log_utils import build_resource_union_query
 
     query = str(build_resource_union_query())
 

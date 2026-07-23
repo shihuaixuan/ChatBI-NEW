@@ -24,9 +24,6 @@ from apps.chatbi.adapters.datasource_selection import build_datasource_selection
 from apps.chatbi.adapters.dynamic_sql_generation import (
     build_dynamic_sql_generation_service,
 )
-from apps.chatbi.adapters.generation_custom_prompt import (
-    build_generation_custom_prompt_service,
-)
 from apps.chatbi.adapters.permission_sql_generation import (
     build_permission_sql_generation_service,
 )
@@ -100,8 +97,6 @@ from apps.chatbi.models import (
     GenerationAssistantContext,
     GenerationContextScope,
     GenerationContextScopeData,
-    GenerationCustomPromptQuery,
-    GenerationCustomPromptType,
     GenerationHistoryLog,
     GenerationHistoryProjectionData,
     GenerationRuntimeSettingsData,
@@ -388,29 +383,6 @@ class LLMService:
             )
         )
 
-    def filter_custom_prompts(self, _session: Session, custom_prompt_type: GenerationCustomPromptType, oid: int = None,
-                              ds_id: int = None):
-        service = build_generation_custom_prompt_service(_session)
-        if not service.enabled:
-            return
-        scope = self.resolve_generation_context_scope(oid, ds_id)
-        self.current_logs[OperationEnum.FILTER_CUSTOM_PROMPT] = start_log(session=_session,
-                                                                          operate=OperationEnum.FILTER_CUSTOM_PROMPT,
-                                                                          record_id=self.record.id,
-                                                                          local_operation=True)
-        result = service.query(
-            GenerationCustomPromptQuery(
-                prompt_type=custom_prompt_type,
-                workspace_id=scope.workspace_id,
-                datasource_id=scope.datasource_id,
-            )
-        )
-        self.chat_question.custom_prompt = result.prompt
-        self.current_logs[OperationEnum.FILTER_CUSTOM_PROMPT] = end_log(session=_session,
-                                                                        log=self.current_logs[
-                                                                            OperationEnum.FILTER_CUSTOM_PROMPT],
-                                                                        full_message=result.items)
-
     def filter_training_template(self, _session: Session, oid: int = None, ds_id: int = None):
         self.current_logs[OperationEnum.FILTER_SQL_EXAMPLE] = start_log(session=_session,
                                                                         operate=OperationEnum.FILTER_SQL_EXAMPLE,
@@ -474,16 +446,7 @@ class LLMService:
         self.chat_question.fields = orjson.dumps(fields).decode()
         data = get_chat_chart_data(_session, self.record.id)
         self.chat_question.data = orjson.dumps(data.get('data')).decode()
-        ds_id = self.ds.id if self.out_ds_instance is None and self.ds else None
-
         self.load_term_context(_session)
-
-        self.filter_custom_prompts(
-            _session,
-            GenerationCustomPromptType.ANALYSIS,
-            self.current_user.oid,
-            ds_id,
-        )
 
         generation_data = AnalysisPredictionGenerationData(
             record_id=self.record.id or 0,
@@ -492,7 +455,6 @@ class LLMService:
             data=self.chat_question.data,
             language=self.chat_question.lang,
             assistant_name=self.chat_question.sqlbot_name,
-            custom_prompt=self.chat_question.custom_prompt,
             terminologies=self.chat_question.terminologies,
         )
         service = build_analysis_prediction_service(_session, self.llm)
@@ -526,14 +488,6 @@ class LLMService:
         data = get_chat_chart_data(_session, self.record.id)
         self.chat_question.data = orjson.dumps(data.get('data')).decode()
 
-        ds_id = self.ds.id if self.out_ds_instance is None and self.ds else None
-        self.filter_custom_prompts(
-            _session,
-            GenerationCustomPromptType.PREDICT_DATA,
-            self.current_user.oid,
-            ds_id,
-        )
-
         generation_data = AnalysisPredictionGenerationData(
             record_id=self.record.id or 0,
             generation_type=ChatRecordAuxiliaryType.PREDICT,
@@ -541,7 +495,6 @@ class LLMService:
             data=self.chat_question.data,
             language=self.chat_question.lang,
             assistant_name=self.chat_question.sqlbot_name,
-            custom_prompt=self.chat_question.custom_prompt,
         )
         service = build_analysis_prediction_service(_session, self.llm)
         messages = service.prepare(generation_data)
@@ -726,13 +679,6 @@ class LLMService:
 
             self.filter_training_template(_session, oid, ds_id)
 
-            self.filter_custom_prompts(
-                _session,
-                GenerationCustomPromptType.GENERATE_SQL,
-                oid,
-                ds_id,
-            )
-
             self.init_messages(_session)
 
     def generate_sql(self, _session: Session):
@@ -748,7 +694,6 @@ class LLMService:
             current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             rule=self.chat_question.rule,
             error_message=self.chat_question.error_msg,
-            custom_prompt=self.chat_question.custom_prompt,
             terminologies=self.chat_question.terminologies,
             data_training=self.chat_question.data_training,
             enable_query_limit=self.enable_sql_row_limit,
@@ -1142,7 +1087,7 @@ class LLMService:
             session_maker.remove()
 
     def _prepare_generation_inputs(self, _session):
-        """术语、SQL 示例、自定义提示词与历史消息准备。"""
+        """准备术语、SQL 示例与历史消息。"""
         if self.ds:
             oid = self.ds.oid if isinstance(self.ds, DatasourceRecord) else 1
             ds_id = self.ds.id if isinstance(self.ds, DatasourceRecord) else None
@@ -1150,13 +1095,6 @@ class LLMService:
             self.load_term_context(_session)
 
             self.filter_training_template(_session, oid, ds_id)
-
-            self.filter_custom_prompts(
-                _session,
-                GenerationCustomPromptType.GENERATE_SQL,
-                oid,
-                ds_id,
-            )
 
             self.init_messages(_session)
 

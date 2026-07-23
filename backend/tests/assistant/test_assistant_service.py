@@ -107,6 +107,53 @@ def test_create_normalizes_local_datasource_scope_once() -> None:
     datasource_catalog.list_for_workspace.assert_called_once_with(7, [1, 2])
 
 
+def test_page_embedded_assistant_is_global_and_generates_credentials() -> None:
+    repository = Mock()
+
+    def create(data):
+        return AssistantRecord(id=10, **data.model_dump())
+
+    repository.create.side_effect = create
+    service = _service(repository, Mock())
+
+    created = service.create(
+        AssistantBase(
+            name="嵌入助手",
+            domain="https://example.com",
+            type=4,
+        ),
+        current_workspace_id=7,
+    )
+
+    assert created.oid == 1
+    assert created.app_id == "app-id"
+    assert created.app_secret == "app-secret"
+
+
+def test_page_embedded_secret_rotation_only_accepts_embedded_assistant() -> None:
+    repository = Mock()
+    repository.get.return_value = _record(
+        workspace_id=1,
+        assistant_type=4,
+    )
+    repository.update_app_secret.return_value = _record(
+        workspace_id=1,
+        assistant_type=4,
+    )
+    service = _service(repository, Mock())
+
+    service.rotate_app_secret(10)
+
+    repository.update_app_secret.assert_called_once_with(10, "app-secret")
+
+    repository.get.return_value = _record(
+        workspace_id=1,
+        assistant_type=0,
+    )
+    with pytest.raises(AssistantConfigurationError, match="NOT_PAGE_EMBEDDED"):
+        service.rotate_app_secret(10)
+
+
 def test_enabled_custom_model_must_reference_existing_model() -> None:
     repository = Mock()
     datasource_catalog = Mock()

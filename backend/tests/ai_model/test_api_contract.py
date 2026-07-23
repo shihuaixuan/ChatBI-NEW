@@ -1,10 +1,6 @@
 from fastapi.routing import APIRoute
 
-from apps.ai_model.models.dto import AiModelEditor as OwnedAiModelEditor
 from apps.api import api_router
-from apps.system.schemas.ai_model_schema import (
-    AiModelEditor as CompatibilityAiModelEditor,
-)
 
 
 def test_model_routes_are_owned_by_ai_model_domain() -> None:
@@ -24,7 +20,3 @@ def test_model_routes_are_owned_by_ai_model_domain() -> None:
         ("/system/aimodel", ("PUT",)): "apps.ai_model.api.model_config",
         ("/system/aimodel/{id}", ("DELETE",)): "apps.ai_model.api.model_config",
     }
-
-
-def test_system_schema_reexports_ai_model_owned_dto() -> None:
-    assert CompatibilityAiModelEditor is OwnedAiModelEditor

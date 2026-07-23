@@ -19,7 +19,6 @@ class SQLGenerationData:
     current_time: str
     rule: str = ""
     error_message: str = ""
-    custom_prompt: str = ""
     terminologies: str = ""
     data_training: str = ""
     enable_query_limit: bool = True

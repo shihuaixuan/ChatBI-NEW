@@ -24,47 +24,6 @@
           {{ $t('user.filter') }}
         </el-button>
 
-        <el-tooltip
-          v-if="!platformType.length && showSyncBtn"
-          effect="dark"
-          :content="$t('sync.integration')"
-          placement="left"
-        >
-          <el-button disabled secondary>
-            <template #icon>
-              <icon_replace_outlined />
-            </template>
-            {{ t('sync.sync_users') }}
-          </el-button>
-        </el-tooltip>
-
-        <el-popover
-          v-if="platformType.length && showSyncBtn"
-          popper-class="sync-platform"
-          placement="bottom-start"
-        >
-          <template #reference>
-            <el-button secondary>
-              <template #icon>
-                <icon_replace_outlined />
-              </template>
-              {{ t('sync.sync_users') }}
-            </el-button></template
-          >
-          <div class="popover">
-            <div class="popover-content">
-              <div
-                v-for="ele in platformType"
-                :key="ele.name"
-                class="popover-item"
-                @click="handleSyncUser(ele)"
-              >
-                <img height="24" width="24" :src="ele.icon" />
-                <div class="model-name">{{ $t(ele.name) }}</div>
-              </div>
-            </div>
-          </div>
-        </el-popover>
         <!--  <el-button secondary @click="handleUserImport">
           <template #icon>
             <ccmUpload></ccmUpload>
@@ -119,8 +78,8 @@
         <el-table-column prop="email" show-overflow-tooltip :label="$t('user.email')" />
         <!-- <el-table-column prop="phone" :label="$t('user.phone_number')" width="280" /> -->
         <el-table-column prop="origin" :label="$t('user.user_source')" width="120">
-          <template #default="scope">
-            <span>{{ formatUserOrigin(scope.row.origin) }}</span>
+          <template #default>
+            <span>{{ formatUserOrigin() }}</span>
           </template>
         </el-table-column>
         <el-table-column
@@ -534,34 +493,26 @@
     :filter-options="filterOption"
     @trigger-filter="searchCondition"
   />
-  <SyncUserDing ref="syncUserRef" @refresh="refresh"></SyncUserDing>
 </template>
 
 <script setup lang="ts">
-import { ref, unref, reactive, onMounted, nextTick, h, shallowRef } from 'vue'
+import { ref, unref, reactive, onMounted, nextTick, shallowRef } from 'vue'
 import UserImport from './UserImport.vue'
 import SuccessFilled from '@/assets/svg/gou_icon.svg'
-import icon_replace_outlined from '@/assets/svg/icon_replace_outlined.svg'
 import CircleCloseFilled from '@/assets/svg/icon_ban_filled.svg'
-import { ElButton } from 'element-plus-secondary'
 import icon_searchOutline_outlined from '@/assets/svg/icon_search-outline_outlined.svg'
 import { useI18n } from 'vue-i18n'
 import EmptyBackground from '@/views/dashboard/common/EmptyBackground.vue'
 import { convertFilterText, FilterText } from '@/components/filter-text'
-import SyncUserDing from './SyncUserDing.vue'
 import IconLock from '@/assets/svg/icon-key_outlined.svg'
 import IconOpeEdit from '@/assets/svg/icon_edit_outlined.svg'
 import IconOpeDelete from '@/assets/svg/icon_delete.svg'
 import iconFilter from '@/assets/svg/icon-filter_outlined.svg'
-import logo_dingtalk from '@/assets/img/dingtalk.png'
-import logo_lark from '@/assets/img/lark.png'
-import logo_wechat_work from '@/assets/img/wechat.png'
 import icon_add_outlined from '@/assets/svg/icon_add_outlined.svg'
 import { userApi } from '@/api/user'
 import field_text from '@/assets/svg/field_text.svg'
 import field_time from '@/assets/svg/field_time.svg'
 import field_value from '@/assets/svg/field_value.svg'
-import { request } from '@/utils/request'
 import { workspaceList } from '@/api/workspace'
 import { variablesApi } from '@/api/variables'
 import { formatTimestamp } from '@/utils/date'
@@ -581,7 +532,6 @@ const dialogVisiblePassword = ref(false)
 const isIndeterminate = ref(true)
 const drawerMainRef = ref()
 const userImportRef = ref()
-const syncUserRef = ref()
 const selectionLoading = ref(false)
 
 const iconMap = {
@@ -598,24 +548,6 @@ const filterOption = ref<any[]>([
     ],
     field: 'status',
     title: t('user.user_status'),
-    operate: 'in',
-  },
-  {
-    type: 'enum',
-    option: [
-      { id: '0', name: t('user.local_creation') },
-      { id: '1', name: 'CAS' },
-      { id: '2', name: 'OIDC' },
-      { id: '3', name: 'LDAP' },
-      { id: '4', name: 'OAuth2' },
-      /* { id: '5', name: 'SAML2' }, */
-      { id: '6', name: t('user.wecom') },
-      { id: '7', name: t('user.dingtalk') },
-      { id: '8', name: t('user.lark') },
-      /* { id: '9', name: t('user.larksuite') }, */
-    ],
-    field: 'origins',
-    title: t('user.user_source'),
     operate: 'in',
   },
   {
@@ -654,7 +586,6 @@ const state = reactive<any>({
   },
 })
 
-const currentPlatform = ref<any>({})
 const rules = {
   name: [
     {
@@ -685,36 +616,6 @@ const rules = {
   ],
 }
 
-const platformType = ref<any[]>([
-  {
-    icon: logo_wechat_work,
-    value: 6,
-    name: 'sync.sync_wechat_users',
-  },
-  {
-    icon: logo_dingtalk,
-    value: 7,
-    name: 'sync.sync_dingtalk_users',
-  },
-  {
-    icon: logo_lark,
-    value: 8,
-    name: 'sync.sync_lark_users',
-  },
-])
-
-const refresh = (res: any) => {
-  showTips(res.successCount, res.errorCount, res.dataKey)
-  if (res.successCount) {
-    handleCurrentChange(1)
-  }
-}
-
-const handleSyncUser = (ele: any) => {
-  currentPlatform.value = ele
-  syncUserRef.value.open(ele.value, ele.name)
-}
-
 const passwordRules = {
   new: [
     {
@@ -738,14 +639,6 @@ const closeResetInfo = (row: any) => {
 }
 const setPopoverRef = (el: any, row: any) => {
   row.popoverRef = el
-}
-
-const loadData = () => {
-  const url = '/system/platform'
-  request.get(url).then((res: any) => {
-    const idArr = res.filter((card: any) => card.valid && card.enable).map((ele: any) => ele.id)
-    platformType.value = platformType.value.filter((card: any) => idArr.includes(card.value))
-  })
 }
 
 const copyText = () => {
@@ -1163,132 +1056,17 @@ const loadDefaultPwd = () => {
     }
   })
 }
-const formatUserOrigin = (origin?: number) => {
-  if (!origin) {
-    return t('user.local_creation')
-  }
-  const originArray = [
-    'CAS',
-    'OIDC',
-    'LDAP',
-    'OAuth2',
-    'SAML2',
-    t('user.wecom'),
-    t('user.dingtalk'),
-    t('user.lark'),
-    t('user.larksuite'),
-  ]
-  return originArray[origin - 1]
-}
+const formatUserOrigin = () => t('user.local_creation')
 
-const showSyncBtn = ref(false)
 onMounted(() => {
-  // eslint-disable-next-line no-undef
-  const obj = LicenseGenerator.getLicense()
-  if (obj?.status === 'valid') {
-    showSyncBtn.value = true
-    loadData()
-  } else {
-    platformType.value = []
-  }
-
   workspaceList().then((res) => {
     options.value = res || []
-    filterOption.value[2].option = [...options.value]
+    filterOption.value[1].option = [...options.value]
   })
   handleCurrentChange(1)
 
   loadDefaultPwd()
 })
-const downErrorExcel = (dataKey: any) => {
-  userApi.errorRecord(dataKey).then((res: any) => {
-    const blob = new Blob([res], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    })
-    const link = document.createElement('a')
-    link.style.display = 'none'
-    link.href = URL.createObjectURL(blob)
-    link.download = 'error.xlsx'
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-  })
-}
-
-const showTips = (successCount: any, errorCount: any, dataKey: any) => {
-  let title = successCount ? t('sync.sync_complete') : t('sync.sync_failed')
-  const childrenDomList = [h('span', null, t('sync.synced_10_users', { num: successCount }))]
-  const contentDomList = h(
-    'div',
-    {
-      style: 'display: flex;align-items: center;',
-    },
-    childrenDomList
-  )
-  const headerDomList = [
-    h(
-      'div',
-      {
-        style: 'font-weight: 500;font-size: 16px;line-height: 24px;margin-bottom: 24px',
-      },
-      title
-    ),
-
-    contentDomList,
-  ]
-
-  if (successCount && errorCount) {
-    childrenDomList.pop()
-    const halfCountDom = h(
-      'span',
-      null,
-      t('sync.failed_3_users', { success: successCount, failed: errorCount })
-    )
-    childrenDomList.push(halfCountDom)
-  }
-
-  if (!successCount && errorCount) {
-    const errorCountDom = h('span', null, t('sync.failed_10_users', { num: errorCount }))
-    childrenDomList.pop()
-    childrenDomList.push(errorCountDom)
-  }
-
-  if (errorCount) {
-    const errorDom = h('div', { class: 'error-record-tip flex-align-center' }, [
-      h(
-        ElButton,
-        {
-          onClick: () => downErrorExcel(dataKey),
-          text: true,
-          class: 'down-button',
-        },
-        t('sync.download_failure_list')
-      ),
-    ])
-
-    childrenDomList.push(errorDom)
-  }
-  ElMessageBox.confirm('', {
-    confirmButtonType: 'primary',
-    autofocus: false,
-    dangerouslyUseHTMLString: true,
-    message: h(
-      'div',
-      { class: 'sync-tip-box' },
-
-      headerDomList
-    ),
-    cancelButtonText: t('sync.return_to_view'),
-    confirmButtonText: t('sync.continue_syncing'),
-  })
-    .then(() => {
-      const { value, name } = currentPlatform.value
-      syncUserRef.value.open(value, name)
-    })
-    .catch(() => {
-      currentPlatform.value = null
-    })
-}
 </script>
 
 <style lang="less" scoped>
@@ -1439,46 +1217,6 @@ const showTips = (successCount: any, errorCount: any, dataKey: any) => {
 .sync-tip-box {
   .error-record-tip {
     display: inline-block;
-  }
-}
-.sync-platform.sync-platform {
-  padding: 4px 0;
-  width: 180px !important;
-  box-shadow: 0px 4px 8px 0px #1f23291a;
-  border: 1px solid #dee0e3;
-
-  .popover {
-    .popover-content {
-      padding: 4px;
-      max-height: 300px;
-      overflow-y: auto;
-    }
-    .popover-item {
-      height: 32px;
-      display: flex;
-      align-items: center;
-      padding-left: 12px;
-      padding-right: 8px;
-      position: relative;
-      border-radius: 4px;
-      cursor: pointer;
-
-      &:not(:last-child) {
-        margin-bottom: 2px;
-      }
-
-      &:hover {
-        background: #1f23291a;
-      }
-
-      .model-name {
-        margin-left: 8px;
-        font-weight: 400;
-        font-size: 14px;
-        line-height: 22px;
-        max-width: 220px;
-      }
-    }
   }
 }
 .reset-pwd-confirm {

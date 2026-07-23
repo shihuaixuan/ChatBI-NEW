@@ -15,7 +15,6 @@ def _base_template() -> dict[str, str]:
             "{example_engine}:{example_answer_1}:{example_answer_2}:{example_answer_3}"
         ),
         "generate_basic_info": "结构:{engine}:{schema}:{sample_data}",
-        "generate_custom_prompt_info": "自定义:{custom_prompt}",
         "generate_terminologies_info": "术语:{terminologies}",
         "generate_data_training_info": "示例:{data_training}",
         "regenerate_hint": "重新生成：",
@@ -56,7 +55,6 @@ def _data(*, enable_query_limit: bool = True) -> SQLGenerationData:
         current_time="2026-07-19 16:00:00",
         rule="只统计已支付订单",
         error_message="上一轮字段错误",
-        custom_prompt="金额保留两位小数",
         terminologies="销售额：已支付订单金额",
         data_training="历史 SQL 示例",
         enable_query_limit=enable_query_limit,
@@ -92,8 +90,6 @@ def test_sql_prompt_keeps_context_history_and_current_message_order(monkeypatch)
         "human",
         "ai",
         "human",
-        "ai",
-        "human",
     ]
     assert [message.system_context for message in messages] == [
         True,
@@ -105,16 +101,13 @@ def test_sql_prompt_keeps_context_history_and_current_message_order(monkeypatch)
         True,
         True,
         True,
-        True,
-        True,
         False,
         False,
         False,
     ]
-    assert messages[5].content == "自定义:金额保留两位小数"
-    assert messages[7].content == "术语:销售额：已支付订单金额"
-    assert messages[9].content == "示例:历史 SQL 示例"
-    assert messages[11:13] == _data().history
+    assert messages[5].content == "术语:销售额：已支付订单金额"
+    assert messages[7].content == "示例:历史 SQL 示例"
+    assert messages[9:11] == _data().history
     assert "限制规则" in messages[1].content
     assert "示例1-limit" in messages[1].content
     assert "重新生成：销售趋势" in messages[-1].content

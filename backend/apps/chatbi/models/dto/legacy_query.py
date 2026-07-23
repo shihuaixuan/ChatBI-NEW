@@ -21,7 +21,6 @@ class AiModelQuestion(BaseModel):
     terminologies: str = ""
     data_training: str = ""
     semantic_context: str = ""
-    custom_prompt: str = ""
     error_msg: str = ""
     regenerate_record_id: int | None = None
     sample_data: str = ""

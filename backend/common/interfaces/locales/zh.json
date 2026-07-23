@@ -179,14 +179,6 @@
   "excel_template_term": "下载模板",
   "upload_term": "导入术语",
 
-  "custom_prompt_api": "自定义提示词",
-  "custom_prompt_page": "分页查询自定义提示词",
-  "create_or_update_custom_prompt": "创建/更新自定义提示词",
-  "delete_custom_prompt": "删除自定义提示词",
-  "export_custom_prompt": "导出自定义提示词",
-  "excel_template_custom_prompt": "下载模板",
-  "upload_custom_prompt": "导入自定义提示词",
-
   "db_api": "仪表板接口",
   "list_resource_api": "加载资源树",
   "load_resource_api": "加载资源树明细",

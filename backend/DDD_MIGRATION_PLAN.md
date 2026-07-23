@@ -89,7 +89,7 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 | 7 ✅ | `deletion.py`、`semantic_binding.py` 及其 ORM 跨域依赖 | 已迁 `chatbi/services/conversation`；Semantic 绑定服务与引擎 run_cleanup 公开契约建立；基线销账 4 条（R3-c2 完成） | R3-c2 |
 | 8 ✅ | `curd/chat.py` 最后 2 条跨域 ORM 依赖（CoreDatasource / SemanticDataset 展示查询） | 改调 Datasource / Semantic 目录公开 Service，基线销账 2 条；`apps/chat/*` 基线清零（R3-c3 完成） | R3-c3 |
 | 9 ✅ | `apps/chat` **整体**迁入 `chatbi/api/`（curd 读侧 + llm.py + external_datasource + legacy_adapter + `api/chat.py`） | 已迁 `legacy_read` / `legacy_chat_flow` / `legacy_external_datasource` / `legacy_sse` / `router`；`apps/api.py` 已切新路由；`resource_scope` 迁入 chatbi 公开面；SSE 121 行（R3-d 完成） | R3-d |
-| 10 ✅ | `apps/chat` 业务源码删除 | 仅余 `models/chat_model.py` xpack 兼容桩及包初始化文件（台账 A7/B2，R6 删）；内部 `apps.chat.*` 调用清零；基线 `apps/chat/*` 条目清零（R3-d 完成） | R3-d |
+| 10 ✅ | `apps/chat` 业务源码删除 | 内部调用全部切换到 ChatBI；最终移除 Xpack 后 `apps/chat` 兼容入口一并删除 | R6 |
 
 > 2026-07-20 修正（停止规则触发）：原 #6"SSE 先行单独迁入 chatbi/api"不可行——其消费方（llm.py/api）仍在
 > apps/chat，先移会给基线新增跨域 API 导入、违反棘轮；且 `curd/chat.py` 经核实是约 760 行真实读侧代码而非
@@ -101,8 +101,8 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 
 验收完成：`apps/chat/task/` 与 `legacy_dependencies.py` 删除；SSE 协议集中于
 `chatbi/api/legacy_sse.py`（121 行）；运行时代码不再导入 `apps.chat.*`；基线中
-`apps/chat/*` 条目清零；OpenAPI 保持 154 条路径。当前安装的 xpack 编译模块仍导入
-`apps.chat.models.chat_model.Chat`，故该文件按外部兼容桩保留至 R6，不能在 R3-d 删除。
+`apps/chat/*` 条目清零；OpenAPI 保持 154 条路径。R6 最终移除 Xpack 依赖后，
+`apps.chat.models.chat_model` 兼容入口已删除。
 风险控制：R3-b（run_task 374 行状态机）单独成批，改写前补终态/事件序列特征测试，旧函数保留一批作为可切换实现。
 
 ### R4：领域收拢与入口统一（3–4 批）
@@ -110,13 +110,13 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 | 批 | 动作 |
 | --- | --- |
 | R4-a ✅ | 旧 `/chat` 路由拆为 conversations / queries；`apps/api.py` 只注册 ChatBI 聚合 router，Agent / Graph router 由最外层注入（路径不变）；interactions 物理归位随 R4-b/c 执行，避免 ChatBI 反向依赖执行器；`chat_model.py` 外部桩按 A7 留至 R6（2026-07-23 完成） |
-| R4-b ✅ | Agent 运行循环与工具迁入 `chatbi/orchestration/agent`；ORM 入 `models/orm/agent_run.py`，CRUD 入 `repository/sqlmodel/agent_run_repository.py`，API 入 `chatbi/api/interactions.py`；旧目录删除，xpack 无旧路径引用（2026-07-23 完成） |
+| R4-b ✅ | Agent 运行循环与工具迁入 `chatbi/orchestration/agent`；ORM 入 `models/orm/agent_run.py`，CRUD 入 `repository/sqlmodel/agent_run_repository.py`，API 入 `chatbi/api/interactions.py`；旧目录删除（2026-07-23 完成） |
 | R4-c ✅ | Graph 整体迁入 `chatbi/orchestration/graph`，旧 `apps/workflow` 删除；`adapters/question.py` 按分类/重写、意图、维度与共享契约拆为 5 文件；runtime 的 4 条引擎 infrastructure 依赖改经公开端口和组合入口，Semantic 具体仓储依赖同步清除；B7/E4 兼容项清偿（2026-07-23 完成） |
 | R4-d ✅ | 解散 `capabilities` 与 `template`（生成器入 `chatbi/adapters/prompts/`）；平台参数迁入 `platform_config`；清偿 B4–B6、D5–D6、E1–E3、E5–E7 兼容项，依赖基线再减 2 条（2026-07-23 完成） |
 
-验收完成：除台账 A7 的 xpack 外部桩外，ChatBI 相关顶级目录仅剩 `chatbi`；问数入口路由唯一
+验收完成：ChatBI 相关顶级目录仅剩 `chatbi`；问数入口路由唯一
 （兼容路径行为不变）；R4 目标兼容项 17/17 已清，剩余项全部归属 R6；全量回归、
-xpack 导入与 OpenAPI 通过。
+应用导入与 OpenAPI 通过。
 
 ### R5：Workflow Engine 隔离（= 原 P6）✅
 
@@ -129,14 +129,14 @@ xpack 导入与 OpenAPI 通过。
 
 验收完成：Graph API、交互恢复、事件续传和 ChatRecord 投影契约保持不变；
 Workflow Engine/Graph/ChatBI 联合回归 316 项、架构测试 137 项、完整后端回归
-1,215 项通过；严格 Mypy、变更范围 Ruff、应用与 xpack 初始化通过，OpenAPI 保持
+1,215 项通过；严格 Mypy、变更范围 Ruff、应用初始化通过，OpenAPI 保持
 154 条路径。无数据库变更。
 
 ### R6：外部接口与最终清理（= 原 P7+P8，3–5 批）
 
 1. `retrieval` 按管道分段重组（sources/projection/indexing/query）。
 2. `dashboard` 分层，解除 `chat.curd` 依赖（基线销账）。
-3. `mcp → backend/interfaces/mcp`；`swagger`、`settings` 归位；`terminology`、`data_training` 壳目录随 xpack 确认删除。
+3. `mcp → backend/interfaces/mcp`；`swagger`、`settings` 归位；`terminology`、`data_training` 壳目录删除。
 4. 兼容台账清零（或每条挂明确外部阻塞原因）；`system` 删除。
 5. `headless_*` 表名与历史品牌命名单独评审（独立迁移窗口）。
 6. 终局验收：v1 计划 §8.5 全项（见 changelog 存档）+ chatbi 公共面 ≤40 符号 + `tests/architecture` 文件数 ≤4 + 依赖基线全项清零。
@@ -170,7 +170,7 @@ Workflow Engine/Graph/ChatBI 联合回归 316 项、架构测试 137 项、完�
 | R1 大范围 import 变更 | 兼容 re-export 兜底 + 应用导入冒烟 + OpenAPI 核对 | 按批 revert，无数据变更 |
 | R2 流式口径差异影响前端 | SSE 契约测试为准绳；分两小批 | revert |
 | R3-b run_task 改写 | 特征测试先行；旧实现保留一批可切换 | 切回旧实现 |
-| R4 目录迁移与 xpack 硬编码路径冲突 | 迁移前 grep xpack 引用清单；不可控者留最小 alias 入台账 | revert + alias |
+| R4 目录迁移与外部固定导入路径冲突 | 迁移前核对调用清单；不可控者留最小 alias 入台账 | revert + alias |
 | R5 引擎隔离影响 Run 恢复 | Run 表与事件协议不变；恢复与续传测试 | 恢复旧装配入口 |
 | 兼容删除误伤外部调用 | 台账删除条件逐条核对；外部路由保留期加调用量日志 | 恢复转发路由 |
 

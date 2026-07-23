@@ -32,6 +32,7 @@ def build_ai_model_management_service(
     return AIModelManagementService(
         repository=SQLModelAIModelManagementRepository(session),
         decrypt_secret=sqlbot_decrypt,
+        encrypt_secret=sqlbot_encrypt,
     )
 
 

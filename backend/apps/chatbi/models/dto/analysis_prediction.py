@@ -14,7 +14,6 @@ class AnalysisPredictionGenerationData:
     data: str
     language: str
     assistant_name: str
-    custom_prompt: str = ""
     terminologies: str = ""
 
 

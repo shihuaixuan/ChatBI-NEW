@@ -11,13 +11,9 @@ from apps.access_control.models.dto.access_variable import (
 )
 from apps.access_control.models.dto.authentication import (
     ApiKeyGridItem,
-    ApikeyGridItem,
     ApiKeyRecord,
     ApiKeyStatus,
-    ApikeyStatus,
-    AuthenticationRecord,
     LogoutDTO,
-    LogoutSchema,
 )
 from apps.access_control.models.dto.authorization import (
     AuthorizationRequirement,
@@ -82,11 +78,7 @@ __all__ = [
     "ApiKeyGridItem",
     "ApiKeyRecord",
     "ApiKeyStatus",
-    "ApikeyGridItem",
-    "ApikeyStatus",
-    "AuthenticationRecord",
     "LogoutDTO",
-    "LogoutSchema",
     "EMAIL_REGEX",
     "PWD_REGEX",
     "BaseUser",

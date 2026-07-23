@@ -135,22 +135,6 @@ class HttpService {
           /* const val = mapping[locale] || locale */
           config.headers['Accept-Language'] = locale
         }
-        if (config.url?.includes('/xpack_static/') && config.baseURL) {
-          config.baseURL = config.baseURL.replace('/api/v1', '')
-          // Skip auth for xpack_static requests
-          return config
-        }
-
-        /* try {
-          const request_key = LicenseGenerator.generate()
-          config.headers['X-SQLBOT-KEY'] = request_key
-        } catch (e: any) {
-          if (e?.message?.includes('offline')) {
-            this.cancelCurrentRequest('license-key error detected')
-            showLicenseKeyError()
-          }
-        } */
-
         // Request logging
         // console.log(`[Request] ${config.method?.toUpperCase()} ${config.url}`)
 
@@ -268,9 +252,6 @@ class HttpService {
 
     // Show error using UI library (e.g., Element Plus, Ant Design)
     console.error(errorMessage)
-    /* if (errorMessage?.includes('Invalid license key salt')) {
-      showLicenseKeyError()
-    } */
     // ElMessage.error(errorMessage)
     ElMessage({
       message: errorMessage,
@@ -333,16 +314,6 @@ class HttpService {
         heads['X-SQLBOT-ASSISTANT-ONLINE'] = assistantStore.getOnline
       }
     }
-
-    /* try {
-      const request_key = LicenseGenerator.generate()
-      heads['X-SQLBOT-KEY'] = request_key
-    } catch (e: any) {
-      if (e?.message?.includes('offline')) {
-        controller?.abort('license-key error detected')
-        showLicenseKeyError()
-      }
-    } */
 
     const real_url = import.meta.env.VITE_API_BASE_URL
     return fetch(real_url + url, {
@@ -463,20 +434,3 @@ class HttpService {
 export const request = new HttpService({
   baseURL: import.meta.env.VITE_API_BASE_URL,
 })
-/*
-const showLicenseKeyError = (msg?: string) => {
-  ElMessageBox.confirm(t('license.error_tips'), {
-    confirmButtonType: 'primary',
-    tip: msg || t('license.offline_tips'),
-    confirmButtonText: t('common.refresh'),
-    cancelButtonText: t('common.cancel'),
-    customClass: 'confirm-no_icon',
-    autofocus: false,
-    callback: (value: string) => {
-      if (value === 'confirm') {
-        window.location.reload()
-      }
-    },
-  })
-}
- */

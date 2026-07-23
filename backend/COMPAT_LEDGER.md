@@ -4,35 +4,28 @@
 > 删除一条兼容时：核对"删除条件"→ 删除代码与本行 → changelog 记录。
 > 状态：`外部阻塞`（仓内已清偿，但外部发布包或调用方尚未迁移）/ `待删`（条件已满足待执行）/ `已清`（保留行一段时间供追溯，可定期清理）/ `已转正`（正式契约，不再作为兼容债务）。
 >
-> R6 审计口径：2026-07-23 通过 Python import hook 实际加载当前 `sqlbot_xpack`
-> 全部可编译模块，记录其运行时导入路径；不能由本仓独立删除的入口统一标为
-> `外部阻塞`，不再保留模糊的“活跃”状态。
+> 2026-07-23 最终决策：项目不再依赖 `sqlbot_xpack`。原先仅为该包保留的兼容入口
+> 已直接删除，非本地认证、自定义提示词和 License 管理同时下线。
 
-## A. xpack 硬编码路径类（删除条件普遍依赖 sqlbot_xpack 发布包更新）
+## A. Xpack 硬编码路径类
 
 | # | 路径 | 内容 | 调用方 | 删除条件 | 目标阶段 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| A1 | `apps/terminology/` 整目录 | XPack 固定导入路径，查询别名实际指向 `headless_term` | sqlbot_xpack | xpack 改用 semantic 公开入口；R6 运行时审计仍命中 | R6 | 外部阻塞 |
-| A2 | `apps/data_training/models/data_training_model.py` | Knowledge SQL 示例对象别名；依赖基线守卫仅对该已登记外部兼容文件豁免 | sqlbot_xpack | xpack 改用 knowledge 公开入口；R6 运行时审计仍命中 | R6 | 外部阻塞 |
-| A3 | `apps/system/crud/assistant.py`、`assistant_manage.py` | 转发 Assistant 公开 Service（含 `get_assistant_ds` 兼容入口） | sqlbot_xpack | xpack 改用 assistant 公开入口；R6 运行时审计仍命中 | R6 | 外部阻塞 |
-| A4 | `apps/system/models/system_model.py`、`user.py` | 同对象转发至 access_control / ai_model / assistant ORM；未被 xpack 使用的 `system_variable_model.py` 已删除 | sqlbot_xpack | xpack 与残余调用方切换；R6 运行时审计仍命中这两个文件 | R6 | 外部阻塞 |
-| A5 | 原 `apps/system/schemas/permission.py` | 调用方已改用 `apps.access_control.permission`，旧文件删除 | 无 | 仓内与 xpack 运行时导入均为零 | R6 | 已清 |
-| A6 | `apps/system/api/user.py` 内 Excel 适配与 create/edit 同名入口 | 转调 Access Control Service | sqlbot_xpack | xpack 改用 access_control 入口；R6 运行时审计仍命中 user/user_excel | R6 | 外部阻塞 |
-| A7 | `apps/chat/models/chat_model.py` 旧 Chat 模型与 `AxisObj` 兼容导出 | 指向 `apps.chatbi.models` 与中立展示 Schema 的同一对象 | sqlbot_xpack | xpack 改用 ChatBI 公开模型与中立 Schema 路径；R6 运行时审计仍命中 | R6 | 外部阻塞 |
+| A1–A7 | terminology、data_training、system、chat、datasource、dashboard、swagger 的 Xpack 固定入口 | 原 Xpack 导入兼容 | 无 | 项目移除 Xpack 依赖 | R6 | 已清 |
 
 ## B. 旧导入路径类（内部调用方，可自主清偿）
 
 | # | 路径 | 内容 | 调用方 | 删除条件 | 目标阶段 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | B1 | `apps/chat/curd/chat.py` | 写侧转发已删；读侧已迁 `chatbi/api/legacy_read.py`；Dashboard 改走 ChatBI 公开面并销账基线 | 旧 Chat 内部、dashboard | R3-d 内部调用方清零 | R3-d | 已清 |
-| B2 | `apps/chat/models/chat_model.py`（除 A7 外） | 运行时内部 Chat/ChatRecord/DTO 旧路径调用已全部切到 `apps.chatbi.models`；兼容契约测试与外部 xpack 依赖并入 A7 管理 | 历史 common 调用（已清）、兼容契约测试、sqlbot_xpack | 运行时内部调用清零；外部删除条件见 A7 | R3-d | 已清 |
+| B2 | 原 `apps/chat/models/chat_model.py` | 运行时内部调用切到 `apps.chatbi.models`，Xpack 兼容入口最终删除 | 无 | 项目移除 Xpack 依赖 | R6 | 已清 |
 | B3 | `apps/chat/task/external_datasource.py` | 旧路径已删除，能力随旧流程迁入 `chatbi/api/legacy_external_datasource.py` | `chatbi/api/legacy_chat_flow.py` | 旧 Chat 包内调用清零 | R3-d | 已清 |
 | B4 | 原 `apps/capabilities/question_understanding.py`、`time_slots.py` | 调用方已改用 ChatBI understanding 子域，兼容导出随目录删除 | 无 | 调用方切 ChatBI 子域公开入口 | R4-d | 已清 |
 | B5 | 原 `apps/capabilities/semantic/compile.py`、`retrieval.py` | 调用方已改用 planning / retrieval 公开服务，兼容函数删除 | 无 | 调用方切公开 Service | R4-d | 已清 |
 | B6 | 原 `apps/capabilities/sql/`、`apps/capabilities/schemas.py` | validator、执行器与 ToolResult 使用既有 ChatBI 所有者；repair 迁入 Graph 适配器 | 无 | validator/repair 归位并切换剩余调用方后整目录删除 | R4-d | 已清 |
 | B7 | 原 `apps/workflow/capabilities/adapters/intent_validation.py`、`time_slots.py` | Graph 已直接调用 ChatBI Service，兼容导出随目录迁移删除 | 无 | Graph 调用方已切换 | R4-c | 已清 |
 | B8 | 原 `apps/retrieval/models/__init__.py`（包转发）、`apps/retrieval/schemas.py` | 调用方全部切至 `models/orm`、`models/dto`，旧文件删除 | 无 | 调用方核对为零 | R6 | 已清 |
-| B9 | `apps/datasource/models/datasource.py` | Datasource 对象导入兼容；仓内运行时调用已清零 | sqlbot_xpack | xpack 改用 Datasource 公开契约或规范模型路径；R6 运行时审计仍命中 | R6 | 外部阻塞 |
+| B9 | 原 `apps/datasource/models/datasource.py` | Datasource 旧模型入口随 Xpack 依赖删除 | 无 | 项目移除 Xpack 依赖 | R6 | 已清 |
 | B10 | `apps/mcp/mcp.py → apps.chat.composition` | MCP 已改用 `apps.chatbi.composition` | apps/mcp | 调用方已切换 | R3-d | 已清 |
 
 ## C. 兼容 API 路由类（删除条件依赖外部调用方确认）
@@ -48,10 +41,10 @@
 
 | # | 路径 | 内容 | 删除条件 | 目标阶段 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| D1 | `apps/terminology/`（见 A1） | 3 文件 13 行 | 同 A1；R6 运行时审计确认 xpack 阻塞 | R6 | 外部阻塞 |
-| D2 | `apps/data_training/`（见 A2） | 3 文件 21 行 | 同 A2；R6 运行时审计确认 xpack 阻塞 | R6 | 外部阻塞 |
+| D1 | 原 `apps/terminology/`（见 A1） | Xpack 术语壳目录已删除 | 项目移除 Xpack 依赖 | R6 | 已清 |
+| D2 | 原 `apps/data_training/`（见 A2） | Xpack SQL 示例壳目录已删除 | 项目移除 Xpack 依赖 | R6 | 已清 |
 | D3 | 原 `apps/settings/models`、`schemas` 旧术语模型 | 无运行时引用，R6 已删除；文件下载接口迁至 `interfaces/http` | 无 | R6 | 已清 |
-| D4 | `apps/swagger/i18n.py` 最小转发 | 实现与 locales 已迁 `common/interfaces` | xpack 改用 `common.interfaces.i18n`；R6 运行时审计仍命中旧路径 | R6 | 外部阻塞 |
+| D4 | 原 `apps/swagger/i18n.py` 最小转发 | 实现与 locales 已迁 `common/interfaces`，Xpack 转发已删除 | 项目移除 Xpack 依赖 | R6 | 已清 |
 | D5 | 原 `apps/template/` | YAML 读取与生成器已迁入 `chatbi/adapters/prompts/`，旧目录删除 | R4-d 迁入 `chatbi/adapters/prompts/` | R4-d | 已清 |
 | D6 | 原 `apps/system/` 参数模块（api/parameter、composition、repository、services） | 已迁入 `apps/platform_config/`，旧模块删除 | R4-d 迁至平台配置归属目录 | R4-d | 已清 |
 
@@ -66,4 +59,4 @@
 | E5 | 原 `QueryService = GuardedQueryService` 别名 | 旧名删除；运行时调用方统一使用 `GuardedQueryService`，Agent 工具局部 Protocol 不属于该别名 | 无 | 调用方改用新名 | R4-d | 已清 |
 | E6 | 原 `SemanticQueryService = SemanticCompilationService` 别名 | 旧名删除，调用方统一使用 `SemanticCompilationService` | 无 | 同上 | R4-d | 已清 |
 | E7 | 原 `GenerationSchemaContextService = SchemaContextService` 别名 | 旧名删除，调用方统一使用 `SchemaContextService` | 无 | 调用方改用新名 | R4-d | 已清 |
-| E8 | `apps/dashboard/models/dashboard_model.py` | Dashboard ORM/DTO 分层后的旧模型入口最小转发 | sqlbot_xpack | xpack 改用 Dashboard 规范模型路径；R6 运行时审计仍命中 | R6 | 外部阻塞 |
+| E8 | 原 `apps/dashboard/models/dashboard_model.py` | Dashboard 的 Xpack 旧模型入口已删除 | 无 | 项目移除 Xpack 依赖 | R6 | 已清 |

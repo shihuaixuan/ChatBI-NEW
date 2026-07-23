@@ -2,19 +2,9 @@
 
 from apps.access_control.models import UserModel, UserWsModel, WorkspaceModel
 from apps.api import api_router
-from apps.system.models.system_model import (
-    UserWsModel as LegacyUserWsModel,
-)
-from apps.system.models.system_model import (
-    WorkspaceModel as LegacyWorkspaceModel,
-)
-from apps.system.models.user import UserModel as LegacyUserModel
 
 
-def test_system_models_reexport_access_control_owned_orm() -> None:
-    assert LegacyUserModel is UserModel
-    assert LegacyWorkspaceModel is WorkspaceModel
-    assert LegacyUserWsModel is UserWsModel
+def test_identity_models_are_owned_by_access_control() -> None:
     assert UserModel.__module__ == "apps.access_control.models.orm.identity"
     assert WorkspaceModel.__module__ == "apps.access_control.models.orm.workspace"
 

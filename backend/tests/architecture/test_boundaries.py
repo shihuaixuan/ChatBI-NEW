@@ -38,14 +38,10 @@ def test_common_data_format_does_not_depend_on_chat_models():
     assert not any(module.startswith("apps.chat") for module in schema_imports)
 
 
-def test_legacy_chat_model_only_contains_compatibility_exports():
-    tree = _tree__chat_model_compatibility("apps/chat/models/chat_model.py")
-
-    assert not any(isinstance(node, ast.ClassDef) for node in tree.body)
-    assert _imports__chat_model_compatibility(tree) == {
-        "apps.chatbi.models",
-        "common.utils.data_format_schema",
-    }
+def test_legacy_chat_model_compatibility_entry_has_been_removed():
+    assert not (
+        BACKEND_DIR__chat_model_compatibility / "apps/chat/models/chat_model.py"
+    ).exists()
 
 
 def test_chat_runtime_uses_public_axis_schema():
@@ -886,15 +882,18 @@ def test_generation_context_scope_service_only_depends_on_chatbi_dto():
     assert imports == {"apps.chatbi.models.dto.generation_context"}
 
 
-def test_legacy_prompt_and_example_filters_use_shared_scope():
+def test_legacy_example_filter_uses_shared_scope():
     tree = _tree__generation_context_scope("apps/chatbi/api/legacy_chat_flow.py")
 
-    for method_name in ("filter_custom_prompts", "filter_training_template"):
-        source = _class_method_source__generation_context_scope(tree, "LLMService", method_name)
-        assert "resolve_generation_context_scope" in source
-        assert "current_assistant.type" not in source
-        assert "calculate_oid" not in source
-        assert "calculate_ds_id" not in source
+    source = _class_method_source__generation_context_scope(
+        tree,
+        "LLMService",
+        "filter_training_template",
+    )
+    assert "resolve_generation_context_scope" in source
+    assert "current_assistant.type" not in source
+    assert "calculate_oid" not in source
+    assert "calculate_ds_id" not in source
 
 
 def test_legacy_scope_method_only_adapts_context_to_chatbi():
@@ -909,78 +908,6 @@ def test_legacy_scope_method_only_adapts_context_to_chatbi():
     assert "GenerationAssistantContext" in source
     assert "assistant_type ==" not in source
     assert "assistant_type !=" not in source
-
-
-# ======================================================================
-# 来源：test_chatbi_generation_custom_prompt_boundary.py
-# ======================================================================
-
-BACKEND_DIR__generation_custom_prompt = Path(__file__).resolve().parents[2]
-
-
-def _tree__generation_custom_prompt(relative_path: str) -> ast.Module:
-    path = BACKEND_DIR__generation_custom_prompt / relative_path
-    return ast.parse(path.read_text(encoding="utf-8"))
-
-
-def _imports__generation_custom_prompt(tree: ast.Module) -> set[str]:
-    modules: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            modules.add(node.module)
-    return modules
-
-
-def _class_method_source__generation_custom_prompt(tree: ast.Module, class_name: str, name: str) -> str:
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == class_name
-    )
-    method = next(
-        node
-        for node in class_node.body
-        if isinstance(node, ast.FunctionDef) and node.name == name
-    )
-    return ast.unparse(method)
-
-
-def test_generation_custom_prompt_service_only_depends_on_chatbi_dto():
-    imports = _imports__generation_custom_prompt(
-        _tree__generation_custom_prompt("apps/chatbi/services/generation/context/knowledge.py")
-    )
-
-    assert "sqlmodel" not in imports
-    assert not any(module.startswith("sqlbot_xpack") for module in imports)
-    assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("apps.workflow") for module in imports)
-
-
-def test_xpack_custom_prompt_dependency_is_owned_by_chatbi_adapter():
-    imports = _imports__generation_custom_prompt(
-        _tree__generation_custom_prompt("apps/chatbi/adapters/generation_custom_prompt.py")
-    )
-
-    assert "sqlbot_xpack.custom_prompt.curd.custom_prompt" in imports
-    assert "sqlbot_xpack.custom_prompt.models.custom_prompt_model" in imports
-    assert "sqlbot_xpack.license.license_manage" in imports
-
-
-def test_legacy_llm_uses_chatbi_custom_prompt_contract():
-    tree = _tree__generation_custom_prompt("apps/chatbi/api/legacy_chat_flow.py")
-    imports = _imports__generation_custom_prompt(tree)
-    source = _class_method_source__generation_custom_prompt(tree, "LLMService", "filter_custom_prompts")
-
-    assert not any(
-        module.startswith("sqlbot_xpack.custom_prompt") for module in imports
-    )
-    assert "sqlbot_xpack.license.license_manage" not in imports
-    assert "build_generation_custom_prompt_service" in source
-    assert "GenerationCustomPromptQuery" in source
-    assert "find_custom_prompts" not in source
-    assert "SQLBotLicenseUtil" not in source
 
 
 # ======================================================================
@@ -1867,17 +1794,6 @@ def test_chat_history_dto_has_no_legacy_chat_or_framework_dependency():
     assert "sqlmodel" not in imports
 
 
-def test_legacy_chat_history_models_are_only_compatibility_exports():
-    tree = _tree__record("apps/chat/models/chat_model.py")
-    class_names = {
-        node.name for node in tree.body if isinstance(node, ast.ClassDef)
-    }
-
-    assert "ChatRecordResult" not in class_names
-    assert "ChatLogHistoryItem" not in class_names
-    assert "ChatLogHistory" not in class_names
-
-
 def test_legacy_query_dto_has_no_transport_or_model_framework_dependency():
     imports = _imports__record(_tree__record("apps/chatbi/models/dto/legacy_query.py"))
 
@@ -1887,21 +1803,6 @@ def test_legacy_query_dto_has_no_transport_or_model_framework_dependency():
     assert "fastapi" not in imports
     assert "langchain" not in imports
     assert "sqlmodel" not in imports
-
-
-def test_legacy_chat_model_only_keeps_query_context_compatibility_exports():
-    tree = _tree__record("apps/chat/models/chat_model.py")
-    class_names = {
-        node.name for node in tree.body if isinstance(node, ast.ClassDef)
-    }
-
-    assert "AiModelQuestion" not in class_names
-    assert "ChatQuestion" not in class_names
-    assert "ChatMcp" not in class_names
-    assert "ExcelData" not in class_names
-    assert "SystemPromptMessage" not in class_names
-    assert "HumanPromptMessage" not in class_names
-    assert "AIPromptMessage" not in class_names
 
 
 def test_agent_record_terminal_projection_uses_chatbi_service():
@@ -2322,14 +2223,5 @@ def test_mcp_routes_use_owned_request_schemas():
     assert "apps.chat.models.chat_model" not in imports
 
 
-def test_legacy_chat_model_has_no_mcp_or_fastapi_contract():
-    tree = _tree__mcp_schema("apps/chat/models/chat_model.py")
-    imports = _imports__mcp_schema(tree)
-    class_names = {
-        node.name for node in tree.body if isinstance(node, ast.ClassDef)
-    }
-
-    assert "fastapi" not in imports
-    assert "McpDs" not in class_names
-    assert "ChatStart" not in class_names
-    assert "McpQuestion" not in class_names
+def test_legacy_chat_package_has_been_removed():
+    assert not (BACKEND_DIR__mcp_schema / "apps/chat/__init__.py").exists()

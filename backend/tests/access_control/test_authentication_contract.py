@@ -1,20 +1,11 @@
 """认证与 API Key 所有权及路由契约测试。"""
 
-from apps.access_control.models import ApiKeyModel, AuthenticationModel
+from apps.access_control.models import ApiKeyModel
 from apps.api import api_router
-from apps.system.models.system_model import ApiKeyModel as LegacyApiKeyModel
-from apps.system.models.system_model import (
-    AuthenticationModel as LegacyAuthenticationModel,
-)
 
 
-def test_system_reexports_access_control_authentication_models() -> None:
-    assert LegacyApiKeyModel is ApiKeyModel
-    assert LegacyAuthenticationModel is AuthenticationModel
+def test_api_key_model_is_owned_by_access_control() -> None:
     assert ApiKeyModel.__module__ == "apps.access_control.models.orm.api_key"
-    assert AuthenticationModel.__module__ == (
-        "apps.access_control.models.orm.authentication"
-    )
 
 
 def test_api_key_constraints_match_domain_invariants() -> None:

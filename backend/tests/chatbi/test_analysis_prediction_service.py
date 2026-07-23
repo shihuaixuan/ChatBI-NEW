@@ -82,7 +82,6 @@ def _data(
         data='[{"月份":"1月","销售额":100}]',
         language="简体中文",
         assistant_name="Numora",
-        custom_prompt="重点关注环比变化",
         terminologies="销售额：已支付订单金额",
     )
 

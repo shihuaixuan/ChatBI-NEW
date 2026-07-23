@@ -36,7 +36,7 @@ apps/<module>/
 │       └── ports.py       # 本子域端口（见 §5）
 ├── orchestration/         # 仅当同一模块存在多种执行方式（如 Agent/Graph）
 ├── repository/            # 仓储接口 + <technology>/ 实现
-├── adapters/              # 非持久化技术实现，按技术分组（langchain/ prompts/ xpack/ …）
+├── adapters/              # 非持久化技术实现，按技术分组（langchain/ prompts/ …）
 ├── models/
 │   ├── orm/               # 持久化对象，按业务资源拆分文件；不得被其他模块导入
 │   └── dto/               # 数据契约；可镜像 services 分包
@@ -69,7 +69,7 @@ apps/<module>/
 
 **先问要不要端口，再问叫什么。** 跨模块调用默认直连对方公开 Service（§1.2）。允许建立端口（`Protocol`）的仅三种情形：
 
-1. **可替换技术缝**：LLM/Embedding 客户端、数据库执行、xpack 许可能力等存在多实现或必须在测试中替换的技术设施；
+1. **可替换技术缝**：LLM/Embedding 客户端、数据库执行等存在多实现或必须在测试中替换的技术设施；
 2. **防腐**：对方契约与本域模型存在真实转换（不是字段改名）且对方契约不稳定；
 3. **本模块持久化**（仓储接口，仅限风格 A/D）。
 

@@ -22,6 +22,10 @@ async def _identity_decrypt(value: str) -> str:
     return value
 
 
+async def _identity_encrypt(value: str) -> str:
+    return value
+
+
 def _creator(
     name: str,
     *,
@@ -48,6 +52,7 @@ def _build_service() -> tuple[Session, AIModelManagementService]:
     service = AIModelManagementService(
         SQLModelAIModelManagementRepository(session),
         _identity_decrypt,
+        _identity_encrypt,
     )
     return session, service
 
@@ -55,8 +60,10 @@ def _build_service() -> tuple[Session, AIModelManagementService]:
 def test_create_and_switch_default_model_preserves_single_default() -> None:
     session, service = _build_service()
     try:
-        first = service.create_model(_creator("模型一"))
-        second = service.create_model(_creator("模型二", default_model=True))
+        first = asyncio.run(service.create_model(_creator("模型一")))
+        second = asyncio.run(
+            service.create_model(_creator("模型二", default_model=True))
+        )
 
         models = service.list_models()
 
@@ -70,12 +77,12 @@ def test_create_and_switch_default_model_preserves_single_default() -> None:
 def test_normal_update_cannot_change_default_model() -> None:
     session, service = _build_service()
     try:
-        created = service.create_model(_creator("模型一"))
+        created = asyncio.run(service.create_model(_creator("模型一")))
         editor = asyncio.run(service.get_model(created.id))
         editor.default_model = False
 
         with pytest.raises(AIModelDefaultChangeRequiresEndpointError):
-            service.update_model(editor)
+            asyncio.run(service.update_model(editor))
     finally:
         session.close()
 
@@ -83,7 +90,7 @@ def test_normal_update_cannot_change_default_model() -> None:
 def test_default_model_cannot_be_deleted() -> None:
     session, service = _build_service()
     try:
-        created = service.create_model(_creator("模型一"))
+        created = asyncio.run(service.create_model(_creator("模型一")))
 
         with pytest.raises(AIModelDefaultCannotDeleteError, match="模型一"):
             service.delete_model(created.id)
@@ -94,7 +101,9 @@ def test_default_model_cannot_be_deleted() -> None:
 def test_secret_migration_encrypts_plain_values_and_updates_supplier() -> None:
     session, service = _build_service()
     try:
-        created = service.create_model(_creator("模型一", supplier=12))
+        created = asyncio.run(
+            service.create_model(_creator("模型一", supplier=12))
+        )
         repository = SQLModelAIModelManagementRepository(session)
 
         async def encrypt(value: str) -> str:

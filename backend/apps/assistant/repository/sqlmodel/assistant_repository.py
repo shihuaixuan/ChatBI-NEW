@@ -1,5 +1,6 @@
 """Assistant SQLModel 仓储。"""
 
+from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from apps.assistant.models.dto import (
@@ -50,6 +51,29 @@ class SQLModelAssistantRepository:
             )
         ).all()
         return [self._record(model) for model in models]
+
+    def list_page_embedded(
+        self,
+        page: int,
+        size: int,
+        keyword: str | None,
+    ) -> tuple[list[AssistantRecord], int]:
+        filters = [col(AssistantModel.type) == 4]
+        if keyword:
+            filters.append(col(AssistantModel.name).contains(keyword))
+        total = int(
+            self._session.exec(
+                select(func.count()).select_from(AssistantModel).where(*filters)
+            ).one()
+        )
+        models = self._session.exec(
+            select(AssistantModel)
+            .where(*filters)
+            .order_by(col(AssistantModel.create_time).desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        ).all()
+        return [self._record(model) for model in models], total
 
     def list_references(
         self,
@@ -111,6 +135,20 @@ class SQLModelAssistantRepository:
         if model is None:
             return None
         model.configuration = configuration
+        self._session.add(model)
+        self._session.commit()
+        self._session.refresh(model)
+        return self._record(model)
+
+    def update_app_secret(
+        self,
+        assistant_id: int,
+        app_secret: str,
+    ) -> AssistantRecord | None:
+        model = self._session.get(AssistantModel, assistant_id)
+        if model is None:
+            return None
+        model.app_secret = app_secret
         self._session.add(model)
         self._session.commit()
         self._session.refresh(model)

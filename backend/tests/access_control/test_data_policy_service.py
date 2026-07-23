@@ -20,12 +20,35 @@ from apps.access_control.models.dto import (
     StoredDataPermission,
     StoredDataRule,
 )
+from apps.access_control.models.orm import DataPermissionModel, DataRuleModel
 from apps.access_control.services import AccessVariableService, DataPolicyService
+from apps.api import api_router
 from apps.datasource import (
     DatasourcePolicyField,
     DatasourcePolicySchema,
     DatasourcePolicyTable,
 )
+
+
+def test_data_permission_management_routes_are_local_access_control_routes():
+    routes = [
+        route
+        for route in api_router.routes
+        if route.path.startswith("/ds_permission")
+    ]
+
+    assert {route.path for route in routes} == {
+        "/ds_permission/list",
+        "/ds_permission/get/{id}",
+        "/ds_permission/save",
+        "/ds_permission/delete/{id}",
+    }
+    assert all(
+        route.endpoint.__module__ == "apps.access_control.api.data_permission"
+        for route in routes
+    )
+    assert DataPermissionModel.__tablename__ == "ds_permission"
+    assert DataRuleModel.__tablename__ == "ds_rules"
 
 
 def _schema() -> DatasourcePolicySchema:

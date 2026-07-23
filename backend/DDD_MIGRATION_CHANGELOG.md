@@ -2480,3 +2480,17 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
 
 **R6 完成。** 本轮架构评审执行计划关账；后续仅处理已登记的外部兼容迁移和独立数据库
 命名迁移，不再作为 R6 的仓内剩余任务。
+
+## R6 补充清理（2026-07-23）：移除 sqlbot-xpack 运行时依赖
+
+1. 项目明确不再依赖 `sqlbot_xpack`，删除 pyproject 依赖、TestPyPI 源配置和锁文件条目；
+   应用启动、路由注册、静态资源挂载、审计与业务代码不再导入该包。
+2. License 管理、非本地认证和自定义提示词直接下线，前后端路由、页面、接口、运行时
+   过滤器、提示词字段与模板片段一并删除。
+3. RSA/AES 加解密、文件校验与存储、平台参数、外观配置、页面嵌入和数据权限改为仓内
+   实现，继续使用现有 `rsa`、`sys_arg`、`sys_assistant`、`ds_permission` 和
+   `ds_rules` 表，不新增数据库迁移。
+4. 删除仅为 Xpack 固定导入路径保留的 chat、terminology、data_training、system、
+   datasource、dashboard 与 swagger 兼容文件；架构测试新增依赖和路由防回退检查。
+5. 验证结果：最终完整后端回归 1,211 项、12 个关键源文件严格 Mypy、变更范围 Ruff
+   和前端生产构建全部通过。

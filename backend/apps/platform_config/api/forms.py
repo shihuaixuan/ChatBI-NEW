@@ -1,19 +1,37 @@
 import json
-from typing import Any, cast
+from typing import Any
 
-from fastapi import Request, UploadFile
-from sqlbot_xpack.config.arg_manage import (  # type: ignore[import-untyped]
-    get_group_args,
-    save_group_args,
+from fastapi import Request
+from starlette.datastructures import UploadFile
+
+from apps.platform_config.models import SysArgModel
+from apps.platform_config.repository.sqlmodel import (
+    SQLModelPlatformParameterRepository,
 )
-from sqlbot_xpack.config.model import SysArgModel  # type: ignore[import-untyped]
-from sqlbot_xpack.file_utils import SQLBotFileUtils  # type: ignore[import-untyped]
-
 from common.core.deps import SessionDep
+from common.utils.file_utils import SQLBotFileUtils
+
+
+async def get_group_args(
+    session: SessionDep,
+    flag: str | None = None,
+) -> list[SysArgModel]:
+    return SQLModelPlatformParameterRepository(session).list_models(flag)
+
+
+async def save_group_args(
+    session: SessionDep,
+    sys_args: list[SysArgModel],
+    file_mapping: dict[str, Any] | None = None,
+) -> None:
+    SQLModelPlatformParameterRepository(session).save_models(
+        sys_args,
+        file_mapping,
+    )
 
 
 async def get_parameter_args(session: SessionDep) -> list[SysArgModel]:
-    group_args = cast(list[SysArgModel], await get_group_args(session=session))
+    group_args = await get_group_args(session=session)
     return [
         item
         for item in group_args
@@ -22,10 +40,7 @@ async def get_parameter_args(session: SessionDep) -> list[SysArgModel]:
 
 
 async def get_groups(session: SessionDep, flag: str) -> list[SysArgModel]:
-    return cast(
-        list[SysArgModel],
-        await get_group_args(session=session, flag=flag),
-    )
+    return await get_group_args(session=session, flag=flag)
 
 
 async def save_parameter_args(session: SessionDep, request: Request) -> None:

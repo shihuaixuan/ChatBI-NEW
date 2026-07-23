@@ -114,36 +114,11 @@
     "linked_assets_require_dataset": "Linked assets require a dataset",
     "linked_asset_not_found": "Linked asset {0}:{1} was not found in the dataset"
   },
-  "i18n_custom_prompt": {
-    "exists_in_db": "Template name already exists",
-    "not_exists": "This template does not exist",
-    "prompt_word_name": "Prompt word name",
-    "prompt_word_content": "Prompt word content",
-    "effective_data_sources": "Effective Data Sources",
-    "all_data_sources": "All Data Sources",
-    "prompt_word_name_template": "Prompt Name (Required)",
-    "prompt_word_content_template": "Prompt Content (Required)",
-    "effective_data_sources_template": "Effective Data Sources (Multiple supported, separated by \",\")",
-    "all_data_sources_template": "All Data Sources (Y: Apply to all data sources, N: Apply to specified data sources)",
-    "prompt_word_name_template_example1": "Prompt1",
-    "prompt_word_content_template_example1": "Describe your prompt in detail",
-    "effective_data_sources_template_example1": "Datasource1, Datasource2",
-    "prompt_word_name_template_example2": "Prompt2",
-    "prompt_word_content_template_example2": "Describe your prompt in detail",
-    "name_cannot_be_empty": "Name cannot be empty",
-    "prompt_cannot_be_empty": "Prompt content cannot be empty",
-    "type_cannot_be_empty": "Type cannot be empty",
-    "datasource_not_found": "Datasource not found",
-    "datasource_cannot_be_none": "Datasource cannot be empty"
-  },
   "i18n_excel_export": {
     "data_is_empty": "Form data is empty, unable to export data"
   },
   "i18n_excel_import": {
     "col_num_not_match": "Number of columns in Excel does not match"
-  },
-  "i18n_authentication": {
-    "record_not_exist": "{msg} record does not exist. Please save it first!"
   },
   "i18n_audit": {
     "success": "Success",

@@ -1,4 +1,3 @@
-from apps.chat.models import chat_model
 from common.utils.data_format import DataFormat
 from common.utils.data_format_schema import AxisObj
 
@@ -11,10 +10,6 @@ def test_axis_obj_keeps_display_contract():
         "value": "gmv",
         "type": "number",
     }
-
-
-def test_legacy_axis_obj_is_same_shared_schema():
-    assert chat_model.AxisObj is AxisObj
 
 
 def test_axis_obj_keeps_empty_defaults():

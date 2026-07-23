@@ -253,13 +253,6 @@ export const useAppearanceStore = defineStore('appearanceStore', {
       // if (!isDataEaseBi) {
       //   document.title = ''
       // }
-      const obj = LicenseGenerator.getLicense()
-      if (obj?.status !== 'valid') {
-        setCurrentColor('#3370FF')
-        document.title = 'Numora'
-        setLinkIcon()
-        return
-      }
       const resData = await request.get('/system/appearance/ui')
       this.loaded = true
       if (!resData?.length) {

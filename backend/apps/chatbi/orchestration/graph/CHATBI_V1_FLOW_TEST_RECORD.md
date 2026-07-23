@@ -458,7 +458,7 @@ Invalid format 'json' for '%' style
 ```text
 apps.agentic_chat.tools.sql_executor.SqlExecuteTool.run()
   -> from apps.datasource.crud.datasource import get_ds
-  -> sqlbot_xpack import chain
+  -> 当时的企业扩展包导入链
   -> common.utils.utils.setup_logging()
   -> logging.Formatter(settings.LOG_FORMAT)
   -> ValueError: Invalid format 'json' for '%' style
@@ -490,15 +490,15 @@ apps.datasource.crud.datasource
 
 ```text
 apps.datasource.crud.datasource
-  -> sqlbot_xpack.permissions.models.ds_rules
-  -> sqlbot_xpack
+  -> 当时企业扩展包的数据权限模型
+  -> 当时的企业扩展包
   -> apps.system.schemas.permission
   -> apps.datasource.crud.datasource
 ```
 
 说明：
 
-- 修正日志格式后，datasource/xpack 链路继续暴露循环导入问题。
+- 修正日志格式后，当时的数据源/企业扩展链路继续暴露循环导入问题。
 - 这说明当前真实 SQL 执行链路还不能稳定被 `SqlExecuteTool` 在该测试环境中导入和调用。
 
 ## 12. 当前流程状态判断

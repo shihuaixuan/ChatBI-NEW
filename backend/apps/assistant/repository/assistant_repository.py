@@ -23,6 +23,13 @@ class AssistantRepository(Protocol):
         exclude_type: int | None = None,
     ) -> list[AssistantRecord]: ...
 
+    def list_page_embedded(
+        self,
+        page: int,
+        size: int,
+        keyword: str | None,
+    ) -> tuple[list[AssistantRecord], int]: ...
+
     def list_references(
         self,
         assistant_ids: list[int] | None = None,
@@ -45,6 +52,12 @@ class AssistantRepository(Protocol):
         self,
         assistant_id: int,
         configuration: str,
+    ) -> AssistantRecord | None: ...
+
+    def update_app_secret(
+        self,
+        assistant_id: int,
+        app_secret: str,
     ) -> AssistantRecord | None: ...
 
     def delete(self, assistant_id: int) -> AssistantRecord | None: ...

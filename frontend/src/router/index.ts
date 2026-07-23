@@ -22,12 +22,9 @@ import Member from '@/views/system/member/index.vue'
 import Professional from '@/views/system/professional/index.vue'
 import Training from '@/views/system/training/index.vue'
 import Semantic from '@/views/system/semantic/index.vue'
-import Prompt from '@/views/system/prompt/index.vue'
 import Audit from '@/views/system/audit/index.vue'
 import Appearance from '@/views/system/appearance/index.vue'
 import Parameter from '@/views/system/parameter/index.vue'
-import Authentication from '@/views/system/authentication/index.vue'
-import Platform from '@/views/system/platform/index.vue'
 import Permission from '@/views/system/permission/index.vue'
 import User from '@/views/system/user/User.vue'
 import Workspace from '@/views/system/workspace/index.vue'
@@ -151,12 +148,6 @@ export const routes = [
           hiddenInSubMenu: true,
         },
       },
-      {
-        path: '/set/prompt',
-        name: 'prompt',
-        component: Prompt,
-        meta: { title: t('prompt.customize_prompt_words') },
-      },
     ],
   },
   {
@@ -237,18 +228,6 @@ export const routes = [
             name: 'variables',
             component: Variables,
             meta: { title: t('variables.system_variables') },
-          },
-          {
-            path: 'authentication',
-            name: 'authentication',
-            component: Authentication,
-            meta: { title: t('system.authentication_settings') },
-          },
-          {
-            path: 'platform',
-            name: 'platform',
-            component: Platform,
-            meta: { title: t('platform.title') },
           },
         ],
       },

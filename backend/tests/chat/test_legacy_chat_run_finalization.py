@@ -72,7 +72,6 @@ def test_legacy_chat_run_preserves_successful_finalization(monkeypatch):
 
     service.load_term_context = lambda session: None
     service.filter_training_template = lambda session, oid, ds_id: None
-    service.filter_custom_prompts = lambda session, prompt_type, oid, ds_id: None
     service.init_messages = lambda session: None
     service.validate_history_ds = lambda session: None
     service.generate_sql = lambda session: iter(
@@ -132,7 +131,6 @@ def test_legacy_chat_run_sse_event_sequence_until_sql_finish(monkeypatch):
 
     service.load_term_context = lambda session: None
     service.filter_training_template = lambda session, oid, ds_id: None
-    service.filter_custom_prompts = lambda session, prompt_type, oid, ds_id: None
     service.init_messages = lambda session: None
     service.validate_history_ds = lambda session: None
     service.generate_sql = lambda session: iter(

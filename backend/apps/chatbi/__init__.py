@@ -4,9 +4,7 @@
 以及 `apps.chatbi.composition` 的 `build_*` 组装入口与 `apps.chatbi.models` 的公开 DTO。
 services 子包内部结构对外不承诺稳定。
 
-公共面按 PEP 562 惰性解析：旧 Chat 兼容层（`apps.chat.models.chat_model`，台账 B2）仍会在
-其他领域的初始化链路中导入本包，公共面在 import 期加载全部子域会放大该历史链路；
-这不是掩盖领域间循环（依赖方向本身合法）。当前 xpack 仍使用 B2，待 R6 清偿后再改回直接导入。
+公共面按 PEP 562 惰性解析，避免使用方仅导入一个公开对象时加载全部子域。
 """
 
 from importlib import import_module

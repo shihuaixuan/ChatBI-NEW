@@ -1,8 +1,10 @@
-from sqlmodel import Field, SQLModel,BigInteger
 from datetime import datetime
-from typing import Optional
 from enum import Enum
+from typing import Optional
+
 from pydantic import BaseModel
+from sqlmodel import BigInteger, Field, SQLModel
+
 
 class OperationModules(str, Enum):
     CHAT = "chat"  # 问数
@@ -13,7 +15,6 @@ class OperationModules(str, Enum):
     RULES = "rules"  # q组
     TERMINOLOGY = "terminology"  # 术语
     DATA_TRAINING = "data_training"  # SQL 示例库
-    PROMPT_WORDS = "prompt_words"  # 自定义提示词
     USER = "user"  # 用户
     WORKSPACE = "workspace"  # 工作空间
     AI_MODEL = "ai_model"  # AI 模型

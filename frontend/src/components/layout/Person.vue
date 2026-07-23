@@ -19,9 +19,7 @@ import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { userApi } from '@/api/auth'
 import { toLoginPage } from '@/utils/utils'
-import { useCache } from '@/utils/useCache'
 
-const { wsCache } = useCache()
 const router = useRouter()
 const appearanceStore = useAppearanceStoreWithOut()
 const userStore = useUserStore()
@@ -38,14 +36,6 @@ const currentLanguage = computed(() => userStore.getLanguage)
 const isAdmin = computed(() => userStore.isAdmin)
 const isLocalUser = computed(() => !userStore.getOrigin)
 
-const isClient = computed(() => {
-  return !!wsCache.get('sqlbot-platform-client')
-})
-
-const platFlag = computed(() => {
-  const platformInfo = userStore.getPlatformInfo
-  return platformInfo?.origin || 0
-})
 const dialogVisible = ref(false)
 const apikeyDialogVisible = ref(false)
 const aboutRef = ref()
@@ -142,7 +132,7 @@ const logout = async () => {
           </el-icon>
           <div class="datasource-name">{{ $t('common.system_manage') }}</div>
         </div>
-        <div v-if="isLocalUser && !platFlag" class="popover-item" @click="openPwd">
+        <div v-if="isLocalUser" class="popover-item" @click="openPwd">
           <el-icon size="16">
             <icon_key_outlined></icon_key_outlined>
           </el-icon>
@@ -194,7 +184,7 @@ const logout = async () => {
           <div class="datasource-name">{{ $t('common.help') }}</div>
         </div>
         <div style="height: 4px; width: 100%"></div>
-        <div v-if="!isClient" class="popover-item mr4" @click="logout">
+        <div class="popover-item mr4" @click="logout">
           <el-icon size="16">
             <icon_logout_outlined></icon_logout_outlined>
           </el-icon>

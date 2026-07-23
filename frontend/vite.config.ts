@@ -41,12 +41,8 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       proxy: {
-        // 本地开发走同源代理，避免 license key 与登录加密请求被浏览器 CORS 拦截。
+        // 本地开发走同源代理。
         '/api': {
-          target: 'http://127.0.0.1:8000',
-          changeOrigin: true,
-        },
-        '/xpack_static': {
           target: 'http://127.0.0.1:8000',
           changeOrigin: true,
         },

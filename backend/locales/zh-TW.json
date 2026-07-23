@@ -114,36 +114,11 @@
     "linked_assets_require_dataset": "關聯資產必須指定數據集",
     "linked_asset_not_found": "數據集內找不到關聯資產 {0}:{1}"
   },
-  "i18n_custom_prompt": {
-    "exists_in_db": "模版名稱已存在",
-    "not_exists": "該模版不存在",
-    "prompt_word_name": "提示詞名稱",
-    "prompt_word_content": "提示詞內容",
-    "effective_data_sources": "生效數據源",
-    "all_data_sources": "所有數據源",
-    "prompt_word_name_template": "提示詞名稱（必填）",
-    "prompt_word_content_template": "提示詞內容（必填）",
-    "effective_data_sources_template": "生效數據源（支援多個，用\",\"分割）",
-    "all_data_sources_template": "所有數據源（Y：應用到全部數據源，N：應用到指定數據源）",
-    "prompt_word_name_template_example1": "提示詞1",
-    "prompt_word_content_template_example1": "詳細描述你的提示詞",
-    "effective_data_sources_template_example1": "生效數據源1, 生效數據源2",
-    "prompt_word_name_template_example2": "提示詞2",
-    "prompt_word_content_template_example2": "詳細描述你的提示詞",
-    "name_cannot_be_empty": "名稱不能為空",
-    "prompt_cannot_be_empty": "提示詞內容不能為空",
-    "type_cannot_be_empty": "類型不能為空",
-    "datasource_not_found": "找不到數據源",
-    "datasource_cannot_be_none": "數據源不能為空"
-  },
   "i18n_excel_export": {
     "data_is_empty": "表單數據為空，無法導出數據"
   },
   "i18n_excel_import": {
     "col_num_not_match": "EXCEL列數量不匹配"
-  },
-  "i18n_authentication": {
-    "record_not_exist": "{msg} 記錄不存在，請先儲存！"
   },
   "i18n_audit": {
     "success": "成功",

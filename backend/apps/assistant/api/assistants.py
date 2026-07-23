@@ -16,7 +16,6 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
-from sqlbot_xpack.file_utils import SQLBotFileUtils
 
 from apps.access_control.permission import SqlbotPermission, require_permissions
 from apps.assistant.composition import build_assistant_service
@@ -31,7 +30,6 @@ from apps.assistant.models.dto import (
 )
 from apps.assistant.public import get_assistant_info
 from apps.assistant.services import AssistantService
-from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.cache_keys import CacheName, CacheNamespace
@@ -44,6 +42,8 @@ from common.core.deps import (
 )
 from common.core.security import create_access_token
 from common.core.sqlbot_cache import clear_cache
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
+from common.utils.file_utils import SQLBotFileUtils
 from common.utils.utils import get_origin_from_referer
 
 router = APIRouter(tags=["system_assistant"], prefix="/system/assistant")

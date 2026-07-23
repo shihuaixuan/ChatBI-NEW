@@ -4,17 +4,12 @@ from fastapi.routing import APIRoute
 
 from apps.api import api_router
 from apps.assistant import (
-    AssistantDTO,
     AssistantModel,
     AssistantPublicInfo,
 )
-from apps.system.models.system_model import AssistantModel as LegacyAssistantModel
-from apps.system.schemas.system_schema import AssistantDTO as LegacyAssistantDTO
 
 
-def test_system_reexports_assistant_owned_models() -> None:
-    assert LegacyAssistantModel is AssistantModel
-    assert LegacyAssistantDTO is AssistantDTO
+def test_assistant_models_are_owned_by_assistant_domain() -> None:
     assert AssistantModel.__module__ == "apps.assistant.models.orm.assistant"
 
 
@@ -29,6 +24,21 @@ def test_assistant_routes_are_owned_by_assistant_domain() -> None:
     assert all(
         route.endpoint.__module__ == "apps.assistant.api.assistants" for route in routes
     )
+
+
+def test_page_embedded_routes_are_owned_by_assistant_domain() -> None:
+    paths = {
+        route.path
+        for route in api_router.routes
+        if route.path.startswith("/system/embedded")
+    }
+
+    assert paths == {
+        "/system/embedded",
+        "/system/embedded/{id}",
+        "/system/embedded/{page_num}/{page_size}",
+        "/system/embedded/secret/{id}",
+    }
 
 
 def test_public_assistant_contract_does_not_expose_app_secret() -> None:

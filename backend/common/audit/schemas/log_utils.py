@@ -1,10 +1,13 @@
 from sqlalchemy import String, func, literal_column, select, union_all
 from sqlalchemy.sql import Select
-from sqlbot_xpack.custom_prompt.models.custom_prompt_model import CustomPrompt
-from sqlbot_xpack.permissions.models.ds_permission import DsPermission
-from sqlbot_xpack.permissions.models.ds_rules import DsRules
 
-from apps.access_control.models import ApiKeyModel, UserModel, WorkspaceModel
+from apps.access_control.models import (
+    ApiKeyModel,
+    DataPermissionModel,
+    DataRuleModel,
+    UserModel,
+    WorkspaceModel,
+)
 from apps.ai_model.models import AiModelDetail
 from apps.assistant.audit import build_assistant_audit_resource_query
 from apps.chatbi.models import Chat
@@ -49,13 +52,6 @@ def build_resource_union_query() -> Select:
         literal_column("'datasource'").label("module")
     ).select_from(CoreDatasource)
 
-    # custom_prompt 表查询
-    custom_prompt_query = select(
-        func.cast(CustomPrompt.id, String).label("id"),
-        CustomPrompt.name.label("name"),
-        literal_column("'prompt_words'").label("module")
-    ).select_from(CustomPrompt)
-
     # data_training 表查询（使用question作为name）
     data_training_query = select(
         func.cast(SQLExampleModel.id, String).label("id"),
@@ -65,17 +61,17 @@ def build_resource_union_query() -> Select:
 
     # ds_permission 表查询
     ds_permission_query = select(
-        func.cast(DsPermission.id, String).label("id"),
-        DsPermission.name.label("name"),
+        func.cast(DataPermissionModel.id, String).label("id"),
+        DataPermissionModel.name.label("name"),
         literal_column("'permission'").label("module")
-    ).select_from(DsPermission)
+    ).select_from(DataPermissionModel)
 
     # ds_rules 表查询
     ds_rules_query = select(
-        func.cast(DsRules.id, String).label("id"),
-        DsRules.name.label("name"),
+        func.cast(DataRuleModel.id, String).label("id"),
+        DataRuleModel.name.label("name"),
         literal_column("'rules'").label("module")
-    ).select_from(DsRules)
+    ).select_from(DataRuleModel)
 
     # sys_user 表查询
     user_query = select(
@@ -121,7 +117,6 @@ def build_resource_union_query() -> Select:
         chat_query,
         dashboard_query,
         datasource_query,
-        custom_prompt_query,
         data_training_query,
         ds_permission_query,
         ds_rules_query,

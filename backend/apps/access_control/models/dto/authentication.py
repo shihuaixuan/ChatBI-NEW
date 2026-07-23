@@ -2,18 +2,8 @@
 
 from pydantic import BaseModel, Field
 
-from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.core.schemas import BaseCreatorDTO
-
-
-class AuthenticationRecord(BaseModel):
-    id: int
-    name: str
-    type: int
-    config: str | None
-    create_time: int
-    enable: bool
-    valid: bool
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 
 
 class ApiKeyStatus(BaseModel):
@@ -37,9 +27,3 @@ class LogoutDTO(BaseModel):
     flag: str | None = "default"
     origin: int | None = 0
     data: str | None = None
-
-
-# 保留前端和 XPack 已使用的类名。
-ApikeyStatus = ApiKeyStatus
-ApikeyGridItem = ApiKeyGridItem
-LogoutSchema = LogoutDTO

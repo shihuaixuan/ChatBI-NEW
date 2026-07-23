@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 
+from apps.access_control.permission import SqlbotPermission, require_permissions
 from apps.ai_model.composition import build_ai_model_management_service
 from apps.ai_model.errors import (
     AIModelConfigInvalidError,
@@ -21,11 +22,10 @@ from apps.ai_model.models.dto import (
     AIModelRecord,
 )
 from apps.ai_model.services import AIModelManagementService
-from common.interfaces.i18n import PLACEHOLDER_PREFIX
-from apps.access_control.permission import SqlbotPermission, require_permissions
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.deps import SessionDep, Trans
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.utils.utils import SQLBotLogUtil
 
 router = APIRouter(tags=["system_model"], prefix="/system/aimodel")
@@ -136,7 +136,7 @@ async def add_model(
     creator: AiModelCreator,
 ) -> AIModelRecord:
     try:
-        return build_ai_model_management_service(session).create_model(creator)
+        return await build_ai_model_management_service(session).create_model(creator)
     except AIModelConfigInvalidError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -159,7 +159,7 @@ async def update_model(
     editor: AiModelEditor,
 ) -> AIModelRecord:
     try:
-        return build_ai_model_management_service(session).update_model(editor)
+        return await build_ai_model_management_service(session).update_model(editor)
     except AIModelNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except AIModelDefaultChangeRequiresEndpointError as exc:

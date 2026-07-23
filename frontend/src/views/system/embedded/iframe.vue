@@ -510,19 +510,18 @@ const handleEmbedded = (row: any) => {
   })()`
 
   jsCodeElementFull.value = `(function(){
-    const script = document.createElement('script');
-    script.defer = true;
-    script.async = true;
-    script.src = "${origin + pathname}xpack_static/sqlbot-embedded-dynamic.umd.js";
-    document.head.appendChild(script);
-  })()
-  let sqlbot_embedded_timer = setInterval(() => {
-    if (sqlbot_embedded_handler?.mounted) {
-      sqlbot_embedded_handler.mounted('.copilot', { "embeddedId": "${row.id}" })
-      clearInterval(sqlbot_embedded_timer)
+    const container = document.querySelector('.copilot');
+    if (!container) {
+      throw new Error('Missing .copilot container');
     }
-  }, 1000)
-  `
+    const iframe = document.createElement('iframe');
+    iframe.src = "${origin + pathname}#/assistant?id=${row.id}";
+    iframe.allow = "microphone; clipboard-read; clipboard-write";
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    iframe.style.border = '0';
+    container.replaceChildren(iframe);
+  })()`
 }
 const copyJsCode = () => {
   copy(jsCodeElement.value)

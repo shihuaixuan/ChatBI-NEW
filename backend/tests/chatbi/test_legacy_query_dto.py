@@ -1,10 +1,4 @@
-from apps.chat.models import chat_model
 from apps.chatbi.models import AiModelQuestion, ChatQuestion
-
-
-def test_xpack_query_models_are_chatbi_compatibility_exports():
-    assert chat_model.AiModelQuestion is AiModelQuestion
-    assert chat_model.ChatQuestion is ChatQuestion
 
 
 def test_chat_question_keeps_legacy_defaults():

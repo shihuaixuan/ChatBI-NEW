@@ -4,7 +4,6 @@ import { AuthApi } from '@/api/login'
 import { useCache } from '@/utils/useCache'
 import { i18n } from '@/i18n'
 import { store } from './index'
-import { getCurrentRouter, getQueryString, getSQLBotAddr, isPlatform } from '@/utils/utils'
 
 const { wsCache } = useCache()
 
@@ -19,7 +18,6 @@ interface UserState {
   time: number
   weight: number
   origin: number
-  platformInfo: any | null
   [key: string]: string | number | any | null
 }
 
@@ -36,7 +34,6 @@ export const UserStore = defineStore('user', {
       time: 0,
       weight: 0,
       origin: 0,
-      platformInfo: null,
     }
   },
   getters: {
@@ -76,9 +73,6 @@ export const UserStore = defineStore('user', {
     isSpaceAdmin(): boolean {
       return this.uid === '1' || !!this.weight
     },
-    getPlatformInfo(): any | null {
-      return this.platformInfo
-    },
   },
   actions: {
     async login(formData: { username: string; password: string }) {
@@ -87,30 +81,8 @@ export const UserStore = defineStore('user', {
     },
 
     async logout() {
-      let param = { token: this.token }
-      if (wsCache.get('user.platformInfo')) {
-        param = { ...param, ...wsCache.get('user.platformInfo') }
-      }
-      const res: any = await AuthApi.logout(param)
+      await AuthApi.logout({ token: this.token, origin: 0 })
       this.clear()
-      if (res) {
-        window.location.href = res
-        window.open(res, '_self')
-        return res
-      }
-      if (
-        (getQueryString('code') && getQueryString('state')?.includes('oauth2_state')) ||
-        isPlatform()
-      ) {
-        const currentPath = getCurrentRouter()
-        let logout_url = getSQLBotAddr() + '#/login'
-        if (currentPath) {
-          logout_url += `?redirect=${currentPath}`
-        }
-        window.location.href = logout_url
-        window.open(res, logout_url)
-        return logout_url
-      }
       return null
     },
 
@@ -142,7 +114,6 @@ export const UserStore = defineStore('user', {
       })
 
       this.setLanguage(this.language)
-      this.platformInfo = wsCache.get('user.platformInfo')
     },
     setToken(token: string) {
       wsCache.set('user.token', token)
@@ -197,10 +168,6 @@ export const UserStore = defineStore('user', {
       wsCache.set('user.origin', origin)
       this.origin = origin
     },
-    setPlatformInfo(info: any | null) {
-      wsCache.set('user.platformInfo', info)
-      this.platformInfo = info
-    },
     clear() {
       const keys: string[] = [
         'token',
@@ -213,7 +180,6 @@ export const UserStore = defineStore('user', {
         'time',
         'weight',
         'origin',
-        'platformInfo',
       ]
       keys.forEach((key) => wsCache.delete('user.' + key))
       this.$reset()

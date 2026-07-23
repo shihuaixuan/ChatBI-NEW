@@ -183,13 +183,3 @@ def test_delete_delegates_owned_conversation_cleanup():
 
     assert result == "Chat with id 10 has been deleted"
     assert deletion_provider.calls == [(7, 10)]
-
-
-def test_xpack_chat_models_export_canonical_chatbi_objects():
-    from apps.chat.models import chat_model
-    from apps.chatbi import models
-
-    assert chat_model.Chat is models.Chat
-    assert chat_model.ChatRecord is models.ChatRecord
-    assert chat_model.ChatLog is models.ChatLog
-    assert chat_model.ChatInfo is models.ChatInfo

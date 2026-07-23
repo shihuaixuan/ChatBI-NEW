@@ -1,13 +1,8 @@
-"""生成流程的知识上下文：SQL 示例、业务术语与自定义提示词。"""
+"""生成流程的知识上下文：SQL 示例与业务术语。"""
 
 import json
-from typing import Protocol
 
 from apps.chatbi.models.dto.generation_context import GenerationContextScope
-from apps.chatbi.models.dto.generation_custom_prompt import (
-    GenerationCustomPromptQuery,
-    GenerationCustomPromptResult,
-)
 from apps.knowledge.services import SQLExampleQueryService
 from apps.semantic.services import SemanticTermQueryService
 
@@ -66,37 +61,4 @@ class GenerationContextService:
         return json.dumps(items, ensure_ascii=False), items
 
 
-class GenerationCustomPromptClient(Protocol):
-    def is_enabled(self) -> bool: ...
-
-    def find(
-        self,
-        query: GenerationCustomPromptQuery,
-    ) -> GenerationCustomPromptResult: ...
-
-
-class GenerationCustomPromptService:
-    """通过稳定端口读取生成流程使用的自定义提示词。"""
-
-    def __init__(self, provider: GenerationCustomPromptClient) -> None:
-        self._provider = provider
-        self._enabled = provider.is_enabled()
-
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
-
-    def query(
-        self,
-        query: GenerationCustomPromptQuery,
-    ) -> GenerationCustomPromptResult:
-        if not self._enabled:
-            return GenerationCustomPromptResult()
-        return self._provider.find(query)
-
-
-__all__ = [
-    "GenerationContextService",
-    "GenerationCustomPromptClient",
-    "GenerationCustomPromptService",
-]
+__all__ = ["GenerationContextService"]

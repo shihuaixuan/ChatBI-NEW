@@ -73,8 +73,6 @@ class Settings(BaseSettings):
     BASE_DIR: str = "/opt/sqlbot"
     SCRIPT_DIR: str = f"{BASE_DIR}/scripts"
     UPLOAD_DIR: str = "/opt/sqlbot/data/file"
-    SQLBOT_KEY_EXPIRED: int = 100  # License key expiration timestamp, 0 means no expiration
-
     @computed_field  # type: ignore[prop-decorator]
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> PostgresDsn | str:

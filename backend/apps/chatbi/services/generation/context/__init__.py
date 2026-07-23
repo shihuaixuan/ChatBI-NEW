@@ -1,11 +1,7 @@
 """生成上下文子包：范围、运行参数、历史、Schema 与知识上下文。"""
 
 from apps.chatbi.services.generation.context.history import project_generation_history
-from apps.chatbi.services.generation.context.knowledge import (
-    GenerationContextService,
-    GenerationCustomPromptClient,
-    GenerationCustomPromptService,
-)
+from apps.chatbi.services.generation.context.knowledge import GenerationContextService
 from apps.chatbi.services.generation.context.runtime_settings import (
     resolve_runtime_settings,
 )
@@ -24,8 +20,6 @@ __all__ = [
     "ADVANCED_ASSISTANT_TYPE",
     "DYNAMIC_DATASOURCE_ASSISTANT_TYPES",
     "GenerationContextService",
-    "GenerationCustomPromptClient",
-    "GenerationCustomPromptService",
     "SchemaContextService",
     "SchemaRankingClient",
     "PAGE_EMBEDDED_ASSISTANT_TYPE",

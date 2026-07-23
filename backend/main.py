@@ -1,8 +1,6 @@
 import os
-from pathlib import Path
 from typing import Any
 
-import sqlbot_xpack
 from alembic.config import Config
 from fastapi import FastAPI, Request
 from fastapi.concurrency import asynccontextmanager
@@ -52,15 +50,6 @@ def init_workflow_artifact_cleanup() -> None:
         ArtifactCleanupService(session).process_pending()
 
 
-def mount_xpack_static(app: FastAPI):
-    static_path = Path(sqlbot_xpack.__file__).resolve().parent / "static"
-    app.mount(
-        "/xpack_static",
-        StaticFiles(directory=static_path),
-        name="xpack_static",
-    )
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     run_migrations()
@@ -69,9 +58,7 @@ async def lifespan(app: FastAPI):
     init_dynamic_cors(app)
     submit_pending_index_jobs()
     SQLBotLogUtil.info("✅ Numora 初始化完成")
-    await sqlbot_xpack.core.clean_xpack_cache()
     await migrate_ai_model_secrets()  # 加密历史模型密钥并修正旧供应商编号
-    await sqlbot_xpack.core.monitor_app(app)
     yield
     SQLBotLogUtil.info("Numora 应用关闭")
 
@@ -224,8 +211,6 @@ app.add_exception_handler(Exception, exception_handler.global_exception_handler)
 
 mcp.setup_server()
 
-mount_xpack_static(app)
-sqlbot_xpack.init_fastapi_app(app)
 if __name__ == "__main__":
     import uvicorn
 

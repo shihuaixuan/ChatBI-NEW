@@ -5,7 +5,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlbot_xpack.authentication.manage import logout as xpack_logout
 
 from apps.access_control.composition import build_authentication_service
 from apps.access_control.errors import AccessControlError
@@ -17,7 +16,6 @@ from common.core.config import settings
 from common.core.deps import SessionDep, Trans
 from common.core.schemas import Token
 from common.core.security import create_access_token
-from common.utils.crypto import sqlbot_decrypt
 
 router = APIRouter(tags=["login"], prefix="/login")
 
@@ -35,12 +33,10 @@ async def local_login(
     trans: Trans,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
 ) -> Token:
-    account = await sqlbot_decrypt(form_data.username)
-    password = await sqlbot_decrypt(form_data.password)
     try:
         user = build_authentication_service(session).authenticate_local(
-            account,
-            password,
+            form_data.username,
+            form_data.password,
         )
     except AccessControlError as exc:
         raise_login_http_error(exc, trans)
@@ -53,6 +49,5 @@ async def local_login(
 
 @router.post("/logout")
 async def logout(session: SessionDep, request: Request, dto: LogoutDTO):
-    if dto.origin != 0:
-        return await xpack_logout(session, request, dto)
+    del session, request, dto
     return None

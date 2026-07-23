@@ -4,10 +4,9 @@ from os.path import abspath, dirname
 
 sys.path.insert(0, dirname(dirname(abspath(__file__))))
 
-import os
+from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -22,14 +21,13 @@ config = context.config
 # target_metadata = mymodel.Base.metadata
 # target_metadata = None
 
-# from apps.system.models.user import SQLModel  # noqa
-#from apps.chat.models.chat_model import SQLModel
-#from apps.custom_prompt.models.custom_prompt_model import SQLModel
-#from apps.data_training.models.data_training_model import SQLModel
-# from apps.dashboard.models.dashboard_model import SQLModel
-from common.core.config import settings # noqa
-#from apps.datasource.models.datasource import SQLModel
-from apps.system.models.system_model import SQLModel
+# 显式加载各领域 ORM，避免依赖已经删除的旧 System/Xpack 模型入口。
+from sqlmodel import SQLModel  # noqa: E402
+
+from apps.access_control import models as access_control_models  # noqa: F401,E402
+from apps.ai_model import models as ai_model_models  # noqa: F401,E402
+from apps.assistant import models as assistant_models  # noqa: F401,E402
+from common.core.config import settings  # noqa: E402
 
 target_metadata = SQLModel.metadata
 

@@ -32,6 +32,7 @@ from apps.ai_model.services.model_config_rules import (
 from common.utils.time import get_timestamp
 
 SecretDecryptor = Callable[[str], Awaitable[str]]
+SecretEncryptor = Callable[[str], Awaitable[str]]
 
 
 class AIModelManagementService:
@@ -39,9 +40,11 @@ class AIModelManagementService:
         self,
         repository: AIModelManagementRepository,
         decrypt_secret: SecretDecryptor,
+        encrypt_secret: SecretEncryptor,
     ) -> None:
         self._repository = repository
         self._decrypt_secret = decrypt_secret
+        self._encrypt_secret = encrypt_secret
 
     def list_models(self, keyword: str | None = None) -> list[AiModelGridItem]:
         return [
@@ -70,7 +73,11 @@ class AIModelManagementService:
             config_list=self._deserialize_config(record.config),
         )
 
-    def create_model(self, creator: AiModelCreator) -> AIModelRecord:
+    async def create_model(self, creator: AiModelCreator) -> AIModelRecord:
+        api_domain, api_key = await self._encrypt_transport_secrets(
+            creator.api_domain,
+            creator.api_key,
+        )
         return self._repository.create_model(
             AIModelCreateData(
                 name=creator.name,
@@ -79,17 +86,21 @@ class AIModelManagementService:
                 supplier=creator.supplier,
                 protocol=creator.protocol,
                 default_model=creator.default_model,
-                api_domain=creator.api_domain,
-                api_key=creator.api_key,
+                api_domain=api_domain,
+                api_key=api_key,
                 config=self._serialize_config(creator.config_list),
                 create_time=get_timestamp(),
             )
         )
 
-    def update_model(self, editor: AiModelEditor) -> AIModelRecord:
+    async def update_model(self, editor: AiModelEditor) -> AIModelRecord:
         current = self._require_model(editor.id)
         if editor.default_model != current.default_model:
             raise AIModelDefaultChangeRequiresEndpointError(editor.id)
+        api_domain, api_key = await self._encrypt_transport_secrets(
+            editor.api_domain,
+            editor.api_key,
+        )
         updated = self._repository.update_model(
             editor.id,
             AIModelUpdateData(
@@ -98,14 +109,31 @@ class AIModelManagementService:
                 base_model=editor.base_model,
                 supplier=editor.supplier,
                 protocol=editor.protocol,
-                api_domain=editor.api_domain,
-                api_key=editor.api_key,
+                api_domain=api_domain,
+                api_key=api_key,
                 config=self._serialize_config(editor.config_list),
             ),
         )
         if updated is None:
             raise AIModelNotFoundError(editor.id)
         return updated
+
+    async def _encrypt_transport_secrets(
+        self,
+        api_domain: str,
+        api_key: str,
+    ) -> tuple[str, str]:
+        """HTTP 接口接收明文，进入仓储前统一完成静态加密。"""
+
+        if not api_domain.startswith("http"):
+            return api_domain, api_key
+        encrypted_domain = await self._encrypt_secret(api_domain)
+        encrypted_key = (
+            await self._encrypt_secret(api_key)
+            if api_key
+            else ""
+        )
+        return encrypted_domain, encrypted_key
 
     def set_default(self, model_id: int) -> AIModelRecord:
         updated = self._repository.set_default(model_id)

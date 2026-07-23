@@ -114,12 +114,6 @@ class TemplateSQLGenerationPromptBuilder:
         ]
         optional_contexts = (
             (
-                data.custom_prompt,
-                "generate_custom_prompt_info",
-                "custom_prompt",
-                "我已确认您提供的额外信息，我会进行参考。",
-            ),
-            (
                 data.terminologies,
                 "generate_terminologies_info",
                 "terminologies",

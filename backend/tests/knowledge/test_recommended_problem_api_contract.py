@@ -30,17 +30,3 @@ def test_sql_example_routes_keep_legacy_paths():
         "/system/data-training/uploadExcel",
         "/system/data-training/{id}/enable/{enabled}",
     }
-
-
-def test_xpack_legacy_model_path_reexports_knowledge_objects():
-    from apps.data_training.models.data_training_model import (
-        DataTraining,
-        DataTrainingInfo,
-        DataTrainingInfoResult,
-    )
-    from apps.knowledge.models.dto import SQLExampleInput, SQLExampleResult
-    from apps.knowledge.models.orm import SQLExampleModel
-
-    assert DataTraining is SQLExampleModel
-    assert DataTrainingInfo is SQLExampleInput
-    assert DataTrainingInfoResult is SQLExampleResult

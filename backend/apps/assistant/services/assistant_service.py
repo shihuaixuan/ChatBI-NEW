@@ -111,6 +111,16 @@ class AssistantService:
             assistant_type=1,
         )
 
+    def list_page_embedded(
+        self,
+        page: int,
+        size: int,
+        keyword: str | None = None,
+    ) -> tuple[list[AssistantRecord], int]:
+        if page <= 0 or size <= 0:
+            raise AssistantConfigurationError("PAGINATION")
+        return self._repository.list_page_embedded(page, size, keyword)
+
     def list_references(
         self,
         assistant_ids: list[int] | None = None,
@@ -246,6 +256,18 @@ class AssistantService:
             assistant=updated,
             obsolete_asset_ids=obsolete_asset_ids,
         )
+
+    def rotate_app_secret(self, assistant_id: int) -> AssistantRecord:
+        assistant = self.get(assistant_id)
+        if assistant.type != PAGE_EMBEDDED_ASSISTANT_TYPE:
+            raise AssistantConfigurationError("NOT_PAGE_EMBEDDED")
+        updated = self._repository.update_app_secret(
+            assistant_id,
+            self._generate_app_secret(),
+        )
+        if updated is None:
+            raise AssistantNotFoundError(assistant_id)
+        return updated
 
     def list_datasources(
         self,

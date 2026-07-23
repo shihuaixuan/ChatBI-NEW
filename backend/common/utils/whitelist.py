@@ -1,8 +1,10 @@
 # app/utils/whitelist.py
 import re
 from typing import List, Pattern
+
 from common.core.config import settings
 from common.utils.utils import SQLBotLogUtil
+
 wlist = [
     "/",
     "/docs",
@@ -23,22 +25,13 @@ wlist = [
     "*.otf",
     "*.css.map",
     "/mcp*",
-    "/system/license",
-    "/system/config/key",
     "/images/*",
-    "/sse",
     "/system/appearance/ui",
     "/system/appearance/picture/*",
     "/system/assistant/validator*",
     "/system/assistant/info/*",
     "/system/assistant/app/*",
     "/system/assistant/picture/*",
-    "/system/authentication/platform/status",
-    "/system/authentication/login/*",
-    "/system/authentication/sso/*",
-    "/system/platform/sso/*",
-    "/system/platform/client/*",
-    "/system/parameter/login"
 ]
 
 class WhitelistChecker:

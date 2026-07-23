@@ -101,7 +101,6 @@ def _data(
         assistant_name="Numora",
         current_time=current_time,
         rule="只统计已支付订单",
-        custom_prompt="金额保留两位小数",
         terminologies="销售额：已支付订单金额",
         data_training="问题：昨日销售额；SQL：SELECT ...",
         history=[

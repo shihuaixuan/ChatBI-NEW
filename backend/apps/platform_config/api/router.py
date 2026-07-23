@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Request
-from sqlbot_xpack.config.model import SysArgModel  # type: ignore[import-untyped]
 
 from apps.access_control.permission import SqlbotPermission, require_permissions
 from apps.platform_config.api.forms import (
@@ -7,6 +6,7 @@ from apps.platform_config.api.forms import (
     get_parameter_args,
     save_parameter_args,
 )
+from apps.platform_config.models import SysArgModel
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.deps import SessionDep
