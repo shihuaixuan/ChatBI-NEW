@@ -31,10 +31,10 @@ from apps.chat.models.chat_model import (
     CreateChat,
     RenameChat,
 )
-from apps.chat.services.semantic_binding import DatasetBindingError
 from apps.chat.task.legacy_adapter import encode_sse_event
 from apps.chat.task.llm import LLMService
 from apps.chatbi.models import ChatQuestion
+from apps.chatbi.services import DatasetBindingError
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log

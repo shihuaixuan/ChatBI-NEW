@@ -1,6 +1,6 @@
 # SQLBot 后端架构迁移计划（现行版）
 
-> 状态：进行中（R0–R2、R3-a/b 已完成，当前推进 R3-c）
+> 状态：进行中（R0–R2、R3-a/b/c1/c2/c3 已完成，当前推进 R3-d）
 > 更新：2026-07-20
 > 定位：**边界清晰的模块化单体**。DDD 战略半边（限界上下文、数据所有权、公开契约、依赖方向）全局保留；战术模式按子域分级使用（见 `apps/AGENTS.md` v2）。
 > 本文是唯一现行计划。历史批次日志（含 P0–P5 前 43 批全文）见 `DDD_MIGRATION_CHANGELOG.md`；兼容入口台账见 `COMPAT_LEDGER.md`；评审依据见 `docs/tech/12/13/14`。
@@ -85,11 +85,19 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 | 3 ✅ | 外部助手 Schema 读取 | 收拢至 `apps/chat/task/external_datasource.py`（台账 B3，随 R3-c 删除） | R3-a |
 | 4 ✅ | `run_task` 主流程编排 | 拆为 12 个阶段方法的顺序调用，特征测试锁行为（R3-b 完成） | R3-b |
 | 5 ✅ | 分析/预测/推荐任务编排 | 拆为 4 个阶段方法（R3-b 完成；推荐任务原本已薄） | R3-b |
-| 6 | SSE 协议与错误格式（legacy_adapter + 投影） | `chatbi/api/legacy_sse.py` | R3-c |
-| 7 | `validate_history_ds`/图片/语言工具 | 归入子域或 legacy_sse | R3-c |
-| 8 | `api/chat.py` 路由与鉴权 | 迁 `chatbi/api/` | R3-c/R4 |
-| 9 | `curd/chat.py`、`chat_model.py` 兼容转发 | 调用方核对后删除、台账销账 | R3-d |
-| 10 | `services/deletion.py`、`semantic_binding.py` 及其 ORM 跨域依赖 | 迁 `conversation/`，走公开契约，基线销账 | R3-d |
+| 6 ✅ | 旧 Chat 写侧转发（curd 的 save_*） | 13 个转发函数已删除，llm.py 直调 ChatRecordService（R3-c1 完成） | R3-c1 |
+| 7 ✅ | `deletion.py`、`semantic_binding.py` 及其 ORM 跨域依赖 | 已迁 `chatbi/services/conversation`；Semantic 绑定服务与引擎 run_cleanup 公开契约建立；基线销账 4 条（R3-c2 完成） | R3-c2 |
+| 8 ✅ | `curd/chat.py` 最后 2 条跨域 ORM 依赖（CoreDatasource / SemanticDataset 展示查询） | 改调 Datasource / Semantic 目录公开 Service，基线销账 2 条；`apps/chat/*` 基线清零（R3-c3 完成） | R3-c3 |
+| 9 | `apps/chat` **整体**迁入 `chatbi/api/`（curd 读侧 + llm.py + external_datasource + legacy_adapter + `api/chat.py`） | `apps/api.py` 更新；`validate_history_ds`/图片/语言工具随流程迁移；SSE 单文件 ≤300 行落位；`resource_scope` 随迁 | R3-d |
+| 10 | `apps/chat` 目录删除 | 仅余 `chat_model.py` xpack 桩（台账 A7/B2，R6 删）；基线 `apps/chat/*` 条目清零 | R3-d |
+
+> 2026-07-20 修正（停止规则触发）：原 #6"SSE 先行单独迁入 chatbi/api"不可行——其消费方（llm.py/api）仍在
+> apps/chat，先移会给基线新增跨域 API 导入、违反棘轮；且 `curd/chat.py` 经核实是约 760 行真实读侧代码而非
+> 纯转发。关账表按依赖顺序重排为 R3-c1→c3 + R3-d，总项数不变、范围不扩。
+> 2026-07-20 再修正（R3-c3 收敛）：物理迁移 curd 读侧并不能消除 ORM 违规（chatbi 直取 datasource/semantic ORM
+> 同样违规），真正的依赖修复是"改调公开 Service"这一步；且读侧多为旧 SSE/MCP 协议的 pandas/markdown 展示代码，
+> 属于 R3-d 随 `apps/chat` 整体迁入 `chatbi/api` 的表现层，不应先切成"读服务"（避免 E7 仪式）。故 R3-c3 收敛为
+> 只做 2 条 ORM 基线销账（就地、低风险），物理迁移并入 R3-d 一次完成。
 
 验收：`apps/chat/task/` 与 `legacy_dependencies.py` 删除；SSE 协议集中单文件 ≤300 行；基线中 `apps/chat/*` 条目清零；原 P5 完成标准逐条通过。
 风险控制：R3-b（run_task 374 行状态机）单独成批，改写前补终态/事件序列特征测试，旧函数保留一批作为可切换实现。

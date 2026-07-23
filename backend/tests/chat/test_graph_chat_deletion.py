@@ -14,7 +14,7 @@ from apps.agent.models import (
     ChatbiAgentTraceEvent,
 )
 from apps.chat.models.chat_model import Chat, ChatLog, ChatRecord
-from apps.chat.services.deletion import ChatDeletionService
+from apps.chat.composition import ChatDeletionProvider
 from apps.workflow_engine.infrastructure.artifacts.cleanup import ArtifactCleanupService
 from apps.workflow_engine.infrastructure.persistence.models import (
     InteractionRequestModel,
@@ -280,8 +280,8 @@ def test_chat_deletion_removes_owned_workflow_data_but_keeps_standalone_run(
     owned_run_id = owned_run.run_id
     standalone_run_id = standalone.run_id
 
-    deleted_message = ChatDeletionService(session).delete_for_user(current_user, chat_id)
-    repeated_message = ChatDeletionService(session).delete_for_user(current_user, chat_id)
+    deleted_message = ChatDeletionProvider(session).delete_for_user(current_user.id, chat_id)
+    repeated_message = ChatDeletionProvider(session).delete_for_user(current_user.id, chat_id)
 
     assert deleted_message == repeated_message
     assert session.get(Chat, chat_id) is None

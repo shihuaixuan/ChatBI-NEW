@@ -29,8 +29,15 @@ class ConversationDeletionProvider(Protocol):
     def delete_for_user(self, user_id: int, chat_id: int) -> str: ...
 
 
+class ExecutionCleanupGateway(Protocol):
+    """按会话清理某种执行方式（如 Agent）的运行数据。"""
+
+    def delete_for_chat(self, chat_id: int) -> None: ...
+
+
 __all__ = [
     "ConversationBindingProvider",
     "ConversationDeletionProvider",
+    "ExecutionCleanupGateway",
     "RecommendedQuestionProvider",
 ]

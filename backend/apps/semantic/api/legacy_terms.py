@@ -6,13 +6,13 @@ from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
+from apps.access_control.permission import SqlbotPermission, require_permissions
 from apps.semantic.api.error_mapping import map_semantic_errors_to_http
 from apps.semantic.composition import (
     build_legacy_terminology_compatibility_service,
 )
 from apps.semantic.models.dto import LegacyTerminologyDTO
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
-from apps.access_control.permission import SqlbotPermission, require_permissions
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.deps import CurrentUser, SessionDep

@@ -2219,3 +2219,64 @@ DDD 迁移完成需要同时满足：
    定向 668 项、**完整后端回归 1,222 项**通过；应用导入通过；Ruff 通过。
    无行为变化、无数据库变更。协议剥离（SSE → chatbi/api/legacy_sse.py）与旧入口收口按计划
    留待 R3-c。
+
+## R3-c 批次修正（2026-07-20，停止规则触发）
+
+尝试执行原关账表 #6（SSE 协议先行迁入 `chatbi/api/legacy_sse.py`）时，依赖基线棘轮正确拦截：
+消费方 llm.py 与 api/chat.py 仍在 apps/chat，先移协议文件会新增 2 条跨域 API 导入违规。同时核实
+`curd/chat.py` 并非纯转发——约 760 行真实读侧代码（图表配置/数据读取、历史投影、日志、格式化），
+需要与流程一起迁移并修复其 semantic/datasource ORM 依赖。
+
+按 AGENTS.md v2 停止规则先改计划：关账表 #6–#10 重排为依赖顺序（R3-c1 写侧转发停用 →
+R3-c2 deletion/binding 迁移销账 → R3-c3 读侧迁移销账 → R3-d 流程/协议/路由整体迁入 chatbi/api 并
+删除 apps/chat），总项数与范围不变。本次已回退试探性移动，工作区恢复全绿（409 项定向通过）。
+
+## R3-c1（2026-07-20）：旧 Chat 写侧转发停用与删除（关账表新 #6）
+
+1. `curd/chat.py` 的 13 个写侧转发函数全部删除（save_sql_answer/save_analysis_answer/
+   save_predict_answer/save_select_datasource_answer/save_recommend_question_answer/save_sql/
+   save_chart_answer/save_chart/save_predict_data/save_sql_exec_data/save_error_message/
+   finish_record/save_analysis_predict_record），其中 8 个此前已无调用。
+2. llm.py 剩余 5 个调用点改为直调 ChatBI `ChatRecordService`：`save_error`（终态 FAILED +
+   步骤日志终结语义保持）、`finish`（SUCCEEDED）、`_save_record_sql`（结果投影）、
+   `check_save_predict_data`（辅助投影）、分析/预测派生记录创建（create_auxiliary）。
+3. 特征测试打桩点从模块级 `save_sql` 改为实例级 `_save_record_sql`；4 个 record 边界守卫从
+   "转发必须委托"改为"转发不存在 + llm 直调 ChatRecordService"断言（约束更强）。
+4. 验证：定向 409 项、完整后端回归 1,222 项通过；应用导入通过。curd/chat.py 767 行（纯读侧）。
+   无行为变化、无数据库变更。
+
+## R3-c2（2026-07-20）：deletion / semantic_binding 迁入 chatbi，基线销账 4 条
+
+1. **新增两个公开契约**：Semantic `SemanticDatasetBindingService`（+SQLModel 仓储与
+   `SemanticDatasetExecutionBinding` DTO）承接"默认模型 → 配置顺序"的执行数据源解析规则
+   （Semantic 业务不变量归位）；Workflow Engine `run_cleanup.py`
+   （list_run_ids_for_chat / delete_runs）承接 Run 及关联行的删除方式。
+2. `semantic_binding.py` → `chatbi/services/conversation/dataset_binding.py`：数据集/模型
+   解析走 Semantic 公开服务、数据源信息走 Datasource 公开服务；文案与会话侧校验保持逐字
+   不变；`DatasetChatBinding` 与既有 `ConversationBinding` 合一（字段完全相同，保留旧名别名）。
+3. `deletion.py` → `chatbi/services/conversation/deletion_service.py`：引擎表删除改调
+   run_cleanup 公开入口；Agent 清理改为 `ExecutionCleanupGateway` 端口注入（chatbi 不导入
+   apps.agent，结构规则保持）；Artifact 服务改必填注入避免组合根循环。
+4. `chat/composition.py` 重写为薄接线；chatbi composition 新增旧签名兼容
+   `resolve_dataset_chat_binding` 与 `build_chat_deletion_service`。
+5. **依赖基线销账 4 条**（首个净下降批次）：chat→engine 内部模型 ×2、
+   chat→datasource ORM ×1、chat→semantic ORM ×1；余额 12/8/0/5/1。
+6. 验证：定向 538 项、完整后端回归 1,222 项通过；新增 Semantic 服务/仓储、run_cleanup、
+   dataset_binding 严格 Mypy 通过；应用导入与 Ruff 通过。无行为变化、无数据库变更。
+
+## R3-c3（2026-07-23）：curd 最后 2 条跨域 ORM 依赖销账（收敛版）
+
+停止规则二次生效：原计划"迁 curd 读侧 ~760 行到 chatbi"经复核不能消除 ORM 违规（chatbi 直取
+datasource/semantic ORM 同样违规），真正的依赖修复是"改调公开 Service"；读侧多为旧 SSE/MCP 协议的
+pandas/markdown 展示代码，应随 `apps/chat` 整体迁入 chatbi/api（R3-d），不先切成"读服务"。故 R3-c3
+收敛为只做 2 条 ORM 基线销账（就地、低风险）。
+
+1. `get_chat_with_records` 中 `session.get(SemanticDataset, ...)` → `SemanticDatasetCatalogService.get_summary`
+   （按 id 直取名称、不做工作空间/状态过滤，逐位保持旧展示行为）；`session.get(CoreDatasource, ...)` →
+   `DatasourceService.get`，`DatasourceNotFoundError` 对应"数据源不存在"分支。
+2. 删除 `from apps.datasource.models.datasource import CoreDatasource` 与
+   `from apps.semantic.models.orm import SemanticDataset`；curd 不再导入任一跨域 ORM。
+3. **依赖基线销账 2 条**：`chat/curd -> datasource.models`、`chat/curd -> semantic.models.orm`；
+   `apps/chat/*` 基线条目全部清零（余额 10/8/0/5/1）。
+4. 验证：定向 596 项、完整后端回归 1,222 项通过；应用导入通过；Ruff 仅余 1 条 SQLAlchemy `== False`
+   既有告警（未触及）。无行为变化、无数据库变更。`apps/chat` 物理迁移与目录删除留 R3-d 一次完成。

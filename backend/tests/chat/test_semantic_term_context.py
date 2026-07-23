@@ -2,11 +2,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.chat.services.semantic_binding import (
+from apps.chat.task import llm as llm_module
+from apps.chatbi.services.conversation.dataset_binding import (
     DatasetBindingError,
     validate_assistant_dataset_binding,
 )
-from apps.chat.task import llm as llm_module
 
 
 class _GenerationContextService:

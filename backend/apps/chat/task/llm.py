@@ -11,6 +11,7 @@ import orjson
 import pandas as pd
 import requests
 import sqlparse
+from sqlalchemy import and_, update
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlmodel import Session
 
@@ -20,7 +21,6 @@ from apps.assistant import AssistantOutDsSchema
 from apps.chat.composition import build_conversation_service
 from apps.chat.curd.chat import (
     end_log,
-    finish_record,
     format_chart_fields,
     format_json_data,
     get_chart_config,
@@ -31,10 +31,6 @@ from apps.chat.curd.chat import (
     get_last_execute_sql_error,
     list_generate_chart_logs,
     list_generate_sql_logs,
-    save_analysis_predict_record,
-    save_error_message,
-    save_predict_data,
-    save_sql,
     start_log,
     trigger_log_error,
 )
@@ -81,6 +77,7 @@ from apps.chatbi.adapters.recommended_questions import (
 )
 from apps.chatbi.adapters.sql_generation import build_sql_generation_service
 from apps.chatbi.composition import (
+    build_chat_record_service,
     build_datasource_selection_candidate_service,
     build_generation_context_service,
     build_generation_schema_context_service,
@@ -90,7 +87,10 @@ from apps.chatbi.models import (
     ChartGenerationData,
     ChartGenerationMessage,
     ChatQuestion,
+    ChatRecordAuxiliaryProjection,
     ChatRecordAuxiliaryType,
+    ChatRecordResultProjection,
+    ChatRecordStatus,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
     DynamicSQLGenerationData,
@@ -981,7 +981,11 @@ class LLMService:
         if not json_str:
             json_str = ''
 
-        save_predict_data(session=session, record_id=self.record.id, data=json_str)
+        build_chat_record_service(session).project_auxiliary_by_id(
+            self.record.id,
+            ChatRecordAuxiliaryProjection(predict_data=json_str),
+        )
+        session.commit()
 
         if json_str == '':
             return False
@@ -989,10 +993,26 @@ class LLMService:
         return True
 
     def save_error(self, session: Session, message: str):
-        return save_error_message(session=session, record_id=self.record.id, message=message)
+        record = build_chat_record_service(session).transition_by_id(
+            self.record.id,
+            ChatRecordStatus.FAILED,
+            error=message,
+        )
+        # 同步终结未完成的步骤日志，保持旧错误终态行为。
+        stmt = update(ChatLog).where(
+            and_(ChatLog.pid == record.id, ChatLog.finish_time.is_(None))
+        ).values(finish_time=record.finish_time, error=True)
+        session.execute(stmt)
+        session.commit()
+        return record
 
     def finish(self, session: Session):
-        return finish_record(session=session, record_id=self.record.id)
+        record = build_chat_record_service(session).transition_by_id(
+            self.record.id,
+            ChatRecordStatus.SUCCEEDED,
+        )
+        session.commit()
+        return record
 
     def execute_sql(
             self,
@@ -1242,6 +1262,13 @@ class LLMService:
             if not stream:
                 json_result['title'] = brief
 
+    def _save_record_sql(self, _session, sql: str):
+        build_chat_record_service(_session).project_result_by_id(
+            self.record.id,
+            ChatRecordResultProjection(sql=sql),
+        )
+        _session.commit()
+
     def _apply_sql_policies(self, _session, sql_generation_result):
         """行权限 / 动态数据源 SQL 改写与记录保存。"""
         use_dynamic_ds: bool = (
@@ -1272,17 +1299,13 @@ class LLMService:
                 sql = sql_result
             elif dynamic_sql_result and sqlbot_temp_sql_text:
                 assistant_dynamic_sql = sqlbot_temp_sql_text
-                save_sql(
-                    session=_session,
-                    sql=assistant_dynamic_sql,
-                    record_id=self.record.id,
-                )
+                self._save_record_sql(_session, assistant_dynamic_sql)
                 self.chat_question.sql = assistant_dynamic_sql
             else:
-                save_sql(session=_session, sql=sql, record_id=self.record.id)
+                self._save_record_sql(_session, sql)
                 self.chat_question.sql = sql
         else:
-            save_sql(session=_session, sql=sql, record_id=self.record.id)
+            self._save_record_sql(_session, sql)
             self.chat_question.sql = sql
 
         return {
@@ -1518,7 +1541,12 @@ class LLMService:
 
     def run_analysis_or_predict_task_async(self, session: Session, action_type: str, base_record: ChatRecord,
                                            in_chat: bool = True, stream: bool = True):
-        self.set_record(save_analysis_predict_record(session, base_record, action_type))
+        record = build_chat_record_service(session).create_auxiliary(
+            base_record,
+            ChatRecordAuxiliaryType(action_type),
+        )
+        session.commit()
+        self.set_record(ChatRecord(**record.model_dump()))
         self.future = executor.submit(self.run_analysis_or_predict_task_cache, action_type, in_chat, stream)
 
     def run_analysis_or_predict_task_cache(self, action_type: str, in_chat: bool = True, stream: bool = True):

@@ -1,3 +1,9 @@
+"""旧 Chat HTTP/SSE 协议的唯一集中实现（关账表 #6；随旧流程整体迁入 chatbi/api）。
+
+承载 SSE 帧编码、模型提示词日志投影、运行错误消息格式与终态收尾规则；
+只依赖标准库与 orjson，不进入业务与持久化边界。旧 `/chat` 前端协议下线后删除。
+"""
+
 from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 

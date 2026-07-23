@@ -1,41 +1,35 @@
 {
-  "cross_domain_internal_models": [
-    "apps/capabilities/semantic/compile.py -> apps.semantic.models.orm",
-    "apps/chat/curd/chat.py -> apps.datasource.models.datasource",
-    "apps/chat/curd/chat.py -> apps.semantic.models.orm",
-    "apps/chat/services/deletion.py -> apps.workflow_engine.infrastructure.persistence.models",
-    "apps/chat/services/semantic_binding.py -> apps.datasource.models.datasource",
-    "apps/chat/services/semantic_binding.py -> apps.semantic.models.orm",
-    "apps/data_training/models/data_training_model.py -> apps.knowledge.models.orm.sql_example",
-    "apps/semantic/repository/datasource/metadata_discovery.py -> apps.datasource.models.datasource",
-    "apps/semantic/repository/datasource/metadata_repository.py -> apps.datasource.models.datasource",
-    "apps/semantic/repository/datasource_metadata_repository.py -> apps.datasource.models.datasource",
-    "apps/semantic/repository/schema_repository.py -> apps.datasource.models.datasource",
-    "apps/semantic/repository/sqlmodel/schema_loader.py -> apps.datasource.models.datasource",
-    "apps/semantic/services/builders/schema_builder.py -> apps.datasource.models.datasource",
-    "apps/semantic/services/datasource_service.py -> apps.datasource.models.datasource",
-    "apps/workflow_engine/api/service.py -> apps.semantic.models.orm"
-  ],
-  "cross_domain_concrete_implementations": [
-    "apps/capabilities/semantic/compile.py -> apps.semantic.repository.sqlmodel.schema_loader",
-    "apps/chat/services/deletion.py -> apps.workflow_engine.infrastructure.persistence.models",
-    "apps/dashboard/crud/dashboard_service.py -> apps.chat.curd.chat",
-    "apps/retrieval/semantic_binding.py -> apps.semantic.repository.sqlmodel.schema_loader",
-    "apps/workflow/runtime.py -> apps.semantic.repository.sqlmodel.schema_loader",
-    "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.events.publisher",
-    "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.persistence.interaction_manager",
-    "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.persistence.node_execution_repository",
-    "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.persistence.run_repository"
-  ],
-  "cross_domain_api_imports": [],
-  "workflow_engine_business_imports": [
-    "apps/workflow_engine/api/service.py -> apps.chatbi.workflow_gateway",
-    "apps/workflow_engine/api/service.py -> apps.semantic.models.orm",
-    "apps/workflow_engine/api/service.py -> apps.workflow.definitions.chatbi_minimal_v1",
-    "apps/workflow_engine/api/service.py -> apps.workflow.definitions.chatbi_v1",
-    "apps/workflow_engine/api/service.py -> apps.workflow.runtime"
-  ],
-  "function_local_app_imports": [
-    "apps/agent/loop.py -> apps.ai_model.model_factory"
-  ]
+    "cross_domain_internal_models": [
+        "apps/capabilities/semantic/compile.py -> apps.semantic.models.orm",
+        "apps/data_training/models/data_training_model.py -> apps.knowledge.models.orm.sql_example",
+        "apps/semantic/repository/datasource/metadata_discovery.py -> apps.datasource.models.datasource",
+        "apps/semantic/repository/datasource/metadata_repository.py -> apps.datasource.models.datasource",
+        "apps/semantic/repository/datasource_metadata_repository.py -> apps.datasource.models.datasource",
+        "apps/semantic/repository/schema_repository.py -> apps.datasource.models.datasource",
+        "apps/semantic/repository/sqlmodel/schema_loader.py -> apps.datasource.models.datasource",
+        "apps/semantic/services/builders/schema_builder.py -> apps.datasource.models.datasource",
+        "apps/semantic/services/datasource_service.py -> apps.datasource.models.datasource",
+        "apps/workflow_engine/api/service.py -> apps.semantic.models.orm"
+    ],
+    "cross_domain_concrete_implementations": [
+        "apps/capabilities/semantic/compile.py -> apps.semantic.repository.sqlmodel.schema_loader",
+        "apps/dashboard/crud/dashboard_service.py -> apps.chat.curd.chat",
+        "apps/retrieval/semantic_binding.py -> apps.semantic.repository.sqlmodel.schema_loader",
+        "apps/workflow/runtime.py -> apps.semantic.repository.sqlmodel.schema_loader",
+        "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.events.publisher",
+        "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.persistence.interaction_manager",
+        "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.persistence.node_execution_repository",
+        "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.persistence.run_repository"
+    ],
+    "cross_domain_api_imports": [],
+    "workflow_engine_business_imports": [
+        "apps/workflow_engine/api/service.py -> apps.chatbi.workflow_gateway",
+        "apps/workflow_engine/api/service.py -> apps.semantic.models.orm",
+        "apps/workflow_engine/api/service.py -> apps.workflow.definitions.chatbi_minimal_v1",
+        "apps/workflow_engine/api/service.py -> apps.workflow.definitions.chatbi_v1",
+        "apps/workflow_engine/api/service.py -> apps.workflow.runtime"
+    ],
+    "function_local_app_imports": [
+        "apps/agent/loop.py -> apps.ai_model.model_factory"
+    ]
 }

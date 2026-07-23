@@ -9,11 +9,13 @@ from apps.chatbi.adapters.embedding_ranking import (
 )
 from apps.chatbi.adapters.execution import DatasourceQueryExecutor
 from apps.chatbi.adapters.question_model import build_question_model_service
+from apps.chatbi.models import ConversationBinding
 from apps.chatbi.repository.sqlmodel import (
     SQLModelChatRecordRepository,
     SQLModelConversationRepository,
 )
 from apps.chatbi.services import (
+    ChatDeletionService,
     ChatRecordService,
     ConversationBindingProvider,
     ConversationDeletionProvider,
@@ -30,6 +32,10 @@ from apps.chatbi.services import (
     SemanticRetrievalService,
     SQLPermissionService,
 )
+from apps.chatbi.services.conversation import (
+    ExecutionCleanupGateway,
+    resolve_conversation_binding,
+)
 from apps.datasource.composition import (
     build_datasource_connection_service,
     build_datasource_metadata_service,
@@ -38,6 +44,7 @@ from apps.datasource.composition import (
 from apps.knowledge.composition import build_sql_example_query_service
 from apps.retrieval.service import RetrievalService, build_retrieval_service
 from apps.semantic.composition import (
+    build_semantic_dataset_binding_service,
     build_semantic_sql_compilation_service,
     build_semantic_term_query_service,
 )
@@ -175,7 +182,39 @@ def build_conversation_reader_service(session: Session) -> ConversationService:
     return build_conversation_service(session)
 
 
+
+def resolve_dataset_chat_binding(
+    session: Session,
+    current_user: object,
+    dataset_id: int | None,
+) -> ConversationBinding:
+    """旧签名兼容：按当前用户工作空间解析数据集执行绑定。"""
+
+    workspace_id = getattr(current_user, "oid", None)
+    return resolve_conversation_binding(
+        build_semantic_dataset_binding_service(session),
+        build_datasource_service(session),
+        workspace_id=workspace_id if workspace_id is not None else 1,
+        dataset_id=dataset_id,
+    )
+
+
+def build_chat_deletion_service(
+    session: Session,
+    *,
+    agent_cleanup: ExecutionCleanupGateway,
+) -> ChatDeletionService:
+    """装配会话删除服务；Agent 清理由调用方注入（归位 orchestration 前）。"""
+
+    return ChatDeletionService(
+        session,
+        agent_cleanup=agent_cleanup,
+        result_artifact_service=build_result_artifact_service(session),
+    )
+
+
 __all__ = [
+    "build_chat_deletion_service",
     "build_chat_record_service",
     "build_conversation_reader_service",
     "build_conversation_service",
@@ -186,6 +225,7 @@ __all__ = [
     "build_query_service",
     "build_result_artifact_service",
     "build_question_understanding_service",
+    "resolve_dataset_chat_binding",
     "build_semantic_query_service",
     "build_semantic_retrieval_service",
 ]

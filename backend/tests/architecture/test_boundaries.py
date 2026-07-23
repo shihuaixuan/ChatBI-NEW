@@ -358,13 +358,15 @@ def test_agent_and_graph_share_chatbi_result_artifact_service():
 
 def test_chat_deletion_uses_unified_artifact_and_agent_cleanup_entries():
     source = (
-        BACKEND_DIR__artifact / "apps/chat/services/deletion.py"
+        BACKEND_DIR__artifact
+        / "apps/chatbi/services/conversation/deletion_service.py"
     ).read_text(encoding="utf-8")
 
     assert "schedule_chat_cleanup" in source
     assert "process_pending_cleanup" in source
-    assert "AgentExecutionDeletionService" in source
+    assert "run_cleanup" in source
     assert "WorkflowArtifactModel" not in source
+    assert "AgentExecutionDeletionService" not in source
 
 
 # ======================================================================
@@ -1930,12 +1932,21 @@ def test_graph_chat_binding_rule_is_forwarded_through_chatbi_gateway():
     assert "CHAT_DATASET_MISMATCH" not in service_source
 
 
-def test_legacy_chat_record_finish_functions_only_forward_state_changes():
-    tree = _tree__record("apps/chat/curd/chat.py")
+def _module_function_names__record(tree):
+    return {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
 
-    for name in ("finish_record", "save_error_message"):
-        source = _function_source__record(tree, name)
+
+def test_legacy_chat_record_finish_functions_only_forward_state_changes():
+    # R3-c1：写侧转发已删除，终态写入由 llm.py 直调 ChatRecordService。
+    names = _module_function_names__record(_tree__record("apps/chat/curd/chat.py"))
+    assert "finish_record" not in names
+    assert "save_error_message" not in names
+
+    llm_tree = _tree__record("apps/chat/task/llm.py")
+    for method in ("save_error", "finish"):
+        source = _class_method_source__record(llm_tree, "LLMService", method)
         assert "build_chat_record_service" in source
+        assert "transition_by_id" in source
         assert "update(ChatRecord)" not in source
 
 
@@ -1951,21 +1962,22 @@ def test_legacy_chat_run_does_not_finish_after_failure():
 
 
 def test_legacy_analysis_and_predict_record_uses_chatbi_create_service():
-    tree = _tree__record("apps/chat/curd/chat.py")
-    source = _function_source__record(tree, "save_analysis_predict_record")
+    names = _module_function_names__record(_tree__record("apps/chat/curd/chat.py"))
+    assert "save_analysis_predict_record" not in names
 
+    source = _class_method_source__record(
+        _tree__record("apps/chat/task/llm.py"),
+        "LLMService",
+        "run_analysis_or_predict_task_async",
+    )
     assert "build_chat_record_service" in source
     assert "create_auxiliary" in source
-    assert "record = ChatRecord()" not in source
     assert ".analysis_record_id =" not in source
     assert ".predict_record_id =" not in source
-    assert "record.chart =" not in source
-    assert "record.data =" not in source
 
 
 def test_legacy_core_result_writes_forward_to_chatbi_service():
-    tree = _tree__record("apps/chat/curd/chat.py")
-
+    names = _module_function_names__record(_tree__record("apps/chat/curd/chat.py"))
     for name in (
         "save_sql_answer",
         "save_sql",
@@ -1973,40 +1985,35 @@ def test_legacy_core_result_writes_forward_to_chatbi_service():
         "save_chart",
         "save_sql_exec_data",
     ):
-        source = _function_source__record(tree, name)
-        assert "project_result_by_id" in source
-        assert "update(ChatRecord)" not in source
-        assert ".sql_answer =" not in source
-        assert ".sql =" not in source
-        assert ".chart_answer =" not in source
-        assert ".chart =" not in source
-        assert ".data =" not in source
+        assert name not in names
+
+    source = _class_method_source__record(
+        _tree__record("apps/chat/task/llm.py"),
+        "LLMService",
+        "_save_record_sql",
+    )
+    assert "project_result_by_id" in source
+    assert "update(ChatRecord)" not in source
 
 
 def test_legacy_auxiliary_result_writes_forward_to_chatbi_service():
-    tree = _tree__record("apps/chat/curd/chat.py")
-
+    names = _module_function_names__record(_tree__record("apps/chat/curd/chat.py"))
     for name in (
         "save_analysis_answer",
         "save_predict_answer",
         "save_select_datasource_answer",
         "save_predict_data",
-    ):
-        source = _function_source__record(tree, name)
-        assert "project_auxiliary_by_id" in source
-        assert "update(ChatRecord)" not in source
-        assert ".analysis =" not in source
-        assert ".predict =" not in source
-        assert ".predict_data =" not in source
-        assert ".datasource_select_answer =" not in source
-
-    recommendation_source = _function_source__record(
-        tree,
         "save_recommend_question_answer",
+    ):
+        assert name not in names
+
+    source = _class_method_source__record(
+        _tree__record("apps/chat/task/llm.py"),
+        "LLMService",
+        "check_save_predict_data",
     )
-    assert "project_recommendation_by_id" in recommendation_source
-    assert "update(ChatRecord)" not in recommendation_source
-    assert "update(Chat)" not in recommendation_source
+    assert "project_auxiliary_by_id" in source
+    assert "update(ChatRecord)" not in source
 
 
 def test_chat_record_service_owns_final_result_size_policy():

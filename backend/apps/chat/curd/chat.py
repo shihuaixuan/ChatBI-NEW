@@ -18,26 +18,24 @@ from apps.chat.models.chat_model import (
     RenameChat,
     TypeEnum,
 )
-from apps.chat.services.semantic_binding import (
-    DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
-)
-from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.models import (
     ChatLogHistory,
     ChatLogHistoryItem,
-    ChatRecordAuxiliaryProjection,
-    ChatRecordAuxiliaryType,
     ChatRecordResult,
-    ChatRecordResultProjection,
-    ChatRecordStatus,
 )
-from apps.chatbi.services import ConversationNotFoundError
-from apps.datasource.composition import build_datasource_connection_service
-from apps.datasource.models.datasource import CoreDatasource
-from apps.semantic.models.orm import SemanticDataset
+from apps.chatbi.services import (
+    DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
+    ConversationNotFoundError,
+)
+from apps.datasource.composition import (
+    build_datasource_connection_service,
+    build_datasource_service,
+)
+from apps.datasource.services import DatasourceNotFoundError
+from apps.semantic.composition import build_semantic_dataset_catalog_service
 from common.core.deps import CurrentAssistant, CurrentUser, SessionDep, Trans
 from common.utils.data_format import DataFormat
-from common.utils.utils import SQLBotLogUtil, extract_nested_json
+from common.utils.utils import SQLBotLogUtil
 
 
 def get_chat_record_by_id(session: SessionDep, record_id: int):
@@ -290,7 +288,11 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
     chat = build_conversation_service(session).get_owned(current_user.id, chart_id)
     chat_info = ChatInfo(**chat.model_dump())
 
-    dataset = session.get(SemanticDataset, chat.dataset_id) if chat.dataset_id else None
+    dataset = (
+        build_semantic_dataset_catalog_service(session).get_summary(chat.dataset_id)
+        if chat.dataset_id
+        else None
+    )
     if not dataset:
         chat_info.dataset_exists = False
         chat_info.dataset_name = 'Dataset not exist'
@@ -305,7 +307,12 @@ def get_chat_with_records(session: SessionDep, chart_id: int, current_user: Curr
         out_ds_instance = AssistantOutDsFactory.get_instance(current_assistant)
         ds = out_ds_instance.get_ds(chat.datasource, trans)
     else:
-        ds = session.get(CoreDatasource, chat.datasource) if chat.datasource else None
+        ds = None
+        if chat.datasource:
+            try:
+                ds = build_datasource_service(session).get(chat.datasource)
+            except DatasourceNotFoundError:
+                ds = None
 
     if not ds:
         chat_info.datasource_exists = False
@@ -708,15 +715,6 @@ def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj:
     )
 
 
-def save_analysis_predict_record(session: SessionDep, base_record: ChatRecord, action_type: str) -> ChatRecord:
-    record = build_chat_record_service(session).create_auxiliary(
-        base_record,
-        ChatRecordAuxiliaryType(action_type),
-    )
-    session.commit()
-    return ChatRecord(**record.model_dump())
-
-
 def start_log(session: SessionDep, ai_modal_id: int = None, ai_modal_name: str = None, operate: OperationEnum = None,
               record_id: int = None, full_message: list[dict] | dict = None,
               local_operation: bool = False) -> ChatLog:
@@ -765,174 +763,6 @@ def trigger_log_error(session: SessionDep, log: ChatLog) -> ChatLog:
     session.commit()
 
     return log
-
-
-def save_sql_answer(session: SessionDep, record_id: int, answer: str) -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-
-    record = build_chat_record_service(session).project_result_by_id(
-        record_id,
-        ChatRecordResultProjection(answer=answer),
-    )
-    session.commit()
-    return record
-
-
-def save_analysis_answer(session: SessionDep, record_id: int, answer: str = '') -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-
-    record = build_chat_record_service(session).project_auxiliary_by_id(
-        record_id,
-        ChatRecordAuxiliaryProjection(analysis=answer),
-    )
-    session.commit()
-    return record
-
-
-def save_predict_answer(session: SessionDep, record_id: int, answer: str) -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-
-    record = build_chat_record_service(session).project_auxiliary_by_id(
-        record_id,
-        ChatRecordAuxiliaryProjection(predict=answer),
-    )
-    session.commit()
-    return record
-
-
-def save_select_datasource_answer(session: SessionDep, record_id: int, answer: str,
-                                  datasource: int = None, engine_type: str = None) -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-    record = build_chat_record_service(session).project_auxiliary_by_id(
-        record_id,
-        ChatRecordAuxiliaryProjection(
-            datasource_select_answer=answer,
-            datasource_id=datasource,
-            engine_type=engine_type if datasource else None,
-        ),
-    )
-    session.commit()
-    return record
-
-
-def save_recommend_question_answer(session: SessionDep, record_id: int,
-                                   answer: dict = None, articles_number: int | None = 4) -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-
-    recommended_question_answer = orjson.dumps(answer).decode()
-
-    json_str = '[]'
-    content = answer.get('content') if isinstance(answer, dict) else None
-    if isinstance(content, str) and content:
-        json_str = extract_nested_json(content) or '[]'
-    recommended_question = json_str
-    record = build_chat_record_service(session).project_recommendation_by_id(
-        record_id,
-        answer=recommended_question_answer,
-        questions=recommended_question,
-        articles_number=articles_number or 4,
-    )
-    session.commit()
-    return record
-
-
-def save_sql(session: SessionDep, record_id: int, sql: str) -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-
-    record = build_chat_record_service(session).project_result_by_id(
-        record_id,
-        ChatRecordResultProjection(sql=sql),
-    )
-    session.commit()
-    return record
-
-
-def save_chart_answer(session: SessionDep, record_id: int, answer: str) -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-
-    record = build_chat_record_service(session).project_result_by_id(
-        record_id,
-        ChatRecordResultProjection(chart_answer=answer),
-    )
-    session.commit()
-    return record
-
-
-def save_chart(session: SessionDep, record_id: int, chart: str) -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-    record = build_chat_record_service(session).project_result_by_id(
-        record_id,
-        ChatRecordResultProjection(chart=chart),
-    )
-    session.commit()
-    return record
-
-
-def save_predict_data(session: SessionDep, record_id: int, data: str = '') -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-    record = build_chat_record_service(session).project_auxiliary_by_id(
-        record_id,
-        ChatRecordAuxiliaryProjection(predict_data=data),
-    )
-    session.commit()
-    return record
-
-
-def save_error_message(session: SessionDep, record_id: int, message: str) -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-    record = build_chat_record_service(session).transition_by_id(
-        record_id,
-        ChatRecordStatus.FAILED,
-        error=message,
-    )
-
-    result = ChatRecord(**record.model_dump())
-
-    # log error finish
-    stmt = update(ChatLog).where(and_(ChatLog.pid == record.id, ChatLog.finish_time.is_(None))).values(
-        finish_time=record.finish_time,
-        error=True
-    )
-    session.execute(stmt)
-    session.commit()
-
-    return result
-
-
-def save_sql_exec_data(session: SessionDep, record_id: int, data: str) -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-    record = build_chat_record_service(session).project_result_by_id(
-        record_id,
-        ChatRecordResultProjection(data=data),
-    )
-    session.commit()
-    return record
-
-
-def finish_record(session: SessionDep, record_id: int) -> ChatRecord:
-    if not record_id:
-        raise Exception("Record id cannot be None")
-    record = build_chat_record_service(session).transition_by_id(
-        record_id,
-        ChatRecordStatus.SUCCEEDED,
-    )
-
-    result = ChatRecord(**record.model_dump())
-
-    session.commit()
-
-    return result
 
 
 def get_old_questions(session: SessionDep, datasource: int):

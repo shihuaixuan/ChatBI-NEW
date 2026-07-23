@@ -57,7 +57,6 @@ def test_legacy_chat_run_preserves_successful_finalization(monkeypatch):
         lambda *_args: True,
     )
     monkeypatch.setattr(llm_module, "requires_data_policy", lambda user: False)
-    monkeypatch.setattr(llm_module, "save_sql", lambda **kwargs: None)
 
     service = object.__new__(llm_module.LLMService)
     service.ds = SimpleNamespace(type="postgres")
@@ -68,6 +67,7 @@ def test_legacy_chat_run_preserves_successful_finalization(monkeypatch):
     service.current_user = object()
     service.current_assistant = None
     service.change_title = False
+    service._save_record_sql = lambda _session, _sql: None
     success_calls: list[object] = []
 
     service.load_term_context = lambda session: None
@@ -115,7 +115,6 @@ def test_legacy_chat_run_sse_event_sequence_until_sql_finish(monkeypatch):
         lambda *_args: True,
     )
     monkeypatch.setattr(llm_module, "requires_data_policy", lambda user: False)
-    monkeypatch.setattr(llm_module, "save_sql", lambda **kwargs: None)
 
     service = object.__new__(llm_module.LLMService)
     service.ds = SimpleNamespace(type="postgres")
@@ -128,6 +127,7 @@ def test_legacy_chat_run_sse_event_sequence_until_sql_finish(monkeypatch):
     service.current_user = object()
     service.current_assistant = None
     service.change_title = False
+    service._save_record_sql = lambda _session, _sql: None
     service.current_logs = {}
 
     service.load_term_context = lambda session: None

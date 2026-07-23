@@ -5,11 +5,23 @@ from sqlmodel import Session
 from apps.semantic.repository.excel.term_workbook_repository import (
     ExcelTermWorkbookRepository,
 )
+from apps.semantic.repository.sqlmodel.dataset_binding_repository import (
+    SQLModelDatasetBindingRepository,
+)
+from apps.semantic.repository.sqlmodel.dataset_catalog_repository import (
+    SQLModelDatasetCatalogRepository,
+)
 from apps.semantic.repository.sqlmodel.domain_repository import (
     SqlModelDomainRepository,
 )
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
 from apps.semantic.repository.sqlmodel.term_repository import SqlModelTermRepository
+from apps.semantic.services.dataset_binding_service import (
+    SemanticDatasetBindingService,
+)
+from apps.semantic.services.dataset_catalog_service import (
+    SemanticDatasetCatalogService,
+)
 from apps.semantic.services.dataset_reference_service import (
     SemanticDatasetReferenceService,
 )
@@ -34,6 +46,22 @@ def build_semantic_term_query_service(
     return SemanticTermQueryService(
         SemanticSchemaService(SemanticSchemaLoader(session))
     )
+
+
+def build_semantic_dataset_binding_service(
+    session: Session,
+) -> SemanticDatasetBindingService:
+    """装配数据集执行绑定公开服务。"""
+
+    return SemanticDatasetBindingService(SQLModelDatasetBindingRepository(session))
+
+
+def build_semantic_dataset_catalog_service(
+    session: Session,
+) -> SemanticDatasetCatalogService:
+    """装配按 id 读取数据集展示信息的公开服务。"""
+
+    return SemanticDatasetCatalogService(SQLModelDatasetCatalogRepository(session))
 
 
 def build_semantic_dataset_reference_service(
@@ -85,6 +113,8 @@ def build_semantic_term_excel_service(
 
 
 __all__ = [
+    "build_semantic_dataset_binding_service",
+    "build_semantic_dataset_catalog_service",
     "build_semantic_dataset_reference_service",
     "build_semantic_sql_compilation_service",
     "build_legacy_terminology_compatibility_service",
