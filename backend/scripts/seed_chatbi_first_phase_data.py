@@ -12,7 +12,7 @@ from decimal import Decimal
 import pymysql
 from sqlmodel import Session
 
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource.models.orm import CoreDatasource
 from apps.datasource.utils.utils import aes_decrypt
 from common.core.db import engine
 

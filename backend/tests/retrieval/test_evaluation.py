@@ -3,14 +3,6 @@
 from datetime import datetime
 from pathlib import Path
 
-from apps.retrieval.evaluation import (
-    GoldenSlotExpectation,
-    RecordedRetrievalResult,
-    RetrievalBaseline,
-    RetrievalGoldenCase,
-    evaluate_baseline,
-    load_gold_set,
-)
 from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,
@@ -30,7 +22,15 @@ from apps.retrieval.models.dto import (
     RetrievalSlotDecision,
     RetrievalSourceType,
 )
-from apps.retrieval.payload import semantic_payload_to_bundle
+from apps.retrieval.projection.payload import semantic_payload_to_bundle
+from apps.retrieval.query.evaluation import (
+    GoldenSlotExpectation,
+    RecordedRetrievalResult,
+    RetrievalBaseline,
+    RetrievalGoldenCase,
+    evaluate_baseline,
+    load_gold_set,
+)
 
 GOLD_SET_PATH = Path(__file__).parent / "golden" / "semantic_binding.json"
 

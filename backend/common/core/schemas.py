@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, Field
 from sqlmodel import SQLModel
 from starlette.status import HTTP_403_FORBIDDEN, HTTP_401_UNAUTHORIZED
-from apps.swagger.i18n import PLACEHOLDER_PREFIX
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.core.config import settings
 from fastapi.security.utils import get_authorization_scheme_param
 from typing import Generic, TypeVar, Optional

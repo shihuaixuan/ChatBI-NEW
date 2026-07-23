@@ -2308,7 +2308,7 @@ def _imports__mcp_schema(tree: ast.Module) -> set[str]:
 
 
 def test_mcp_request_schemas_do_not_depend_on_chat_or_fastapi():
-    imports = _imports__mcp_schema(_tree__mcp_schema("apps/mcp/schemas.py"))
+    imports = _imports__mcp_schema(_tree__mcp_schema("interfaces/mcp/schemas.py"))
 
     assert not any(module.startswith("apps.chat") for module in imports)
     assert "fastapi" not in imports
@@ -2316,9 +2316,9 @@ def test_mcp_request_schemas_do_not_depend_on_chat_or_fastapi():
 
 
 def test_mcp_routes_use_owned_request_schemas():
-    imports = _imports__mcp_schema(_tree__mcp_schema("apps/mcp/mcp.py"))
+    imports = _imports__mcp_schema(_tree__mcp_schema("interfaces/mcp/router.py"))
 
-    assert "apps.mcp.schemas" in imports
+    assert "interfaces.mcp.schemas" in imports
     assert "apps.chat.models.chat_model" not in imports
 
 

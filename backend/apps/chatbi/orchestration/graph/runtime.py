@@ -44,7 +44,7 @@ from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
 )
 from apps.chatbi.services.execution.sql_permission import SQLPermissionService
 from apps.chatbi.services.generation.answer_generation import AnswerModelClient
-from apps.retrieval.service import build_retrieval_service
+from apps.retrieval.query.service import build_retrieval_service
 from apps.semantic.composition import build_semantic_schema_service
 from common.core.db import engine
 from sqlbot_platform.workflow_engine.composition import (

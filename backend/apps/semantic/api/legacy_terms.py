@@ -12,10 +12,10 @@ from apps.semantic.composition import (
     build_legacy_terminology_compatibility_service,
 )
 from apps.semantic.models.dto import LegacyTerminologyDTO
-from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.deps import CurrentUser, SessionDep
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 
 router = APIRouter(tags=["Terminology"], prefix="/system/terminology")
 

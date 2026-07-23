@@ -5,7 +5,7 @@ import re
 from pydantic import BaseModel, Field, field_validator
 
 from apps.access_control.models.dto.access_variable import UserVariableAssignment
-from apps.swagger.i18n import PLACEHOLDER_PREFIX
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.core.schemas import BaseCreatorDTO
 
 EMAIL_REGEX = re.compile(

@@ -13,7 +13,7 @@ from apps.access_control.models.dto import (
     AccessVariableRecord,
 )
 from apps.access_control.permission import SqlbotPermission, require_permissions
-from apps.swagger.i18n import PLACEHOLDER_PREFIX
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.core.deps import CurrentUser, SessionDep, Trans
 from common.core.schemas import PaginatedResponse
 

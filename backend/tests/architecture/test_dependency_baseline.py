@@ -17,12 +17,15 @@ BASELINE_PATH = Path(__file__).with_name("known_dependency_violations.json")
 # 旧模块尚未统一 models/orm，迁移期通过这些前缀识别其内部模型。
 LEGACY_INTERNAL_MODEL_PREFIXES = (
     "apps.chat.models",
-    "apps.dashboard.models",
     "apps.datasource.models",
     "apps.semantic.models.orm",
-    "apps.settings.models",
     "apps.system.models",
     "sqlbot_platform.workflow_engine.infrastructure.persistence.models",
+)
+
+# 该模块仅为当前发布版 xpack 的固定导入路径保留，删除条件登记在兼容台账 A2。
+EXTERNAL_COMPATIBILITY_PATHS = frozenset(
+    {"apps/data_training/models/data_training_model.py"}
 )
 
 # 这些路径表示具体实现，而不是可供跨领域依赖的公开契约。
@@ -123,6 +126,8 @@ def _iter_imports() -> list[ImportRecord]:
 def _collect_violations() -> dict[str, set[str]]:
     violations = {rule_name: set() for rule_name in RULE_NAMES}
     for record in _iter_imports():
+        if record.path in EXTERNAL_COMPATIBILITY_PATHS:
+            continue
         target_app = record.target_app
         is_cross_domain = target_app is not None and target_app != record.source_app
 

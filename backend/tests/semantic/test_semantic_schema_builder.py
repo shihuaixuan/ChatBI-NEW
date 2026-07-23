@@ -1,4 +1,4 @@
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource import DatasourceRecord
 from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDimension,
@@ -154,7 +154,7 @@ def test_schema_builder_only_exposes_terms_in_dataset_scope():
 
 def test_schema_builder_adds_database_and_model_relations_for_runtime_assets():
     domain = SemanticDomain(id=1, oid=1, name="销售域", biz_name="sales")
-    datasource = CoreDatasource(
+    datasource = DatasourceRecord(
         id=7,
         oid=1,
         name="本地 MySQL",

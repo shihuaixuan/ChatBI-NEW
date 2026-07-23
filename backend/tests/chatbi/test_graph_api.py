@@ -25,8 +25,8 @@ from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
 )
 from apps.retrieval.embedding import StaticEmbeddingProvider
-from apps.retrieval.indexing import RetrievalIndexingService
-from apps.retrieval.semantic_indexing import (
+from apps.retrieval.indexing.service import RetrievalIndexingService
+from apps.retrieval.sources.semantic_indexing import (
     SemanticIndexCoordinator,
     build_semantic_index_profile,
 )

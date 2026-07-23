@@ -1,13 +1,13 @@
 from typing import Protocol
 
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource import DatasourceRecord
 from apps.semantic.models.dto import SemanticColumnMeta, SemanticTableMeta
 
 
 class DatasourceMetadataRepository(Protocol):
     """语义服务访问数据源及其元数据的只读端口。"""
 
-    def list_accessible(self, oid: int) -> list[CoreDatasource]: ...
+    def list_accessible(self, oid: int) -> list[DatasourceRecord]: ...
 
     def is_accessible(self, oid: int, datasource_id: int) -> bool: ...
 

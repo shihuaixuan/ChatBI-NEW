@@ -17,12 +17,12 @@ from apps.chatbi.orchestration.graph.api_extension import (
 from apps.dashboard.api import dashboard_api
 from apps.datasource.api import datasource, table_relation
 from apps.knowledge.api import recommended_problem, sql_example
-from apps.mcp import mcp
 from apps.platform_config.api import router as platform_config
 from apps.semantic.api import legacy_terms
 from apps.semantic.api.router import router as semantic_router
-from apps.settings.api import base
 from apps.system.api import user
+from interfaces.http import file_download
+from interfaces.mcp import router as mcp_router
 from sqlbot_platform.workflow_engine.api import router as graph_workflow
 from sqlbot_platform.workflow_engine.api.extension import (
     register_workflow_api_extension,
@@ -42,12 +42,12 @@ api_router.include_router(user.router)
 api_router.include_router(access_workspace.router)
 api_router.include_router(assistant.router)
 api_router.include_router(ai_model.router)
-api_router.include_router(base.router)
+api_router.include_router(file_download.router)
 api_router.include_router(sql_example.router)
 api_router.include_router(datasource.router)
 api_router.include_router(chatbi_router)
 api_router.include_router(dashboard_api.router)
-api_router.include_router(mcp.router)
+api_router.include_router(mcp_router)
 api_router.include_router(table_relation.router)
 api_router.include_router(platform_config.router)
 api_router.include_router(access_api_key.router)

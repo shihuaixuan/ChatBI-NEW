@@ -31,7 +31,7 @@ from apps.assistant.models.dto import (
 )
 from apps.assistant.public import get_assistant_info
 from apps.assistant.services import AssistantService
-from apps.swagger.i18n import PLACEHOLDER_PREFIX
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.cache_keys import CacheName, CacheNamespace

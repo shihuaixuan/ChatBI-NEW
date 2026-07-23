@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks
 
-from apps.retrieval.semantic_indexing import SemanticIndexCoordinator
-from apps.retrieval.worker import process_index_jobs
+from apps.retrieval.indexing.worker import process_index_jobs
+from apps.retrieval.sources.semantic_indexing import SemanticIndexCoordinator
 from apps.semantic.api.error_mapping import map_semantic_errors_to_http
 from apps.semantic.repository.sqlmodel.dataset_index_repository import (
     SqlModelDatasetIndexRepository,

@@ -46,7 +46,7 @@ from apps.datasource.composition import (
     build_datasource_service,
 )
 from apps.knowledge.composition import build_sql_example_query_service
-from apps.retrieval.service import RetrievalService, build_retrieval_service
+from apps.retrieval.query.service import RetrievalService, build_retrieval_service
 from apps.semantic.composition import (
     build_semantic_dataset_binding_service,
     build_semantic_sql_compilation_service,

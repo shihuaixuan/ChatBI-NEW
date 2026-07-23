@@ -10,7 +10,7 @@ from apps.retrieval.models.dto import (
     RetrievalRequest,
     RetrievalScope,
 )
-from apps.retrieval.planner import SemanticBindingQueryPlanner
+from apps.retrieval.projection.planner import SemanticBindingQueryPlanner
 
 
 def _request() -> RetrievalRequest:

@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from apps.retrieval.compilation import validate_compilation_assets
 from apps.retrieval.errors import (
     RetrievalPermissionError,
     RetrievalProviderUnavailableError,
     RetrievalQueryError,
 )
-from apps.retrieval.hybrid import HybridRecallResult, SubQueryRecallResult
 from apps.retrieval.models.dto import (
     AssetReference,
     RetrievalChannel,
@@ -28,15 +26,17 @@ from apps.retrieval.models.dto import (
     RetrievalSourceType,
     RetrievalSubQuery,
 )
-from apps.retrieval.payload import bundle_to_semantic_payload
-from apps.retrieval.planner import RetrievalQueryPlan
-from apps.retrieval.policy import (
+from apps.retrieval.projection.payload import bundle_to_semantic_payload
+from apps.retrieval.projection.planner import RetrievalQueryPlan
+from apps.retrieval.query.compilation import validate_compilation_assets
+from apps.retrieval.query.hybrid import HybridRecallResult, SubQueryRecallResult
+from apps.retrieval.query.policy import (
     RerankCandidate,
     RerankScore,
     SemanticBindingPolicy,
     bind_default_time_dimensions,
 )
-from apps.retrieval.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
+from apps.retrieval.query.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 

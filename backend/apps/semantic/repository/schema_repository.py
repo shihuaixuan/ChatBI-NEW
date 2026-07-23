@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource import DatasourceRecord
 from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetAsset,
@@ -28,7 +28,7 @@ class DatasetSchemaAssets:
     metrics: list[SemanticMetric]
     dimensions: list[SemanticDimension]
     terms: list[SemanticTerm]
-    datasources: list[CoreDatasource]
+    datasources: list[DatasourceRecord]
     model_relations: list[SemanticModelRelation]
     model_fields: list[SemanticModelField]
     model_measures: list[SemanticModelMeasure]

@@ -1,4 +1,4 @@
-from apps.mcp.schemas import ChatStart, McpDs, McpQuestion
+from interfaces.mcp.schemas import ChatStart, McpDs, McpQuestion
 
 
 def test_mcp_question_keeps_request_defaults():

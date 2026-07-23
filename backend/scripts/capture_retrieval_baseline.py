@@ -13,15 +13,15 @@ from sqlmodel import Session
 
 from apps.chatbi.models import SemanticRetrievalData
 from apps.chatbi.services.planning import SemanticRetrievalService
-from apps.retrieval.evaluation import (
+from apps.retrieval.query.evaluation import (
     RecordedRetrievalResult,
     RetrievalBaseline,
     RetrievalGoldenCase,
     load_gold_set,
 )
 from apps.retrieval.models.dto import RetrievalChannel, RetrievalChannelStatus
-from apps.retrieval.payload import semantic_payload_to_bundle
-from apps.retrieval.service import build_retrieval_service
+from apps.retrieval.projection.payload import semantic_payload_to_bundle
+from apps.retrieval.query.service import build_retrieval_service
 from common.core.db import engine
 
 

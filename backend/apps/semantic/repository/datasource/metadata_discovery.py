@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session
 
-from apps.datasource.composition import build_datasource_connection_service
-from apps.datasource.models.datasource import CoreField, CoreTable
+from apps.datasource import PhysicalField, PhysicalTable
+from apps.datasource.composition import (
+    build_datasource_connection_service,
+    build_datasource_metadata_service,
+)
 from apps.semantic.errors import SemanticDataAccessError
 from apps.semantic.models.dto import SemanticColumnMeta, SemanticTableMeta
-from apps.semantic.repository.sqlmodel.results import all_results, first_result
 
 
 class DatasourceMetadataDiscoveryError(SemanticDataAccessError):
@@ -21,15 +23,13 @@ class DatasourceMetadataDiscoveryError(SemanticDataAccessError):
 def discover_datasource_tables(
     session: Session, datasource_id: int
 ) -> list[SemanticTableMeta]:
-    persisted_tables = all_results(
-        session.exec(
-            select(CoreTable)
-            .where(col(CoreTable.ds_id) == datasource_id)
-            .order_by(col(CoreTable.table_name))
-        )
+    persisted_schema = build_datasource_metadata_service(session).get_schema(
+        datasource_id
     )
-    if persisted_tables:
-        return table_metas_from_persisted_tables(persisted_tables)
+    if persisted_schema:
+        return table_metas_from_persisted_tables(
+            [item.table for item in persisted_schema]
+        )
 
     try:
         live_tables = build_datasource_connection_service(session).list_tables(
@@ -51,25 +51,21 @@ def discover_datasource_tables(
 def discover_datasource_columns(
     session: Session, datasource_id: int, table_name: str
 ) -> list[SemanticColumnMeta]:
-    table = first_result(
-        session.exec(
-            select(CoreTable).where(
-                col(CoreTable.ds_id) == datasource_id,
-                col(CoreTable.table_name) == table_name,
-            )
-        )
+    persisted_schema = build_datasource_metadata_service(session).get_schema(
+        datasource_id
     )
-    if table is not None:
-        if not table.checked:
+    detail = next(
+        (
+            item
+            for item in persisted_schema
+            if item.table.table_name == table_name
+        ),
+        None,
+    )
+    if detail is not None:
+        if not detail.table.checked:
             return []
-        persisted_fields = all_results(
-            session.exec(
-                select(CoreField)
-                .where(col(CoreField.table_id) == table.id)
-                .order_by(col(CoreField.field_index))
-            )
-        )
-        return column_metas_from_persisted_fields(persisted_fields)
+        return column_metas_from_persisted_fields(detail.fields)
 
     try:
         live_fields = build_datasource_connection_service(session).list_fields(
@@ -92,7 +88,7 @@ def discover_datasource_columns(
 
 
 def table_metas_from_persisted_tables(
-    tables: list[CoreTable],
+    tables: list[PhysicalTable],
 ) -> list[SemanticTableMeta]:
     # 新建模型必须遵守数据源配置时勾选的表范围，避免实时读库绕过表白名单。
     return [
@@ -110,7 +106,7 @@ def table_metas_from_persisted_tables(
 
 
 def column_metas_from_persisted_fields(
-    fields: list[CoreField],
+    fields: list[PhysicalField],
 ) -> list[SemanticColumnMeta]:
     # 字段同样使用数据源已保存的中文注释，规避驱动实时读取注释时的编码不一致。
     return [

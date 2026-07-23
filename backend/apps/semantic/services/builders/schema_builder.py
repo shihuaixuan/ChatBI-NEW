@@ -4,7 +4,7 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource import DatasourceRecord
 from apps.semantic.models.dto import (
     DatasetSchema,
     JoinRelation,
@@ -74,7 +74,7 @@ class SemanticSchemaBuilder:
         metrics: list[SemanticMetric],
         dimensions: list[SemanticDimension],
         terms: list[SemanticTerm],
-        datasources: list[CoreDatasource] | None = None,
+        datasources: list[DatasourceRecord] | None = None,
         model_relations: list[SemanticModelRelation] | None = None,
         model_fields: list[SemanticModelField] | None = None,
         model_measures: list[SemanticModelMeasure] | None = None,
@@ -108,7 +108,11 @@ class SemanticSchemaBuilder:
                 or dimension.id in dimension_ids_by_model.get(dimension.model_id, set())
             )
         ]
-        datasource_by_id = {datasource.id: datasource for datasource in datasources or []}
+        datasource_by_id = {
+            datasource.id: datasource
+            for datasource in datasources or []
+            if datasource.id is not None
+        }
         database_type, database_version = _runtime_database_info(selected_models, datasource_by_id)
         exposed_relations = _runtime_join_relations(model_relations or [], model_by_id)
         fields_by_model = _group_by_model(model_fields or [])
@@ -407,7 +411,7 @@ def _runtime_sql_query(raw: Any) -> str:
 
 def _runtime_database_info(
     models: list[SemanticModel],
-    datasource_by_id: dict[int, CoreDatasource],
+    datasource_by_id: dict[int, DatasourceRecord],
 ) -> tuple[str | None, str | None]:
     for model in models:
         datasource = datasource_by_id.get(model.datasource_id)
@@ -418,7 +422,7 @@ def _runtime_database_info(
     return None, None
 
 
-def _datasource_database_version(datasource: CoreDatasource) -> str | None:
+def _datasource_database_version(datasource: DatasourceRecord) -> str | None:
     try:
         config = json.loads(datasource.configuration or "{}")
     except (TypeError, ValueError):

@@ -13,8 +13,8 @@ from apps.knowledge.services import (
     SQLExampleQueryService,
     SQLExampleService,
 )
-from apps.retrieval.sql_example_indexing import SQLExampleIndexCoordinator
-from apps.retrieval.sql_example_query import SQLExampleRetriever
+from apps.retrieval.sources.sql_example_indexing import SQLExampleIndexCoordinator
+from apps.retrieval.query.sql_example_query import SQLExampleRetriever
 
 
 def build_sql_example_service(session: Session) -> SQLExampleService:

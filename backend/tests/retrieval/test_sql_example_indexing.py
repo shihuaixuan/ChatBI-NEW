@@ -13,7 +13,7 @@ from apps.knowledge.models.dto import (
     SQLExampleSourceSnapshot,
     SQLExampleVerificationStatus,
 )
-from apps.retrieval.indexing import (
+from apps.retrieval.indexing.service import (
     IndexEmbeddingProfile,
     RetrievalIndexingService,
     RetryableIndexingError,
@@ -25,8 +25,8 @@ from apps.retrieval.models.orm import (
     RetrievalSourceModel,
     RetrievalUnitModel,
 )
-from apps.retrieval.sql_example_indexing import SQLExampleIndexCoordinator
-from apps.retrieval.sql_example_projector import SQLExampleSourceProjector
+from apps.retrieval.sources.sql_example_indexing import SQLExampleIndexCoordinator
+from apps.retrieval.sources.sql_example_projector import SQLExampleSourceProjector
 from common.core.db import engine
 
 TENANT_ID = 9_930_001

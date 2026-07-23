@@ -8,7 +8,7 @@ from pathlib import Path
 
 from sqlmodel import Session
 
-from apps.retrieval.lexical_benchmark import (
+from apps.retrieval.query.lexical_benchmark import (
     evaluate_lexical_strategies,
     load_lexical_benchmark,
 )

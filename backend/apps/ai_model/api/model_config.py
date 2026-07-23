@@ -21,7 +21,7 @@ from apps.ai_model.models.dto import (
     AIModelRecord,
 )
 from apps.ai_model.services import AIModelManagementService
-from apps.swagger.i18n import PLACEHOLDER_PREFIX
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from apps.access_control.permission import SqlbotPermission, require_permissions
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log

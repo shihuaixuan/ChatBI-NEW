@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import BackgroundTasks
 
-from apps.retrieval.worker import process_index_jobs
+from apps.retrieval.indexing.worker import process_index_jobs
 from apps.semantic.api import dataset_indexes
 from apps.semantic.models.dto import (
     DatasetIndexEnqueueResult,

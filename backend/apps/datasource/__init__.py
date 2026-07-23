@@ -21,14 +21,18 @@ from apps.datasource.external_connection import (
 from apps.datasource.models.dto import (
     DatasourceConnection,
     DatasourceRecord,
+    PhysicalField,
     PhysicalRelationCell,
+    PhysicalTable,
     PhysicalTableDetail,
 )
 from apps.datasource.policy_catalog import build_datasource_policy_catalog
+from apps.datasource.services.connection_service import DatasourceNotFoundError
 
 __all__ = [
     "DatasourceCatalog",
     "DatasourceConnection",
+    "DatasourceNotFoundError",
     "DatasourceRecord",
     "DatasourcePolicyCatalog",
     "DatasourcePolicyField",
@@ -39,7 +43,9 @@ __all__ = [
     "ExternalDatasource",
     "ExternalDatasourceField",
     "ExternalDatasourceTable",
+    "PhysicalField",
     "PhysicalRelationCell",
+    "PhysicalTable",
     "PhysicalTableDetail",
     "build_datasource_catalog",
     "build_datasource_policy_catalog",

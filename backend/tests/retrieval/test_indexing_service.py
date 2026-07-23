@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlmodel import Session, col, select
 
-from apps.retrieval.indexing import (
+from apps.retrieval.indexing.service import (
     DeletedResourceRef,
     IndexEmbeddingProfile,
     RetrievalIndexingService,
@@ -22,9 +22,9 @@ from apps.retrieval.models.orm import (
     RetrievalSourceModel,
     RetrievalUnitModel,
 )
-from apps.retrieval.projection import ProjectedResource
-from apps.retrieval.semantic_indexing import SemanticIndexCoordinator
-from apps.retrieval.semantic_projector import SemanticSourceProjector
+from apps.retrieval.projection.contracts import ProjectedResource
+from apps.retrieval.sources.semantic_indexing import SemanticIndexCoordinator
+from apps.retrieval.sources.semantic_projector import SemanticSourceProjector
 from apps.semantic.models.dto import DatasetIndexVersion, DatasetSchema, SchemaElement
 from apps.semantic.models.orm import (
     SemanticDataset,

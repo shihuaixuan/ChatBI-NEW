@@ -8,12 +8,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlmodel import Session, select
 
-from apps.retrieval.hybrid import (
-    HybridRetrievalConfig,
-    SemanticBindingHybridRetriever,
-    SemanticBindingSearchStore,
+from apps.retrieval.indexing.service import (
+    IndexEmbeddingProfile,
+    RetrievalIndexingService,
 )
-from apps.retrieval.indexing import IndexEmbeddingProfile, RetrievalIndexingService
 from apps.retrieval.models.dto import (
     RetrievalChannel,
     RetrievalChannelStatus,
@@ -27,10 +25,15 @@ from apps.retrieval.models.dto import (
     RetrievalSubQuery,
 )
 from apps.retrieval.models.orm import RetrievalResourceModel, RetrievalSourceModel
-from apps.retrieval.projection import (
+from apps.retrieval.projection.contracts import (
     ProjectedResource,
     ProjectedUnit,
     projection_content_hash,
+)
+from apps.retrieval.query.hybrid import (
+    HybridRetrievalConfig,
+    SemanticBindingHybridRetriever,
+    SemanticBindingSearchStore,
 )
 from common.core.db import engine
 

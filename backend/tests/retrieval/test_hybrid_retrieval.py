@@ -4,12 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from apps.retrieval.hybrid import (
-    HybridRetrievalConfig,
-    RecallCandidate,
-    SemanticBindingHybridRetriever,
-    reciprocal_rank_fusion,
-)
 from apps.retrieval.models.dto import (
     RetrievalChannel,
     RetrievalChannelStatus,
@@ -20,6 +14,12 @@ from apps.retrieval.models.dto import (
     RetrievalResourceType,
     RetrievalScope,
     RetrievalSourceType,
+)
+from apps.retrieval.query.hybrid import (
+    HybridRetrievalConfig,
+    RecallCandidate,
+    SemanticBindingHybridRetriever,
+    reciprocal_rank_fusion,
 )
 
 

@@ -1,6 +1,7 @@
-from sqlmodel import Session, col, select
+from sqlmodel import Session
 
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource import DatasourceNotFoundError, DatasourceRecord
+from apps.datasource.composition import build_datasource_service
 from apps.semantic.models.dto import SemanticColumnMeta, SemanticTableMeta
 from apps.semantic.repository.datasource.metadata_discovery import (
     discover_datasource_columns,
@@ -9,7 +10,6 @@ from apps.semantic.repository.datasource.metadata_discovery import (
 from apps.semantic.repository.datasource_metadata_repository import (
     DatasourceMetadataRepository,
 )
-from apps.semantic.repository.sqlmodel.results import all_results
 
 
 class SqlModelDatasourceMetadataRepository(DatasourceMetadataRepository):
@@ -18,18 +18,15 @@ class SqlModelDatasourceMetadataRepository(DatasourceMetadataRepository):
     def __init__(self, session: Session):
         self._session = session
 
-    def list_accessible(self, oid: int) -> list[CoreDatasource]:
-        return all_results(
-            self._session.exec(
-                select(CoreDatasource)
-                .where(CoreDatasource.oid == oid)
-                .order_by(col(CoreDatasource.id))
-            )
-        )
+    def list_accessible(self, oid: int) -> list[DatasourceRecord]:
+        return build_datasource_service(self._session).list_by_workspace(oid)
 
     def is_accessible(self, oid: int, datasource_id: int) -> bool:
-        datasource = self._session.get(CoreDatasource, datasource_id)
-        return datasource is not None and datasource.oid == oid
+        try:
+            datasource = build_datasource_service(self._session).get(datasource_id)
+        except DatasourceNotFoundError:
+            return False
+        return datasource.oid == oid
 
     def list_tables(self, datasource_id: int) -> list[SemanticTableMeta]:
         return discover_datasource_tables(self._session, datasource_id)

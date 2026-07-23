@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlmodel import Session, col, select
 
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource.composition import build_datasource_service
 from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetAsset,
@@ -86,18 +86,13 @@ class SemanticSchemaLoader:
         datasource_ids = {
             model.datasource_id for model in models if model.datasource_id is not None
         }
-        datasources = (
-            all_results(
-                self._session.exec(
-                    select(CoreDatasource).where(
-                        CoreDatasource.oid == oid,
-                        col(CoreDatasource.id).in_(datasource_ids),
-                    )
-                )
-            )
-            if datasource_ids
-            else []
-        )
+        datasources = [
+            datasource
+            for datasource in build_datasource_service(
+                self._session
+            ).list_by_workspace(oid)
+            if datasource.id in datasource_ids
+        ]
         model_ids = [model.id for model in models if model.id is not None]
         model_fields = (
             all_results(

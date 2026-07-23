@@ -15,14 +15,17 @@ from apps.knowledge.models.dto import (
     SQLExampleVerificationStatus,
 )
 from apps.retrieval.errors import RetrievalProviderUnavailableError
-from apps.retrieval.indexing import IndexEmbeddingProfile, RetrievalIndexingService
+from apps.retrieval.indexing.service import (
+    IndexEmbeddingProfile,
+    RetrievalIndexingService,
+)
 from apps.retrieval.models.dto import RetrievalChannel, RetrievalChannelStatus
-from apps.retrieval.semantic_runtime import RetrievalEmbeddingRuntimeConfig
-from apps.retrieval.sql_example_indexing import SQLExampleIndexCoordinator
-from apps.retrieval.sql_example_query import (
+from apps.retrieval.query.semantic_runtime import RetrievalEmbeddingRuntimeConfig
+from apps.retrieval.query.sql_example_query import (
     SQLExampleRecallCandidate,
     SQLExampleRetriever,
 )
+from apps.retrieval.sources.sql_example_indexing import SQLExampleIndexCoordinator
 from common.core.db import engine
 
 TENANT_ID = 9_940_001

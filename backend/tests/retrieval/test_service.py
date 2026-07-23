@@ -17,11 +17,14 @@ from apps.retrieval.models.dto import (
     RetrievalDecisionStatus,
     RetrievalDiagnostics,
 )
-from apps.retrieval.semantic_binding import (
+from apps.retrieval.query.semantic_binding import (
     SEMANTIC_BINDING_STRATEGY_VERSION,
     SemanticBindingExecutionResult,
 )
-from apps.retrieval.service import RetrievalService, build_semantic_binding_request
+from apps.retrieval.query.service import (
+    RetrievalService,
+    build_semantic_binding_request,
+)
 
 
 def _request(strategy_version: str | None = None):

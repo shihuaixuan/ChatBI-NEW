@@ -1,20 +1,7 @@
 {
-    "cross_domain_internal_models": [
-        "apps/data_training/models/data_training_model.py -> apps.knowledge.models.orm.sql_example",
-        "apps/semantic/repository/datasource/metadata_discovery.py -> apps.datasource.models.datasource",
-        "apps/semantic/repository/datasource/metadata_repository.py -> apps.datasource.models.datasource",
-        "apps/semantic/repository/datasource_metadata_repository.py -> apps.datasource.models.datasource",
-        "apps/semantic/repository/schema_repository.py -> apps.datasource.models.datasource",
-        "apps/semantic/repository/sqlmodel/schema_loader.py -> apps.datasource.models.datasource",
-        "apps/semantic/services/builders/schema_builder.py -> apps.datasource.models.datasource",
-        "apps/semantic/services/datasource_service.py -> apps.datasource.models.datasource"
-    ],
-    "cross_domain_concrete_implementations": [
-        "apps/retrieval/semantic_binding.py -> apps.semantic.repository.sqlmodel.schema_loader"
-    ],
+    "cross_domain_internal_models": [],
+    "cross_domain_concrete_implementations": [],
     "cross_domain_api_imports": [],
     "workflow_engine_business_imports": [],
-    "function_local_app_imports": [
-        "apps/chatbi/orchestration/agent/loop.py -> apps.ai_model.model_factory"
-    ]
+    "function_local_app_imports": []
 }

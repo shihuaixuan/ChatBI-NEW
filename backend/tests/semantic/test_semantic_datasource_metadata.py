@@ -3,7 +3,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from apps.datasource.models.datasource import CoreField, CoreTable
+from apps.datasource import PhysicalField, PhysicalTable, PhysicalTableDetail
+from apps.datasource.models.orm import CoreField, CoreTable
 from apps.semantic.api.datasources import list_datasource_columns
 from apps.semantic.errors import SemanticForbiddenError
 from apps.semantic.repository.datasource import metadata_discovery
@@ -97,11 +98,11 @@ def test_datasource_service_rejects_cross_tenant_datasource_access():
 
 
 @pytest.mark.anyio
-async def test_list_datasource_columns_unwraps_sqlalchemy_row_to_table_entity():
-    table = CoreTable(
+async def test_list_datasource_columns_reads_persisted_snapshot(monkeypatch):
+    table = PhysicalTable(
         id=100, ds_id=10, checked=True, table_name="stall_traffic_metrics"
     )
-    field = CoreField(
+    field = PhysicalField(
         id=1,
         ds_id=10,
         table_id=100,
@@ -111,10 +112,22 @@ async def test_list_datasource_columns_unwraps_sqlalchemy_row_to_table_entity():
         field_comment="访问人数",
         field_index=1,
     )
-    session = _FakeSession(table=table, fields=[field])
+    metadata_service = SimpleNamespace(
+        get_schema=lambda _datasource_id: [
+            PhysicalTableDetail(table=table, fields=[field])
+        ]
+    )
+    monkeypatch.setattr(
+        metadata_discovery,
+        "build_datasource_metadata_service",
+        lambda _session: metadata_service,
+    )
 
     result = await list_datasource_columns(
-        session, SimpleNamespace(oid=1), 10, "stall_traffic_metrics"
+        _AccessibleDatasourceSession(),
+        SimpleNamespace(oid=1),
+        10,
+        "stall_traffic_metrics",
     )
 
     assert [item.field_name for item in result] == ["visit_uv"]
@@ -131,6 +144,11 @@ async def test_list_datasource_columns_maps_live_discovery_failure(monkeypatch):
         "build_datasource_connection_service",
         lambda _session: FailingConnectionService(),
     )
+    monkeypatch.setattr(
+        metadata_discovery,
+        "build_datasource_metadata_service",
+        lambda _session: SimpleNamespace(get_schema=lambda _datasource_id: []),
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await list_datasource_columns(
@@ -144,69 +162,16 @@ async def test_list_datasource_columns_maps_live_discovery_failure(monkeypatch):
     assert exc_info.value.detail == "SEMANTIC_COLUMN_DISCOVERY_FAILED: 连接失败"
 
 
-class _FakeSession:
-    def __init__(self, table: CoreTable, fields: list[CoreField]):
-        self.table = table
-        self.fields = fields
-        self.exec_calls = 0
-
-    def execute(self, _statement):
-        return _ExistsResult()
-
+class _AccessibleDatasourceSession:
     def get(self, _model, datasource_id):
         return SimpleNamespace(id=datasource_id, oid=1)
 
-    def exec(self, _statement):
-        self.exec_calls += 1
-        if self.exec_calls == 1:
-            return _RowBackedScalarResult(self.table)
-        return _ListScalarResult(self.fields)
-
-
-class _MissingMetadataSession:
-    def execute(self, _statement):
-        return _ExistsResult()
-
-    def exec(self, _statement):
-        return _ScalarFirstResult(None)
-
-    def get(self, _model, datasource_id):
-        return SimpleNamespace(id=datasource_id, oid=1)
+_MissingMetadataSession = _AccessibleDatasourceSession
 
 
 class _MissingDatasourceRepository:
     def is_accessible(self, _oid, _datasource_id):
         return False
-
-
-class _ExistsResult:
-    def first(self):
-        return (10,)
-
-
-class _RowBackedScalarResult:
-    def __init__(self, scalar):
-        self.scalar = scalar
-
-    def first(self):
-        # 模拟 SQLAlchemy Row：直接取 table.checked 会抛出 AttributeError。
-        return SimpleNamespace(CoreTable=self.scalar)
-
-    def scalars(self):
-        return _ScalarFirstResult(self.scalar)
-
-
-class _ScalarFirstResult:
-    def __init__(self, value):
-        self.value = value
-
-    def first(self):
-        return self.value
-
-
-class _ListScalarResult:
-    def __init__(self, values):
-        self.values = values
 
     def scalars(self):
         return self

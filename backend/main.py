@@ -21,19 +21,19 @@ from apps.access_control.permission import RequestContextMiddleware
 from apps.ai_model.composition import migrate_ai_model_secrets
 from apps.api import api_router
 from apps.assistant.public import init_dynamic_cors
-from apps.retrieval.worker import submit_pending_index_jobs
-from apps.swagger.i18n import (
+from apps.retrieval.indexing.worker import submit_pending_index_jobs
+from common.audit.schemas.request_context import RequestContextMiddlewareCommon
+from common.core.config import settings
+from common.core.db import engine
+from common.core.response_middleware import ResponseMiddleware, exception_handler
+from common.core.sqlbot_cache import init_sqlbot_cache
+from common.interfaces.i18n import (
     DEFAULT_LANG,
     PLACEHOLDER_PREFIX,
     get_translation,
     i18n_list,
     tags_metadata,
 )
-from common.audit.schemas.request_context import RequestContextMiddlewareCommon
-from common.core.config import settings
-from common.core.db import engine
-from common.core.response_middleware import ResponseMiddleware, exception_handler
-from common.core.sqlbot_cache import init_sqlbot_cache
 from common.utils.utils import SQLBotLogUtil
 from sqlbot_platform.workflow_engine.infrastructure.artifacts.cleanup import (
     ArtifactCleanupService,

@@ -54,7 +54,7 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
     ),
     ForbiddenImportRule(
         rule_id="mcp-no-chat-internals",
-        scope="apps/mcp",
+        scope="interfaces/mcp",
         forbidden=(
             "apps.chat.models",
             "apps.chat.api",
@@ -62,6 +62,17 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
             "apps.chat.task",
         ),
         reason="MCP 只能使用 ChatBI 公开契约，不得重新依赖旧 Chat 内部路径。",
+    ),
+    ForbiddenImportRule(
+        rule_id="dashboard-no-chat-internals",
+        scope="apps/dashboard",
+        forbidden=(
+            "apps.chat.models",
+            "apps.chat.api",
+            "apps.chat.curd",
+            "apps.chat.task",
+        ),
+        reason="Dashboard 只能通过 ChatBI 公开契约加载图表数据。",
     ),
 )
 
@@ -71,6 +82,8 @@ FORBIDDEN_TOP_LEVEL_PATHS: tuple[str, ...] = (
     "apps/template",
     "apps/workflow",
     "apps/workflow_engine",
+    "apps/mcp",
+    "apps/settings",
 )
 
 

@@ -20,6 +20,7 @@ from langchain_core.messages import (
     messages_from_dict,
 )
 
+from apps.ai_model.model_factory import LLMFactory, get_default_config
 from apps.chatbi.composition import (
     build_chat_record_service,
     build_physical_schema_service,
@@ -84,8 +85,6 @@ class DefaultAgentModelClient:
 
     def _get_llm(self):
         if self._llm is None:
-            from apps.ai_model.model_factory import LLMFactory, get_default_config
-
             try:
                 asyncio.get_running_loop()
             except RuntimeError:

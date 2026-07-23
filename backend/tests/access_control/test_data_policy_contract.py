@@ -4,11 +4,9 @@ from fastapi.routing import APIRoute
 
 from apps.access_control.models.orm import AccessVariableModel
 from apps.api import api_router
-from apps.system.models.system_variable_model import SystemVariable
 
 
-def test_system_reexports_access_control_variable_model() -> None:
-    assert SystemVariable is AccessVariableModel
+def test_access_control_owns_variable_model() -> None:
     assert AccessVariableModel.__module__ == (
         "apps.access_control.models.orm.access_variable"
     )

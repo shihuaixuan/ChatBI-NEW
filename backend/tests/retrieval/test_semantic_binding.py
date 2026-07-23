@@ -16,11 +16,11 @@ from apps.retrieval.models.dto import (
     RetrievalRequest,
     RetrievalScope,
 )
-from apps.retrieval.semantic_binding import (
+from apps.retrieval.query.semantic_binding import (
     SEMANTIC_BINDING_STRATEGY_VERSION,
     SemanticBindingRunner,
 )
-from apps.retrieval.semantic_runtime import RetrievalEmbeddingRuntimeConfig
+from apps.retrieval.query.semantic_runtime import RetrievalEmbeddingRuntimeConfig
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 
@@ -82,29 +82,20 @@ def test_semantic_binding_connects_recall_policy_schema_and_payload_projection(m
         def apply(self, _recall):
             return SimpleNamespace(bundle=bundle)
 
-    class _SchemaRepository:
-        def __init__(self, session):
-            observed["schema_session"] = session
-
     class _SchemaBuilder:
-        def __init__(self, repository):
-            assert isinstance(repository, _SchemaRepository)
-
         def build_dataset_schema(self, tenant_id, dataset_id):
             observed["schema_scope"] = (tenant_id, dataset_id)
             return _schema()
 
     monkeypatch.setattr(
-        "apps.retrieval.semantic_binding.SemanticBindingHybridRetriever",
+        "apps.retrieval.query.semantic_binding.SemanticBindingHybridRetriever",
         _HybridRetriever,
     )
     monkeypatch.setattr(
-        "apps.retrieval.semantic_binding.SemanticSchemaService",
-        _SchemaBuilder,
-    )
-    monkeypatch.setattr(
-        "apps.retrieval.semantic_binding.SemanticSchemaLoader",
-        _SchemaRepository,
+        "apps.retrieval.query.semantic_binding.build_semantic_schema_service",
+        lambda session: (
+            observed.__setitem__("schema_session", session) or _SchemaBuilder()
+        ),
     )
     config = RetrievalEmbeddingRuntimeConfig(
         enabled=True,

@@ -20,7 +20,7 @@ from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
     register_chatbi_v1_handlers,
 )
-from apps.retrieval.service import RetrievalService
+from apps.retrieval.query.service import RetrievalService
 from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
 from sqlbot_platform.workflow_engine.domain.run import RunStatus
 from sqlbot_platform.workflow_engine.infrastructure.memory import (

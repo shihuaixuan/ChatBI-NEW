@@ -14,8 +14,8 @@ from apps.chatbi.orchestration.graph.capabilities.interactions import (
     apply_slot_response_to_intent,
 )
 from apps.retrieval.errors import RetrievalConfigurationError, RetrievalQueryError
-from apps.retrieval.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
-from apps.retrieval.service import RetrievalService
+from apps.retrieval.query.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
+from apps.retrieval.query.service import RetrievalService
 
 
 class _RecordingRetrievalService:

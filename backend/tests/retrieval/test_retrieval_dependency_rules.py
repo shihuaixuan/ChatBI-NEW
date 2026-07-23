@@ -11,8 +11,8 @@ FORBIDDEN = (
     "apps.agentic_chat",
 )
 GENERIC_RETRIEVAL_MODULES = (
-    "projection.py",
-    "indexing.py",
+    "projection/contracts.py",
+    "indexing/service.py",
     "models/orm/retrieval.py",
     "models/dto/retrieval.py",
 )
@@ -45,14 +45,8 @@ def test_generic_projection_and_indexing_modules_do_not_import_headless():
 
 
 def test_retrieval_runtime_uses_structured_orm_and_dto_imports():
-    compatibility_paths = {
-        RETRIEVAL_DIR / "schemas.py",
-        RETRIEVAL_DIR / "models" / "__init__.py",
-    }
     legacy_modules = {"apps.retrieval.models", "apps.retrieval.schemas"}
     for path in RETRIEVAL_DIR.rglob("*.py"):
-        if path in compatibility_paths:
-            continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module:
@@ -60,3 +54,8 @@ def test_retrieval_runtime_uses_structured_orm_and_dto_imports():
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     assert alias.name not in legacy_modules, f"{path} 仍通过兼容入口导入模型"
+
+
+def test_retrieval_compatibility_model_modules_are_removed():
+    assert not (RETRIEVAL_DIR / "schemas.py").exists()
+    assert not (RETRIEVAL_DIR / "models" / "__init__.py").exists()

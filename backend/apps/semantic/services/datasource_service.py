@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource import DatasourceRecord
 from apps.semantic.errors import SemanticForbiddenError
 from apps.semantic.models.dto import SemanticColumnMeta, SemanticTableMeta
 from apps.semantic.repository.datasource_metadata_repository import (
@@ -14,7 +14,7 @@ class SemanticDatasourceService:
     def __init__(self, repository: DatasourceMetadataRepository):
         self._repository = repository
 
-    def list_datasources(self, oid: int) -> list[CoreDatasource]:
+    def list_datasources(self, oid: int) -> list[DatasourceRecord]:
         return self._repository.list_accessible(oid)
 
     def list_datasource_tables(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from apps.retrieval.evaluation import (
+from apps.retrieval.query.evaluation import (
     evaluate_baseline,
     load_baseline,
     load_gold_set,

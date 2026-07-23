@@ -5,8 +5,11 @@ from __future__ import annotations
 import hashlib
 
 from apps.retrieval.models.dto import RetrievalResourceType
-from apps.retrieval.projection import ProjectedResource, ProjectedResourceDelta
-from apps.retrieval.semantic_projector import (
+from apps.retrieval.projection.contracts import (
+    ProjectedResource,
+    ProjectedResourceDelta,
+)
+from apps.retrieval.sources.semantic_projector import (
     SemanticProjectionPolicy,
     SemanticSourceProjector,
 )

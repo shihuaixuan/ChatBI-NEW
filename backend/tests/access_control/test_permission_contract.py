@@ -20,9 +20,6 @@ from apps.access_control.permission import (
     require_permissions,
     resolve_resource_reference,
 )
-from apps.system.schemas.permission import (
-    SqlbotPermission as LegacySqlbotPermission,
-)
 
 
 class RecordingAuthorizationService:
@@ -56,19 +53,6 @@ def _request_with_user(user: object) -> Request:
     )
     request.state.current_user = user
     return request
-
-
-def test_legacy_permission_import_is_same_dto() -> None:
-    assert LegacySqlbotPermission is SqlbotPermission
-    permission = LegacySqlbotPermission(
-        role=["ws_admin"],
-        type="ds",
-        keyExpression="payload.datasource",
-    )
-    requirement = permission.to_requirement()
-    assert requirement.roles == frozenset({"ws_admin"})
-    assert requirement.resource_type == "ds"
-    assert requirement.resource_expression == "payload.datasource"
 
 
 def test_resource_reference_supports_named_nested_and_positional_values() -> None:

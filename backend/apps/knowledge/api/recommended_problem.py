@@ -14,7 +14,7 @@ from apps.knowledge.models.dto import (
     RecommendedProblemItem,
     RecommendedProblemResponse,
 )
-from apps.swagger.i18n import PLACEHOLDER_PREFIX
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.deps import CurrentUser, SessionDep

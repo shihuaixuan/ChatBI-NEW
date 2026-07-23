@@ -14,7 +14,7 @@ from apps.chatbi.api.legacy_read import (
 )
 from apps.chatbi.api.legacy_sse import encode_sse_event
 from apps.chatbi.models import ChatQuestion, ChatRecord
-from apps.swagger.i18n import PLACEHOLDER_PREFIX
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.core.deps import CurrentAssistant, CurrentUser, SessionDep
 
 router = APIRouter(tags=["Data Q&A"], prefix="/chat")

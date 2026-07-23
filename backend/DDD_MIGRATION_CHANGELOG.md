@@ -2441,3 +2441,42 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
    154 条路径。无数据库变更，Run 表、事件协议、HTTP 路径和恢复语义不变。
 
 **R5 完成。** 下一阶段进入 R6，处理外部接口归位、剩余兼容台账与最终清理。
+
+## R6（2026-07-23）：外部接口归位与最终清理
+
+1. Retrieval 从根目录平铺结构改为四段管道：
+   `sources` 持有 Semantic/SQL Example 投影和索引协调，
+   `projection` 持有投影契约、载荷与规划，
+   `indexing` 持有索引服务、配置和 worker，
+   `query` 持有召回、编译、评估、策略和运行时。
+   旧平铺文件、`schemas.py` 与 `models/__init__.py` 兼容入口删除，所有运行时、脚本和
+   测试导入同步切换。
+2. Dashboard 按 API → Service → Repository/SQLModel → ORM 分层，DTO 独立归位并由
+   composition 组装；列表、详情、名称校验、创建、修改和删除规则从旧 CRUD 模块迁入，
+   画布数据加载只调用 ChatBI 公开 `get_chart_data_ds`，不再依赖旧 Chat CRUD。
+   旧 `crud` 目录删除；当前 xpack 仍使用的 `models/dashboard_model.py` 仅保留最小转发。
+3. MCP 路由和请求模型迁至 `interfaces/mcp`；`apps/api.py` 改注册新接口入口。
+   Settings 的失败文件下载迁至 `interfaces/http/file_download.py`，并修正为 FastAPI
+   `HTTPException`；无引用的 Settings 模型与 Schema 整体删除。
+   Swagger i18n 实现和 locales 迁至 `common/interfaces`，仓内调用方全部切换，
+   `apps/swagger/i18n.py` 仅为当前 xpack 保留最小转发。
+4. Semantic 的数据源列表、权限判断、物理元数据发现和 Schema 加载改经 Datasource
+   公开 DTO 与组合入口，不再读取 Datasource ORM；Retrieval 的 Semantic Binding 改经
+   Semantic 公开 Service；Agent 的模型工厂导入移至模块级。
+   `known_dependency_violations.json` 的内部模型、具体实现、跨 API、引擎业务和函数内
+   导入五类基线全部清零。Data Training 的 xpack 固定入口作为台账 A2 的明确外部兼容
+   文件由守卫单点豁免，不进入历史依赖余额。
+5. 删除未被仓内或 xpack 使用的 `apps/system/schemas/permission.py` 和
+   `apps/system/models/system_variable_model.py`。通过运行时 import hook 加载当前
+   `sqlbot_xpack` 全部可编译模块，确认仍在使用的 terminology、data_training、system、
+   chat、dashboard、datasource、swagger 旧路径；这些入口统一标为“外部阻塞”，写明
+   审计证据和删除条件。兼容台账已无“活跃”或“待确认”条目。
+6. 结构守卫更新 MCP 新位置、Dashboard 禁止旧 Chat 内部依赖，以及已删除的
+   `apps/mcp`、`apps/settings` 顶级路径；架构守卫仍集中在 3 个测试文件。
+7. 验证：完整后端回归 1,217 项、架构测试 140 项通过；新增与迁移模块严格 Mypy
+   58 个源文件通过，变更范围 Ruff 通过；应用与 xpack 初始化成功，OpenAPI 保持
+   154 条路径；ChatBI 公共面 28 个符号。无数据库迁移，`headless_*` 表名与历史品牌
+   命名留待独立评审。
+
+**R6 完成。** 本轮架构评审执行计划关账；后续仅处理已登记的外部兼容迁移和独立数据库
+命名迁移，不再作为 R6 的仓内剩余任务。

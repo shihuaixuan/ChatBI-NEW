@@ -11,7 +11,7 @@ from apps.chatbi.orchestration.graph.capabilities.interactions import (
 )
 from apps.chatbi.services.planning import SemanticRetrievalService
 from apps.retrieval.errors import RetrievalConfigurationError, RetrievalQueryError
-from apps.retrieval.service import RetrievalService
+from apps.retrieval.query.service import RetrievalService
 
 
 class SemanticKnowledgeAdapter:

@@ -15,7 +15,7 @@ import pymysql
 import requests
 from sqlmodel import Session, select
 
-from apps.datasource.models.datasource import CoreDatasource
+from apps.datasource.models.orm import CoreDatasource
 from apps.datasource.utils.utils import aes_decrypt
 from apps.system.models.user import UserModel
 from common.core.db import engine

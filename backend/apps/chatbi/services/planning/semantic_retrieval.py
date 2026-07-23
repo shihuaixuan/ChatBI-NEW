@@ -1,7 +1,7 @@
 from typing import Any
 
 from apps.chatbi.models import SemanticRetrievalData
-from apps.retrieval.service import (
+from apps.retrieval.query.service import (
     RetrievalService,
     build_semantic_binding_request,
 )
