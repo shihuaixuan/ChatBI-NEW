@@ -2310,3 +2310,26 @@ pandas/markdown 展示代码，应随 `apps/chat` 整体迁入 chatbi/api（R3-d
 **R3 阶段完成，P5 验收完成。** 下一批进入 R4-a，统一 ChatBI 问数路由并拆分
 conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼容桩不计入业务源码，
 按台账 A7 在 R6 与 xpack 协同清偿。
+
+## R4-a（2026-07-23）：ChatBI 问数路由统一
+
+1. 原 `chatbi/api/router.py` 的旧 `/chat` 接口按真实职责拆分：
+   - `conversations.py`：会话创建、读取、重命名、删除，记录数据/日志/用量读取与 Excel 导出；
+   - `queries.py`：推荐问题、分析和预测查询；
+   - `router.py`：只保留 ChatBI 问数路由聚合。
+   HTTP 路径、请求参数、响应类型、SSE 与错误内容保持不变。
+2. `router.py::compose_chatbi_router()` 接收 Agent 与 Graph 的 `APIRouter`，聚合
+   `/chat`、`/chat/agent`、`/graph` 三组既有入口；`apps/api.py` 从三次独立注册收敛为只注册
+   `chatbi_router` 一次。具体执行器 router 由最外层传入，ChatBI 未新增
+   `apps.agent` / `apps.workflow` / `apps.workflow_engine.api` 反向依赖。
+3. `interactions.py` 暂不建立空壳：Agent 澄清/取消与 Graph 交互/重试仍依赖各自执行器实现，
+   此时物理搬入会违反依赖方向。交互路由分别随 R4-b、R4-c 迁入 orchestration 后再按职责归位；
+   计划文本同步记录该边界决定。
+4. 路由契约测试补充检查：`apps/api.py` 不再直接 include Agent / Graph router，聚合后的
+   `/chat/list`、`/chat/agent/stream`、`/graph/queries` 均实际注册。
+5. 验证：Chat/Agent/Graph/架构定向回归 198 项、完整后端回归 1,222 项通过；应用导入与
+   xpack 初始化通过；OpenAPI 保持 154 条路径，三类兼容路径均存在；变更范围 Ruff（F/I）
+   通过；新聚合路由严格 Mypy 通过。无数据库变更。
+
+**R4-a 完成。** 下一批进入 R4-b，将 Agent 的 API、运行循环、ORM 与 CRUD 迁入
+`chatbi/orchestration/agent` 及 ChatBI 模型/仓储归属。

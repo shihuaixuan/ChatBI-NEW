@@ -1,6 +1,6 @@
 # SQLBot 后端架构迁移计划（现行版）
 
-> 状态：进行中（R0–R3 已完成，P5 已验收，下一批 R4-a）
+> 状态：进行中（R0–R3、R4-a 已完成，P5 已验收，下一批 R4-b）
 > 更新：2026-07-23
 > 定位：**边界清晰的模块化单体**。DDD 战略半边（限界上下文、数据所有权、公开契约、依赖方向）全局保留；战术模式按子域分级使用（见 `apps/AGENTS.md` v2）。
 > 本文是唯一现行计划。历史批次日志（含 P0–P5 前 43 批全文）见 `DDD_MIGRATION_CHANGELOG.md`；兼容入口台账见 `COMPAT_LEDGER.md`；评审依据见 `docs/tech/12/13/14`。
@@ -109,7 +109,7 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 
 | 批 | 动作 |
 | --- | --- |
-| R4-a | 在 R3-d 已建立的 `chatbi/api/` 内拆分 conversations/queries/interactions；`apps/api.py` 的问数入口收敛为 chatbi 单 router（`/chat`、`/chat/agent`、`/graph` 路径不变）；`apps/chat/models/chat_model.py` 外部桩按 A7 留至 R6 |
+| R4-a ✅ | 旧 `/chat` 路由拆为 conversations / queries；`apps/api.py` 只注册 ChatBI 聚合 router，Agent / Graph router 由最外层注入（路径不变）；interactions 物理归位随 R4-b/c 执行，避免 ChatBI 反向依赖执行器；`chat_model.py` 外部桩按 A7 留至 R6（2026-07-23 完成） |
 | R4-b | `apps/agent → chatbi/orchestration/agent`（ORM 入 models/orm，crud 入仓储，api 并入） |
 | R4-c | `apps/workflow → chatbi/orchestration/graph`；1,483 行 `adapters/question.py` 按节点拆分；runtime 对引擎 infrastructure 依赖改端口 |
 | R4-d | 解散 `capabilities` 与 `template`（生成器入 `chatbi/adapters/prompts/`）；平台参数迁出 `system`；清偿 R1/R2 兼容 re-export |

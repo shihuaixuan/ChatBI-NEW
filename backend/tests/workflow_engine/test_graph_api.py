@@ -359,6 +359,8 @@ def _load_chat_record(record_id: int) -> ChatRecord:
 
 
 def test_graph_routes_are_registered_and_included_by_apps_api():
+    from apps.api import api_router
+
     app = FastAPI()
     app.include_router(graph_router.router)
 
@@ -383,7 +385,19 @@ def test_graph_routes_are_registered_and_included_by_apps_api():
     api_py = Path(__file__).parents[2] / "apps" / "api.py"
     source = api_py.read_text()
     assert "from apps.workflow_engine.api import router as graph_workflow" in source
-    assert "include_router(graph_workflow.router)" in source
+    assert "graph_router=graph_workflow.router" in source
+    assert "api_router.include_router(chatbi_router)" in source
+    assert "api_router.include_router(agent.router)" not in source
+    assert "api_router.include_router(graph_workflow.router)" not in source
+
+    registered_paths = {
+        route.path for route in api_router.routes if isinstance(route, APIRoute)
+    }
+    assert {
+        "/chat/list",
+        "/chat/agent/stream",
+        "/graph/queries",
+    }.issubset(registered_paths)
 
 
 def test_graph_routes_require_current_user_dependency():

@@ -12,8 +12,8 @@ from apps.agent import api as agent
 from apps.agent.deletion import AgentExecutionDeletionService
 from apps.ai_model.api import model_config as ai_model
 from apps.assistant.api import assistants as assistant
-from apps.chatbi.api import router as chat
 from apps.chatbi.api.legacy_composition import configure_legacy_agent_cleanup
+from apps.chatbi.api.router import compose_chatbi_router
 from apps.dashboard.api import dashboard_api
 from apps.datasource.api import datasource, table_relation
 from apps.knowledge.api import recommended_problem, sql_example
@@ -29,6 +29,10 @@ from apps.workflow_engine.api import router as graph_workflow
 
 api_router = APIRouter()
 configure_legacy_agent_cleanup(AgentExecutionDeletionService)
+chatbi_router = compose_chatbi_router(
+    agent_router=agent.router,
+    graph_router=graph_workflow.router,
+)
 api_router.include_router(access_login.router)
 api_router.include_router(access_user.router)
 api_router.include_router(user.router)
@@ -38,8 +42,7 @@ api_router.include_router(ai_model.router)
 api_router.include_router(base.router)
 api_router.include_router(sql_example.router)
 api_router.include_router(datasource.router)
-api_router.include_router(chat.router)
-api_router.include_router(agent.router)
+api_router.include_router(chatbi_router)
 api_router.include_router(dashboard_api.router)
 api_router.include_router(mcp.router)
 api_router.include_router(table_relation.router)
@@ -51,7 +54,6 @@ api_router.include_router(recommended_problem.router)
 api_router.include_router(access_variable.router)
 api_router.include_router(legacy_terms.router)
 api_router.include_router(semantic_router)
-api_router.include_router(graph_workflow.router)
 
 # 前端登录加密与授权初始化依赖 xpack 提供的 key/license/status 接口。
 api_router.include_router(xpack_config.router)

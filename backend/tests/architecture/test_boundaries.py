@@ -49,7 +49,9 @@ def test_legacy_chat_model_only_contains_compatibility_exports():
 
 
 def test_chat_runtime_uses_public_axis_schema():
-    api_imports = _imports__chat_model_compatibility(_tree__chat_model_compatibility("apps/chatbi/api/router.py"))
+    api_imports = _imports__chat_model_compatibility(
+        _tree__chat_model_compatibility("apps/chatbi/api/conversations.py")
+    )
     task_imports = _imports__chat_model_compatibility(_tree__chat_model_compatibility("apps/chatbi/api/legacy_chat_flow.py"))
 
     assert "common.utils.data_format_schema" in api_imports
@@ -518,7 +520,7 @@ def test_legacy_conversation_mutations_have_moved_out_of_read_projection():
         assert name not in functions
 
     router_source = (
-        BACKEND_DIR__conversation / "apps/chatbi/api/router.py"
+        BACKEND_DIR__conversation / "apps/chatbi/api/conversations.py"
     ).read_text(encoding="utf-8")
     assert "build_conversation_reader_service" in router_source
     assert "build_legacy_conversation_service" in router_source
@@ -2161,7 +2163,9 @@ def test_legacy_llm_adapter_only_depends_on_serialization_library():
 
 def test_legacy_chat_streams_use_shared_sse_encoder():
     llm_source = (BACKEND_DIR__legacy_chat_llm_adapter / "apps/chatbi/api/legacy_chat_flow.py").read_text(encoding="utf-8")
-    api_source = (BACKEND_DIR__legacy_chat_llm_adapter / "apps/chatbi/api/router.py").read_text(encoding="utf-8")
+    api_source = (
+        BACKEND_DIR__legacy_chat_llm_adapter / "apps/chatbi/api/queries.py"
+    ).read_text(encoding="utf-8")
 
     assert "from apps.chatbi.api.legacy_sse import" in llm_source
     assert "from apps.chatbi.api.legacy_sse import encode_sse_event" in api_source

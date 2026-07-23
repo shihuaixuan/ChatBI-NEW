@@ -36,7 +36,7 @@
 | # | 路径 | 内容 | 调用方 | 删除条件 | 目标阶段 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | C1 | `/system/terminology`（`apps/semantic/api/legacy_terms.py`） | 转发 SemanticTermService，旧响应字段转换 | 外部 API 调用方 | 外部调用量确认为零 | R6 | 活跃 |
-| C2 | `/chat`、`/chat/agent`、`/graph` 旧路由前缀 | R4-a 起由 `chatbi/api` 内部保持 | 前端、外部集成 | 前端与外部迁移新路径（如规划） | R6+ | 活跃 |
+| C2 | `/chat`、`/chat/agent`、`/graph` 旧路由前缀 | R4-a 起由 `chatbi/api/router.py` 聚合入口保持；Agent / Graph 具体 router 由最外层注入 | 前端、外部集成 | 前端与外部迁移新路径（如规划） | R6+ | 活跃 |
 | C3 | `/system/data-training`、`/recommended_problem` 旧前缀 | Knowledge 所有权下的兼容路径 | 前端 | 前端迁移 | R6 | 活跃 |
 | C4 | `/system/aimodel`、`/system/assistant`、`/user`、`/login` 等原路径 | 所有权已迁，路径长期保持（视为正式路径） | 前端 | 不删除（转正） | — | 已转正 |
 
