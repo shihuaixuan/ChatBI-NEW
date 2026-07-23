@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from apps.chatbi.orchestration.graph.capabilities.adapters.permission import (
-    PermissionAdapter,
+    SQLPermissionService,
 )
 
 
@@ -34,7 +34,7 @@ def test_permission_adapter_allows_and_returns_rewritten_sql():
             message=None,
         )
     )
-    adapter = PermissionAdapter(permission_tool=tool)
+    adapter = SQLPermissionService(permission_tool=tool)
 
     result = adapter.apply({"sql": "select * from orders", "datasource_id": 7, "tenant_id": 1, "user_id": 9})
 
@@ -63,7 +63,7 @@ def test_permission_adapter_applies_row_filters_from_policy_provider():
             "denied_columns": [],
         }
     )
-    adapter = PermissionAdapter(permission_tool=tool, policy_provider=provider)
+    adapter = SQLPermissionService(permission_tool=tool, policy_provider=provider)
 
     result = adapter.apply(
         {
@@ -102,7 +102,7 @@ def test_permission_adapter_denies_when_policy_blocks_restricted_column():
             "denied_columns": [{"table": "orders", "column": "secret_cost"}],
         }
     )
-    adapter = PermissionAdapter(permission_tool=tool, policy_provider=provider)
+    adapter = SQLPermissionService(permission_tool=tool, policy_provider=provider)
 
     result = adapter.apply({"sql": "select o.secret_cost from orders o", "datasource_id": 7})
 
@@ -118,7 +118,7 @@ def test_permission_adapter_denies_when_permission_tool_fails():
     tool = FakePermissionTool(
         SimpleNamespace(success=False, payload=None, error_code="permission_denied", message="没有数据源权限")
     )
-    adapter = PermissionAdapter(permission_tool=tool)
+    adapter = SQLPermissionService(permission_tool=tool)
 
     result = adapter.apply({"sql": "select * from orders", "datasource_id": 7})
 
@@ -140,7 +140,7 @@ def test_permission_adapter_denies_malformed_provider_policy():
             "denied_columns": [],
         }
     )
-    adapter = PermissionAdapter(permission_tool=tool, policy_provider=provider)
+    adapter = SQLPermissionService(permission_tool=tool, policy_provider=provider)
 
     result = adapter.apply({"sql": "select * from orders", "datasource_id": 7})
 

@@ -11,7 +11,7 @@ from apps.chatbi.models import (
     DatasourceSelectionCandidate,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
-    DatasourceSelectionMessage,
+    ModelMessage,
 )
 from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 from apps.chatbi.services.generation.ports import (
@@ -41,7 +41,7 @@ class DatasourceSelectionService:
     def prepare(
         self,
         data: DatasourceSelectionData,
-    ) -> list[DatasourceSelectionMessage]:
+    ) -> list[ModelMessage]:
         self._validate_data(data)
         if data.auto_select:
             return []
@@ -52,7 +52,7 @@ class DatasourceSelectionService:
     def generate(
         self,
         data: DatasourceSelectionData,
-        messages: list[DatasourceSelectionMessage] | None = None,
+        messages: list[ModelMessage] | None = None,
     ) -> Iterator[DatasourceSelectionEvent]:
         self._validate_data(data)
         if data.auto_select:
@@ -165,7 +165,7 @@ class DatasourceSelectionService:
             )
 
     @staticmethod
-    def _validate_messages(messages: list[DatasourceSelectionMessage]) -> None:
+    def _validate_messages(messages: list[ModelMessage]) -> None:
         if not messages or any(not message.content.strip() for message in messages):
             raise DatasourceSelectionError("DATASOURCE_SELECTION_PROMPT_INVALID")
 

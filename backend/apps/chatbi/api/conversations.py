@@ -27,7 +27,7 @@ from apps.chatbi.models import (
     CreateChat,
     RenameChat,
 )
-from apps.chatbi.services import DatasetBindingError
+from apps.chatbi.services.conversation import DatasetBindingError
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log

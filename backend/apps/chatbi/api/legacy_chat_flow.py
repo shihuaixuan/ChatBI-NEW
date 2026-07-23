@@ -74,10 +74,16 @@ from apps.chatbi.composition import (
     build_generation_context_service,
     build_generation_schema_context_service,
 )
+from apps.chatbi.errors import (
+    ChartGenerationError,
+    DatasourceSelectionError,
+    DynamicSQLGenerationError,
+    PermissionSQLGenerationError,
+    SQLGenerationError,
+)
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
     ChartGenerationData,
-    ChartGenerationMessage,
     Chat,
     ChatFinishStep,
     ChatLog,
@@ -99,6 +105,7 @@ from apps.chatbi.models import (
     GenerationHistoryLog,
     GenerationHistoryProjectionData,
     GenerationRuntimeSettingsData,
+    ModelMessage,
     OperationEnum,
     PermissionSQLFilter,
     PermissionSQLGenerationData,
@@ -106,15 +113,9 @@ from apps.chatbi.models import (
     RecommendedQuestionGenerationData,
     RenameChat,
     SQLGenerationData,
-    SQLGenerationMessage,
 )
-from apps.chatbi.services import (
+from apps.chatbi.services.generation import (
     DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
-    ChartGenerationError,
-    DatasourceSelectionError,
-    DynamicSQLGenerationError,
-    PermissionSQLGenerationError,
-    SQLGenerationError,
     project_generation_history,
     resolve_generation_scope,
     resolve_runtime_settings,
@@ -124,7 +125,7 @@ from apps.datasource import (
     DatasourceRecord,
 )
 from apps.datasource.composition import build_datasource_service
-from apps.system.composition import build_system_parameter_service
+from apps.platform_config.composition import build_platform_parameter_service
 from common.core.config import settings
 from common.core.db import engine
 from common.core.deps import CurrentAssistant, CurrentUser
@@ -158,8 +159,8 @@ class LLMService:
     record: ChatRecord
     config: Any
     llm: Any
-    sql_history: list[SQLGenerationMessage]
-    chart_history: list[ChartGenerationMessage]
+    sql_history: list[ModelMessage]
+    chart_history: list[ModelMessage]
 
     # session: Session = db_session
     current_user: CurrentUser
@@ -284,7 +285,7 @@ class LLMService:
         kwargs.pop("model_runtime", None)
         instance = cls(*args, **kwargs, model_runtime=model_runtime)
 
-        parameter_values = await build_system_parameter_service(
+        parameter_values = await build_platform_parameter_service(
             args[0]
         ).list_group("chat")
         runtime_settings = resolve_runtime_settings(

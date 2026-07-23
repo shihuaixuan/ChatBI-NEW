@@ -38,7 +38,6 @@ from apps.chatbi.services.understanding.intent_projection import (
 )
 from apps.chatbi.services.understanding.model_invocation import (
     QuestionModelClient,
-    QuestionModelService,
     StructuredModelService,
 )
 from apps.chatbi.services.understanding.prompts import (
@@ -73,7 +72,6 @@ __all__ = [
     "QUESTION_REWRITE_BUSINESS_RULES",
     "QuestionIntentFallbackService",
     "QuestionModelClient",
-    "QuestionModelService",
     "QuestionUnderstandingModelClient",
     "QuestionUnderstandingModelResponse",
     "QuestionUnderstandingService",

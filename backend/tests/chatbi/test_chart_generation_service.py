@@ -5,16 +5,16 @@ from collections.abc import Iterator
 import orjson
 import pytest
 
+from apps.chatbi.errors import ChartGenerationError
 from apps.chatbi.models import (
     ChartGenerationData,
-    ChartGenerationMessage,
-    ChartGenerationModelChunk,
     ChatRecord,
+    ModelMessage,
+    ModelStreamChunk,
 )
-from apps.chatbi.services import (
-    ChartGenerationError,
+from apps.chatbi.services.conversation import ChatRecordService
+from apps.chatbi.services.generation import (
     ChartGenerationService,
-    ChatRecordService,
 )
 
 
@@ -25,23 +25,23 @@ class FakePromptBuilder:
     def build(
         self,
         data: ChartGenerationData,
-    ) -> list[ChartGenerationMessage]:
+    ) -> list[ModelMessage]:
         self.data = data
         return [
-            ChartGenerationMessage(role="system", content=data.language),
-            ChartGenerationMessage(role="human", content=data.question),
+            ModelMessage(role="system", content=data.language),
+            ModelMessage(role="human", content=data.question),
         ]
 
 
 class FakeModelClient:
-    def __init__(self, chunks: list[ChartGenerationModelChunk]) -> None:
+    def __init__(self, chunks: list[ModelStreamChunk]) -> None:
         self.chunks = chunks
-        self.messages: list[ChartGenerationMessage] | None = None
+        self.messages: list[ModelMessage] | None = None
 
     def stream(
         self,
-        messages: list[ChartGenerationMessage],
-    ) -> Iterator[ChartGenerationModelChunk]:
+        messages: list[ModelMessage],
+    ) -> Iterator[ModelStreamChunk]:
         self.messages = messages
         yield from self.chunks
 
@@ -96,8 +96,8 @@ def _data(
         assistant_name="Numora",
         rule="销售额保留两位小数",
         history=[
-            ChartGenerationMessage(role="human", content="上一轮问题"),
-            ChartGenerationMessage(role="ai", content='{"type":"table"}'),
+            ModelMessage(role="human", content="上一轮问题"),
+            ModelMessage(role="ai", content='{"type":"table"}'),
         ],
     )
 
@@ -144,12 +144,12 @@ def test_prepare_builds_stable_messages_from_generation_data():
 def test_generate_streams_chunks_and_projects_answer_and_chart_once():
     model = FakeModelClient(
         [
-            ChartGenerationModelChunk(
+            ModelStreamChunk(
                 content="图表配置：```json\n",
                 reasoning_content="先分析字段",
                 token_usage={"input_tokens": 5},
             ),
-            ChartGenerationModelChunk(
+            ModelStreamChunk(
                 content=(
                     '{"type":"line","axis":{"x":{"value":"Month"},'
                     '"y":[{"value":"Sales"}],"series":{"value":"Region"},'
@@ -208,7 +208,7 @@ def test_generate_normalizes_supported_chart_value_aliases(
     expected: dict,
 ):
     service, _, _, _ = _service(
-        FakeModelClient([ChartGenerationModelChunk(content=content)])
+        FakeModelClient([ModelStreamChunk(content=content)])
     )
 
     completed = list(service.generate(_data()))[-1]
@@ -220,7 +220,7 @@ def test_generate_normalizes_supported_chart_value_aliases(
 def test_model_error_preserves_reason_and_only_projects_chart_answer():
     content = '{"type":"error","reason":"当前结果不适合生成图表"}'
     service, _, _, repository = _service(
-        FakeModelClient([ChartGenerationModelChunk(content=content)])
+        FakeModelClient([ModelStreamChunk(content=content)])
     )
 
     completed = list(service.generate(_data()))[-1]
@@ -237,7 +237,7 @@ def test_model_error_preserves_reason_and_only_projects_chart_answer():
 def test_invalid_json_returns_legacy_error_and_only_projects_chart_answer():
     content = "无法生成图表"
     service, _, _, repository = _service(
-        FakeModelClient([ChartGenerationModelChunk(content=content)])
+        FakeModelClient([ModelStreamChunk(content=content)])
     )
 
     completed = list(service.generate(_data()))[-1]
@@ -277,7 +277,7 @@ def test_explicit_empty_or_blank_messages_are_rejected():
 
     for messages in (
         [],
-        [ChartGenerationMessage(role="human", content=" ")],
+        [ModelMessage(role="human", content=" ")],
     ):
         with pytest.raises(
             ChartGenerationError,

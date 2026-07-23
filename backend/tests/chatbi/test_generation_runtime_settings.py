@@ -2,7 +2,7 @@ from apps.chatbi.models import (
     GenerationRuntimeSettings,
     GenerationRuntimeSettingsData,
 )
-from apps.chatbi.services import resolve_runtime_settings
+from apps.chatbi.services.generation import resolve_runtime_settings
 
 
 def test_runtime_settings_service_normalizes_values():

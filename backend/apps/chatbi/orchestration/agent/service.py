@@ -19,7 +19,7 @@ from apps.chatbi.models.dto.agent import (
 )
 from apps.chatbi.orchestration.agent.loop import AgentLoop
 from apps.chatbi.repository.sqlmodel import agent_run_repository
-from apps.chatbi.services import resolve_execution_binding
+from apps.chatbi.services.planning import resolve_execution_binding
 from common.core.config import settings
 from common.core.db import engine
 

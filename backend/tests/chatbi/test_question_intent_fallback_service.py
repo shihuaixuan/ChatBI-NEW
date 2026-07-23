@@ -1,6 +1,6 @@
 import pytest
 
-from apps.chatbi.services import QuestionIntentFallbackService
+from apps.chatbi.services.understanding import QuestionIntentFallbackService
 
 
 def test_intent_fallback_keeps_empty_and_vague_question_contracts():

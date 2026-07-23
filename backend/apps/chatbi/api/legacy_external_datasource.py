@@ -11,7 +11,7 @@ from sqlmodel import Session
 
 from apps.assistant import AssistantOutDsSchema
 from apps.assistant.public import AssistantOutDsFactory
-from apps.chatbi.services import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
+from apps.chatbi.services.generation import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
 from apps.datasource import (
     DatasourceConnection,
     DatasourceRecord,

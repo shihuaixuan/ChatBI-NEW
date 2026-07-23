@@ -2,7 +2,7 @@ from apps.chatbi.models import (
     GenerationAssistantContext,
     GenerationContextScopeData,
 )
-from apps.chatbi.services import resolve_generation_scope
+from apps.chatbi.services.generation import resolve_generation_scope
 
 
 def test_scope_without_assistant_keeps_requested_workspace_and_datasource():

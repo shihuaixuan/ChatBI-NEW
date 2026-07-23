@@ -4,17 +4,17 @@ from collections.abc import Iterator
 
 import pytest
 
+from apps.chatbi.errors import PermissionSQLGenerationError
 from apps.chatbi.models import (
     ChatRecord,
+    ModelMessage,
+    ModelStreamChunk,
     PermissionSQLFilter,
     PermissionSQLGenerationData,
-    SQLGenerationMessage,
-    SQLGenerationModelChunk,
     SQLGenerationResult,
 )
-from apps.chatbi.services import (
-    ChatRecordService,
-    PermissionSQLGenerationError,
+from apps.chatbi.services.conversation import ChatRecordService
+from apps.chatbi.services.generation import (
     PermissionSQLGenerationService,
 )
 
@@ -26,23 +26,23 @@ class FakePromptBuilder:
     def build(
         self,
         data: PermissionSQLGenerationData,
-    ) -> list[SQLGenerationMessage]:
+    ) -> list[ModelMessage]:
         self.data = data
         return [
-            SQLGenerationMessage(role="system", content=data.engine),
-            SQLGenerationMessage(role="human", content=data.sql),
+            ModelMessage(role="system", content=data.engine),
+            ModelMessage(role="human", content=data.sql),
         ]
 
 
 class FakeModelClient:
-    def __init__(self, chunks: list[SQLGenerationModelChunk]) -> None:
+    def __init__(self, chunks: list[ModelStreamChunk]) -> None:
         self.chunks = chunks
-        self.messages: list[SQLGenerationMessage] | None = None
+        self.messages: list[ModelMessage] | None = None
 
     def stream(
         self,
-        messages: list[SQLGenerationMessage],
-    ) -> Iterator[SQLGenerationModelChunk]:
+        messages: list[ModelMessage],
+    ) -> Iterator[ModelStreamChunk]:
         self.messages = messages
         yield from self.chunks
 
@@ -145,12 +145,12 @@ def test_prepare_builds_messages_from_permission_sql_data():
 def test_generate_streams_chunks_parses_and_projects_final_sql_once():
     model = FakeModelClient(
         [
-            SQLGenerationModelChunk(
+            ModelStreamChunk(
                 content="```json\n",
                 reasoning_content="分析权限条件",
                 token_usage={"input_tokens": 6},
             ),
-            SQLGenerationModelChunk(
+            ModelStreamChunk(
                 content=(
                     '{"success":true,"sql":"SELECT * FROM orders '
                     "WHERE region = '华东'\"}\n```"
@@ -188,7 +188,7 @@ def test_invalid_model_result_does_not_overwrite_existing_sql(
     message: str,
 ):
     service, _, _, repository = _service(
-        FakeModelClient([SQLGenerationModelChunk(content=content)])
+        FakeModelClient([ModelStreamChunk(content=content)])
     )
 
     completed = list(service.generate(_data()))[-1]
@@ -239,7 +239,7 @@ def test_explicit_empty_or_blank_messages_are_rejected():
 
     for messages in (
         [],
-        [SQLGenerationMessage(role="human", content=" ")],
+        [ModelMessage(role="human", content=" ")],
     ):
         with pytest.raises(
             PermissionSQLGenerationError,

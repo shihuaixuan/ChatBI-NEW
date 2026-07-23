@@ -19,7 +19,7 @@ _NO_SCHEMA_TYPES = frozenset(
 )
 
 
-class GenerationSchemaTableRanker(Protocol):
+class SchemaRankingClient(Protocol):
     """生成 Schema 的物理表相关性排序端口。"""
 
     def rank(
@@ -40,7 +40,7 @@ class SchemaContextService:
         metadata_service: DatasourceMetadataService,
         connection_service: DatasourceConnectionService,
         data_policy_service: DataPolicyService,
-        table_ranker: GenerationSchemaTableRanker,
+        table_ranker: SchemaRankingClient,
         *,
         embedding_enabled: bool,
         embedding_limit: int,
@@ -275,11 +275,7 @@ class SchemaContextService:
         return value
 
 
-# 旧名兼容（台账 E1）。
-GenerationSchemaContextService = SchemaContextService
-
 __all__ = [
-    "GenerationSchemaContextService",
-    "GenerationSchemaTableRanker",
     "SchemaContextService",
+    "SchemaRankingClient",
 ]

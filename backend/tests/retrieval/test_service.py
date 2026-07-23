@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from apps.capabilities.semantic.retrieval import (
-    _agent_semantic_status,
-    retrieve_semantic_assets,
+from apps.chatbi.models import SemanticRetrievalData
+from apps.chatbi.orchestration.graph.capabilities.adapters.knowledge import (
+    SemanticKnowledgeAdapter,
 )
+from apps.chatbi.services.planning import SemanticRetrievalService
 from apps.retrieval.errors import RetrievalQueryError
 from apps.retrieval.models.dto import (
     RetrievalBindings,
@@ -21,9 +22,6 @@ from apps.retrieval.semantic_binding import (
     SemanticBindingExecutionResult,
 )
 from apps.retrieval.service import RetrievalService, build_semantic_binding_request
-from apps.chatbi.orchestration.graph.capabilities.adapters.knowledge import (
-    SemanticKnowledgeAdapter,
-)
 
 
 def _request(strategy_version: str | None = None):
@@ -197,15 +195,19 @@ def test_graph_and_agent_consume_the_same_semantic_binding_result():
             },
         }
     )
-    agent = retrieve_semantic_assets(
-        None,
-        oid=1,
-        dataset_id=20,
-        question="GMV",
-        intent={"intent_type": "metric_query", "metric_mentions": ["GMV"]},
-        actor_id=2,
-        request_id="run-1",
-        retrieval_service=service,
+    agent = SemanticRetrievalService(service).retrieve_for_agent(
+        SemanticRetrievalData(
+            workspace_id=1,
+            user_id=2,
+            dataset_id=20,
+            original_question="GMV",
+            rewritten_question="GMV",
+            intent={
+                "intent_type": "metric_query",
+                "metric_mentions": ["GMV"],
+            },
+            request_id="run-1",
+        )
     )
 
     assert graph["status"] == agent["status"] == "missed"
@@ -221,7 +223,7 @@ def test_agent_semantic_status_identifies_ambiguous_slot_type(
     ambiguity_type: str,
     expected_status: str,
 ):
-    status = _agent_semantic_status(
+    status = SemanticRetrievalService.agent_semantic_status(
         {
             "status": "metric_ambiguous",
             "decision": {"status": "ambiguous"},
@@ -233,7 +235,7 @@ def test_agent_semantic_status_identifies_ambiguous_slot_type(
 
 
 def test_agent_semantic_status_reports_missing_time_dimension_configuration():
-    status = _agent_semantic_status(
+    status = SemanticRetrievalService.agent_semantic_status(
         {
             "status": "missed",
             "decision": {

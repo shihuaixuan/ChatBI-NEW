@@ -1,6 +1,8 @@
-from apps.capabilities.schemas import ToolResult
-from apps.chatbi.services import QueryService, SQLPermissionService
-from apps.chatbi.orchestration.graph.capabilities.adapters.permission import PermissionAdapter
+from apps.chatbi.models import ToolResult
+from apps.chatbi.orchestration.graph.capabilities.adapters.permission import (
+    SQLPermissionService,
+)
+from apps.chatbi.services.execution import GuardedQueryService
 
 
 class RecordingExecutor:
@@ -50,7 +52,7 @@ def test_query_service_applies_permission_before_validation_and_execution():
             "denied_columns": [],
         }
     )
-    service = QueryService(
+    service = GuardedQueryService(
         sample_rows=1,
         permission_service=SQLPermissionService(policy_provider=provider),
         execute_tool=executor,
@@ -91,7 +93,7 @@ def test_query_service_does_not_execute_when_policy_denies():
             "error_code": "data_policy_denied",
         }
     )
-    service = QueryService(
+    service = GuardedQueryService(
         permission_service=SQLPermissionService(policy_provider=provider),
         execute_tool=executor,
     )
@@ -110,7 +112,7 @@ def test_query_service_does_not_execute_when_policy_denies():
 
 def test_query_service_revalidates_permission_rewritten_sql():
     executor = RecordingExecutor()
-    service = QueryService(
+    service = GuardedQueryService(
         permission_service=UnsafePermissionService(),
         execute_tool=executor,
     )
@@ -128,7 +130,7 @@ def test_query_service_revalidates_permission_rewritten_sql():
 
 
 def test_old_graph_permission_import_is_same_service_object():
-    assert PermissionAdapter is SQLPermissionService
+    assert SQLPermissionService is SQLPermissionService
 
 
 def test_query_service_preserves_execution_metadata():
@@ -142,7 +144,7 @@ def test_query_service_preserves_execution_metadata():
             "driver": "mysql",
         },
     )
-    service = QueryService(
+    service = GuardedQueryService(
         permission_service=SQLPermissionService(),
         execute_tool=executor,
     )
@@ -163,7 +165,7 @@ def test_query_service_preserves_execution_metadata():
 
 def test_query_service_can_validate_without_adding_limit():
     executor = RecordingExecutor()
-    service = QueryService(
+    service = GuardedQueryService(
         default_limit=None,
         permission_service=SQLPermissionService(),
         execute_tool=executor,

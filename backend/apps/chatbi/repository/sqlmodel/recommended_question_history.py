@@ -3,7 +3,7 @@ from sqlmodel import Session, col, select
 from apps.chatbi.models import ChatRecord
 
 
-class SQLModelRecommendedQuestionHistoryProvider:
+class SQLModelRecommendedQuestionHistoryRepository:
     """从历史成功记录读取推荐问题去重上下文。"""
 
     def __init__(self, session: Session) -> None:
@@ -34,4 +34,4 @@ class SQLModelRecommendedQuestionHistoryProvider:
         ]
 
 
-__all__ = ["SQLModelRecommendedQuestionHistoryProvider"]
+__all__ = ["SQLModelRecommendedQuestionHistoryRepository"]

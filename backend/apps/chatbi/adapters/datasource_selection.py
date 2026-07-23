@@ -8,13 +8,13 @@ from langchain.chat_models.base import BaseChatModel
 from sqlmodel import Session
 
 from apps.chatbi.adapters.langchain import LangChainGenerationModelClient
+from apps.chatbi.adapters.prompts import get_datasource_template
 from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.models import (
     DatasourceSelectionData,
-    DatasourceSelectionMessage,
+    ModelMessage,
 )
-from apps.chatbi.services import DatasourceSelectionService
-from apps.template.select_datasource.generator import get_datasource_template
+from apps.chatbi.services.planning import DatasourceSelectionService
 
 
 class TemplateDatasourceSelectionPromptBuilder:
@@ -23,7 +23,7 @@ class TemplateDatasourceSelectionPromptBuilder:
     def build(
         self,
         data: DatasourceSelectionData,
-    ) -> list[DatasourceSelectionMessage]:
+    ) -> list[ModelMessage]:
         template_loader = cast(
             Callable[[], dict[str, str]],
             get_datasource_template,
@@ -38,14 +38,14 @@ class TemplateDatasourceSelectionPromptBuilder:
             for candidate in data.candidates
         ]
         return [
-            DatasourceSelectionMessage(
+            ModelMessage(
                 role="system",
                 content=template["system"].format(
                     lang=data.language,
                     sqlbot_name=data.assistant_name,
                 ),
             ),
-            DatasourceSelectionMessage(
+            ModelMessage(
                 role="human",
                 content=template["user"].format(
                     lang=data.language,
@@ -56,10 +56,6 @@ class TemplateDatasourceSelectionPromptBuilder:
         ]
 
 
-# 共享客户端（R2 合并）；旧名保留（台账 E2）。
-LangChainDatasourceSelectionModelClient = LangChainGenerationModelClient
-
-
 def build_datasource_selection_service(
     session: Session,
     llm: BaseChatModel,
@@ -68,13 +64,12 @@ def build_datasource_selection_service(
 
     return DatasourceSelectionService(
         prompt_builder=TemplateDatasourceSelectionPromptBuilder(),
-        model_client=LangChainDatasourceSelectionModelClient(llm),
+        model_client=LangChainGenerationModelClient(llm),
         chat_record_service=build_chat_record_service(session),
     )
 
 
 __all__ = [
-    "LangChainDatasourceSelectionModelClient",
     "TemplateDatasourceSelectionPromptBuilder",
     "build_datasource_selection_service",
 ]

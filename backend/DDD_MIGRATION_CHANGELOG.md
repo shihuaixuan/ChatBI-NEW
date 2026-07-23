@@ -2388,3 +2388,32 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
 
 **R4-c 完成。** 下一批进入 R4-d，解散 `apps/capabilities` 与 `apps/template`，
 迁出平台参数，并清偿 R1/R2 剩余兼容导出。
+
+## R4-d（2026-07-23）：解散共享壳目录并清偿迁移兼容
+
+1. `apps/capabilities` 整体删除：SQL 校验、执行器、权限和 `ToolResult` 直接使用
+   ChatBI 既有所有者；SQL 修复策略迁入 Graph 能力适配器；问题理解、时间归一化、
+   语义检索与编译调用方全部切换到 ChatBI / Retrieval 公开入口。兼容专用测试删除，
+   SQL 校验契约测试迁入 ChatBI 测试归属。
+2. `apps/template` 整体删除。YAML 模板读取与九个生成提示词入口集中到
+   `chatbi/adapters/prompts/`；SQL 示例提示片段由 Knowledge 自己持有，不再反向依赖
+   ChatBI 模板适配器。原检索平台设计文档迁入 `apps/retrieval/`。
+3. 平台参数从 `apps/system` 迁入 `apps/platform_config`，包含 API、表单处理、
+   Service、仓储端口、SQLModel 实现和组合入口；`apps/api.py` 与旧 Chat 流程切换新入口，
+   `/system/parameter` 路径保持不变。`system` 只保留台账 A3–A6 的 xpack 兼容职责。
+4. R1/R2 兼容面清偿：`chatbi/services/__init__.py` 不再转发业务符号；调用方从
+   conversation / execution / generation / planning / understanding 子域导入。
+   五套流式 DTO 旧名、旧 ModelClient/LangChain 客户端名及 QuestionModelService、
+   QueryService、SemanticQueryService、GenerationSchemaContextService 等别名全部删除。
+5. 同批统一长期端口命名：History Provider 改为 Repository，Schema Ranker 改为 Client，
+   自定义提示词 Provider 改为 Client；Graph 权限与数据源执行实现使用
+   `SQLPermissionService`、`DatasourceQueryExecutor` 权威名称。
+6. 台账 B4–B6、D5–D6、E1–E3、E5–E7 全部销账；R4 目标兼容项累计 17/17 已清，
+   剩余项均有 R6 归属。依赖基线再销账 2 条 capabilities 对 Semantic 内部实现的依赖；
+   结构守卫新增旧顶级目录不得恢复的规则。
+7. 验证：目标域回归 609 项、架构测试 135 项、完整后端回归 1,213 项通过；
+   变更范围 Ruff（F/I）和 19 个关键模块严格 Mypy 通过；应用与 xpack 初始化成功；
+   OpenAPI 保持 154 条路径，`/chat`、`/chat/agent`、`/graph` 三类入口完整。
+   无数据库迁移，既有 HTTP 路径与业务行为不变。
+
+**R4 完成。** 下一阶段进入 R5，隔离 Workflow Engine 的剩余业务依赖。

@@ -826,7 +826,7 @@ def test_legacy_llm_keeps_unmigrated_dependencies_in_legacy_module():
     assert "apps.chatbi.api.legacy_external_datasource" in imports
     assert "apps.ai_model.runtime" in imports
     assert "apps.chatbi.composition" in imports
-    assert "apps.system.composition" in imports
+    assert "apps.platform_config.composition" in imports
     assert "apps.knowledge.composition" not in imports
     assert "apps.semantic.composition" not in imports
     assert "apps.datasource.crud.datasource" not in imports
@@ -1178,7 +1178,7 @@ def _imports__query(relative_path: str) -> set[str]:
 def test_agent_sql_tools_only_use_chatbi_query_service():
     imports = _imports__query("apps/chatbi/orchestration/agent/tools/core.py")
 
-    assert "apps.chatbi.services" in imports
+    assert "apps.chatbi.services.execution" in imports
     assert "apps.capabilities.sql.executor" not in imports
     assert "apps.capabilities.sql.permission" not in imports
     assert "apps.chatbi.services.execution.sql_validator" not in imports
@@ -1189,7 +1189,7 @@ def test_graph_sql_adapter_does_not_maintain_second_execution_chain():
     source = path.read_text(encoding="utf-8")
     imports = _imports__query("apps/chatbi/orchestration/graph/capabilities/adapters/sql.py")
 
-    assert "apps.chatbi.services" in imports
+    assert "apps.chatbi.services.execution" in imports
     assert "self._execute_tool" not in source
     assert "self._validate_tool" not in source
     assert "self._permission_adapter.apply" not in source
@@ -1242,7 +1242,7 @@ def test_graph_semantic_retrieval_uses_chatbi_service():
         BACKEND_DIR__query / "apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py"
     ).read_text(encoding="utf-8")
 
-    assert "apps.chatbi.services" in imports
+    assert "apps.chatbi.services.planning" in imports
     assert "build_semantic_binding_request" not in source
     assert "semantic_retrieval_service.retrieve" in source
 
@@ -1486,8 +1486,9 @@ def test_default_question_model_client_stays_in_chatbi_adapter():
 
 
 def test_question_understanding_dtos_are_owned_by_chatbi():
-    agent_source = (
-        BACKEND_DIR__question_understanding / "apps/capabilities/question_understanding.py"
+    dto_source = (
+        BACKEND_DIR__question_understanding
+        / "apps/chatbi/models/dto/question_understanding.py"
     ).read_text(encoding="utf-8")
     graph_source = (BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/schemas/v1.py").read_text(
         encoding="utf-8"
@@ -1503,7 +1504,7 @@ def test_question_understanding_dtos_are_owned_by_chatbi():
         "QuestionUnderstandingOutput",
         "QuestionUnderstandingOutcome",
     ):
-        assert f"class {class_name}" not in agent_source
+        assert f"class {class_name}" in dto_source
 
     assert "QuestionClassificationOutputBase" in graph_source
     assert "QuestionRewriteProjectionOutput" in graph_source
@@ -1547,18 +1548,14 @@ def test_question_understanding_service_has_no_executor_or_infrastructure_depend
     assert "sqlmodel" not in imports
 
 
-def test_old_question_understanding_path_only_reexports_chatbi_objects():
+def test_old_question_understanding_path_has_been_removed():
     compatibility_path = "apps/capabilities/question_understanding.py"
-    compatibility_source = (BACKEND_DIR__question_understanding / compatibility_path).read_text(encoding="utf-8")
-    compatibility_imports = _imports__question_understanding(compatibility_path)
-    agent_loop_source = (BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/agent/loop.py").read_text(encoding="utf-8")
+    agent_loop_source = (
+        BACKEND_DIR__question_understanding
+        / "apps/chatbi/orchestration/agent/loop.py"
+    ).read_text(encoding="utf-8")
 
-    assert compatibility_imports == {
-        "apps.chatbi.models.dto.question_understanding",
-        "apps.chatbi.services.understanding.understanding_service",
-    }
-    assert "class QuestionUnderstandingService" not in compatibility_source
-    assert "def apply_question_understanding_clarification" not in compatibility_source
+    assert not (BACKEND_DIR__question_understanding / compatibility_path).exists()
     assert "apps.capabilities.question_understanding" not in agent_loop_source
 
 

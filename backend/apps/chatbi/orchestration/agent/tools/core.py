@@ -6,7 +6,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from apps.capabilities.time_slots import normalize_time_range
 from apps.chatbi.models import (
     ChatRecordExecutionType,
     QueryFinalReplyProjectionData,
@@ -20,13 +19,18 @@ from apps.chatbi.orchestration.agent.tools.base import (
     ToolOutput,
     json_summary,
 )
-from apps.chatbi.services import (
-    FinalReplyProjectionError,
-    QueryService,
+from apps.chatbi.services.execution import (
+    GuardedQueryService,
     ResultArtifactWriteError,
-    SemanticQueryCompileError,
+)
+from apps.chatbi.services.generation import (
+    FinalReplyProjectionError,
     project_query_final_reply,
 )
+from apps.chatbi.services.planning import (
+    SemanticQueryCompileError,
+)
+from apps.chatbi.services.understanding.time_range import normalize_time_range
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
 
@@ -352,7 +356,7 @@ class ValidateSqlTool(AgentTool):
         blocked = _execution_gate(ctx)
         if blocked:
             return blocked
-        service = ctx.query_service or QueryService(
+        service = ctx.query_service or GuardedQueryService(
             default_limit=getattr(ctx.config, "default_limit", 100),
         )
         result = service.validate_sql(

@@ -1,11 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
-
-# 旧名兼容（台账 E2）。
-ChartGenerationMessage = ModelMessage
-ChartGenerationModelChunk = ModelStreamChunk
+from apps.chatbi.models.dto.streaming import ModelMessage
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +16,7 @@ class ChartGenerationData:
     language: str
     assistant_name: str
     rule: str = ""
-    history: list[ChartGenerationMessage] = field(default_factory=list)
+    history: list[ModelMessage] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +32,4 @@ class ChartGenerationEvent:
 __all__ = [
     "ChartGenerationData",
     "ChartGenerationEvent",
-    "ChartGenerationMessage",
-    "ChartGenerationModelChunk",
 ]

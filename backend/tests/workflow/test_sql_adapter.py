@@ -2,11 +2,10 @@ import threading
 
 import pytest
 
-from apps.capabilities.schemas import ToolResult
-from apps.chatbi.models import ChatBIResultArtifactRef
+from apps.chatbi.models import ChatBIResultArtifactRef, ToolResult
 from apps.chatbi.orchestration.graph.capabilities.adapters.sql import SqlAdapter
 from apps.chatbi.orchestration.graph.capabilities.config import ChatBIConfig
-from apps.chatbi.services import ResultArtifactWriteError
+from apps.chatbi.services.execution import ResultArtifactWriteError
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.sql_compiler import SemanticSQLCompileResult
 
@@ -662,7 +661,7 @@ def test_sql_adapter_rejects_retry_when_regenerated_sql_is_same_as_failed_sql():
         )
 
 
-class FakeSqlExecuteTool:
+class FakeDatasourceQueryExecutor:
     def __init__(self, result: ToolResult) -> None:
         self.result = result
         self.payloads: list[dict] = []
@@ -691,7 +690,7 @@ class FakeResultArtifactService:
         )
 
 
-class BlockingSqlExecuteTool:
+class BlockingDatasourceQueryExecutor:
     def __init__(self) -> None:
         self.barrier = threading.Barrier(2)
         self.lock = threading.Lock()
@@ -712,7 +711,7 @@ class BlockingSqlExecuteTool:
         )
 
 
-class SelectiveFailureSqlExecuteTool:
+class SelectiveFailureDatasourceQueryExecutor:
     def run(self, payload: dict) -> ToolResult:
         if "failed" in payload["sql"]:
             return ToolResult(
@@ -726,13 +725,13 @@ class SelectiveFailureSqlExecuteTool:
         )
 
 
-class DenyPermissionAdapter:
+class DenySQLPermissionService:
     def apply(self, payload: dict) -> dict:
         return {"allowed": False, "reason": "没有数据源权限", "sql": None, "error_code": "permission_denied"}
 
 
 def test_sql_adapter_executes_sql_and_normalizes_result_rows():
-    execute_tool = FakeSqlExecuteTool(
+    execute_tool = FakeDatasourceQueryExecutor(
         ToolResult(
             success=True,
             payload={
@@ -772,7 +771,7 @@ def test_sql_adapter_executes_sql_and_normalizes_result_rows():
 
 
 def test_sql_adapter_executes_single_query_with_uniform_result_and_artifact():
-    execute_tool = FakeSqlExecuteTool(
+    execute_tool = FakeDatasourceQueryExecutor(
         ToolResult(
             success=True,
             payload={
@@ -812,7 +811,7 @@ def test_sql_adapter_executes_single_query_with_uniform_result_and_artifact():
 
 
 def test_sql_adapter_returns_stable_failure_when_artifact_write_fails():
-    execute_tool = FakeSqlExecuteTool(
+    execute_tool = FakeDatasourceQueryExecutor(
         ToolResult(success=True, payload={"fields": ["value"], "data": [{"value": 1}]})
     )
     adapter = SqlAdapter(
@@ -887,7 +886,7 @@ def test_sql_adapter_executes_cross_model_plans_as_independent_queries():
             ),
         ],
     )
-    execute_tool = FakeSqlExecuteTool(
+    execute_tool = FakeDatasourceQueryExecutor(
         ToolResult(success=True, payload={"fields": ["value"], "data": [{"value": 10}]})
     )
     adapter = SqlAdapter(
@@ -939,7 +938,7 @@ def test_sql_adapter_executes_cross_model_plans_as_independent_queries():
 
 
 def test_sql_adapter_executes_split_queries_in_parallel_and_keeps_order():
-    execute_tool = BlockingSqlExecuteTool()
+    execute_tool = BlockingDatasourceQueryExecutor()
     adapter = SqlAdapter(
         execute_tool=execute_tool,
         result_artifact_service=FakeResultArtifactService(),
@@ -980,7 +979,7 @@ def test_sql_adapter_executes_split_queries_in_parallel_and_keeps_order():
 
 def test_sql_adapter_preserves_successful_split_result_when_sibling_fails():
     adapter = SqlAdapter(
-        execute_tool=SelectiveFailureSqlExecuteTool(),
+        execute_tool=SelectiveFailureDatasourceQueryExecutor(),
         result_artifact_service=FakeResultArtifactService(),
     )
 
@@ -1007,7 +1006,7 @@ def test_sql_adapter_preserves_successful_split_result_when_sibling_fails():
 
 
 def test_sql_adapter_keeps_only_sample_rows_for_large_result():
-    execute_tool = FakeSqlExecuteTool(
+    execute_tool = FakeDatasourceQueryExecutor(
         ToolResult(
             success=True,
             payload={
@@ -1037,7 +1036,7 @@ def test_sql_adapter_keeps_only_sample_rows_for_large_result():
 
 
 def test_sql_adapter_uses_chatbi_config_sample_row_limit():
-    execute_tool = FakeSqlExecuteTool(
+    execute_tool = FakeDatasourceQueryExecutor(
         ToolResult(
             success=True,
             payload={
@@ -1067,7 +1066,7 @@ def test_sql_adapter_uses_chatbi_config_sample_row_limit():
 
 
 def test_sql_adapter_returns_failed_result_when_execute_tool_fails():
-    execute_tool = FakeSqlExecuteTool(
+    execute_tool = FakeDatasourceQueryExecutor(
         ToolResult(success=False, error_code="sql_execute_error", message="table not found")
     )
     adapter = SqlAdapter(execute_tool=execute_tool)
@@ -1091,8 +1090,8 @@ def test_sql_adapter_returns_failed_result_when_execute_tool_fails():
 
 
 def test_sql_adapter_does_not_execute_sql_when_permission_denied():
-    execute_tool = FakeSqlExecuteTool(ToolResult(success=True, payload={"fields": [], "data": []}))
-    adapter = SqlAdapter(execute_tool=execute_tool, permission_adapter=DenyPermissionAdapter())
+    execute_tool = FakeDatasourceQueryExecutor(ToolResult(success=True, payload={"fields": [], "data": []}))
+    adapter = SqlAdapter(execute_tool=execute_tool, permission_adapter=DenySQLPermissionService())
 
     result = adapter.execute(
         {
@@ -1224,7 +1223,7 @@ def test_execute_split_preserves_sub_plan_role_for_share_analysis_e2e():
         ],
     )
     # part 查询按档口分组返回 30+70，total 查询返回单行汇总 100。
-    class RoleAwareFakeSqlExecuteTool:
+    class RoleAwareFakeDatasourceQueryExecutor:
         def run(self, payload):
             sql = payload.get("sql", "")
             if "shop_name" in sql:
@@ -1245,7 +1244,7 @@ def test_execute_split_preserves_sub_plan_role_for_share_analysis_e2e():
 
     adapter = SqlAdapter(
         schema_provider=FakeDatasetSchemaProvider(schema),
-        execute_tool=RoleAwareFakeSqlExecuteTool(),
+        execute_tool=RoleAwareFakeDatasourceQueryExecutor(),
     )
 
     # Step 1: generate_split with role-annotated sub_plans.

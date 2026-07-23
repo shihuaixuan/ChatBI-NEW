@@ -10,11 +10,11 @@ from apps.chatbi.models import (
     DatasourceSelectionCandidate,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
-    DatasourceSelectionMessage,
-    DatasourceSelectionModelChunk,
+    ModelMessage,
+    ModelStreamChunk,
 )
-from apps.chatbi.services import (
-    ChatRecordService,
+from apps.chatbi.services.conversation import ChatRecordService
+from apps.chatbi.services.planning import (
     DatasourceSelectionError,
     DatasourceSelectionService,
 )
@@ -27,23 +27,23 @@ class FakePromptBuilder:
     def build(
         self,
         data: DatasourceSelectionData,
-    ) -> list[DatasourceSelectionMessage]:
+    ) -> list[ModelMessage]:
         self.data = data
         return [
-            DatasourceSelectionMessage(role="system", content=data.language),
-            DatasourceSelectionMessage(role="human", content=data.question),
+            ModelMessage(role="system", content=data.language),
+            ModelMessage(role="human", content=data.question),
         ]
 
 
 class FakeModelClient:
-    def __init__(self, chunks: list[DatasourceSelectionModelChunk]) -> None:
+    def __init__(self, chunks: list[ModelStreamChunk]) -> None:
         self.chunks = chunks
-        self.messages: list[DatasourceSelectionMessage] | None = None
+        self.messages: list[ModelMessage] | None = None
 
     def stream(
         self,
-        messages: list[DatasourceSelectionMessage],
-    ) -> Iterator[DatasourceSelectionModelChunk]:
+        messages: list[ModelMessage],
+    ) -> Iterator[ModelStreamChunk]:
         self.messages = messages
         yield from self.chunks
 
@@ -163,12 +163,12 @@ def test_single_candidate_is_selected_without_prompt_or_model():
 def test_model_selection_streams_and_parses_first_valid_object():
     model = FakeModelClient(
         [
-            DatasourceSelectionModelChunk(
+            ModelStreamChunk(
                 content="选择结果：```json\n",
                 reasoning_content="分析候选",
                 token_usage={"input_tokens": 3},
             ),
-            DatasourceSelectionModelChunk(
+            ModelStreamChunk(
                 content='{"id":101}\n```',
                 token_usage={"total_tokens": 7},
             ),
@@ -198,7 +198,7 @@ def test_invalid_model_selection_returns_completed_error(
     error: str,
 ):
     service, _, _, _ = _service(
-        FakeModelClient([DatasourceSelectionModelChunk(content=content)])
+        FakeModelClient([ModelStreamChunk(content=content)])
     )
 
     completed = list(service.generate(_data()))[-1]

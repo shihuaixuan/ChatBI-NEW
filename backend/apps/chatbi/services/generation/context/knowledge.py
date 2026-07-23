@@ -66,7 +66,7 @@ class GenerationContextService:
         return json.dumps(items, ensure_ascii=False), items
 
 
-class GenerationCustomPromptProvider(Protocol):
+class GenerationCustomPromptClient(Protocol):
     def is_enabled(self) -> bool: ...
 
     def find(
@@ -78,7 +78,7 @@ class GenerationCustomPromptProvider(Protocol):
 class GenerationCustomPromptService:
     """通过稳定端口读取生成流程使用的自定义提示词。"""
 
-    def __init__(self, provider: GenerationCustomPromptProvider) -> None:
+    def __init__(self, provider: GenerationCustomPromptClient) -> None:
         self._provider = provider
         self._enabled = provider.is_enabled()
 
@@ -97,6 +97,6 @@ class GenerationCustomPromptService:
 
 __all__ = [
     "GenerationContextService",
-    "GenerationCustomPromptProvider",
+    "GenerationCustomPromptClient",
     "GenerationCustomPromptService",
 ]

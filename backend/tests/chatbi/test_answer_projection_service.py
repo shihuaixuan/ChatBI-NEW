@@ -1,7 +1,7 @@
 import json
 
 from apps.chatbi.models import AnswerProjectionData
-from apps.chatbi.services import project_answer_context
+from apps.chatbi.services.generation import project_answer_context
 
 
 def test_answer_projection_applies_plan_result_and_error_whitelists():

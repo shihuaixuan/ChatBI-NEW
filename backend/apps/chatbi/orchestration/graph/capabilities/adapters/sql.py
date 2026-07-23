@@ -3,8 +3,6 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from apps.capabilities.sql.repair import SQLRepairStrategy
-from apps.capabilities.sql.validator import SqlValidateTool
 from apps.chatbi.models import (
     ChatRecordExecutionType,
     ResultArtifactWriteData,
@@ -13,7 +11,10 @@ from apps.chatbi.models import (
 )
 from apps.chatbi.orchestration.graph.capabilities import planning
 from apps.chatbi.orchestration.graph.capabilities.adapters.permission import (
-    PermissionAdapter,
+    SQLPermissionService,
+)
+from apps.chatbi.orchestration.graph.capabilities.adapters.sql_repair import (
+    SQLRepairStrategy,
 )
 from apps.chatbi.orchestration.graph.capabilities.config import ChatBIConfig
 from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContext
@@ -23,12 +24,15 @@ from apps.chatbi.orchestration.graph.capabilities.execution import (
     build_execution_output,
     validate_execution_output,
 )
-from apps.chatbi.services import (
-    QueryService,
+from apps.chatbi.services.execution import (
+    GuardedQueryService,
     ResultArtifactService,
     ResultArtifactWriteError,
-    SemanticQueryService,
     SQLExecutor,
+)
+from apps.chatbi.services.execution.sql_validator import SqlValidateTool
+from apps.chatbi.services.planning import (
+    SemanticCompilationService,
 )
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.semantic.services.sql_compilation_service import (
@@ -48,25 +52,25 @@ class SqlAdapter:
         compiler: SemanticSQLCompiler | None = None,
         execute_tool: SQLExecutor | None = None,
         validate_tool: SqlValidateTool | None = None,
-        permission_adapter: PermissionAdapter | None = None,
+        permission_adapter: SQLPermissionService | None = None,
         repair_strategy: SQLRepairStrategy | None = None,
         result_artifact_service: ResultArtifactService | None = None,
         sample_row_limit: int | None = None,
         max_parallel_queries: int | None = None,
         config: ChatBIConfig | None = None,
-        query_service: QueryService | None = None,
-        semantic_query_service: SemanticQueryService | None = None,
+        query_service: GuardedQueryService | None = None,
+        semantic_query_service: SemanticCompilationService | None = None,
     ) -> None:
         config = config or ChatBIConfig()
         self._semantic_query_service = semantic_query_service
         if self._semantic_query_service is None and schema_provider is not None:
-            self._semantic_query_service = SemanticQueryService(
+            self._semantic_query_service = SemanticCompilationService(
                 SemanticSQLCompilationService(
                     schema_provider,
                     compiler or SemanticSQLCompiler(),
                 )
             )
-        self._permission_adapter = permission_adapter or PermissionAdapter()
+        self._permission_adapter = permission_adapter or SQLPermissionService()
         self._repair_strategy = repair_strategy or SQLRepairStrategy()
         self._result_artifact_service = result_artifact_service
         self._sample_row_limit = max(
@@ -77,7 +81,7 @@ class SqlAdapter:
             max_parallel_queries if max_parallel_queries is not None else config.sql_max_parallel_queries,
             1,
         )
-        self._query_service = query_service or QueryService(
+        self._query_service = query_service or GuardedQueryService(
             sample_rows=self._sample_row_limit,
             permission_service=self._permission_adapter,
             validate_tool=validate_tool,

@@ -23,9 +23,9 @@
 | B1 | `apps/chat/curd/chat.py` | 写侧转发已删；读侧已迁 `chatbi/api/legacy_read.py`；Dashboard 改走 ChatBI 公开面并销账基线 | 旧 Chat 内部、dashboard | R3-d 内部调用方清零 | R3-d | 已清 |
 | B2 | `apps/chat/models/chat_model.py`（除 A7 外） | 运行时内部 Chat/ChatRecord/DTO 旧路径调用已全部切到 `apps.chatbi.models`；兼容契约测试与外部 xpack 依赖并入 A7 管理 | 历史 common 调用（已清）、兼容契约测试、sqlbot_xpack | 运行时内部调用清零；外部删除条件见 A7 | R3-d | 已清 |
 | B3 | `apps/chat/task/external_datasource.py` | 旧路径已删除，能力随旧流程迁入 `chatbi/api/legacy_external_datasource.py` | `chatbi/api/legacy_chat_flow.py` | 旧 Chat 包内调用清零 | R3-d | 已清 |
-| B4 | `apps/capabilities/question_understanding.py`、`time_slots.py` | ChatBI 同一身份兼容导出 | 旧测试与历史导入 | 调用方切 `apps.chatbi.services` | R4-d | 活跃 |
-| B5 | `apps/capabilities/semantic/compile.py`、`retrieval.py` | 兼容函数转发至 Semantic/ChatBI 公开服务 | 旧测试与历史导入 | 同上 | R4-d | 活跃 |
-| B6 | `apps/capabilities/sql/`、`apps/capabilities/schemas.py` | R1-c 起 schemas/validator/permission/execution_gateway 均为**纯转发桩**（实现已迁入 chatbi models/execution/adapters）；executor.py、repair.py 为 Graph 调用方持有的活代码 | `chatbi/orchestration/graph`、旧测试 | validator/repair 归位并切换剩余调用方后整目录删除 | R4-d | 活跃 |
+| B4 | 原 `apps/capabilities/question_understanding.py`、`time_slots.py` | 调用方已改用 ChatBI understanding 子域，兼容导出随目录删除 | 无 | 调用方切 ChatBI 子域公开入口 | R4-d | 已清 |
+| B5 | 原 `apps/capabilities/semantic/compile.py`、`retrieval.py` | 调用方已改用 planning / retrieval 公开服务，兼容函数删除 | 无 | 调用方切公开 Service | R4-d | 已清 |
+| B6 | 原 `apps/capabilities/sql/`、`apps/capabilities/schemas.py` | validator、执行器与 ToolResult 使用既有 ChatBI 所有者；repair 迁入 Graph 适配器 | 无 | validator/repair 归位并切换剩余调用方后整目录删除 | R4-d | 已清 |
 | B7 | 原 `apps/workflow/capabilities/adapters/intent_validation.py`、`time_slots.py` | Graph 已直接调用 ChatBI Service，兼容导出随目录迁移删除 | 无 | Graph 调用方已切换 | R4-c | 已清 |
 | B8 | `apps/retrieval/models/__init__.py`（包转发）、`apps/retrieval/schemas.py` | 旧路径转发新 orm/dto（守卫已禁运行时新用） | 历史导入 | 调用方核对为零 | R6 | 活跃 |
 | B9 | `apps/datasource/models/datasource.py` | Datasource 对象导入兼容 | 历史导入 | 调用方核对为零 | R6 | 活跃 |
@@ -48,17 +48,17 @@
 | D2 | `apps/data_training/`（见 A2） | 3 文件 21 行 | 同 A2 | R6 | 活跃 |
 | D3 | `apps/settings/models`、`schemas` 旧术语模型 | 无运行时引用，疑似未提交工作区内容（P1 登记待确认） | 与作者确认后删除 | R6 | 待确认 |
 | D4 | `apps/swagger/` | 接口国际化支持 | 迁 common/接口层 | R6 | 活跃 |
-| D5 | `apps/template/` | 提示词模板（**被 chatbi/adapters 活跃引用，非转发**） | R4-d 迁入 `chatbi/adapters/prompts/` | R4-d | 活跃 |
-| D6 | `apps/system/` 残余（api/parameter、composition、repository、services） | 平台参数新实现暂驻 system | R4-d 迁至平台配置归属目录 | R4-d | 活跃 |
+| D5 | 原 `apps/template/` | YAML 读取与生成器已迁入 `chatbi/adapters/prompts/`，旧目录删除 | R4-d 迁入 `chatbi/adapters/prompts/` | R4-d | 已清 |
+| D6 | 原 `apps/system/` 参数模块（api/parameter、composition、repository、services） | 已迁入 `apps/platform_config/`，旧模块删除 | R4-d 迁至平台配置归属目录 | R4-d | 已清 |
 
 ## E. 迁移期新增（R1 起在此登记，初始为空）
 
 | # | 路径 | 内容 | 调用方 | 删除条件 | 目标阶段 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| E1 | `apps/chatbi/services/__init__.py` | R1-a 起降级为兼容导出层（旧符号 → 子域包新位置） | agent/workflow/chat/composition 等既有调用方 | 调用方改从子域包导入 | R4-d | 活跃 |
-| E2 | 5 套流式 DTO 旧名别名（`{X}Message`/`{X}ModelChunk` → streaming 共享 DTO）、7 个旧 Client 协议名别名（generation/ports.py）、5 个旧 LangChain 客户端类名别名（各 adapter 文件） | R2 统一产生 | llm.py、旧测试、adapters | 调用方改用共享名 | R4-d | 活跃 |
-| E3 | `understanding/model_invocation.py` 中 `QuestionModelService = StructuredModelService` 别名 | 类改名的旧名兼容 | question.py、composition、旧测试 | 调用方改用 `StructuredModelService` | R4-d | 活跃 |
+| E1 | `apps/chatbi/services/__init__.py` | 兼容导出已删除，文件只标识子域导航；调用方均从具体子域导入 | 无 | 调用方改从子域包导入 | R4-d | 已清 |
+| E2 | 原 5 套流式 DTO 旧名、7 个旧 Client 协议名、5 个旧 LangChain 客户端类名 | 旧别名删除，调用方统一使用 ModelMessage / ModelStreamChunk / GenerationModelClient / LangChainGenerationModelClient | 无 | 调用方改用共享名 | R4-d | 已清 |
+| E3 | 原 `QuestionModelService = StructuredModelService` 别名 | 旧名删除，调用方统一使用 `StructuredModelService` | 无 | 调用方改用 `StructuredModelService` | R4-d | 已清 |
 | E4 | 原 `understanding/graph_contracts.py` 中 `QuestionIntentValidationService` 薄包装类 | Graph 与测试已直接调用 `validate_intent()`、`intent_retry_feedback()` | 无 | B7 删除时一并清偿 | R4-c | 已清 |
-| E5 | `execution/guarded_query_service.py` 中 `QueryService = GuardedQueryService` 别名 | 类改名旧名兼容 | agent/workflow/legacy 调用方 | 调用方改用新名 | R4-d | 活跃 |
-| E6 | `planning/semantic_compilation.py` 中 `SemanticQueryService = SemanticCompilationService` 别名 | 类改名旧名兼容 | 同上 | 同上 | R4-d | 活跃 |
-| E7 | `generation/context/schema_context.py` 中 `GenerationSchemaContextService = SchemaContextService` 别名 | 类改名旧名兼容 | composition、llm.py、旧测试 | 调用方改用新名 | R4-d | 活跃 |
+| E5 | 原 `QueryService = GuardedQueryService` 别名 | 旧名删除；运行时调用方统一使用 `GuardedQueryService`，Agent 工具局部 Protocol 不属于该别名 | 无 | 调用方改用新名 | R4-d | 已清 |
+| E6 | 原 `SemanticQueryService = SemanticCompilationService` 别名 | 旧名删除，调用方统一使用 `SemanticCompilationService` | 无 | 同上 | R4-d | 已清 |
+| E7 | 原 `GenerationSchemaContextService = SchemaContextService` 别名 | 旧名删除，调用方统一使用 `SchemaContextService` | 无 | 调用方改用新名 | R4-d | 已清 |

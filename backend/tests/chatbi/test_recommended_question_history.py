@@ -5,7 +5,7 @@ from sqlmodel import Session
 
 from apps.chatbi.models import ChatRecord
 from apps.chatbi.repository.sqlmodel import (
-    SQLModelRecommendedQuestionHistoryProvider,
+    SQLModelRecommendedQuestionHistoryRepository,
 )
 from common.core.db import engine
 
@@ -56,7 +56,7 @@ def test_history_provider_returns_recent_successful_questions_only():
         )
         session.commit()
 
-        provider = SQLModelRecommendedQuestionHistoryProvider(session)
+        provider = SQLModelRecommendedQuestionHistoryRepository(session)
 
         assert provider.list_recent(datasource_id, limit=2) == [
             "最新问题",

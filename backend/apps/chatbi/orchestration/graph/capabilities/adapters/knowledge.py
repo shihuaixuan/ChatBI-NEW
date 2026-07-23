@@ -9,9 +9,7 @@ from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContex
 from apps.chatbi.orchestration.graph.capabilities.interactions import (
     apply_slot_response_to_intent,
 )
-from apps.chatbi.services import (
-    SemanticRetrievalService,
-)
+from apps.chatbi.services.planning import SemanticRetrievalService
 from apps.retrieval.errors import RetrievalConfigurationError, RetrievalQueryError
 from apps.retrieval.service import RetrievalService
 

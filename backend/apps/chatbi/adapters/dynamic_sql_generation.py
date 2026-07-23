@@ -6,12 +6,10 @@ from typing import cast
 
 from langchain.chat_models.base import BaseChatModel
 
-from apps.chatbi.adapters.langchain import (
-    LangChainGenerationModelClient as LangChainSQLGenerationModelClient,
-)
-from apps.chatbi.models import DynamicSQLGenerationData, SQLGenerationMessage
-from apps.chatbi.services import DynamicSQLGenerationService
-from apps.template.generate_dynamic.generator import get_dynamic_template
+from apps.chatbi.adapters.langchain import LangChainGenerationModelClient
+from apps.chatbi.adapters.prompts import get_dynamic_template
+from apps.chatbi.models import DynamicSQLGenerationData, ModelMessage
+from apps.chatbi.services.generation import DynamicSQLGenerationService
 
 
 class TemplateDynamicSQLGenerationPromptBuilder:
@@ -20,7 +18,7 @@ class TemplateDynamicSQLGenerationPromptBuilder:
     def build(
         self,
         data: DynamicSQLGenerationData,
-    ) -> list[SQLGenerationMessage]:
+    ) -> list[ModelMessage]:
         template_loader = cast(
             Callable[[], dict[str, str]],
             get_dynamic_template,
@@ -31,7 +29,7 @@ class TemplateDynamicSQLGenerationPromptBuilder:
             for mapping in data.subqueries
         ]
         return [
-            SQLGenerationMessage(
+            ModelMessage(
                 role="system",
                 content=template["system"].format(
                     lang=data.language,
@@ -40,7 +38,7 @@ class TemplateDynamicSQLGenerationPromptBuilder:
                 ),
                 system_context=True,
             ),
-            SQLGenerationMessage(
+            ModelMessage(
                 role="human",
                 content=template["user"].format(
                     sql=data.sql,
@@ -57,7 +55,7 @@ def build_dynamic_sql_generation_service(
 
     return DynamicSQLGenerationService(
         prompt_builder=TemplateDynamicSQLGenerationPromptBuilder(),
-        model_client=LangChainSQLGenerationModelClient(llm),
+        model_client=LangChainGenerationModelClient(llm),
     )
 
 

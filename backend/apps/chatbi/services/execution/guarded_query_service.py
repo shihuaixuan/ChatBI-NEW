@@ -166,7 +166,4 @@ def numeric_stats(
     return stats
 
 
-# 旧名兼容（台账 E1）。
-QueryService = GuardedQueryService
-
-__all__ = ["GuardedQueryService", "QueryService", "SQLExecutor", "numeric_stats"]
+__all__ = ["GuardedQueryService", "SQLExecutor", "numeric_stats"]

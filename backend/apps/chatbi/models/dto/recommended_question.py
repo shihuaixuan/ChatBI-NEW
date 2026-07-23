@@ -1,8 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
-
 
 @dataclass(frozen=True, slots=True)
 class RecommendedQuestionGenerationData:
@@ -17,11 +15,6 @@ class RecommendedQuestionGenerationData:
     articles_number: int = 4
 
 
-# 旧名兼容（台账 E2）。
-RecommendedQuestionMessage = ModelMessage
-RecommendedQuestionModelChunk = ModelStreamChunk
-
-
 @dataclass(frozen=True, slots=True)
 class RecommendedQuestionGenerationEvent:
     kind: Literal["chunk", "completed"]
@@ -34,6 +27,4 @@ class RecommendedQuestionGenerationEvent:
 __all__ = [
     "RecommendedQuestionGenerationData",
     "RecommendedQuestionGenerationEvent",
-    "RecommendedQuestionMessage",
-    "RecommendedQuestionModelChunk",
 ]

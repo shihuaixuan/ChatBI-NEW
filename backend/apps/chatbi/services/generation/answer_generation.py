@@ -19,9 +19,7 @@ from apps.chatbi.models.dto.question_model import (
     QuestionModelJSONMode,
     QuestionModelResponse,
 )
-from apps.chatbi.services.understanding.model_invocation import (
-    StructuredModelService as QuestionModelService,
-)
+from apps.chatbi.services.understanding.model_invocation import StructuredModelService
 
 
 class AnswerModelClient(Protocol):
@@ -53,7 +51,7 @@ class CallableAnswerModelClient:
 class AnswerGenerationService:
     """调用统一模型边界并输出稳定回答或明确降级结果。"""
 
-    def __init__(self, question_model_service: QuestionModelService) -> None:
+    def __init__(self, question_model_service: StructuredModelService) -> None:
         self._question_model_service = question_model_service
 
     def generate(self, data: AnswerGenerationData) -> AnswerGenerationResult:

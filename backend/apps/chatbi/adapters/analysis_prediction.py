@@ -7,15 +7,14 @@ from langchain.chat_models.base import BaseChatModel
 from sqlmodel import Session
 
 from apps.chatbi.adapters.langchain import LangChainGenerationModelClient
+from apps.chatbi.adapters.prompts import get_analysis_template, get_predict_template
 from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
-    AnalysisPredictionMessage,
     ChatRecordAuxiliaryType,
+    ModelMessage,
 )
-from apps.chatbi.services import AnalysisPredictionService
-from apps.template.generate_analysis.generator import get_analysis_template
-from apps.template.generate_predict.generator import get_predict_template
+from apps.chatbi.services.generation import AnalysisPredictionService
 
 
 class TemplateAnalysisPredictionPromptBuilder:
@@ -24,7 +23,7 @@ class TemplateAnalysisPredictionPromptBuilder:
     def build(
         self,
         data: AnalysisPredictionGenerationData,
-    ) -> list[AnalysisPredictionMessage]:
+    ) -> list[ModelMessage]:
         if data.generation_type is ChatRecordAuxiliaryType.ANALYSIS:
             template_loader = cast(
                 Callable[[], dict[str, str]],
@@ -49,8 +48,8 @@ class TemplateAnalysisPredictionPromptBuilder:
                 sqlbot_name=data.assistant_name,
             )
         return [
-            AnalysisPredictionMessage(role="system", content=system_content),
-            AnalysisPredictionMessage(
+            ModelMessage(role="system", content=system_content),
+            ModelMessage(
                 role="human",
                 content=template["user"].format(
                     fields=data.fields,
@@ -58,10 +57,6 @@ class TemplateAnalysisPredictionPromptBuilder:
                 ),
             ),
         ]
-
-
-# 共享客户端（R2 合并）；旧名保留（台账 E2）。
-LangChainAnalysisPredictionModelClient = LangChainGenerationModelClient
 
 
 def build_analysis_prediction_service(
@@ -72,13 +67,12 @@ def build_analysis_prediction_service(
 
     return AnalysisPredictionService(
         prompt_builder=TemplateAnalysisPredictionPromptBuilder(),
-        model_client=LangChainAnalysisPredictionModelClient(llm),
+        model_client=LangChainGenerationModelClient(llm),
         chat_record_service=build_chat_record_service(session),
     )
 
 
 __all__ = [
-    "LangChainAnalysisPredictionModelClient",
     "TemplateAnalysisPredictionPromptBuilder",
     "build_analysis_prediction_service",
 ]

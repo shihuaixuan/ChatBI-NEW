@@ -4,7 +4,8 @@ from xml.dom.minidom import parseString
 import dicttoxml  # type: ignore[import-untyped]
 
 from apps.knowledge.repository import SQLExampleRepository, SQLExampleRetrievalSearch
-from apps.template.generate_chart.generator import get_base_data_training_template
+
+_DATA_TRAINING_TEMPLATE = "\n{data_training}\n"
 
 
 class SQLExampleQueryService:
@@ -70,9 +71,7 @@ class SQLExampleQueryService:
             return "", []
         content = self._to_xml(examples)
         return (
-            get_base_data_training_template().format(  # type: ignore[no-untyped-call]
-                data_training=content
-            ),
+            _DATA_TRAINING_TEMPLATE.format(data_training=content),
             examples,
         )
 

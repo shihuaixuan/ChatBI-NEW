@@ -1,6 +1,6 @@
 from apps.chatbi.adapters import sql_generation
 from apps.chatbi.adapters.sql_generation import TemplateSQLGenerationPromptBuilder
-from apps.chatbi.models import SQLGenerationData, SQLGenerationMessage
+from apps.chatbi.models import ModelMessage, SQLGenerationData
 
 
 def _base_template() -> dict[str, str]:
@@ -63,8 +63,8 @@ def _data(*, enable_query_limit: bool = True) -> SQLGenerationData:
         change_title=True,
         regenerate=True,
         history=[
-            SQLGenerationMessage(role="human", content="历史问题"),
-            SQLGenerationMessage(role="ai", content="历史回答"),
+            ModelMessage(role="human", content="历史问题"),
+            ModelMessage(role="ai", content="历史回答"),
         ],
     )
 

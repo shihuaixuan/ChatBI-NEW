@@ -1,8 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from apps.chatbi.models.dto.chart_generation import ChartGenerationMessage
-from apps.chatbi.models.dto.sql_generation import SQLGenerationMessage
+from apps.chatbi.models.dto.streaming import ModelMessage
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,8 +26,8 @@ class GenerationHistoryProjectionData:
 class GenerationHistoryProjectionResult:
     """可直接传入 SQL 与图表生成流程的历史消息。"""
 
-    sql_history: list[SQLGenerationMessage] = field(default_factory=list)
-    chart_history: list[ChartGenerationMessage] = field(default_factory=list)
+    sql_history: list[ModelMessage] = field(default_factory=list)
+    chart_history: list[ModelMessage] = field(default_factory=list)
 
 
 __all__ = [

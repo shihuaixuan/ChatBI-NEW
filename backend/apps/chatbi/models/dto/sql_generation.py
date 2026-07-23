@@ -1,11 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
-
-# 旧名兼容（台账 E2）：Message/Chunk 已统一到 streaming 共享 DTO。
-SQLGenerationMessage = ModelMessage
-SQLGenerationModelChunk = ModelStreamChunk
+from apps.chatbi.models.dto.streaming import ModelMessage
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +25,7 @@ class SQLGenerationData:
     enable_query_limit: bool = True
     change_title: bool = False
     regenerate: bool = False
-    history: list[SQLGenerationMessage] = field(default_factory=list)
+    history: list[ModelMessage] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +49,5 @@ class SQLGenerationEvent:
 __all__ = [
     "SQLGenerationData",
     "SQLGenerationEvent",
-    "SQLGenerationMessage",
-    "SQLGenerationModelChunk",
     "SQLGenerationResult",
 ]

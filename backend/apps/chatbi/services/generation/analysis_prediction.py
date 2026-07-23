@@ -7,9 +7,9 @@ import orjson
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
     AnalysisPredictionGenerationEvent,
-    AnalysisPredictionMessage,
     ChatRecordAuxiliaryProjection,
     ChatRecordAuxiliaryType,
+    ModelMessage,
 )
 from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 from apps.chatbi.services.generation.ports import (
@@ -39,7 +39,7 @@ class AnalysisPredictionService:
     def prepare(
         self,
         data: AnalysisPredictionGenerationData,
-    ) -> list[AnalysisPredictionMessage]:
+    ) -> list[ModelMessage]:
         self._validate_data(data)
         messages = self._prompt_builder.build(data)
         self._validate_messages(messages)
@@ -48,7 +48,7 @@ class AnalysisPredictionService:
     def generate(
         self,
         data: AnalysisPredictionGenerationData,
-        messages: list[AnalysisPredictionMessage] | None = None,
+        messages: list[ModelMessage] | None = None,
     ) -> Iterator[AnalysisPredictionGenerationEvent]:
         self._validate_data(data)
         prepared_messages = self.prepare(data) if messages is None else messages
@@ -86,7 +86,7 @@ class AnalysisPredictionService:
             raise ValueError("ANALYSIS_PREDICTION_TYPE_INVALID")
 
     @staticmethod
-    def _validate_messages(messages: list[AnalysisPredictionMessage]) -> None:
+    def _validate_messages(messages: list[ModelMessage]) -> None:
         if not messages or any(not message.content.strip() for message in messages):
             raise ValueError("ANALYSIS_PREDICTION_PROMPT_INVALID")
 

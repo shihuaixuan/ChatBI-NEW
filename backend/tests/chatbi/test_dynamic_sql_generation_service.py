@@ -7,11 +7,11 @@ import pytest
 from apps.chatbi.models import (
     DynamicSQLGenerationData,
     DynamicSQLSubqueryMapping,
-    SQLGenerationMessage,
-    SQLGenerationModelChunk,
+    ModelMessage,
+    ModelStreamChunk,
     SQLGenerationResult,
 )
-from apps.chatbi.services import (
+from apps.chatbi.services.generation import (
     DynamicSQLGenerationError,
     DynamicSQLGenerationService,
 )
@@ -24,23 +24,23 @@ class FakePromptBuilder:
     def build(
         self,
         data: DynamicSQLGenerationData,
-    ) -> list[SQLGenerationMessage]:
+    ) -> list[ModelMessage]:
         self.data = data
         return [
-            SQLGenerationMessage(role="system", content=data.engine),
-            SQLGenerationMessage(role="human", content=data.sql),
+            ModelMessage(role="system", content=data.engine),
+            ModelMessage(role="human", content=data.sql),
         ]
 
 
 class FakeModelClient:
-    def __init__(self, chunks: list[SQLGenerationModelChunk]) -> None:
+    def __init__(self, chunks: list[ModelStreamChunk]) -> None:
         self.chunks = chunks
-        self.messages: list[SQLGenerationMessage] | None = None
+        self.messages: list[ModelMessage] | None = None
 
     def stream(
         self,
-        messages: list[SQLGenerationMessage],
-    ) -> Iterator[SQLGenerationModelChunk]:
+        messages: list[ModelMessage],
+    ) -> Iterator[ModelStreamChunk]:
         self.messages = messages
         yield from self.chunks
 
@@ -94,12 +94,12 @@ def test_prepare_builds_messages_from_dynamic_sql_data():
 def test_generate_streams_chunks_and_reuses_sql_result_parser():
     model = FakeModelClient(
         [
-            SQLGenerationModelChunk(
+            ModelStreamChunk(
                 content="```json\n",
                 reasoning_content="识别需要替换的表",
                 token_usage={"input_tokens": 5},
             ),
-            SQLGenerationModelChunk(
+            ModelStreamChunk(
                 content=(
                     '{"success":true,"sql":"SELECT * FROM '
                     'sqlbot_dynamic_subsql_orders"}\n```'
@@ -135,7 +135,7 @@ def test_invalid_model_result_returns_completed_error(
     message: str,
 ):
     service, _, _ = _service(
-        FakeModelClient([SQLGenerationModelChunk(content=content)])
+        FakeModelClient([ModelStreamChunk(content=content)])
     )
 
     completed = list(service.generate(_data()))[-1]
@@ -187,7 +187,7 @@ def test_explicit_empty_or_blank_messages_are_rejected():
 
     for messages in (
         [],
-        [SQLGenerationMessage(role="human", content=" ")],
+        [ModelMessage(role="human", content=" ")],
     ):
         with pytest.raises(
             DynamicSQLGenerationError,

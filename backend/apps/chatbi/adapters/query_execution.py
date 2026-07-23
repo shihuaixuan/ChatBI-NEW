@@ -3,7 +3,10 @@ from __future__ import annotations
 from typing import Any, cast
 
 from apps.chatbi.models.dto.tool_result import ToolResult
-from apps.chatbi.services import QueryService, SQLPermissionService
+from apps.chatbi.services.execution import (
+    GuardedQueryService,
+    SQLPermissionService,
+)
 from apps.datasource import DatasourceConnection
 from apps.datasource.database import exec_sql
 from common.error import ParseSQLResultError
@@ -58,10 +61,10 @@ def build_legacy_chat_query_service(
     connection: DatasourceConnection,
     *,
     enable_query_limit: bool,
-) -> QueryService:
+) -> GuardedQueryService:
     """装配旧 Chat 使用的统一查询入口。"""
 
-    return QueryService(
+    return GuardedQueryService(
         default_limit=1000 if enable_query_limit else None,
         sample_rows=0,
         # 旧 Chat 在进入执行阶段前已经通过统一权限 SQL 生成服务完成改写。

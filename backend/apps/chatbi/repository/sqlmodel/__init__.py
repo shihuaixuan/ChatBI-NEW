@@ -5,14 +5,14 @@ from apps.chatbi.repository.sqlmodel.conversation_repository import (
     SQLModelConversationRepository,
 )
 from apps.chatbi.repository.sqlmodel.recommended_question_history import (
-    SQLModelRecommendedQuestionHistoryProvider,
+    SQLModelRecommendedQuestionHistoryRepository,
 )
 
 __all__ = [
     "AgentExecutionDeletionService",
     "SQLModelChatRecordRepository",
     "SQLModelConversationRepository",
-    "SQLModelRecommendedQuestionHistoryProvider",
+    "SQLModelRecommendedQuestionHistoryRepository",
     "agent_run_repository",
 ]
 from apps.chatbi.repository.sqlmodel import agent_run_repository

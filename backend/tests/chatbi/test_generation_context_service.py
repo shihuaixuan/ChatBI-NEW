@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from apps.chatbi.models import GenerationContextScope
-from apps.chatbi.services import GenerationContextService
+from apps.chatbi.services.generation import GenerationContextService
 from apps.knowledge.services import SQLExampleQueryService
 from apps.semantic.services import SemanticTermQueryService
 

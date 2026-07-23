@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from apps.chatbi.models import SemanticRetrievalData
-from apps.chatbi.services import SemanticRetrievalService
+from apps.chatbi.services.planning import SemanticRetrievalService
 
 
 class RecordingRetrievalGateway:

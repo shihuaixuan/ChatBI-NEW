@@ -1,10 +1,9 @@
 from apps.chatbi.models import (
-    ChartGenerationMessage,
     GenerationHistoryLog,
     GenerationHistoryProjectionData,
-    SQLGenerationMessage,
+    ModelMessage,
 )
-from apps.chatbi.services import project_generation_history
+from apps.chatbi.services.generation import project_generation_history
 
 
 def test_projection_uses_latest_log_and_last_requested_round():
@@ -49,12 +48,12 @@ def test_projection_uses_latest_log_and_last_requested_round():
     )
 
     assert result.sql_history == [
-        SQLGenerationMessage(role="human", content="last question"),
-        SQLGenerationMessage(role="ai", content="last answer"),
+        ModelMessage(role="human", content="last question"),
+        ModelMessage(role="ai", content="last answer"),
     ]
     assert result.chart_history == [
-        ChartGenerationMessage(role="human", content="chart question"),
-        ChartGenerationMessage(role="ai", content="chart answer"),
+        ModelMessage(role="human", content="chart question"),
+        ModelMessage(role="ai", content="chart answer"),
     ]
 
 

@@ -6,9 +6,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from apps.capabilities.schemas import ToolResult
-from apps.capabilities.sql.executor import SqlExecuteTool
-from apps.chatbi.models import ChatBIResultArtifactRef
+from apps.chatbi.adapters.execution import DatasourceQueryExecutor
+from apps.chatbi.models import ChatBIResultArtifactRef, ToolResult
 
 
 class SessionSqlExecutionGateway:
@@ -17,7 +16,7 @@ class SessionSqlExecutionGateway:
     def __init__(
         self,
         session_factory: Callable[[], Session],
-        execute_tool_factory: Callable[[Session], SqlExecuteTool] = SqlExecuteTool,
+        execute_tool_factory: Callable[[Session], DatasourceQueryExecutor] = DatasourceQueryExecutor,
     ) -> None:
         self._session_factory = session_factory
         self._execute_tool_factory = execute_tool_factory

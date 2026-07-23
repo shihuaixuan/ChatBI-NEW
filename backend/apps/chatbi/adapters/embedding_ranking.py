@@ -44,7 +44,7 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
     ) / (left_norm * right_norm)
 
 
-class EmbeddingGenerationSchemaTableRanker:
+class EmbeddingSchemaRankingClient:
     """使用系统 Embedding 模型排序物理表。"""
 
     def rank(
@@ -83,5 +83,5 @@ class EmbeddingDatasourceSelectionCandidateRanker:
 
 __all__ = [
     "EmbeddingDatasourceSelectionCandidateRanker",
-    "EmbeddingGenerationSchemaTableRanker",
+    "EmbeddingSchemaRankingClient",
 ]

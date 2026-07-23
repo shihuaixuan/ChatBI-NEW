@@ -7,7 +7,7 @@ from sqlmodel import Session
 
 from apps.chatbi.adapters import generation_custom_prompt as adapter_module
 from apps.chatbi.adapters.generation_custom_prompt import (
-    XPackGenerationCustomPromptProvider,
+    XPackGenerationCustomPromptClient,
 )
 from apps.chatbi.models import (
     GenerationCustomPromptQuery,
@@ -29,7 +29,7 @@ def test_xpack_adapter_maps_prompt_type_and_query_scope(monkeypatch):
 
     session = cast(Session, object())
     monkeypatch.setattr(adapter_module, "find_custom_prompts", fake_find)
-    provider = XPackGenerationCustomPromptProvider(session)
+    provider = XPackGenerationCustomPromptClient(session)
 
     result = provider.find(
         GenerationCustomPromptQuery(
@@ -56,6 +56,6 @@ def test_xpack_adapter_uses_license_as_availability(monkeypatch):
         staticmethod(lambda: False),
     )
 
-    provider = XPackGenerationCustomPromptProvider(cast(Session, object()))
+    provider = XPackGenerationCustomPromptClient(cast(Session, object()))
 
     assert provider.is_enabled() is False

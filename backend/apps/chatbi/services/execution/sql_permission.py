@@ -209,11 +209,7 @@ class SQLPermissionService:
         return names
 
 
-# 旧 Graph 适配器名称保留对象身份，迁移期不维护第二套实现。
-PermissionAdapter = SQLPermissionService
-
 __all__ = [
-    "PermissionAdapter",
     "PermissionTool",
     "SQLPermissionService",
 ]

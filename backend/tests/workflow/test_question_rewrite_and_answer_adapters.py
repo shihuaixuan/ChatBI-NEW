@@ -4,7 +4,6 @@ import time
 
 from apps.chatbi.orchestration.graph.capabilities.adapters.answer import (
     AnswerAdapter,
-    build_answer_generation_prompt,
     build_answer_projection,
 )
 from apps.chatbi.orchestration.graph.capabilities.adapters.question import (
@@ -25,6 +24,7 @@ from apps.chatbi.orchestration.graph.capabilities.placeholder import (
 from apps.chatbi.orchestration.graph.capabilities.real import (
     RealChatBICapabilityGateway,
 )
+from apps.chatbi.services.generation import build_answer_generation_prompt
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 

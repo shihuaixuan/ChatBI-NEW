@@ -12,7 +12,7 @@ from apps.chatbi.models import (
     ChatRecordStatus,
 )
 from apps.chatbi.repository.sqlmodel import SQLModelChatRecordRepository
-from apps.chatbi.services import ChatRecordService
+from apps.chatbi.services.conversation import ChatRecordService
 from common.core.db import engine
 
 

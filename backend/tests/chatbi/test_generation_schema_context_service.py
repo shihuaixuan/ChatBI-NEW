@@ -10,12 +10,12 @@ from apps.access_control.models.dto import (
 from apps.access_control.services import DataPolicyService
 from apps.chatbi.adapters import embedding_ranking as ranking_module
 from apps.chatbi.adapters.embedding_ranking import (
-    EmbeddingGenerationSchemaTableRanker,
+    EmbeddingSchemaRankingClient,
 )
 from apps.chatbi.models import GenerationSchemaTableCandidate
-from apps.chatbi.services import (
-    GenerationSchemaContextService,
-    GenerationSchemaTableRanker,
+from apps.chatbi.services.generation import (
+    SchemaContextService,
+    SchemaRankingClient,
 )
 from apps.datasource import DatasourceRecord, PhysicalTableDetail
 from apps.datasource.models.dto import PhysicalField, PhysicalTable
@@ -161,15 +161,15 @@ def _user() -> UserInfoDTO:
 
 def _service(
     connection_service: FakeConnectionService,
-) -> tuple[GenerationSchemaContextService, FakeTableRanker]:
+) -> tuple[SchemaContextService, FakeTableRanker]:
     ranker = FakeTableRanker()
     return (
-        GenerationSchemaContextService(
+        SchemaContextService(
             cast(DatasourceService, FakeDatasourceService()),
             cast(DatasourceMetadataService, FakeMetadataService()),
             cast(DatasourceConnectionService, connection_service),
             cast(DataPolicyService, FakeDataPolicyService()),
-            cast(GenerationSchemaTableRanker, ranker),
+            cast(SchemaRankingClient, ranker),
             embedding_enabled=True,
             embedding_limit=10,
         ),
@@ -214,7 +214,7 @@ def test_embedding_table_ranker_orders_candidates_by_similarity(monkeypatch):
         staticmethod(lambda: FakeEmbeddingModel()),
     )
 
-    result = EmbeddingGenerationSchemaTableRanker().rank(
+    result = EmbeddingSchemaRankingClient().rank(
         "客户订单",
         [
             GenerationSchemaTableCandidate(10, "[1, 0]"),

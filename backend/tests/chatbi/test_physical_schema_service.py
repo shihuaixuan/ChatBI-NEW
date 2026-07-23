@@ -1,4 +1,4 @@
-from apps.chatbi.services import PhysicalSchemaService
+from apps.chatbi.services.planning import PhysicalSchemaService
 from apps.datasource.models.dto import PhysicalField, PhysicalTable
 
 

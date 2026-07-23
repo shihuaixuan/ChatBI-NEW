@@ -90,10 +90,6 @@ class StructuredModelService:
             )
 
 
-# 兼容别名（台账 E1）：R1-a 前的公开名，R4-d 随兼容层清偿删除。
-QuestionModelService = StructuredModelService
-
-
 def _parse_strict_json(content: str, stage: str) -> dict[str, object]:
     try:
         payload = orjson.loads(content)
@@ -129,6 +125,5 @@ def _extract_json_object(content: str, stage: str) -> dict[str, object]:
 
 __all__ = [
     "QuestionModelClient",
-    "QuestionModelService",
     "StructuredModelService",
 ]

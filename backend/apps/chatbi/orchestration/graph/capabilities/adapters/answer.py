@@ -10,17 +10,14 @@ from apps.chatbi.models import (
     FinalReplyProjectionData,
 )
 from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContext
-from apps.chatbi.services import (
+from apps.chatbi.services.generation import (
     AnswerGenerationService,
     AnswerModelClient,
     CallableAnswerModelClient,
-    QuestionModelService,
     project_answer_context,
     project_final_reply,
 )
-from apps.chatbi.services import (
-    build_answer_generation_prompt as build_answer_generation_prompt,
-)
+from apps.chatbi.services.understanding import StructuredModelService
 
 
 def build_answer_projection(request: dict[str, Any]) -> dict[str, Any]:
@@ -54,7 +51,7 @@ class AnswerAdapter:
             self._answer_generation_service = answer_generation_service
         elif model_client is not None:
             self._answer_generation_service = AnswerGenerationService(
-                QuestionModelService(CallableAnswerModelClient(model_client))
+                StructuredModelService(CallableAnswerModelClient(model_client))
             )
         else:
             self._answer_generation_service = AnswerGenerationService(

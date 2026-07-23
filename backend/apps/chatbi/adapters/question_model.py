@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from apps.ai_model.model_factory import LLMFactory, get_default_config
 from apps.chatbi.models import QuestionModelResponse
-from apps.chatbi.services import QuestionModelService
+from apps.chatbi.services.understanding import StructuredModelService
 
 
 class LangChainQuestionModelClient:
@@ -49,10 +49,10 @@ class LangChainQuestionModelClient:
         return self._llm
 
 
-def build_question_model_service() -> QuestionModelService:
+def build_question_model_service() -> StructuredModelService:
     """装配问题理解各阶段共享的默认模型客户端。"""
 
-    return QuestionModelService(LangChainQuestionModelClient())
+    return StructuredModelService(LangChainQuestionModelClient())
 
 
 def _message_content_text(message: Any) -> str:

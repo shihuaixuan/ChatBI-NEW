@@ -5,9 +5,9 @@ from collections.abc import Iterator
 from apps.chatbi.errors import PermissionSQLGenerationError, SQLGenerationError
 from apps.chatbi.models import (
     ChatRecordResultProjection,
+    ModelMessage,
     PermissionSQLGenerationData,
     SQLGenerationEvent,
-    SQLGenerationMessage,
 )
 from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 from apps.chatbi.services.generation.ports import (
@@ -39,7 +39,7 @@ class PermissionSQLGenerationService:
     def prepare(
         self,
         data: PermissionSQLGenerationData,
-    ) -> list[SQLGenerationMessage]:
+    ) -> list[ModelMessage]:
         self._validate_data(data)
         messages = self._prompt_builder.build(data)
         if not messages or any(not message.content.strip() for message in messages):
@@ -51,7 +51,7 @@ class PermissionSQLGenerationService:
     def generate(
         self,
         data: PermissionSQLGenerationData,
-        messages: list[SQLGenerationMessage] | None = None,
+        messages: list[ModelMessage] | None = None,
     ) -> Iterator[SQLGenerationEvent]:
         self._validate_data(data)
         prepared_messages = self.prepare(data) if messages is None else messages

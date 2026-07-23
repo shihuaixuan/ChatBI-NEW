@@ -1,11 +1,11 @@
 import pytest
 
+from apps.chatbi.errors import FinalReplyProjectionError
 from apps.chatbi.models import (
     FinalReplyProjectionData,
     QueryFinalReplyProjectionData,
 )
-from apps.chatbi.services import (
-    FinalReplyProjectionError,
+from apps.chatbi.services.generation import (
     project_final_reply,
     project_query_final_reply,
 )

@@ -5,7 +5,10 @@ from apps.chatbi.models import (
     ChatRecordExecutionType,
     ResultArtifactWriteData,
 )
-from apps.chatbi.services import ResultArtifactService, ResultArtifactWriteError
+from apps.chatbi.services.execution import (
+    ResultArtifactService,
+    ResultArtifactWriteError,
+)
 
 
 class RecordingArtifactGateway:

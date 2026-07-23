@@ -1,8 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
-
 
 @dataclass(frozen=True, slots=True)
 class DatasourceSelectionCandidate:
@@ -31,11 +29,6 @@ class DatasourceSelectionData:
     auto_select: bool
 
 
-# 旧名兼容（台账 E2）。
-DatasourceSelectionMessage = ModelMessage
-DatasourceSelectionModelChunk = ModelStreamChunk
-
-
 @dataclass(frozen=True, slots=True)
 class DatasourceSelectionEvent:
     kind: Literal["chunk", "completed"]
@@ -51,7 +44,5 @@ __all__ = [
     "DatasourceSelectionCandidate",
     "DatasourceSelectionData",
     "DatasourceSelectionEvent",
-    "DatasourceSelectionMessage",
-    "DatasourceSelectionModelChunk",
     "DatasourceSelectionRankingCandidate",
 ]

@@ -5,16 +5,16 @@ from collections.abc import Iterator
 import orjson
 import pytest
 
+from apps.chatbi.errors import SQLGenerationError
 from apps.chatbi.models import (
     ChatRecord,
+    ModelMessage,
+    ModelStreamChunk,
     SQLGenerationData,
-    SQLGenerationMessage,
-    SQLGenerationModelChunk,
     SQLGenerationResult,
 )
-from apps.chatbi.services import (
-    ChatRecordService,
-    SQLGenerationError,
+from apps.chatbi.services.conversation import ChatRecordService
+from apps.chatbi.services.generation import (
     SQLGenerationService,
 )
 
@@ -26,23 +26,23 @@ class FakePromptBuilder:
     def build(
         self,
         data: SQLGenerationData,
-    ) -> list[SQLGenerationMessage]:
+    ) -> list[ModelMessage]:
         self.data = data
         return [
-            SQLGenerationMessage(role="system", content=data.engine),
-            SQLGenerationMessage(role="human", content=data.question),
+            ModelMessage(role="system", content=data.engine),
+            ModelMessage(role="human", content=data.question),
         ]
 
 
 class FakeModelClient:
-    def __init__(self, chunks: list[SQLGenerationModelChunk]) -> None:
+    def __init__(self, chunks: list[ModelStreamChunk]) -> None:
         self.chunks = chunks
-        self.messages: list[SQLGenerationMessage] | None = None
+        self.messages: list[ModelMessage] | None = None
 
     def stream(
         self,
-        messages: list[SQLGenerationMessage],
-    ) -> Iterator[SQLGenerationModelChunk]:
+        messages: list[ModelMessage],
+    ) -> Iterator[ModelStreamChunk]:
         self.messages = messages
         yield from self.chunks
 
@@ -105,8 +105,8 @@ def _data(
         terminologies="销售额：已支付订单金额",
         data_training="问题：昨日销售额；SQL：SELECT ...",
         history=[
-            SQLGenerationMessage(role="human", content="上一轮问题"),
-            SQLGenerationMessage(role="ai", content='{"success":true}'),
+            ModelMessage(role="human", content="上一轮问题"),
+            ModelMessage(role="ai", content='{"success":true}'),
         ],
     )
 
@@ -153,12 +153,12 @@ def test_prepare_builds_stable_messages_from_generation_data():
 def test_generate_streams_chunks_parses_result_and_projects_answer_once():
     model = FakeModelClient(
         [
-            SQLGenerationModelChunk(
+            ModelStreamChunk(
                 content="结果：```json\n",
                 reasoning_content="先确定时间范围",
                 token_usage={"input_tokens": 8},
             ),
-            SQLGenerationModelChunk(
+            ModelStreamChunk(
                 content=(
                     '{"success":true,"sql":"SELECT SUM(sales) FROM orders",'
                     '"tables":["orders"],"chart-type":"number","brief":"本月销售额"}\n```'
@@ -190,7 +190,7 @@ def test_generate_streams_chunks_parses_result_and_projects_answer_once():
 def test_model_failure_preserves_message_and_projects_answer():
     content = '{"success":false,"message":"无法确定查询范围"}'
     service, _, _, repository = _service(
-        FakeModelClient([SQLGenerationModelChunk(content=content)])
+        FakeModelClient([ModelStreamChunk(content=content)])
     )
 
     completed = list(service.generate(_data()))[-1]
@@ -219,7 +219,7 @@ def test_invalid_model_result_returns_completed_error(
     message: str,
 ):
     service, _, _, repository = _service(
-        FakeModelClient([SQLGenerationModelChunk(content=content)])
+        FakeModelClient([ModelStreamChunk(content=content)])
     )
 
     completed = list(service.generate(_data()))[-1]
@@ -259,7 +259,7 @@ def test_explicit_empty_or_blank_messages_are_rejected():
 
     for messages in (
         [],
-        [SQLGenerationMessage(role="human", content=" ")],
+        [ModelMessage(role="human", content=" ")],
     ):
         with pytest.raises(
             SQLGenerationError,

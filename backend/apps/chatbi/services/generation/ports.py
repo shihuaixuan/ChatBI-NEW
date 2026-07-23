@@ -1,7 +1,7 @@
 """生成子域端口（AGENTS.md v2 §5：可替换技术缝）。
 
 `GenerationModelClient` 是所有生成能力共享的模型流端口；各能力仅保留自己的
-PromptBuilder。旧的按能力命名的 Client 协议名以别名保留（台账 E2）。
+PromptBuilder。
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ class DatasourceSelectionPromptBuilder(Protocol):
     def build(self, data: DatasourceSelectionData) -> list[ModelMessage]: ...
 
 
-class RecommendedQuestionHistoryProvider(Protocol):
+class RecommendedQuestionHistoryRepository(Protocol):
     def list_recent(
         self,
         datasource_id: int | None,
@@ -74,30 +74,14 @@ class RecommendedQuestionHistoryProvider(Protocol):
     ) -> list[str]: ...
 
 
-# 旧的按能力命名的 Client 协议名（台账 E2，R4-d 清偿）。
-SQLGenerationModelClient = GenerationModelClient
-DynamicSQLGenerationModelClient = GenerationModelClient
-PermissionSQLGenerationModelClient = GenerationModelClient
-ChartGenerationModelClient = GenerationModelClient
-AnalysisPredictionModelClient = GenerationModelClient
-RecommendedQuestionModelClient = GenerationModelClient
-DatasourceSelectionModelClient = GenerationModelClient
-
 __all__ = [
-    "AnalysisPredictionModelClient",
     "AnalysisPredictionPromptBuilder",
-    "ChartGenerationModelClient",
     "ChartGenerationPromptBuilder",
-    "DatasourceSelectionModelClient",
     "DatasourceSelectionPromptBuilder",
-    "DynamicSQLGenerationModelClient",
     "DynamicSQLGenerationPromptBuilder",
     "GenerationModelClient",
-    "PermissionSQLGenerationModelClient",
     "PermissionSQLGenerationPromptBuilder",
-    "RecommendedQuestionHistoryProvider",
-    "RecommendedQuestionModelClient",
+    "RecommendedQuestionHistoryRepository",
     "RecommendedQuestionPromptBuilder",
-    "SQLGenerationModelClient",
     "SQLGenerationPromptBuilder",
 ]

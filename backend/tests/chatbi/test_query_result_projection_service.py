@@ -6,8 +6,8 @@ import orjson
 import pytest
 
 from apps.chatbi.models import ChatRecord, QueryResultProjectionData
-from apps.chatbi.services import (
-    ChatRecordService,
+from apps.chatbi.services.conversation import ChatRecordService
+from apps.chatbi.services.execution import (
     QueryResultProjectionError,
     QueryResultProjectionService,
 )

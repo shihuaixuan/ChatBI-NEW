@@ -1,12 +1,12 @@
 """核心工具的守护行为测试（不依赖真实 DB/LLM）。"""
 
-from apps.capabilities.schemas import ToolResult
 from apps.chatbi.models import (
     ChatBIResultArtifactRef,
     PhysicalSchemaField,
     PhysicalSchemaResult,
     PhysicalSchemaTable,
     SemanticQueryCompileResult,
+    ToolResult,
 )
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.core import (
@@ -105,7 +105,7 @@ class RecordingResultArtifactService:
         )
 
 
-class RecordingSemanticQueryService:
+class RecordingSemanticCompilationService:
     def __init__(self) -> None:
         self.calls = []
 
@@ -268,7 +268,7 @@ def test_compile_rejects_asset_outside_package():
 
 
 def test_compile_passes_known_assets_to_capability():
-    service = RecordingSemanticQueryService()
+    service = RecordingSemanticCompilationService()
     ctx = _ctx(
         semantic_query_service=service,
         dataset_id=3,
@@ -292,7 +292,7 @@ def test_compile_normalizes_today_literal_from_confirmed_time_range():
         "offset_days": 0,
         "timezone": "Asia/Shanghai",
     }
-    service = RecordingSemanticQueryService()
+    service = RecordingSemanticCompilationService()
     ctx = _ctx(
         semantic_query_service=service,
         dataset_id=3,

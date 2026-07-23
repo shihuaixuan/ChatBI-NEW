@@ -11,7 +11,8 @@ from typing import Any, cast
 
 from sqlmodel import Session
 
-from apps.capabilities.semantic.retrieval import retrieve_semantic_assets
+from apps.chatbi.models import SemanticRetrievalData
+from apps.chatbi.services.planning import SemanticRetrievalService
 from apps.retrieval.evaluation import (
     RecordedRetrievalResult,
     RetrievalBaseline,
@@ -32,15 +33,16 @@ def _graph_result(session: Session, case: RetrievalGoldenCase) -> RecordedRetrie
 def _agent_result(session: Session, case: RetrievalGoldenCase) -> RecordedRetrievalResult:
     service = build_retrieval_service(session)
     started = time.perf_counter()
-    raw = retrieve_semantic_assets(
-        session,
-        oid=case.request.tenant_id,
-        dataset_id=case.request.scope.dataset_ids[0],
-        question=case.request.rewritten_question,
-        intent=case.request.intent.model_dump(mode="json"),
-        actor_id=case.request.actor_id,
-        request_id=case.request.request_id,
-        retrieval_service=service,
+    raw = SemanticRetrievalService(service).retrieve_for_agent(
+        SemanticRetrievalData(
+            workspace_id=case.request.tenant_id,
+            user_id=case.request.actor_id,
+            dataset_id=case.request.scope.dataset_ids[0],
+            original_question=case.request.original_question,
+            rewritten_question=case.request.rewritten_question,
+            intent=case.request.intent.model_dump(mode="json"),
+            request_id=case.request.request_id,
+        )
     )
     latency_ms = (time.perf_counter() - started) * 1000
     dense = _channel_diagnostic(raw, RetrievalChannel.DENSE)

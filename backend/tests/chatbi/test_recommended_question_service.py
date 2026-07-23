@@ -7,11 +7,12 @@ import pytest
 
 from apps.chatbi.models import (
     ChatRecord,
+    ModelMessage,
+    ModelStreamChunk,
     RecommendedQuestionGenerationData,
-    RecommendedQuestionMessage,
-    RecommendedQuestionModelChunk,
 )
-from apps.chatbi.services import ChatRecordService, RecommendedQuestionService
+from apps.chatbi.services.conversation import ChatRecordService
+from apps.chatbi.services.generation import RecommendedQuestionService
 
 
 class FakeHistoryProvider:
@@ -37,23 +38,23 @@ class FakePromptBuilder:
         self,
         data: RecommendedQuestionGenerationData,
         old_questions: list[str],
-    ) -> list[RecommendedQuestionMessage]:
+    ) -> list[ModelMessage]:
         self.old_questions = old_questions
         return [
-            RecommendedQuestionMessage(role="system", content=data.language),
-            RecommendedQuestionMessage(role="human", content=data.question),
+            ModelMessage(role="system", content=data.language),
+            ModelMessage(role="human", content=data.question),
         ]
 
 
 class FakeModelClient:
-    def __init__(self, chunks: list[RecommendedQuestionModelChunk]) -> None:
+    def __init__(self, chunks: list[ModelStreamChunk]) -> None:
         self.chunks = chunks
-        self.messages: list[RecommendedQuestionMessage] | None = None
+        self.messages: list[ModelMessage] | None = None
 
     def stream(
         self,
-        messages: list[RecommendedQuestionMessage],
-    ) -> Iterator[RecommendedQuestionModelChunk]:
+        messages: list[ModelMessage],
+    ) -> Iterator[ModelStreamChunk]:
         self.messages = messages
         yield from self.chunks
 
@@ -154,12 +155,12 @@ def test_prepare_trims_history_and_builds_stable_messages():
 def test_generate_streams_chunks_normalizes_json_and_projects_record():
     model = FakeModelClient(
         [
-            RecommendedQuestionModelChunk(
+            ModelStreamChunk(
                 content='```json\n[" 问题一 ", 42,',
                 reasoning_content="思考一",
                 token_usage={"input_tokens": 3},
             ),
-            RecommendedQuestionModelChunk(
+            ModelStreamChunk(
                 content='"问题二", "", "问题三"]\n```',
                 reasoning_content="思考二",
                 token_usage={"total_tokens": 9},
@@ -188,7 +189,7 @@ def test_generate_streams_chunks_normalizes_json_and_projects_record():
 def test_generate_saves_empty_array_when_model_has_no_valid_json_array():
     service, _, _, _, repository = _service(
         model=FakeModelClient(
-            [RecommendedQuestionModelChunk(content="没有可用的推荐问题")]
+            [ModelStreamChunk(content="没有可用的推荐问题")]
         )
     )
 

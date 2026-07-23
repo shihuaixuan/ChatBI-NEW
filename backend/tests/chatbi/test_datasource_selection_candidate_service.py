@@ -9,7 +9,7 @@ from apps.chatbi.adapters.embedding_ranking import (
     EmbeddingDatasourceSelectionCandidateRanker,
 )
 from apps.chatbi.models import DatasourceSelectionRankingCandidate
-from apps.chatbi.services import (
+from apps.chatbi.services.planning import (
     DatasourceSelectionCandidateRanker,
     DatasourceSelectionCandidateService,
     DatasourceSelectionError,

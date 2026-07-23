@@ -1,7 +1,10 @@
 import pytest
 
 from apps.chatbi.models import SemanticQueryCompileData
-from apps.chatbi.services import SemanticQueryCompileError, SemanticQueryService
+from apps.chatbi.services.planning import (
+    SemanticCompilationService,
+    SemanticQueryCompileError,
+)
 from apps.semantic.models.dto import (
     DatasetSchema,
     SchemaElement,
@@ -63,7 +66,7 @@ class FailingCompilationGateway:
 
 
 def test_semantic_query_service_projects_datasource_and_used_assets():
-    result = SemanticQueryService(StaticCompilationGateway()).compile(
+    result = SemanticCompilationService(StaticCompilationGateway()).compile(
         SemanticQueryCompileData(
             workspace_id=10,
             dataset_id=20,
@@ -80,6 +83,6 @@ def test_semantic_query_service_preserves_compile_error_code():
         SemanticQueryCompileError,
         match="SEMANTIC_SQL_ASSET_REQUIRED",
     ):
-        SemanticQueryService(FailingCompilationGateway()).compile(
+        SemanticCompilationService(FailingCompilationGateway()).compile(
             SemanticQueryCompileData(workspace_id=10, dataset_id=20)
         )

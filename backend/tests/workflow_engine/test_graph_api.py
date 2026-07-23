@@ -64,7 +64,7 @@ async def _collect_stream_frames(stream):
 
 @pytest.fixture(autouse=True)
 def _fake_chatbi_v1_sql_execute_tool(monkeypatch):
-    class FakeSqlExecuteTool:
+    class FakeDatasourceQueryExecutor:
         def __init__(self, session) -> None:
             self.session = session
 
@@ -76,7 +76,7 @@ def _fake_chatbi_v1_sql_execute_tool(monkeypatch):
                 message=None,
             )
 
-    monkeypatch.setattr(chatbi_runtime, "SqlExecuteTool", FakeSqlExecuteTool)
+    monkeypatch.setattr(chatbi_runtime, "DatasourceQueryExecutor", FakeDatasourceQueryExecutor)
 
 
 @pytest.fixture(autouse=True)

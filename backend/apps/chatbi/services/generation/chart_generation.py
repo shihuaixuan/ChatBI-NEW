@@ -10,8 +10,8 @@ from apps.chatbi.errors import ChartGenerationError
 from apps.chatbi.models import (
     ChartGenerationData,
     ChartGenerationEvent,
-    ChartGenerationMessage,
     ChatRecordResultProjection,
+    ModelMessage,
 )
 from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 from apps.chatbi.services.generation.ports import (
@@ -42,7 +42,7 @@ class ChartGenerationService:
     def prepare(
         self,
         data: ChartGenerationData,
-    ) -> list[ChartGenerationMessage]:
+    ) -> list[ModelMessage]:
         self._validate_data(data)
         messages = self._prompt_builder.build(data)
         if not messages or any(not message.content.strip() for message in messages):
@@ -52,7 +52,7 @@ class ChartGenerationService:
     def generate(
         self,
         data: ChartGenerationData,
-        messages: list[ChartGenerationMessage] | None = None,
+        messages: list[ModelMessage] | None = None,
     ) -> Iterator[ChartGenerationEvent]:
         self._validate_data(data)
         prepared_messages = self.prepare(data) if messages is None else messages

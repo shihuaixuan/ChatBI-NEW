@@ -5,7 +5,7 @@ from apps.access_control.data_policy import SessionDataPolicyProvider
 from apps.assistant.composition import build_assistant_service
 from apps.chatbi.adapters.embedding_ranking import (
     EmbeddingDatasourceSelectionCandidateRanker,
-    EmbeddingGenerationSchemaTableRanker,
+    EmbeddingSchemaRankingClient,
 )
 from apps.chatbi.adapters.execution import DatasourceQueryExecutor
 from apps.chatbi.adapters.question_model import build_question_model_service
@@ -14,28 +14,32 @@ from apps.chatbi.repository.sqlmodel import (
     SQLModelChatRecordRepository,
     SQLModelConversationRepository,
 )
-from apps.chatbi.services import (
+from apps.chatbi.services.conversation import (
     ChatDeletionService,
     ChatRecordService,
     ConversationBindingProvider,
     ConversationDeletionProvider,
     ConversationService,
-    DatasourceSelectionCandidateService,
-    GenerationContextService,
-    GenerationSchemaContextService,
-    PhysicalSchemaService,
-    QueryService,
-    QuestionUnderstandingService,
-    RecommendedQuestionProvider,
-    ResultArtifactService,
-    SemanticQueryService,
-    SemanticRetrievalService,
-    SQLPermissionService,
-)
-from apps.chatbi.services.conversation import (
     ExecutionCleanupGateway,
+    RecommendedQuestionProvider,
     resolve_conversation_binding,
 )
+from apps.chatbi.services.execution import (
+    GuardedQueryService,
+    ResultArtifactService,
+    SQLPermissionService,
+)
+from apps.chatbi.services.generation import (
+    GenerationContextService,
+    SchemaContextService,
+)
+from apps.chatbi.services.planning import (
+    DatasourceSelectionCandidateService,
+    PhysicalSchemaService,
+    SemanticCompilationService,
+    SemanticRetrievalService,
+)
+from apps.chatbi.services.understanding import QuestionUnderstandingService
 from apps.datasource.composition import (
     build_datasource_connection_service,
     build_datasource_metadata_service,
@@ -58,13 +62,13 @@ def build_query_service(
     *,
     default_limit: int = 100,
     sample_rows: int = 10,
-) -> QueryService:
+) -> GuardedQueryService:
     """装配使用真实数据权限策略的 ChatBI 查询服务。"""
 
     def policy_session_factory() -> Session:
         return Session(engine)
 
-    return QueryService(
+    return GuardedQueryService(
         default_limit=default_limit,
         sample_rows=sample_rows,
         permission_service=SQLPermissionService(
@@ -74,10 +78,10 @@ def build_query_service(
     )
 
 
-def build_semantic_query_service(session: Session) -> SemanticQueryService:
+def build_semantic_query_service(session: Session) -> SemanticCompilationService:
     """装配 Agent 与 Graph 共用的语义 SQL 编译入口。"""
 
-    return SemanticQueryService(build_semantic_sql_compilation_service(session))
+    return SemanticCompilationService(build_semantic_sql_compilation_service(session))
 
 
 def build_semantic_retrieval_service(
@@ -116,15 +120,15 @@ def build_generation_context_service(
 
 def build_generation_schema_context_service(
     session: Session,
-) -> GenerationSchemaContextService:
+) -> SchemaContextService:
     """装配旧 Chat 与后续统一查询流程使用的物理 Schema 上下文服务。"""
 
-    return GenerationSchemaContextService(
+    return SchemaContextService(
         datasource_service=build_datasource_service(session),
         metadata_service=build_datasource_metadata_service(session),
         connection_service=build_datasource_connection_service(session),
         data_policy_service=build_data_policy_service(session),
-        table_ranker=EmbeddingGenerationSchemaTableRanker(),
+        table_ranker=EmbeddingSchemaRankingClient(),
         embedding_enabled=settings.TABLE_EMBEDDING_ENABLED,
         embedding_limit=settings.TABLE_EMBEDDING_COUNT,
     )

@@ -4,16 +4,18 @@ from typing import Any, cast
 
 import pytest
 
+from apps.chatbi.errors import (
+    QuestionModelCallError,
+    QuestionModelError,
+    QuestionModelOutputError,
+)
 from apps.chatbi.models import (
     QuestionModelInvocationData,
     QuestionModelJSONMode,
     QuestionModelResponse,
 )
-from apps.chatbi.services import (
-    QuestionModelCallError,
-    QuestionModelError,
-    QuestionModelOutputError,
-    QuestionModelService,
+from apps.chatbi.services.understanding import (
+    StructuredModelService,
 )
 
 
@@ -52,7 +54,7 @@ def test_strict_mode_returns_json_object_and_usage():
         )
     )
 
-    result = QuestionModelService(client).invoke(_data())
+    result = StructuredModelService(client).invoke(_data())
 
     assert result.payload == {"rewritten_question": "本月销售额"}
     assert result.usage_metadata == {"total_tokens": 12}
@@ -66,7 +68,7 @@ def test_extract_mode_accepts_markdown_wrapped_json_object():
         )
     )
 
-    result = QuestionModelService(client).invoke(
+    result = StructuredModelService(client).invoke(
         _data(json_mode=QuestionModelJSONMode.EXTRACT_OBJECT)
     )
 
@@ -74,7 +76,7 @@ def test_extract_mode_accepts_markdown_wrapped_json_object():
 
 
 def test_strict_mode_rejects_wrapped_json_without_silent_extraction():
-    service = QuestionModelService(
+    service = StructuredModelService(
         FakeQuestionModelClient(
             QuestionModelResponse(content='结果：{"intent_type":"metric_query"}')
         )
@@ -88,7 +90,7 @@ def test_strict_mode_rejects_wrapped_json_without_silent_extraction():
 
 
 def test_strict_mode_rejects_non_object_json():
-    service = QuestionModelService(
+    service = StructuredModelService(
         FakeQuestionModelClient(QuestionModelResponse(content="[]"))
     )
 
@@ -100,7 +102,7 @@ def test_strict_mode_rejects_non_object_json():
 
 
 def test_empty_response_fails_explicitly():
-    service = QuestionModelService(
+    service = StructuredModelService(
         FakeQuestionModelClient(QuestionModelResponse(content="   "))
     )
 
@@ -112,7 +114,7 @@ def test_empty_response_fails_explicitly():
 
 
 def test_model_call_failure_keeps_stage():
-    service = QuestionModelService(
+    service = StructuredModelService(
         FakeQuestionModelClient(RuntimeError("model unavailable"))
     )
 
@@ -148,6 +150,6 @@ def test_invalid_invocation_data_fails_before_model_call(
     client = FakeQuestionModelClient(QuestionModelResponse(content="{}"))
 
     with pytest.raises(QuestionModelError, match=error):
-        QuestionModelService(client).invoke(_data(**overrides))
+        StructuredModelService(client).invoke(_data(**overrides))
 
     assert client.calls == []

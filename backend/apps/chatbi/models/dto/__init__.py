@@ -10,8 +10,6 @@ from apps.chatbi.models.dto.agent import (
 from apps.chatbi.models.dto.analysis_prediction import (
     AnalysisPredictionGenerationData,
     AnalysisPredictionGenerationEvent,
-    AnalysisPredictionMessage,
-    AnalysisPredictionModelChunk,
 )
 from apps.chatbi.models.dto.answer_generation import (
     AnswerGenerationData,
@@ -26,8 +24,6 @@ from apps.chatbi.models.dto.answer_projection import (
 from apps.chatbi.models.dto.chart_generation import (
     ChartGenerationData,
     ChartGenerationEvent,
-    ChartGenerationMessage,
-    ChartGenerationModelChunk,
 )
 from apps.chatbi.models.dto.chat_history import (
     ChatLogHistory,
@@ -54,8 +50,6 @@ from apps.chatbi.models.dto.datasource_selection import (
     DatasourceSelectionCandidate,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
-    DatasourceSelectionMessage,
-    DatasourceSelectionModelChunk,
     DatasourceSelectionRankingCandidate,
 )
 from apps.chatbi.models.dto.dynamic_sql_generation import (
@@ -136,8 +130,6 @@ from apps.chatbi.models.dto.question_understanding import (
 from apps.chatbi.models.dto.recommended_question import (
     RecommendedQuestionGenerationData,
     RecommendedQuestionGenerationEvent,
-    RecommendedQuestionMessage,
-    RecommendedQuestionModelChunk,
 )
 from apps.chatbi.models.dto.result_artifact import (
     ChatBIResultArtifactRef,
@@ -152,11 +144,10 @@ from apps.chatbi.models.dto.semantic_retrieval import SemanticRetrievalData
 from apps.chatbi.models.dto.sql_generation import (
     SQLGenerationData,
     SQLGenerationEvent,
-    SQLGenerationMessage,
-    SQLGenerationModelChunk,
     SQLGenerationResult,
 )
 from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
+from apps.chatbi.models.dto.tool_result import ToolResult
 
 __all__ = [
     "AgentClarificationRequest",
@@ -176,8 +167,6 @@ __all__ = [
     "AnswerProjectionResult",
     "AnalysisPredictionGenerationData",
     "AnalysisPredictionGenerationEvent",
-    "AnalysisPredictionMessage",
-    "AnalysisPredictionModelChunk",
     "AiModelQuestion",
     "ChatInfo",
     "ChatQuestion",
@@ -194,16 +183,12 @@ __all__ = [
     "ChatRecordStatus",
     "ChartGenerationData",
     "ChartGenerationEvent",
-    "ChartGenerationMessage",
-    "ChartGenerationModelChunk",
     "ConversationBinding",
     "ConversationCreateData",
     "CreateChat",
     "DatasourceSelectionCandidate",
     "DatasourceSelectionData",
     "DatasourceSelectionEvent",
-    "DatasourceSelectionMessage",
-    "DatasourceSelectionModelChunk",
     "DatasourceSelectionRankingCandidate",
     "DimensionRecognitionOutput",
     "DimensionSlot",
@@ -254,8 +239,6 @@ __all__ = [
     "QueryFinalReplyProjectionResult",
     "RecommendedQuestionGenerationData",
     "RecommendedQuestionGenerationEvent",
-    "RecommendedQuestionMessage",
-    "RecommendedQuestionModelChunk",
     "RenameChat",
     "ResultArtifactWriteData",
     "SemanticRetrievalData",
@@ -264,8 +247,7 @@ __all__ = [
     "SemanticQueryUsedAsset",
     "SQLGenerationData",
     "SQLGenerationEvent",
-    "SQLGenerationMessage",
-    "SQLGenerationModelChunk",
     "SQLGenerationResult",
     "TimeRange",
+    "ToolResult",
 ]

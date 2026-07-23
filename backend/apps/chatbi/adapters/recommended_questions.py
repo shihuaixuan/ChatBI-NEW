@@ -8,18 +8,16 @@ from langchain.chat_models.base import BaseChatModel
 from sqlmodel import Session
 
 from apps.chatbi.adapters.langchain import LangChainGenerationModelClient
+from apps.chatbi.adapters.prompts import get_guess_question_template
 from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.models import (
+    ModelMessage,
     RecommendedQuestionGenerationData,
-    RecommendedQuestionMessage,
 )
 from apps.chatbi.repository.sqlmodel import (
-    SQLModelRecommendedQuestionHistoryProvider,
+    SQLModelRecommendedQuestionHistoryRepository,
 )
-from apps.chatbi.services import RecommendedQuestionService
-from apps.template.generate_guess_question.generator import (
-    get_guess_question_template,
-)
+from apps.chatbi.services.generation import RecommendedQuestionService
 
 
 class TemplateRecommendedQuestionPromptBuilder:
@@ -29,14 +27,14 @@ class TemplateRecommendedQuestionPromptBuilder:
         self,
         data: RecommendedQuestionGenerationData,
         old_questions: list[str],
-    ) -> list[RecommendedQuestionMessage]:
+    ) -> list[ModelMessage]:
         template_loader = cast(
             Callable[[], dict[str, str]],
             get_guess_question_template,
         )
         template = template_loader()
         return [
-            RecommendedQuestionMessage(
+            ModelMessage(
                 role="system",
                 content=template["system"].format(
                     lang=data.language,
@@ -44,7 +42,7 @@ class TemplateRecommendedQuestionPromptBuilder:
                     sqlbot_name=data.assistant_name,
                 ),
             ),
-            RecommendedQuestionMessage(
+            ModelMessage(
                 role="human",
                 content=template["user"].format(
                     question=data.question,
@@ -55,10 +53,6 @@ class TemplateRecommendedQuestionPromptBuilder:
         ]
 
 
-# 共享客户端（R2 合并）；旧名保留（台账 E2）。
-LangChainRecommendedQuestionModelClient = LangChainGenerationModelClient
-
-
 def build_recommended_question_service(
     session: Session,
     llm: BaseChatModel,
@@ -66,15 +60,14 @@ def build_recommended_question_service(
     """装配推荐问题生成所需的外层实现。"""
 
     return RecommendedQuestionService(
-        history_provider=SQLModelRecommendedQuestionHistoryProvider(session),
+        history_provider=SQLModelRecommendedQuestionHistoryRepository(session),
         prompt_builder=TemplateRecommendedQuestionPromptBuilder(),
-        model_client=LangChainRecommendedQuestionModelClient(llm),
+        model_client=LangChainGenerationModelClient(llm),
         chat_record_service=build_chat_record_service(session),
     )
 
 
 __all__ = [
-    "LangChainRecommendedQuestionModelClient",
     "TemplateRecommendedQuestionPromptBuilder",
     "build_recommended_question_service",
 ]

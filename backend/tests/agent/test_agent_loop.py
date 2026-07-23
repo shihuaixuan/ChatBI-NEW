@@ -7,6 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
+from apps.chatbi.errors import QuestionUnderstandingError
 from apps.chatbi.models import (
     AgentConfig,
     AgentRunStatus,
@@ -21,8 +22,7 @@ from apps.chatbi.models import (
 from apps.chatbi.orchestration.agent.loop import AgentLoop
 from apps.chatbi.orchestration.agent.tools.base import AgentTool, ToolOutput
 from apps.chatbi.orchestration.agent.tools.registry import ToolRegistry
-from apps.chatbi.services import (
-    QuestionUnderstandingError,
+from apps.chatbi.services.understanding import (
     QuestionUnderstandingModelResponse,
     QuestionUnderstandingService,
 )

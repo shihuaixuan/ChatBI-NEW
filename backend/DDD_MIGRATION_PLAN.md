@@ -21,7 +21,7 @@
 | 模块 | 定位 | 架构风格（仪式上限） | 状态 |
 | --- | --- | --- | --- |
 | `semantic` | 核心领域：语义资产事实源 | 完整战术分层 | 稳定（P1 完成） |
-| `chatbi` | 核心：应用编排层 + 管道核心 | 薄 Service + 函数管道；端口仅限可替换缝 | R1–R4 重组中 |
+| `chatbi` | 核心：应用编排层 + 管道核心 | 薄 Service + 函数管道；端口仅限可替换缝 | R4 完成 |
 | `datasource` | 物理连接与元数据边界 | 六边形（公开 Service + 驱动适配器） | 稳定（P3 完成） |
 | `knowledge` | SQL 示例/推荐问题资源 | 薄 Service + 仓储 | 稳定（P4 完成） |
 | `retrieval` | 派生索引管道 | 管道分段（sources/projection/indexing/query） | R6 重组结构 |
@@ -112,10 +112,11 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 | R4-a ✅ | 旧 `/chat` 路由拆为 conversations / queries；`apps/api.py` 只注册 ChatBI 聚合 router，Agent / Graph router 由最外层注入（路径不变）；interactions 物理归位随 R4-b/c 执行，避免 ChatBI 反向依赖执行器；`chat_model.py` 外部桩按 A7 留至 R6（2026-07-23 完成） |
 | R4-b ✅ | Agent 运行循环与工具迁入 `chatbi/orchestration/agent`；ORM 入 `models/orm/agent_run.py`，CRUD 入 `repository/sqlmodel/agent_run_repository.py`，API 入 `chatbi/api/interactions.py`；旧目录删除，xpack 无旧路径引用（2026-07-23 完成） |
 | R4-c ✅ | Graph 整体迁入 `chatbi/orchestration/graph`，旧 `apps/workflow` 删除；`adapters/question.py` 按分类/重写、意图、维度与共享契约拆为 5 文件；runtime 的 4 条引擎 infrastructure 依赖改经公开端口和组合入口，Semantic 具体仓储依赖同步清除；B7/E4 兼容项清偿（2026-07-23 完成） |
-| R4-d | 解散 `capabilities` 与 `template`（生成器入 `chatbi/adapters/prompts/`）；平台参数迁出 `system`；清偿 R1/R2 兼容 re-export |
+| R4-d ✅ | 解散 `capabilities` 与 `template`（生成器入 `chatbi/adapters/prompts/`）；平台参数迁入 `platform_config`；清偿 B4–B6、D5–D6、E1–E3、E5–E7 兼容项，依赖基线再减 2 条（2026-07-23 完成） |
 
-验收：除台账 A7 的 xpack 外部桩外，ChatBI 相关顶级目录仅剩 `chatbi`；问数入口路由唯一
-（兼容路径行为不变）；台账清偿率 ≥80%；xpack 导入与 OpenAPI 通过。
+验收完成：除台账 A7 的 xpack 外部桩外，ChatBI 相关顶级目录仅剩 `chatbi`；问数入口路由唯一
+（兼容路径行为不变）；R4 目标兼容项 17/17 已清，剩余项全部归属 R6；全量回归、
+xpack 导入与 OpenAPI 通过。
 
 ### R5：Workflow Engine 隔离（= 原 P6，2–3 批）
 

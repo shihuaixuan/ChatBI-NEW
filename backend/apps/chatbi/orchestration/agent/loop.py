@@ -29,6 +29,7 @@ from apps.chatbi.composition import (
     build_semantic_query_service,
     build_semantic_retrieval_service,
 )
+from apps.chatbi.errors import QuestionUnderstandingError
 from apps.chatbi.models import (
     AgentClarificationResumeKind,
     AgentErrorClass,
@@ -53,14 +54,17 @@ from apps.chatbi.orchestration.agent.tools.interaction import (
 )
 from apps.chatbi.orchestration.agent.tools.registry import ToolRegistry
 from apps.chatbi.repository.sqlmodel import agent_run_repository
-from apps.chatbi.services import (
-    PhysicalSchemaService,
-    QueryService,
-    QuestionUnderstandingError,
-    QuestionUnderstandingService,
+from apps.chatbi.services.execution import (
+    GuardedQueryService,
     ResultArtifactService,
-    SemanticQueryService,
+)
+from apps.chatbi.services.planning import (
+    PhysicalSchemaService,
+    SemanticCompilationService,
     SemanticRetrievalService,
+)
+from apps.chatbi.services.understanding import (
+    QuestionUnderstandingService,
     apply_question_understanding_clarification,
 )
 from apps.semantic.composition import build_semantic_term_query_service
@@ -102,8 +106,8 @@ class AgentLoop:
         registry: ToolRegistry | None = None,
         understanding_service: QuestionUnderstandingService | None = None,
         term_query_service: SemanticTermQueryService | None = None,
-        query_service: QueryService | None = None,
-        semantic_query_service: SemanticQueryService | None = None,
+        query_service: GuardedQueryService | None = None,
+        semantic_query_service: SemanticCompilationService | None = None,
         semantic_retrieval_service: SemanticRetrievalService | None = None,
         physical_schema_service: PhysicalSchemaService | None = None,
         result_artifact_service: ResultArtifactService | None = None,

@@ -5,8 +5,8 @@ from collections.abc import Iterator
 from apps.chatbi.errors import DynamicSQLGenerationError, SQLGenerationError
 from apps.chatbi.models import (
     DynamicSQLGenerationData,
+    ModelMessage,
     SQLGenerationEvent,
-    SQLGenerationMessage,
 )
 from apps.chatbi.services.generation.ports import (
     DynamicSQLGenerationPromptBuilder,
@@ -35,7 +35,7 @@ class DynamicSQLGenerationService:
     def prepare(
         self,
         data: DynamicSQLGenerationData,
-    ) -> list[SQLGenerationMessage]:
+    ) -> list[ModelMessage]:
         self._validate_data(data)
         messages = self._prompt_builder.build(data)
         if not messages or any(not message.content.strip() for message in messages):
@@ -45,7 +45,7 @@ class DynamicSQLGenerationService:
     def generate(
         self,
         data: DynamicSQLGenerationData,
-        messages: list[SQLGenerationMessage] | None = None,
+        messages: list[ModelMessage] | None = None,
     ) -> Iterator[SQLGenerationEvent]:
         self._validate_data(data)
         prepared_messages = self.prepare(data) if messages is None else messages

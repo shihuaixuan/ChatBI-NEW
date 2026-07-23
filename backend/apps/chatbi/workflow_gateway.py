@@ -12,7 +12,7 @@ from apps.chatbi.models import (
     ChatRecordResultProjection,
     ExecutionBindingData,
 )
-from apps.chatbi.services import (
+from apps.chatbi.services.planning import (
     ExecutionBindingError,
     resolve_execution_binding,
 )

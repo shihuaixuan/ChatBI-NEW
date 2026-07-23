@@ -3,16 +3,15 @@
 from apps.chatbi.services.generation.context.history import project_generation_history
 from apps.chatbi.services.generation.context.knowledge import (
     GenerationContextService,
-    GenerationCustomPromptProvider,
+    GenerationCustomPromptClient,
     GenerationCustomPromptService,
 )
 from apps.chatbi.services.generation.context.runtime_settings import (
     resolve_runtime_settings,
 )
 from apps.chatbi.services.generation.context.schema_context import (
-    GenerationSchemaContextService,
-    GenerationSchemaTableRanker,
     SchemaContextService,
+    SchemaRankingClient,
 )
 from apps.chatbi.services.generation.context.scope import (
     ADVANCED_ASSISTANT_TYPE,
@@ -25,11 +24,10 @@ __all__ = [
     "ADVANCED_ASSISTANT_TYPE",
     "DYNAMIC_DATASOURCE_ASSISTANT_TYPES",
     "GenerationContextService",
-    "GenerationCustomPromptProvider",
+    "GenerationCustomPromptClient",
     "GenerationCustomPromptService",
-    "GenerationSchemaContextService",
-    "GenerationSchemaTableRanker",
     "SchemaContextService",
+    "SchemaRankingClient",
     "PAGE_EMBEDDED_ASSISTANT_TYPE",
     "project_generation_history",
     "resolve_generation_scope",

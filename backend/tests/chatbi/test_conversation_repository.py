@@ -9,7 +9,7 @@ from apps.chatbi.models import (
     RenameChat,
 )
 from apps.chatbi.repository.sqlmodel import SQLModelConversationRepository
-from apps.chatbi.services import ConversationService
+from apps.chatbi.services.conversation import ConversationService
 from common.core.db import engine
 
 

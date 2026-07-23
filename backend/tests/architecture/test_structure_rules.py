@@ -60,6 +60,13 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
     ),
 )
 
+FORBIDDEN_TOP_LEVEL_PATHS: tuple[str, ...] = (
+    "apps/agent",
+    "apps/capabilities",
+    "apps/template",
+    "apps/workflow",
+)
+
 
 def _module_matches(module: str, prefix: str) -> bool:
     return module == prefix or module.startswith(prefix + ".")
@@ -99,3 +106,12 @@ def test_forbidden_imports(rule: ForbiddenImportRule) -> None:
     assert not violations, (
         f"结构规则 {rule.rule_id} 违规（{rule.reason}）:\n" + "\n".join(violations)
     )
+
+
+@pytest.mark.parametrize("relative_path", FORBIDDEN_TOP_LEVEL_PATHS)
+def test_removed_chatbi_top_level_path_does_not_return(
+    relative_path: str,
+) -> None:
+    """已归入 ChatBI 的顶级目录不得重新建立。"""
+
+    assert not (BACKEND_ROOT / relative_path).exists()

@@ -7,16 +7,13 @@ from langchain.chat_models.base import BaseChatModel
 from sqlmodel import Session
 
 from apps.chatbi.adapters.langchain import LangChainGenerationModelClient
+from apps.chatbi.adapters.prompts import get_sql_example_template, get_sql_template
 from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.models import (
+    ModelMessage,
     SQLGenerationData,
-    SQLGenerationMessage,
 )
-from apps.chatbi.services import SQLGenerationService
-from apps.template.generate_sql.generator import (
-    get_sql_example_template,
-    get_sql_template,
-)
+from apps.chatbi.services.generation import SQLGenerationService
 
 
 class TemplateSQLGenerationPromptBuilder:
@@ -25,7 +22,7 @@ class TemplateSQLGenerationPromptBuilder:
     def build(
         self,
         data: SQLGenerationData,
-    ) -> list[SQLGenerationMessage]:
+    ) -> list[ModelMessage]:
         sql_template_loader = cast(
             Callable[[str], dict[str, str]],
             get_sql_example_template,
@@ -54,7 +51,7 @@ class TemplateSQLGenerationPromptBuilder:
             + other_rule
         )
         messages = [
-            SQLGenerationMessage(
+            ModelMessage(
                 role="system",
                 content=base_template["system"].format(
                     lang=data.language,
@@ -63,7 +60,7 @@ class TemplateSQLGenerationPromptBuilder:
                 ),
                 system_context=True,
             ),
-            SQLGenerationMessage(
+            ModelMessage(
                 role="human",
                 content=base_template["generate_rules"].format(
                     lang=data.language,
@@ -89,7 +86,7 @@ class TemplateSQLGenerationPromptBuilder:
                 ),
                 system_context=True,
             ),
-            SQLGenerationMessage(
+            ModelMessage(
                 role="ai",
                 content=(
                     "我已掌握所有规则，包括表结构、SQL规范、安全限制和输出格式，"
@@ -97,7 +94,7 @@ class TemplateSQLGenerationPromptBuilder:
                 ),
                 system_context=True,
             ),
-            SQLGenerationMessage(
+            ModelMessage(
                 role="human",
                 content=base_template["generate_basic_info"].format(
                     engine=data.engine,
@@ -106,7 +103,7 @@ class TemplateSQLGenerationPromptBuilder:
                 ),
                 system_context=True,
             ),
-            SQLGenerationMessage(
+            ModelMessage(
                 role="ai",
                 content=(
                     "我已确认您提供的数据库信息与表结构schema，"
@@ -140,14 +137,14 @@ class TemplateSQLGenerationPromptBuilder:
                 continue
             messages.extend(
                 [
-                    SQLGenerationMessage(
+                    ModelMessage(
                         role="human",
                         content=base_template[template_key].format(
                             **{argument_name: value}
                         ),
                         system_context=True,
                     ),
-                    SQLGenerationMessage(
+                    ModelMessage(
                         role="ai",
                         content=confirmation,
                         system_context=True,
@@ -160,7 +157,7 @@ class TemplateSQLGenerationPromptBuilder:
             question = base_template["regenerate_hint"] + question
         messages.extend(data.history)
         messages.append(
-            SQLGenerationMessage(
+            ModelMessage(
                 role="human",
                 content=base_template["user"].format(
                     lang=data.language,
@@ -177,10 +174,6 @@ class TemplateSQLGenerationPromptBuilder:
         return messages
 
 
-# 共享客户端（R2 合并）；旧名保留（台账 E2）。
-LangChainSQLGenerationModelClient = LangChainGenerationModelClient
-
-
 def build_sql_generation_service(
     session: Session,
     llm: BaseChatModel,
@@ -189,13 +182,12 @@ def build_sql_generation_service(
 
     return SQLGenerationService(
         prompt_builder=TemplateSQLGenerationPromptBuilder(),
-        model_client=LangChainSQLGenerationModelClient(llm),
+        model_client=LangChainGenerationModelClient(llm),
         chat_record_service=build_chat_record_service(session),
     )
 
 
 __all__ = [
-    "LangChainSQLGenerationModelClient",
     "TemplateSQLGenerationPromptBuilder",
     "build_sql_generation_service",
 ]

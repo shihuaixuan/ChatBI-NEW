@@ -1,7 +1,7 @@
 from sqlmodel import Session
 
 from apps.access_control.data_policy import SessionDataPolicyProvider
-from apps.capabilities.sql.executor import SqlExecuteTool
+from apps.chatbi.adapters.execution import DatasourceQueryExecutor
 from apps.chatbi.composition import (
     build_result_artifact_service,
     build_semantic_query_service,
@@ -42,7 +42,7 @@ from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
     register_chatbi_v1_handlers,
 )
-from apps.chatbi.services.execution.sql_permission import PermissionAdapter
+from apps.chatbi.services.execution.sql_permission import SQLPermissionService
 from apps.chatbi.services.generation.answer_generation import AnswerModelClient
 from apps.retrieval.service import build_retrieval_service
 from apps.semantic.composition import build_semantic_schema_service
@@ -136,9 +136,9 @@ def build_real_chatbi_v1_runtime(
             semantic_query_service=build_semantic_query_service(session),
             execute_tool=SessionSqlExecutionGateway(
                 session_factory,
-                execute_tool_factory=SqlExecuteTool,
+                execute_tool_factory=DatasourceQueryExecutor,
             ),
-            permission_adapter=PermissionAdapter(
+            permission_adapter=SQLPermissionService(
                 policy_provider=SessionDataPolicyProvider(session_factory)
             ),
             result_artifact_service=result_artifact_service,

@@ -15,10 +15,11 @@ from apps.dashboard.api import dashboard_api
 from apps.datasource.api import datasource, table_relation
 from apps.knowledge.api import recommended_problem, sql_example
 from apps.mcp import mcp
+from apps.platform_config.api import router as platform_config
 from apps.semantic.api import legacy_terms
 from apps.semantic.api.router import router as semantic_router
 from apps.settings.api import base
-from apps.system.api import parameter, user
+from apps.system.api import user
 from apps.workflow_engine.api import router as graph_workflow
 
 #from audit.api import audit_api
@@ -41,7 +42,7 @@ api_router.include_router(chatbi_router)
 api_router.include_router(dashboard_api.router)
 api_router.include_router(mcp.router)
 api_router.include_router(table_relation.router)
-api_router.include_router(parameter.router)
+api_router.include_router(platform_config.router)
 api_router.include_router(access_api_key.router)
 
 api_router.include_router(recommended_problem.router)

@@ -8,12 +8,13 @@ import pytest
 
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
-    AnalysisPredictionMessage,
-    AnalysisPredictionModelChunk,
     ChatRecord,
     ChatRecordAuxiliaryType,
+    ModelMessage,
+    ModelStreamChunk,
 )
-from apps.chatbi.services import AnalysisPredictionService, ChatRecordService
+from apps.chatbi.services.conversation import ChatRecordService
+from apps.chatbi.services.generation import AnalysisPredictionService
 
 
 class FakePromptBuilder:
@@ -23,23 +24,23 @@ class FakePromptBuilder:
     def build(
         self,
         data: AnalysisPredictionGenerationData,
-    ) -> list[AnalysisPredictionMessage]:
+    ) -> list[ModelMessage]:
         self.data = data
         return [
-            AnalysisPredictionMessage(role="system", content=data.language),
-            AnalysisPredictionMessage(role="human", content=data.data),
+            ModelMessage(role="system", content=data.language),
+            ModelMessage(role="human", content=data.data),
         ]
 
 
 class FakeModelClient:
-    def __init__(self, chunks: list[AnalysisPredictionModelChunk]) -> None:
+    def __init__(self, chunks: list[ModelStreamChunk]) -> None:
         self.chunks = chunks
-        self.messages: list[AnalysisPredictionMessage] | None = None
+        self.messages: list[ModelMessage] | None = None
 
     def stream(
         self,
-        messages: list[AnalysisPredictionMessage],
-    ) -> Iterator[AnalysisPredictionModelChunk]:
+        messages: list[ModelMessage],
+    ) -> Iterator[ModelStreamChunk]:
         self.messages = messages
         yield from self.chunks
 
@@ -138,12 +139,12 @@ def test_generate_streams_chunks_and_projects_matching_auxiliary_field(
 ):
     model = FakeModelClient(
         [
-            AnalysisPredictionModelChunk(
+            ModelStreamChunk(
                 content="第一段",
                 reasoning_content="思考一",
                 token_usage={"input_tokens": 4},
             ),
-            AnalysisPredictionModelChunk(
+            ModelStreamChunk(
                 content="第二段",
                 reasoning_content="思考二",
                 token_usage={"total_tokens": 10},

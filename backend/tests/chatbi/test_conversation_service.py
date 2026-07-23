@@ -1,5 +1,9 @@
 import pytest
 
+from apps.chatbi.errors import (
+    ConversationBindingError,
+    ConversationOwnershipError,
+)
 from apps.chatbi.models import (
     Chat,
     ChatInfo,
@@ -7,9 +11,7 @@ from apps.chatbi.models import (
     CreateChat,
     RenameChat,
 )
-from apps.chatbi.services import (
-    ConversationBindingError,
-    ConversationOwnershipError,
+from apps.chatbi.services.conversation import (
     ConversationService,
 )
 

@@ -134,11 +134,7 @@ class SemanticCompilationService:
         return None
 
 
-# 旧名兼容（台账 E1）。
-SemanticQueryService = SemanticCompilationService
-
 __all__ = [
     "SemanticCompilationService",
     "SemanticQueryCompileError",
-    "SemanticQueryService",
 ]

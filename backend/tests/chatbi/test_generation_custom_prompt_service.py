@@ -5,8 +5,8 @@ from apps.chatbi.models import (
     GenerationCustomPromptResult,
     GenerationCustomPromptType,
 )
-from apps.chatbi.services import (
-    GenerationCustomPromptProvider,
+from apps.chatbi.services.generation import (
+    GenerationCustomPromptClient,
     GenerationCustomPromptService,
 )
 
@@ -33,7 +33,7 @@ class StubProvider:
 def test_enabled_custom_prompt_service_delegates_stable_query():
     provider = StubProvider(enabled=True)
     service = GenerationCustomPromptService(
-        cast(GenerationCustomPromptProvider, provider)
+        cast(GenerationCustomPromptClient, provider)
     )
     query = GenerationCustomPromptQuery(
         prompt_type=GenerationCustomPromptType.GENERATE_SQL,
@@ -52,7 +52,7 @@ def test_enabled_custom_prompt_service_delegates_stable_query():
 def test_disabled_custom_prompt_service_keeps_empty_result_without_querying():
     provider = StubProvider(enabled=False)
     service = GenerationCustomPromptService(
-        cast(GenerationCustomPromptProvider, provider)
+        cast(GenerationCustomPromptClient, provider)
     )
 
     result = service.query(

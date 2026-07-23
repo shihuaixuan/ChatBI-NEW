@@ -55,7 +55,4 @@ class DatasourceQueryExecutor:
             )
 
 
-# 旧名兼容（台账 B6）：capabilities.sql.execution_gateway 转发使用。
-SqlExecuteTool = DatasourceQueryExecutor
-
-__all__ = ["DatasourceQueryExecutor", "SqlExecuteTool"]
+__all__ = ["DatasourceQueryExecutor"]

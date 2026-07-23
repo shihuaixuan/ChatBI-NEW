@@ -15,10 +15,10 @@ from apps.chatbi.models import (
     GenerationCustomPromptQuery,
     GenerationCustomPromptResult,
 )
-from apps.chatbi.services import GenerationCustomPromptService
+from apps.chatbi.services.generation import GenerationCustomPromptService
 
 
-class XPackGenerationCustomPromptProvider:
+class XPackGenerationCustomPromptClient:
     """把 xpack 自定义提示词能力适配到 ChatBI 稳定端口。"""
 
     def __init__(self, session: Session) -> None:
@@ -50,11 +50,11 @@ def build_generation_custom_prompt_service(
     """装配旧 Chat 使用的自定义提示词查询服务。"""
 
     return GenerationCustomPromptService(
-        XPackGenerationCustomPromptProvider(session)
+        XPackGenerationCustomPromptClient(session)
     )
 
 
 __all__ = [
-    "XPackGenerationCustomPromptProvider",
+    "XPackGenerationCustomPromptClient",
     "build_generation_custom_prompt_service",
 ]

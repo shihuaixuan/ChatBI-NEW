@@ -1,6 +1,5 @@
 {
     "cross_domain_internal_models": [
-        "apps/capabilities/semantic/compile.py -> apps.semantic.models.orm",
         "apps/data_training/models/data_training_model.py -> apps.knowledge.models.orm.sql_example",
         "apps/semantic/repository/datasource/metadata_discovery.py -> apps.datasource.models.datasource",
         "apps/semantic/repository/datasource/metadata_repository.py -> apps.datasource.models.datasource",
@@ -12,7 +11,6 @@
         "apps/workflow_engine/api/service.py -> apps.semantic.models.orm"
     ],
     "cross_domain_concrete_implementations": [
-        "apps/capabilities/semantic/compile.py -> apps.semantic.repository.sqlmodel.schema_loader",
         "apps/retrieval/semantic_binding.py -> apps.semantic.repository.sqlmodel.schema_loader"
     ],
     "cross_domain_api_imports": [],

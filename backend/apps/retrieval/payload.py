@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Literal, cast
 
-from apps.capabilities.time_slots import normalize_time_range_payload
+from apps.chatbi.services.understanding.time_range import (
+    normalize_time_range_payload,
+)
 from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,

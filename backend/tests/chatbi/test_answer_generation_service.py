@@ -5,12 +5,12 @@ from apps.chatbi.models import (
     AnswerGenerationPrompt,
     QuestionModelResponse,
 )
-from apps.chatbi.services import (
+from apps.chatbi.services.generation import (
     AnswerGenerationService,
     CallableAnswerModelClient,
-    QuestionModelService,
     build_answer_generation_prompt,
 )
+from apps.chatbi.services.understanding import StructuredModelService
 
 
 class FakeQuestionModelClient:
@@ -31,7 +31,7 @@ class FakeQuestionModelClient:
 
 def _service(response: str | Exception) -> AnswerGenerationService:
     return AnswerGenerationService(
-        QuestionModelService(FakeQuestionModelClient(response))
+        StructuredModelService(FakeQuestionModelClient(response))
     )
 
 

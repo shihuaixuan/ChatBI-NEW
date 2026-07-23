@@ -6,14 +6,14 @@ from collections.abc import Iterator
 import orjson
 
 from apps.chatbi.models import (
+    ModelMessage,
     RecommendedQuestionGenerationData,
     RecommendedQuestionGenerationEvent,
-    RecommendedQuestionMessage,
 )
 from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 from apps.chatbi.services.generation.ports import (
     GenerationModelClient,
-    RecommendedQuestionHistoryProvider,
+    RecommendedQuestionHistoryRepository,
     RecommendedQuestionPromptBuilder,
 )
 from apps.chatbi.services.generation.streaming import (
@@ -29,7 +29,7 @@ class RecommendedQuestionService:
     def __init__(
         self,
         *,
-        history_provider: RecommendedQuestionHistoryProvider,
+        history_provider: RecommendedQuestionHistoryRepository,
         prompt_builder: RecommendedQuestionPromptBuilder,
         model_client: GenerationModelClient,
         chat_record_service: ChatRecordService,
@@ -42,7 +42,7 @@ class RecommendedQuestionService:
     def prepare(
         self,
         data: RecommendedQuestionGenerationData,
-    ) -> list[RecommendedQuestionMessage]:
+    ) -> list[ModelMessage]:
         self._validate_data(data)
         old_questions = [
             question.strip()
@@ -60,7 +60,7 @@ class RecommendedQuestionService:
     def generate(
         self,
         data: RecommendedQuestionGenerationData,
-        messages: list[RecommendedQuestionMessage] | None = None,
+        messages: list[ModelMessage] | None = None,
     ) -> Iterator[RecommendedQuestionGenerationEvent]:
         self._validate_data(data)
         prepared_messages = self.prepare(data) if messages is None else messages

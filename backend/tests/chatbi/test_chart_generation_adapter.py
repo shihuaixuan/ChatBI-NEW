@@ -1,6 +1,6 @@
 from apps.chatbi.adapters import chart_generation
 from apps.chatbi.adapters.chart_generation import TemplateChartGenerationPromptBuilder
-from apps.chatbi.models import ChartGenerationData, ChartGenerationMessage
+from apps.chatbi.models import ChartGenerationData, ModelMessage
 
 
 def test_chart_prompt_keeps_system_history_and_current_message_order(monkeypatch):
@@ -14,8 +14,8 @@ def test_chart_prompt_keeps_system_history_and_current_message_order(monkeypatch
         },
     )
     history = [
-        ChartGenerationMessage(role="human", content="历史问题"),
-        ChartGenerationMessage(role="ai", content="历史图表"),
+        ModelMessage(role="human", content="历史问题"),
+        ModelMessage(role="ai", content="历史图表"),
     ]
 
     messages = TemplateChartGenerationPromptBuilder().build(

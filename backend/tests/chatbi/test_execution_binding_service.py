@@ -1,7 +1,10 @@
 import pytest
 
 from apps.chatbi.models import ExecutionBindingData
-from apps.chatbi.services import ExecutionBindingError, resolve_execution_binding
+from apps.chatbi.services.planning import (
+    ExecutionBindingError,
+    resolve_execution_binding,
+)
 
 
 def test_execution_binding_keeps_conversation_dataset_and_datasource():
