@@ -1,3 +1,5 @@
+"""sqlbot_xpack 尚未迁移的旧 Chat 模型导入路径兼容桩（台账 A7/B2）。"""
+
 from apps.chatbi.models import (
     AiModelQuestion as AiModelQuestion,
 )
@@ -44,3 +46,22 @@ from apps.chatbi.models import (
     TypeEnum as TypeEnum,
 )
 from common.utils.data_format_schema import AxisObj as AxisObj
+
+__all__ = [
+    "AiModelQuestion",
+    "AxisObj",
+    "Chat",
+    "ChatFinishStep",
+    "ChatInfo",
+    "ChatLog",
+    "ChatLogHistory",
+    "ChatLogHistoryItem",
+    "ChatQuestion",
+    "ChatRecord",
+    "ChatRecordResult",
+    "CreateChat",
+    "OperationEnum",
+    "QuickCommand",
+    "RenameChat",
+    "TypeEnum",
+]

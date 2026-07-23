@@ -13,7 +13,6 @@
     ],
     "cross_domain_concrete_implementations": [
         "apps/capabilities/semantic/compile.py -> apps.semantic.repository.sqlmodel.schema_loader",
-        "apps/dashboard/crud/dashboard_service.py -> apps.chat.curd.chat",
         "apps/retrieval/semantic_binding.py -> apps.semantic.repository.sqlmodel.schema_loader",
         "apps/workflow/runtime.py -> apps.semantic.repository.sqlmodel.schema_loader",
         "apps/workflow/runtime.py -> apps.workflow_engine.infrastructure.events.publisher",

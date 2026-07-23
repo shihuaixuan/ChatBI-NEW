@@ -2280,3 +2280,33 @@ pandas/markdown 展示代码，应随 `apps/chat` 整体迁入 chatbi/api（R3-d
    `apps/chat/*` 基线条目全部清零（余额 10/8/0/5/1）。
 4. 验证：定向 596 项、完整后端回归 1,222 项通过；应用导入通过；Ruff 仅余 1 条 SQLAlchemy `== False`
    既有告警（未触及）。无行为变化、无数据库变更。`apps/chat` 物理迁移与目录删除留 R3-d 一次完成。
+
+## R3-d（2026-07-23）：旧 Chat 业务源码迁入 chatbi/api，P5 关账
+
+1. `apps/chat` 的旧入口与协议实现整体迁入 ChatBI：
+   - `task/llm.py` → `chatbi/api/legacy_chat_flow.py`；
+   - `task/external_datasource.py` → `chatbi/api/legacy_external_datasource.py`；
+   - `task/legacy_adapter.py` → `chatbi/api/legacy_sse.py`；
+   - `curd/chat.py` → `chatbi/api/legacy_read.py`；
+   - `api/chat.py` → `chatbi/api/router.py`。
+   `legacy_sse.py` 为 121 行，满足单文件不超过 300 行的关账标准。
+2. `apps/api.py` 改注册 ChatBI 路由；MCP 改调 `chatbi.composition`；Access Control 的会话资源范围
+   读取器迁入 ChatBI 公开面；common、Agent、Workflow Engine 与测试的旧 Chat 模型导入改为
+   `apps.chatbi.models`。运行时代码不再导入 `apps.chat.*`。
+3. 删除接线保留依赖方向：`legacy_composition.py` 只依赖
+   `ExecutionCleanupGateway`，Agent 的具体清理实现由最外层 `apps/api.py` 注册，未让 ChatBI
+   反向导入 `apps.agent`。迁移同时把旧推荐问题接线中不存在的
+   `list_questions_for_chat()` 修正为 Knowledge 公开契约 `list_for_chat()`，严格 Mypy 通过。
+4. Dashboard 改从 ChatBI 公共面读取旧图表数据，删除最后一条
+   `dashboard -> apps.chat.curd` 具体实现基线；余额更新为 10/7/0/5/1。
+5. xpack 导入验证发现台账 A7/B2 低估外部依赖：当前安装的编译模块至少仍导入
+   `apps.chat.models.chat_model.Chat`，若只留 `AxisObj` 会在应用初始化时报
+   `ImportError`。因此 `apps/chat` 仅保留 `chat_model.py` 的模型同对象兼容导出与包初始化文件，
+   内部调用全部清零，外部删除条件并入 A7 留至 R6；B1/B2/B3/B10 销账。
+6. 验证：定向回归 219 项、完整后端回归 1,222 项通过；应用导入与 xpack 初始化通过；
+   OpenAPI 保持 154 条路径；变更范围 Ruff（F/I）通过；新增
+   `legacy_composition.py`、`resource_scope.py` 严格 Mypy 通过。无数据库变更。
+
+**R3 阶段完成，P5 验收完成。** 下一批进入 R4-a，统一 ChatBI 问数路由并拆分
+conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼容桩不计入业务源码，
+按台账 A7 在 R6 与 xpack 协同清偿。

@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 from fastapi.responses import StreamingResponse
 
-from apps.chat.models.chat_model import ChatRecord
 from apps.agent import api, service
 from apps.agent.models import (
     AgentClarificationStatus,
@@ -16,6 +15,7 @@ from apps.agent.schemas import (
     AgentResumeStreamRequest,
     AgentStartStreamRequest,
 )
+from apps.chatbi.models import ChatRecord
 
 
 async def _read_stream(response: StreamingResponse) -> str:

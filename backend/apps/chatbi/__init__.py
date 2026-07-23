@@ -6,7 +6,7 @@ services 子包内部结构对外不承诺稳定。
 
 公共面按 PEP 562 惰性解析：旧 Chat 兼容层（`apps.chat.models.chat_model`，台账 B2）仍会在
 其他领域的初始化链路中导入本包，公共面在 import 期加载全部子域会放大该历史链路；
-这不是掩盖领域间循环（依赖方向本身合法），R3-d 删除 B2 后可改回直接导入。
+这不是掩盖领域间循环（依赖方向本身合法）。当前 xpack 仍使用 B2，待 R6 清偿后再改回直接导入。
 """
 
 from importlib import import_module
@@ -14,12 +14,15 @@ from typing import Any
 
 _SERVICES = "apps.chatbi.services"
 _ERRORS = "apps.chatbi.errors"
+_LEGACY_READ = "apps.chatbi.api.legacy_read"
+_RESOURCE_SCOPE = "apps.chatbi.resource_scope"
 
 _PUBLIC: dict[str, str] = {
     "AnalysisPredictionService": _SERVICES,
     "AnswerGenerationService": _SERVICES,
     "ChatBIError": _ERRORS,
     "ChartGenerationService": _SERVICES,
+    "ChatWorkspaceResourceScopeReader": _RESOURCE_SCOPE,
     "ChatRecordService": _SERVICES,
     "ConversationService": _SERVICES,
     "DatasourceSelectionService": _SERVICES,
@@ -42,6 +45,7 @@ _PUBLIC: dict[str, str] = {
     "project_query_final_reply": _SERVICES,
     "resolve_execution_binding": _SERVICES,
     "resolve_generation_scope": _SERVICES,
+    "get_chart_data_ds": _LEGACY_READ,
 }
 
 __all__ = sorted(_PUBLIC)

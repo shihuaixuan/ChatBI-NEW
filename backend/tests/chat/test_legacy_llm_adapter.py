@@ -8,14 +8,14 @@ from sqlmodel import Session
 
 from apps.ai_model import runtime as model_runtime_module
 from apps.ai_model.runtime import build_llm_runtime
-from apps.chat.task import external_datasource as dependency_module
-from apps.chat.task.external_datasource import (
+from apps.chatbi.api import legacy_external_datasource as dependency_module
+from apps.chatbi.api.legacy_external_datasource import (
     LegacySchemaContext,
     check_legacy_datasource_connection,
     load_legacy_external_schema_context,
     resolve_legacy_datasource,
 )
-from apps.chat.task.legacy_adapter import (
+from apps.chatbi.api.legacy_sse import (
     build_context_prompt_log,
     build_role_prompt_log,
     build_run_error_message,

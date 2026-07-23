@@ -14,22 +14,22 @@
 | A4 | `apps/system/models/system_model.py`、`user.py`、`system_variable_model.py` | 同对象转发至 access_control / ai_model / assistant ORM | sqlbot_xpack + 历史导入路径 | xpack 与残余调用方切换 | R6 | 活跃 |
 | A5 | `apps/system/schemas/permission.py` | 转发 `apps.access_control.permission` | 历史导入路径 | 调用方核对为零 | R6 | 活跃 |
 | A6 | `apps/system/api/user.py` 内 Excel 适配与 create/edit 同名入口 | 转调 Access Control Service | sqlbot_xpack | xpack 改用 access_control 入口 | R6 | 活跃 |
-| A7 | `apps/chat/models/chat_model.py` 中 `AxisObj` 兼容导出 | 指向中立展示 Schema 同一对象 | sqlbot_xpack | xpack 改用中立 Schema 路径 | R6 | 活跃 |
+| A7 | `apps/chat/models/chat_model.py` 旧 Chat 模型与 `AxisObj` 兼容导出 | 指向 `apps.chatbi.models` 与中立展示 Schema 的同一对象；R3-d 实测当前 xpack 编译模块至少仍导入 `Chat` | sqlbot_xpack | xpack 改用 ChatBI 公开模型与中立 Schema 路径 | R6 | 活跃 |
 
 ## B. 旧导入路径类（内部调用方，可自主清偿）
 
 | # | 路径 | 内容 | 调用方 | 删除条件 | 目标阶段 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| B1 | `apps/chat/curd/chat.py` | `save_*`、创建/列表/重命名等兼容转发 → ChatBI Service | 旧 Chat 内部、dashboard（基线在案） | 调用方切换公开 Service | R3-d | 活跃 |
-| B2 | `apps/chat/models/chat_model.py`（除 A7 外） | Chat/ChatRecord/DTO 同对象兼容导出 | `common/utils/command_utils.py`、`common/audit/schemas/log_utils.py` 等 | common 调用方改用 `apps.chatbi.models` | R3-d | 活跃 |
-| B3 | `apps/chat/task/external_datasource.py`（原 legacy_dependencies.py 的存留部分；模型运行时已转正为 `apps/ai_model/runtime.py`，本地数据源包装已删除） | 旧流程外部/本地数据源装配与外部 Schema 读取 | `apps/chat/task/llm.py` | run_task 收口（R3-b/c）或 Assistant 外部契约重构 | R3-c | 活跃 |
+| B1 | `apps/chat/curd/chat.py` | 写侧转发已删；读侧已迁 `chatbi/api/legacy_read.py`；Dashboard 改走 ChatBI 公开面并销账基线 | 旧 Chat 内部、dashboard | R3-d 内部调用方清零 | R3-d | 已清 |
+| B2 | `apps/chat/models/chat_model.py`（除 A7 外） | 运行时内部 Chat/ChatRecord/DTO 旧路径调用已全部切到 `apps.chatbi.models`；兼容契约测试与外部 xpack 依赖并入 A7 管理 | 历史 common 调用（已清）、兼容契约测试、sqlbot_xpack | 运行时内部调用清零；外部删除条件见 A7 | R3-d | 已清 |
+| B3 | `apps/chat/task/external_datasource.py` | 旧路径已删除，能力随旧流程迁入 `chatbi/api/legacy_external_datasource.py` | `chatbi/api/legacy_chat_flow.py` | 旧 Chat 包内调用清零 | R3-d | 已清 |
 | B4 | `apps/capabilities/question_understanding.py`、`time_slots.py` | ChatBI 同一身份兼容导出 | 旧测试与历史导入 | 调用方切 `apps.chatbi.services` | R4-d | 活跃 |
 | B5 | `apps/capabilities/semantic/compile.py`、`retrieval.py` | 兼容函数转发至 Semantic/ChatBI 公开服务 | 旧测试与历史导入 | 同上 | R4-d | 活跃 |
 | B6 | `apps/capabilities/sql/`、`apps/capabilities/schemas.py` | R1-c 起 schemas/validator/permission/execution_gateway 均为**纯转发桩**（实现已迁入 chatbi models/execution/adapters）；executor.py、repair.py 为 workflow 调用方持有的活代码 | apps/workflow、旧测试 | executor/repair 随 R4-c 归位后整目录删除 | R4-d | 活跃 |
 | B7 | `apps/workflow/capabilities/adapters/intent_validation.py`、`time_slots.py` | ChatBI Service 同一身份兼容导出 | Graph 历史导入 | Graph 调用方切换 | R4-c | 活跃 |
 | B8 | `apps/retrieval/models/__init__.py`（包转发）、`apps/retrieval/schemas.py` | 旧路径转发新 orm/dto（守卫已禁运行时新用） | 历史导入 | 调用方核对为零 | R6 | 活跃 |
 | B9 | `apps/datasource/models/datasource.py` | Datasource 对象导入兼容 | 历史导入 | 调用方核对为零 | R6 | 活跃 |
-| B10 | `apps/mcp/mcp.py → apps.chat.composition` | MCP 会话创建仍经旧 chat 组装模块 | apps/mcp | R4-a 后改 `chatbi.composition` | R4-a | 活跃 |
+| B10 | `apps/mcp/mcp.py → apps.chat.composition` | MCP 已改用 `apps.chatbi.composition` | apps/mcp | 调用方已切换 | R3-d | 已清 |
 
 ## C. 兼容 API 路由类（删除条件依赖外部调用方确认）
 

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from apps.chat.models.chat_model import Chat, ChatRecord
+from apps.chatbi.models import Chat, ChatRecord
 from apps.retrieval.embedding import StaticEmbeddingProvider
 from apps.retrieval.indexing import RetrievalIndexingService
 from apps.retrieval.semantic_indexing import (

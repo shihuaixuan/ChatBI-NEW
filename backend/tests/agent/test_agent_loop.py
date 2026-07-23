@@ -16,8 +16,8 @@ from apps.agent.models import (
 from apps.agent.schemas import AgentConfig
 from apps.agent.tools.base import AgentTool, ToolOutput
 from apps.agent.tools.registry import ToolRegistry
-from apps.chat.models.chat_model import ChatRecord
 from apps.chatbi.models import (
+    ChatRecord,
     IntentRecognitionOutput,
     IntentValidationOutput,
     QuestionUnderstandingOutcome,

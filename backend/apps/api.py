@@ -9,9 +9,11 @@ from apps.access_control.api import login as access_login
 from apps.access_control.api import user as access_user
 from apps.access_control.api import workspace as access_workspace
 from apps.agent import api as agent
+from apps.agent.deletion import AgentExecutionDeletionService
 from apps.ai_model.api import model_config as ai_model
 from apps.assistant.api import assistants as assistant
-from apps.chat.api import chat
+from apps.chatbi.api import router as chat
+from apps.chatbi.api.legacy_composition import configure_legacy_agent_cleanup
 from apps.dashboard.api import dashboard_api
 from apps.datasource.api import datasource, table_relation
 from apps.knowledge.api import recommended_problem, sql_example
@@ -26,6 +28,7 @@ from apps.workflow_engine.api import router as graph_workflow
 
 
 api_router = APIRouter()
+configure_legacy_agent_cleanup(AgentExecutionDeletionService)
 api_router.include_router(access_login.router)
 api_router.include_router(access_user.router)
 api_router.include_router(user.router)

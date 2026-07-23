@@ -183,7 +183,7 @@ def test_delete_delegates_owned_conversation_cleanup():
     assert deletion_provider.calls == [(7, 10)]
 
 
-def test_legacy_chat_models_export_canonical_chatbi_objects():
+def test_xpack_chat_models_export_canonical_chatbi_objects():
     from apps.chat.models import chat_model
     from apps.chatbi import models
 

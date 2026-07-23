@@ -26,7 +26,7 @@ from apps.agent.service import (
     AgentNotEnabledError,
     create_agent_start_stream,
 )
-from apps.chat.composition import build_conversation_service
+from apps.chatbi.composition import build_conversation_service
 from apps.chatbi.models import CreateChat
 from apps.datasource.composition import build_datasource_service
 from apps.mcp.schemas import ChatStart, McpDs, McpQuestion

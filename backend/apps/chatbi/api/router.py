@@ -8,8 +8,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, select
 from starlette.responses import JSONResponse
 
-from apps.chat.composition import build_conversation_service
-from apps.chat.curd.chat import (
+from apps.chatbi.api.legacy_chat_flow import LLMService
+from apps.chatbi.api.legacy_composition import build_legacy_conversation_service
+from apps.chatbi.api.legacy_read import (
     format_json_data,
     format_json_list_data,
     get_chart_config,
@@ -24,16 +25,16 @@ from apps.chat.curd.chat import (
     get_chat_with_records_with_data,
     list_recent_questions,
 )
-from apps.chat.models.chat_model import (
+from apps.chatbi.api.legacy_sse import encode_sse_event
+from apps.chatbi.composition import build_conversation_reader_service
+from apps.chatbi.models import (
     Chat,
     ChatInfo,
+    ChatQuestion,
     ChatRecord,
     CreateChat,
     RenameChat,
 )
-from apps.chat.task.legacy_adapter import encode_sse_event
-from apps.chat.task.llm import LLMService
-from apps.chatbi.models import ChatQuestion
 from apps.chatbi.services import DatasetBindingError
 from apps.swagger.i18n import PLACEHOLDER_PREFIX
 from common.audit.models.log_model import OperationModules, OperationType
@@ -47,7 +48,7 @@ router = APIRouter(tags=["Data Q&A"], prefix="/chat")
 
 @router.get("/list", response_model=list[Chat], summary=f"{PLACEHOLDER_PREFIX}get_chat_list")
 async def chats(session: SessionDep, current_user: CurrentUser):
-    return build_conversation_service(session).list_for_owner(
+    return build_conversation_reader_service(session).list_for_owner(
         current_user.id,
         current_user.oid,
     )
@@ -159,7 +160,7 @@ async def rename(session: SessionDep, chat: RenameChat):
 ))
 async def rename(session: SessionDep, current_user: CurrentUser, chat: RenameChat):
     try:
-        return build_conversation_service(session).rename(current_user.id, chat)
+        return build_conversation_reader_service(session).rename(current_user.id, chat)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -193,7 +194,7 @@ async def delete(session: SessionDep, chart_id: int, brief: str):
 ))
 async def delete(session: SessionDep, current_user: CurrentUser, chart_id: int, brief: str):
     # 删除服务保留明确的权限、数据库冲突和 Artifact 清理错误，不在 API 层宽泛吞掉。
-    return build_conversation_service(session).delete(current_user.id, chart_id)
+    return build_legacy_conversation_service(session).delete(current_user.id, chart_id)
 
 
 @router.post("/start", response_model=ChatInfo, summary=f"{PLACEHOLDER_PREFIX}start_chat")
@@ -204,7 +205,7 @@ async def delete(session: SessionDep, current_user: CurrentUser, chart_id: int, 
 ))
 async def start_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj: CreateChat):
     try:
-        return build_conversation_service(session).create(
+        return build_legacy_conversation_service(session).create(
             user_id=current_user.id,
             workspace_id=current_user.oid,
             request=create_chat_obj,
@@ -231,7 +232,7 @@ async def assistant_start_chat(
     create_chat_obj: CreateChat = CreateChat(origin=2),
 ):
     try:
-        return build_conversation_service(session).create(
+        return build_legacy_conversation_service(session).create(
             user_id=current_user.id,
             workspace_id=current_user.oid,
             request=create_chat_obj,

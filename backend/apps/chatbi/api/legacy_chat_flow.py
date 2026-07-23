@@ -18,44 +18,6 @@ from sqlmodel import Session
 from apps.access_control.data_policy import requires_data_policy, resolve_data_policy
 from apps.ai_model.runtime import LLMRuntime, build_llm_runtime
 from apps.assistant import AssistantOutDsSchema
-from apps.chat.composition import build_conversation_service
-from apps.chat.curd.chat import (
-    end_log,
-    format_chart_fields,
-    format_json_data,
-    get_chart_config,
-    get_chat_brief_generate,
-    get_chat_chart_config,
-    get_chat_chart_data,
-    get_chat_predict_data,
-    get_last_execute_sql_error,
-    list_generate_chart_logs,
-    list_generate_sql_logs,
-    start_log,
-    trigger_log_error,
-)
-from apps.chat.models.chat_model import (
-    Chat,
-    ChatFinishStep,
-    ChatLog,
-    ChatRecord,
-    OperationEnum,
-    RenameChat,
-)
-from apps.chat.task.external_datasource import (
-    LegacyDatasourceRuntime,
-    build_legacy_external_datasource_catalog,
-    check_legacy_datasource_connection,
-    load_legacy_external_schema_context,
-    resolve_legacy_datasource,
-)
-from apps.chat.task.legacy_adapter import (
-    build_context_prompt_log,
-    build_role_prompt_log,
-    build_run_error_message,
-    encode_sse_event,
-    finalize_legacy_run,
-)
 from apps.chatbi.adapters.analysis_prediction import build_analysis_prediction_service
 from apps.chatbi.adapters.chart_generation import build_chart_generation_service
 from apps.chatbi.adapters.datasource_selection import build_datasource_selection_service
@@ -76,8 +38,38 @@ from apps.chatbi.adapters.recommended_questions import (
     build_recommended_question_service,
 )
 from apps.chatbi.adapters.sql_generation import build_sql_generation_service
+from apps.chatbi.api.legacy_external_datasource import (
+    LegacyDatasourceRuntime,
+    build_legacy_external_datasource_catalog,
+    check_legacy_datasource_connection,
+    load_legacy_external_schema_context,
+    resolve_legacy_datasource,
+)
+from apps.chatbi.api.legacy_read import (
+    end_log,
+    format_chart_fields,
+    format_json_data,
+    get_chart_config,
+    get_chat_brief_generate,
+    get_chat_chart_config,
+    get_chat_chart_data,
+    get_chat_predict_data,
+    get_last_execute_sql_error,
+    list_generate_chart_logs,
+    list_generate_sql_logs,
+    start_log,
+    trigger_log_error,
+)
+from apps.chatbi.api.legacy_sse import (
+    build_context_prompt_log,
+    build_role_prompt_log,
+    build_run_error_message,
+    encode_sse_event,
+    finalize_legacy_run,
+)
 from apps.chatbi.composition import (
     build_chat_record_service,
+    build_conversation_reader_service,
     build_datasource_selection_candidate_service,
     build_generation_context_service,
     build_generation_schema_context_service,
@@ -86,7 +78,11 @@ from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
     ChartGenerationData,
     ChartGenerationMessage,
+    Chat,
+    ChatFinishStep,
+    ChatLog,
     ChatQuestion,
+    ChatRecord,
     ChatRecordAuxiliaryProjection,
     ChatRecordAuxiliaryType,
     ChatRecordResultProjection,
@@ -103,10 +99,12 @@ from apps.chatbi.models import (
     GenerationHistoryLog,
     GenerationHistoryProjectionData,
     GenerationRuntimeSettingsData,
+    OperationEnum,
     PermissionSQLFilter,
     PermissionSQLGenerationData,
     QueryResultProjectionData,
     RecommendedQuestionGenerationData,
+    RenameChat,
     SQLGenerationData,
     SQLGenerationMessage,
 )
@@ -1249,7 +1247,7 @@ class LLMService:
         if llm_brief_generated or (self.chat_question.question and self.chat_question.question.strip() != ''):
             save_brief = llm_brief if (llm_brief and llm_brief != '') else self.chat_question.question.strip()[
                                                                            :20]
-            brief = build_conversation_service(_session).rename(
+            brief = build_conversation_reader_service(_session).rename(
                 self.current_user.id,
                 RenameChat(
                     id=self.get_record().chat_id,

@@ -6,7 +6,7 @@ from apps.chatbi.models import (
 )
 
 
-def test_legacy_chat_history_models_are_chatbi_compatibility_exports():
+def test_xpack_chat_history_models_are_chatbi_compatibility_exports():
     assert chat_model.ChatRecordResult is ChatRecordResult
     assert chat_model.ChatLogHistoryItem is ChatLogHistoryItem
     assert chat_model.ChatLogHistory is ChatLogHistory

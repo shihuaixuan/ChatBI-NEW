@@ -1,14 +1,18 @@
-import base64
+
+import time
+import uuid
 
 from orjson import orjson
-from sqlalchemy import select, and_, text
+from sqlalchemy import and_, text
 
-from apps.chat.curd.chat import get_chart_data_ds
-from apps.dashboard.models.dashboard_model import CoreDashboard, CreateDashboard, QueryDashboard, DashboardBaseResponse
-from common.core.deps import SessionDep, CurrentUser
-import uuid
-import time
-
+from apps.chatbi import get_chart_data_ds
+from apps.dashboard.models.dashboard_model import (
+    CoreDashboard,
+    CreateDashboard,
+    DashboardBaseResponse,
+    QueryDashboard,
+)
+from common.core.deps import CurrentUser, SessionDep
 from common.utils.tree_utils import build_tree_generic
 
 

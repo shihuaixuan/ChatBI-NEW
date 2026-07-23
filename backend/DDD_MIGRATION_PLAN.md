@@ -1,7 +1,7 @@
 # SQLBot 后端架构迁移计划（现行版）
 
-> 状态：进行中（R0–R2、R3-a/b/c1/c2/c3 已完成，当前推进 R3-d）
-> 更新：2026-07-20
+> 状态：进行中（R0–R3 已完成，P5 已验收，下一批 R4-a）
+> 更新：2026-07-23
 > 定位：**边界清晰的模块化单体**。DDD 战略半边（限界上下文、数据所有权、公开契约、依赖方向）全局保留；战术模式按子域分级使用（见 `apps/AGENTS.md` v2）。
 > 本文是唯一现行计划。历史批次日志（含 P0–P5 前 43 批全文）见 `DDD_MIGRATION_CHANGELOG.md`；兼容入口台账见 `COMPAT_LEDGER.md`；评审依据见 `docs/tech/12/13/14`。
 
@@ -88,8 +88,8 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 | 6 ✅ | 旧 Chat 写侧转发（curd 的 save_*） | 13 个转发函数已删除，llm.py 直调 ChatRecordService（R3-c1 完成） | R3-c1 |
 | 7 ✅ | `deletion.py`、`semantic_binding.py` 及其 ORM 跨域依赖 | 已迁 `chatbi/services/conversation`；Semantic 绑定服务与引擎 run_cleanup 公开契约建立；基线销账 4 条（R3-c2 完成） | R3-c2 |
 | 8 ✅ | `curd/chat.py` 最后 2 条跨域 ORM 依赖（CoreDatasource / SemanticDataset 展示查询） | 改调 Datasource / Semantic 目录公开 Service，基线销账 2 条；`apps/chat/*` 基线清零（R3-c3 完成） | R3-c3 |
-| 9 | `apps/chat` **整体**迁入 `chatbi/api/`（curd 读侧 + llm.py + external_datasource + legacy_adapter + `api/chat.py`） | `apps/api.py` 更新；`validate_history_ds`/图片/语言工具随流程迁移；SSE 单文件 ≤300 行落位；`resource_scope` 随迁 | R3-d |
-| 10 | `apps/chat` 目录删除 | 仅余 `chat_model.py` xpack 桩（台账 A7/B2，R6 删）；基线 `apps/chat/*` 条目清零 | R3-d |
+| 9 ✅ | `apps/chat` **整体**迁入 `chatbi/api/`（curd 读侧 + llm.py + external_datasource + legacy_adapter + `api/chat.py`） | 已迁 `legacy_read` / `legacy_chat_flow` / `legacy_external_datasource` / `legacy_sse` / `router`；`apps/api.py` 已切新路由；`resource_scope` 迁入 chatbi 公开面；SSE 121 行（R3-d 完成） | R3-d |
+| 10 ✅ | `apps/chat` 业务源码删除 | 仅余 `models/chat_model.py` xpack 兼容桩及包初始化文件（台账 A7/B2，R6 删）；内部 `apps.chat.*` 调用清零；基线 `apps/chat/*` 条目清零（R3-d 完成） | R3-d |
 
 > 2026-07-20 修正（停止规则触发）：原 #6"SSE 先行单独迁入 chatbi/api"不可行——其消费方（llm.py/api）仍在
 > apps/chat，先移会给基线新增跨域 API 导入、违反棘轮；且 `curd/chat.py` 经核实是约 760 行真实读侧代码而非
@@ -99,19 +99,23 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 > 属于 R3-d 随 `apps/chat` 整体迁入 `chatbi/api` 的表现层，不应先切成"读服务"（避免 E7 仪式）。故 R3-c3 收敛为
 > 只做 2 条 ORM 基线销账（就地、低风险），物理迁移并入 R3-d 一次完成。
 
-验收：`apps/chat/task/` 与 `legacy_dependencies.py` 删除；SSE 协议集中单文件 ≤300 行；基线中 `apps/chat/*` 条目清零；原 P5 完成标准逐条通过。
+验收完成：`apps/chat/task/` 与 `legacy_dependencies.py` 删除；SSE 协议集中于
+`chatbi/api/legacy_sse.py`（121 行）；运行时代码不再导入 `apps.chat.*`；基线中
+`apps/chat/*` 条目清零；OpenAPI 保持 154 条路径。当前安装的 xpack 编译模块仍导入
+`apps.chat.models.chat_model.Chat`，故该文件按外部兼容桩保留至 R6，不能在 R3-d 删除。
 风险控制：R3-b（run_task 374 行状态机）单独成批，改写前补终态/事件序列特征测试，旧函数保留一批作为可切换实现。
 
 ### R4：领域收拢与入口统一（3–4 批）
 
 | 批 | 动作 |
 | --- | --- |
-| R4-a | 建 `chatbi/api/`（conversations/queries/interactions/legacy_sse），`apps/api.py` 收敛为单 router（旧路径不变）；删除 `apps/chat` |
+| R4-a | 在 R3-d 已建立的 `chatbi/api/` 内拆分 conversations/queries/interactions；`apps/api.py` 的问数入口收敛为 chatbi 单 router（`/chat`、`/chat/agent`、`/graph` 路径不变）；`apps/chat/models/chat_model.py` 外部桩按 A7 留至 R6 |
 | R4-b | `apps/agent → chatbi/orchestration/agent`（ORM 入 models/orm，crud 入仓储，api 并入） |
 | R4-c | `apps/workflow → chatbi/orchestration/graph`；1,483 行 `adapters/question.py` 按节点拆分；runtime 对引擎 infrastructure 依赖改端口 |
 | R4-d | 解散 `capabilities` 与 `template`（生成器入 `chatbi/adapters/prompts/`）；平台参数迁出 `system`；清偿 R1/R2 兼容 re-export |
 
-验收：ChatBI 相关顶级目录仅剩 `chatbi`；问数入口路由唯一（兼容路径行为不变）；台账清偿率 ≥80%；xpack 导入与 OpenAPI 通过。
+验收：除台账 A7 的 xpack 外部桩外，ChatBI 相关顶级目录仅剩 `chatbi`；问数入口路由唯一
+（兼容路径行为不变）；台账清偿率 ≥80%；xpack 导入与 OpenAPI 通过。
 
 ### R5：Workflow Engine 隔离（= 原 P6，2–3 批）
 

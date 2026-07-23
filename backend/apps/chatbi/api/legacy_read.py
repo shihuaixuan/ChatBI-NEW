@@ -7,21 +7,17 @@ from sqlalchemy import and_, desc, func, select, update
 from sqlalchemy.orm import aliased
 
 from apps.assistant.public import AssistantOutDsFactory
-from apps.chat.composition import build_conversation_service
-from apps.chat.models.chat_model import (
+from apps.chatbi.composition import build_conversation_reader_service
+from apps.chatbi.models import (
     Chat,
     ChatInfo,
     ChatLog,
-    ChatRecord,
-    CreateChat,
-    OperationEnum,
-    RenameChat,
-    TypeEnum,
-)
-from apps.chatbi.models import (
     ChatLogHistory,
     ChatLogHistoryItem,
+    ChatRecord,
     ChatRecordResult,
+    OperationEnum,
+    TypeEnum,
 )
 from apps.chatbi.services import (
     DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
@@ -56,18 +52,9 @@ def get_chat(session: SessionDep, chat_id: int) -> Chat | None:
     """兼容旧查询入口，业务规则由 ConversationService 维护。"""
 
     try:
-        return build_conversation_service(session).get(chat_id)
+        return build_conversation_reader_service(session).get(chat_id)
     except ConversationNotFoundError:
         return None
-
-
-def list_chats(session: SessionDep, current_user: CurrentUser) -> list[Chat]:
-    """兼容旧列表入口，业务规则由 ConversationService 维护。"""
-
-    return build_conversation_service(session).list_for_owner(
-        current_user.id,
-        current_user.oid,
-    )
 
 
 def list_recent_questions(session: SessionDep, current_user: CurrentUser, dataset_id: int) -> list[str]:
@@ -87,21 +74,6 @@ def list_recent_questions(session: SessionDep, current_user: CurrentUser, datase
         .all()
     )
     return [record[0] for record in chat_records] if chat_records else []
-
-
-def rename_chat_with_user(session: SessionDep, current_user: CurrentUser, rename_object: RenameChat) -> str:
-    """兼容旧重命名入口，业务规则由 ConversationService 维护。"""
-
-    return build_conversation_service(session).rename(
-        current_user.id,
-        rename_object,
-    )
-
-
-def delete_chat_with_user(session, current_user: CurrentUser, chart_id) -> str:
-    """兼容旧删除入口，业务规则由 ConversationService 维护。"""
-
-    return build_conversation_service(session).delete(current_user.id, chart_id)
 
 
 def get_chart_config(session: SessionDep, chart_record_id: int):
@@ -285,7 +257,7 @@ def get_chat_with_records_with_data(session: SessionDep, chart_id: int, current_
 def get_chat_with_records(session: SessionDep, chart_id: int, current_user: CurrentUser,
                           current_assistant: CurrentAssistant, with_data: bool = False,
                           trans: Trans = None) -> ChatInfo:
-    chat = build_conversation_service(session).get_owned(current_user.id, chart_id)
+    chat = build_conversation_reader_service(session).get_owned(current_user.id, chart_id)
     chat_info = ChatInfo(**chat.model_dump())
 
     dataset = (
@@ -698,21 +670,6 @@ def list_generate_chart_logs(session: SessionDep, chart_id: int) -> list[ChatLog
         for r in row:
             _list.append(ChatLog(**r.model_dump()))
     return _list
-
-
-def create_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj: CreateChat,
-                require_datasource: bool = True, _current_assistant: CurrentAssistant = None) -> ChatInfo:
-    """兼容旧创建入口，创建与欢迎记录在同一事务中提交。"""
-
-    return build_conversation_service(session).create(
-        user_id=current_user.id,
-        workspace_id=current_user.oid,
-        request=create_chat_obj,
-        require_dataset=require_datasource,
-        assistant_type=(
-            _current_assistant.type if _current_assistant is not None else None
-        ),
-    )
 
 
 def start_log(session: SessionDep, ai_modal_id: int = None, ai_modal_name: str = None, operate: OperationEnum = None,

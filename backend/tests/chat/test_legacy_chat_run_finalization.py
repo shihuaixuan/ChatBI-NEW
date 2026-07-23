@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from apps.chat.task import llm as llm_module
+from apps.chatbi.api import legacy_chat_flow as llm_module
 from apps.chatbi.models import ChatFinishStep
 from common.error import SingleMessageError
 
@@ -161,7 +161,7 @@ def test_legacy_chat_run_sse_event_sequence_until_sql_finish(monkeypatch):
 
     import sqlparse
 
-    from apps.chat.task.legacy_adapter import encode_sse_event
+    from apps.chatbi.api.legacy_sse import encode_sse_event
 
     assert frames == [
         encode_sse_event("id", id=7),

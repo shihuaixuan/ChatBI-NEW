@@ -20,7 +20,7 @@ from apps.access_control.services import (
     DataPolicyService,
     IdentityWorkspaceService,
 )
-from apps.chat.resource_scope import ChatWorkspaceResourceScopeReader
+from apps.chatbi import ChatWorkspaceResourceScopeReader
 from apps.datasource import build_datasource_policy_catalog
 from apps.datasource.resource_scope import DatasourceWorkspaceResourceScopeReader
 from common.core.security import default_md5_pwd, md5pwd, verify_md5pwd

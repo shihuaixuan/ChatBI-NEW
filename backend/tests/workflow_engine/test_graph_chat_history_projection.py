@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from apps.chat.models.chat_model import Chat, ChatRecord
+from apps.chatbi.models import Chat, ChatRecord
 from apps.chatbi.workflow_gateway import build_workflow_chat_record_gateway
 from apps.workflow_engine.api.chat_history import (
     ChatProjectingRunStore,

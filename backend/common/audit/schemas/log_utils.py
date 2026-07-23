@@ -7,7 +7,7 @@ from sqlbot_xpack.permissions.models.ds_rules import DsRules
 from apps.access_control.models import ApiKeyModel, UserModel, WorkspaceModel
 from apps.ai_model.models import AiModelDetail
 from apps.assistant.audit import build_assistant_audit_resource_query
-from apps.chat.models.chat_model import Chat
+from apps.chatbi.models import Chat
 from apps.dashboard.models.dashboard_model import CoreDashboard
 from apps.datasource.models.datasource import CoreDatasource
 from apps.knowledge.models.orm import SQLExampleModel

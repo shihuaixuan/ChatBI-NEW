@@ -1,7 +1,7 @@
 import re
 from typing import Optional, Tuple
 
-from apps.chat.models.chat_model import QuickCommand
+from apps.chatbi.models import QuickCommand
 
 
 def parse_quick_command(input_str: str) -> Tuple[Optional[QuickCommand], str, Optional[int], Optional[str]]:
@@ -46,7 +46,7 @@ def parse_quick_command(input_str: str) -> Tuple[Optional[QuickCommand], str, Op
     match = re.search(full_pattern, input_str)
 
     if not match:
-        return None, input_str, None, f"错误: 命令格式不正确"
+        return None, input_str, None, "错误: 命令格式不正确"
 
     command_part = match.group(1)
     number_part = match.group(2)
@@ -70,7 +70,7 @@ def parse_quick_command(input_str: str) -> Tuple[Optional[QuickCommand], str, Op
     if before_command and not before_command.endswith(' '):
         # 检查命令是否在字符串开头
         if match.start() > 0:
-            return None, input_str, None, f"错误: 命令与前面的文本没有用空格分隔"
+            return None, input_str, None, "错误: 命令与前面的文本没有用空格分隔"
 
     # 6. 获取命令枚举
     command = None
@@ -95,5 +95,4 @@ def parse_quick_command(input_str: str) -> Tuple[Optional[QuickCommand], str, Op
             return None, input_str, None, f"错误: 数字参数格式不正确: {number_part}"
 
     return command, text_before_command, record_id, None
-
 

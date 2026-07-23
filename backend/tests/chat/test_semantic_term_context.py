@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.chat.task import llm as llm_module
+from apps.chatbi.api import legacy_chat_flow as llm_module
 from apps.chatbi.services.conversation.dataset_binding import (
     DatasetBindingError,
     validate_assistant_dataset_binding,

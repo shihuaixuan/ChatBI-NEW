@@ -6,7 +6,7 @@ from apps.agent import crud
 from apps.agent.schemas import AgentQuestionRequest
 from apps.agent.tools.base import AgentToolContext
 from apps.agent.tools.interaction import SearchTerminologyArgs, SearchTerminologyTool
-from apps.chat.models.chat_model import Chat
+from apps.chatbi.models import Chat
 from apps.semantic.models.dto import TermSearchResult
 
 

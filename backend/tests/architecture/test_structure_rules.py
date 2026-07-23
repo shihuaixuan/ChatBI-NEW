@@ -50,7 +50,7 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
             "apps.chat.curd",
             "apps.chat.task",
         ),
-        reason="MCP 只能使用公开契约；对 apps.chat.composition 的过渡依赖见台账 B10。",
+        reason="MCP 只能使用 ChatBI 公开契约，不得重新依赖旧 Chat 内部路径。",
     ),
 )
 
