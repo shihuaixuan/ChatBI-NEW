@@ -4,9 +4,10 @@ import pytest
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.domain.run import RunStatus, WorkflowRun
-from apps.workflow_engine.infrastructure.persistence.models import (
+from common.core.db import engine
+from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
+from sqlbot_platform.workflow_engine.domain.run import RunStatus, WorkflowRun
+from sqlbot_platform.workflow_engine.infrastructure.persistence.models import (
     InteractionRequestModel,
     NodeExecutionModel,
     WorkflowArtifactModel,
@@ -14,13 +15,12 @@ from apps.workflow_engine.infrastructure.persistence.models import (
     WorkflowEventModel,
     WorkflowRunModel,
 )
-from apps.workflow_engine.infrastructure.persistence.run_repository import (
+from sqlbot_platform.workflow_engine.infrastructure.persistence.run_repository import (
     RunOwnershipConflictError,
     RunOwnershipIncompleteError,
     RunRepository,
     RunVersionConflictError,
 )
-from common.core.db import engine
 
 
 def _cleanup(session: Session) -> None:

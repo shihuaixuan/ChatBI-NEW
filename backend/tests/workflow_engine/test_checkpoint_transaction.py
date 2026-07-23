@@ -3,15 +3,16 @@ from datetime import datetime, timezone
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from apps.workflow_engine.domain.artifact import WorkflowArtifact
-from apps.workflow_engine.domain.checkpoint import WorkflowCheckpoint
-from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.domain.event import WorkflowEvent
-from apps.workflow_engine.domain.run import RunStatus
-from apps.workflow_engine.infrastructure.persistence.artifact_repository import (
+from common.core.db import engine
+from sqlbot_platform.workflow_engine.domain.artifact import WorkflowArtifact
+from sqlbot_platform.workflow_engine.domain.checkpoint import WorkflowCheckpoint
+from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
+from sqlbot_platform.workflow_engine.domain.event import WorkflowEvent
+from sqlbot_platform.workflow_engine.domain.run import RunStatus
+from sqlbot_platform.workflow_engine.infrastructure.persistence.artifact_repository import (
     ArtifactRepository,
 )
-from apps.workflow_engine.infrastructure.persistence.models import (
+from sqlbot_platform.workflow_engine.infrastructure.persistence.models import (
     InteractionRequestModel,
     NodeExecutionModel,
     WorkflowArtifactModel,
@@ -19,11 +20,12 @@ from apps.workflow_engine.infrastructure.persistence.models import (
     WorkflowEventModel,
     WorkflowRunModel,
 )
-from apps.workflow_engine.infrastructure.persistence.run_repository import RunRepository
-from apps.workflow_engine.infrastructure.persistence.unit_of_work import (
+from sqlbot_platform.workflow_engine.infrastructure.persistence.run_repository import (
+    RunRepository,
+)
+from sqlbot_platform.workflow_engine.infrastructure.persistence.unit_of_work import (
     WorkflowUnitOfWork,
 )
-from common.core.db import engine
 from tests.workflow_engine.test_run_repository import _domain_run
 
 

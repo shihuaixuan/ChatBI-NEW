@@ -1,9 +1,14 @@
 import pytest
 
-from apps.workflow_engine.registry.condition_registry import ConditionRegistry
-from apps.workflow_engine.registry.definition_validator import DefinitionValidator
-from apps.workflow_engine.registry.handler_registry import HandlerRegistry
-from apps.workflow_engine.registry.workflow_registry import (
+from sqlbot_platform.workflow_engine.api import extension as api_extension
+from sqlbot_platform.workflow_engine.registry.condition_registry import (
+    ConditionRegistry,
+)
+from sqlbot_platform.workflow_engine.registry.definition_validator import (
+    DefinitionValidator,
+)
+from sqlbot_platform.workflow_engine.registry.handler_registry import HandlerRegistry
+from sqlbot_platform.workflow_engine.registry.workflow_registry import (
     DefinitionNotFoundError,
     DuplicateDefinitionError,
     WorkflowRegistry,
@@ -12,6 +17,18 @@ from tests.workflow_engine.test_definition_validator import (
     _registries,
     _valid_definition,
 )
+
+
+def test_workflow_api_extension_requires_explicit_registration(monkeypatch):
+    """未注册业务扩展时必须明确失败，不能回退到隐式业务实现。"""
+
+    monkeypatch.setattr(api_extension, "_extension_factory", None)
+
+    with pytest.raises(
+        RuntimeError,
+        match="WORKFLOW_API_EXTENSION_NOT_REGISTERED",
+    ):
+        api_extension.build_workflow_api_extension(object())  # type: ignore[arg-type]
 
 
 def test_handler_and_condition_registry_reject_duplicate_names():

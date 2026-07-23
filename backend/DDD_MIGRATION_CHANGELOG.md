@@ -2417,3 +2417,27 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
    无数据库迁移，既有 HTTP 路径与业务行为不变。
 
 **R4 完成。** 下一阶段进入 R5，隔离 Workflow Engine 的剩余业务依赖。
+
+## R5（2026-07-23）：Workflow Engine 业务隔离与平台迁移
+
+1. Workflow Engine API 新增 `WorkflowApiExtension` 注册端口，统一声明数据集解析、
+   Chat 会话校验与历史准备、图运行时与定义创建、ChatRecord 投影网关五类能力。
+   `GraphApiService` 只依赖该端口，不再 import ChatBI 图实现、Chat 模型或 Semantic ORM；
+   未在应用组合根注册时明确抛出 `WORKFLOW_API_EXTENSION_NOT_REGISTERED`。
+2. ChatBI 在 `orchestration/graph/api_extension.py` 实现扩展，并由 `apps/api.py`
+   显式注册。原会话归属/执行绑定、历史语义上下文、ChatRecord 创建与终态投影规则
+   完整迁入该实现；`apps/chatbi/workflow_gateway.py` 删除。
+3. Semantic 数据集目录公开服务新增旧数据源引用解析能力，继续按数据集可用状态、
+   默认模型、配置顺序和数据集 id 表达唯一映射规则；ChatBI 不直接读取 Semantic ORM。
+4. `apps/workflow_engine` 整体迁至 `backend/platform/workflow_engine`，旧目录和旧导入
+   不保留。由于 Python 标准库已有 `platform` 模块，项目使用
+   `sqlbot_platform.workflow_engine` 导入命名空间，并通过源码映射指向唯一物理目录。
+5. Graph API 与 ChatRecord 投影集成测试迁入 `tests/chatbi`；演示脚本同步归位。
+   `tests/workflow_engine` 只保留通用引擎测试。架构守卫扩大到整个引擎目录和引擎测试，
+   禁止 import `apps`；`workflow_engine_business_imports` 五条基线全部销账。
+6. 验证：Workflow Engine、Graph 与 ChatBI 联合回归 316 项通过，架构测试 137 项通过，
+   完整后端回归 1,215 项通过；新增端口、ChatBI 实现、Semantic 目录扩展和引擎 API
+   严格 Mypy 通过；变更范围 Ruff（F/I）通过；应用与 xpack 初始化成功，OpenAPI 保持
+   154 条路径。无数据库变更，Run 表、事件协议、HTTP 路径和恢复语义不变。
+
+**R5 完成。** 下一阶段进入 R6，处理外部接口归位、剩余兼容台账与最终清理。

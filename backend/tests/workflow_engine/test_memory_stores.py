@@ -2,11 +2,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from apps.workflow_engine.domain.artifact import WorkflowArtifact
-from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.domain.event import WorkflowEvent
-from apps.workflow_engine.domain.run import WorkflowRun
-from apps.workflow_engine.infrastructure.memory import (
+from sqlbot_platform.workflow_engine.domain.artifact import WorkflowArtifact
+from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
+from sqlbot_platform.workflow_engine.domain.event import WorkflowEvent
+from sqlbot_platform.workflow_engine.domain.run import WorkflowRun
+from sqlbot_platform.workflow_engine.infrastructure.memory import (
     InMemoryArtifactStore,
     InMemoryEventPublisher,
     InMemoryRunStore,

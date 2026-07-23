@@ -46,19 +46,25 @@ from apps.chatbi.services.execution.sql_permission import SQLPermissionService
 from apps.chatbi.services.generation.answer_generation import AnswerModelClient
 from apps.retrieval.service import build_retrieval_service
 from apps.semantic.composition import build_semantic_schema_service
-from apps.workflow_engine.composition import build_persistent_runtime_services
-from apps.workflow_engine.ports.run_store import RunStore
-from apps.workflow_engine.registry.condition_registry import ConditionRegistry
-from apps.workflow_engine.registry.definition_validator import DefinitionValidator
-from apps.workflow_engine.registry.handler_registry import HandlerRegistry
-from apps.workflow_engine.registry.workflow_registry import WorkflowRegistry
-from apps.workflow_engine.runtime.checkpoint_manager import CheckpointManager
-from apps.workflow_engine.runtime.context_patcher import ContextPatcher
-from apps.workflow_engine.runtime.graph_runtime import GraphRuntime
-from apps.workflow_engine.runtime.lease import InMemoryRunLease
-from apps.workflow_engine.runtime.router import ConditionRouter
-from apps.workflow_engine.runtime.scheduler import NodeScheduler
 from common.core.db import engine
+from sqlbot_platform.workflow_engine.composition import (
+    build_persistent_runtime_services,
+)
+from sqlbot_platform.workflow_engine.ports.run_store import RunStore
+from sqlbot_platform.workflow_engine.registry.condition_registry import (
+    ConditionRegistry,
+)
+from sqlbot_platform.workflow_engine.registry.definition_validator import (
+    DefinitionValidator,
+)
+from sqlbot_platform.workflow_engine.registry.handler_registry import HandlerRegistry
+from sqlbot_platform.workflow_engine.registry.workflow_registry import WorkflowRegistry
+from sqlbot_platform.workflow_engine.runtime.checkpoint_manager import CheckpointManager
+from sqlbot_platform.workflow_engine.runtime.context_patcher import ContextPatcher
+from sqlbot_platform.workflow_engine.runtime.graph_runtime import GraphRuntime
+from sqlbot_platform.workflow_engine.runtime.lease import InMemoryRunLease
+from sqlbot_platform.workflow_engine.runtime.router import ConditionRouter
+from sqlbot_platform.workflow_engine.runtime.scheduler import NodeScheduler
 
 
 def build_placeholder_chatbi_runtime(session: Session, commit_events: bool = False) -> GraphRuntime:

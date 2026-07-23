@@ -4,8 +4,11 @@ from apps.chatbi.orchestration.graph.conditions.core import (
     SqlExecutionFailedCondition,
     SqlExecutionSucceededCondition,
 )
-from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.domain.execution import NodeExecutionResult, NodeResultStatus
+from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
+from sqlbot_platform.workflow_engine.domain.execution import (
+    NodeExecutionResult,
+    NodeResultStatus,
+)
 
 
 def test_slot_clarification_needed_condition_handles_subject_domain():

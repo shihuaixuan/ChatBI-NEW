@@ -11,6 +11,9 @@ from apps.access_control.api import workspace as access_workspace
 from apps.ai_model.api import model_config as ai_model
 from apps.assistant.api import assistants as assistant
 from apps.chatbi.api.router import compose_chatbi_router
+from apps.chatbi.orchestration.graph.api_extension import (
+    build_chatbi_workflow_api_extension,
+)
 from apps.dashboard.api import dashboard_api
 from apps.datasource.api import datasource, table_relation
 from apps.knowledge.api import recommended_problem, sql_example
@@ -20,12 +23,16 @@ from apps.semantic.api import legacy_terms
 from apps.semantic.api.router import router as semantic_router
 from apps.settings.api import base
 from apps.system.api import user
-from apps.workflow_engine.api import router as graph_workflow
+from sqlbot_platform.workflow_engine.api import router as graph_workflow
+from sqlbot_platform.workflow_engine.api.extension import (
+    register_workflow_api_extension,
+)
 
 #from audit.api import audit_api
 
 
 api_router = APIRouter()
+register_workflow_api_extension(build_chatbi_workflow_api_extension)
 chatbi_router = compose_chatbi_router(
     graph_router=graph_workflow.router,
 )

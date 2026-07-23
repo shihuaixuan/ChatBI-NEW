@@ -1,7 +1,10 @@
 import pytest
 
-from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.runtime.mapping import MappingError, MappingResolver
+from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
+from sqlbot_platform.workflow_engine.runtime.mapping import (
+    MappingError,
+    MappingResolver,
+)
 
 
 def _context() -> WorkflowContext:

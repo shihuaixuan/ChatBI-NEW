@@ -3,7 +3,7 @@ from apps.chatbi.orchestration.graph.schemas.v1 import (
     QuestionClassificationInput,
     QuestionClassificationOutput,
 )
-from apps.workflow_engine.domain.execution import (
+from sqlbot_platform.workflow_engine.domain.execution import (
     NodeExecutionRequest,
     NodeResultStatus,
 )

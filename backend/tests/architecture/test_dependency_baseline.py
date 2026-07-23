@@ -11,6 +11,7 @@ import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 APPS_DIR = BACKEND_DIR / "apps"
+WORKFLOW_ENGINE_DIR = BACKEND_DIR / "platform" / "workflow_engine"
 BASELINE_PATH = Path(__file__).with_name("known_dependency_violations.json")
 
 # 旧模块尚未统一 models/orm，迁移期通过这些前缀识别其内部模型。
@@ -21,7 +22,7 @@ LEGACY_INTERNAL_MODEL_PREFIXES = (
     "apps.semantic.models.orm",
     "apps.settings.models",
     "apps.system.models",
-    "apps.workflow_engine.infrastructure.persistence.models",
+    "sqlbot_platform.workflow_engine.infrastructure.persistence.models",
 )
 
 # 这些路径表示具体实现，而不是可供跨领域依赖的公开契约。
@@ -105,11 +106,14 @@ class _ImportVisitor(ast.NodeVisitor):
 
 def _iter_imports() -> list[ImportRecord]:
     records: list[ImportRecord] = []
-    for path in sorted(APPS_DIR.rglob("*.py")):
+    source_files = [
+        *((path, path.relative_to(APPS_DIR).parts[0]) for path in APPS_DIR.rglob("*.py")),
+        *((path, "workflow_engine") for path in WORKFLOW_ENGINE_DIR.rglob("*.py")),
+    ]
+    for path, source_app in sorted(source_files):
         if "__pycache__" in path.parts:
             continue
         relative_path = path.relative_to(BACKEND_DIR)
-        source_app = relative_path.parts[1]
         visitor = _ImportVisitor(str(relative_path), source_app)
         visitor.visit(ast.parse(path.read_text(encoding="utf-8")))
         records.extend(visitor.records)

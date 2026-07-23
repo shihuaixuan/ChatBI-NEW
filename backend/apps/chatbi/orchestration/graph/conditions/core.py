@@ -2,10 +2,12 @@ from apps.chatbi.orchestration.graph.capabilities.interactions import (
     CHATBI_V1_INTERACTION_SPECS,
     read_interaction_response,
 )
-from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.domain.execution import NodeExecutionResult
-from apps.workflow_engine.registry.condition_registry import ConditionRegistry
-from apps.workflow_engine.runtime.router import ConditionDecision
+from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
+from sqlbot_platform.workflow_engine.domain.execution import NodeExecutionResult
+from sqlbot_platform.workflow_engine.registry.condition_registry import (
+    ConditionRegistry,
+)
+from sqlbot_platform.workflow_engine.runtime.router import ConditionDecision
 
 
 def _all_interaction_responses(variables: dict) -> list[dict]:

@@ -118,9 +118,19 @@ R1 验收达成：services 顶层业务文件 0（6 子域包）；chatbi→capa
 （兼容路径行为不变）；R4 目标兼容项 17/17 已清，剩余项全部归属 R6；全量回归、
 xpack 导入与 OpenAPI 通过。
 
-### R5：Workflow Engine 隔离（= 原 P6，2–3 批）
+### R5：Workflow Engine 隔离（= 原 P6）✅
 
-引擎 API 剩余 5 条业务依赖（图定义注册、ChatRecord 投影、Semantic ORM）改由 ChatBI 注册回调/装配注入；`chatbi/workflow_gateway.py` 删除；`workflow_engine_business_imports` 基线清零；引擎测试环境不 import 任何业务包；依赖清零后目录迁 `backend/platform/workflow_engine`。
+引擎 API 的图定义、运行时、会话校验、ChatRecord 投影和 Semantic 数据集解析改为
+`WorkflowApiExtension` 显式注册注入；ChatBI 在应用组合根注册实现。
+`chatbi/workflow_gateway.py` 已删除，`workflow_engine_business_imports` 基线清零；
+引擎源码与 `tests/workflow_engine` 均禁止 import 业务包。引擎目录已迁至
+`backend/platform/workflow_engine`，导入使用 `sqlbot_platform.workflow_engine`
+以避开 Python 标准库 `platform` 同名模块（2026-07-23 完成）。
+
+验收完成：Graph API、交互恢复、事件续传和 ChatRecord 投影契约保持不变；
+Workflow Engine/Graph/ChatBI 联合回归 316 项、架构测试 137 项、完整后端回归
+1,215 项通过；严格 Mypy、变更范围 Ruff、应用与 xpack 初始化通过，OpenAPI 保持
+154 条路径。无数据库变更。
 
 ### R6：外部接口与最终清理（= 原 P7+P8，3–5 批）
 

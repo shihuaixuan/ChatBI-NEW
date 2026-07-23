@@ -12,7 +12,10 @@ from sqlmodel import Session, col, select
 from apps.chatbi.models import Chat, ChatLog, ChatRecord
 from apps.chatbi.services.conversation.ports import ExecutionCleanupGateway
 from apps.chatbi.services.execution.result_artifacts import ResultArtifactService
-from apps.workflow_engine.run_cleanup import delete_runs, list_run_ids_for_chat
+from sqlbot_platform.workflow_engine.run_cleanup import (
+    delete_runs,
+    list_run_ids_for_chat,
+)
 
 
 class ChatDeletionService:

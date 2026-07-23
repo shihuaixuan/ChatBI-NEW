@@ -7,20 +7,13 @@
         "apps/semantic/repository/schema_repository.py -> apps.datasource.models.datasource",
         "apps/semantic/repository/sqlmodel/schema_loader.py -> apps.datasource.models.datasource",
         "apps/semantic/services/builders/schema_builder.py -> apps.datasource.models.datasource",
-        "apps/semantic/services/datasource_service.py -> apps.datasource.models.datasource",
-        "apps/workflow_engine/api/service.py -> apps.semantic.models.orm"
+        "apps/semantic/services/datasource_service.py -> apps.datasource.models.datasource"
     ],
     "cross_domain_concrete_implementations": [
         "apps/retrieval/semantic_binding.py -> apps.semantic.repository.sqlmodel.schema_loader"
     ],
     "cross_domain_api_imports": [],
-    "workflow_engine_business_imports": [
-        "apps/workflow_engine/api/service.py -> apps.chatbi.orchestration.graph.definitions.chatbi_minimal_v1",
-        "apps/workflow_engine/api/service.py -> apps.chatbi.orchestration.graph.definitions.chatbi_v1",
-        "apps/workflow_engine/api/service.py -> apps.chatbi.orchestration.graph.runtime",
-        "apps/workflow_engine/api/service.py -> apps.chatbi.workflow_gateway",
-        "apps/workflow_engine/api/service.py -> apps.semantic.models.orm"
-    ],
+    "workflow_engine_business_imports": [],
     "function_local_app_imports": [
         "apps/chatbi/orchestration/agent/loop.py -> apps.ai_model.model_factory"
     ]

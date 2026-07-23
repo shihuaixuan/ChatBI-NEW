@@ -29,13 +29,15 @@ from apps.swagger.i18n import (
     i18n_list,
     tags_metadata,
 )
-from apps.workflow_engine.infrastructure.artifacts.cleanup import ArtifactCleanupService
 from common.audit.schemas.request_context import RequestContextMiddlewareCommon
 from common.core.config import settings
 from common.core.db import engine
 from common.core.response_middleware import ResponseMiddleware, exception_handler
 from common.core.sqlbot_cache import init_sqlbot_cache
 from common.utils.utils import SQLBotLogUtil
+from sqlbot_platform.workflow_engine.infrastructure.artifacts.cleanup import (
+    ArtifactCleanupService,
+)
 
 
 def run_migrations():

@@ -20,8 +20,11 @@ from apps.chatbi.models import (
 from apps.chatbi.repository.sqlmodel.agent_run_repository import (
     AgentExecutionDeletionService,
 )
-from apps.workflow_engine.infrastructure.artifacts.cleanup import ArtifactCleanupService
-from apps.workflow_engine.infrastructure.persistence.models import (
+from common.core.db import engine
+from sqlbot_platform.workflow_engine.infrastructure.artifacts.cleanup import (
+    ArtifactCleanupService,
+)
+from sqlbot_platform.workflow_engine.infrastructure.persistence.models import (
     InteractionRequestModel,
     NodeExecutionModel,
     WorkflowArtifactCleanupModel,
@@ -30,7 +33,6 @@ from apps.workflow_engine.infrastructure.persistence.models import (
     WorkflowEventModel,
     WorkflowRunModel,
 )
-from common.core.db import engine
 
 
 @pytest.fixture

@@ -6,10 +6,14 @@ from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
     register_chatbi_v1_handlers,
 )
-from apps.workflow_engine.registry.condition_registry import ConditionRegistry
-from apps.workflow_engine.registry.definition_validator import DefinitionValidator
-from apps.workflow_engine.registry.handler_registry import HandlerRegistry
-from apps.workflow_engine.registry.workflow_registry import WorkflowRegistry
+from sqlbot_platform.workflow_engine.registry.condition_registry import (
+    ConditionRegistry,
+)
+from sqlbot_platform.workflow_engine.registry.definition_validator import (
+    DefinitionValidator,
+)
+from sqlbot_platform.workflow_engine.registry.handler_registry import HandlerRegistry
+from sqlbot_platform.workflow_engine.registry.workflow_registry import WorkflowRegistry
 
 
 def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions():

@@ -21,23 +21,27 @@ from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
     register_chatbi_v1_handlers,
 )
 from apps.retrieval.service import RetrievalService
-from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.domain.run import RunStatus
-from apps.workflow_engine.infrastructure.memory import (
+from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
+from sqlbot_platform.workflow_engine.domain.run import RunStatus
+from sqlbot_platform.workflow_engine.infrastructure.memory import (
     InMemoryEventPublisher,
     InMemoryRunStore,
 )
-from apps.workflow_engine.registry.condition_registry import ConditionRegistry
-from apps.workflow_engine.registry.definition_validator import DefinitionValidator
-from apps.workflow_engine.registry.handler_registry import HandlerRegistry
-from apps.workflow_engine.registry.workflow_registry import WorkflowRegistry
-from apps.workflow_engine.runtime.checkpoint_manager import CheckpointManager
-from apps.workflow_engine.runtime.context_patcher import ContextPatcher
-from apps.workflow_engine.runtime.graph_runtime import GraphRuntime
-from apps.workflow_engine.runtime.interaction import InteractionManager
-from apps.workflow_engine.runtime.lease import InMemoryRunLease
-from apps.workflow_engine.runtime.router import ConditionRouter
-from apps.workflow_engine.runtime.scheduler import NodeScheduler
+from sqlbot_platform.workflow_engine.registry.condition_registry import (
+    ConditionRegistry,
+)
+from sqlbot_platform.workflow_engine.registry.definition_validator import (
+    DefinitionValidator,
+)
+from sqlbot_platform.workflow_engine.registry.handler_registry import HandlerRegistry
+from sqlbot_platform.workflow_engine.registry.workflow_registry import WorkflowRegistry
+from sqlbot_platform.workflow_engine.runtime.checkpoint_manager import CheckpointManager
+from sqlbot_platform.workflow_engine.runtime.context_patcher import ContextPatcher
+from sqlbot_platform.workflow_engine.runtime.graph_runtime import GraphRuntime
+from sqlbot_platform.workflow_engine.runtime.interaction import InteractionManager
+from sqlbot_platform.workflow_engine.runtime.lease import InMemoryRunLease
+from sqlbot_platform.workflow_engine.runtime.router import ConditionRouter
+from sqlbot_platform.workflow_engine.runtime.scheduler import NodeScheduler
 
 
 class TrackingGateway(PlaceholderChatBICapabilityGateway):

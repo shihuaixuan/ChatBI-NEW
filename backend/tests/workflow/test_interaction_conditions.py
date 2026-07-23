@@ -5,8 +5,11 @@ from apps.chatbi.orchestration.graph.conditions.core import (
     InteractionSkippedCondition,
     SlotClarificationNeededCondition,
 )
-from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.domain.execution import NodeExecutionResult, NodeResultStatus
+from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
+from sqlbot_platform.workflow_engine.domain.execution import (
+    NodeExecutionResult,
+    NodeResultStatus,
+)
 
 
 def test_interaction_answered_ignores_skipped_response():

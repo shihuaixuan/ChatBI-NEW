@@ -42,10 +42,15 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
     ),
     ForbiddenImportRule(
         rule_id="engine-domain-no-business-imports",
-        scope="apps/workflow_engine/domain",
+        scope="platform/workflow_engine",
         forbidden=("apps",),
-        allowed=("apps.workflow_engine",),
-        reason="通用引擎的 domain 层不得依赖任何业务模块（api 层历史违规由依赖基线管理）。",
+        reason="通用 Workflow Engine 的所有分层均不得依赖业务应用。",
+    ),
+    ForbiddenImportRule(
+        rule_id="engine-tests-no-business-imports",
+        scope="tests/workflow_engine",
+        forbidden=("apps",),
+        reason="Workflow Engine 测试环境只能依赖通用平台和公共基础设施。",
     ),
     ForbiddenImportRule(
         rule_id="mcp-no-chat-internals",
@@ -65,6 +70,7 @@ FORBIDDEN_TOP_LEVEL_PATHS: tuple[str, ...] = (
     "apps/capabilities",
     "apps/template",
     "apps/workflow",
+    "apps/workflow_engine",
 )
 
 

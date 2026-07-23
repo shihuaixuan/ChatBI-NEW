@@ -3,14 +3,17 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from apps.workflow_engine.domain.artifact import ArtifactRef, WorkflowArtifact
-from apps.workflow_engine.domain.checkpoint import WorkflowCheckpoint
-from apps.workflow_engine.domain.context import (
+from sqlbot_platform.workflow_engine.domain.artifact import (
+    ArtifactRef,
+    WorkflowArtifact,
+)
+from sqlbot_platform.workflow_engine.domain.checkpoint import WorkflowCheckpoint
+from sqlbot_platform.workflow_engine.domain.context import (
     ContextPatch,
     ControlContext,
     WorkflowContext,
 )
-from apps.workflow_engine.domain.definition import (
+from sqlbot_platform.workflow_engine.domain.definition import (
     EdgeDefinition,
     NodeDefinition,
     NodeType,
@@ -18,18 +21,18 @@ from apps.workflow_engine.domain.definition import (
     WorkflowDefinition,
     WorkflowPolicies,
 )
-from apps.workflow_engine.domain.errors import NodeError
-from apps.workflow_engine.domain.event import WorkflowEvent
-from apps.workflow_engine.domain.execution import (
+from sqlbot_platform.workflow_engine.domain.errors import NodeError
+from sqlbot_platform.workflow_engine.domain.event import WorkflowEvent
+from sqlbot_platform.workflow_engine.domain.execution import (
     NodeExecutionRequest,
     NodeExecutionResult,
     NodeResultStatus,
 )
-from apps.workflow_engine.domain.interaction import (
+from sqlbot_platform.workflow_engine.domain.interaction import (
     InteractionRequest,
     InteractionStatus,
 )
-from apps.workflow_engine.domain.run import RunStatus, WorkflowRun
+from sqlbot_platform.workflow_engine.domain.run import RunStatus, WorkflowRun
 
 
 def _definition() -> WorkflowDefinition:

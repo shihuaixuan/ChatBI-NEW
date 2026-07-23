@@ -8,14 +8,14 @@ from apps.chatbi.orchestration.graph.nodes.sql import (
     SqlGenerateNode,
     SqlValidateNode,
 )
-from apps.workflow_engine.domain.definition import (
+from sqlbot_platform.workflow_engine.domain.definition import (
     EdgeDefinition,
     NodeDefinition,
     NodeType,
     WorkflowDefinition,
     WorkflowPolicies,
 )
-from apps.workflow_engine.registry.handler_registry import HandlerRegistry
+from sqlbot_platform.workflow_engine.registry.handler_registry import HandlerRegistry
 
 
 def _trace_metadata(label: str, output_path: tuple[str, ...], *, redaction: str = "none") -> dict:

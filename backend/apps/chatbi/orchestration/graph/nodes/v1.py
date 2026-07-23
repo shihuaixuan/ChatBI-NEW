@@ -3,9 +3,9 @@ from apps.chatbi.orchestration.graph.capabilities.gateway import ChatBICapabilit
 from apps.chatbi.orchestration.graph.capabilities.interactions import (
     standard_interaction_path,
 )
-from apps.workflow_engine.domain.context import ContextPatch
-from apps.workflow_engine.domain.errors import NodeError
-from apps.workflow_engine.domain.execution import (
+from sqlbot_platform.workflow_engine.domain.context import ContextPatch
+from sqlbot_platform.workflow_engine.domain.errors import NodeError
+from sqlbot_platform.workflow_engine.domain.execution import (
     NodeExecutionRequest,
     NodeExecutionResult,
     NodeResultStatus,

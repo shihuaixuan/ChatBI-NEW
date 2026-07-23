@@ -103,7 +103,7 @@ def test_analysis_prediction_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("apps.workflow_engine") for module in imports)
+    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
 def test_legacy_analysis_and_prediction_delegate_generation_to_chatbi():
@@ -339,7 +339,7 @@ def test_chatbi_artifact_service_has_no_workflow_or_persistence_dependency():
     imports = _imports__artifact("apps/chatbi/services/execution/result_artifacts.py")
 
     assert "sqlmodel" not in imports
-    assert not any(module.startswith("apps.workflow_engine") for module in imports)
+    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
     assert not any(".infrastructure" in module for module in imports)
     assert not any(".models.orm" in module for module in imports)
 
@@ -355,7 +355,7 @@ def test_agent_and_graph_share_chatbi_result_artifact_service():
 
     assert "result_artifact_service.save" in agent_source
     assert "result_artifact_service.save" in graph_source
-    assert "apps.workflow_engine.domain.artifact" not in execution_imports
+    assert "sqlbot_platform.workflow_engine.domain.artifact" not in execution_imports
 
 
 def test_chat_deletion_uses_unified_artifact_and_agent_cleanup_entries():
@@ -414,7 +414,7 @@ def test_chart_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("apps.workflow_engine") for module in imports)
+    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
 def test_legacy_chart_generation_delegates_to_chatbi():
@@ -501,7 +501,7 @@ def test_conversation_service_depends_on_ports_not_session_or_legacy_chat():
     assert not any(module.startswith("apps.datasource.") for module in imports)
     assert not any(module.startswith("apps.semantic.") for module in imports)
     assert not any(module.startswith("apps.knowledge.") for module in imports)
-    assert not any(module.startswith("apps.workflow_engine.") for module in imports)
+    assert not any(module.startswith("sqlbot_platform.workflow_engine.") for module in imports)
 
 
 def test_legacy_conversation_mutations_have_moved_out_of_read_projection():
@@ -681,7 +681,7 @@ def test_dynamic_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("apps.workflow_engine") for module in imports)
+    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
 def test_legacy_dynamic_sql_generation_delegates_to_chatbi():
@@ -1096,7 +1096,7 @@ def test_permission_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("apps.workflow_engine") for module in imports)
+    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
 def test_legacy_permission_sql_generation_delegates_to_chatbi():
@@ -1747,7 +1747,7 @@ def test_recommended_question_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("apps.workflow_engine") for module in imports)
+    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
 def test_legacy_recommendation_task_only_keeps_schema_log_and_sse_projection():
@@ -1852,7 +1852,7 @@ def test_chat_record_service_has_no_runtime_or_session_dependency():
 
     assert "sqlmodel" not in imports
     assert not any(module.startswith("apps.agent.") for module in imports)
-    assert not any(module.startswith("apps.workflow_engine.") for module in imports)
+    assert not any(module.startswith("sqlbot_platform.workflow_engine.") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
 
 
@@ -1932,31 +1932,39 @@ def test_agent_record_terminal_projection_uses_chatbi_service():
     assert ".finish =" not in finish_source
 
 
-def test_workflow_projector_is_generic_and_chatbi_logic_stays_in_gateway():
-    projector_imports = _imports__record(_tree__record("apps/workflow_engine/api/chat_history.py"))
-    service_imports = _imports__record(_tree__record("apps/workflow_engine/api/service.py"))
+def test_workflow_projector_and_api_service_have_no_business_imports():
+    projector_imports = _imports__record(
+        _tree__record("platform/workflow_engine/api/chat_history.py")
+    )
+    service_imports = _imports__record(
+        _tree__record("platform/workflow_engine/api/service.py")
+    )
+    extension_imports = _imports__record(
+        _tree__record("apps/chatbi/orchestration/graph/api_extension.py")
+    )
 
     assert not any(
         module.startswith("apps.")
-        and not module.startswith("apps.workflow_engine.")
         for module in projector_imports
     )
-    assert "apps.chatbi.workflow_gateway" in service_imports
-    assert "apps.chat.models.chat_model" not in service_imports
+    assert not any(module.startswith("apps.") for module in service_imports)
+    assert "apps.chatbi.orchestration.graph.runtime" in extension_imports
+    assert "apps.semantic.composition" in extension_imports
 
 
-def test_graph_chat_binding_rule_is_forwarded_through_chatbi_gateway():
-    tree = _tree__record("apps/workflow_engine/api/service.py")
+def test_graph_chat_binding_rule_is_owned_by_chatbi_extension():
+    tree = _tree__record("apps/chatbi/orchestration/graph/api_extension.py")
     service_class = next(
         node
         for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "GraphApiService"
+        if isinstance(node, ast.ClassDef)
+        and node.name == "ChatBIWorkflowApiExtension"
     )
     method = next(
         node
         for node in service_class.body
         if isinstance(node, ast.FunctionDef)
-        and node.name == "_resolve_chat_query_context"
+        and node.name == "validate_chat_query"
     )
     service_source = ast.unparse(method)
 
@@ -2105,7 +2113,7 @@ def test_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("apps.workflow_engine") for module in imports)
+    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
 def test_legacy_main_sql_generation_delegates_to_chatbi():

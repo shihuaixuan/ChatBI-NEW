@@ -1,10 +1,16 @@
 import pytest
 
-from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.domain.definition import NodeDefinition, NodeType
-from apps.workflow_engine.domain.execution import NodeExecutionResult, NodeResultStatus
-from apps.workflow_engine.registry.handler_registry import HandlerRegistry
-from apps.workflow_engine.runtime.scheduler import NodeScheduler, SchedulerError
+from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
+from sqlbot_platform.workflow_engine.domain.definition import NodeDefinition, NodeType
+from sqlbot_platform.workflow_engine.domain.execution import (
+    NodeExecutionResult,
+    NodeResultStatus,
+)
+from sqlbot_platform.workflow_engine.registry.handler_registry import HandlerRegistry
+from sqlbot_platform.workflow_engine.runtime.scheduler import (
+    NodeScheduler,
+    SchedulerError,
+)
 
 
 class CountingHandler:

@@ -1,12 +1,12 @@
 import pytest
 
-from apps.workflow_engine.domain.artifact import ArtifactRef
-from apps.workflow_engine.domain.context import (
+from sqlbot_platform.workflow_engine.domain.artifact import ArtifactRef
+from sqlbot_platform.workflow_engine.domain.context import (
     ContextPatch,
     ControlContext,
     WorkflowContext,
 )
-from apps.workflow_engine.runtime.context_patcher import (
+from sqlbot_platform.workflow_engine.runtime.context_patcher import (
     ContextPatcher,
     ContextPatchError,
 )

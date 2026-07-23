@@ -1,17 +1,19 @@
 import pytest
 
-from apps.workflow_engine.domain.definition import (
+from sqlbot_platform.workflow_engine.domain.definition import (
     EdgeDefinition,
     NodeDefinition,
     NodeType,
     WorkflowDefinition,
 )
-from apps.workflow_engine.registry.condition_registry import ConditionRegistry
-from apps.workflow_engine.registry.definition_validator import (
+from sqlbot_platform.workflow_engine.registry.condition_registry import (
+    ConditionRegistry,
+)
+from sqlbot_platform.workflow_engine.registry.definition_validator import (
     DefinitionValidationError,
     DefinitionValidator,
 )
-from apps.workflow_engine.registry.handler_registry import HandlerRegistry
+from sqlbot_platform.workflow_engine.registry.handler_registry import HandlerRegistry
 
 
 def _registries() -> tuple[HandlerRegistry, ConditionRegistry]:

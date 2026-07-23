@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from apps.workflow_engine.infrastructure.artifacts.file_store import FileArtifactStore
+from sqlbot_platform.workflow_engine.infrastructure.artifacts.file_store import (
+    FileArtifactStore,
+)
 
 
 class FakeArtifactMetadataStore:

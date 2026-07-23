@@ -1,7 +1,7 @@
 from sqlalchemy import CheckConstraint, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 
-from apps.workflow_engine.infrastructure.persistence.models import (
+from sqlbot_platform.workflow_engine.infrastructure.persistence.models import (
     InteractionRequestModel,
     NodeExecutionModel,
     WorkflowArtifactCleanupModel,

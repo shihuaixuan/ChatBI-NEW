@@ -276,7 +276,7 @@
 每个 TODO 完成时至少满足：
 
 - 有对应单元测试或集成测试。
-- `uv run ruff check apps/workflow apps/workflow_engine tests/workflow_engine tests/workflow` 通过。
+- `uv run ruff check apps/chatbi/orchestration/graph platform/workflow_engine tests/workflow_engine tests/workflow` 通过。
 - `pytest tests/workflow_engine tests/workflow -q` 通过。
 - 新增节点必须能在 demo 或测试中看到节点状态和输出。
 - 真实能力接入不得破坏 `chatbi/minimal-v1` smoke test。

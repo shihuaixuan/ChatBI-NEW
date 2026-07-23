@@ -12,7 +12,7 @@ AGENT_DIR = (
 )
 FORBIDDEN = (
     "apps.chatbi.orchestration.graph",
-    "apps.workflow_engine",
+    "sqlbot_platform.workflow_engine",
     "apps.agentic_chat",
 )
 

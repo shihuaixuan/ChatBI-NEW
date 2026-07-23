@@ -14,15 +14,38 @@ from apps.semantic.models.dto import SemanticDatasetSummary
 class DatasetSummaryReader(Protocol):
     def get_summary(self, dataset_id: int) -> SemanticDatasetSummary | None: ...
 
+    def resolve_dataset_id(
+        self,
+        workspace_id: int,
+        dataset_or_datasource_id: int,
+    ) -> int | None: ...
+
 
 class SemanticDatasetCatalogService:
-    """按数据集 id 提供最小展示信息（名称与存在性）。"""
+    """提供数据集展示信息和旧数据源引用解析能力。"""
 
     def __init__(self, reader: DatasetSummaryReader) -> None:
         self._reader = reader
 
     def get_summary(self, dataset_id: int) -> SemanticDatasetSummary | None:
         return self._reader.get_summary(dataset_id)
+
+    def resolve_dataset_id(
+        self,
+        workspace_id: int,
+        dataset_or_datasource_id: int,
+    ) -> int:
+        """优先识别数据集 id，否则按默认模型把旧数据源 id 映射为数据集 id。"""
+
+        resolved = self._reader.resolve_dataset_id(
+            workspace_id,
+            dataset_or_datasource_id,
+        )
+        return (
+            resolved
+            if resolved is not None
+            else dataset_or_datasource_id
+        )
 
 
 __all__ = ["SemanticDatasetCatalogService"]

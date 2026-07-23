@@ -8,14 +8,14 @@ from apps.chatbi.orchestration.graph.nodes.v1 import (
     ChatBIV1InteractionNode,
 )
 from apps.chatbi.orchestration.graph.schemas.v1 import CHATBI_V1_OUTPUT_MODELS
-from apps.workflow_engine.domain.definition import (
+from sqlbot_platform.workflow_engine.domain.definition import (
     EdgeDefinition,
     NodeDefinition,
     NodeType,
     WorkflowDefinition,
     WorkflowPolicies,
 )
-from apps.workflow_engine.registry.handler_registry import HandlerRegistry
+from sqlbot_platform.workflow_engine.registry.handler_registry import HandlerRegistry
 
 
 def _trace_metadata(

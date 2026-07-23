@@ -1,15 +1,20 @@
 import pytest
 
-from apps.workflow_engine.domain.context import WorkflowContext
-from apps.workflow_engine.domain.definition import (
+from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
+from sqlbot_platform.workflow_engine.domain.definition import (
     EdgeDefinition,
     NodeDefinition,
     NodeType,
     WorkflowDefinition,
 )
-from apps.workflow_engine.domain.execution import NodeExecutionResult, NodeResultStatus
-from apps.workflow_engine.registry.condition_registry import ConditionRegistry
-from apps.workflow_engine.runtime.router import (
+from sqlbot_platform.workflow_engine.domain.execution import (
+    NodeExecutionResult,
+    NodeResultStatus,
+)
+from sqlbot_platform.workflow_engine.registry.condition_registry import (
+    ConditionRegistry,
+)
+from sqlbot_platform.workflow_engine.runtime.router import (
     ConditionDecision,
     ConditionRouter,
     RoutingError,

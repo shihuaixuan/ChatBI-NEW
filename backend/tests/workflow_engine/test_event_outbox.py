@@ -4,10 +4,12 @@ import pytest
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from apps.workflow_engine.domain.event import WorkflowEvent
-from apps.workflow_engine.infrastructure.events.outbox import EventOutbox
-from apps.workflow_engine.infrastructure.persistence.models import WorkflowEventModel
 from common.core.db import engine
+from sqlbot_platform.workflow_engine.domain.event import WorkflowEvent
+from sqlbot_platform.workflow_engine.infrastructure.events.outbox import EventOutbox
+from sqlbot_platform.workflow_engine.infrastructure.persistence.models import (
+    WorkflowEventModel,
+)
 
 
 def _cleanup(session: Session) -> None:

@@ -52,9 +52,11 @@ from apps.semantic.composition import (
     build_semantic_sql_compilation_service,
     build_semantic_term_query_service,
 )
-from apps.workflow_engine.artifact_gateway import build_workflow_artifact_gateway
 from common.core.config import settings
 from common.core.db import engine
+from sqlbot_platform.workflow_engine.artifact_gateway import (
+    build_workflow_artifact_gateway,
+)
 
 
 def build_query_service(
