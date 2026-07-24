@@ -20,7 +20,7 @@ from apps.access_control.services import (
     DataPolicyService,
     IdentityWorkspaceService,
 )
-from apps.chatbi import ChatWorkspaceResourceScopeReader
+from apps.conversation import ConversationResourceScope
 from apps.datasource import build_datasource_policy_catalog
 from apps.datasource.resource_scope import DatasourceWorkspaceResourceScopeReader
 from common.core.security import default_md5_pwd, md5pwd, verify_md5pwd
@@ -32,7 +32,7 @@ def build_authorization_service() -> AuthorizationService:
     return AuthorizationService(
         resource_scope_repository=CompositeWorkspaceResourceScopeRepository(
             readers={
-                "chat": ChatWorkspaceResourceScopeReader(),
+                "chat": ConversationResourceScope(),
                 "ds": datasource_reader,
                 "datasource": datasource_reader,
             }

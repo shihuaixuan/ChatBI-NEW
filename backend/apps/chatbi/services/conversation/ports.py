@@ -1,43 +1,37 @@
-"""会话子域端口（AGENTS.md v2 §5）。
-
-仓储端口（ConversationRepository / ChatRecordRepository）位于 apps/chatbi/repository/。
-本文件承载会话流程依赖的跨域/防腐端口；Provider 后缀为历史命名，统一改名安排在 R1-d。
-"""
-
-from __future__ import annotations
+"""ChatBI 会话创建与联合删除需要的技术端口。"""
 
 from typing import Protocol
 
-from apps.chatbi.models import ConversationBinding
-
-
-class ConversationBindingProvider(Protocol):
-    def resolve(
-        self,
-        *,
-        workspace_id: int,
-        dataset_id: int,
-        assistant_type: int | None,
-    ) -> ConversationBinding: ...
-
-
-class RecommendedQuestionProvider(Protocol):
-    def list_for_chat(self, datasource_id: int) -> list[str] | None: ...
-
-
-class ConversationDeletionProvider(Protocol):
-    def delete_for_user(self, user_id: int, chat_id: int) -> str: ...
-
 
 class ExecutionCleanupGateway(Protocol):
-    """按会话清理某种执行方式（如 Agent）的运行数据。"""
+    """清理一种执行方式的运行数据并提交自身事务。"""
 
-    def delete_for_chat(self, chat_id: int) -> None: ...
+    def delete_for_chat(self, chat_id: int) -> int: ...
+
+
+class GraphCleanupGateway(Protocol):
+    """查询并清理 Workflow Engine 的会话运行数据。"""
+
+    def list_run_ids_for_chat(self, chat_id: int) -> list[str]: ...
+
+    def delete_for_chat(self, chat_id: int) -> int: ...
+
+
+class ArtifactCleanupGateway(Protocol):
+    """登记并执行 Workflow Artifact 正文清理。"""
+
+    def schedule_chat_cleanup(
+        self,
+        chat_id: int,
+        *,
+        legacy_execution_ids: list[str],
+    ) -> int: ...
+
+    def process_pending_cleanup(self) -> int: ...
 
 
 __all__ = [
-    "ConversationBindingProvider",
-    "ConversationDeletionProvider",
+    "ArtifactCleanupGateway",
     "ExecutionCleanupGateway",
-    "RecommendedQuestionProvider",
+    "GraphCleanupGateway",
 ]

@@ -1,4 +1,4 @@
-"""会话 ORM：chat_log 表与步骤日志枚举。"""
+"""Conversation 会话日志 ORM：chat_log 表与步骤日志枚举。"""
 
 from datetime import datetime
 from enum import Enum

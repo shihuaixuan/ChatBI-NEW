@@ -81,15 +81,7 @@ from apps.chatbi.errors import (
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
     ChartGenerationData,
-    Chat,
-    ChatFinishStep,
-    ChatLog,
     ChatQuestion,
-    ChatRecord,
-    ChatRecordAuxiliaryProjection,
-    ChatRecordAuxiliaryType,
-    ChatRecordResultProjection,
-    ChatRecordStatus,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
     DynamicSQLGenerationData,
@@ -101,12 +93,10 @@ from apps.chatbi.models import (
     GenerationHistoryProjectionData,
     GenerationRuntimeSettingsData,
     ModelMessage,
-    OperationEnum,
     PermissionSQLFilter,
     PermissionSQLGenerationData,
     QueryResultProjectionData,
     RecommendedQuestionGenerationData,
-    RenameChat,
     SQLGenerationData,
 )
 from apps.chatbi.services.generation import (
@@ -114,6 +104,18 @@ from apps.chatbi.services.generation import (
     project_generation_history,
     resolve_generation_scope,
     resolve_runtime_settings,
+)
+from apps.conversation.models import (
+    Chat,
+    ChatFinishStep,
+    ChatLog,
+    ChatRecord,
+    ChatRecordAuxiliaryProjection,
+    ChatRecordAuxiliaryType,
+    ChatRecordResultProjection,
+    ChatRecordStatus,
+    OperationEnum,
+    RenameChat,
 )
 from apps.datasource import (
     DatasourceConnection,

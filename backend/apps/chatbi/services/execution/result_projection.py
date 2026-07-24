@@ -7,11 +7,8 @@ from typing import Any
 import orjson
 
 from apps.chatbi.errors import QueryResultProjectionError
-from apps.chatbi.models import (
-    ChatRecordResultProjection,
-    QueryResultProjectionData,
-)
-from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
+from apps.chatbi.models import QueryResultProjectionData
+from apps.conversation import ChatRecordResultProjection, ChatRecordService
 
 _LARGE_INTEGER_THRESHOLD = 10**15
 _LARGE_FLOAT_THRESHOLD = 1e10

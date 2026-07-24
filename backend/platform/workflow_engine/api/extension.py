@@ -12,9 +12,6 @@ from typing import Any, Protocol
 
 from sqlmodel import Session
 
-from sqlbot_platform.workflow_engine.api.chat_history import (
-    GraphRecordProjectionGateway,
-)
 from sqlbot_platform.workflow_engine.domain.definition import WorkflowDefinition
 from sqlbot_platform.workflow_engine.ports.run_store import RunStore
 from sqlbot_platform.workflow_engine.runtime.graph_runtime import GraphRuntime
@@ -36,6 +33,10 @@ class WorkflowApiRequestError(ValueError):
         super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
+
+
+class WorkflowRunProjectionError(RuntimeError):
+    """业务 Run 投影失败，具体投影对象由应用扩展定义。"""
 
 
 class WorkflowApiExtension(Protocol):
@@ -77,9 +78,9 @@ class WorkflowApiExtension(Protocol):
 
     def build_definition(self, definition_version: str) -> WorkflowDefinition: ...
 
-    def build_record_projection_gateway(
-        self,
-    ) -> GraphRecordProjectionGateway: ...
+    def build_run_store(self, base: RunStore) -> RunStore: ...
+
+    def project_run_model(self, run: Any) -> Any | None: ...
 
 
 WorkflowApiExtensionFactory = Callable[[Session], WorkflowApiExtension]
@@ -109,6 +110,7 @@ __all__ = [
     "WorkflowApiExtension",
     "WorkflowApiExtensionFactory",
     "WorkflowApiRequestError",
+    "WorkflowRunProjectionError",
     "build_workflow_api_extension",
     "register_workflow_api_extension",
 ]

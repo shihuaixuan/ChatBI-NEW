@@ -6,11 +6,11 @@
 
 from __future__ import annotations
 
-from apps.chatbi.errors import ConversationBindingError
-from apps.chatbi.models import Chat, ChatRecord, ConversationBinding
 from apps.chatbi.services.generation.context.scope import (
     DYNAMIC_DATASOURCE_ASSISTANT_TYPES,
 )
+from apps.conversation import ConversationBinding
+from apps.conversation.errors import ConversationBindingError
 from apps.datasource.services import DatasourceService
 from apps.semantic.errors import SemanticNotFoundError
 from apps.semantic.services.dataset_binding_service import SemanticDatasetBindingService
@@ -70,23 +70,9 @@ def resolve_conversation_binding(
     )
 
 
-def apply_binding_to_chat(chat: Chat, binding: ConversationBinding) -> None:
-    chat.dataset_id = binding.dataset_id
-    chat.datasource = binding.datasource_id
-    chat.engine_type = binding.datasource_type_name
-
-
-def apply_binding_to_record(record: ChatRecord, binding: ConversationBinding) -> None:
-    record.dataset_id = binding.dataset_id
-    record.datasource = binding.datasource_id
-    record.engine_type = binding.datasource_type_name
-
-
 __all__ = [
     "DatasetBindingError",
     "DatasetChatBinding",
-    "apply_binding_to_chat",
-    "apply_binding_to_record",
     "resolve_conversation_binding",
     "validate_assistant_dataset_binding",
 ]

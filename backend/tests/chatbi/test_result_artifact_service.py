@@ -2,13 +2,13 @@ import pytest
 
 from apps.chatbi.models import (
     ChatBIResultArtifactRef,
-    ChatRecordExecutionType,
     ResultArtifactWriteData,
 )
 from apps.chatbi.services.execution import (
     ResultArtifactService,
     ResultArtifactWriteError,
 )
+from apps.conversation import ChatRecordExecutionType
 
 
 class RecordingArtifactGateway:

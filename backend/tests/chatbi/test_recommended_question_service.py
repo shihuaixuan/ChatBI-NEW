@@ -6,13 +6,13 @@ import orjson
 import pytest
 
 from apps.chatbi.models import (
-    ChatRecord,
     ModelMessage,
     ModelStreamChunk,
     RecommendedQuestionGenerationData,
 )
-from apps.chatbi.services.conversation import ChatRecordService
 from apps.chatbi.services.generation import RecommendedQuestionService
+from apps.conversation import ChatRecordService
+from apps.conversation.models import ChatRecord
 
 
 class FakeHistoryProvider:

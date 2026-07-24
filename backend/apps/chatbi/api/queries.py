@@ -4,7 +4,6 @@ import traceback
 
 from fastapi import APIRouter, Path
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, select
 from starlette.responses import JSONResponse
 
 from apps.chatbi.api.legacy_chat_flow import LLMService
@@ -13,9 +12,10 @@ from apps.chatbi.api.legacy_read import (
     list_recent_questions,
 )
 from apps.chatbi.api.legacy_sse import encode_sse_event
-from apps.chatbi.models import ChatQuestion, ChatRecord
-from common.interfaces.i18n import PLACEHOLDER_PREFIX
+from apps.chatbi.composition import build_chat_record_service
+from apps.chatbi.models import ChatQuestion
 from common.core.deps import CurrentAssistant, CurrentUser, SessionDep
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 
 router = APIRouter(tags=["Data Q&A"], prefix="/chat")
 
@@ -121,35 +121,10 @@ async def analysis_or_predict(
     try:
         if action_type != "analysis" and action_type != "predict":
             raise Exception(f"Type {action_type} Not Found")
-        record: ChatRecord | None = None
-
-        stmt = select(
-            ChatRecord.id,
-            ChatRecord.question,
-            ChatRecord.chat_id,
-            ChatRecord.datasource,
-            ChatRecord.engine_type,
-            ChatRecord.ai_modal_id,
-            ChatRecord.create_by,
-            ChatRecord.chart,
-            ChatRecord.data,
-        ).where(and_(ChatRecord.id == chat_record_id))
-        result = session.execute(stmt)
-        for row in result:
-            record = ChatRecord(
-                id=row.id,
-                question=row.question,
-                chat_id=row.chat_id,
-                datasource=row.datasource,
-                engine_type=row.engine_type,
-                ai_modal_id=row.ai_modal_id,
-                create_by=row.create_by,
-                chart=row.chart,
-                data=row.data,
-            )
-
-        if not record:
-            raise Exception(f"Chat record with id {chat_record_id} not found")
+        record = build_chat_record_service(session).get_owned(
+            current_user.id,
+            chat_record_id,
+        )
 
         if not record.chart:
             raise Exception(

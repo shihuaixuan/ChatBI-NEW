@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 from sqlmodel import Session
 
 from apps.access_control.composition import build_data_policy_service
@@ -8,22 +10,19 @@ from apps.chatbi.adapters.embedding_ranking import (
     EmbeddingSchemaRankingClient,
 )
 from apps.chatbi.adapters.execution import DatasourceQueryExecutor
-from apps.chatbi.adapters.question_model import build_question_model_service
-from apps.chatbi.models import ConversationBinding
-from apps.chatbi.repository.sqlmodel import (
-    SQLModelChatRecordRepository,
-    SQLModelConversationRepository,
+from apps.chatbi.adapters.execution_cleanup import (
+    CommittedAgentCleanupGateway,
+    WorkflowArtifactCleanupGateway,
+    WorkflowRunCleanupGateway,
 )
+from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.services.conversation import (
-    ChatDeletionService,
-    ChatRecordService,
-    ConversationBindingProvider,
-    ConversationDeletionProvider,
-    ConversationService,
-    ExecutionCleanupGateway,
-    RecommendedQuestionProvider,
     resolve_conversation_binding,
 )
+from apps.chatbi.services.conversation.deletion_service import (
+    ChatDeletionService,
+)
+from apps.chatbi.services.conversation.ports import ExecutionCleanupGateway
 from apps.chatbi.services.execution import (
     GuardedQueryService,
     ResultArtifactService,
@@ -40,6 +39,14 @@ from apps.chatbi.services.planning import (
     SemanticRetrievalService,
 )
 from apps.chatbi.services.understanding import QuestionUnderstandingService
+from apps.conversation import ConversationBinding
+from apps.conversation.composition import (
+    build_chat_record_service as build_conversation_chat_record_service,
+)
+from apps.conversation.composition import (
+    build_conversation_service as build_owned_conversation_service,
+)
+from apps.conversation.services import ChatRecordService, ConversationService
 from apps.datasource.composition import (
     build_datasource_connection_service,
     build_datasource_metadata_service,
@@ -160,26 +167,17 @@ def build_question_understanding_service() -> QuestionUnderstandingService:
 
 
 def build_chat_record_service(session: Session) -> ChatRecordService:
-    """在 ChatBI 边界内装配 ChatRecord 仓储。"""
+    """从 Conversation 组合入口获取 ChatRecord Service。"""
 
-    return ChatRecordService(SQLModelChatRecordRepository(session))
+    return build_conversation_chat_record_service(session)
 
 
 def build_conversation_service(
     session: Session,
-    *,
-    binding_provider: ConversationBindingProvider | None = None,
-    recommended_question_provider: RecommendedQuestionProvider | None = None,
-    deletion_provider: ConversationDeletionProvider | None = None,
 ) -> ConversationService:
-    """在 ChatBI 边界内装配会话仓储和外部端口。"""
+    """从 Conversation 组合入口获取会话 Service。"""
 
-    return ConversationService(
-        SQLModelConversationRepository(session),
-        binding_provider=binding_provider,
-        recommended_question_provider=recommended_question_provider,
-        deletion_provider=deletion_provider,
-    )
+    return build_owned_conversation_service(session)
 
 
 def build_conversation_reader_service(session: Session) -> ConversationService:
@@ -208,14 +206,24 @@ def resolve_dataset_chat_binding(
 def build_chat_deletion_service(
     session: Session,
     *,
-    agent_cleanup: ExecutionCleanupGateway,
+    agent_cleanup_factory: Callable[[Session], ExecutionCleanupGateway],
 ) -> ChatDeletionService:
-    """装配会话删除服务；Agent 清理由调用方注入（归位 orchestration 前）。"""
+    """装配使用独立模块事务的会话联合删除服务。"""
+
+    def cleanup_session_factory() -> Session:
+        return Session(engine)
 
     return ChatDeletionService(
-        session,
-        agent_cleanup=agent_cleanup,
-        result_artifact_service=build_result_artifact_service(session),
+        build_conversation_service(session),
+        agent_cleanup=CommittedAgentCleanupGateway(
+            cleanup_session_factory,
+            agent_cleanup_factory,
+        ),
+        graph_cleanup=WorkflowRunCleanupGateway(cleanup_session_factory),
+        artifact_cleanup=WorkflowArtifactCleanupGateway(
+            cleanup_session_factory,
+            build_result_artifact_service,
+        ),
     )
 
 

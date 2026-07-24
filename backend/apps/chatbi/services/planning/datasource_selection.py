@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from typing import Any
 
 import orjson
 
 from apps.chatbi.errors import DatasourceSelectionError
 from apps.chatbi.models import (
-    ChatRecord,
     DatasourceSelectionCandidate,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
     ModelMessage,
 )
-from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 from apps.chatbi.services.generation.ports import (
     DatasourceSelectionPromptBuilder,
     GenerationModelClient,
@@ -22,6 +21,7 @@ from apps.chatbi.services.generation.streaming import (
     StreamAccumulator,
     stream_generation,
 )
+from apps.conversation import ChatRecordService
 
 
 class DatasourceSelectionService:
@@ -106,7 +106,7 @@ class DatasourceSelectionService:
         *,
         record_engine_type: str,
         conversation_engine_type: str,
-    ) -> ChatRecord:
+    ) -> Any:
         """把已解析并完成连接验证的数据源同时绑定到会话和记录。"""
 
         selected_id = event.selected_datasource_id

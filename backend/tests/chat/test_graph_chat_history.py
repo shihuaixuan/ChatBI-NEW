@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from sqlmodel import Session
 
-from apps.chatbi.models import Chat, ChatRecord
+from apps.conversation.models import Chat, ChatRecord
 from common.core.db import engine
 
 

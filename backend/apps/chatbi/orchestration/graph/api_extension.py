@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
 import orjson
-from sqlmodel import Session, col, select
+from sqlmodel import Session, select
 
 from apps.chatbi.composition import build_chat_record_service
-from apps.chatbi.models import (
-    Chat,
-    ChatRecord,
-    ChatRecordCreateData,
-    ChatRecordExecutionType,
-    ChatRecordResultProjection,
-    ExecutionBindingData,
-)
+from apps.chatbi.models import ExecutionBindingData
 from apps.chatbi.orchestration.graph.definitions.chatbi_minimal_v1 import (
     build_chatbi_minimal_definition,
 )
@@ -30,21 +23,114 @@ from apps.chatbi.services.planning import (
     ExecutionBindingError,
     resolve_execution_binding,
 )
-from apps.semantic.composition import build_semantic_dataset_catalog_service
-from sqlbot_platform.workflow_engine.api.chat_history import (
-    GraphRecordProjectionGateway,
+from apps.conversation import (
+    ChatRecordCreateData,
+    ChatRecordExecutionType,
+    ChatRecordResultProjection,
 )
+from apps.conversation.composition import build_conversation_service
+from apps.semantic.composition import build_semantic_dataset_catalog_service
 from sqlbot_platform.workflow_engine.api.extension import (
     ChatQueryPreparation,
     WorkflowApiRequestError,
+    WorkflowRunProjectionError,
 )
 from sqlbot_platform.workflow_engine.domain.definition import WorkflowDefinition
-from sqlbot_platform.workflow_engine.domain.run import RunStatus
+from sqlbot_platform.workflow_engine.domain.run import RunStatus, WorkflowRun
 from sqlbot_platform.workflow_engine.infrastructure.persistence.models import (
     WorkflowRunModel,
 )
+from sqlbot_platform.workflow_engine.infrastructure.persistence.run_repository import (
+    RunOwnershipError,
+    RunRepository,
+)
 from sqlbot_platform.workflow_engine.ports.run_store import RunStore
 from sqlbot_platform.workflow_engine.runtime.graph_runtime import GraphRuntime
+
+
+class GraphResultNotProjectableError(WorkflowRunProjectionError):
+    """Graph 成功但无法形成用户可见历史快照。"""
+
+
+class GraphRecordProjectionGateway(Protocol):
+    def project(
+        self,
+        *,
+        record_id: int,
+        chat_id: int,
+        run_id: str,
+        status: str,
+        variables: dict[str, Any],
+    ) -> Any: ...
+
+
+class GraphChatRecordProjector:
+    """把 Graph Run 同步投影为 ChatBI 的 ChatRecord 快照。"""
+
+    def __init__(
+        self,
+        session: Session,
+        gateway: GraphRecordProjectionGateway,
+    ) -> None:
+        self._session = session
+        self._gateway = gateway
+
+    def project(self, run: WorkflowRun) -> Any | None:
+        """更新绑定的聊天记录；独立 Run 不生成历史投影。"""
+
+        record_id = run.context.request.get("record_id")
+        chat_id = run.context.request.get("chat_id")
+        if record_id is None and chat_id is None:
+            return None
+        if record_id is None or chat_id is None:
+            raise GraphResultNotProjectableError("GRAPH_CHAT_OWNERSHIP_INCOMPLETE")
+
+        try:
+            return self._gateway.project(
+                record_id=int(record_id),
+                chat_id=int(chat_id),
+                run_id=run.run_id,
+                status=run.status.value,
+                variables=run.context.variables,
+            )
+        except ValueError as exc:
+            raise GraphResultNotProjectableError(str(exc)) from exc
+
+    def project_model(self, run: WorkflowRunModel) -> Any | None:
+        """复用通用仓储转换规则投影 ORM Run。"""
+
+        try:
+            domain_run = RunRepository(self._session).to_domain(run)
+        except RunOwnershipError as exc:
+            raise GraphResultNotProjectableError(str(exc)) from exc
+        return self.project(domain_run)
+
+
+class ChatProjectingRunStore:
+    """在 Run 保存事务中同步维护 ChatRecord 历史投影。"""
+
+    def __init__(self, base: RunStore, projector: GraphChatRecordProjector) -> None:
+        self._base = base
+        self._projector = projector
+
+    def create(self, run: WorkflowRun) -> WorkflowRun:
+        """创建 Run 后同步投影，但不提交外层事务。"""
+
+        created = self._base.create(run)
+        self._projector.project(created)
+        return created
+
+    def get(self, run_id: str) -> WorkflowRun:
+        """读取操作直接委托给基础 RunStore。"""
+
+        return self._base.get(run_id)
+
+    def save(self, run: WorkflowRun, expected_version: int) -> WorkflowRun:
+        """保存 Run 后同步投影，但不提交外层事务。"""
+
+        saved = self._base.save(run, expected_version)
+        self._projector.project(saved)
+        return saved
 
 
 class ChatRecordProjectionGateway:
@@ -61,7 +147,7 @@ class ChatRecordProjectionGateway:
         run_id: str,
         status: str,
         variables: dict[str, Any],
-    ) -> ChatRecord:
+    ) -> Any:
         try:
             record = self._service.get(record_id)
         except ValueError as exc:
@@ -130,12 +216,15 @@ class ChatBIWorkflowApiExtension:
             workspace_id,
             requested_dataset_id,
         )
-        chat = self._session.get(Chat, chat_id)
-        if (
-            chat is None
-            or chat.oid != workspace_id
-            or chat.create_by != user_id
-        ):
+        try:
+            chat = build_conversation_service(self._session).get_owned_in_workspace(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                chat_id=chat_id,
+            )
+        except ValueError as exc:
+            raise WorkflowApiRequestError(404, "CHAT_NOT_FOUND") from exc
+        if chat is None:
             raise WorkflowApiRequestError(404, "CHAT_NOT_FOUND")
         try:
             binding = resolve_execution_binding(
@@ -168,10 +257,11 @@ class ChatBIWorkflowApiExtension:
             chat_id=chat_id,
             requested_dataset_id=requested_dataset_id,
         )
-        chat = self._session.get(Chat, chat_id)
-        if chat is None:
-            # validate_chat_query 已校验存在性；这里保护同一事务内的不变量。
-            raise RuntimeError("CHAT_DISAPPEARED_DURING_GRAPH_PREPARATION")
+        chat = build_conversation_service(self._session).get_owned_in_workspace(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            chat_id=chat_id,
+        )
         record = build_chat_record_service(self._session).create(
             ChatRecordCreateData(
                 chat_id=chat_id,
@@ -233,10 +323,21 @@ class ChatBIWorkflowApiExtension:
             "UNSUPPORTED_GRAPH_DEFINITION_VERSION",
         )
 
-    def build_record_projection_gateway(
-        self,
-    ) -> GraphRecordProjectionGateway:
-        return ChatRecordProjectionGateway(self._session)
+    def build_run_store(self, base: RunStore) -> RunStore:
+        """为关联会话的 Graph Run 装配 ChatRecord 同步投影。"""
+
+        return ChatProjectingRunStore(base, self._build_record_projector())
+
+    def project_run_model(self, run: WorkflowRunModel) -> Any | None:
+        """投影控制操作直接更新的持久化 Run。"""
+
+        return self._build_record_projector().project_model(run)
+
+    def _build_record_projector(self) -> GraphChatRecordProjector:
+        return GraphChatRecordProjector(
+            self._session,
+            ChatRecordProjectionGateway(self._session),
+        )
 
     def _build_conversation_context(
         self,
@@ -245,7 +346,7 @@ class ChatBIWorkflowApiExtension:
         user_id: int,
         question: str,
         dataset_id: int,
-        chat_record: ChatRecord,
+        chat_record: Any,
     ) -> dict[str, Any]:
         conversation: dict[str, Any] = {"question": question}
         conversation.update(
@@ -264,26 +365,16 @@ class ChatBIWorkflowApiExtension:
         workspace_id: int,
         user_id: int,
         dataset_id: int,
-        chat_record: ChatRecord,
+        chat_record: Any,
     ) -> dict[str, Any]:
-        records = self._session.exec(
-            select(ChatRecord)
-            .where(
-                ChatRecord.chat_id == chat_record.chat_id,
-                ChatRecord.id != chat_record.id,
-                ChatRecord.create_by == user_id,
-                ChatRecord.dataset_id == dataset_id,
-                ChatRecord.execution_type == ChatRecordExecutionType.GRAPH.value,
-                ChatRecord.status == RunStatus.SUCCEEDED.value,
-                col(ChatRecord.finish).is_(True),
-                col(ChatRecord.trace_id).is_not(None),
-            )
-            .order_by(
-                col(ChatRecord.create_time).desc(),
-                col(ChatRecord.id).desc(),
-            )
-            .limit(10)
-        ).all()
+        records = build_chat_record_service(
+            self._session
+        ).list_recent_successful_graph(
+            chat_id=chat_record.chat_id,
+            exclude_record_id=chat_record.id,
+            user_id=user_id,
+            dataset_id=dataset_id,
+        )
         for record in records:
             run = self._session.exec(
                 select(WorkflowRunModel).where(
@@ -315,7 +406,7 @@ class ChatBIWorkflowApiExtension:
     def _project_previous_semantic_context(
         self,
         run: WorkflowRunModel,
-        record: ChatRecord,
+        record: Any,
     ) -> dict[str, Any]:
         context = run.context if isinstance(run.context, dict) else {}
         variables_value = context.get("variables")
@@ -367,6 +458,9 @@ def build_chatbi_workflow_api_extension(
 
 __all__ = [
     "ChatBIWorkflowApiExtension",
+    "ChatProjectingRunStore",
     "ChatRecordProjectionGateway",
+    "GraphChatRecordProjector",
+    "GraphResultNotProjectableError",
     "build_chatbi_workflow_api_extension",
 ]

@@ -3,14 +3,14 @@ from typing import Any
 
 import orjson
 
-from apps.chatbi.errors import (
+from apps.conversation.errors import (
     ChatRecordError,
     ChatRecordNotFoundError,
     ChatRecordOwnershipError,
     ChatRecordResultTooLargeError,
     ChatRecordTransitionError,
 )
-from apps.chatbi.models import (
+from apps.conversation.models import (
     ChatRecord,
     ChatRecordAuxiliaryProjection,
     ChatRecordAuxiliaryType,
@@ -20,7 +20,7 @@ from apps.chatbi.models import (
     ChatRecordResultProjection,
     ChatRecordStatus,
 )
-from apps.chatbi.repository import ChatRecordRepository
+from apps.conversation.repository import ChatRecordRepository
 
 _TERMINAL_STATUSES = {
     ChatRecordStatus.SUCCEEDED,
@@ -95,10 +95,64 @@ class ChatRecordService:
             )
         return record
 
+    def get_owned(self, user_id: int, record_id: int) -> ChatRecord:
+        """读取属于指定用户的问数记录。"""
+
+        record = self.get(record_id)
+        if record.create_by != user_id:
+            raise ChatRecordOwnershipError(
+                f"ChatRecord with id {record_id} not owned by the current user"
+            )
+        return record
+
     def create(self, data: ChatRecordCreateData) -> ChatRecord:
         if not data.question.strip():
             raise ChatRecordError("ChatRecord question is required")
         return self._repository.create(data)
+
+    def list_recent_successful_graph(
+        self,
+        *,
+        chat_id: int,
+        exclude_record_id: int,
+        user_id: int,
+        dataset_id: int,
+        limit: int = 10,
+    ) -> list[ChatRecord]:
+        """读取 Graph 多轮上下文使用的最近成功记录。"""
+
+        if limit <= 0:
+            return []
+        return self._repository.list_recent_successful_graph(
+            chat_id=chat_id,
+            exclude_record_id=exclude_record_id,
+            user_id=user_id,
+            dataset_id=dataset_id,
+            limit=limit,
+        )
+
+    def list_recent_completed(
+        self,
+        *,
+        chat_id: int,
+        exclude_record_id: int,
+        limit: int = 3,
+    ) -> list[ChatRecord]:
+        if limit <= 0:
+            return []
+        return self._repository.list_recent_completed(
+            chat_id=chat_id,
+            exclude_record_id=exclude_record_id,
+            limit=limit,
+        )
+
+    def list_recent_questions(self, datasource_id: int, limit: int = 20) -> list[str]:
+        if datasource_id <= 0 or limit <= 0:
+            return []
+        return self._repository.list_recent_questions(
+            datasource_id=datasource_id,
+            limit=limit,
+        )
 
     def create_auxiliary(
         self,

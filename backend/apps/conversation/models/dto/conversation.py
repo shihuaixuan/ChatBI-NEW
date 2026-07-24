@@ -2,9 +2,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
-from apps.chatbi.models.orm import ChatRecord
+from apps.conversation.models.dto.chat_history import ChatRecordResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +43,27 @@ class RenameChat(BaseModel):
     brief_generate: bool = True
 
 
+class ConversationSummary(BaseModel):
+    """保持 `/chat/list` 既有字段的会话摘要。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int | None
+    oid: int | None
+    create_time: datetime
+    create_by: int
+    brief: str = Field(max_length=64)
+    chat_type: str = Field(default="chat", max_length=20)
+    dataset_id: int | None = None
+    datasource: SkipValidation[int]
+    engine_type: str = Field(max_length=64)
+    origin: int | None
+    brief_generate: bool = False
+    recommended_question_answer: SkipValidation[str]
+    recommended_question: SkipValidation[str]
+    recommended_generate: bool = False
+
+
 class ChatInfo(BaseModel):
     id: int | None = None
     create_time: datetime | None = None
@@ -59,13 +80,14 @@ class ChatInfo(BaseModel):
     datasource_exists: bool = True
     recommended_question: str | None = None
     recommended_generate: bool | None = False
-    records: list[ChatRecord | dict[str, Any]] = Field(default_factory=list)
+    records: list[ChatRecordResult | dict[str, Any]] = Field(default_factory=list)
 
 
 __all__ = [
     "ChatInfo",
     "ConversationBinding",
     "ConversationCreateData",
+    "ConversationSummary",
     "CreateChat",
     "RenameChat",
 ]

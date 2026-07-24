@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from apps.chatbi.models.dto.chat_record import ChatRecordAuxiliaryType
+from apps.conversation import ChatRecordAuxiliaryType
 
 
 @dataclass(frozen=True, slots=True)

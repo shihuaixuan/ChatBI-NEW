@@ -9,9 +9,6 @@ from apps.chatbi.models.orm.agent_run import (
     ChatbiAgentStep,
     ChatbiAgentTraceEvent,
 )
-from apps.chatbi.models.orm.chat import Chat, QuickCommand
-from apps.chatbi.models.orm.chat_log import ChatLog, OperationEnum, TypeEnum
-from apps.chatbi.models.orm.chat_record import ChatFinishStep, ChatRecord
 
 __all__ = [
     "AgentClarificationResumeKind",
@@ -19,15 +16,8 @@ __all__ = [
     "AgentErrorClass",
     "AgentRunStatus",
     "AgentStepStatus",
-    "Chat",
-    "ChatFinishStep",
-    "ChatLog",
-    "ChatRecord",
     "ChatbiAgentClarification",
     "ChatbiAgentRun",
     "ChatbiAgentStep",
     "ChatbiAgentTraceEvent",
-    "OperationEnum",
-    "QuickCommand",
-    "TypeEnum",
 ]

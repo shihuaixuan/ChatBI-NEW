@@ -1,7 +1,7 @@
 import re
 from typing import Optional, Tuple
 
-from apps.chatbi.models import QuickCommand
+from apps.conversation.models import QuickCommand
 
 
 def parse_quick_command(input_str: str) -> Tuple[Optional[QuickCommand], str, Optional[int], Optional[str]]:
@@ -95,4 +95,3 @@ def parse_quick_command(input_str: str) -> Tuple[Optional[QuickCommand], str, Op
             return None, input_str, None, f"错误: 数字参数格式不正确: {number_part}"
 
     return command, text_before_command, record_id, None
-

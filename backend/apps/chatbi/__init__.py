@@ -10,23 +10,18 @@ services 子包内部结构对外不承诺稳定。
 from importlib import import_module
 from typing import Any
 
-_CONVERSATION = "apps.chatbi.services.conversation"
 _EXECUTION = "apps.chatbi.services.execution"
 _GENERATION = "apps.chatbi.services.generation"
 _PLANNING = "apps.chatbi.services.planning"
 _UNDERSTANDING = "apps.chatbi.services.understanding"
 _ERRORS = "apps.chatbi.errors"
 _LEGACY_READ = "apps.chatbi.api.legacy_read"
-_RESOURCE_SCOPE = "apps.chatbi.resource_scope"
 
 _PUBLIC: dict[str, str] = {
     "AnalysisPredictionService": _GENERATION,
     "AnswerGenerationService": _GENERATION,
     "ChatBIError": _ERRORS,
     "ChartGenerationService": _GENERATION,
-    "ChatWorkspaceResourceScopeReader": _RESOURCE_SCOPE,
-    "ChatRecordService": _CONVERSATION,
-    "ConversationService": _CONVERSATION,
     "DatasourceSelectionService": _PLANNING,
     "GenerationContextService": _GENERATION,
     "GuardedQueryService": _EXECUTION,
@@ -41,7 +36,6 @@ _PUBLIC: dict[str, str] = {
     "SemanticCompilationService": _PLANNING,
     "SemanticRetrievalService": _PLANNING,
     "apply_question_understanding_clarification": _UNDERSTANDING,
-    "normalize_chat_record_status": _CONVERSATION,
     "project_answer_context": _GENERATION,
     "project_final_reply": _GENERATION,
     "project_query_final_reply": _GENERATION,

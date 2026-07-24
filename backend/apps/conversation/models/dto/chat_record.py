@@ -1,3 +1,5 @@
+"""Conversation 问数记录的公开契约。"""
+
 from dataclasses import dataclass
 from enum import Enum
 

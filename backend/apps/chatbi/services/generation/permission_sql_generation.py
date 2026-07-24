@@ -4,12 +4,10 @@ from collections.abc import Iterator
 
 from apps.chatbi.errors import PermissionSQLGenerationError, SQLGenerationError
 from apps.chatbi.models import (
-    ChatRecordResultProjection,
     ModelMessage,
     PermissionSQLGenerationData,
     SQLGenerationEvent,
 )
-from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 from apps.chatbi.services.generation.ports import (
     GenerationModelClient,
     PermissionSQLGenerationPromptBuilder,
@@ -20,6 +18,7 @@ from apps.chatbi.services.generation.streaming import (
     ensure_prompt_messages,
     stream_generation,
 )
+from apps.conversation import ChatRecordResultProjection, ChatRecordService
 
 
 class PermissionSQLGenerationService:

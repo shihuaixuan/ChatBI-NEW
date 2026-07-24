@@ -74,6 +74,26 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
         ),
         reason="Dashboard 只能通过 ChatBI 公开契约加载图表数据。",
     ),
+    ForbiddenImportRule(
+        rule_id="conversation-no-application-dependencies",
+        scope="apps/conversation",
+        forbidden=(
+            "apps.chatbi",
+            "apps.agent",
+            "apps.workflow",
+            "sqlbot_platform.workflow_engine",
+        ),
+        reason="Conversation 只拥有会话数据，不得依赖问数编排或工作流平台。",
+    ),
+    ForbiddenImportRule(
+        rule_id="chatbi-no-conversation-internals",
+        scope="apps/chatbi",
+        forbidden=(
+            "apps.conversation.models.orm",
+            "apps.conversation.repository.sqlmodel",
+        ),
+        reason="ChatBI 只能通过 Conversation Service 和公开 DTO 访问会话数据。",
+    ),
 )
 
 FORBIDDEN_TOP_LEVEL_PATHS: tuple[str, ...] = (

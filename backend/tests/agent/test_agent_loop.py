@@ -13,7 +13,6 @@ from apps.chatbi.models import (
     AgentRunStatus,
     ChatbiAgentRun,
     ChatbiAgentTraceEvent,
-    ChatRecord,
     IntentRecognitionOutput,
     IntentValidationOutput,
     QuestionUnderstandingOutcome,
@@ -26,6 +25,7 @@ from apps.chatbi.services.understanding import (
     QuestionUnderstandingModelResponse,
     QuestionUnderstandingService,
 )
+from apps.conversation.models import ChatRecord
 
 
 class FakeSession:
@@ -49,7 +49,11 @@ class FakeSession:
 
     def exec(self, stmt):
         count = self.trace_count
-        return SimpleNamespace(scalar=lambda: count, scalars=lambda: SimpleNamespace(all=lambda: [], first=lambda: None))
+        return SimpleNamespace(
+            all=lambda: [],
+            scalar=lambda: count,
+            scalars=lambda: SimpleNamespace(all=lambda: [], first=lambda: None),
+        )
 
 
 class ScriptedModel:

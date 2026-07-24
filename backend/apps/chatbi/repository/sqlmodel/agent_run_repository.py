@@ -12,7 +12,7 @@ from apps.chatbi.models.orm.agent_run import (
     ChatbiAgentStep,
     ChatbiAgentTraceEvent,
 )
-from apps.chatbi.models.orm.chat_record import ChatRecord
+from apps.conversation.composition import build_chat_record_service
 
 
 def now() -> datetime:
@@ -196,19 +196,11 @@ def get_pending_clarification(session, record_id: int) -> ChatbiAgentClarificati
 def recent_qa_summaries(session, chat_id: int, exclude_record_id: int, limit: int = 3) -> list[dict]:
     """最近 K 轮已完成问答的摘要（question + SQL + 概要），供多轮上下文注入。"""
 
-    stmt = (
-        select(ChatRecord)
-        .where(
-            and_(
-                ChatRecord.chat_id == chat_id,
-                ChatRecord.id != exclude_record_id,
-                ChatRecord.finish.is_(True),
-            )
-        )
-        .order_by(desc(ChatRecord.id))
-        .limit(limit)
+    records = build_chat_record_service(session).list_recent_completed(
+        chat_id=chat_id,
+        exclude_record_id=exclude_record_id,
+        limit=limit,
     )
-    records = session.exec(stmt).scalars().all()
     summaries = []
     for record in reversed(records):
         summaries.append(
@@ -234,24 +226,21 @@ def latest_successful_rewritten_question(
         ChatbiAgentRun.chat_id == chat_id,
         ChatbiAgentRun.record_id != exclude_record_id,
         ChatbiAgentRun.status == AgentRunStatus.FINISHED.value,
-        ChatRecord.finish.is_(True),
-        ChatRecord.execution_type == "agent",
     ]
-    if datasource_id is not None:
-        conditions.append(ChatRecord.datasource == datasource_id)
 
     stmt = (
         select(ChatbiAgentRun)
-        .join(ChatRecord, ChatRecord.id == ChatbiAgentRun.record_id)
         .where(and_(*conditions))
-        .order_by(
-            desc(ChatRecord.create_time),
-            desc(ChatRecord.id),
-            desc(ChatbiAgentRun.created_at),
-        )
+        .order_by(desc(ChatbiAgentRun.created_at))
         .limit(10)
     )
+    record_service = build_chat_record_service(session)
     for previous_run in session.exec(stmt).scalars().all():
+        record = record_service.get(previous_run.record_id)
+        if not record.finish or record.execution_type != "agent":
+            continue
+        if datasource_id is not None and record.datasource != datasource_id:
+            continue
         understanding = (previous_run.derived_state or {}).get("question_understanding")
         if not isinstance(understanding, dict):
             continue

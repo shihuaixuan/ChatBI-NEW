@@ -18,12 +18,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from apps.chatbi.models import Chat, ChatRecord
 from apps.chatbi.orchestration.graph import api_extension as chatbi_graph_extension
 from apps.chatbi.orchestration.graph import runtime as chatbi_runtime
 from apps.chatbi.orchestration.graph.definitions.chatbi_v1 import (
     build_chatbi_v1_definition,
 )
+from apps.conversation.models import Chat, ChatRecord
 from apps.retrieval.embedding import StaticEmbeddingProvider
 from apps.retrieval.indexing.service import RetrievalIndexingService
 from apps.retrieval.sources.semantic_indexing import (

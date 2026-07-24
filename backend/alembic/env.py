@@ -27,6 +27,8 @@ from sqlmodel import SQLModel  # noqa: E402
 from apps.access_control import models as access_control_models  # noqa: F401,E402
 from apps.ai_model import models as ai_model_models  # noqa: F401,E402
 from apps.assistant import models as assistant_models  # noqa: F401,E402
+from apps.chatbi import models as chatbi_models  # noqa: F401,E402
+from apps.conversation import models as conversation_models  # noqa: F401,E402
 from common.core.config import settings  # noqa: E402
 
 target_metadata = SQLModel.metadata

@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from apps.chatbi.models import ChatRecord, ChatRecordCreateData
+from apps.conversation.models import ChatRecord, ChatRecordCreateData
 
 
 class ChatRecordRepository(Protocol):
@@ -11,6 +11,31 @@ class ChatRecordRepository(Protocol):
     def create(self, data: ChatRecordCreateData) -> ChatRecord: ...
 
     def save(self, record: ChatRecord) -> None: ...
+
+    def list_recent_successful_graph(
+        self,
+        *,
+        chat_id: int,
+        exclude_record_id: int,
+        user_id: int,
+        dataset_id: int,
+        limit: int,
+    ) -> list[ChatRecord]: ...
+
+    def list_recent_completed(
+        self,
+        *,
+        chat_id: int,
+        exclude_record_id: int,
+        limit: int,
+    ) -> list[ChatRecord]: ...
+
+    def list_recent_questions(
+        self,
+        *,
+        datasource_id: int,
+        limit: int,
+    ) -> list[str]: ...
 
     def promote_recommendation(
         self,

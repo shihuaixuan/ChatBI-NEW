@@ -8,13 +8,12 @@ import pytest
 
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
-    ChatRecord,
-    ChatRecordAuxiliaryType,
     ModelMessage,
     ModelStreamChunk,
 )
-from apps.chatbi.services.conversation import ChatRecordService
 from apps.chatbi.services.generation import AnalysisPredictionService
+from apps.conversation import ChatRecordAuxiliaryType, ChatRecordService
+from apps.conversation.models import ChatRecord
 
 
 class FakePromptBuilder:

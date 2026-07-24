@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from typing import Any
 
 import orjson
 from langchain_core.messages import (
@@ -37,10 +38,6 @@ from apps.chatbi.models import (
     AgentRunStatus,
     ChatbiAgentClarification,
     ChatbiAgentRun,
-    ChatRecord,
-    ChatRecordExecutionType,
-    ChatRecordResultProjection,
-    ChatRecordStatus,
 )
 from apps.chatbi.models.dto.agent import AgentConfig, AgentEventPayload
 from apps.chatbi.orchestration.agent.budget import BudgetGuard
@@ -67,6 +64,11 @@ from apps.chatbi.services.planning import (
 from apps.chatbi.services.understanding import (
     QuestionUnderstandingService,
     apply_question_understanding_clarification,
+)
+from apps.conversation import (
+    ChatRecordExecutionType,
+    ChatRecordResultProjection,
+    ChatRecordStatus,
 )
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
@@ -154,7 +156,7 @@ class AgentLoop:
 
     # ---- 入口 ----
 
-    def run(self, run: ChatbiAgentRun, record: ChatRecord) -> Iterator[str]:
+    def run(self, run: ChatbiAgentRun, record: Any) -> Iterator[str]:
         budget = self._new_budget()
         ctx = self._new_ctx(run, record)
         messages = [HumanMessage(content=record.question or "")]
@@ -243,7 +245,7 @@ class AgentLoop:
     def resume(
         self,
         run: ChatbiAgentRun,
-        record: ChatRecord,
+        record: Any,
         clarification: ChatbiAgentClarification,
         answer_text: str,
     ) -> Iterator[str]:
@@ -361,7 +363,7 @@ class AgentLoop:
             max_clarifications=self.config.max_clarifications,
         )
 
-    def _new_ctx(self, run: ChatbiAgentRun, record: ChatRecord) -> AgentToolContext:
+    def _new_ctx(self, run: ChatbiAgentRun, record: Any) -> AgentToolContext:
         if run.id is None or record.id is None:
             raise RuntimeError("AGENT_EXECUTION_OWNERSHIP_MISSING")
         return AgentToolContext(
@@ -383,7 +385,7 @@ class AgentLoop:
             state={"question": record.question or ""},
         )
 
-    def _load_conversation_context(self, run: ChatbiAgentRun, record: ChatRecord) -> dict:
+    def _load_conversation_context(self, run: ChatbiAgentRun, record: Any) -> dict:
         history = agent_run_repository.recent_qa_summaries(self.session, run.chat_id, record.id, limit=self.config.history_rounds)
         previous_rewritten_question = agent_run_repository.latest_successful_rewritten_question(
             self.session,
@@ -399,7 +401,7 @@ class AgentLoop:
     def _build_system(
         self,
         run: ChatbiAgentRun,
-        record: ChatRecord,
+        record: Any,
         *,
         conversation_context: dict,
         question_understanding: dict | None,

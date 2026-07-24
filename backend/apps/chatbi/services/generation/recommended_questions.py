@@ -10,7 +10,6 @@ from apps.chatbi.models import (
     RecommendedQuestionGenerationData,
     RecommendedQuestionGenerationEvent,
 )
-from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 from apps.chatbi.services.generation.ports import (
     GenerationModelClient,
     RecommendedQuestionHistoryRepository,
@@ -21,6 +20,7 @@ from apps.chatbi.services.generation.streaming import (
     ensure_prompt_messages,
     stream_generation,
 )
+from apps.conversation import ChatRecordService
 
 
 class RecommendedQuestionService:

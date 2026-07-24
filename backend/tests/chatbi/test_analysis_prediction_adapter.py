@@ -3,8 +3,8 @@ from apps.chatbi.adapters.analysis_prediction import (
 )
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
-    ChatRecordAuxiliaryType,
 )
+from apps.conversation import ChatRecordAuxiliaryType
 
 
 def _data(

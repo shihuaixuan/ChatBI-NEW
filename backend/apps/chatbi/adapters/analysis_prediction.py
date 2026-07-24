@@ -9,12 +9,9 @@ from sqlmodel import Session
 from apps.chatbi.adapters.langchain import LangChainGenerationModelClient
 from apps.chatbi.adapters.prompts import get_analysis_template, get_predict_template
 from apps.chatbi.composition import build_chat_record_service
-from apps.chatbi.models import (
-    AnalysisPredictionGenerationData,
-    ChatRecordAuxiliaryType,
-    ModelMessage,
-)
+from apps.chatbi.models import AnalysisPredictionGenerationData, ModelMessage
 from apps.chatbi.services.generation import AnalysisPredictionService
+from apps.conversation import ChatRecordAuxiliaryType
 
 
 class TemplateAnalysisPredictionPromptBuilder:

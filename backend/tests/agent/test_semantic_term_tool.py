@@ -2,13 +2,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from apps.chatbi.models import AgentQuestionRequest, Chat
+from apps.chatbi.models import AgentQuestionRequest
 from apps.chatbi.orchestration.agent.service import create_record_and_run
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.interaction import (
     SearchTerminologyArgs,
     SearchTerminologyTool,
 )
+from apps.conversation.models import Chat
 from apps.semantic.models.dto import TermSearchResult
 
 

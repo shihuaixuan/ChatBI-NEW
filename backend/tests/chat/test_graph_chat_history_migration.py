@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from apps.chatbi.models import ChatRecord, ChatRecordResult
+from apps.conversation import ChatRecordResult
+from apps.conversation.models import ChatRecord
 
 # 固定检查本任务新增迁移，防止误把破坏性数据改写带入历史归属升级。
 MIGRATION = (

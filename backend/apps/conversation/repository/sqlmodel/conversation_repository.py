@@ -1,11 +1,14 @@
 import json
 
+from sqlalchemy import delete
 from sqlmodel import Session, col, select
 
-from apps.chatbi.models import (
+from apps.conversation.models import (
     Chat,
     ChatInfo,
+    ChatLog,
     ChatRecord,
+    ChatRecordResult,
     ChatRecordStatus,
     ConversationCreateData,
 )
@@ -82,7 +85,7 @@ class SQLModelConversationRepository:
             self._session.add(record)
             self._session.flush()
             self._session.refresh(record)
-            chat_info.records.append(ChatRecord(**record.model_dump()))
+            chat_info.records.append(ChatRecordResult(**record.model_dump()))
 
         return chat_info
 
@@ -99,6 +102,21 @@ class SQLModelConversationRepository:
         self._session.flush()
         self._session.refresh(chat)
         return chat.brief
+
+    def delete(self, chat_id: int) -> None:
+        record_ids = list(
+            self._session.exec(
+                select(ChatRecord.id).where(ChatRecord.chat_id == chat_id)
+            ).all()
+        )
+        if record_ids:
+            self._session.exec(
+                delete(ChatLog).where(col(ChatLog.pid).in_(record_ids))
+            )
+            self._session.exec(
+                delete(ChatRecord).where(col(ChatRecord.id).in_(record_ids))
+            )
+        self._session.exec(delete(Chat).where(col(Chat.id) == chat_id))
 
     def commit(self) -> None:
         self._session.commit()

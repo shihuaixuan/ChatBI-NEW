@@ -2,13 +2,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session
 
-from apps.chatbi.composition import build_chat_record_service
 from apps.chatbi.models import (
     AgentClarificationStatus,
     AgentRunStatus,
-    ChatRecord,
-    ChatRecordExecutionType,
-    ChatRecordStatus,
 )
 from apps.chatbi.models.dto.agent import (
     AgentClarificationRequest,
@@ -25,6 +21,12 @@ from apps.chatbi.orchestration.agent.service import (
     get_agent_config,
 )
 from apps.chatbi.repository.sqlmodel import agent_run_repository
+from apps.conversation import (
+    ChatRecordError,
+    ChatRecordExecutionType,
+    ChatRecordStatus,
+)
+from apps.conversation.composition import build_chat_record_service
 from common.core.db import engine
 from common.core.deps import CurrentUser, SessionDep
 
@@ -53,9 +55,13 @@ async def agent_stream(current_user: CurrentUser, request: AgentStreamRequest):
     def stream_resume():
         # resume 复用同一入口和事件格式，但会开启新的 HTTP 响应流。
         with Session(engine) as stream_session:
-            record = stream_session.get(ChatRecord, request.record_id)
-            if not record or record.create_by != current_user.id:
-                raise RuntimeError("Chat record not found")
+            try:
+                record = build_chat_record_service(stream_session).get_owned(
+                    current_user.id,
+                    request.record_id,
+                )
+            except ChatRecordError as exc:
+                raise RuntimeError("Chat record not found") from exc
             run = agent_run_repository.get_latest_run_by_record(
                 stream_session,
                 request.record_id,
@@ -118,9 +124,11 @@ def _clarification_answer_text(request: AgentClarificationRequest) -> str:
 
 @router.get("/record/{record_id}/trace")
 async def agent_trace(session: SessionDep, current_user: CurrentUser, record_id: int):
-    record = session.get(ChatRecord, record_id)
-    if not record or record.create_by != current_user.id:
+    try:
+        build_chat_record_service(session).get_owned(current_user.id, record_id)
+    except ChatRecordError:
         raise HTTPException(status_code=404, detail="Chat record not found")
+
     return agent_run_repository.build_trace_response(session, record_id)
 
 
@@ -151,12 +159,12 @@ async def agent_cancel(session: SessionDep, current_user: CurrentUser, run_id: i
         run,
         status=AgentRunStatus.CANCELLED.value,
     )
-    record = session.get(ChatRecord, run.record_id)
-    if record:
-        build_chat_record_service(session).transition(
-            record,
-            ChatRecordStatus.CANCELLED,
-            execution_type=ChatRecordExecutionType.AGENT,
-        )
+    record_service = build_chat_record_service(session)
+    record = record_service.get_owned(current_user.id, run.record_id)
+    record_service.transition(
+        record,
+        ChatRecordStatus.CANCELLED,
+        execution_type=ChatRecordExecutionType.AGENT,
+    )
     session.commit()
     return {"run_id": run_id, "status": AgentRunStatus.CANCELLED.value}

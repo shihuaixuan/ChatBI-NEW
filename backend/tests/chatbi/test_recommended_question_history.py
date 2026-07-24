@@ -3,10 +3,10 @@ from datetime import datetime, timedelta
 from sqlalchemy import delete
 from sqlmodel import Session
 
-from apps.chatbi.models import ChatRecord
 from apps.chatbi.repository.sqlmodel import (
     SQLModelRecommendedQuestionHistoryRepository,
 )
+from apps.conversation.models import ChatRecord
 from common.core.db import engine
 
 

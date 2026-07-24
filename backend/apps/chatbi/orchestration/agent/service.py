@@ -6,12 +6,7 @@ from apps.chatbi.composition import (
     build_chat_record_service,
     build_conversation_reader_service,
 )
-from apps.chatbi.models import (
-    ChatRecordCreateData,
-    ChatRecordExecutionType,
-    ChatRecordStatus,
-    ExecutionBindingData,
-)
+from apps.chatbi.models import ExecutionBindingData
 from apps.chatbi.models.dto.agent import (
     AgentConfig,
     AgentQuestionRequest,
@@ -20,6 +15,11 @@ from apps.chatbi.models.dto.agent import (
 from apps.chatbi.orchestration.agent.loop import AgentLoop
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.planning import resolve_execution_binding
+from apps.conversation import (
+    ChatRecordCreateData,
+    ChatRecordExecutionType,
+    ChatRecordStatus,
+)
 from common.core.config import settings
 from common.core.db import engine
 

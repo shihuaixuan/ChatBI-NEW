@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from apps.chatbi.api import legacy_chat_flow as llm_module
-from apps.chatbi.models import ChatFinishStep
+from apps.conversation.models import ChatFinishStep
 from common.error import SingleMessageError
 
 

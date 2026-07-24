@@ -7,13 +7,7 @@ from typing import Any
 import orjson
 
 from apps.chatbi.errors import ChartGenerationError
-from apps.chatbi.models import (
-    ChartGenerationData,
-    ChartGenerationEvent,
-    ChatRecordResultProjection,
-    ModelMessage,
-)
-from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
+from apps.chatbi.models import ChartGenerationData, ChartGenerationEvent, ModelMessage
 from apps.chatbi.services.generation.ports import (
     ChartGenerationPromptBuilder,
     GenerationModelClient,
@@ -23,6 +17,7 @@ from apps.chatbi.services.generation.streaming import (
     ensure_prompt_messages,
     stream_generation,
 )
+from apps.conversation import ChatRecordResultProjection, ChatRecordService
 
 
 class ChartGenerationService:

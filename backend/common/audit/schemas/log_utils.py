@@ -10,7 +10,7 @@ from apps.access_control.models import (
 )
 from apps.ai_model.models import AiModelDetail
 from apps.assistant.audit import build_assistant_audit_resource_query
-from apps.chatbi.models import Chat
+from apps.conversation.models import Chat
 from apps.dashboard.models.orm import CoreDashboard
 from apps.datasource.models.orm import CoreDatasource
 from apps.knowledge.models.orm import SQLExampleModel

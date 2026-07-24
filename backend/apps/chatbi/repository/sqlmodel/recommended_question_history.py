@@ -1,6 +1,6 @@
-from sqlmodel import Session, col, select
+from sqlmodel import Session
 
-from apps.chatbi.models import ChatRecord
+from apps.conversation.composition import build_chat_record_service
 
 
 class SQLModelRecommendedQuestionHistoryRepository:
@@ -17,21 +17,10 @@ class SQLModelRecommendedQuestionHistoryRepository:
     ) -> list[str]:
         if datasource_id is None or limit <= 0:
             return []
-        statement = (
-            select(ChatRecord.question)
-            .where(
-                ChatRecord.datasource == datasource_id,
-                col(ChatRecord.question).is_not(None),
-                col(ChatRecord.error).is_(None),
-            )
-            .order_by(col(ChatRecord.create_time).desc())
-            .limit(limit)
+        return build_chat_record_service(self._session).list_recent_questions(
+            datasource_id,
+            limit,
         )
-        return [
-            question
-            for question in self._session.exec(statement).all()
-            if isinstance(question, str) and question.strip()
-        ]
 
 
 __all__ = ["SQLModelRecommendedQuestionHistoryRepository"]

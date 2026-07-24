@@ -19,26 +19,34 @@ from apps.chatbi.api.legacy_read import (
     get_chat_with_records,
     get_chat_with_records_with_data,
 )
-from apps.chatbi.composition import build_conversation_reader_service
-from apps.chatbi.models import (
-    Chat,
+from apps.chatbi.composition import (
+    build_chat_record_service,
+    build_conversation_reader_service,
+)
+from apps.chatbi.services.conversation import DatasetBindingError
+from apps.conversation import (
     ChatInfo,
-    ChatRecord,
+    ChatRecordNotFoundError,
+    ChatRecordOwnershipError,
+    ConversationSummary,
     CreateChat,
     RenameChat,
 )
-from apps.chatbi.services.conversation import DatasetBindingError
-from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.deps import CurrentAssistant, CurrentUser, SessionDep, Trans
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.utils.data_format import DataFormat
 from common.utils.data_format_schema import AxisObj
 
 router = APIRouter(tags=["Data Q&A"], prefix="/chat")
 
 
-@router.get("/list", response_model=list[Chat], summary=f"{PLACEHOLDER_PREFIX}get_chat_list")
+@router.get(
+    "/list",
+    response_model=list[ConversationSummary],
+    summary=f"{PLACEHOLDER_PREFIX}get_chat_list",
+)
 async def chats(session: SessionDep, current_user: CurrentUser):
     return build_conversation_reader_service(session).list_for_owner(
         current_user.id,
@@ -243,13 +251,17 @@ async def assistant_start_chat(
 @router.get("/record/{chat_record_id}/excel/export/{chat_id}", summary=f"{PLACEHOLDER_PREFIX}export_chart_data")
 @system_log(LogConfig(operation_type=OperationType.EXPORT, module=OperationModules.CHAT, resource_id_expr="chat_id", ))
 async def export_excel(session: SessionDep, current_user: CurrentUser, chat_record_id: int, chat_id: int, trans: Trans):
-    chat_record = session.get(ChatRecord, chat_record_id)
-    if not chat_record:
+    try:
+        chat_record = build_chat_record_service(session).get_owned(
+            current_user.id,
+            chat_record_id,
+        )
+    except ChatRecordNotFoundError:
         raise HTTPException(
             status_code=500,
             detail=f"ChatRecord with id {chat_record_id} not found"
         )
-    if chat_record.create_by != current_user.id:
+    except ChatRecordOwnershipError:
         raise HTTPException(
             status_code=500,
             detail=f"ChatRecord with id {chat_record_id} not Owned by the current user"

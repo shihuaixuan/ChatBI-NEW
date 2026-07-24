@@ -6,18 +6,18 @@ import orjson
 import pytest
 
 from apps.chatbi.models import (
-    ChatRecord,
     DatasourceSelectionCandidate,
     DatasourceSelectionData,
     DatasourceSelectionEvent,
     ModelMessage,
     ModelStreamChunk,
 )
-from apps.chatbi.services.conversation import ChatRecordService
 from apps.chatbi.services.planning import (
     DatasourceSelectionError,
     DatasourceSelectionService,
 )
+from apps.conversation import ChatRecordService
+from apps.conversation.models import ChatRecord
 
 
 class FakePromptBuilder:

@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from apps.chatbi.models import Chat, ChatInfo, ConversationCreateData
+from apps.conversation.models import Chat, ChatInfo, ConversationCreateData
 
 
 class ConversationRepository(Protocol):
@@ -19,6 +19,8 @@ class ConversationRepository(Protocol):
         brief: str,
         brief_generate: bool,
     ) -> str: ...
+
+    def delete(self, chat_id: int) -> None: ...
 
     def commit(self) -> None: ...
 

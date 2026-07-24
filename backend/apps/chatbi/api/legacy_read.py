@@ -8,8 +8,9 @@ from sqlalchemy.orm import aliased
 
 from apps.assistant.public import AssistantOutDsFactory
 from apps.chatbi.composition import build_conversation_reader_service
-from apps.chatbi.errors import ConversationNotFoundError
-from apps.chatbi.models import (
+from apps.chatbi.services.generation import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
+from apps.conversation import ConversationNotFoundError
+from apps.conversation.models import (
     Chat,
     ChatInfo,
     ChatLog,
@@ -20,7 +21,6 @@ from apps.chatbi.models import (
     OperationEnum,
     TypeEnum,
 )
-from apps.chatbi.services.generation import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
 from apps.datasource.composition import (
     build_datasource_connection_service,
     build_datasource_service,

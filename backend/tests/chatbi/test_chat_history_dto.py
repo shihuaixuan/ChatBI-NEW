@@ -1,4 +1,4 @@
-from apps.chatbi.models import (
+from apps.conversation import (
     ChatLogHistory,
     ChatLogHistoryItem,
     ChatRecordResult,

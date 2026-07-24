@@ -12,7 +12,6 @@ from apps.chatbi.models import (
     AgentRunStatus,
     ChatbiAgentClarification,
     ChatbiAgentRun,
-    ChatRecord,
     DimensionSlot,
 )
 from apps.chatbi.orchestration.agent.loop import (
@@ -23,6 +22,7 @@ from apps.chatbi.orchestration.agent.loop import (
 from apps.chatbi.orchestration.agent.prompts import build_system_prompt
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.chatbi.orchestration.agent.tools.registry import ToolRegistry
+from apps.conversation.models import ChatRecord
 from tests.agent.test_agent_loop import (
     FakeSession,
     FinishProbeTool,

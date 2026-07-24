@@ -1,3 +1,5 @@
+"""Conversation 历史查询契约。"""
+
 from datetime import datetime
 from typing import Any
 

@@ -12,9 +12,9 @@ from apps.chatbi.models import (
     AgentStartStreamRequest,
     ChatbiAgentClarification,
     ChatbiAgentRun,
-    ChatRecord,
 )
 from apps.chatbi.orchestration.agent import service
+from apps.conversation.models import ChatRecord
 
 
 async def _read_stream(response: StreamingResponse) -> str:

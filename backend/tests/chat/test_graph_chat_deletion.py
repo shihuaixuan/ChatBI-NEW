@@ -10,16 +10,14 @@ from sqlmodel import Session, select
 from apps.chatbi.api.legacy_composition import LegacyChatDeletionProvider
 from apps.chatbi.models import (
     AgentRunStatus,
-    Chat,
     ChatbiAgentRun,
     ChatbiAgentStep,
     ChatbiAgentTraceEvent,
-    ChatLog,
-    ChatRecord,
 )
 from apps.chatbi.repository.sqlmodel.agent_run_repository import (
     AgentExecutionDeletionService,
 )
+from apps.conversation.models import Chat, ChatLog, ChatRecord
 from common.core.db import engine
 from sqlbot_platform.workflow_engine.infrastructure.artifacts.cleanup import (
     ArtifactCleanupService,
@@ -287,7 +285,10 @@ def test_chat_deletion_removes_owned_workflow_data_but_keeps_standalone_run(
     owned_run_id = owned_run.run_id
     standalone_run_id = standalone.run_id
 
-    deleted_message = LegacyChatDeletionProvider(session, AgentExecutionDeletionService(session)).delete_for_user(current_user.id, chat_id)
+    deleted_message = LegacyChatDeletionProvider(
+        session,
+        AgentExecutionDeletionService,
+    ).delete_for_user(current_user.id, chat_id)
     repeated_message = LegacyChatDeletionProvider(session, AgentExecutionDeletionService(session)).delete_for_user(current_user.id, chat_id)
 
     assert deleted_message == repeated_message

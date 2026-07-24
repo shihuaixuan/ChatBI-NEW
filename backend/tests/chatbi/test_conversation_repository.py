@@ -1,42 +1,18 @@
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from apps.chatbi.models import (
-    Chat,
-    ChatRecord,
+from apps.conversation import (
     ConversationBinding,
+    ConversationService,
     CreateChat,
     RenameChat,
 )
-from apps.chatbi.repository.sqlmodel import SQLModelConversationRepository
-from apps.chatbi.services.conversation import ConversationService
+from apps.conversation.models import (
+    Chat,
+    ChatRecord,
+)
+from apps.conversation.repository.sqlmodel import SQLModelConversationRepository
 from common.core.db import engine
-
-
-class StaticBindingProvider:
-    def resolve(
-        self,
-        *,
-        workspace_id: int,
-        dataset_id: int,
-        assistant_type: int | None,
-    ) -> ConversationBinding:
-        assert workspace_id == 99101
-        assert assistant_type is None
-        return ConversationBinding(
-            dataset_id=dataset_id,
-            dataset_name="仓储测试数据集",
-            datasource_id=99201,
-            datasource_name="仓储测试数据源",
-            datasource_type="postgresql",
-            datasource_type_name="PostgreSQL",
-        )
-
-
-class StaticRecommendedQuestionProvider:
-    def list_for_chat(self, datasource_id: int) -> list[str]:
-        assert datasource_id == 99201
-        return ["推荐问题一"]
 
 
 def _cleanup(session: Session) -> None:
@@ -52,16 +28,21 @@ def _cleanup(session: Session) -> None:
 def test_sqlmodel_repository_supports_conversation_lifecycle():
     with Session(engine) as session:
         _cleanup(session)
-        service = ConversationService(
-            SQLModelConversationRepository(session),
-            binding_provider=StaticBindingProvider(),
-            recommended_question_provider=StaticRecommendedQuestionProvider(),
-        )
+        service = ConversationService(SQLModelConversationRepository(session))
 
-        created = service.create(
+        created = service.create_from_request(
             user_id=99301,
             workspace_id=99101,
             request=CreateChat(question="仓储生命周期测试", dataset_id=99401),
+            binding=ConversationBinding(
+                dataset_id=99401,
+                dataset_name="仓储测试数据集",
+                datasource_id=99201,
+                datasource_name="仓储测试数据源",
+                datasource_type="postgresql",
+                datasource_type_name="PostgreSQL",
+            ),
+            recommended_questions=["推荐问题一"],
         )
         chat_id = created.id or 0
 

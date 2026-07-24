@@ -10,14 +10,10 @@ from fastapi import HTTPException
 from sqlmodel import Session, col, func, select
 
 from common.core.db import engine
-from sqlbot_platform.workflow_engine.api.chat_history import (
-    ChatProjectingRunStore,
-    GraphChatRecordProjector,
-    GraphResultNotProjectableError,
-)
 from sqlbot_platform.workflow_engine.api.extension import (
     WorkflowApiExtension,
     WorkflowApiRequestError,
+    WorkflowRunProjectionError,
     build_workflow_api_extension,
 )
 from sqlbot_platform.workflow_engine.api.schemas import (
@@ -73,14 +69,6 @@ class GraphApiService:
     ) -> None:
         self._session = session
         self._extension = extension or build_workflow_api_extension(session)
-
-    def _graph_chat_record_projector(self) -> GraphChatRecordProjector:
-        """用业务侧注册的投影端口装配通用 Run 投影器。"""
-
-        return GraphChatRecordProjector(
-            self._session,
-            self._extension.build_record_projection_gateway(),
-        )
 
     def create_query(
         self,
@@ -155,10 +143,7 @@ class GraphApiService:
             "chat_id": chat_id,
             "record_id": prepared.record_id,
         }
-        run_store = ChatProjectingRunStore(
-            RunRepository(self._session),
-            self._graph_chat_record_projector(),
-        )
+        run_store = self._extension.build_run_store(RunRepository(self._session))
         runtime = self._build_runtime(
             request.definition_version,
             commit_events=commit_events,
@@ -176,7 +161,7 @@ class GraphApiService:
             )
             runtime.execute(created.run_id)
             self._session.commit()
-        except GraphResultNotProjectableError as exc:
+        except WorkflowRunProjectionError as exc:
             self._raise_projection_http_error(exc)
         return self._to_run_response(self._load_owned_run(current_user, created.run_id))
 
@@ -232,10 +217,7 @@ class GraphApiService:
         if run.record_id is not None:
             if run.definition_version != "v1":
                 raise HTTPException(status_code=400, detail="GRAPH_CHAT_DEFINITION_UNSUPPORTED")
-            run_store = ChatProjectingRunStore(
-                RunRepository(self._session),
-                self._graph_chat_record_projector(),
-            )
+            run_store = self._extension.build_run_store(RunRepository(self._session))
             return self._build_runtime(
                 run.definition_version,
                 commit_events=commit_events,
@@ -243,7 +225,7 @@ class GraphApiService:
             )
         return self._build_runtime(run.definition_version, commit_events=commit_events)
 
-    def _raise_projection_http_error(self, exc: GraphResultNotProjectableError) -> NoReturn:
+    def _raise_projection_http_error(self, exc: WorkflowRunProjectionError) -> NoReturn:
         """只在应用边界映射明确的历史投影错误。"""
 
         self._session.rollback()
@@ -429,7 +411,7 @@ class GraphApiService:
                     user_id=current_user.id,
                 )
                 self._session.commit()
-            except GraphResultNotProjectableError as exc:
+            except WorkflowRunProjectionError as exc:
                 self._raise_projection_http_error(exc)
             return ControlResponse(run_id=run_id, status=resumed.status.value)
 
@@ -503,9 +485,9 @@ class GraphApiService:
             self._session.add(interaction)
         self._append_control_event(run_id, "run.cancelled", {"status": "cancelled"})
         try:
-            self._graph_chat_record_projector().project_model(run)
+            self._extension.project_run_model(run)
             self._session.commit()
-        except GraphResultNotProjectableError as exc:
+        except WorkflowRunProjectionError as exc:
             self._raise_projection_http_error(exc)
         return ControlResponse(run_id=run_id, status=RunStatus.CANCELLED.value)
 
@@ -517,12 +499,12 @@ class GraphApiService:
             runtime = self._build_runtime_for_run(run)
             try:
                 self._restore_v1_run_for_retry(run)
-                self._graph_chat_record_projector().project_model(run)
+                self._extension.project_run_model(run)
                 self._append_control_event(run_id, "run.retry_requested", {"status": "created"})
                 self._session.flush()
                 retried = runtime.execute(run_id)
                 self._session.commit()
-            except GraphResultNotProjectableError as exc:
+            except WorkflowRunProjectionError as exc:
                 self._raise_projection_http_error(exc)
             return ControlResponse(run_id=run_id, status=retried.status.value)
         run.status = RunStatus.CREATED.value

@@ -3,23 +3,19 @@ from datetime import datetime
 import orjson
 import pytest
 
-from apps.chatbi.errors import (
-    ChatRecordResultTooLargeError,
-    ChatRecordTransitionError,
-)
-from apps.chatbi.models import (
-    ChatRecord,
+from apps.conversation import (
     ChatRecordAuxiliaryProjection,
     ChatRecordAuxiliaryType,
     ChatRecordExecutionType,
     ChatRecordResultLimits,
     ChatRecordResultProjection,
-    ChatRecordStatus,
-)
-from apps.chatbi.services.conversation import (
+    ChatRecordResultTooLargeError,
     ChatRecordService,
+    ChatRecordStatus,
+    ChatRecordTransitionError,
     normalize_chat_record_status,
 )
+from apps.conversation.models import ChatRecord
 
 
 class FakeChatRecordRepository:

@@ -2494,3 +2494,26 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
    datasource、dashboard 与 swagger 兼容文件；架构测试新增依赖和路由防回退检查。
 5. 验证结果：最终完整后端回归 1,211 项、12 个关键源文件严格 Mypy、变更范围 Ruff
    和前端生产构建全部通过。
+
+## R6-a（2026-07-23）：建立 Conversation 数据所有权
+
+1. 新建 `apps/conversation`，迁入 `chat`、`chat_record`、`chat_log` ORM、DTO、仓储端口、
+   SQLModel 实现、错误类型、资源范围和基础 Service。数据库表名、字段和 HTTP 路径均未
+   修改；Service 文件按目录语义命名为 `services/conversation.py` 和
+   `services/chat_record.py`，不重复添加 `_service` 后缀。
+2. Conversation 创建只接收 ChatBI 已解析完成的数据集绑定和推荐问题；会话自身删除只
+   处理 Conversation 拥有的数据。ChatBI 保留 Semantic/Datasource 绑定协调，以及
+   Conversation、Agent、Graph、Artifact 的独立事务联合删除协调。
+3. ChatBI Generation、Planning、Execution、Agent、Graph、Access Control、MCP 和审计
+   调用方切换到 Conversation 公共入口；ChatBI 原会话 ORM、DTO、仓储和 Service 文件
+   删除，不保留旧路径转发。`/chat/list` 使用字段一致的 `ConversationSummary` DTO，
+   API 的记录读取改经 `ChatRecordService`。
+4. Workflow Engine 删除包含 ChatRecord 业务语义的 `api/chat_history.py`。通用扩展只声明
+   RunStore 装饰、Run 投影和通用投影错误；Graph ChatRecord 投影器、投影型 RunStore、
+   错误码和写入规则全部归入 ChatBI Graph 扩展。
+5. Alembic 元数据入口显式加载 Conversation 与 ChatBI ORM，`alembic current` 仍为
+   `094_sql_example_verification (head)`，未新增迁移。架构守卫禁止 Conversation 反向
+   依赖 ChatBI/Workflow Engine，并禁止 ChatBI 导入 Conversation ORM 或 SQLModel 实现。
+6. 验证结果：R6-a 联合回归 591 项、完整后端回归 1,212 项通过；架构测试 137 项通过；
+   Conversation、Graph 投影、Workflow API 和删除协调等 26 个核心源文件严格 Mypy
+   通过，变更范围 Ruff（F/I）通过。

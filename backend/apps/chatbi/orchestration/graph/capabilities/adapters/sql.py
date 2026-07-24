@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from apps.chatbi.models import (
-    ChatRecordExecutionType,
     ResultArtifactWriteData,
     SemanticQueryCompileData,
     SemanticQueryCompileResult,
@@ -34,6 +33,7 @@ from apps.chatbi.services.execution.sql_validator import SqlValidateTool
 from apps.chatbi.services.planning import (
     SemanticCompilationService,
 )
+from apps.conversation import ChatRecordExecutionType
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.semantic.services.sql_compilation_service import (
     SemanticSQLCompilationService,

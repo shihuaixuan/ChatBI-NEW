@@ -1,4 +1,4 @@
-"""会话 ORM：chat_record 表。"""
+"""Conversation 问数记录 ORM：chat_record 表。"""
 
 from datetime import datetime
 from enum import Enum

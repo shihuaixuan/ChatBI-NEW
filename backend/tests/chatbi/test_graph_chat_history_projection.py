@@ -4,16 +4,14 @@ import pytest
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from apps.chatbi.models import Chat, ChatRecord
 from apps.chatbi.orchestration.graph.api_extension import (
-    ChatRecordProjectionGateway,
-)
-from common.core.db import engine
-from sqlbot_platform.workflow_engine.api.chat_history import (
     ChatProjectingRunStore,
+    ChatRecordProjectionGateway,
     GraphChatRecordProjector,
     GraphResultNotProjectableError,
 )
+from apps.conversation.models import Chat, ChatRecord
+from common.core.db import engine
 from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
 from sqlbot_platform.workflow_engine.domain.run import RunStatus, WorkflowRun
 from sqlbot_platform.workflow_engine.infrastructure.persistence.models import (

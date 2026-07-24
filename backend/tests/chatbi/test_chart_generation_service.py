@@ -8,14 +8,14 @@ import pytest
 from apps.chatbi.errors import ChartGenerationError
 from apps.chatbi.models import (
     ChartGenerationData,
-    ChatRecord,
     ModelMessage,
     ModelStreamChunk,
 )
-from apps.chatbi.services.conversation import ChatRecordService
 from apps.chatbi.services.generation import (
     ChartGenerationService,
 )
+from apps.conversation import ChatRecordService
+from apps.conversation.models import ChatRecord
 
 
 class FakePromptBuilder:

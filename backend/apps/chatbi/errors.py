@@ -11,52 +11,6 @@ class ChatBIError(Exception):
     """ChatBI 领域错误基类。"""
 
 
-# --- 会话（conversation） ---
-
-
-class ConversationError(ChatBIError, ValueError):
-    """会话业务错误基类。"""
-
-
-class ConversationBindingError(ConversationError):
-    """会话数据集绑定不合法。"""
-
-
-class ConversationNotFoundError(ConversationError):
-    """会话不存在。"""
-
-
-class ConversationOwnershipError(ConversationError):
-    """当前用户不拥有会话。"""
-
-
-class ConversationServiceConfigurationError(ChatBIError, RuntimeError):
-    """会话 Service 缺少必需端口。"""
-
-
-# --- 会话记录（chat record） ---
-
-
-class ChatRecordError(ChatBIError, ValueError):
-    """ChatRecord 业务错误基类。"""
-
-
-class ChatRecordNotFoundError(ChatRecordError):
-    """ChatRecord 不存在。"""
-
-
-class ChatRecordOwnershipError(ChatRecordError):
-    """ChatRecord 不属于指定会话。"""
-
-
-class ChatRecordTransitionError(ChatRecordError):
-    """ChatRecord 状态转换不合法。"""
-
-
-class ChatRecordResultTooLargeError(ChatRecordError):
-    """最终结果无法在会话快照边界内安全保存。"""
-
-
 # --- 规划（planning） ---
 
 
@@ -140,17 +94,7 @@ class QuestionModelOutputError(QuestionModelError):
 
 __all__ = [
     "ChatBIError",
-    "ChatRecordError",
-    "ChatRecordNotFoundError",
-    "ChatRecordOwnershipError",
-    "ChatRecordResultTooLargeError",
-    "ChatRecordTransitionError",
-    "ConversationBindingError",
-    "ConversationError",
-    "ConversationNotFoundError",
-    "ConversationOwnershipError",
     "ChartGenerationError",
-    "ConversationServiceConfigurationError",
     "DatasourceSelectionError",
     "DynamicSQLGenerationError",
     "ExecutionBindingError",

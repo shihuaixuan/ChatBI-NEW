@@ -7,11 +7,8 @@ import orjson
 from apps.chatbi.models import (
     AnalysisPredictionGenerationData,
     AnalysisPredictionGenerationEvent,
-    ChatRecordAuxiliaryProjection,
-    ChatRecordAuxiliaryType,
     ModelMessage,
 )
-from apps.chatbi.services.conversation.chat_record_service import ChatRecordService
 from apps.chatbi.services.generation.ports import (
     AnalysisPredictionPromptBuilder,
     GenerationModelClient,
@@ -19,6 +16,11 @@ from apps.chatbi.services.generation.ports import (
 from apps.chatbi.services.generation.streaming import (
     StreamAccumulator,
     stream_generation,
+)
+from apps.conversation import (
+    ChatRecordAuxiliaryProjection,
+    ChatRecordAuxiliaryType,
+    ChatRecordService,
 )
 
 

@@ -1,19 +1,17 @@
+from datetime import datetime
+
 import pytest
 
-from apps.chatbi.errors import (
-    ConversationBindingError,
-    ConversationOwnershipError,
-)
-from apps.chatbi.models import (
-    Chat,
+from apps.conversation import (
     ChatInfo,
     ConversationBinding,
-    CreateChat,
+    ConversationBindingError,
+    ConversationCreateData,
+    ConversationOwnershipError,
+    ConversationService,
     RenameChat,
 )
-from apps.chatbi.services.conversation import (
-    ConversationService,
-)
+from apps.conversation.models import Chat
 
 
 class FakeConversationRepository:
@@ -23,6 +21,7 @@ class FakeConversationRepository:
         self.commits = 0
         self.rollbacks = 0
         self.fail_create = False
+        self.deleted = []
 
     def get(self, chat_id: int) -> Chat | None:
         if self.chat is not None and self.chat.id == chat_id:
@@ -54,6 +53,9 @@ class FakeConversationRepository:
         chat.brief_generate = brief_generate
         return brief
 
+    def delete(self, chat_id: int) -> None:
+        self.deleted.append(chat_id)
+
     def commit(self) -> None:
         self.commits += 1
 
@@ -61,59 +63,32 @@ class FakeConversationRepository:
         self.rollbacks += 1
 
 
-class FakeBindingProvider:
-    def __init__(self) -> None:
-        self.calls = []
-
-    def resolve(self, *, workspace_id, dataset_id, assistant_type):
-        self.calls.append((workspace_id, dataset_id, assistant_type))
-        return ConversationBinding(
-            dataset_id=dataset_id,
-            dataset_name="销售数据集",
-            datasource_id=40,
-            datasource_name="销售库",
-            datasource_type="mysql",
-            datasource_type_name="MySQL",
-        )
-
-
-class FakeRecommendedQuestionProvider:
-    def list_for_chat(self, datasource_id: int) -> list[str]:
-        assert datasource_id == 40
-        return ["本月销售额是多少？"]
-
-
-class FakeDeletionProvider:
-    def __init__(self) -> None:
-        self.calls = []
-
-    def delete_for_user(self, user_id: int, chat_id: int) -> str:
-        self.calls.append((user_id, chat_id))
-        return f"Chat with id {chat_id} has been deleted"
-
-
 def test_create_conversation_commits_chat_and_welcome_record_once():
     repository = FakeConversationRepository()
-    binding_provider = FakeBindingProvider()
-    service = ConversationService(
-        repository,
-        binding_provider=binding_provider,
-        recommended_question_provider=FakeRecommendedQuestionProvider(),
+    service = ConversationService(repository)
+    binding = ConversationBinding(
+        dataset_id=20,
+        dataset_name="销售数据集",
+        datasource_id=40,
+        datasource_name="销售库",
+        datasource_type="mysql",
+        datasource_type_name="MySQL",
     )
 
     result = service.create(
-        user_id=7,
-        workspace_id=9,
-        request=CreateChat(
+        ConversationCreateData(
+            user_id=7,
+            workspace_id=9,
             question="  查询本月销售额  ",
-            dataset_id=20,
             origin=2,
-        ),
-        assistant_type=0,
+            created_at=datetime.now(),
+            binding=binding,
+            create_welcome_record=True,
+            recommended_questions=["本月销售额是多少？"],
+        )
     )
 
     assert result.id == 10
-    assert binding_provider.calls == [(9, 20, 0)]
     assert repository.created.question == "查询本月销售额"
     assert repository.created.create_welcome_record is True
     assert repository.created.recommended_questions == ["本月销售额是多少？"]
@@ -127,9 +102,16 @@ def test_create_conversation_requires_dataset_without_partial_write():
 
     with pytest.raises(ConversationBindingError, match="请选择数据集"):
         service.create(
-            user_id=7,
-            workspace_id=9,
-            request=CreateChat(question="销售额"),
+            ConversationCreateData(
+                user_id=7,
+                workspace_id=9,
+                question="销售额",
+                origin=0,
+                created_at=datetime.now(),
+                binding=None,
+                create_welcome_record=True,
+                recommended_questions=[],
+            )
         )
 
     assert repository.created is None
@@ -143,10 +125,16 @@ def test_create_conversation_rolls_back_repository_failure():
 
     with pytest.raises(RuntimeError, match="create failed"):
         service.create(
-            user_id=7,
-            workspace_id=9,
-            request=CreateChat(question="无数据集会话"),
-            require_dataset=False,
+            ConversationCreateData(
+                user_id=7,
+                workspace_id=9,
+                question="无数据集会话",
+                origin=0,
+                created_at=datetime.now(),
+                binding=None,
+                create_welcome_record=False,
+                recommended_questions=[],
+            )
         )
 
     assert repository.commits == 0
@@ -173,13 +161,12 @@ def test_rename_enforces_owner_and_title_length():
 
 
 def test_delete_delegates_owned_conversation_cleanup():
-    deletion_provider = FakeDeletionProvider()
-    service = ConversationService(
-        FakeConversationRepository(),
-        deletion_provider=deletion_provider,
+    repository = FakeConversationRepository(
+        Chat(id=10, create_by=7, oid=9, brief="待删除", engine_type="")
     )
+    service = ConversationService(repository)
 
     result = service.delete(7, 10)
 
     assert result == "Chat with id 10 has been deleted"
-    assert deletion_provider.calls == [(7, 10)]
+    assert repository.deleted == [10]

@@ -5,12 +5,13 @@ from typing import Any, cast
 import orjson
 import pytest
 
-from apps.chatbi.models import ChatRecord, QueryResultProjectionData
-from apps.chatbi.services.conversation import ChatRecordService
+from apps.chatbi.models import QueryResultProjectionData
 from apps.chatbi.services.execution import (
     QueryResultProjectionError,
     QueryResultProjectionService,
 )
+from apps.conversation import ChatRecordService
+from apps.conversation.models import ChatRecord
 
 
 class FakeChatRecordRepository:

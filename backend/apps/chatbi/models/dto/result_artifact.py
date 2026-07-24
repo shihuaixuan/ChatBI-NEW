@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
-from apps.chatbi.models.dto.chat_record import ChatRecordExecutionType
+from apps.conversation import ChatRecordExecutionType
 
 
 class ChatBIResultArtifactRef(BaseModel):

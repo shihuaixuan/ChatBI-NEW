@@ -3,16 +3,18 @@ from datetime import datetime
 from sqlalchemy import delete
 from sqlmodel import Session
 
-from apps.chatbi.models import (
-    Chat,
-    ChatRecord,
+from apps.conversation import (
     ChatRecordCreateData,
     ChatRecordExecutionType,
     ChatRecordResultProjection,
+    ChatRecordService,
     ChatRecordStatus,
 )
-from apps.chatbi.repository.sqlmodel import SQLModelChatRecordRepository
-from apps.chatbi.services.conversation import ChatRecordService
+from apps.conversation.models import (
+    Chat,
+    ChatRecord,
+)
+from apps.conversation.repository.sqlmodel import SQLModelChatRecordRepository
 from common.core.db import engine
 
 

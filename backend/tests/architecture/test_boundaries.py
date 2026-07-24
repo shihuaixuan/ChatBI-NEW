@@ -362,7 +362,7 @@ def test_chat_deletion_uses_unified_artifact_and_agent_cleanup_entries():
 
     assert "schedule_chat_cleanup" in source
     assert "process_pending_cleanup" in source
-    assert "run_cleanup" in source
+    assert "GraphCleanupGateway" in source
     assert "WorkflowArtifactModel" not in source
     assert "AgentExecutionDeletionService" not in source
 
@@ -489,7 +489,7 @@ def _imports__conversation(path: Path) -> set[str]:
 
 
 def test_conversation_service_depends_on_ports_not_session_or_legacy_chat():
-    path = BACKEND_DIR__conversation / "apps/chatbi/services/conversation/conversation_service.py"
+    path = BACKEND_DIR__conversation / "apps/conversation/services/conversation.py"
     imports = _imports__conversation(path)
 
     assert "sqlmodel" not in imports
@@ -1775,7 +1775,7 @@ def _class_method_source__record(tree: ast.Module, class_name: str, method_name:
 
 
 def test_chat_record_service_has_no_runtime_or_session_dependency():
-    imports = _imports__record(_tree__record("apps/chatbi/services/conversation/chat_record_service.py"))
+    imports = _imports__record(_tree__record("apps/conversation/services/chat_record.py"))
 
     assert "sqlmodel" not in imports
     assert not any(module.startswith("apps.agent.") for module in imports)
@@ -1784,7 +1784,7 @@ def test_chat_record_service_has_no_runtime_or_session_dependency():
 
 
 def test_chat_history_dto_has_no_legacy_chat_or_framework_dependency():
-    imports = _imports__record(_tree__record("apps/chatbi/models/dto/chat_history.py"))
+    imports = _imports__record(_tree__record("apps/conversation/models/dto/chat_history.py"))
 
     assert not any(module.startswith("apps.chat") for module in imports)
     assert not any(module.startswith("apps.agent") for module in imports)
@@ -1834,9 +1834,6 @@ def test_agent_record_terminal_projection_uses_chatbi_service():
 
 
 def test_workflow_projector_and_api_service_have_no_business_imports():
-    projector_imports = _imports__record(
-        _tree__record("platform/workflow_engine/api/chat_history.py")
-    )
     service_imports = _imports__record(
         _tree__record("platform/workflow_engine/api/service.py")
     )
@@ -1844,13 +1841,15 @@ def test_workflow_projector_and_api_service_have_no_business_imports():
         _tree__record("apps/chatbi/orchestration/graph/api_extension.py")
     )
 
-    assert not any(
-        module.startswith("apps.")
-        for module in projector_imports
-    )
+    assert not (
+        BACKEND_DIR__record / "platform/workflow_engine/api/chat_history.py"
+    ).exists()
     assert not any(module.startswith("apps.") for module in service_imports)
     assert "apps.chatbi.orchestration.graph.runtime" in extension_imports
     assert "apps.semantic.composition" in extension_imports
+    assert "GraphChatRecordProjector" in (
+        BACKEND_DIR__record / "apps/chatbi/orchestration/graph/api_extension.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_graph_chat_binding_rule_is_owned_by_chatbi_extension():
@@ -1960,7 +1959,7 @@ def test_legacy_auxiliary_result_writes_forward_to_chatbi_service():
 
 def test_chat_record_service_owns_final_result_size_policy():
     service_source = (
-        BACKEND_DIR__record / "apps/chatbi/services/conversation/chat_record_service.py"
+        BACKEND_DIR__record / "apps/conversation/services/chat_record.py"
     ).read_text(encoding="utf-8")
     agent_loop_source = (
         BACKEND_DIR__record / "apps/chatbi/orchestration/agent/loop.py"

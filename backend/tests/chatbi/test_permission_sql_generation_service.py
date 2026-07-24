@@ -6,17 +6,17 @@ import pytest
 
 from apps.chatbi.errors import PermissionSQLGenerationError
 from apps.chatbi.models import (
-    ChatRecord,
     ModelMessage,
     ModelStreamChunk,
     PermissionSQLFilter,
     PermissionSQLGenerationData,
     SQLGenerationResult,
 )
-from apps.chatbi.services.conversation import ChatRecordService
 from apps.chatbi.services.generation import (
     PermissionSQLGenerationService,
 )
+from apps.conversation import ChatRecordService
+from apps.conversation.models import ChatRecord
 
 
 class FakePromptBuilder:

@@ -7,7 +7,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.chatbi.models import (
-    ChatRecordExecutionType,
     QueryFinalReplyProjectionData,
     ResultArtifactWriteData,
     SemanticQueryCompileData,
@@ -31,6 +30,7 @@ from apps.chatbi.services.planning import (
     SemanticQueryCompileError,
 )
 from apps.chatbi.services.understanding.time_range import normalize_time_range
+from apps.conversation import ChatRecordExecutionType
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
 
