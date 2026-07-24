@@ -22,6 +22,9 @@ from apps.chatbi.services.conversation import (
 from apps.chatbi.services.conversation.deletion_service import (
     ChatDeletionService,
 )
+from apps.chatbi.services.conversation.history_reader import (
+    ConversationHistoryReader,
+)
 from apps.chatbi.services.conversation.ports import ExecutionCleanupGateway
 from apps.chatbi.services.execution import (
     GuardedQueryService,
@@ -39,14 +42,25 @@ from apps.chatbi.services.planning import (
     SemanticRetrievalService,
 )
 from apps.chatbi.services.understanding import QuestionUnderstandingService
-from apps.conversation import ConversationBinding
+from apps.conversation import (
+    ChatLogService,
+    ChatRecordService,
+    ConversationBinding,
+    ConversationService,
+    HistoryQueryService,
+)
+from apps.conversation.composition import (
+    build_chat_log_service as build_conversation_chat_log_service,
+)
 from apps.conversation.composition import (
     build_chat_record_service as build_conversation_chat_record_service,
 )
 from apps.conversation.composition import (
     build_conversation_service as build_owned_conversation_service,
 )
-from apps.conversation.services import ChatRecordService, ConversationService
+from apps.conversation.composition import (
+    build_history_query_service as build_conversation_history_query_service,
+)
 from apps.datasource.composition import (
     build_datasource_connection_service,
     build_datasource_metadata_service,
@@ -56,6 +70,7 @@ from apps.knowledge.composition import build_sql_example_query_service
 from apps.retrieval.query.service import RetrievalService, build_retrieval_service
 from apps.semantic.composition import (
     build_semantic_dataset_binding_service,
+    build_semantic_dataset_catalog_service,
     build_semantic_sql_compilation_service,
     build_semantic_term_query_service,
 )
@@ -186,6 +201,31 @@ def build_conversation_reader_service(session: Session) -> ConversationService:
     return build_conversation_service(session)
 
 
+def build_history_query_service(session: Session) -> HistoryQueryService:
+    """从 Conversation 组合入口获取历史查询 Service。"""
+
+    return build_conversation_history_query_service(session)
+
+
+def build_chat_log_service(session: Session) -> ChatLogService:
+    """从 Conversation 组合入口获取执行日志写入 Service。"""
+
+    return build_conversation_chat_log_service(session)
+
+
+def build_conversation_history_reader(
+    session: Session,
+) -> ConversationHistoryReader:
+    """装配会话历史富化读取与 data_live 重新执行服务。"""
+
+    return ConversationHistoryReader(
+        build_conversation_service(session),
+        build_conversation_history_query_service(session),
+        build_semantic_dataset_catalog_service(session),
+        build_datasource_service(session),
+        build_datasource_connection_service(session),
+    )
+
 
 def resolve_dataset_chat_binding(
     session: Session,
@@ -229,12 +269,15 @@ def build_chat_deletion_service(
 
 __all__ = [
     "build_chat_deletion_service",
+    "build_chat_log_service",
     "build_chat_record_service",
+    "build_conversation_history_reader",
     "build_conversation_reader_service",
     "build_conversation_service",
     "build_datasource_selection_candidate_service",
     "build_generation_context_service",
     "build_generation_schema_context_service",
+    "build_history_query_service",
     "build_physical_schema_service",
     "build_query_service",
     "build_result_artifact_service",

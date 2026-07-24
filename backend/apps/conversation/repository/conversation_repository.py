@@ -20,6 +20,14 @@ class ConversationRepository(Protocol):
         brief_generate: bool,
     ) -> str: ...
 
+    def bind_datasource(
+        self,
+        chat: Chat,
+        *,
+        datasource_id: int,
+        engine_type: str,
+    ) -> Chat: ...
+
     def delete(self, chat_id: int) -> None: ...
 
     def commit(self) -> None: ...

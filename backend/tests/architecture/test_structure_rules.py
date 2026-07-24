@@ -89,6 +89,9 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
         rule_id="chatbi-no-conversation-internals",
         scope="apps/chatbi",
         forbidden=(
+            "apps.conversation.models",
+            "apps.conversation.repository",
+            "apps.conversation.services",
             "apps.conversation.models.orm",
             "apps.conversation.repository.sqlmodel",
         ),

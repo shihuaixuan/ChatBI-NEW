@@ -1,6 +1,6 @@
 # ChatBI 减重与 Conversation 拆分执行计划
 
-> 状态：R6-a 已实施，R6-b 及后续批次待执行  
+> 状态：R6-a、R6-b、R6-c 已实施，R6-d 及后续批次待执行
 > 范围：后端模块拆分、内部实现收敛和架构守卫  
 > 不包含：数据库表改名、前端接口路径调整、微服务拆分
 
@@ -17,13 +17,11 @@
 
 其中，会话和问数记录已经具备独立的数据、仓储、Service 和业务规则，适合拆分为 `apps/conversation`。理解、规划、生成和执行仍是一次问数流程的连续阶段，不拆成独立顶层模块。
 
-当前 `legacy_*` 文件共约 2,858 行，不能直接删除：
+当前 `legacy_*` 文件已大幅收敛：
 
-- `legacy_chat_flow.py` 仍被分析、预测和推荐问题接口调用；
-- `legacy_read.py` 仍提供会话历史、执行日志、结果读取和 Dashboard 查询；
-- `legacy_sse.py` 仍提供分析、预测和推荐问题的流式事件格式；
-- `legacy_composition.py` 仍组装会话创建、删除和 Agent 清理；
-- `legacy_external_datasource.py` 仍被旧 `LLMService` 使用。
+- `legacy_chat_flow.py` / `legacy_sse.py` / `legacy_external_datasource.py` 已在 R6-c 删除；
+- `legacy_read.py` 已在 R6-b 删除；
+- `legacy_composition.py` 仍组装会话创建、删除和 Agent 清理（R6-d）。
 
 因此，本计划先迁移数据所有权，再替换仍在使用的旧实现，最后删除 `legacy_*`。
 
@@ -254,6 +252,8 @@ R6-a 至 R6-c 保留 `chatbi/api/conversations.py` 作为 `/chat` 接口入口�
 
 ### R6-b：迁移历史读取并删除 `legacy_read.py`
 
+> 状态：已实施（2026-07-24）
+
 #### 目标
 
 将仍在使用的读取能力归入明确所有者，删除 734 行的 `legacy_read.py`。
@@ -286,6 +286,8 @@ R6-a 至 R6-c 保留 `chatbi/api/conversations.py` 作为 `/chat` 接口入口�
 本批只迁移查询实现。接口路径和数据结构保持不变，可以按调用入口回滚，不涉及数据变更。
 
 ### R6-c：替换旧 `LLMService`
+
+> 状态：已实施（2026-07-24）
 
 #### 目标
 

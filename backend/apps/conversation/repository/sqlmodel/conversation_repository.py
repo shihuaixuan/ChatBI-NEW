@@ -103,6 +103,20 @@ class SQLModelConversationRepository:
         self._session.refresh(chat)
         return chat.brief
 
+    def bind_datasource(
+        self,
+        chat: Chat,
+        *,
+        datasource_id: int,
+        engine_type: str,
+    ) -> Chat:
+        chat.datasource = datasource_id
+        chat.engine_type = engine_type
+        self._session.add(chat)
+        self._session.flush()
+        self._session.refresh(chat)
+        return chat
+
     def delete(self, chat_id: int) -> None:
         record_ids = list(
             self._session.exec(

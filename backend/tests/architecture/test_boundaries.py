@@ -44,16 +44,6 @@ def test_legacy_chat_model_compatibility_entry_has_been_removed():
     ).exists()
 
 
-def test_chat_runtime_uses_public_axis_schema():
-    api_imports = _imports__chat_model_compatibility(
-        _tree__chat_model_compatibility("apps/chatbi/api/conversations.py")
-    )
-    task_imports = _imports__chat_model_compatibility(_tree__chat_model_compatibility("apps/chatbi/api/legacy_chat_flow.py"))
-
-    assert "common.utils.data_format_schema" in api_imports
-    assert "common.utils.data_format_schema" in task_imports
-
-
 # ======================================================================
 # 来源：test_chatbi_analysis_prediction_boundary.py
 # ======================================================================
@@ -100,45 +90,6 @@ def test_analysis_prediction_service_only_depends_on_stable_ports():
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
-
-
-def test_legacy_analysis_and_prediction_delegate_generation_to_chatbi():
-    tree = _tree__analysis_prediction("apps/chatbi/api/legacy_chat_flow.py")
-
-    for method_name in ("generate_analysis", "generate_predict"):
-        source = _class_method_source__analysis_prediction(tree, "LLMService", method_name)
-        assert "build_analysis_prediction_service" in source
-        assert "service.prepare" in source
-        assert "service.generate" in source
-        assert "start_log" in source
-        assert "end_log" in source
-        assert "self.llm.stream" not in source
-        assert "save_analysis_answer" not in source
-        assert "save_predict_answer" not in source
-
-
-def test_legacy_analysis_and_prediction_sse_contract_is_unchanged():
-    tree = _tree__analysis_prediction("apps/chatbi/api/legacy_chat_flow.py")
-    # R3-b 起流程拆为阶段方法；契约仍由 legacy 流程整体持有。
-    source = "\n".join(
-        _class_method_source__analysis_prediction(tree, "LLMService", name)
-        for name in (
-            "run_analysis_or_predict_task",
-            "_analysis_stage",
-            "_predict_stage",
-            "_predict_success_output",
-        )
-    )
-
-    for event_type in (
-        "analysis-result",
-        "analysis_finish",
-        "predict-result",
-        "predict-success",
-        "predict-failed",
-        "predict_finish",
-    ):
-        assert event_type in source
 
 
 def test_legacy_chat_question_no_longer_owns_analysis_prediction_templates():
@@ -413,46 +364,6 @@ def test_chart_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
-def test_legacy_chart_generation_delegates_to_chatbi():
-    tree = _tree__chart_generation("apps/chatbi/api/legacy_chat_flow.py")
-    source = _class_method_source__chart_generation(tree, "LLMService", "generate_chart")
-
-    assert "build_chart_generation_service" in source
-    assert "service.prepare" in source
-    assert "service.generate" in source
-    assert "start_log" in source
-    assert "end_log" in source
-    assert "self.llm.stream" not in source
-    assert "chart_sys_question" not in source
-    assert "chart_user_question" not in source
-    assert "save_chart_answer" not in source
-
-
-def test_legacy_chart_parser_and_writer_are_removed():
-    tree = _tree__chart_generation("apps/chatbi/api/legacy_chat_flow.py")
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "LLMService"
-    )
-    method_names = {
-        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
-    }
-
-    assert "check_save_chart" not in method_names
-
-
-def test_legacy_run_task_keeps_chart_sse_contract():
-    tree = _tree__chart_generation("apps/chatbi/api/legacy_chat_flow.py")
-    source = "\n".join(
-        _class_method_source__chart_generation(tree, "LLMService", name)
-        for name in ("run_task", "_generate_chart_stage", "_render_final_output")
-    )
-
-    for event_type in ("chart-result", "chart", "finish"):
-        assert event_type in source
-
-
 def test_legacy_chat_question_no_longer_owns_chart_templates():
     tree = _tree__chart_generation("apps/chatbi/models/dto/legacy_query.py")
     imports = _imports__chart_generation(tree)
@@ -501,19 +412,10 @@ def test_conversation_service_depends_on_ports_not_session_or_legacy_chat():
 
 
 def test_legacy_conversation_mutations_have_moved_out_of_read_projection():
-    path = BACKEND_DIR__conversation / "apps/chatbi/api/legacy_read.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    functions = {
-        node.name for node in tree.body if isinstance(node, ast.FunctionDef)
-    }
-
-    for name in (
-        "list_chats",
-        "rename_chat_with_user",
-        "delete_chat_with_user",
-        "create_chat",
-    ):
-        assert name not in functions
+    # R6-b：历史读取投影模块已整体删除，读写能力由 Conversation 领域服务承接。
+    assert not (
+        BACKEND_DIR__conversation / "apps/chatbi/api/legacy_read.py"
+    ).exists()
 
     router_source = (
         BACKEND_DIR__conversation / "apps/chatbi/api/conversations.py"
@@ -588,33 +490,6 @@ def test_datasource_selection_service_only_depends_on_stable_ports():
     assert not any(module.startswith("apps.datasource") for module in imports)
 
 
-def test_legacy_datasource_selection_delegates_model_and_binding_to_chatbi():
-    tree = _tree__datasource_selection("apps/chatbi/api/legacy_chat_flow.py")
-    source = _class_method_source__datasource_selection(tree, "LLMService", "select_datasource")
-
-    assert "build_datasource_selection_service" in source
-    assert "service.prepare" in source
-    assert "service.generate" in source
-    assert "service.bind_selection" in source
-    assert "self.llm.stream" not in source
-    assert "extract_nested_json" not in source
-    assert "save_select_datasource_answer" not in source
-    assert "_chat.datasource" not in source
-    assert "_session.get(Chat" not in source
-
-
-def test_legacy_datasource_selection_sse_contract_is_unchanged():
-    tree = _tree__datasource_selection("apps/chatbi/api/legacy_chat_flow.py")
-    source = "\n".join(
-        _class_method_source__datasource_selection(tree, "LLMService", name)
-        for name in ("run_task", "_resolve_datasource_stage")
-    )
-
-    assert "datasource-result" in source
-    assert "datasource_name" in source
-    assert "engine_type" in source
-
-
 def test_legacy_chat_question_no_longer_owns_datasource_selection_template():
     tree = _tree__datasource_selection("apps/chatbi/models/dto/legacy_query.py")
     imports = _imports__datasource_selection(tree)
@@ -678,34 +553,6 @@ def test_dynamic_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
-
-
-def test_legacy_dynamic_sql_generation_delegates_to_chatbi():
-    tree = _tree__dynamic_sql_generation("apps/chatbi/api/legacy_chat_flow.py")
-    source = _class_method_source__dynamic_sql_generation(tree, "LLMService", "generate_with_sub_sql")
-
-    assert "build_dynamic_sql_generation_service" in source
-    assert "service.prepare" in source
-    assert "service.generate" in source
-    assert "start_log" in source
-    assert "end_log" in source
-    assert "self.llm.stream" not in source
-    assert "dynamic_sys_question" not in source
-    assert "dynamic_user_question" not in source
-    assert "check_save_sql" not in source
-
-
-def test_legacy_dynamic_sql_mapping_keeps_placeholder_replacement_contract():
-    tree = _tree__dynamic_sql_generation("apps/chatbi/api/legacy_chat_flow.py")
-    source = _class_method_source__dynamic_sql_generation(
-        tree,
-        "LLMService",
-        "generate_assistant_dynamic_sql",
-    )
-
-    assert "DynamicSQLSubqueryMapping" in source
-    assert "dynamic_subsql_prefix" in source
-    assert "sqlbot_temp_sql_text" in source
 
 
 def test_legacy_chat_question_no_longer_owns_dynamic_sql_templates():
@@ -800,40 +647,6 @@ def test_datasource_selection_candidates_use_public_domain_services_only():
     )
 
 
-def test_legacy_dependencies_no_longer_read_local_schema_through_crud():
-    imports = _imports__generation_context("apps/chatbi/api/legacy_external_datasource.py")
-
-    assert "apps.datasource.crud.datasource" not in imports
-    assert "apps.datasource.embedding.ds_embedding" not in imports
-    assert "get_assistant_ds" not in (
-        BACKEND_DIR__generation_context / "apps/chatbi/api/legacy_external_datasource.py"
-    ).read_text(encoding="utf-8")
-    assert "get_assistant_ds" not in (
-        BACKEND_DIR__generation_context / "apps/chatbi/api/legacy_chat_flow.py"
-    ).read_text(encoding="utf-8")
-    assert not (
-        BACKEND_DIR__generation_context / "apps/datasource/embedding/ds_embedding.py"
-    ).exists()
-
-
-def test_legacy_llm_keeps_unmigrated_dependencies_in_legacy_module():
-    imports = _imports__generation_context("apps/chatbi/api/legacy_chat_flow.py")
-
-    assert "apps.chatbi.api.legacy_external_datasource" in imports
-    assert "apps.ai_model.runtime" in imports
-    assert "apps.chatbi.composition" in imports
-    assert "apps.platform_config.composition" in imports
-    assert "apps.knowledge.composition" not in imports
-    assert "apps.semantic.composition" not in imports
-    assert "apps.datasource.crud.datasource" not in imports
-    assert "apps.datasource.models.datasource" not in imports
-    assert "apps.system.crud.parameter_manage" not in imports
-    assert "apps.ai_model.model_factory" not in imports
-    assert "langchain.chat_models.base" not in imports
-    assert "sqlbot_xpack.config.model" not in imports
-    assert not (BACKEND_DIR__generation_context / "apps/chat/services/term_context.py").exists()
-
-
 def test_top_level_infrastructure_package_has_been_removed():
     assert not (BACKEND_DIR__generation_context / "infrastructure").exists()
 
@@ -880,34 +693,6 @@ def test_generation_context_scope_service_only_depends_on_chatbi_dto():
     )
 
     assert imports == {"apps.chatbi.models.dto.generation_context"}
-
-
-def test_legacy_example_filter_uses_shared_scope():
-    tree = _tree__generation_context_scope("apps/chatbi/api/legacy_chat_flow.py")
-
-    source = _class_method_source__generation_context_scope(
-        tree,
-        "LLMService",
-        "filter_training_template",
-    )
-    assert "resolve_generation_context_scope" in source
-    assert "current_assistant.type" not in source
-    assert "calculate_oid" not in source
-    assert "calculate_ds_id" not in source
-
-
-def test_legacy_scope_method_only_adapts_context_to_chatbi():
-    source = _class_method_source__generation_context_scope(
-        _tree__generation_context_scope("apps/chatbi/api/legacy_chat_flow.py"),
-        "LLMService",
-        "resolve_generation_context_scope",
-    )
-
-    assert "resolve_generation_scope" in source
-    assert "GenerationContextScopeData" in source
-    assert "GenerationAssistantContext" in source
-    assert "assistant_type ==" not in source
-    assert "assistant_type !=" not in source
 
 
 # ======================================================================
@@ -958,26 +743,6 @@ def test_generation_history_projection_only_depends_on_chatbi_dto():
     assert not any(module.startswith("apps.datasource") for module in imports)
 
 
-def test_legacy_init_messages_delegates_history_projection_to_chatbi():
-    tree = _tree__generation_history("apps/chatbi/api/legacy_chat_flow.py")
-    source = _class_method_source__generation_history(tree, "LLMService", "init_messages")
-
-    assert "project_generation_history" in source
-    assert "GenerationHistoryProjectionData" in source
-    assert "GenerationHistoryLog" in source
-    assert "get_last_conversation_rounds" not in source
-    assert "sqlbot_system" not in source
-
-
-def test_legacy_history_round_helper_is_removed():
-    tree = _tree__generation_history("apps/chatbi/api/legacy_chat_flow.py")
-    function_names = {
-        node.name for node in tree.body if isinstance(node, ast.FunctionDef)
-    }
-
-    assert "get_last_conversation_rounds" not in function_names
-
-
 # ======================================================================
 # 来源：test_chatbi_permission_sql_generation_boundary.py
 # ======================================================================
@@ -1024,46 +789,6 @@ def test_permission_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
-
-
-def test_legacy_permission_sql_generation_delegates_to_chatbi():
-    tree = _tree__permission_sql_generation("apps/chatbi/api/legacy_chat_flow.py")
-    source = _class_method_source__permission_sql_generation(tree, "LLMService", "build_table_filter")
-
-    assert "build_permission_sql_generation_service" in source
-    assert "service.prepare" in source
-    assert "service.generate" in source
-    assert "start_log" in source
-    assert "end_log" in source
-    assert "self.llm.stream" not in source
-    assert "filter_sys_question" not in source
-    assert "filter_user_question" not in source
-
-
-def test_legacy_llm_service_no_longer_owns_sql_response_parser():
-    tree = _tree__permission_sql_generation("apps/chatbi/api/legacy_chat_flow.py")
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "LLMService"
-    )
-    method_names = {
-        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
-    }
-    class_source = ast.unparse(class_node)
-
-    assert "check_sql" not in method_names
-    assert "check_save_sql" not in method_names
-    assert "self.llm.stream" not in class_source
-
-
-def test_legacy_permission_sources_use_stable_filter_dto():
-    tree = _tree__permission_sql_generation("apps/chatbi/api/legacy_chat_flow.py")
-
-    for method_name in ("generate_filter", "generate_assistant_filter"):
-        source = _class_method_source__permission_sql_generation(tree, "LLMService", method_name)
-        assert "PermissionSQLFilter" in source
-        assert "build_table_filter" in source
 
 
 def test_legacy_chat_question_no_longer_owns_permission_sql_templates():
@@ -1250,62 +975,6 @@ def test_query_result_projection_service_only_depends_on_stable_boundaries():
     assert not any(module.startswith("apps.chat.") for module in imports)
     assert not any(module.startswith("apps.datasource") for module in imports)
     assert not any(module.startswith("apps.chatbi.models.orm") for module in imports)
-
-
-def test_legacy_chat_run_task_delegates_result_projection_and_owns_transaction():
-    tree = _tree__query_result_projection("apps/chatbi/api/legacy_chat_flow.py")
-    source = "\n".join(
-        _class_method_source__query_result_projection(tree, "LLMService", name)
-        for name in ("run_task", "_execute_sql_stage")
-    )
-
-    assert "build_query_result_projection_service" in source
-    assert "QueryResultProjectionData" in source
-    assert ".project" in source
-    assert "_session.commit()" in source
-    assert "_session.rollback()" in source
-    assert "convert_large_numbers_in_object_array" not in source
-    assert "normalize_qualified_sql_column_keys_in_object_array" not in source
-    assert "save_sql_data" not in source
-
-
-def test_legacy_chat_result_writer_is_removed():
-    tree = _tree__query_result_projection("apps/chatbi/api/legacy_chat_flow.py")
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "LLMService"
-    )
-    method_names = {
-        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
-    }
-    source = ast.unparse(tree)
-
-    assert "save_sql_data" not in method_names
-    assert "save_sql_exec_data" not in source
-    assert "prepare_for_orjson" not in source
-
-
-def test_legacy_chat_result_flow_keeps_existing_output_contract():
-    source = "\n".join(
-        _class_method_source__query_result_projection(
-            _tree__query_result_projection("apps/chatbi/api/legacy_chat_flow.py"),
-            "LLMService",
-            name,
-        )
-        for name in (
-            "run_task",
-            "_finish_query_data_stage",
-            "_generate_chart_stage",
-            "_render_final_output",
-        )
-    )
-
-    assert "execute-success" in source
-    assert "sql-data" in source
-    assert "to_markdown" in source
-    assert "generate_chart" in source
-    assert "request_picture" in source
 
 
 # ======================================================================
@@ -1677,40 +1346,6 @@ def test_recommended_question_service_only_depends_on_stable_ports():
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
-def test_legacy_recommendation_task_only_keeps_schema_log_and_sse_projection():
-    tree = _tree__recommended_question("apps/chatbi/api/legacy_chat_flow.py")
-    source = _class_method_source__recommended_question(
-        tree,
-        "LLMService",
-        "generate_recommend_questions_task",
-    )
-
-    assert "build_recommended_question_service" in source
-    assert "service.prepare" in source
-    assert "service.generate" in source
-    assert "start_log" in source
-    assert "end_log" in source
-    assert "guess_sys_question" not in source
-    assert "guess_user_question" not in source
-    assert "get_old_questions" not in source
-    assert "save_recommend_question_answer" not in source
-    assert "self.llm.stream" not in source
-
-
-def test_sql_model_adapter_uses_shared_model_stream_parser():
-    # R2 起共享流解析统一收敛在 chatbi/adapters/langchain.py 的共享客户端。
-    adapter_tree = _tree__recommended_question("apps/chatbi/adapters/langchain.py")
-    adapter_imports = _imports__recommended_question(adapter_tree)
-    legacy_tree = _tree__recommended_question("apps/chatbi/api/legacy_chat_flow.py")
-
-    assert "apps.ai_model.streaming" in adapter_imports
-    assert "apps.ai_model.streaming" not in _imports__recommended_question(legacy_tree)
-    assert not any(
-        isinstance(node, ast.FunctionDef) and node.name == "process_stream"
-        for node in adapter_tree.body
-    )
-
-
 def test_legacy_chat_question_no_longer_owns_recommendation_templates():
     tree = _tree__recommended_question("apps/chatbi/models/dto/legacy_query.py")
     imports = _imports__recommended_question(tree)
@@ -1873,90 +1508,6 @@ def test_graph_chat_binding_rule_is_owned_by_chatbi_extension():
     assert "CHAT_DATASET_MISMATCH" not in service_source
 
 
-def _module_function_names__record(tree):
-    return {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
-
-
-def test_legacy_chat_record_finish_functions_only_forward_state_changes():
-    # R3-c1：写侧转发已删除，终态写入由 llm.py 直调 ChatRecordService。
-    names = _module_function_names__record(_tree__record("apps/chatbi/api/legacy_read.py"))
-    assert "finish_record" not in names
-    assert "save_error_message" not in names
-
-    llm_tree = _tree__record("apps/chatbi/api/legacy_chat_flow.py")
-    for method in ("save_error", "finish"):
-        source = _class_method_source__record(llm_tree, "LLMService", method)
-        assert "build_chat_record_service" in source
-        assert "transition_by_id" in source
-        assert "update(ChatRecord)" not in source
-
-
-def test_legacy_chat_run_does_not_finish_after_failure():
-    source = _class_method_source__record(
-        _tree__record("apps/chatbi/api/legacy_chat_flow.py"),
-        "LLMService",
-        "run_task",
-    )
-
-    assert "run_failed = True" in source
-    assert "finalize_legacy_run(_session, run_failed, self.finish)" in source
-
-
-def test_legacy_analysis_and_predict_record_uses_chatbi_create_service():
-    names = _module_function_names__record(_tree__record("apps/chatbi/api/legacy_read.py"))
-    assert "save_analysis_predict_record" not in names
-
-    source = _class_method_source__record(
-        _tree__record("apps/chatbi/api/legacy_chat_flow.py"),
-        "LLMService",
-        "run_analysis_or_predict_task_async",
-    )
-    assert "build_chat_record_service" in source
-    assert "create_auxiliary" in source
-    assert ".analysis_record_id =" not in source
-    assert ".predict_record_id =" not in source
-
-
-def test_legacy_core_result_writes_forward_to_chatbi_service():
-    names = _module_function_names__record(_tree__record("apps/chatbi/api/legacy_read.py"))
-    for name in (
-        "save_sql_answer",
-        "save_sql",
-        "save_chart_answer",
-        "save_chart",
-        "save_sql_exec_data",
-    ):
-        assert name not in names
-
-    source = _class_method_source__record(
-        _tree__record("apps/chatbi/api/legacy_chat_flow.py"),
-        "LLMService",
-        "_save_record_sql",
-    )
-    assert "project_result_by_id" in source
-    assert "update(ChatRecord)" not in source
-
-
-def test_legacy_auxiliary_result_writes_forward_to_chatbi_service():
-    names = _module_function_names__record(_tree__record("apps/chatbi/api/legacy_read.py"))
-    for name in (
-        "save_analysis_answer",
-        "save_predict_answer",
-        "save_select_datasource_answer",
-        "save_predict_data",
-        "save_recommend_question_answer",
-    ):
-        assert name not in names
-
-    source = _class_method_source__record(
-        _tree__record("apps/chatbi/api/legacy_chat_flow.py"),
-        "LLMService",
-        "check_save_predict_data",
-    )
-    assert "project_auxiliary_by_id" in source
-    assert "update(ChatRecord)" not in source
-
-
 def test_chat_record_service_owns_final_result_size_policy():
     service_source = (
         BACKEND_DIR__record / "apps/conversation/services/chat_record.py"
@@ -2016,47 +1567,6 @@ def test_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
-def test_legacy_main_sql_generation_delegates_to_chatbi():
-    tree = _tree__sql_generation("apps/chatbi/api/legacy_chat_flow.py")
-    source = _class_method_source__sql_generation(tree, "LLMService", "generate_sql")
-
-    assert "build_sql_generation_service" in source
-    assert "service.prepare" in source
-    assert "service.generate" in source
-    assert "start_log" in source
-    assert "end_log" in source
-    assert "self.llm.stream" not in source
-    assert "sql_sys_question" not in source
-    assert "sql_user_question" not in source
-    assert "save_sql_answer" not in source
-
-
-def test_legacy_main_sql_parsing_helpers_are_removed():
-    tree = _tree__sql_generation("apps/chatbi/api/legacy_chat_flow.py")
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "LLMService"
-    )
-    method_names = {
-        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
-    }
-
-    assert "get_chart_type_from_sql_answer" not in method_names
-    assert "get_brief_from_sql_answer" not in method_names
-
-
-def test_legacy_run_task_keeps_sql_sse_contract():
-    tree = _tree__sql_generation("apps/chatbi/api/legacy_chat_flow.py")
-    source = "\n".join(
-        _class_method_source__sql_generation(tree, "LLMService", name)
-        for name in ("run_task", "_generate_sql_stage", "_emit_sql")
-    )
-
-    for event_type in ("sql-result", "sql", "finish"):
-        assert event_type in source
-
-
 def test_legacy_chat_question_no_longer_owns_sql_templates():
     tree = _tree__sql_generation("apps/chatbi/models/dto/legacy_query.py")
     imports = _imports__sql_generation(tree)
@@ -2096,33 +1606,6 @@ def _imports__legacy_chat_llm_adapter(tree: ast.Module) -> set[str]:
     return modules
 
 
-def test_legacy_llm_adapter_only_depends_on_serialization_library():
-    imports = _imports__legacy_chat_llm_adapter(_tree__legacy_chat_llm_adapter("apps/chatbi/api/legacy_sse.py"))
-
-    assert imports == {"collections.abc", "typing", "orjson"}
-
-
-def test_legacy_chat_streams_use_shared_sse_encoder():
-    llm_source = (BACKEND_DIR__legacy_chat_llm_adapter / "apps/chatbi/api/legacy_chat_flow.py").read_text(encoding="utf-8")
-    api_source = (
-        BACKEND_DIR__legacy_chat_llm_adapter / "apps/chatbi/api/queries.py"
-    ).read_text(encoding="utf-8")
-
-    assert "from apps.chatbi.api.legacy_sse import" in llm_source
-    assert "from apps.chatbi.api.legacy_sse import encode_sse_event" in api_source
-    assert "'data:' + orjson.dumps" not in llm_source
-    assert "'data:' + orjson.dumps" not in api_source
-
-
-def test_legacy_llm_prompt_logs_use_shared_adapter():
-    source = (BACKEND_DIR__legacy_chat_llm_adapter / "apps/chatbi/api/legacy_chat_flow.py").read_text(encoding="utf-8")
-
-    assert "build_role_prompt_log(" in source
-    assert "build_context_prompt_log(" in source
-    assert "'sqlbot_system': message.role == 'system'" not in source
-    assert "'sqlbot_system': message.system_context" not in source
-
-
 # ======================================================================
 # 来源：test_legacy_chat_query_service_boundary.py
 # ======================================================================
@@ -2147,42 +1630,6 @@ def _class_method_source__legacy_chat_query_service(tree: ast.Module, class_name
         if isinstance(node, ast.FunctionDef) and node.name == name
     )
     return ast.unparse(method)
-
-
-def test_legacy_chat_sql_execution_delegates_to_query_service():
-    tree = _tree__legacy_chat_query_service("apps/chatbi/api/legacy_chat_flow.py")
-    source = _class_method_source__legacy_chat_query_service(tree, "LLMService", "execute_sql")
-
-    assert "build_legacy_chat_query_service" in source
-    assert ".execute_sql" in source
-    assert "exec_sql" not in source
-    assert "workspace_id=self.current_user.oid" in source
-    assert "user_id=self.current_user.id" in source
-
-
-def test_legacy_chat_run_task_keeps_table_scope_for_internal_datasource():
-    tree = _tree__legacy_chat_query_service("apps/chatbi/api/legacy_chat_flow.py")
-    source = "\n".join(
-        _class_method_source__legacy_chat_query_service(tree, "LLMService", name)
-        for name in ("run_task", "_execute_sql_stage")
-    )
-
-    assert (
-        "allowed_tables=None if prepared['use_dynamic_ds'] else prepared['tables']"
-        in source
-    )
-    assert "execute-success" in source
-    assert "sql-data" in source
-
-
-def test_connection_driver_dependency_stays_in_chatbi_adapter():
-    legacy_tree = _tree__legacy_chat_query_service("apps/chatbi/api/legacy_chat_flow.py")
-    adapter_tree = _tree__legacy_chat_query_service("apps/chatbi/adapters/query_execution.py")
-    legacy_source = ast.unparse(legacy_tree)
-    adapter_source = ast.unparse(adapter_tree)
-
-    assert "exec_sql(" not in legacy_source
-    assert "exec_sql(" in adapter_source
 
 
 # ======================================================================
@@ -2224,3 +1671,150 @@ def test_mcp_routes_use_owned_request_schemas():
 
 def test_legacy_chat_package_has_been_removed():
     assert not (BACKEND_DIR__mcp_schema / "apps/chat/__init__.py").exists()
+
+
+# ======================================================================
+# R6-c：删除 LLMService 后的辅助生成边界
+# ======================================================================
+
+BACKEND_DIR__r6c = Path(__file__).resolve().parents[2]
+
+
+def _tree__r6c(relative_path: str) -> ast.Module:
+    path = BACKEND_DIR__r6c / relative_path
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _imports__r6c(tree: ast.Module) -> set[str]:
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+    return modules
+
+
+def _class_method_source__r6c(tree: ast.Module, class_name: str, name: str) -> str:
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    method = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+    return ast.unparse(method)
+
+
+def test_r6c_legacy_llm_files_are_removed():
+    api_dir = BACKEND_DIR__r6c / "apps/chatbi/api"
+    for name in (
+        "legacy_chat_flow.py",
+        "legacy_sse.py",
+        "legacy_external_datasource.py",
+        "legacy_read.py",
+    ):
+        assert not (api_dir / name).exists()
+
+
+def test_r6c_queries_do_not_import_legacy_or_llmservice():
+    source = (BACKEND_DIR__r6c / "apps/chatbi/api/queries.py").read_text(encoding="utf-8")
+    imports = _imports__r6c(_tree__r6c("apps/chatbi/api/queries.py"))
+
+    assert "apps.chatbi.api.legacy_chat_flow" not in imports
+    assert "apps.chatbi.api.legacy_sse" not in imports
+    assert "apps.chatbi.api.legacy_external_datasource" not in imports
+    assert "LLMService" not in source
+    assert "build_auxiliary_generation_service" in source
+    assert "from apps.chatbi.api.sse import encode_sse_event" in source
+
+
+def test_r6c_auxiliary_generation_uses_generation_services():
+    tree = _tree__r6c("apps/chatbi/services/generation/auxiliary_generation.py")
+    source = tree.body and ast.unparse(tree)
+    imports = _imports__r6c(tree)
+
+    assert "apps.chatbi.services.generation.analysis_prediction" in imports
+    assert "apps.chatbi.services.generation.recommended_questions" in imports
+    assert "apps.chatbi.api.sse" in imports
+    assert "apps.chatbi.adapters.assistant_schema" in imports
+    assert "AnalysisPredictionService" in source
+    assert "RecommendedQuestionService" in source
+    assert "encode_sse_event" in source
+
+
+def test_r6c_auxiliary_generation_keeps_sse_event_contract():
+    source = (
+        BACKEND_DIR__r6c / "apps/chatbi/services/generation/auxiliary_generation.py"
+    ).read_text(encoding="utf-8")
+    for event_type in (
+        "recommended_question_result",
+        "recommended_question",
+        "analysis-result",
+        "analysis_finish",
+        "predict-result",
+        "predict-success",
+        "predict-failed",
+        "predict_finish",
+    ):
+        assert event_type in source
+
+
+def test_r6c_auxiliary_generation_writes_via_conversation_services():
+    tree = _tree__r6c("apps/chatbi/services/generation/auxiliary_generation.py")
+    finish_source = _class_method_source__r6c(
+        tree, "AuxiliaryGenerationService", "_finish"
+    )
+    error_source = _class_method_source__r6c(
+        tree, "AuxiliaryGenerationService", "_save_error"
+    )
+    predict_source = _class_method_source__r6c(
+        tree, "AuxiliaryGenerationService", "_save_predict_data"
+    )
+
+    assert "transition_by_id" in finish_source
+    assert "transition_by_id" in error_source
+    assert "project_auxiliary_by_id" in predict_source
+    assert "update(ChatRecord)" not in finish_source + error_source + predict_source
+
+
+def test_r6c_sse_module_only_depends_on_serialization_library():
+    imports = _imports__r6c(_tree__r6c("apps/chatbi/api/sse.py"))
+    assert imports == {"collections.abc", "typing", "orjson"}
+
+
+def test_r6c_queries_create_auxiliary_via_chat_record_service():
+    source = (BACKEND_DIR__r6c / "apps/chatbi/api/queries.py").read_text(encoding="utf-8")
+    assert "create_auxiliary" in source
+    assert "ChatRecordAuxiliaryType" in source
+    assert ".analysis_record_id =" not in source
+    assert ".predict_record_id =" not in source
+
+
+def test_r6c_langchain_adapter_uses_shared_model_stream_parser():
+    adapter_tree = _tree__r6c("apps/chatbi/adapters/langchain.py")
+    adapter_imports = _imports__r6c(adapter_tree)
+    assert "apps.ai_model.streaming" in adapter_imports
+    assert not any(
+        isinstance(node, ast.FunctionDef) and node.name == "process_stream"
+        for node in adapter_tree.body
+    )
+
+
+def test_r6c_conversations_use_public_axis_schema():
+    api_imports = _imports__r6c(_tree__r6c("apps/chatbi/api/conversations.py"))
+    assert "common.utils.data_format_schema" in api_imports
+
+
+def test_r6c_query_execution_adapter_owns_exec_sql():
+    adapter_source = (
+        BACKEND_DIR__r6c / "apps/chatbi/adapters/query_execution.py"
+    ).read_text(encoding="utf-8")
+    queries_source = (
+        BACKEND_DIR__r6c / "apps/chatbi/api/queries.py"
+    ).read_text(encoding="utf-8")
+    assert "exec_sql(" in adapter_source
+    assert "exec_sql(" not in queries_source

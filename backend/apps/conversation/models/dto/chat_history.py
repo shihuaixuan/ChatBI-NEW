@@ -45,6 +45,31 @@ class ChatRecordResult(BaseModel):
     total_tokens: int | None = None
 
 
+class ChatLogHandle(BaseModel):
+    """会话步骤日志的可传递句柄，避免向调用方泄漏 ORM。"""
+
+    id: int | None = None
+    pid: int | None = None
+    type: str | None = None
+    operate: str | None = None
+    ai_modal_id: int | None = None
+    base_modal: str | None = None
+    messages: Any = None
+    reasoning_content: str | None = None
+    token_usage: Any = None
+    start_time: datetime | None = None
+    finish_time: datetime | None = None
+    local_operation: bool | None = False
+    error: bool | None = False
+
+
+class ChatRecordLiveQuery(BaseModel):
+    """重新执行历史记录所需的数据源绑定与 SQL。"""
+
+    datasource_id: int | None = None
+    sql: str | None = None
+
+
 class ChatLogHistoryItem(BaseModel):
     """会话记录中的单个执行步骤。"""
 
@@ -68,4 +93,10 @@ class ChatLogHistory(BaseModel):
     steps: list[ChatLogHistoryItem | dict[str, Any]] = Field(default_factory=list)
 
 
-__all__ = ["ChatLogHistory", "ChatLogHistoryItem", "ChatRecordResult"]
+__all__ = [
+    "ChatLogHandle",
+    "ChatLogHistory",
+    "ChatLogHistoryItem",
+    "ChatRecordLiveQuery",
+    "ChatRecordResult",
+]

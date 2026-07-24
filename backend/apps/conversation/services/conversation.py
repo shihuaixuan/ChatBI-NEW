@@ -12,6 +12,7 @@ from apps.conversation.models import (
     ChatInfo,
     ConversationBinding,
     ConversationCreateData,
+    ConversationSnapshot,
     ConversationSummary,
     CreateChat,
     RenameChat,
@@ -54,6 +55,52 @@ class ConversationService:
                 f"Chat with id {chat_id} not owned by the current workspace"
             )
         return chat
+
+    def get_owned_snapshot(
+        self,
+        *,
+        user_id: int,
+        workspace_id: int,
+        chat_id: int,
+    ) -> ConversationSnapshot:
+        """读取用户在指定工作空间内拥有的会话快照。"""
+
+        chat = self.get_owned_in_workspace(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            chat_id=chat_id,
+        )
+        return ConversationSnapshot.model_validate(chat)
+
+    def bind_datasource(
+        self,
+        *,
+        user_id: int,
+        workspace_id: int,
+        chat_id: int,
+        datasource_id: int,
+        engine_type: str,
+    ) -> ConversationSnapshot:
+        """更新 Conversation 自有的数据源绑定并返回最新快照。"""
+
+        if datasource_id <= 0 or not engine_type.strip():
+            raise ConversationBindingError("CONVERSATION_DATASOURCE_BINDING_INVALID")
+        chat = self.get_owned_in_workspace(
+            user_id=user_id,
+            workspace_id=workspace_id,
+            chat_id=chat_id,
+        )
+        try:
+            updated = self._repository.bind_datasource(
+                chat,
+                datasource_id=datasource_id,
+                engine_type=engine_type,
+            )
+            self._repository.commit()
+        except Exception:
+            self._repository.rollback()
+            raise
+        return ConversationSnapshot.model_validate(updated)
 
     def list_for_owner(
         self,

@@ -1,61 +1,24 @@
+"""SSE 协议与助手外部 Schema 适配的契约测试。"""
+
 import asyncio
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import cast
 
 import orjson
-from sqlmodel import Session
 
 from apps.ai_model import runtime as model_runtime_module
 from apps.ai_model.runtime import build_llm_runtime
-from apps.chatbi.api import legacy_external_datasource as dependency_module
-from apps.chatbi.api.legacy_external_datasource import (
-    LegacySchemaContext,
-    check_legacy_datasource_connection,
-    load_legacy_external_schema_context,
-    resolve_legacy_datasource,
+from apps.chatbi.adapters.assistant_schema import (
+    is_dynamic_assistant,
+    load_assistant_schema,
 )
-from apps.chatbi.api.legacy_sse import (
-    build_context_prompt_log,
-    build_role_prompt_log,
-    build_run_error_message,
-    encode_sse_event,
-    finalize_legacy_run,
-)
-from apps.datasource import DatasourceConnection, DatasourceRecord, ExternalDatasource
+from apps.chatbi.api.sse import build_role_prompt_log, encode_sse_event
 
 
 @dataclass(frozen=True)
 class RoleMessage:
     role: str
     content: str
-
-
-@dataclass(frozen=True)
-class ContextMessage(RoleMessage):
-    system_context: bool = False
-
-
-class FakeDatasourceService:
-    def __init__(self, datasource: DatasourceRecord) -> None:
-        self.datasource = datasource
-
-    def get(self, datasource_id: int) -> DatasourceRecord:
-        assert datasource_id == self.datasource.id
-        return self.datasource
-
-
-class FakeConnectionService:
-    def __init__(self) -> None:
-        self.checked: list[int] = []
-
-    def get_version(self, datasource_id: int) -> str:
-        assert datasource_id == 20
-        return "16"
-
-    def check_connection(self, datasource_id: int) -> bool:
-        self.checked.append(datasource_id)
-        return True
 
 
 def test_encode_sse_event_keeps_legacy_frame_shape():
@@ -80,7 +43,7 @@ def test_build_role_prompt_log_marks_system_role_and_appends_assistant():
         RoleMessage(role="human", content="question"),
     ]
 
-    assert build_role_prompt_log(messages, "answer") == [
+    assert build_role_prompt_log(messages, assistant_content="answer") == [
         {
             "type": "system",
             "sqlbot_system": True,
@@ -99,157 +62,60 @@ def test_build_role_prompt_log_marks_system_role_and_appends_assistant():
     ]
 
 
-def test_build_context_prompt_log_uses_explicit_context_flag():
-    messages = [
-        ContextMessage(
-            role="human",
-            content="schema context",
-            system_context=True,
-        ),
-        ContextMessage(role="human", content="question"),
-    ]
-
-    assert build_context_prompt_log(messages, "") == [
-        {
-            "type": "human",
-            "sqlbot_system": True,
-            "content": "schema context",
-        },
-        {
-            "type": "human",
-            "sqlbot_system": False,
-            "content": "question",
-        },
-        {
-            "type": "ai",
-            "sqlbot_system": False,
-            "content": "",
-        },
-    ]
+def test_is_dynamic_assistant_only_for_external_types():
+    assert is_dynamic_assistant(SimpleNamespace(type=1)) is True
+    assert is_dynamic_assistant(SimpleNamespace(type=3)) is True
+    assert is_dynamic_assistant(SimpleNamespace(type=0)) is False
+    assert is_dynamic_assistant(None) is False
 
 
-def test_run_error_message_keeps_database_error_contract():
-    assert orjson.loads(
-        build_run_error_message("db_connection", "offline", "trace")
-    ) == {"message": "offline", "type": "db-connection-err"}
-    assert orjson.loads(
-        build_run_error_message("db_execution", "failed", "trace")
-    ) == {
-        "message": "Execute SQL Failed",
-        "traceback": "failed",
-        "type": "exec-sql-err",
-    }
+def test_load_assistant_schema_reads_external_catalog(monkeypatch):
+    calls: list[tuple[object, ...]] = []
 
+    class FakeCatalog:
+        def get_db_schema(self, datasource_id, question, embedding=False, table_list=None):
+            calls.append((datasource_id, question, embedding, table_list))
+            return "schema text"
 
-def test_finalize_legacy_run_only_finishes_successful_run():
-    calls: list[object] = []
-    session = object()
-
-    finalize_legacy_run(session, False, calls.append)
-    finalize_legacy_run(session, True, calls.append)
-
-    assert calls == [session]
-
-
-def test_legacy_local_datasource_uses_public_datasource_services(monkeypatch):
-    datasource = DatasourceRecord(
-        id=20,
-        name="orders",
-        type="pg",
-        type_name="PostgreSQL",
-        configuration="{}",
-        oid=10,
-    )
-    connection_service = FakeConnectionService()
     monkeypatch.setattr(
-        dependency_module,
-        "build_datasource_service",
-        lambda _session: FakeDatasourceService(datasource),
-    )
-    monkeypatch.setattr(
-        dependency_module,
-        "build_datasource_connection_service",
-        lambda _session: connection_service,
+        "apps.chatbi.adapters.assistant_schema.AssistantOutDsFactory.get_instance",
+        lambda _assistant: FakeCatalog(),
     )
 
-    runtime = resolve_legacy_datasource(cast(Session, object()), 20, None)
-
-    assert runtime.datasource is datasource
-    assert runtime.engine == "PostgreSQL16"
-    assert runtime.is_external is False
-    assert check_legacy_datasource_connection(cast(Session, object()), runtime)
-    assert connection_service.checked == [20]
-
-
-def test_legacy_external_datasource_keeps_external_catalog(monkeypatch):
-    datasource = ExternalDatasource(id=30, name="external", type="mysql")
-    catalog = SimpleNamespace(get_ds=lambda datasource_id: datasource)
-    connection = DatasourceConnection(id=30, type="mysql", configuration="{}")
-    monkeypatch.setattr(
-        dependency_module,
-        "build_external_datasource_connection",
-        lambda _datasource, _timeout: connection,
-    )
-    monkeypatch.setattr(dependency_module, "get_version", lambda _connection: "8")
-    monkeypatch.setattr(
-        dependency_module,
-        "check_connection",
-        lambda **_kwargs: True,
-    )
-
-    runtime = resolve_legacy_datasource(
-        cast(Session, object()),
-        30,
+    schema = load_assistant_schema(
         SimpleNamespace(type=1),
-        catalog,
+        datasource_id=9,
+        question="GMV",
+        embedding=False,
+        table_names=["orders"],
     )
 
-    assert runtime.datasource is datasource
-    assert runtime.engine == "mysql8"
-    assert runtime.external_catalog is catalog
-    assert check_legacy_datasource_connection(cast(Session, object()), runtime)
+    assert schema == "schema text"
+    assert calls == [(9, "GMV", False, ["orders"])]
 
 
-def test_legacy_model_runtime_selects_model_and_disables_reasoning(monkeypatch):
-    config = SimpleNamespace(
-        additional_params={"extra_body": {"enable_thinking": True}}
-    )
-    calls: list[int | None] = []
+def test_build_llm_runtime_can_disable_reasoning(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeConfig:
+        model_id = 1
+        model_name = "demo"
+        additional_params = {"extra_body": {"enable_thinking": True}}
+
+    class FakeLLM:
+        llm = object()
 
     async def fake_get_default_config(model_id):
-        calls.append(model_id)
-        return config
+        captured["model_id"] = model_id
+        return FakeConfig()
 
-    monkeypatch.setattr(
-        model_runtime_module,
-        "get_default_config",
-        fake_get_default_config,
-    )
-    monkeypatch.setattr(
-        model_runtime_module.LLMFactory,
-        "create_llm",
-        staticmethod(lambda runtime_config: SimpleNamespace(llm=runtime_config)),
-    )
+    def fake_create_llm(config):
+        captured["thinking"] = config.additional_params.get("extra_body")
+        return FakeLLM()
 
-    runtime = asyncio.run(build_llm_runtime("17", no_reasoning=True))
+    monkeypatch.setattr(model_runtime_module, "get_default_config", fake_get_default_config)
+    monkeypatch.setattr(model_runtime_module.LLMFactory, "create_llm", fake_create_llm)
 
-    assert calls == [17]
-    assert runtime.config is config
-    assert runtime.llm is config
-    assert config.additional_params == {"extra_body": {}}
-
-
-def test_legacy_external_schema_context_reads_external_catalog_only():
-    catalog = SimpleNamespace(
-        get_db_schema=lambda *args, **kwargs: "external schema"
-    )
-
-    result = load_legacy_external_schema_context(
-        catalog,
-        datasource_id=30,
-        question="订单数",
-        embedding=True,
-        table_names=None,
-    )
-
-    assert result == LegacySchemaContext(schema="external schema")
+    runtime = asyncio.run(build_llm_runtime(None, no_reasoning=True))
+    assert runtime.llm is FakeLLM.llm
+    assert captured["thinking"] == {}

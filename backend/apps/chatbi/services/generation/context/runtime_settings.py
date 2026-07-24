@@ -37,4 +37,19 @@ def resolve_runtime_settings(
     )
 
 
-__all__ = ["resolve_runtime_settings"]
+def resolve_generation_language(lang: str | None) -> str:
+    """把用户语言标识转换为生成提示词使用的语言名称。"""
+
+    if not lang:
+        return "简体中文"
+    normalized = lang.lower()
+    if normalized.startswith("zh-tw"):
+        return "繁体中文"
+    if normalized.startswith("en"):
+        return "英文"
+    if normalized.startswith("ko"):
+        return "韩语"
+    return "简体中文"
+
+
+__all__ = ["resolve_generation_language", "resolve_runtime_settings"]

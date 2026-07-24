@@ -548,8 +548,9 @@ Conversation 是 `chat`、`chat_record`、`chat_log` 三张表及其基础业务
 ```text
 apps/conversation/
 ├── __init__.py                     # 导出 Conversation 公共 DTO、错误和 Service
-├── composition.py                  # 组装会话与问数记录 Service
+├── composition.py                  # 组装会话、记录、历史查询与步骤日志 Service
 ├── errors.py                       # 会话、所有权、状态迁移和结果限制错误
+├── formatting.py                   # 历史记录、图表字段与结果数据的纯格式化
 ├── resource_scope.py               # 提供会话所属工作空间查询
 ├── models/
 │   ├── __init__.py                 # 汇总 Conversation DTO 与持久化模型
@@ -563,17 +564,21 @@ apps/conversation/
 │       ├── chat_log.py             # chat_log 表及日志枚举
 │       └── chat_record.py          # chat_record 表及完成步骤枚举
 ├── repository/
-│   ├── __init__.py                 # 导出会话与问数记录仓储端口
+│   ├── __init__.py                 # 导出会话、记录与历史读取仓储端口
+│   ├── chat_history_repository.py  # 历史记录、结果和步骤日志读写端口
 │   ├── chat_record_repository.py   # 问数记录持久化和历史查询端口
 │   ├── conversation_repository.py  # 会话生命周期持久化端口
 │   └── sqlmodel/
 │       ├── __init__.py                     # 导出 SQLModel 仓储实现
+│       ├── chat_history_repository.py      # 历史读取和步骤日志 SQLModel 实现
 │       ├── chat_record_repository.py       # 问数记录 SQLModel 实现
 │       └── conversation_repository.py      # 会话 SQLModel 实现
 └── services/
     ├── __init__.py                 # Service 包声明
+    ├── chat_log.py                 # 步骤日志开始、结束、置错和终态维护
     ├── chat_record.py              # 问数记录创建、状态迁移、结果和历史规则
-    └── conversation.py             # 会话创建、读取、重命名和自身删除规则
+    ├── conversation.py             # 会话创建、快照、绑定、重命名和自身删除规则
+    └── history_query.py            # 会话历史、结果、日志和用量统一查询入口
 ```
 
 ### 5.11 `chatbi` 对话式问数
@@ -588,6 +593,8 @@ apps/chatbi/
 ├── adapters/
 │   ├── __init__.py                 # ChatBI 技术适配包声明
 │   ├── analysis_prediction.py      # 将分析预测 Service 适配为 LLM 调用
+│   ├── assistant_schema.py         # 助手外部 Schema 适配
+│   ├── auxiliary_generation.py     # 推荐/分析/预测编排装配
 │   ├── chart_generation.py         # 将图表生成 Service 适配为 LLM 调用
 │   ├── datasource_selection.py     # 将数据源选择 Service 适配为 LLM 调用
 │   ├── dynamic_sql_generation.py   # 动态 SQL 生成的模型适配
@@ -608,12 +615,9 @@ apps/chatbi/
 │   ├── __init__.py                 # ChatBI 接口包声明
 │   ├── conversations.py            # 会话列表、详情、重命名和删除接口
 │   ├── interactions.py             # Graph/Agent 澄清交互提交和恢复接口
-│   ├── legacy_chat_flow.py         # 现有聊天 SSE 主流程的兼容接口编排
 │   ├── legacy_composition.py       # 为现有聊天接口组装旧流程依赖
-│   ├── legacy_external_datasource.py# 现有聊天流程的助手外部数据源适配
-│   ├── legacy_read.py              # 现有聊天记录和图表数据只读接口
-│   ├── legacy_sse.py               # 现有聊天流程的 SSE 事件格式化和输出
-│   ├── queries.py                  # 新统一查询、Agent 和 Graph 启动接口
+│   ├── queries.py                  # 推荐问题、分析与预测接口
+│   ├── sse.py                      # /chat 辅助接口 SSE 事件编码
 │   └── router.py                   # 组合会话、查询、交互和工作流路由
 ├── models/
 │   ├── __init__.py                 # 集中导出 ChatBI 编排 DTO 和 Agent ORM
@@ -660,6 +664,7 @@ apps/chatbi/
 │   │   ├── __init__.py                     # 导出 ChatBI 保留的数据集绑定能力
 │   │   ├── dataset_binding.py              # 协调 Semantic 与 Datasource 解析会话绑定
 │   │   ├── deletion_service.py             # 协调 Conversation、Agent、Graph 和 Artifact 删除
+│   │   ├── history_reader.py                # 富化 Conversation 历史并执行 data_live
 │   │   └── ports.py                        # 跨模块级联删除端口
 │   ├── execution/
 │   │   ├── __init__.py                     # 导出执行子域 Service 和规则
@@ -679,7 +684,8 @@ apps/chatbi/
 │   │   ├── final_reply.py                  # 将各类终态统一投影为最终回复
 │   │   ├── permission_sql_generation.py    # 生成受行列权限约束的 SQL
 │   │   ├── ports.py                        # LLM Client 和 PromptBuilder 等生成端口
-│   │   ├── recommended_questions.py        # 根据上下文生成后续推荐问题
+│   │   ├── recommended_questions.py            # 根据上下文生成后续推荐问题
+│   │   ├── auxiliary_generation.py             # 推荐/分析/预测应用编排
 │   │   ├── sql_generation.py               # 根据问题、Schema 和知识上下文生成 SQL
 │   │   ├── streaming.py                    # 将生成过程转换为标准流式事件
 │   │   └── context/

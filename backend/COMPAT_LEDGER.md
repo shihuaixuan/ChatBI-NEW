@@ -19,7 +19,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | B1 | `apps/chat/curd/chat.py` | 写侧转发已删；读侧已迁 `chatbi/api/legacy_read.py`；Dashboard 改走 ChatBI 公开面并销账基线 | 旧 Chat 内部、dashboard | R3-d 内部调用方清零 | R3-d | 已清 |
 | B2 | 原 `apps/chat/models/chat_model.py` | 运行时内部调用切到 `apps.chatbi.models`，Xpack 兼容入口最终删除 | 无 | 项目移除 Xpack 依赖 | R6 | 已清 |
-| B3 | `apps/chat/task/external_datasource.py` | 旧路径已删除，能力随旧流程迁入 `chatbi/api/legacy_external_datasource.py` | `chatbi/api/legacy_chat_flow.py` | 旧 Chat 包内调用清零 | R3-d | 已清 |
+| B3 | `apps/chat/task/external_datasource.py` | 旧路径已删除，能力随旧流程迁入 `chatbi/api/legacy_external_datasource.py` | `chatbi/api/legacy_chat_flow.py` | 旧 Chat 包内调用清零 | R6-c | 已清 |
 | B4 | 原 `apps/capabilities/question_understanding.py`、`time_slots.py` | 调用方已改用 ChatBI understanding 子域，兼容导出随目录删除 | 无 | 调用方切 ChatBI 子域公开入口 | R4-d | 已清 |
 | B5 | 原 `apps/capabilities/semantic/compile.py`、`retrieval.py` | 调用方已改用 planning / retrieval 公开服务，兼容函数删除 | 无 | 调用方切公开 Service | R4-d | 已清 |
 | B6 | 原 `apps/capabilities/sql/`、`apps/capabilities/schemas.py` | validator、执行器与 ToolResult 使用既有 ChatBI 所有者；repair 迁入 Graph 适配器 | 无 | validator/repair 归位并切换剩余调用方后整目录删除 | R4-d | 已清 |

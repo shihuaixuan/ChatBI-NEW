@@ -15,7 +15,6 @@ _GENERATION = "apps.chatbi.services.generation"
 _PLANNING = "apps.chatbi.services.planning"
 _UNDERSTANDING = "apps.chatbi.services.understanding"
 _ERRORS = "apps.chatbi.errors"
-_LEGACY_READ = "apps.chatbi.api.legacy_read"
 
 _PUBLIC: dict[str, str] = {
     "AnalysisPredictionService": _GENERATION,
@@ -41,7 +40,6 @@ _PUBLIC: dict[str, str] = {
     "project_query_final_reply": _GENERATION,
     "resolve_execution_binding": _PLANNING,
     "resolve_generation_scope": _GENERATION,
-    "get_chart_data_ds": _LEGACY_READ,
 }
 
 __all__ = sorted(_PUBLIC)

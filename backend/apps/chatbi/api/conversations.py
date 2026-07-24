@@ -6,22 +6,11 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from apps.chatbi.api.legacy_composition import build_legacy_conversation_service
-from apps.chatbi.api.legacy_read import (
-    format_json_data,
-    format_json_list_data,
-    get_chart_config,
-    get_chart_data_with_user,
-    get_chart_data_with_user_live,
-    get_chat_chart_data,
-    get_chat_log_history,
-    get_chat_predict_data,
-    get_chat_predict_data_with_user,
-    get_chat_with_records,
-    get_chat_with_records_with_data,
-)
 from apps.chatbi.composition import (
     build_chat_record_service,
+    build_conversation_history_reader,
     build_conversation_reader_service,
+    build_history_query_service,
 )
 from apps.chatbi.services.conversation import DatasetBindingError
 from apps.conversation import (
@@ -31,6 +20,8 @@ from apps.conversation import (
     ConversationSummary,
     CreateChat,
     RenameChat,
+    format_json_data,
+    format_json_list_data,
 )
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
@@ -58,8 +49,12 @@ async def chats(session: SessionDep, current_user: CurrentUser):
 async def get_chat(session: SessionDep, current_user: CurrentUser, chart_id: int, current_assistant: CurrentAssistant,
                    trans: Trans):
     def inner():
-        return get_chat_with_records(chart_id=chart_id, session=session, current_user=current_user,
-                                     current_assistant=current_assistant, trans=trans)
+        return build_conversation_history_reader(session).get_chat_with_records(
+            chart_id=chart_id,
+            current_user=current_user,
+            current_assistant=current_assistant,
+            trans=trans,
+        )
 
     return await asyncio.to_thread(inner)
 
@@ -68,8 +63,12 @@ async def get_chat(session: SessionDep, current_user: CurrentUser, chart_id: int
 async def get_chat_with_data(session: SessionDep, current_user: CurrentUser, chart_id: int,
                              current_assistant: CurrentAssistant):
     def inner():
-        return get_chat_with_records_with_data(chart_id=chart_id, session=session, current_user=current_user,
-                                               current_assistant=current_assistant)
+        return build_conversation_history_reader(session).get_chat_with_records(
+            chart_id=chart_id,
+            current_user=current_user,
+            current_assistant=current_assistant,
+            with_data=True,
+        )
 
     return await asyncio.to_thread(inner)
 
@@ -95,7 +94,10 @@ async def chat_predict_data(session: SessionDep, chat_record_id: int):
 @router.get("/record/{chat_record_id}/data", summary=f"{PLACEHOLDER_PREFIX}get_chart_data")
 async def chat_record_data(session: SessionDep, current_user: CurrentUser, chat_record_id: int):
     def inner():
-        data = get_chart_data_with_user(chat_record_id=chat_record_id, session=session, current_user=current_user)
+        data = build_history_query_service(session).get_chart_data(
+            chat_record_id,
+            user_id=current_user.id,
+        )
         return format_json_data(data)
 
     return await asyncio.to_thread(inner)
@@ -104,7 +106,10 @@ async def chat_record_data(session: SessionDep, current_user: CurrentUser, chat_
 @router.get("/record/{chat_record_id}/data_live", summary=f"{PLACEHOLDER_PREFIX}get_chart_data_live")
 async def chat_record_data_live(session: SessionDep, current_user: CurrentUser, chat_record_id: int):
     def inner():
-        data = get_chart_data_with_user_live(chat_record_id=chat_record_id, session=session, current_user=current_user)
+        data = build_conversation_history_reader(session).get_live_chart_data(
+            current_user=current_user,
+            chat_record_id=chat_record_id,
+        )
         return format_json_data(data)
 
     return await asyncio.to_thread(inner)
@@ -113,8 +118,10 @@ async def chat_record_data_live(session: SessionDep, current_user: CurrentUser, 
 @router.get("/record/{chat_record_id}/predict_data", summary=f"{PLACEHOLDER_PREFIX}get_chart_predict_data")
 async def chat_predict_data(session: SessionDep, current_user: CurrentUser, chat_record_id: int):
     def inner():
-        data = get_chat_predict_data_with_user(chat_record_id=chat_record_id, session=session,
-                                               current_user=current_user)
+        data = build_history_query_service(session).get_predict_data(
+            chat_record_id,
+            user_id=current_user.id,
+        )
         return format_json_list_data(data)
 
     return await asyncio.to_thread(inner)
@@ -123,7 +130,10 @@ async def chat_predict_data(session: SessionDep, current_user: CurrentUser, chat
 @router.get("/record/{chat_record_id}/log", summary=f"{PLACEHOLDER_PREFIX}get_record_log")
 async def chat_record_log(session: SessionDep, current_user: CurrentUser, chat_record_id: int):
     def inner():
-        return get_chat_log_history(session, chat_record_id, current_user)
+        return build_history_query_service(session).get_log_history(
+            user_id=current_user.id,
+            chat_record_id=chat_record_id,
+        )
 
     return await asyncio.to_thread(inner)
 
@@ -131,7 +141,11 @@ async def chat_record_log(session: SessionDep, current_user: CurrentUser, chat_r
 @router.get("/record/{chat_record_id}/usage", summary=f"{PLACEHOLDER_PREFIX}get_record_usage")
 async def chat_record_usage(session: SessionDep, current_user: CurrentUser, chat_record_id: int):
     def inner():
-        return get_chat_log_history(session, chat_record_id, current_user, True)
+        return build_history_query_service(session).get_log_history(
+            user_id=current_user.id,
+            chat_record_id=chat_record_id,
+            without_steps=True,
+        )
 
     return await asyncio.to_thread(inner)
 
@@ -193,6 +207,7 @@ async def delete(session: SessionDep, chart_id: int, brief: str):
     remark_expr="brief"
 ))
 async def delete(session: SessionDep, current_user: CurrentUser, chart_id: int, brief: str):
+    _ = brief  # 路径兼容字段，仅供审计装饰器记录。
     # 删除服务保留明确的权限、数据库冲突和 Artifact 清理错误，不在 API 层宽泛吞掉。
     return build_legacy_conversation_service(session).delete(current_user.id, chart_id)
 
@@ -251,6 +266,7 @@ async def assistant_start_chat(
 @router.get("/record/{chat_record_id}/excel/export/{chat_id}", summary=f"{PLACEHOLDER_PREFIX}export_chart_data")
 @system_log(LogConfig(operation_type=OperationType.EXPORT, module=OperationModules.CHAT, resource_id_expr="chat_id", ))
 async def export_excel(session: SessionDep, current_user: CurrentUser, chat_record_id: int, chat_id: int, trans: Trans):
+    _ = chat_id  # 保留现有导出路径契约和审计资源标识。
     try:
         chat_record = build_chat_record_service(session).get_owned(
             current_user.id,
@@ -268,7 +284,9 @@ async def export_excel(session: SessionDep, current_user: CurrentUser, chat_reco
         )
     is_predict_data = chat_record.predict_record_id is not None
 
-    _origin_data = format_json_data(get_chat_chart_data(chat_record_id=chat_record_id, session=session))
+    history_service = build_history_query_service(session)
+
+    _origin_data = format_json_data(history_service.get_chart_data(chat_record_id))
 
     _base_field = _origin_data.get('fields')
     _data = _origin_data.get('data')
@@ -279,7 +297,7 @@ async def export_excel(session: SessionDep, current_user: CurrentUser, chat_reco
             detail=trans("i18n_excel_export.data_is_empty")
         )
 
-    chart_info = get_chart_config(session, chat_record_id)
+    chart_info = history_service.get_chart_config(chat_record_id)
 
     _title = chart_info.get('title') if chart_info.get('title') else 'Excel'
 
@@ -310,7 +328,7 @@ async def export_excel(session: SessionDep, current_user: CurrentUser, chat_reco
 
     _predict_data = []
     if is_predict_data:
-        _predict_data = format_json_list_data(get_chat_predict_data(chat_record_id=chat_record_id, session=session))
+        _predict_data = format_json_list_data(history_service.get_predict_data(chat_record_id))
 
     def inner():
 
@@ -319,7 +337,7 @@ async def export_excel(session: SessionDep, current_user: CurrentUser, chat_reco
 
         md_data, _fields_list = DataFormat.convert_object_array_for_pandas(fields, data_list)
 
-        # data, _fields_list, col_formats = LLMService.format_pd_data(fields, _data + _predict_data)
+        # data, _fields_list, col_formats = DataFormat.format_pd_data(fields, _data + _predict_data)
 
         df = pd.DataFrame(md_data, columns=_fields_list)
 

@@ -2517,3 +2517,34 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
 6. 验证结果：R6-a 联合回归 591 项、完整后端回归 1,212 项通过；架构测试 137 项通过；
    Conversation、Graph 投影、Workflow API 和删除协调等 26 个核心源文件严格 Mypy
    通过，变更范围 Ruff（F/I）通过。
+
+## R6-b（2026-07-24）：迁移历史读取并删除 legacy_read
+
+1. 删除 `apps/chatbi/api/legacy_read.py`，会话记录列表、结果、预测、图表配置、步骤日志、
+   Token 用量和最近问题统一迁入 Conversation `HistoryQueryService` 与
+   `SQLModelChatHistoryRepository`；步骤日志写入由 `ChatLogService` 维护。
+2. Conversation 新增 `ConversationSnapshot` 公共 DTO。旧 Chat 执行和历史富化通过公开
+   Conversation Service 校验用户及工作空间，不再导入或查询 Conversation ORM；会话
+   数据源绑定由 Conversation Service 在独立事务中更新。
+3. ChatBI `ConversationHistoryReader` 只负责 Semantic/Datasource 展示富化和
+   `data_live` 重新执行。Dashboard 直接调用 Datasource 公开连接能力，不再依赖 ChatBI
+   读取函数；Excel 导出使用 Conversation 查询结果。
+4. 推荐问题接口改为按当前用户读取 ChatRecord；记录数据、预测、日志、用量和导出继续
+   保持所有权校验。表驱动架构规则禁止 ChatBI 导入 Conversation models、repository 和
+   services 内部路径。
+5. 新增 Conversation 快照与绑定、历史查询、步骤日志、历史仓储、ChatBI 富化和推荐问题
+   权限专项测试。完整后端回归 1,223 项通过；R6-b 核心生产代码严格 Mypy 与变更范围
+   Ruff 通过，差异格式检查无错误。
+
+## R6-c（2026-07-24）：替换旧 LLMService 并删除 legacy 生成入口
+
+1. 推荐问题、分析与预测接口改为通过 ChatBI `AuxiliaryGenerationService` 直接调用
+   `RecommendedQuestionService` 与 `AnalysisPredictionService`，结果写入统一经
+   Conversation `ChatRecordService` / `ChatLogService`。
+2. 新增 `chatbi/api/sse.py` 作为 `/chat` 辅助接口 SSE 编码；新增
+   `adapters/assistant_schema.py` 承载助手外部 Schema 读取。推荐问题的本地 Schema
+   由 `SchemaContextService` 提供。
+3. 删除 `chatbi/api/legacy_chat_flow.py`、`legacy_sse.py`、`legacy_external_datasource.py`。
+   仓库运行时代码不再包含 `LLMService`；主问数继续由 Agent / Graph 路径承担。
+4. 架构守卫与单元测试改为锚定 `AuxiliaryGenerationService` 与 `queries.py` 边界，
+   移除对已删除 `LLMService` 方法体的 AST 断言。

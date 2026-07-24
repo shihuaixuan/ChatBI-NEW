@@ -3,10 +3,16 @@
 from sqlmodel import Session
 
 from apps.conversation.repository.sqlmodel import (
+    SQLModelChatHistoryRepository,
     SQLModelChatRecordRepository,
     SQLModelConversationRepository,
 )
-from apps.conversation.services import ChatRecordService, ConversationService
+from apps.conversation.services import (
+    ChatLogService,
+    ChatRecordService,
+    ConversationService,
+    HistoryQueryService,
+)
 
 
 def build_chat_record_service(session: Session) -> ChatRecordService:
@@ -21,4 +27,25 @@ def build_conversation_service(session: Session) -> ConversationService:
     return ConversationService(SQLModelConversationRepository(session))
 
 
-__all__ = ["build_chat_record_service", "build_conversation_service"]
+def build_history_query_service(session: Session) -> HistoryQueryService:
+    """按当前数据库会话装配会话历史查询 Service。"""
+
+    return HistoryQueryService(
+        SQLModelChatHistoryRepository(session),
+        build_conversation_service(session),
+        build_chat_record_service(session),
+    )
+
+
+def build_chat_log_service(session: Session) -> ChatLogService:
+    """按当前数据库会话装配执行日志写入 Service。"""
+
+    return ChatLogService(SQLModelChatHistoryRepository(session))
+
+
+__all__ = [
+    "build_chat_log_service",
+    "build_chat_record_service",
+    "build_conversation_service",
+    "build_history_query_service",
+]

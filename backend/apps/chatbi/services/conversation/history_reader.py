@@ -1,0 +1,153 @@
+"""ChatBI 会话历史读取服务：富化会话详情并重新执行历史查询。
+
+历史记录本体由 Conversation 的 HistoryQueryService 负责读取，本服务只补充
+数据集/数据源展示信息（跨 semantic、datasource、assistant 领域），并在 ChatBI
+侧完成 data_live 的重新执行。
+"""
+
+from typing import Any, cast
+
+from apps.assistant.public import AssistantOutDsFactory
+from apps.chatbi.services.generation import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
+from apps.conversation import ChatInfo, ConversationService, HistoryQueryService
+from apps.datasource.services import DatasourceNotFoundError
+from apps.datasource.services.connection_service import (
+    DatasourceConnectionService,
+)
+from apps.datasource.services.datasource_service import DatasourceService
+from apps.semantic.services.dataset_catalog_service import (
+    SemanticDatasetCatalogService,
+)
+from common.utils.data_format import DataFormat
+from common.utils.utils import SQLBotLogUtil
+
+
+class ConversationHistoryReader:
+    """在 Conversation 历史结果之上补充数据集/数据源展示信息并执行 data_live。"""
+
+    def __init__(
+        self,
+        conversation_service: ConversationService,
+        history_service: HistoryQueryService,
+        dataset_catalog_service: SemanticDatasetCatalogService,
+        datasource_service: DatasourceService,
+        connection_service: DatasourceConnectionService,
+    ) -> None:
+        self._conversation_service = conversation_service
+        self._history_service = history_service
+        self._dataset_catalog_service = dataset_catalog_service
+        self._datasource_service = datasource_service
+        self._connection_service = connection_service
+
+    def get_chat_with_records(
+        self,
+        *,
+        chart_id: int,
+        current_user: Any,
+        current_assistant: Any,
+        with_data: bool = False,
+        trans: Any = None,
+    ) -> ChatInfo:
+        workspace_id = current_user.oid if current_user.oid is not None else 1
+        chat = self._conversation_service.get_owned_snapshot(
+            user_id=current_user.id,
+            workspace_id=workspace_id,
+            chat_id=chart_id,
+        )
+        chat_info = ChatInfo(**chat.model_dump())
+
+        dataset = (
+            self._dataset_catalog_service.get_summary(chat.dataset_id)
+            if chat.dataset_id
+            else None
+        )
+        if not dataset:
+            chat_info.dataset_exists = False
+            chat_info.dataset_name = "Dataset not exist"
+        else:
+            chat_info.dataset_exists = True
+            chat_info.dataset_name = dataset.name
+
+        ds: Any
+        if (
+            current_assistant
+            and current_assistant.type in DYNAMIC_DATASOURCE_ASSISTANT_TYPES
+            and chat.datasource is not None
+        ):
+            out_ds_instance = AssistantOutDsFactory.get_instance(current_assistant)
+            ds = out_ds_instance.get_ds(chat.datasource, trans)
+        else:
+            ds = None
+            if chat.datasource:
+                try:
+                    ds = self._datasource_service.get(chat.datasource)
+                except DatasourceNotFoundError:
+                    ds = None
+
+        if not ds:
+            chat_info.datasource_exists = False
+            chat_info.datasource_name = "Datasource not exist"
+        else:
+            chat_info.datasource_exists = True
+            chat_info.datasource_name = ds.name
+            chat_info.ds_type = ds.type
+
+        chat_info.records = cast(
+            "list[Any]",
+            self._history_service.list_records(
+                user_id=current_user.id,
+                chat_id=chart_id,
+                with_data=with_data,
+            ),
+        )
+        return chat_info
+
+    def get_live_chart_data(
+        self,
+        *,
+        current_user: Any,
+        chat_record_id: int,
+    ) -> dict[str, Any]:
+        """按记录保存的数据源与 SQL 重新执行，返回统一结果结构。"""
+
+        binding = self._history_service.get_live_query(
+            user_id=current_user.id,
+            chat_record_id=chat_record_id,
+        )
+        if binding is None:
+            return {"status": "success", "data": [], "message": ""}
+        return self.execute_chart_data(binding.datasource_id, binding.sql)
+
+    def execute_chart_data(
+        self,
+        datasource_id: int | None,
+        sql: str | None,
+    ) -> dict[str, Any]:
+        json_result: dict[str, Any] = {
+            "status": "success",
+            "data": [],
+            "message": "",
+        }
+        if datasource_id is None or sql is None:
+            return json_result
+        try:
+            result = self._connection_service.execute_query(
+                datasource_id,
+                sql,
+                origin_column=False,
+            )
+            _data = DataFormat.convert_large_numbers_in_object_array(  # type: ignore[no-untyped-call]
+                result.get("data")
+            )
+            _data = DataFormat.normalize_qualified_sql_column_keys_in_object_array(
+                _data
+            )
+            json_result["data"] = _data
+        except Exception as e:
+            SQLBotLogUtil.error(f"Function failed: {e}")
+            json_result["status"] = "failed"
+            json_result["message"] = f"{e}"
+        return json_result
+
+
+__all__ = ["ConversationHistoryReader"]

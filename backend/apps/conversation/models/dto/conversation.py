@@ -64,6 +64,33 @@ class ConversationSummary(BaseModel):
     recommended_generate: bool = False
 
 
+class ConversationSnapshot(BaseModel):
+    """跨模块使用的稳定会话只读快照，不暴露 Conversation ORM。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    oid: int | None = None
+    create_time: datetime | None = None
+    create_by: int
+    brief: str = ""
+    chat_type: str = "chat"
+    dataset_id: int | None = None
+    datasource: int | None = None
+    engine_type: str = ""
+    origin: int | None = None
+    brief_generate: bool = False
+    recommended_question_answer: str | None = None
+    recommended_question: str | None = None
+    recommended_generate: bool = False
+
+    @property
+    def datasource_id(self) -> int | None:
+        """为执行绑定提供语义明确的只读别名。"""
+
+        return self.datasource
+
+
 class ChatInfo(BaseModel):
     id: int | None = None
     create_time: datetime | None = None
@@ -87,6 +114,7 @@ __all__ = [
     "ChatInfo",
     "ConversationBinding",
     "ConversationCreateData",
+    "ConversationSnapshot",
     "ConversationSummary",
     "CreateChat",
     "RenameChat",

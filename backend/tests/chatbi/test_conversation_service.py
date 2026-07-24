@@ -21,6 +21,8 @@ class FakeConversationRepository:
         self.commits = 0
         self.rollbacks = 0
         self.fail_create = False
+        self.fail_bind = False
+        self.bound_datasource = None
         self.deleted = []
 
     def get(self, chat_id: int) -> Chat | None:
@@ -52,6 +54,20 @@ class FakeConversationRepository:
         chat.brief = brief
         chat.brief_generate = brief_generate
         return brief
+
+    def bind_datasource(
+        self,
+        chat: Chat,
+        *,
+        datasource_id: int,
+        engine_type: str,
+    ) -> Chat:
+        if self.fail_bind:
+            raise RuntimeError("bind failed")
+        chat.datasource = datasource_id
+        chat.engine_type = engine_type
+        self.bound_datasource = (datasource_id, engine_type)
+        return chat
 
     def delete(self, chat_id: int) -> None:
         self.deleted.append(chat_id)
@@ -170,3 +186,77 @@ def test_delete_delegates_owned_conversation_cleanup():
 
     assert result == "Chat with id 10 has been deleted"
     assert repository.deleted == [10]
+
+
+def test_owned_snapshot_enforces_user_and_workspace_without_exposing_orm():
+    repository = FakeConversationRepository(
+        Chat(
+            id=10,
+            create_by=7,
+            oid=9,
+            brief="销售分析",
+            dataset_id=20,
+            datasource=30,
+            engine_type="PostgreSQL",
+        )
+    )
+    service = ConversationService(repository)
+
+    snapshot = service.get_owned_snapshot(
+        user_id=7,
+        workspace_id=9,
+        chat_id=10,
+    )
+
+    assert snapshot.id == 10
+    assert snapshot.dataset_id == 20
+    assert snapshot.datasource_id == 30
+    assert snapshot.engine_type == "PostgreSQL"
+    assert snapshot.__class__.__name__ == "ConversationSnapshot"
+    assert not isinstance(snapshot, Chat)
+
+    with pytest.raises(ConversationOwnershipError):
+        service.get_owned_snapshot(user_id=8, workspace_id=9, chat_id=10)
+    with pytest.raises(ConversationOwnershipError):
+        service.get_owned_snapshot(user_id=7, workspace_id=8, chat_id=10)
+
+
+def test_bind_datasource_commits_and_returns_updated_snapshot():
+    repository = FakeConversationRepository(
+        Chat(id=10, create_by=7, oid=9, brief="销售分析", engine_type="")
+    )
+    service = ConversationService(repository)
+
+    snapshot = service.bind_datasource(
+        user_id=7,
+        workspace_id=9,
+        chat_id=10,
+        datasource_id=30,
+        engine_type="PostgreSQL",
+    )
+
+    assert repository.bound_datasource == (30, "PostgreSQL")
+    assert repository.commits == 1
+    assert repository.rollbacks == 0
+    assert snapshot.datasource_id == 30
+    assert snapshot.engine_type == "PostgreSQL"
+
+
+def test_bind_datasource_rolls_back_repository_failure():
+    repository = FakeConversationRepository(
+        Chat(id=10, create_by=7, oid=9, brief="销售分析", engine_type="")
+    )
+    repository.fail_bind = True
+    service = ConversationService(repository)
+
+    with pytest.raises(RuntimeError, match="bind failed"):
+        service.bind_datasource(
+            user_id=7,
+            workspace_id=9,
+            chat_id=10,
+            datasource_id=30,
+            engine_type="PostgreSQL",
+        )
+
+    assert repository.commits == 0
+    assert repository.rollbacks == 1
