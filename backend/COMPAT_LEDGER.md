@@ -33,7 +33,7 @@
 | # | 路径 | 内容 | 调用方 | 删除条件 | 目标阶段 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | C1 | `/system/terminology`（`apps/semantic/api/legacy_terms.py`） | 转发 SemanticTermService，旧响应字段转换 | 外部 API 调用方 | 缺少生产调用量证据；取得连续一个发布周期零调用证据后删除 | R6 | 外部阻塞 |
-| C2 | `/chat`、`/chat/agent`、`/graph` 旧路由前缀 | `chatbi/api/router.py` 聚合入口保持；Agent router 已于 R4-b 归入 `chatbi/api/interactions.py`，Graph router 由最外层注入 | 前端、外部集成 | 前端和外部集成完成新路径迁移并提供调用清单 | R6+ | 外部阻塞 |
+| C2 | `/chat`、`/chat/agent`、`/graph` 路由前缀 | `chatbi/api/router.py` 正式聚合 Chat、Agent、Graph；路径保持为正式接口，不再视为兼容债务 | 前端、外部集成 | 不删除（转正） | R6-d | 已转正 |
 | C3 | `/system/data-training`、`/recommended_problem` 旧前缀 | Knowledge 所有权下的兼容路径 | 前端 | 前端完成路径迁移并提供调用清单 | R6 | 外部阻塞 |
 | C4 | `/system/aimodel`、`/system/assistant`、`/user`、`/login` 等原路径 | 所有权已迁，路径长期保持（视为正式路径） | 前端 | 不删除（转正） | — | 已转正 |
 
@@ -60,3 +60,5 @@
 | E6 | 原 `SemanticQueryService = SemanticCompilationService` 别名 | 旧名删除，调用方统一使用 `SemanticCompilationService` | 无 | 同上 | R4-d | 已清 |
 | E7 | 原 `GenerationSchemaContextService = SchemaContextService` 别名 | 旧名删除，调用方统一使用 `SchemaContextService` | 无 | 调用方改用新名 | R4-d | 已清 |
 | E8 | 原 `apps/dashboard/models/dashboard_model.py` | Dashboard 的 Xpack 旧模型入口已删除 | 无 | 项目移除 Xpack 依赖 | R6 | 已清 |
+
+| `chatbi/api/legacy_composition.py` | 旧会话创建/联合删除组合 | 已迁 `composition.build_chat_application_service` 后删除 | R6-d | 已清 |

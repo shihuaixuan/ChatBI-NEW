@@ -1,6 +1,6 @@
 # ChatBI 减重与 Conversation 拆分执行计划
 
-> 状态：R6-a、R6-b、R6-c 已实施，R6-d 及后续批次待执行
+> 状态：R6-a 至 R6-d 已实施；ChatBI 减重阶段完成
 > 范围：后端模块拆分、内部实现收敛和架构守卫  
 > 不包含：数据库表改名、前端接口路径调整、微服务拆分
 
@@ -17,13 +17,7 @@
 
 其中，会话和问数记录已经具备独立的数据、仓储、Service 和业务规则，适合拆分为 `apps/conversation`。理解、规划、生成和执行仍是一次问数流程的连续阶段，不拆成独立顶层模块。
 
-当前 `legacy_*` 文件已大幅收敛：
-
-- `legacy_chat_flow.py` / `legacy_sse.py` / `legacy_external_datasource.py` 已在 R6-c 删除；
-- `legacy_read.py` 已在 R6-b 删除；
-- `legacy_composition.py` 仍组装会话创建、删除和 Agent 清理（R6-d）。
-
-因此，本计划先迁移数据所有权，再替换仍在使用的旧实现，最后删除 `legacy_*`。
+当前 `chatbi/api/legacy_*.py` 已全部删除（R6-b/c/d）。会话创建与联合删除由 ChatBI composition 与 `ChatApplicationService` 正式组装；主问数走 Agent/Graph，辅助能力走 Generation Service。
 
 ## 2. 目标
 
@@ -321,6 +315,8 @@ R6-a 至 R6-c 保留 `chatbi/api/conversations.py` 作为 `/chat` 接口入口�
 本批按接口能力分别迁移。单个能力未达到兼容要求时，可以暂缓该能力删除，但不得复制旧 LLMService 形成第四套流程。
 
 ### R6-d：清理组合入口与兼容台账
+
+> 状态：已实施（2026-07-24）
 
 #### 目标
 

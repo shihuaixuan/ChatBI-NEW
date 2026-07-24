@@ -19,6 +19,9 @@ from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.services.conversation import (
     resolve_conversation_binding,
 )
+from apps.chatbi.services.conversation.chat_application import (
+    ChatApplicationService,
+)
 from apps.chatbi.services.conversation.deletion_service import (
     ChatDeletionService,
 )
@@ -67,6 +70,7 @@ from apps.datasource.composition import (
     build_datasource_service,
 )
 from apps.knowledge.composition import build_sql_example_query_service
+from apps.knowledge.recommended import build_recommended_problem_service
 from apps.retrieval.query.service import RetrievalService, build_retrieval_service
 from apps.semantic.composition import (
     build_semantic_dataset_binding_service,
@@ -267,7 +271,43 @@ def build_chat_deletion_service(
     )
 
 
+AgentCleanupFactory = Callable[[Session], ExecutionCleanupGateway]
+
+_agent_cleanup_factory: AgentCleanupFactory | None = None
+
+
+def configure_agent_cleanup(factory: AgentCleanupFactory) -> None:
+    """注册会话联合删除所需的 Agent 执行数据清理能力。"""
+
+    global _agent_cleanup_factory
+    _agent_cleanup_factory = factory
+
+
+def build_chat_application_service(session: Session) -> ChatApplicationService:
+    """装配 ChatBI 会话创建与联合删除编排。"""
+
+    if _agent_cleanup_factory is None:
+        raise RuntimeError("ChatBI Agent cleanup factory is not configured")
+
+    def resolve_binding(current_user: object, dataset_id: int) -> ConversationBinding:
+        return resolve_dataset_chat_binding(session, current_user, dataset_id)
+
+    def list_recommended_questions(datasource_id: int) -> list[str] | None:
+        return build_recommended_problem_service(session).list_for_chat(datasource_id)
+
+    return ChatApplicationService(
+        conversation_service=build_conversation_service(session),
+        resolve_binding=resolve_binding,
+        list_recommended_questions=list_recommended_questions,
+        deletion_service=build_chat_deletion_service(
+            session,
+            agent_cleanup_factory=_agent_cleanup_factory,
+        ),
+    )
+
+
 __all__ = [
+    "build_chat_application_service",
     "build_chat_deletion_service",
     "build_chat_log_service",
     "build_chat_record_service",
@@ -282,6 +322,7 @@ __all__ = [
     "build_query_service",
     "build_result_artifact_service",
     "build_question_understanding_service",
+    "configure_agent_cleanup",
     "resolve_dataset_chat_binding",
     "build_semantic_query_service",
     "build_semantic_retrieval_service",

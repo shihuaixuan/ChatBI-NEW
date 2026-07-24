@@ -421,7 +421,9 @@ def test_legacy_conversation_mutations_have_moved_out_of_read_projection():
         BACKEND_DIR__conversation / "apps/chatbi/api/conversations.py"
     ).read_text(encoding="utf-8")
     assert "build_conversation_reader_service" in router_source
-    assert "build_legacy_conversation_service" in router_source
+    assert "build_chat_application_service" in router_source
+    assert "build_legacy_conversation_service" not in router_source
+    assert "legacy_composition" not in router_source
 
 
 def test_agent_conversation_owner_check_uses_chatbi_service():
@@ -1818,3 +1820,41 @@ def test_r6c_query_execution_adapter_owns_exec_sql():
     ).read_text(encoding="utf-8")
     assert "exec_sql(" in adapter_source
     assert "exec_sql(" not in queries_source
+
+
+# ======================================================================
+# R6-d：清理组合入口
+# ======================================================================
+
+
+def test_r6d_legacy_composition_is_removed():
+    api_dir = BACKEND_DIR__r6c / "apps/chatbi/api"
+    assert not any(path.name.startswith("legacy_") for path in api_dir.glob("*.py"))
+
+
+def test_r6d_router_configures_agent_cleanup_via_composition():
+    source = (BACKEND_DIR__r6c / "apps/chatbi/api/router.py").read_text(encoding="utf-8")
+    imports = _imports__r6c(_tree__r6c("apps/chatbi/api/router.py"))
+
+    assert "apps.chatbi.composition" in imports
+    assert "configure_agent_cleanup" in source
+    assert "legacy_composition" not in source
+    assert "compose_chatbi_router" in source
+
+
+def test_r6d_chat_application_service_coordinates_create_and_delete():
+    tree = _tree__r6c("apps/chatbi/services/conversation/chat_application.py")
+    source = ast.unparse(tree)
+    imports = _imports__r6c(tree)
+
+    assert "ChatApplicationService" in source
+    assert "create_from_request" in source
+    assert "validate_assistant_dataset_binding" in imports or "validate_assistant_dataset_binding" in source
+    assert "Legacy" not in source
+
+
+def test_r6d_chatbi_public_surface_does_not_export_conversation_internals():
+    init_source = (BACKEND_DIR__r6c / "apps/chatbi/__init__.py").read_text(encoding="utf-8")
+    assert "Chat" not in init_source or "ChatBIError" in init_source
+    assert "conversation_repository" not in init_source
+    assert "ChatRecordService" not in init_source

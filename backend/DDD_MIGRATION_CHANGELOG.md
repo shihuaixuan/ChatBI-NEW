@@ -2548,3 +2548,13 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
    仓库运行时代码不再包含 `LLMService`；主问数继续由 Agent / Graph 路径承担。
 4. 架构守卫与单元测试改为锚定 `AuxiliaryGenerationService` 与 `queries.py` 边界，
    移除对已删除 `LLMService` 方法体的 AST 断言。
+
+## R6-d（2026-07-24）：清理组合入口与兼容台账
+
+1. 会话创建与联合删除迁入正式 `ChatApplicationService`，由 ChatBI `composition.py`
+   的 `build_chat_application_service` / `configure_agent_cleanup` 装配；`chatbi/api/router.py`
+   改为正式聚合 Chat、Agent、Graph 路由。
+2. 删除 `chatbi/api/legacy_composition.py`。`chatbi/api/` 下不再存在任何 `legacy_*.py`。
+3. `COMPAT_LEDGER` 将 C2（`/chat`、`/chat/agent`、`/graph`）转正为正式接口；内部
+   `legacy_*` 实现登记为已清。`apps/chatbi/__init__.py` 公共面不导出会话内部实现。
+4. 架构守卫与会话删除回归同步切换到新组合入口。

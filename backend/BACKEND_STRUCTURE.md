@@ -615,7 +615,6 @@ apps/chatbi/
 │   ├── __init__.py                 # ChatBI 接口包声明
 │   ├── conversations.py            # 会话列表、详情、重命名和删除接口
 │   ├── interactions.py             # Graph/Agent 澄清交互提交和恢复接口
-│   ├── legacy_composition.py       # 为现有聊天接口组装旧流程依赖
 │   ├── queries.py                  # 推荐问题、分析与预测接口
 │   ├── sse.py                      # /chat 辅助接口 SSE 事件编码
 │   └── router.py                   # 组合会话、查询、交互和工作流路由
@@ -662,9 +661,10 @@ apps/chatbi/
 │   ├── __init__.py                         # 汇总导出 ChatBI 子域 Service
 │   ├── conversation/
 │   │   ├── __init__.py                     # 导出 ChatBI 保留的数据集绑定能力
+│   │   ├── chat_application.py             # 会话创建与联合删除应用编排
 │   │   ├── dataset_binding.py              # 协调 Semantic 与 Datasource 解析会话绑定
 │   │   ├── deletion_service.py             # 协调 Conversation、Agent、Graph 和 Artifact 删除
-│   │   ├── history_reader.py                # 富化 Conversation 历史并执行 data_live
+│   │   ├── history_reader.py               # 富化 Conversation 历史并执行 data_live
 │   │   └── ports.py                        # 跨模块级联删除端口
 │   ├── execution/
 │   │   ├── __init__.py                     # 导出执行子域 Service 和规则

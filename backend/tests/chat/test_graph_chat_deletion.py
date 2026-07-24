@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from apps.chatbi.api.legacy_composition import LegacyChatDeletionProvider
+from apps.chatbi.composition import build_chat_deletion_service
 from apps.chatbi.models import (
     AgentRunStatus,
     ChatbiAgentRun,
@@ -285,11 +285,14 @@ def test_chat_deletion_removes_owned_workflow_data_but_keeps_standalone_run(
     owned_run_id = owned_run.run_id
     standalone_run_id = standalone.run_id
 
-    deleted_message = LegacyChatDeletionProvider(
+    deleted_message = build_chat_deletion_service(
         session,
-        AgentExecutionDeletionService,
+        agent_cleanup_factory=AgentExecutionDeletionService,
     ).delete_for_user(current_user.id, chat_id)
-    repeated_message = LegacyChatDeletionProvider(session, AgentExecutionDeletionService(session)).delete_for_user(current_user.id, chat_id)
+    repeated_message = build_chat_deletion_service(
+        session,
+        agent_cleanup_factory=AgentExecutionDeletionService,
+    ).delete_for_user(current_user.id, chat_id)
 
     assert deleted_message == repeated_message
     assert session.get(Chat, chat_id) is None

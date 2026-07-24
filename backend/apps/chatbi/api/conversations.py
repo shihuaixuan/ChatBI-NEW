@@ -5,8 +5,8 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from apps.chatbi.api.legacy_composition import build_legacy_conversation_service
 from apps.chatbi.composition import (
+    build_chat_application_service,
     build_chat_record_service,
     build_conversation_history_reader,
     build_conversation_reader_service,
@@ -209,7 +209,7 @@ async def delete(session: SessionDep, chart_id: int, brief: str):
 async def delete(session: SessionDep, current_user: CurrentUser, chart_id: int, brief: str):
     _ = brief  # 路径兼容字段，仅供审计装饰器记录。
     # 删除服务保留明确的权限、数据库冲突和 Artifact 清理错误，不在 API 层宽泛吞掉。
-    return build_legacy_conversation_service(session).delete(current_user.id, chart_id)
+    return build_chat_application_service(session).delete(current_user.id, chart_id)
 
 
 @router.post("/start", response_model=ChatInfo, summary=f"{PLACEHOLDER_PREFIX}start_chat")
@@ -220,7 +220,7 @@ async def delete(session: SessionDep, current_user: CurrentUser, chart_id: int, 
 ))
 async def start_chat(session: SessionDep, current_user: CurrentUser, create_chat_obj: CreateChat):
     try:
-        return build_legacy_conversation_service(session).create(
+        return build_chat_application_service(session).create(
             user_id=current_user.id,
             workspace_id=current_user.oid,
             request=create_chat_obj,
@@ -247,7 +247,7 @@ async def assistant_start_chat(
     create_chat_obj: CreateChat = CreateChat(origin=2),
 ):
     try:
-        return build_legacy_conversation_service(session).create(
+        return build_chat_application_service(session).create(
             user_id=current_user.id,
             workspace_id=current_user.oid,
             request=create_chat_obj,
