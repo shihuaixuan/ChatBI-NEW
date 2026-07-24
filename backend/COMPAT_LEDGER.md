@@ -60,5 +60,6 @@
 | E6 | 原 `SemanticQueryService = SemanticCompilationService` 别名 | 旧名删除，调用方统一使用 `SemanticCompilationService` | 无 | 同上 | R4-d | 已清 |
 | E7 | 原 `GenerationSchemaContextService = SchemaContextService` 别名 | 旧名删除，调用方统一使用 `SchemaContextService` | 无 | 调用方改用新名 | R4-d | 已清 |
 | E8 | 原 `apps/dashboard/models/dashboard_model.py` | Dashboard 的 Xpack 旧模型入口已删除 | 无 | 项目移除 Xpack 依赖 | R6 | 已清 |
+| E9 | 原 `apps/chatbi/orchestration/agent/budget.py`、`tools/registry.py` 及 base re-export | 已迁 `apps.tool`；调用方与测试改直连 `apps.tool`，转发文件删除 | 无 | 调用方统一改 `apps.tool` | tool-runtime | 已清 |
 
 | `chatbi/api/legacy_composition.py` | 旧会话创建/联合删除组合 | 已迁 `composition.build_chat_application_service` 后删除 | R6-d | 已清 |

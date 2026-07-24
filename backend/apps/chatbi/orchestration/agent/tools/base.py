@@ -1,20 +1,15 @@
-"""Agent 工具基座。
+"""Agent 工具基座：ChatBI 执行上下文 + 领域工具基类。
 
-工具 = pydantic 参数 schema（喂给 bind_tools 供 LLM 选择）+ execute 实现。
-执行永远由 AgentLoop 经白名单分发，LLM 只能提名工具与参数。
-
-返回统一为 ToolOutput：
-- summary：回写进 LLM 消息历史（ToolMessage），受字数上限约束；
-- payload：完整结构化结果，落库/给前端，不进上下文。
+通用运行时（Tool/ToolOutput/Registry）在 apps.tool。
+本模块只保留问数执行上下文与服务端口。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-import orjson
-from pydantic import BaseModel
+from apps.tool import Tool
 
 if TYPE_CHECKING:
     from apps.chatbi.models import (
@@ -103,7 +98,7 @@ class PhysicalSchemaReader(Protocol):
 
 @dataclass
 class AgentToolContext:
-    """一次 run 的执行上下文（由 API 层组装，工具只读）。"""
+    """一次 run 的执行上下文（由 API/Loop 组装，工具只读）。"""
 
     session: Any
     oid: int
@@ -124,43 +119,11 @@ class AgentToolContext:
     state: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
-class ToolOutput:
-    success: bool
-    summary: str
-    payload: dict[str, Any] = field(default_factory=dict)
-    error_code: str | None = None
+class AgentTool(Tool):
+    """ChatBI 领域工具基类；继承通用 Tool 协议。"""
 
 
-class AgentTool:
-    """工具基类：子类声明 name/description/args_model 并实现 execute。"""
-
-    name: ClassVar[str]
-    description: ClassVar[str]
-    args_model: ClassVar[type[BaseModel]]
-
-    def execute(self, ctx: AgentToolContext, args: BaseModel) -> ToolOutput:  # pragma: no cover - interface
-        raise NotImplementedError
-
-    @classmethod
-    def tool_spec(cls) -> dict[str, Any]:
-        """OpenAI function-calling 形态的工具定义，供 bind_tools 使用。"""
-
-        return {
-            "type": "function",
-            "function": {
-                "name": cls.name,
-                "description": cls.description,
-                "parameters": cls.args_model.model_json_schema(),
-            },
-        }
-
-
-def truncate_summary(summary: str, max_chars: int) -> str:
-    if len(summary) <= max_chars:
-        return summary
-    return summary[:max_chars] + f"\n…(截断，完整结果已存档，原文 {len(summary)} 字符)"
-
-
-def json_summary(data: Any, max_chars: int) -> str:
-    return truncate_summary(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode(), max_chars)
+__all__ = [
+    "AgentTool",
+    "AgentToolContext",
+]

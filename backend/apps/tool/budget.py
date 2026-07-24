@@ -1,11 +1,17 @@
-"""Agent 预算与熔断：步数、token、重复调用、SQL 重试、墙钟超时。"""
+"""通用预算与熔断原语。
+
+宿主（如 ChatBI AgentLoop）负责把 soft/hard 判定落实为 allowlist 与收口策略。
+"""
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Literal
 
 import orjson
+
+PlanningMode = Literal["normal", "soft", "exhausted"]
 
 
 @dataclass
@@ -23,6 +29,7 @@ class BudgetGuard:
     max_sql_retries: int = 2
     timeout_seconds: int = 120
     max_clarifications: int = 2
+    soft_ratio: float = 0.8
 
     steps: int = 0
     tokens_used: int = 0
@@ -41,6 +48,21 @@ class BudgetGuard:
         self.tokens_used = int(snapshot.get("tokens_used") or 0)
         self.sql_failures = int(snapshot.get("sql_failures") or 0)
         self.clarifications = int(snapshot.get("clarifications") or 0)
+
+    def planning_mode(self) -> PlanningMode:
+        """当前规划模式：normal / soft（接近上限）/ exhausted（已耗尽）。"""
+
+        if self._is_exhausted():
+            return "exhausted"
+        if self._is_soft():
+            return "soft"
+        return "normal"
+
+    def soft_tool_allowlist(self, available: list[str]) -> list[str]:
+        """soft 模式下仅允许收口类工具。"""
+
+        preferred = ("finish", "clarify")
+        return [name for name in preferred if name in available]
 
     def check_before_step(self) -> BudgetVerdict:
         if self.steps >= self.max_steps:
@@ -61,7 +83,7 @@ class BudgetGuard:
         self.steps += 1
 
     def record_llm_usage(self, usage: dict | None) -> None:
-        """累计不占 Agent 规划步数的模型调用，例如前置问题理解。"""
+        """累计不占规划步数的模型调用，例如前置问题理解。"""
 
         if usage:
             self.tokens_used += int(usage.get("total_tokens") or 0)
@@ -109,5 +131,28 @@ class BudgetGuard:
             "token_budget": self.token_budget,
             "sql_failures": self.sql_failures,
             "clarifications": self.clarifications,
+            "planning_mode": self.planning_mode(),
             "elapsed_seconds": round(time.monotonic() - self.started_at, 2),
         }
+
+    def _is_exhausted(self) -> bool:
+        if self.steps >= self.max_steps:
+            return True
+        if self.token_budget and self.tokens_used >= self.token_budget:
+            return True
+        if time.monotonic() - self.started_at > self.timeout_seconds:
+            return True
+        return False
+
+    def _is_soft(self) -> bool:
+        ratio = self.soft_ratio
+        if ratio <= 0 or ratio >= 1:
+            return False
+        if self.max_steps > 0 and self.steps >= max(1, int(self.max_steps * ratio)):
+            return True
+        if (
+            self.token_budget > 0
+            and self.tokens_used >= max(1, int(self.token_budget * ratio))
+        ):
+            return True
+        return False

@@ -4,12 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from apps.chatbi.orchestration.agent.tools.base import (
-    AgentTool,
-    AgentToolContext,
-    ToolOutput,
-    json_summary,
-)
+from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolContext
+from apps.tool import ToolOutput, json_summary
 from apps.knowledge.composition import build_sql_example_query_service
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
@@ -44,6 +40,8 @@ class ClarifyTool(AgentTool):
         "必须给出结构化选项（来自语义包候选）。不要为可以合理默认的小事澄清。"
     )
     args_model = ClarifyArgs
+    is_read_only = False
+    is_concurrency_safe = False
 
     def execute(self, ctx: AgentToolContext, args: ClarifyArgs) -> ToolOutput:
         return ToolOutput(
@@ -64,6 +62,9 @@ class SearchTerminologyTool(AgentTool):
     name = "search_terminology"
     description = "查询业务术语的解释与映射（同义词、口径说明）。用于理解问题中的黑话/缩写。"
     args_model = SearchTerminologyArgs
+    is_read_only = True
+    # 共享 Session 下禁止并行读。
+    is_concurrency_safe = False
 
     def execute(self, ctx: AgentToolContext, args: SearchTerminologyArgs) -> ToolOutput:
         dataset_id = ctx.dataset_id or ctx.state.get("dataset_id")
@@ -104,6 +105,9 @@ class GetSqlExamplesTool(AgentTool):
         "注意：示例仅供写 SQL 参考，不是真实查询结果，禁止当作答案。"
     )
     args_model = GetSqlExamplesArgs
+    is_read_only = True
+    # 内部会 build_*_service(ctx.session)，共享 Session 下禁止并行。
+    is_concurrency_safe = False
 
     def execute(self, ctx: AgentToolContext, args: GetSqlExamplesArgs) -> ToolOutput:
         results = build_sql_example_query_service(ctx.session).search(

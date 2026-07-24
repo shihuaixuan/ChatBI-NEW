@@ -59,6 +59,8 @@ class AgentConfig(BaseModel):
     summary_max_chars: int = 4000
     history_rounds: int = 3
     context_fold_chars: int = 30000
+    tool_timeout_seconds: float = 60.0
+    tool_parallel_workers: int = 4
 
 
 class AgentEventPayload(BaseModel):

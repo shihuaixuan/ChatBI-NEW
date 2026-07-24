@@ -1,4 +1,4 @@
-from apps.chatbi.orchestration.agent.budget import BudgetGuard
+from apps.tool import BudgetGuard
 
 
 def test_step_budget_exhaustion():
@@ -54,3 +54,12 @@ def test_snapshot_reports_usage():
     assert snapshot["steps"] == 1
     assert snapshot["tokens_used"] == 42
     assert snapshot["max_steps"] == 12
+    assert snapshot["planning_mode"] in {"normal", "soft", "exhausted"}
+
+
+def test_soft_mode_before_hard_exhaustion():
+    guard = BudgetGuard(max_steps=5, soft_ratio=0.8)
+    for _ in range(4):
+        guard.record_system_step()
+    assert guard.planning_mode() == "soft"
+    assert guard.check_before_step().allowed

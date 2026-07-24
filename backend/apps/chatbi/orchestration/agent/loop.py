@@ -1,8 +1,9 @@
 """AgentLoop：LLM 自主规划 + 受控工具循环。
 
 LLM 拥有：选择工具、组织参数、决定顺序、决定何时澄清与结束。
-LLM 没有：越出白名单、绕过守护、超出预算（BudgetGuard 硬上限）。
+LLM 没有：越出白名单、绕过守护、超出预算（BudgetGuard 硬/软上限）。
 状态即消息历史：run.messages 持久化除 system 外的全部消息，恢复=反序列化继续。
+工具运行时内核见 apps.tool；本模块只负责 ChatBI 编排策略。
 """
 
 from __future__ import annotations
@@ -40,17 +41,15 @@ from apps.chatbi.models import (
     ChatbiAgentRun,
 )
 from apps.chatbi.models.dto.agent import AgentConfig, AgentEventPayload
-from apps.chatbi.orchestration.agent.budget import BudgetGuard
 from apps.chatbi.orchestration.agent.events import sse_event
 from apps.chatbi.orchestration.agent.prompts import build_system_prompt
-from apps.chatbi.orchestration.agent.tools.base import AgentToolContext, ToolOutput
+from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.core import build_default_tools
 from apps.chatbi.orchestration.agent.tools.interaction import (
     ClarifyTool,
     GetSqlExamplesTool,
     SearchTerminologyTool,
 )
-from apps.chatbi.orchestration.agent.tools.registry import ToolRegistry
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.execution import (
     GuardedQueryService,
@@ -72,8 +71,22 @@ from apps.conversation import (
 )
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
+from apps.tool import (
+    BudgetGuard,
+    ToolCallRequest,
+    ToolOutput,
+    ToolRegistry,
+    ToolStatus,
+    batch_tool_calls,
+    close_unfinished_tool_calls,
+    default_middlewares,
+    execute_tool_batch,
+    fold_tool_messages,
+    format_tool_message_content,
+    maybe_offload_output,
+)
 
-FOLDED_PLACEHOLDER = "（此前的工具结果已折叠归档，如需请重新调用工具）"
+__all__ = ["AgentLoop", "DefaultAgentModelClient"]
 
 
 class DefaultAgentModelClient:
@@ -146,7 +159,8 @@ class AgentLoop:
         )
 
     def _build_registry(self) -> ToolRegistry:
-        registry = ToolRegistry()
+        timeout = float(getattr(self.config, "tool_timeout_seconds", 60) or 60)
+        registry = ToolRegistry(middlewares=default_middlewares(timeout_seconds=timeout))
         for tool in build_default_tools():
             registry.register(tool)
         registry.register(ClarifyTool())
@@ -427,18 +441,44 @@ class AgentLoop:
 
     def _loop(self, run, record, ctx, system, messages, budget) -> Iterator[str]:
         while True:
-            verdict = budget.check_before_step()
-            if not verdict.allowed:
-                yield from self._fail(run, record, messages, budget, verdict.reason, verdict.error_class)
+            mode = budget.planning_mode()
+            if mode == "exhausted":
+                yield from self._budget_exhausted(run, record, ctx, messages, budget)
                 return
 
-            _fold_messages(messages, self.config.context_fold_chars)
+            verdict = budget.check_before_step()
+            if not verdict.allowed:
+                yield from self._budget_exhausted(
+                    run,
+                    record,
+                    ctx,
+                    messages,
+                    budget,
+                    reason=verdict.reason,
+                    error_class=verdict.error_class,
+                )
+                return
+
+            fold_tool_messages(messages, self.config.context_fold_chars)
             step_index = budget.steps + 1
             step = agent_run_repository.start_step(self.session, run, step_index, None, {})
             self.session.commit()
             yield self._emit(run, "step-started", {"record_id": record.id, "step_index": step_index}, step.id)
 
-            response: AIMessage = self.model_client.invoke([system, *messages], self.registry.tool_specs())
+            tool_specs = self._tool_specs_for_budget(budget)
+            invoke_messages = [system, *messages]
+            if mode == "soft":
+                invoke_messages = [
+                    system,
+                    HumanMessage(
+                        content=(
+                            "<system-reminder>预算接近上限。请基于已有工具结果尽快 finish；"
+                            "若关键歧义未消可 clarify；不要再启动新的检索或 SQL 探索。</system-reminder>"
+                        )
+                    ),
+                    *messages,
+                ]
+            response: AIMessage = self.model_client.invoke(invoke_messages, tool_specs)
             usage = getattr(response, "usage_metadata", None) or {}
             budget.record_llm_turn(usage)
             messages.append(response)
@@ -450,6 +490,7 @@ class AgentLoop:
             tool_calls = list(getattr(response, "tool_calls", None) or [])
             if not tool_calls:
                 # 宽松 finish：模型直接给出文本回答。
+                close_unfinished_tool_calls(messages)
                 agent_run_repository.finish_step(self.session, step, {"mode": "direct_answer"}, usage)
                 yield from self._finish(
                     run, record, messages, budget,
@@ -457,94 +498,184 @@ class AgentLoop:
                     chart={},
                     sql=(ctx.state.get("last_execution") or {}).get("sql"),
                     step_id=step.id,
+                    full_data=ctx.state.get("full_data"),
+                    execution=ctx.state.get("last_execution"),
                 )
                 return
 
-            for tool_call in tool_calls:
-                tool_name = tool_call.get("name") or ""
-                raw_args = tool_call.get("args") or {}
-                call_id = tool_call.get("id") or ""
-                step.tool_name = tool_name
-                step.args_summary = _tool_args_summary(tool_name, raw_args, ctx)
-                self.session.add(step)
-                yield self._emit(
-                    run,
-                    "tool-called",
-                    {
-                        "record_id": record.id,
-                        "tool_name": tool_name,
-                        "args_summary": step.args_summary,
-                    },
-                    step.id,
+            requests = [
+                ToolCallRequest(
+                    name=call.get("name") or "",
+                    args=call.get("args") or {},
+                    call_id=call.get("id") or "",
+                )
+                for call in tool_calls
+            ]
+            batches = batch_tool_calls(requests, self.registry.get)
+            offload_store = ctx.state.setdefault("tool_offloads", {})
+
+            for batch in batches:
+                for call in batch:
+                    fuse = budget.check_tool_call(call.name, call.args)
+                    if not fuse.allowed:
+                        step.tool_name = call.name
+                        step.args_summary = _tool_args_summary(call.name, call.args, ctx)
+                        self.session.add(step)
+                        agent_run_repository.fail_step(self.session, step, fuse.reason)
+                        yield from self._fail(
+                            run, record, messages, budget, fuse.reason, fuse.error_class
+                        )
+                        return
+
+                for call in batch:
+                    step.tool_name = call.name
+                    step.args_summary = _tool_args_summary(call.name, call.args, ctx)
+                    self.session.add(step)
+                    yield self._emit(
+                        run,
+                        "tool-called",
+                        {
+                            "record_id": record.id,
+                            "tool_name": call.name,
+                            "args_summary": step.args_summary,
+                        },
+                        step.id,
+                    )
+
+                def _execute_one(name: str, raw_args: dict) -> ToolOutput:
+                    if mode == "soft" and name not in {"finish", "clarify"}:
+                        return ToolOutput.denied(
+                            f"预算接近上限，禁止调用 {name}。请 finish 或 clarify。",
+                            error_code="budget_soft_tool_blocked",
+                        )
+                    return self.registry.execute(name, ctx, raw_args)
+
+                executed = execute_tool_batch(
+                    batch,
+                    _execute_one,
+                    max_workers=int(getattr(self.config, "tool_parallel_workers", 4) or 4),
                 )
 
-                fuse = budget.check_tool_call(tool_name, raw_args)
-                if not fuse.allowed:
-                    agent_run_repository.fail_step(self.session, step, fuse.reason)
-                    yield from self._fail(run, record, messages, budget, fuse.reason, fuse.error_class)
-                    return
-
-                output = self.registry.execute(tool_name, ctx, raw_args)
-
-                if tool_name == "clarify" and output.success:
-                    clarify_verdict = budget.record_clarification()
-                    if not clarify_verdict.allowed:
-                        # 超出澄清预算不挂起：告知模型基于现有信息收敛。
-                        messages.append(
-                            ToolMessage(
-                                content="澄清次数已达上限，请基于现有信息继续，或如实说明无法完成。",
-                                tool_call_id=call_id,
-                            )
-                        )
-                        agent_run_repository.finish_step(self.session, step, {"tool": "clarify", "rejected": "budget"}, usage)
-                        continue
-                    agent_run_repository.finish_step(self.session, step, {"tool": "clarify"}, usage)
-                    yield from self._suspend_for_clarification(
-                        run,
-                        record,
-                        ctx,
-                        messages,
-                        budget,
+                for call, output in executed:
+                    output = maybe_offload_output(
                         output,
-                        call_id,
-                        step.id,
-                        resume_kind=AgentClarificationResumeKind.AGENT_TOOL,
-                        resume_payload={},
+                        store=offload_store,
+                        tool_name=call.name,
+                        max_chars=int(getattr(self.config, "summary_max_chars", 4000) or 4000),
                     )
-                    return
+                    tool_name = call.name
+                    call_id = call.call_id
 
-                messages.append(ToolMessage(content=output.summary, tool_call_id=call_id))
-
-                if tool_name == "finish" and output.success:
-                    agent_run_repository.finish_step(self.session, step, {"tool": "finish"}, usage)
-                    payload = output.payload
-                    if payload.get("chart"):
-                        yield self._emit(run, "chart-generated", {"record_id": record.id, "chart": payload["chart"]}, step.id)
-                    yield from self._finish(
-                        run, record, messages, budget,
-                        answer=payload.get("answer") or "",
-                        chart=payload.get("chart") or {},
-                        sql=payload.get("sql"),
-                        step_id=step.id,
-                        full_data=ctx.state.get("full_data"),
-                        execution=ctx.state.get("last_execution"),
-                    )
-                    return
-
-                result_summary = _result_summary(tool_name, output)
-                if output.success:
-                    agent_run_repository.finish_step(self.session, step, result_summary, usage)
-                else:
-                    agent_run_repository.fail_step(self.session, step, output.summary[:500])
-                yield self._emit(run, "tool-result", {"record_id": record.id, "tool_name": tool_name, **result_summary}, step.id)
-                for event_type, payload in _semantic_events(tool_name, output, record.id):
-                    yield self._emit(run, event_type, payload, step.id)
-
-                if tool_name == "execute_sql" and not output.success:
-                    retry = budget.record_sql_failure()
-                    if not retry.allowed:
-                        yield from self._fail(run, record, messages, budget, retry.reason, retry.error_class)
+                    if tool_name == "clarify" and output.success:
+                        clarify_verdict = budget.record_clarification()
+                        if not clarify_verdict.allowed:
+                            messages.append(
+                                ToolMessage(
+                                    content="澄清次数已达上限，请基于现有信息继续，或如实说明无法完成。",
+                                    tool_call_id=call_id,
+                                )
+                            )
+                            agent_run_repository.finish_step(
+                                self.session,
+                                step,
+                                {"tool": "clarify", "rejected": "budget"},
+                                usage,
+                            )
+                            continue
+                        agent_run_repository.finish_step(
+                            self.session, step, {"tool": "clarify"}, usage
+                        )
+                        yield from self._suspend_for_clarification(
+                            run,
+                            record,
+                            ctx,
+                            messages,
+                            budget,
+                            output,
+                            call_id,
+                            step.id,
+                            resume_kind=AgentClarificationResumeKind.AGENT_TOOL,
+                            resume_payload={},
+                        )
                         return
+
+                    messages.append(
+                        ToolMessage(
+                            content=format_tool_message_content(
+                                output.summary,
+                                offload_ref=output.offload_ref,
+                            ),
+                            tool_call_id=call_id,
+                        )
+                    )
+
+                    if tool_name == "finish" and output.success:
+                        close_unfinished_tool_calls(messages)
+                        agent_run_repository.finish_step(
+                            self.session, step, {"tool": "finish"}, usage
+                        )
+                        payload = output.payload
+                        if payload.get("chart"):
+                            yield self._emit(
+                                run,
+                                "chart-generated",
+                                {"record_id": record.id, "chart": payload["chart"]},
+                                step.id,
+                            )
+                        yield from self._finish(
+                            run,
+                            record,
+                            messages,
+                            budget,
+                            answer=payload.get("answer") or "",
+                            chart=payload.get("chart") or {},
+                            sql=payload.get("sql"),
+                            step_id=step.id,
+                            full_data=ctx.state.get("full_data"),
+                            execution=ctx.state.get("last_execution"),
+                        )
+                        return
+
+                    result_summary = _result_summary(tool_name, output)
+                    if output.success:
+                        agent_run_repository.finish_step(
+                            self.session, step, result_summary, usage
+                        )
+                    else:
+                        agent_run_repository.fail_step(
+                            self.session, step, output.summary[:500]
+                        )
+                    yield self._emit(
+                        run,
+                        "tool-result",
+                        {
+                            "record_id": record.id,
+                            "tool_name": tool_name,
+                            **result_summary,
+                        },
+                        step.id,
+                    )
+                    for event_type, payload in _semantic_events(
+                        tool_name, output, record.id
+                    ):
+                        yield self._emit(run, event_type, payload, step.id)
+
+                    if (
+                        tool_name == "execute_sql"
+                        and not output.success
+                        and output.status != ToolStatus.DENIED
+                    ):
+                        retry = budget.record_sql_failure()
+                        if not retry.allowed:
+                            yield from self._fail(
+                                run,
+                                record,
+                                messages,
+                                budget,
+                                retry.reason,
+                                retry.error_class,
+                            )
+                            return
 
             agent_run_repository.update_run(
                 self.session, run,
@@ -710,6 +841,13 @@ class AgentLoop:
         resume_kind: AgentClarificationResumeKind,
         resume_payload: dict,
     ) -> Iterator[str]:
+        # clarify 自身的 call_id 留给用户答案注入；其余 sibling tool_calls 必须先闭合。
+        exclude = {call_id} if call_id else set()
+        close_unfinished_tool_calls(
+            messages,
+            content="skipped: run suspended for clarification before this tool executed",
+            exclude_ids=exclude,
+        )
         clarification = agent_run_repository.create_clarification(
             self.session,
             run,
@@ -745,7 +883,57 @@ class AgentLoop:
             step_id,
         )
 
+    def _tool_specs_for_budget(self, budget: BudgetGuard) -> list[dict]:
+        mode = budget.planning_mode()
+        if mode == "soft":
+            allowed = budget.soft_tool_allowlist(self.registry.names())
+            if allowed:
+                return self.registry.tool_specs(allowed=allowed)
+        return self.registry.tool_specs()
+
+    def _budget_exhausted(
+        self,
+        run,
+        record,
+        ctx,
+        messages,
+        budget,
+        *,
+        reason: str | None = None,
+        error_class: str | None = None,
+    ) -> Iterator[str]:
+        """预算耗尽：有执行结果则软收口，否则硬失败。"""
+
+        execution = ctx.state.get("last_execution")
+        if isinstance(execution, dict) and execution.get("sql"):
+            close_unfinished_tool_calls(messages)
+            answer = (
+                "预算已达上限，以下基于已成功执行的查询结果作答。"
+                f" 行数={execution.get('row_count')}，字段={execution.get('fields')}。"
+            )
+            yield from self._finish(
+                run,
+                record,
+                messages,
+                budget,
+                answer=answer,
+                chart={},
+                sql=execution.get("sql"),
+                full_data=ctx.state.get("full_data"),
+                execution=execution,
+            )
+            return
+        yield from self._fail(
+            run,
+            record,
+            messages,
+            budget,
+            reason or "预算已耗尽",
+            error_class or AgentErrorClass.BUDGET.value,
+        )
+
     def _finish(self, run, record, messages, budget, *, answer, chart, sql, step_id=None, full_data=None, execution=None) -> Iterator[str]:
+        close_unfinished_tool_calls(messages)
         record_data = None
         if full_data is not None and execution:
             record_payload = {
@@ -779,6 +967,10 @@ class AgentLoop:
         yield self._emit(run, "finish", {"record_id": record.id, "content": answer}, step_id)
 
     def _fail(self, run, record, messages, budget, message, error_class) -> Iterator[str]:
+        close_unfinished_tool_calls(
+            messages,
+            content="skipped: run failed before this tool executed",
+        )
         self.record_service.transition(
             record,
             ChatRecordStatus.FAILED,
@@ -819,22 +1011,13 @@ def _serialize_messages(messages: list) -> list[dict]:
 
 
 def _persistable_state(state: dict) -> dict:
-    """可持久化的派生状态：排除全量数据这类大对象。"""
+    """可持久化的派生状态：排除全量数据与 offload 大对象。"""
 
-    return {key: value for key, value in state.items() if key != "full_data"}
-
-
-def _fold_messages(messages: list, max_chars: int, keep_recent: int = 6) -> None:
-    """消息历史超过阈值时，把较早的工具结果折叠为占位符（就地修改，持久化同步收缩）。"""
-
-    if max_chars <= 0:
-        return
-    total = sum(len(str(getattr(message, "content", ""))) for message in messages)
-    if total <= max_chars:
-        return
-    for message in messages[:-keep_recent]:
-        if isinstance(message, ToolMessage) and message.content != FOLDED_PLACEHOLDER:
-            message.content = FOLDED_PLACEHOLDER
+    return {
+        key: value
+        for key, value in state.items()
+        if key not in {"full_data", "tool_offloads"}
+    }
 
 
 def _content_text(message: AIMessage) -> str:
@@ -870,26 +1053,38 @@ def _tool_args_summary(tool_name: str, raw_args: dict, ctx: AgentToolContext) ->
 
 
 def _result_summary(tool_name: str, output: ToolOutput) -> dict:
+    status = getattr(output.status, "value", output.status)
+    base = {
+        "success": bool(output.success),
+        "status": status,
+    }
+    if output.offload_ref:
+        base["offload_ref"] = output.offload_ref
     if not output.success:
-        return {"success": False, "error_code": output.error_code}
+        base["error_code"] = output.error_code
+        return base
     payload = output.payload
     if tool_name == "execute_sql":
-        return {"success": True, "row_count": payload.get("row_count"), "fields": payload.get("fields")}
+        return {
+            **base,
+            "row_count": payload.get("row_count"),
+            "fields": payload.get("fields"),
+        }
     if tool_name in {"compile_semantic_sql", "validate_sql"}:
-        return {"success": True, "sql": payload.get("sql")}
+        return {**base, "sql": payload.get("sql")}
     if tool_name == "search_semantic_assets":
         return {
-            "success": True,
-            "status": payload.get("status"),
+            **base,
+            "status": payload.get("status") or status,
             "metrics": payload.get("metrics"),
             "dimensions": payload.get("dimensions"),
             "tables": payload.get("tables"),
         }
     if tool_name == "get_dataset_schema":
-        return {"success": True, "table_count": payload.get("table_count")}
+        return {**base, "table_count": payload.get("table_count")}
     if tool_name in {"search_terminology", "get_sql_examples"}:
-        return {"success": True, "count": payload.get("count")}
-    return {"success": True}
+        return {**base, "count": payload.get("count")}
+    return base
 
 
 def _semantic_events(tool_name: str, output: ToolOutput, record_id: int) -> list[tuple[str, dict]]:

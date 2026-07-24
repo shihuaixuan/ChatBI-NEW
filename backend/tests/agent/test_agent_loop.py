@@ -19,8 +19,8 @@ from apps.chatbi.models import (
     QuestionUnderstandingOutput,
 )
 from apps.chatbi.orchestration.agent.loop import AgentLoop
-from apps.chatbi.orchestration.agent.tools.base import AgentTool, ToolOutput
-from apps.chatbi.orchestration.agent.tools.registry import ToolRegistry
+from apps.chatbi.orchestration.agent.tools.base import AgentTool
+from apps.tool import ToolOutput, ToolRegistry
 from apps.chatbi.services.understanding import (
     QuestionUnderstandingModelResponse,
     QuestionUnderstandingService,
@@ -180,6 +180,17 @@ class ProbeTool(AgentTool):
         return ToolOutput(success=True, summary="probed", payload={"value": args.value})
 
 
+class NoopTool(AgentTool):
+    """无副作用探测工具，用于预算/熔断路径（不写入 last_execution）。"""
+
+    name = "noop"
+    description = "noop"
+    args_model = ProbeArgs
+
+    def execute(self, ctx, args):
+        return ToolOutput(success=True, summary="noop", payload={"value": args.value})
+
+
 class SearchSemanticAssetsProbeTool(AgentTool):
     """模拟从运行状态读取意图的无参语义检索工具。"""
 
@@ -211,6 +222,7 @@ class FinishProbeTool(AgentTool):
 def _registry():
     registry = ToolRegistry()
     registry.register(ProbeTool())
+    registry.register(NoopTool())
     registry.register(SearchSemanticAssetsProbeTool())
     registry.register(FinishProbeTool())
     return registry
@@ -343,7 +355,7 @@ def test_direct_text_treated_as_loose_finish():
 
 
 def test_budget_exhaustion_fails_run_honestly():
-    responses = [_tool_message("probe", {"value": str(i)}, f"c{i}") for i in range(10)]
+    responses = [_tool_message("noop", {"value": str(i)}, f"c{i}") for i in range(10)]
     model = ScriptedModel(responses)
     run, record = _run_and_record()
     events = list(_loop(model, AgentConfig(max_steps=2)).run(run, record))
@@ -357,8 +369,21 @@ def test_budget_exhaustion_fails_run_honestly():
     assert run.error_class == "budget_exhausted"
 
 
+def test_budget_exhaustion_soft_wraps_when_execution_exists():
+    responses = [_tool_message("probe", {"value": str(i)}, f"c{i}") for i in range(10)]
+    model = ScriptedModel(responses)
+    run, record = _run_and_record()
+    events = list(_loop(model, AgentConfig(max_steps=2)).run(run, record))
+    types = _event_types(events)
+
+    assert types[-3:] == ["answer", "run-finished", "finish"]
+    assert run.status == AgentRunStatus.FINISHED.value
+    assert "预算已达上限" in record.sql_answer
+    assert record.sql == "select 1"
+
+
 def test_repeat_fuse_fails_run():
-    responses = [_tool_message("probe", {"value": "same"}, f"c{i}") for i in range(5)]
+    responses = [_tool_message("noop", {"value": "same"}, f"c{i}") for i in range(5)]
     model = ScriptedModel(responses)
     run, record = _run_and_record()
     list(_loop(model, AgentConfig(max_steps=10, repeat_fuse_threshold=3)).run(run, record))
@@ -381,6 +406,8 @@ def test_unknown_tool_is_rejected_but_loop_continues():
     second_call_messages = model.calls[1]
     tool_messages = [m for m in second_call_messages if m.__class__.__name__ == "ToolMessage"]
     assert any("不在白名单" in m.content for m in tool_messages)
+    # dangling tool_calls 已收口
+    assert any(getattr(m, "tool_call_id", None) for m in tool_messages)
 
 
 def test_understanding_rewrites_followup_before_recognizing_intent():

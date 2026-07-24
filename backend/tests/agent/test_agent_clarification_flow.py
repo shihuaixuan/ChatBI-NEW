@@ -14,14 +14,10 @@ from apps.chatbi.models import (
     ChatbiAgentRun,
     DimensionSlot,
 )
-from apps.chatbi.orchestration.agent.loop import (
-    FOLDED_PLACEHOLDER,
-    AgentLoop,
-    _fold_messages,
-)
+from apps.chatbi.orchestration.agent.loop import AgentLoop
 from apps.chatbi.orchestration.agent.prompts import build_system_prompt
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
-from apps.chatbi.orchestration.agent.tools.registry import ToolRegistry
+from apps.tool import FOLDED_PLACEHOLDER, ToolRegistry, fold_tool_messages
 from apps.conversation.models import ChatRecord
 from tests.agent.test_agent_loop import (
     FakeSession,
@@ -516,7 +512,7 @@ def test_fold_messages_folds_old_tool_results_only():
         AIMessage(content=""),
         ToolMessage(content="y" * 500, tool_call_id="b"),
     ]
-    _fold_messages(messages, max_chars=100, keep_recent=2)
+    fold_tool_messages(messages, max_chars=100, keep_recent=2)
     assert messages[2].content == FOLDED_PLACEHOLDER
     assert messages[4].content == "y" * 500  # 最近窗口不折叠
     assert messages[0].content == "q"  # 非工具消息不折叠

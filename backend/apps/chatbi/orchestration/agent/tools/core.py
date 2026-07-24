@@ -12,12 +12,8 @@ from apps.chatbi.models import (
     SemanticQueryCompileData,
     SemanticRetrievalData,
 )
-from apps.chatbi.orchestration.agent.tools.base import (
-    AgentTool,
-    AgentToolContext,
-    ToolOutput,
-    json_summary,
-)
+from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolContext
+from apps.tool import ToolOutput, json_summary
 from apps.chatbi.services.execution import (
     GuardedQueryService,
     ResultArtifactWriteError,
@@ -44,23 +40,20 @@ def _execution_gate(ctx: AgentToolContext) -> ToolOutput | None:
 
     understanding = ctx.state.get("question_understanding")
     if not isinstance(understanding, dict):
-        return ToolOutput(
-            success=False,
-            summary="缺少已确认的问题理解，禁止生成或执行 SQL。",
+        return ToolOutput.denied(
+            "缺少已确认的问题理解，禁止生成或执行 SQL。",
             error_code="question_understanding_required",
         )
     validation = understanding.get("validation")
     if not isinstance(validation, dict):
-        return ToolOutput(
-            success=False,
-            summary="问题理解缺少校验结果，禁止生成或执行 SQL。",
+        return ToolOutput.denied(
+            "问题理解缺少校验结果，禁止生成或执行 SQL。",
             error_code="question_understanding_invalid",
         )
     if validation.get("status") != "valid":
         slots = validation.get("clarification_slots") or []
-        return ToolOutput(
-            success=False,
-            summary=f"当前问题仍需澄清槽位 {slots}，禁止生成或执行 SQL。请先调用 clarify。",
+        return ToolOutput.denied(
+            f"当前问题仍需澄清槽位 {slots}，禁止生成或执行 SQL。请先调用 clarify。",
             error_code="question_clarification_required",
         )
     return None
@@ -96,6 +89,8 @@ class SearchSemanticAssetsTool(AgentTool):
         "返回的语义包（asset_id、口径、置信度、歧义提示）是后续编译 SQL 的唯一合法依据。"
     )
     args_model = SearchSemanticAssetsArgs
+    is_read_only = True
+    is_concurrency_safe = False
 
     def execute(self, ctx: AgentToolContext, args: SearchSemanticAssetsArgs) -> ToolOutput:
         dataset_id = _ensure_dataset_id(ctx)
@@ -167,6 +162,9 @@ class GetDatasetSchemaTool(AgentTool):
         "基于此结构手写 SQL；手写 SQL 属于非标准口径，结果会附带口径提示。"
     )
     args_model = GetDatasetSchemaArgs
+    is_read_only = True
+    # 共享 Session 下禁止并行读，避免 SQLAlchemy 会话竞态。
+    is_concurrency_safe = False
 
     def execute(self, ctx: AgentToolContext, args: GetDatasetSchemaArgs) -> ToolOutput:
         if not ctx.datasource_id:
@@ -243,6 +241,8 @@ class CompileSemanticSqlTool(AgentTool):
         "所有 asset_id 必须来自 search_semantic_assets 返回的语义包，否则会被拒绝。"
     )
     args_model = CompileSemanticSqlArgs
+    is_read_only = True
+    is_concurrency_safe = False
 
     def execute(self, ctx: AgentToolContext, args: CompileSemanticSqlArgs) -> ToolOutput:
         blocked = _execution_gate(ctx)
@@ -257,15 +257,13 @@ class CompileSemanticSqlTool(AgentTool):
             requested.add(args.time_bucket["asset_id"])
         unknown = sorted(requested - known_ids)
         if not known_ids:
-            return ToolOutput(
-                success=False,
-                summary="尚未检索语义资产，请先调用 search_semantic_assets。",
+            return ToolOutput.denied(
+                "尚未检索语义资产，请先调用 search_semantic_assets。",
                 error_code="semantic_package_required",
             )
         if unknown:
-            return ToolOutput(
-                success=False,
-                summary=f"以下 asset_id 未出现在语义包中，禁止编造口径: {unknown}。请只使用检索结果里的资产。",
+            return ToolOutput.denied(
+                f"以下 asset_id 未出现在语义包中，禁止编造口径: {unknown}。请只使用检索结果里的资产。",
                 error_code="asset_not_in_package",
             )
         filters = [filter_item.model_dump(mode="json") for filter_item in args.filters]
@@ -351,6 +349,8 @@ class ValidateSqlTool(AgentTool):
         "手写 SQL 在执行前必须先通过校验。"
     )
     args_model = ValidateSqlArgs
+    is_read_only = True
+    is_concurrency_safe = True
 
     def execute(self, ctx: AgentToolContext, args: ValidateSqlArgs) -> ToolOutput:
         blocked = _execution_gate(ctx)
@@ -379,6 +379,8 @@ class ExecuteSqlTool(AgentTool):
         "完整结果自动存档，不要试图获取全量数据。"
     )
     args_model = ExecuteSqlArgs
+    is_read_only = False
+    is_concurrency_safe = False
 
     def execute(self, ctx: AgentToolContext, args: ExecuteSqlArgs) -> ToolOutput:
         blocked = _execution_gate(ctx)
@@ -474,6 +476,8 @@ class FinishTool(AgentTool):
         "没有数据时应改为如实说明失败原因。"
     )
     args_model = FinishArgs
+    is_read_only = False
+    is_concurrency_safe = False
 
     def execute(self, ctx: AgentToolContext, args: FinishArgs) -> ToolOutput:
         try:
@@ -487,9 +491,8 @@ class FinishTool(AgentTool):
                 )
             )
         except FinalReplyProjectionError as exc:
-            return ToolOutput(
-                success=False,
-                summary=str(exc),
+            return ToolOutput.denied(
+                str(exc),
                 error_code=exc.error_code,
             )
         return ToolOutput(
