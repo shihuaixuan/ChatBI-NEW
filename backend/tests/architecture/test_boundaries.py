@@ -1157,6 +1157,55 @@ def test_old_question_understanding_path_has_been_removed():
     assert "apps.capabilities.question_understanding" not in agent_loop_source
 
 
+def test_agent_input_preparation_owns_understanding_and_preflight_clarification():
+    loop_source = (
+        BACKEND_DIR__question_understanding
+        / "apps/chatbi/orchestration/agent/loop.py"
+    ).read_text(encoding="utf-8")
+    preparation_source = (
+        BACKEND_DIR__question_understanding
+        / "apps/chatbi/orchestration/agent/preparation.py"
+    ).read_text(encoding="utf-8")
+
+    assert "self.input_preparer.prepare_initial" in loop_source
+    assert "self.input_preparer.prepare_resume" in loop_source
+    assert "self.understanding_service.understand" not in loop_source
+    assert "apply_question_understanding_clarification" not in loop_source
+    assert "def _preflight_clarification" in preparation_source
+    assert "build_system_prompt" in preparation_source
+
+
+def test_agent_runtime_dependencies_are_owned_by_composition():
+    loop_source = (
+        BACKEND_DIR__question_understanding
+        / "apps/chatbi/orchestration/agent/loop.py"
+    ).read_text(encoding="utf-8")
+    composition_source = (
+        BACKEND_DIR__question_understanding
+        / "apps/chatbi/orchestration/agent/composition.py"
+    ).read_text(encoding="utf-8")
+    service_source = (
+        BACKEND_DIR__question_understanding
+        / "apps/chatbi/orchestration/agent/service.py"
+    ).read_text(encoding="utf-8")
+    state_source = (
+        BACKEND_DIR__question_understanding
+        / "apps/chatbi/orchestration/agent/state.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def build_agent_loop" in composition_source
+    assert "def build_agent_tool_registry" in composition_source
+    assert "build_agent_loop(stream_session" in service_source
+    assert "apps.chatbi.composition" not in loop_source
+    assert "build_default_tools" not in loop_source
+    assert "LLMFactory" not in loop_source
+    assert "AgentRuntimeStateFactory(" in composition_source
+    assert "BudgetGuard(" in state_source
+    assert "AgentToolContext(" in state_source
+    assert "BudgetGuard(" not in loop_source
+    assert "AgentToolContext(" not in loop_source
+
+
 def test_graph_intent_projection_rules_are_owned_by_chatbi():
     service_path = f"{UNDERSTANDING__question_understanding}/intent_projection.py"
     service_imports = _imports__question_understanding(service_path)
@@ -1443,31 +1492,33 @@ def test_legacy_query_dto_has_no_transport_or_model_framework_dependency():
 
 
 def test_agent_record_terminal_projection_uses_chatbi_service():
-    tree = _tree__record("apps/chatbi/orchestration/agent/loop.py")
-    loop_class = next(
+    tree = _tree__record("apps/chatbi/orchestration/agent/lifecycle.py")
+    lifecycle_class = next(
         node
         for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "AgentLoop"
+        if isinstance(node, ast.ClassDef) and node.name == "AgentLifecycle"
     )
     finish_source = ast.unparse(
         next(
             node
-            for node in loop_class.body
-            if isinstance(node, ast.FunctionDef) and node.name == "_finish"
+            for node in lifecycle_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "finish"
         )
     )
     fail_source = ast.unparse(
         next(
             node
-            for node in loop_class.body
-            if isinstance(node, ast.FunctionDef) and node.name == "_fail"
+            for node in lifecycle_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "fail"
         )
     )
+    loop_source = (BACKEND_DIR__record / "apps/chatbi/orchestration/agent/loop.py").read_text()
 
-    assert "self.record_service.transition" in finish_source
-    assert "self.record_service.transition" in fail_source
+    assert "self._record_service.transition" in finish_source
+    assert "self._record_service.transition" in fail_source
     assert ".status =" not in finish_source
     assert ".finish =" not in finish_source
+    assert "ChatRecordStatus" not in loop_source
 
 
 def test_workflow_projector_and_api_service_have_no_business_imports():
@@ -1514,13 +1565,13 @@ def test_chat_record_service_owns_final_result_size_policy():
     service_source = (
         BACKEND_DIR__record / "apps/conversation/services/chat_record.py"
     ).read_text(encoding="utf-8")
-    agent_loop_source = (
-        BACKEND_DIR__record / "apps/chatbi/orchestration/agent/loop.py"
+    agent_lifecycle_source = (
+        BACKEND_DIR__record / "apps/chatbi/orchestration/agent/lifecycle.py"
     ).read_text(encoding="utf-8")
 
     assert "ChatRecordResultLimits" in service_source
     assert "CHAT_RECORD_DATA_TOO_LARGE" in service_source
-    assert 'record_payload["artifact_ref"]' in agent_loop_source
+    assert 'record_payload["artifact_ref"]' in agent_lifecycle_source
 
 
 # ======================================================================

@@ -57,11 +57,14 @@ backend/
 │   ├── conversation/               # 会话、问数记录和步骤日志的数据所有者
 │   ├── dashboard/                  # 仪表板配置和图表数据查询
 │   ├── datasource/                 # 数据源连接、物理元数据、表关系和 Excel 导入
+│   ├── event/                      # 产品事件契约、持久化、SSE 编码和按序补拉
 │   ├── knowledge/                  # SQL 示例和推荐问题
 │   ├── platform_config/            # 平台参数和外观配置
 │   ├── retrieval/                  # 语义资产与 SQL 示例的统一索引、召回和评测
 │   ├── semantic/                   # 语义域、模型、数据集、指标、维度、术语和语义 SQL
-│   └── system/                     # 用户 Excel 导入导出等少量系统兼容接口
+│   ├── system/                     # 用户 Excel 导入导出等少量系统兼容接口
+│   ├── tool/                       # Agent 工具注册、执行、中间件和批处理基础能力
+│   └── trace/                      # 独立于产品事件的 OpenTelemetry 可观测性能力
 ├── common/                         # 数据库、配置、缓存、审计、国际化、安全和通用工具
 ├── interfaces/                     # 不属于单一业务模块的 HTTP、MCP 对外接口
 ├── platform/
@@ -581,7 +584,41 @@ apps/conversation/
     └── history_query.py            # 会话历史、结果、日志和用量统一查询入口
 ```
 
-### 5.11 `chatbi` 对话式问数
+### 5.11 `event` 产品事件
+
+Event 模块拥有 Agent 前端渲染事件的稳定契约和有序事件日志。它负责事件类型映射、Run 内序号分配、持久化、按序补拉和 SSE 编码，不决定 ChatBI 业务何时产生事件，也不创建 OpenTelemetry span。当前物理表 `chatbi_agent_event` 仍是 ChatBI Agent 专用表，代码边界独立不表示已经合并为全业务事件表。
+
+```text
+apps/event/
+├── __init__.py                     # 导出 EventPublisher、RenderEvent、补拉和 SSE 编码接口
+├── service.py                      # 统一分配序号、持久化、提交并返回渲染事件
+├── models/
+│   ├── __init__.py                 # 导出产品事件 DTO 与 ORM
+│   ├── dto.py                      # kind、phase、domain 契约及内部事件名称映射
+│   └── orm.py                      # chatbi_agent_event 有序事件日志模型
+├── repository/
+│   ├── __init__.py                 # 导出事件仓储操作
+│   └── sqlmodel.py                 # 序号分配、追加、after_sequence 补拉和批量删除
+└── protocol/
+    ├── __init__.py                 # 导出事件传输协议函数
+    └── sse.py                      # 将 RenderEvent 编码为 SSE data 帧
+```
+
+事件先持久化并提交，再交给 SSE 生成器发送。实时流、补拉接口和 Timeline 因此使用同一份 `kind + phase + domain + sequence` 契约。
+
+### 5.12 `trace` 可观测性
+
+Trace 模块只负责 Agent 的 OpenTelemetry 可观测性。它提供最小 tracer/span 接口、关闭时的空实现、属性清理、采样和 OTLP exporter 惰性装配。Trace 不写产品 Event、不编码 SSE、不参与 Timeline 和断线恢复；运行期观测故障由适配层隔离，不能中断 Agent 产品流程。
+
+```text
+apps/trace/
+├── __init__.py                     # 导出稳定 tracer 接口、配置和属性构造函数
+├── api.py                          # AgentTracer、AgentSpan 协议及关闭时的空实现
+├── attributes.py                   # Agent、LLM、Tool 属性构造与敏感值清理
+└── setup.py                        # OpenTelemetry 采样、OTLP exporter、惰性加载和故障隔离
+```
+
+### 5.13 `chatbi` 对话式问数
 
 ChatBI 是业务编排模块，负责把 Conversation、问题理解、数据源选择、语义检索、SQL 生成、安全执行和答案生成连接起来。它不拥有会话数据、数据源、权限、模型或语义资产，而是通过这些模块的公开 Service 完成完整问数流程。
 
@@ -614,7 +651,7 @@ apps/chatbi/
 ├── api/
 │   ├── __init__.py                 # ChatBI 接口包声明
 │   ├── conversations.py            # 会话列表、详情、重命名和删除接口
-│   ├── interactions.py             # Graph/Agent 澄清交互提交和恢复接口
+│   ├── interactions.py             # Agent start/resume SSE、Timeline、事件补拉和取消接口
 │   ├── queries.py                  # 推荐问题、分析与预测接口
 │   ├── sse.py                      # /chat 辅助接口 SSE 事件编码
 │   └── router.py                   # 组合会话、查询、交互和工作流路由
@@ -622,7 +659,7 @@ apps/chatbi/
 │   ├── __init__.py                 # 集中导出 ChatBI 编排 DTO 和 Agent ORM
 │   ├── dto/
 │   │   ├── __init__.py             # 导出 ChatBI 数据契约
-│   │   ├── agent.py                # Agent 请求、运行状态和事件契约
+│   │   ├── agent.py                # Agent start/resume 请求、运行配置和状态契约
 │   │   ├── analysis_prediction.py  # 分析预测输入和结果契约
 │   │   ├── answer_generation.py    # 答案生成输入和结果契约
 │   │   ├── answer_projection.py    # 最终答案投影所需数据契约
@@ -716,17 +753,21 @@ apps/chatbi/
 └── orchestration/
     ├── agent/
     │   ├── __init__.py                     # 导出 Agent 编排入口
-    │   ├── budget.py                       # 限制 Agent 步骤、工具调用和令牌预算
-    │   ├── events.py                       # 构造 Agent 运行事件
-    │   ├── loop.py                         # 执行模型思考、工具调用和终止循环
+    │   ├── composition.py                  # 统一组装模型、工具、业务服务和 Agent 执行组件
+    │   ├── lifecycle.py                    # 统一维护启动、恢复、挂起、成功和失败状态迁移
+    │   ├── loop.py                         # 协调启动、恢复、输入准备和 ReAct 主循环
+    │   ├── model_client.py                 # 基于系统默认配置惰性创建 Agent 模型客户端
+    │   ├── preparation.py                  # 首次问题理解、恢复答案合并、系统提示和预检澄清
     │   ├── prompts.py                      # Agent 系统提示词和工具使用规则
-    │   ├── service.py                      # Agent 启动、恢复和状态持久化服务
+    │   ├── reasoning.py                    # 构造推理输入、调用 LLM 并解析 Function Calling 决策
+    │   ├── service.py                      # Agent 启动、恢复及流式 Session 生命周期
+    │   ├── state.py                        # 保存运行状态，并统一创建预算与工具上下文
+    │   ├── tool_execution.py               # 工具预算、分批执行、Observation、重试和控制结果
     │   └── tools/
     │       ├── __init__.py                 # 导出 Agent 工具
     │       ├── base.py                     # Agent 工具抽象和公共输入输出
     │       ├── core.py                     # Schema、语义检索、SQL 编译和查询工具
-    │       ├── interaction.py              # 向用户发起澄清交互的工具
-    │       └── registry.py                 # 注册并按名称调度 Agent 工具
+    │       └── interaction.py              # 向用户发起澄清交互的工具
     └── graph/
         ├── __init__.py                     # 导出 ChatBI Graph 组装入口
         ├── api_extension.py                # 将 ChatBI 业务能力注册到通用工作流 API
@@ -775,7 +816,9 @@ apps/chatbi/
             └── v1.py                       # ChatBI v1 Graph 的上下文 Schema
 ```
 
-### 5.12 `semantic` 语义层
+ChatBI 通过公开入口依赖 `apps.event` 和 `apps.trace`：Agent 编排组件在业务状态变化处触发 Event，`EventPublisher` 负责产品事件；`AgentLoop`、`AgentReasoner` 和 `AgentToolExecutor` 只在各自执行边界记录观测 span。`apps.event` 与 `apps.trace` 不反向依赖 ChatBI，也不相互依赖。
+
+### 5.14 `semantic` 语义层
 
 Semantic 模块拥有语义域、语义模型、数据集、指标、维度和术语等权威数据，并向 ChatBI 提供数据集绑定、语义 Schema 查询和语义 SQL 编译能力。
 

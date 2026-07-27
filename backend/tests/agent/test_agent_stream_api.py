@@ -79,7 +79,7 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
             )
 
     monkeypatch.setattr(service, "create_record_and_run", fake_create_record_and_run)
-    monkeypatch.setattr(service, "AgentLoop", FakeLoop)
+    monkeypatch.setattr(service, "build_agent_loop", FakeLoop)
 
     response = asyncio.run(
         api.agent_stream(
@@ -154,7 +154,7 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
                 sequence=1,
             )
 
-    monkeypatch.setattr(service, "AgentLoop", FakeLoop)
+    monkeypatch.setattr(service, "build_agent_loop", FakeLoop)
 
     response = asyncio.run(
         api.agent_stream(

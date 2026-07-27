@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import orjson
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from apps.chatbi.errors import QuestionUnderstandingError
@@ -19,8 +19,10 @@ from apps.chatbi.models import (
     QuestionUnderstandingOutcome,
     QuestionUnderstandingOutput,
 )
-from apps.chatbi.orchestration.agent.loop import AgentLoop
-from apps.chatbi.orchestration.agent.tools.base import AgentTool
+from apps.chatbi.orchestration.agent.composition import build_agent_loop
+from apps.chatbi.orchestration.agent.reasoning import AgentReasoner
+from apps.chatbi.orchestration.agent.state import AgentRuntimeState
+from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolContext
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.understanding import (
     QuestionUnderstandingModelResponse,
@@ -33,7 +35,7 @@ from apps.event import (
     encode_sse_event,
 )
 from apps.event import list_events_after as list_persisted_events_after
-from apps.tool import ToolOutput, ToolRegistry
+from apps.tool import BudgetGuard, ToolOutput, ToolRegistry
 from apps.trace import DisabledAgentTracer, TraceConfig
 from apps.trace.setup import (
     OpenTelemetryAgentTracer,
@@ -132,9 +134,11 @@ class ScriptedModel:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
+        self.tool_specs_calls = []
 
     def invoke(self, messages, tool_specs):
         self.calls.append(messages)
+        self.tool_specs_calls.append(tool_specs)
         return self.responses.pop(0)
 
 
@@ -298,6 +302,28 @@ class NoopTool(AgentTool):
         return ToolOutput(success=True, summary="noop", payload={"value": args.value})
 
 
+class FailingProbeTool(AgentTool):
+    """稳定返回执行错误，用于保护普通工具失败后的 Observation 行为。"""
+
+    name = "failing_probe"
+    description = "failing probe"
+    args_model = ProbeArgs
+
+    def execute(self, ctx, args):
+        return ToolOutput.error("探测工具执行失败", error_code="probe_failed")
+
+
+class FailingExecuteSqlTool(AgentTool):
+    """稳定返回 SQL 执行错误，用于保护 SQL 重试耗尽行为。"""
+
+    name = "execute_sql"
+    description = "failing execute sql"
+    args_model = ProbeArgs
+
+    def execute(self, ctx, args):
+        return ToolOutput.error("数据库暂不可用", error_code="database_unavailable")
+
+
 class SearchSemanticAssetsProbeTool(AgentTool):
     """模拟从运行状态读取意图的无参语义检索工具。"""
 
@@ -344,7 +370,7 @@ def _run_and_record():
 
 
 def _loop(model, config=None):
-    return AgentLoop(
+    return build_agent_loop(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         config or AgentConfig(max_steps=5),
@@ -360,6 +386,70 @@ def _event_domains(events):
 
 def _tool_message(name, args, call_id="c1"):
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": call_id, "type": "tool_call"}])
+
+
+def test_reasoner_returns_structured_function_call_and_records_usage():
+    response = AIMessage(
+        content="需要查询数据",
+        tool_calls=[
+            {"name": "probe", "args": {"value": "x"}, "id": "call-1", "type": "tool_call"}
+        ],
+        usage_metadata={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+    )
+    model = ScriptedModel([response])
+    run, record = _run_and_record()
+    state = AgentRuntimeState(
+        run=run,
+        record=record,
+        context=AgentToolContext(session=None, oid=1, user_id=1, datasource_id=5),
+        messages=[HumanMessage(content="按城市看 gmv")],
+        budget=BudgetGuard(max_steps=5, token_budget=100),
+        system=SystemMessage(content="系统提示词"),
+    )
+    reasoner = AgentReasoner(
+        AgentConfig(),
+        model,
+        _registry(),
+        DisabledAgentTracer(),
+    )
+
+    decision = reasoner.decide(state, "normal")
+
+    assert decision.reasoning == "需要查询数据"
+    assert [(call.name, call.call_id) for call in decision.tool_calls] == [
+        ("probe", "call-1")
+    ]
+    assert state.budget.steps == 1
+    assert state.budget.tokens_used == 5
+    assert state.messages[-1] is response
+
+
+def test_reasoner_soft_mode_only_exposes_terminal_tools():
+    model = ScriptedModel([AIMessage(content="基于现有结果结束")])
+    run, record = _run_and_record()
+    state = AgentRuntimeState(
+        run=run,
+        record=record,
+        context=AgentToolContext(session=None, oid=1, user_id=1, datasource_id=5),
+        messages=[HumanMessage(content="按城市看 gmv")],
+        budget=BudgetGuard(max_steps=5),
+        system=SystemMessage(content="系统提示词"),
+    )
+    registry = _registry()
+    reasoner = AgentReasoner(
+        AgentConfig(),
+        model,
+        registry,
+        DisabledAgentTracer(),
+    )
+
+    decision = reasoner.decide(state, "soft")
+
+    assert decision.is_direct_answer is True
+    assert "预算接近上限" in str(model.calls[0][1].content)
+    assert [item["function"]["name"] for item in model.tool_specs_calls[0]] == [
+        "finish"
+    ]
 
 
 def test_happy_path_tool_then_finish():
@@ -388,6 +478,103 @@ def test_happy_path_tool_then_finish():
     assert "时间筛选必须原样使用 `time_range.normalized`" in model.calls[0][0].content
 
 
+def test_success_events_have_strict_sequence_and_single_terminal_event():
+    """重构主循环后仍必须保持事件有序，并且只能产生一个运行终态。"""
+
+    model = ScriptedModel([
+        _tool_message("probe", {"value": "x"}),
+        _tool_message("finish", {"value": ""}, "c2"),
+    ])
+    run, record = _run_and_record()
+
+    events = list(_loop(model).run(run, record))
+    domains = _event_domains(events)
+
+    assert [event.sequence for event in events] == list(range(1, len(events) + 1))
+    assert [domain for domain in domains if domain in {"run.finished", "run.failed"}] == [
+        "run.finished"
+    ]
+    assert domains[-2:] == ["answer.completed", "run.finished"]
+
+
+def test_regular_tool_error_is_observed_and_loop_can_continue():
+    """普通工具失败是 Observation，不应直接把 Run 置为失败。"""
+
+    registry = _registry()
+    registry.register(FailingProbeTool())
+    model = ScriptedModel([
+        _tool_message("failing_probe", {"value": "x"}),
+        AIMessage(content="工具失败后如实结束。"),
+    ])
+    run, record = _run_and_record()
+    loop = build_agent_loop(
+        FakeSession(),
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=5),
+        model_client=model,
+        registry=registry,
+        understanding_service=StaticUnderstandingService(),
+    )
+
+    events = list(loop.run(run, record))
+    failed_tool_event = next(
+        event
+        for event in events
+        if event.domain == "tool.completed"
+        and event.content.get("tool_name") == "failing_probe"
+    )
+
+    assert failed_tool_event.content == {
+        "record_id": record.id,
+        "tool_name": "failing_probe",
+        "success": False,
+        "status": "error",
+        "error_code": "probe_failed",
+    }
+    assert run.status == AgentRunStatus.FINISHED.value
+    assert _event_domains(events)[-2:] == ["answer.completed", "run.finished"]
+    second_call_tool_messages = [
+        message
+        for message in model.calls[1]
+        if message.__class__.__name__ == "ToolMessage"
+    ]
+    assert any("探测工具执行失败" in message.content for message in second_call_tool_messages)
+
+
+def test_execute_sql_retry_exhaustion_has_single_failed_terminal_event():
+    """SQL 执行错误超过重试上限后必须明确失败，不能继续调用模型。"""
+
+    registry = ToolRegistry()
+    registry.register(FailingExecuteSqlTool())
+    model = ScriptedModel([
+        _tool_message("execute_sql", {"value": "select 1"}, "sql-1"),
+        _tool_message("execute_sql", {"value": "select 2"}, "sql-2"),
+    ])
+    run, record = _run_and_record()
+    loop = build_agent_loop(
+        FakeSession(),
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=5, max_sql_retries=1),
+        model_client=model,
+        registry=registry,
+        understanding_service=StaticUnderstandingService(),
+    )
+
+    events = list(loop.run(run, record))
+    domains = _event_domains(events)
+
+    assert len(model.calls) == 2
+    assert domains.count("tool.completed") == 2
+    assert [domain for domain in domains if domain in {"run.finished", "run.failed"}] == [
+        "run.failed"
+    ]
+    assert domains[-1] == "run.failed"
+    assert run.status == AgentRunStatus.FAILED.value
+    assert record.status == "failed"
+    assert run.error_class == "sql_failed"
+    assert "SQL 执行失败重试已达上限" in run.error
+
+
 def test_agent_tracing_records_run_llm_and_tool_hierarchy():
     tracer = RecordingTracer()
     model = ScriptedModel([
@@ -395,7 +582,7 @@ def test_agent_tracing_records_run_llm_and_tool_hierarchy():
         _tool_message("finish", {"value": ""}, "c2"),
     ])
     run, record = _run_and_record()
-    loop = AgentLoop(
+    loop = build_agent_loop(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -437,7 +624,7 @@ def test_opentelemetry_exporter_receives_agent_span_hierarchy():
         _tool_message("finish", {"value": ""}, "c2"),
     ])
     run, record = _run_and_record()
-    loop = AgentLoop(
+    loop = build_agent_loop(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -466,7 +653,7 @@ def test_agent_span_closes_when_event_generator_is_closed():
     tracer = RecordingTracer()
     model = ScriptedModel([AIMessage(content="完成")])
     run, record = _run_and_record()
-    loop = AgentLoop(
+    loop = build_agent_loop(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -513,7 +700,7 @@ def test_enabled_tracing_without_dependencies_raises_clear_import_error(monkeypa
 def test_runtime_tracing_failure_does_not_change_agent_events():
     model = ScriptedModel([AIMessage(content="完成")])
     run, record = _run_and_record()
-    loop = AgentLoop(
+    loop = build_agent_loop(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -541,7 +728,7 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
             )
 
     monkeypatch.setattr(
-        "apps.chatbi.orchestration.agent.loop.agent_run_repository.recent_qa_summaries",
+        "apps.chatbi.orchestration.agent.preparation.agent_run_repository.recent_qa_summaries",
         lambda session, chat_id, exclude_record_id, limit: [
             {
                 "question": "今天店铺的客户数",
@@ -551,13 +738,13 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
         ],
     )
     monkeypatch.setattr(
-        "apps.chatbi.orchestration.agent.loop.agent_run_repository.latest_successful_rewritten_question",
+        "apps.chatbi.orchestration.agent.preparation.agent_run_repository.latest_successful_rewritten_question",
         lambda session, **kwargs: "今天按店铺分组的销售下单客户数",
     )
 
     model = ScriptedModel([AIMessage(content="完成")])
     run, record = _run_and_record()
-    loop = AgentLoop(
+    loop = build_agent_loop(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),

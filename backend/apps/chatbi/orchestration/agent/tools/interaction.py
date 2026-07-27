@@ -5,8 +5,8 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolContext
-from apps.tool import ToolOutput, json_summary
 from apps.knowledge.composition import build_sql_example_query_service
+from apps.tool import ToolOutput, json_summary
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
 
@@ -32,7 +32,7 @@ class ClarifyArgs(BaseModel):
 
 
 class ClarifyTool(AgentTool):
-    """clarify 是终止动作：execute 只做结构校验，挂起/持久化由 AgentLoop 处理。"""
+    """clarify 是终止动作：execute 只做结构校验，挂起和持久化由 Agent 编排层处理。"""
 
     name = "clarify"
     description = (

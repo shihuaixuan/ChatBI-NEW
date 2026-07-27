@@ -96,6 +96,18 @@ class PhysicalSchemaReader(Protocol):
     ) -> PhysicalSchemaResult: ...
 
 
+@dataclass(frozen=True)
+class AgentToolContextServices:
+    """创建工具执行上下文所需的稳定服务集合。"""
+
+    term_query_service: TermQueryService
+    query_service: QueryService
+    semantic_query_service: SemanticQueryCompiler
+    semantic_retrieval_service: SemanticAssetRetriever
+    physical_schema_service: PhysicalSchemaReader
+    result_artifact_service: ResultArtifactWriter
+
+
 @dataclass
 class AgentToolContext:
     """一次 run 的执行上下文（由 API/Loop 组装，工具只读）。"""
@@ -126,4 +138,5 @@ class AgentTool(Tool):
 __all__ = [
     "AgentTool",
     "AgentToolContext",
+    "AgentToolContextServices",
 ]
