@@ -1,16 +1,21 @@
 """SSE 事件编码。"""
 
 from collections.abc import Iterable, Iterator
+from typing import Any
 
 import orjson
 
 from apps.event.models.dto import EventPayload
 
 
-def encode_sse_event(payload: EventPayload | dict) -> str:
+def encode_sse_event(payload: EventPayload | dict[str, Any]) -> str:
     """保持现有 ``data:{json}\n\n`` 帧格式。"""
 
     data = payload.model_dump() if isinstance(payload, EventPayload) else payload
+    # 旧 EventPayload 不输出尚未启用的新契约空字段，保持原 SSE JSON 完全兼容。
+    for field in ("kind", "phase", "domain", "block_id"):
+        if data.get(field) is None:
+            data.pop(field, None)
     return "data:" + orjson.dumps(data).decode() + "\n\n"
 
 

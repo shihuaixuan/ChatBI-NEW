@@ -1,6 +1,7 @@
 """通用事件应用管理的 Event log 持久化模型。"""
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import BigInteger, Column, DateTime, Identity, Index, Integer, text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -29,7 +30,7 @@ class EventLog(SQLModel, table=True):
     # run 内单调递增，供 after_sequence 断线补拉。
     sequence: int = Field(sa_column=Column(Integer, nullable=False))
     event_type: str = Field(max_length=64, nullable=False)
-    payload: dict = Field(
+    payload: dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     )

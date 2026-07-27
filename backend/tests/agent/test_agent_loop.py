@@ -26,7 +26,13 @@ from apps.chatbi.services.understanding import (
     QuestionUnderstandingService,
 )
 from apps.conversation.models import ChatRecord
-from apps.event import EventLog, EventPayload, EventPublisher, encode_sse_event
+from apps.event import (
+    EventLog,
+    EventPayload,
+    EventPublisher,
+    create_render_event,
+    encode_sse_event,
+)
 from apps.event import list_events_after as list_persisted_events_after
 from apps.event.repository import sqlmodel as event_repository
 from apps.tool import ToolOutput, ToolRegistry
@@ -56,6 +62,7 @@ class FakeSession:
         count = self.trace_count
         return SimpleNamespace(
             all=lambda: [],
+            one=lambda: count,
             scalar=lambda: count,
             scalars=lambda: SimpleNamespace(all=lambda: [], first=lambda: None),
         )
@@ -93,7 +100,26 @@ def test_event_publisher_assigns_sequence_and_commits():
     second = publisher.publish(9, "answer", {"content": "完成"})
 
     assert [first.sequence, second.sequence] == [1, 2]
+    assert (first.kind, first.phase, first.domain) == ("run", "start", "run")
+    assert (second.kind, second.phase, second.domain) == ("text", "end", "answer")
+    assert session.added[0].payload["kind"] == "run"
+    assert session.added[1].payload["domain"] == "answer"
     assert session.commit_count == 2
+
+
+def test_render_event_contract_keeps_legacy_type_and_adds_block_id():
+    event = create_render_event(
+        "tool-called",
+        {"record_id": 7, "tool_name": "execute_sql"},
+        record_id=7,
+        run_id=9,
+        sequence=4,
+        step_id=3,
+    )
+
+    assert event.type == "tool-called"
+    assert (event.kind, event.phase, event.domain) == ("tool", "start", "tool")
+    assert event.block_id == "tool:3:execute_sql"
 
 
 class ScriptedModel:

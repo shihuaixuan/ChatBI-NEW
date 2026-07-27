@@ -14,7 +14,7 @@ import {
 import type { ChatRecord } from '@/api/chat.ts'
 import { agentQuestionApi, type AgentTraceResponse } from '@/api/agent-chat'
 import MdComponent from '@/views/chat/component/MdComponent.vue'
-import { buildAgentFlow, type AgentFlowStep } from './agentTraceDisplay'
+import { buildAgentFlow, type AgentFlowStep } from './agentTimelineProjection'
 
 const props = withDefaults(
   defineProps<{

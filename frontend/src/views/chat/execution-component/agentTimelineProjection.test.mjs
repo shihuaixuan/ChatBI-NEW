@@ -1,7 +1,45 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildAgentFlow } from './agentTraceDisplay.ts'
+import { buildAgentFlow } from './agentTimelineProjection.ts'
+import {
+  normalizeAgentEvent,
+  reduceAgentEvent,
+} from '../answer/agentEventReducer.ts'
+
+test('新旧事件契约产生相同的回答投影', () => {
+  const legacyRecord = { execution_trace: [] }
+  const currentRecord = { execution_trace: [] }
+
+  reduceAgentEvent(legacyRecord, {
+    type: 'answer',
+    content: { record_id: 7, content: '完成' },
+  })
+  reduceAgentEvent(currentRecord, {
+    type: 'legacy-answer-name',
+    kind: 'text',
+    phase: 'end',
+    domain: 'answer',
+    content: { record_id: 7, content: '完成' },
+  })
+
+  assert.equal(currentRecord.sql_answer, legacyRecord.sql_answer)
+  assert.equal(currentRecord.chart_answer, legacyRecord.chart_answer)
+  assert.equal(currentRecord.execution_trace[0].type, 'answer')
+})
+
+test('未知 domain 不影响事件消费', () => {
+  const event = normalizeAgentEvent({
+    type: 'extension-event',
+    kind: 'extension',
+    phase: 'snapshot',
+    domain: 'custom-domain',
+    content: { value: 1 },
+  })
+
+  assert.equal(event.type, 'extension-event')
+  assert.equal(event.domain, 'custom-domain')
+})
 
 test('完成的运行保留中间失败步骤，但整体展示为已完成并标记重试', () => {
   const flow = buildAgentFlow({

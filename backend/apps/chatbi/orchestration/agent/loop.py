@@ -999,18 +999,11 @@ class AgentLoop:
         payload: dict,
         step_id: int | None = None,
     ) -> RenderEvent:
-        event = self.event_publisher.publish(
+        return self.event_publisher.publish(
             run.id,
             event_type,
             payload,
             step_id=step_id,
-        )
-        return RenderEvent(
-            type=event_type,
-            content=payload,
-            record_id=payload.get("record_id"),
-            run_id=run.id,
-            sequence=event.sequence,
         )
 
 

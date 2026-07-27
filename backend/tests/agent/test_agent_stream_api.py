@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import orjson
 from fastapi.responses import StreamingResponse
 
 from apps.chatbi.api import interactions as api
@@ -15,7 +16,7 @@ from apps.chatbi.models import (
 )
 from apps.chatbi.orchestration.agent import service
 from apps.conversation.models import ChatRecord
-from apps.event import RenderEvent
+from apps.event import create_render_event
 
 
 async def _read_stream(response: StreamingResponse) -> str:
@@ -69,7 +70,13 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
             pass
 
         def run(self, run_obj, record_obj):
-            yield RenderEvent(type="run-started", run_id=run_obj.id)
+            yield create_render_event(
+                "run-started",
+                {},
+                record_id=record_obj.id,
+                run_id=run_obj.id,
+                sequence=1,
+            )
 
     monkeypatch.setattr(service, "create_record_and_run", fake_create_record_and_run)
     monkeypatch.setattr(service, "AgentLoop", FakeLoop)
@@ -89,7 +96,13 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
 
     assert response.media_type == "text/event-stream"
     assert captured["request"].question == "销售额"
-    assert "run-started" in body
+    payload = orjson.loads(body.removeprefix("data:").strip())
+    assert payload["type"] == "run-started"
+    assert (payload["kind"], payload["phase"], payload["domain"]) == (
+        "run",
+        "start",
+        "run",
+    )
 
 
 def test_unified_stream_resumes_pending_clarification(monkeypatch):
@@ -133,7 +146,13 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
 
         def resume(self, run_obj, record_obj, clarification_obj, answer_text):
             captured["answer_text"] = answer_text
-            yield RenderEvent(type="clarification-accepted", run_id=run_obj.id)
+            yield create_render_event(
+                "clarification-accepted",
+                {},
+                record_id=record_obj.id,
+                run_id=run_obj.id,
+                sequence=1,
+            )
 
     monkeypatch.setattr(service, "AgentLoop", FakeLoop)
 

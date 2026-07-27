@@ -1,27 +1,28 @@
 """Event log 的 SQLModel 持久化实现。"""
 
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import and_, delete, func, select
-from sqlmodel import col
+from sqlalchemy import delete, func
+from sqlmodel import Session, col, select
 
 from apps.event.models.orm import EventLog
 
 
-def next_sequence(session, run_id: int) -> int:
+def next_sequence(session: Session, run_id: int) -> int:
     """返回指定事件流的下一个递增序号。"""
 
     current = session.exec(
-        select(func.max(EventLog.sequence)).where(EventLog.run_id == run_id)
-    ).scalar()
+        select(func.max(col(EventLog.sequence))).where(col(EventLog.run_id) == run_id)
+    ).one()
     return (current or 0) + 1
 
 
 def append_event(
-    session,
+    session: Session,
     run_id: int,
     event_type: str,
-    payload: dict,
+    payload: dict[str, Any],
     step_id: int | None = None,
 ) -> EventLog:
     """追加事件；事务提交由调用方控制。"""
@@ -40,7 +41,7 @@ def append_event(
 
 
 def list_events_after(
-    session,
+    session: Session,
     run_id: int,
     after_sequence: int = 0,
 ) -> list[EventLog]:
@@ -49,17 +50,15 @@ def list_events_after(
     stmt = (
         select(EventLog)
         .where(
-            and_(
-                EventLog.run_id == run_id,
-                EventLog.sequence > after_sequence,
-            )
+            col(EventLog.run_id) == run_id,
+            col(EventLog.sequence) > after_sequence,
         )
-        .order_by(EventLog.sequence)
+        .order_by(col(EventLog.sequence))
     )
-    return session.exec(stmt).scalars().all()
+    return list(session.exec(stmt).all())
 
 
-def delete_events_for_runs(session, run_ids: list[int]) -> None:
+def delete_events_for_runs(session: Session, run_ids: list[int]) -> None:
     """删除一组 Agent run 对应的事件。"""
 
     if not run_ids:

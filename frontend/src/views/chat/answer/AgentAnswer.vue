@@ -6,6 +6,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ChartBlock from '@/views/chat/chat-block/ChartBlock.vue'
 import AgentTrace from '@/views/chat/execution-component/AgentTrace.vue'
 import JSONBig from 'json-bigint'
+import {
+  latestAgentEventSequence,
+  reduceAgentEvent,
+} from '@/views/chat/answer/agentEventReducer'
 
 const props = withDefaults(
   defineProps<{
@@ -64,28 +68,16 @@ const loadingData = ref(false)
 // 全局 loading 控制输入区，执行流运行态只属于当前这条消息，不能污染历史记录。
 const runtimeLoading = ref(false)
 
-function pushTraceEvent(currentRecord: ChatRecord, data: any, payload: Record<string, any>) {
-  currentRecord.execution_trace = currentRecord.execution_trace || []
-  currentRecord.execution_trace.push({
-    type: data.type,
-    sequence: data.sequence,
-    ...payload,
-    _ts: Date.now(),
-  })
-}
-
-function latestTraceSequence(currentRecord: ChatRecord) {
-  const events = Array.isArray(currentRecord.execution_trace) ? currentRecord.execution_trace : []
-  return events.reduce((max, event: any) => Math.max(max, Number(event.sequence || 0)), 0)
-}
-
 async function pushOptimisticClarificationAccepted(currentRecord: ChatRecord) {
   // 用户已提交澄清后，先让时间线退出等待态；真实后端事件随后会补齐持久化序号。
-  pushTraceEvent(
-    currentRecord,
-    { type: 'clarification-accepted', sequence: latestTraceSequence(currentRecord) + 0.001 },
-    { record_id: currentRecord.id, run_id: currentRecord.trace_id, synthetic: true }
-  )
+  reduceAgentEvent(currentRecord, {
+    type: 'clarification-accepted',
+    kind: 'interaction',
+    phase: 'end',
+    domain: 'interaction',
+    sequence: latestAgentEventSequence(currentRecord) + 0.001,
+    content: { record_id: currentRecord.id, run_id: currentRecord.trace_id, synthetic: true },
+  })
   await nextTick()
   emits('scrollBottom')
 }
@@ -128,55 +120,15 @@ async function consumeStream(
 }
 
 function handleEvent(data: any, currentRecord: ChatRecord) {
-  const payload = data.content || {}
-  pushTraceEvent(currentRecord, data, payload)
-  switch (data.type) {
-    case 'record-created':
-      currentRecord.id = payload.id || payload.record_id
-      currentRecord.trace_id = payload.run_id?.toString()
-      break
-    case 'run-started':
-      currentRecord.status = 'running'
-      break
-    case 'sql-generated':
-    case 'sql-validated':
-      currentRecord.sql = payload.sql
-      break
-    case 'sql-executed':
-      break
-    case 'chart-generated':
-      currentRecord.chart = JSON.stringify(payload.chart || {})
-      break
-    case 'answer':
-      currentRecord.sql_answer = payload.content
-      currentRecord.chart_answer = payload.content
-      break
-    case 'clarification':
-      currentRecord.status = 'waiting_user'
-      currentRecord.clarification = payload
-      runtimeLoading.value = false
-      _loading.value = false
-      break
-    case 'clarification-accepted':
-      currentRecord.status = 'running'
-      currentRecord.clarification = undefined
-      break
-    case 'run-failed':
-    case 'error':
-      currentRecord.status = 'failed'
-      currentRecord.error = payload.content || data.content
-      runtimeLoading.value = false
-      emits('error', currentRecord.id)
-      break
-    case 'run-finished':
-    case 'finish':
-      currentRecord.status = 'finished'
-      currentRecord.finish = true
-      currentRecord.sql_answer = payload.content
-      currentRecord.chart_answer = payload.content
-      getChatData(currentRecord.id)
-      emits('finish', currentRecord.id)
-      break
+  const effect = reduceAgentEvent(currentRecord, data)
+  if (effect.waitingUser || effect.terminal === 'failed') {
+    runtimeLoading.value = false
+    _loading.value = false
+  }
+  if (effect.terminal === 'failed') emits('error', currentRecord.id)
+  if (effect.terminal === 'finished') {
+    getChatData(currentRecord.id)
+    emits('finish', currentRecord.id)
   }
 }
 
