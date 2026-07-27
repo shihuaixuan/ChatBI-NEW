@@ -69,6 +69,7 @@ from apps.datasource.composition import (
     build_datasource_metadata_service,
     build_datasource_service,
 )
+from apps.event import EventPublisher
 from apps.knowledge.composition import build_sql_example_query_service
 from apps.knowledge.recommended import build_recommended_problem_service
 from apps.retrieval.query.service import RetrievalService, build_retrieval_service
@@ -83,6 +84,12 @@ from common.core.db import engine
 from sqlbot_platform.workflow_engine.artifact_gateway import (
     build_workflow_artifact_gateway,
 )
+
+
+def build_agent_event_publisher(session: Session) -> EventPublisher:
+    """装配 Agent 产品事件发布器。"""
+
+    return EventPublisher(session)
 
 
 def build_query_service(
@@ -307,6 +314,7 @@ def build_chat_application_service(session: Session) -> ChatApplicationService:
 
 
 __all__ = [
+    "build_agent_event_publisher",
     "build_chat_application_service",
     "build_chat_deletion_service",
     "build_chat_log_service",

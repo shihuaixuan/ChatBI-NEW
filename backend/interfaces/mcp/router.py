@@ -5,7 +5,6 @@ from collections.abc import Callable, Iterable
 from datetime import timedelta
 from typing import Any, cast
 
-import orjson
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from jwt.exceptions import InvalidTokenError
@@ -27,10 +26,11 @@ from apps.chatbi.models import AgentStartStreamRequest
 from apps.chatbi.orchestration.agent.service import (
     AgentDatasourceNotAllowedError,
     AgentNotEnabledError,
-    create_agent_start_stream,
+    create_agent_start_events,
 )
 from apps.conversation import CreateChat
 from apps.datasource.composition import build_datasource_service
+from apps.event import RenderEvent, encode_sse_events
 from common.core.config import settings
 from common.core.deps import SessionDep, Trans
 from common.core.schemas import Token, XOAuth2PasswordBearer
@@ -192,13 +192,13 @@ async def mcp_question(
         datasource_id=ds_id,
     )
     try:
-        events = create_agent_start_stream(session_user, request)
+        events = create_agent_start_events(session_user, request)
     except (AgentNotEnabledError, AgentDatasourceNotAllowedError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if chat.stream:
         return StreamingResponse(
-            events,
+            encode_sse_events(events),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -209,11 +209,11 @@ async def mcp_question(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-def _collect_agent_result(events: Iterable[str]) -> dict[str, Any]:
-    """将 Agent SSE 收敛为 MCP 非流式响应。"""
+def _collect_agent_result(events: Iterable[RenderEvent]) -> dict[str, Any]:
+    """将 Agent 结构化事件收敛为 MCP 非流式响应。"""
 
-    for frame in events:
-        payload = orjson.loads(frame.removeprefix("data:").strip())
+    for event in events:
+        payload = event.model_dump()
         event_type = payload.get("type")
         content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
         if event_type == "clarification":

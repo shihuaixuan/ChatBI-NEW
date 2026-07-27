@@ -15,6 +15,7 @@ from apps.chatbi.models import (
 )
 from apps.chatbi.orchestration.agent import service
 from apps.conversation.models import ChatRecord
+from apps.event import RenderEvent
 
 
 async def _read_stream(response: StreamingResponse) -> str:
@@ -43,7 +44,6 @@ def _mock_stream_session(monkeypatch, record: ChatRecord | None = None):
         def commit(self):
             pass
 
-    monkeypatch.setattr(api, "Session", lambda _engine: FakeSession())
     monkeypatch.setattr(service, "Session", lambda _engine: FakeSession())
 
 
@@ -69,7 +69,7 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
             pass
 
         def run(self, run_obj, record_obj):
-            yield 'data:{"type":"run-started"}\n\n'
+            yield RenderEvent(type="run-started", run_id=run_obj.id)
 
     monkeypatch.setattr(service, "create_record_and_run", fake_create_record_and_run)
     monkeypatch.setattr(service, "AgentLoop", FakeLoop)
@@ -117,12 +117,12 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
     _enable_agent(monkeypatch)
     _mock_stream_session(monkeypatch, record)
     monkeypatch.setattr(
-        api.agent_run_repository,
+        service.agent_run_repository,
         "get_latest_run_by_record",
         lambda session, record_id: run,
     )
     monkeypatch.setattr(
-        api.agent_run_repository,
+        service.agent_run_repository,
         "get_pending_clarification",
         lambda session, record_id: clarification,
     )
@@ -133,9 +133,9 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
 
         def resume(self, run_obj, record_obj, clarification_obj, answer_text):
             captured["answer_text"] = answer_text
-            yield 'data:{"type":"clarification-accepted"}\n\n'
+            yield RenderEvent(type="clarification-accepted", run_id=run_obj.id)
 
-    monkeypatch.setattr(api, "AgentLoop", FakeLoop)
+    monkeypatch.setattr(service, "AgentLoop", FakeLoop)
 
     response = asyncio.run(
         api.agent_stream(

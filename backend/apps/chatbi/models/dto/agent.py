@@ -4,6 +4,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from apps.event import EventPayload
+
 
 class AgentQuestionRequest(BaseModel):
     chat_id: int = Field(gt=0)
@@ -63,9 +65,5 @@ class AgentConfig(BaseModel):
     tool_parallel_workers: int = 4
 
 
-class AgentEventPayload(BaseModel):
-    type: str
-    content: Any = None
-    record_id: int | None = None
-    run_id: int | None = None
-    sequence: int | None = None
+# 兼容旧导入；事件载荷已由 apps.event 统一管理。
+AgentEventPayload = EventPayload

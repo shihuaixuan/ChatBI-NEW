@@ -24,6 +24,7 @@ from langchain_core.messages import (
 
 from apps.ai_model.model_factory import LLMFactory, get_default_config
 from apps.chatbi.composition import (
+    build_agent_event_publisher,
     build_chat_record_service,
     build_physical_schema_service,
     build_query_service,
@@ -40,8 +41,7 @@ from apps.chatbi.models import (
     ChatbiAgentClarification,
     ChatbiAgentRun,
 )
-from apps.chatbi.models.dto.agent import AgentConfig, AgentEventPayload
-from apps.chatbi.orchestration.agent.events import sse_event
+from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.prompts import build_system_prompt
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.core import build_default_tools
@@ -69,6 +69,7 @@ from apps.conversation import (
     ChatRecordResultProjection,
     ChatRecordStatus,
 )
+from apps.event import EventPublisher, RenderEvent
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
 from apps.tool import (
@@ -125,10 +126,12 @@ class AgentLoop:
         semantic_retrieval_service: SemanticRetrievalService | None = None,
         physical_schema_service: PhysicalSchemaService | None = None,
         result_artifact_service: ResultArtifactService | None = None,
+        event_publisher: EventPublisher | None = None,
     ):
         self.session = session
         self.current_user = current_user
         self.config = config or AgentConfig()
+        self.event_publisher = event_publisher or build_agent_event_publisher(session)
         self.record_service = build_chat_record_service(session)
         self.model_client = model_client or DefaultAgentModelClient()
         self.registry = registry or self._build_registry()
@@ -170,7 +173,7 @@ class AgentLoop:
 
     # ---- 入口 ----
 
-    def run(self, run: ChatbiAgentRun, record: Any) -> Iterator[str]:
+    def run(self, run: ChatbiAgentRun, record: Any) -> Iterator[RenderEvent]:
         budget = self._new_budget()
         ctx = self._new_ctx(run, record)
         messages = [HumanMessage(content=record.question or "")]
@@ -262,7 +265,7 @@ class AgentLoop:
         record: Any,
         clarification: ChatbiAgentClarification,
         answer_text: str,
-    ) -> Iterator[str]:
+    ) -> Iterator[RenderEvent]:
         """从澄清记录声明的恢复边界继续，不重跑已经完成的问题理解。"""
 
         budget = self._new_budget()
@@ -439,7 +442,7 @@ class AgentLoop:
 
     # ---- 主循环 ----
 
-    def _loop(self, run, record, ctx, system, messages, budget) -> Iterator[str]:
+    def _loop(self, run, record, ctx, system, messages, budget) -> Iterator[RenderEvent]:
         while True:
             mode = budget.planning_mode()
             if mode == "exhausted":
@@ -758,7 +761,7 @@ class AgentLoop:
         messages,
         budget,
         output: ToolOutput,
-    ) -> Iterator[str]:
+    ) -> Iterator[RenderEvent]:
         """把确定性澄清记录成完整步骤，并在任何资产检索前挂起。"""
 
         verdict = budget.check_before_step()
@@ -840,7 +843,7 @@ class AgentLoop:
         *,
         resume_kind: AgentClarificationResumeKind,
         resume_payload: dict,
-    ) -> Iterator[str]:
+    ) -> Iterator[RenderEvent]:
         # clarify 自身的 call_id 留给用户答案注入；其余 sibling tool_calls 必须先闭合。
         exclude = {call_id} if call_id else set()
         close_unfinished_tool_calls(
@@ -901,7 +904,7 @@ class AgentLoop:
         *,
         reason: str | None = None,
         error_class: str | None = None,
-    ) -> Iterator[str]:
+    ) -> Iterator[RenderEvent]:
         """预算耗尽：有执行结果则软收口，否则硬失败。"""
 
         execution = ctx.state.get("last_execution")
@@ -932,7 +935,7 @@ class AgentLoop:
             error_class or AgentErrorClass.BUDGET.value,
         )
 
-    def _finish(self, run, record, messages, budget, *, answer, chart, sql, step_id=None, full_data=None, execution=None) -> Iterator[str]:
+    def _finish(self, run, record, messages, budget, *, answer, chart, sql, step_id=None, full_data=None, execution=None) -> Iterator[RenderEvent]:
         close_unfinished_tool_calls(messages)
         record_data = None
         if full_data is not None and execution:
@@ -966,7 +969,7 @@ class AgentLoop:
         yield self._emit(run, "run-finished", {"record_id": record.id, "content": answer}, step_id)
         yield self._emit(run, "finish", {"record_id": record.id, "content": answer}, step_id)
 
-    def _fail(self, run, record, messages, budget, message, error_class) -> Iterator[str]:
+    def _fail(self, run, record, messages, budget, message, error_class) -> Iterator[RenderEvent]:
         close_unfinished_tool_calls(
             messages,
             content="skipped: run failed before this tool executed",
@@ -989,17 +992,25 @@ class AgentLoop:
         yield self._emit(run, "run-failed", {"record_id": record.id, "content": message, "error_class": error_class})
         yield self._emit(run, "error", {"record_id": record.id, "content": message, "error_class": error_class})
 
-    def _emit(self, run: ChatbiAgentRun, event_type: str, payload: dict, step_id: int | None = None) -> str:
-        event = agent_run_repository.append_trace(self.session, run.id, event_type, payload, step_id=step_id)
-        self.session.commit()
-        return sse_event(
-            AgentEventPayload(
-                type=event_type,
-                content=payload,
-                record_id=payload.get("record_id"),
-                run_id=run.id,
-                sequence=event.sequence,
-            )
+    def _emit(
+        self,
+        run: ChatbiAgentRun,
+        event_type: str,
+        payload: dict,
+        step_id: int | None = None,
+    ) -> RenderEvent:
+        event = self.event_publisher.publish(
+            run.id,
+            event_type,
+            payload,
+            step_id=step_id,
+        )
+        return RenderEvent(
+            type=event_type,
+            content=payload,
+            record_id=payload.get("record_id"),
+            run_id=run.id,
+            sequence=event.sequence,
         )
 
 

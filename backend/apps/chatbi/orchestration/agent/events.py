@@ -1,8 +1,10 @@
-import orjson
+"""Agent 旧事件编码入口。
 
-from apps.chatbi.models.dto.agent import AgentEventPayload
+新代码应直接使用 apps.event.protocol.sse；此模块只保留兼容导出。
+"""
 
+from apps.event import encode_sse_event
 
-def sse_event(payload: AgentEventPayload | dict) -> str:
-    data = payload.model_dump() if isinstance(payload, AgentEventPayload) else payload
-    return "data:" + orjson.dumps(data).decode() + "\n\n"
+sse_event = encode_sse_event
+
+__all__ = ["sse_event"]

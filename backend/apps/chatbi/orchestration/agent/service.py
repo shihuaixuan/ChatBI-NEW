@@ -6,10 +6,15 @@ from apps.chatbi.composition import (
     build_chat_record_service,
     build_conversation_reader_service,
 )
-from apps.chatbi.models import ExecutionBindingData
+from apps.chatbi.models import (
+    AgentClarificationStatus,
+    AgentRunStatus,
+    ExecutionBindingData,
+)
 from apps.chatbi.models.dto.agent import (
     AgentConfig,
     AgentQuestionRequest,
+    AgentResumeStreamRequest,
     AgentStartStreamRequest,
 )
 from apps.chatbi.orchestration.agent.loop import AgentLoop
@@ -17,9 +22,11 @@ from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.planning import resolve_execution_binding
 from apps.conversation import (
     ChatRecordCreateData,
+    ChatRecordError,
     ChatRecordExecutionType,
     ChatRecordStatus,
 )
+from apps.event import RenderEvent
 from common.core.config import settings
 from common.core.db import engine
 
@@ -105,11 +112,11 @@ def get_agent_config() -> AgentConfig:
     )
 
 
-def create_agent_start_stream(
+def create_agent_start_events(
     current_user,
     request: AgentStartStreamRequest,
-) -> Iterator[str]:
-    """创建 Agent 首次提问事件流，供 HTTP 与 MCP 入口复用。"""
+) -> Iterator[RenderEvent]:
+    """创建 Agent 首次提问的结构化事件流。"""
 
     config = get_agent_config()
     if not config.enabled:
@@ -121,8 +128,8 @@ def create_agent_start_stream(
     ):
         raise AgentDatasourceNotAllowedError("Datasource is not enabled for Agent ChatBI")
 
-    def stream() -> Iterator[str]:
-        # SSE 流自己持有 session，避免跨响应生命周期传递 ORM 对象。
+    def stream() -> Iterator[RenderEvent]:
+        # 事件迭代器自己持有 session，避免跨响应生命周期传递 ORM 对象。
         with Session(engine) as stream_session:
             record, run = create_record_and_run(
                 stream_session,
@@ -132,5 +139,53 @@ def create_agent_start_stream(
             )
             loop = AgentLoop(stream_session, current_user, config)
             yield from loop.run(run, record)
+
+    return stream()
+
+
+def create_agent_resume_events(
+    current_user,
+    request: AgentResumeStreamRequest,
+    answer_text: str,
+) -> Iterator[RenderEvent]:
+    """校验挂起状态并创建 Agent 恢复执行的结构化事件流。"""
+
+    config = get_agent_config()
+    if not config.enabled:
+        raise AgentNotEnabledError("Agent ChatBI is not enabled")
+
+    def stream() -> Iterator[RenderEvent]:
+        with Session(engine) as stream_session:
+            try:
+                record = build_chat_record_service(stream_session).get_owned(
+                    current_user.id,
+                    request.record_id,
+                )
+            except ChatRecordError as exc:
+                raise RuntimeError("Chat record not found") from exc
+            run = agent_run_repository.get_latest_run_by_record(
+                stream_session,
+                request.record_id,
+            )
+            clarification = agent_run_repository.get_pending_clarification(
+                stream_session,
+                request.record_id,
+            )
+            if (
+                not run
+                or not clarification
+                or run.status != AgentRunStatus.WAITING_USER.value
+            ):
+                raise RuntimeError("No pending clarification")
+            clarification.status = AgentClarificationStatus.ANSWERED.value
+            clarification.answer = {
+                "selections": request.clarification.selections,
+                "text": request.clarification.text,
+            }
+            clarification.answered_at = agent_run_repository.now()
+            stream_session.add(clarification)
+            stream_session.commit()
+            loop = AgentLoop(stream_session, current_user, config)
+            yield from loop.resume(run, record, clarification, answer_text)
 
     return stream()

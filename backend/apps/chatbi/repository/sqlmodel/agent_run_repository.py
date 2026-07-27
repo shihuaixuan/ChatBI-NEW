@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, delete, desc, func, select
+from sqlalchemy import and_, delete, desc, select
 from sqlmodel import col
 
 from apps.chatbi.models.orm.agent_run import (
@@ -10,9 +10,18 @@ from apps.chatbi.models.orm.agent_run import (
     ChatbiAgentClarification,
     ChatbiAgentRun,
     ChatbiAgentStep,
-    ChatbiAgentTraceEvent,
 )
 from apps.conversation.composition import build_chat_record_service
+from apps.event import (
+    append_event,
+    delete_events_for_runs,
+)
+from apps.event import (
+    list_events_after as list_persisted_events_after,
+)
+from apps.event import (
+    next_sequence as next_event_sequence,
+)
 
 
 def now() -> datetime:
@@ -108,34 +117,10 @@ def update_run(
     session.add(run)
 
 
-def next_sequence(session, run_id: int) -> int:
-    current = session.exec(
-        select(func.max(ChatbiAgentTraceEvent.sequence)).where(ChatbiAgentTraceEvent.run_id == run_id)
-    ).scalar()
-    return (current or 0) + 1
-
-
-def append_trace(session, run_id: int, event_type: str, payload: dict, step_id: int | None = None) -> ChatbiAgentTraceEvent:
-    event = ChatbiAgentTraceEvent(
-        run_id=run_id,
-        step_id=step_id,
-        sequence=next_sequence(session, run_id),
-        event_type=event_type,
-        payload=payload,
-        created_at=now(),
-    )
-    session.add(event)
-    session.flush()
-    return event
-
-
-def list_events_after(session, run_id: int, after_sequence: int = 0) -> list[ChatbiAgentTraceEvent]:
-    stmt = (
-        select(ChatbiAgentTraceEvent)
-        .where(and_(ChatbiAgentTraceEvent.run_id == run_id, ChatbiAgentTraceEvent.sequence > after_sequence))
-        .order_by(ChatbiAgentTraceEvent.sequence)
-    )
-    return session.exec(stmt).scalars().all()
+# 兼容旧调用；事件仓储已迁移到 apps.event。
+next_sequence = next_event_sequence
+append_trace = append_event
+list_events_after = list_persisted_events_after
 
 
 def create_clarification(
@@ -257,7 +242,7 @@ def build_trace_response(session, record_id: int) -> dict:
     steps = session.exec(
         select(ChatbiAgentStep).where(ChatbiAgentStep.run_id == run.id).order_by(ChatbiAgentStep.step_index)
     ).scalars().all()
-    events = list_events_after(session, run.id, 0)
+    events = list_persisted_events_after(session, run.id, 0)
     return {
         "record_id": record_id,
         "run_id": run.id,
@@ -298,11 +283,7 @@ class AgentExecutionDeletionService:
         if not run_ids:
             return 0
 
-        self._session.execute(
-            delete(ChatbiAgentTraceEvent).where(
-                col(ChatbiAgentTraceEvent.run_id).in_(run_ids)
-            )
-        )
+        delete_events_for_runs(self._session, run_ids)
         self._session.execute(
             delete(ChatbiAgentClarification).where(
                 col(ChatbiAgentClarification.run_id).in_(run_ids)

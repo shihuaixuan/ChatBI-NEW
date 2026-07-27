@@ -2,7 +2,6 @@
 
 from types import SimpleNamespace
 
-import orjson
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from apps.ai_model.openai.llm import BaseChatOpenAI
@@ -17,8 +16,8 @@ from apps.chatbi.models import (
 from apps.chatbi.orchestration.agent.loop import AgentLoop
 from apps.chatbi.orchestration.agent.prompts import build_system_prompt
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
-from apps.tool import FOLDED_PLACEHOLDER, ToolRegistry, fold_tool_messages
 from apps.conversation.models import ChatRecord
+from apps.tool import FOLDED_PLACEHOLDER, ToolRegistry, fold_tool_messages
 from tests.agent.test_agent_loop import (
     FakeSession,
     FinishProbeTool,
@@ -99,7 +98,7 @@ def test_clarify_suspends_run_and_persists_messages():
     types = _event_types(events)
 
     assert types[-1] == "clarification"
-    payload = orjson.loads(events[-1].removeprefix("data:"))["content"]
+    payload = events[-1].content
     assert payload["question"] == "你要查哪种额度？"
     assert payload["options"][0]["label"] == "授信额度"
     assert run.status == AgentRunStatus.WAITING_USER.value
@@ -175,7 +174,7 @@ def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval()
     assert run.budget_snapshot["clarifications"] == 1
     # 工作流澄清没有伪造助手工具调用，挂起前只保留规范化后的用户问题。
     assert [message["type"] for message in run.messages] == ["human"]
-    clarification_payload = orjson.loads(events[-1].removeprefix("data:"))["content"]
+    clarification_payload = events[-1].content
     assert clarification_payload["question"] == "请确认“店铺”在本次查询中的使用方式。"
     assert [item["value"] for item in clarification_payload["options"]] == [
         "group_by:店铺",

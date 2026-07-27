@@ -1,11 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlmodel import Session
 
-from apps.chatbi.models import (
-    AgentClarificationStatus,
-    AgentRunStatus,
-)
+from apps.chatbi.models import AgentRunStatus
 from apps.chatbi.models.dto.agent import (
     AgentClarificationRequest,
     AgentQuestionRequest,
@@ -13,21 +9,16 @@ from apps.chatbi.models.dto.agent import (
     AgentStartStreamRequest,
     AgentStreamRequest,
 )
-from apps.chatbi.orchestration.agent.loop import AgentLoop
 from apps.chatbi.orchestration.agent.service import (
     AgentDatasourceNotAllowedError,
     AgentNotEnabledError,
-    create_agent_start_stream,
-    get_agent_config,
+    create_agent_resume_events,
+    create_agent_start_events,
 )
 from apps.chatbi.repository.sqlmodel import agent_run_repository
-from apps.conversation import (
-    ChatRecordError,
-    ChatRecordExecutionType,
-    ChatRecordStatus,
-)
+from apps.conversation import ChatRecordError, ChatRecordExecutionType, ChatRecordStatus
 from apps.conversation.composition import build_chat_record_service
-from common.core.db import engine
+from apps.event import encode_sse_events, list_events_after
 from common.core.deps import CurrentUser, SessionDep
 
 router = APIRouter(tags=["Agent Data Q&A"], prefix="/chat/agent")
@@ -39,48 +30,21 @@ async def agent_stream(current_user: CurrentUser, request: AgentStreamRequest):
 
     if isinstance(request, AgentStartStreamRequest):
         try:
-            stream = create_agent_start_stream(current_user, request)
+            events = create_agent_start_events(current_user, request)
         except (AgentNotEnabledError, AgentDatasourceNotAllowedError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return StreamingResponse(stream, media_type="text/event-stream")
+        return StreamingResponse(encode_sse_events(events), media_type="text/event-stream")
 
-    config = get_agent_config()
-    if not config.enabled:
-        raise HTTPException(status_code=400, detail="Agent ChatBI is not enabled")
     answer = request.clarification
     answer_text = _clarification_answer_text(answer)
     if not answer_text:
         raise HTTPException(status_code=400, detail="Clarification answer is empty")
 
-    def stream_resume():
-        # resume 复用同一入口和事件格式，但会开启新的 HTTP 响应流。
-        with Session(engine) as stream_session:
-            try:
-                record = build_chat_record_service(stream_session).get_owned(
-                    current_user.id,
-                    request.record_id,
-                )
-            except ChatRecordError as exc:
-                raise RuntimeError("Chat record not found") from exc
-            run = agent_run_repository.get_latest_run_by_record(
-                stream_session,
-                request.record_id,
-            )
-            clarification = agent_run_repository.get_pending_clarification(
-                stream_session,
-                request.record_id,
-            )
-            if not run or not clarification or run.status != AgentRunStatus.WAITING_USER.value:
-                raise RuntimeError("No pending clarification")
-            clarification.status = AgentClarificationStatus.ANSWERED.value
-            clarification.answer = {"selections": answer.selections, "text": answer.text}
-            clarification.answered_at = agent_run_repository.now()
-            stream_session.add(clarification)
-            stream_session.commit()
-            loop = AgentLoop(stream_session, current_user, config)
-            yield from loop.resume(run, record, clarification, answer_text)
-
-    return StreamingResponse(stream_resume(), media_type="text/event-stream")
+    try:
+        events = create_agent_resume_events(current_user, request, answer_text)
+    except AgentNotEnabledError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return StreamingResponse(encode_sse_events(events), media_type="text/event-stream")
 
 
 @router.post("/question", deprecated=True)
@@ -137,7 +101,7 @@ async def agent_events(session: SessionDep, current_user: CurrentUser, run_id: i
     run = agent_run_repository.get_run(session, run_id)
     if not run or run.created_by != current_user.id:
         raise HTTPException(status_code=404, detail="Run not found")
-    events = agent_run_repository.list_events_after(session, run_id, after_sequence)
+    events = list_events_after(session, run_id, after_sequence)
     return {
         "run_id": run_id,
         "status": run.status,

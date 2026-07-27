@@ -20,18 +20,23 @@ from apps.chatbi.models import (
 )
 from apps.chatbi.orchestration.agent.loop import AgentLoop
 from apps.chatbi.orchestration.agent.tools.base import AgentTool
-from apps.tool import ToolOutput, ToolRegistry
+from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.understanding import (
     QuestionUnderstandingModelResponse,
     QuestionUnderstandingService,
 )
 from apps.conversation.models import ChatRecord
+from apps.event import EventLog, EventPayload, EventPublisher, encode_sse_event
+from apps.event import list_events_after as list_persisted_events_after
+from apps.event.repository import sqlmodel as event_repository
+from apps.tool import ToolOutput, ToolRegistry
 
 
 class FakeSession:
     def __init__(self):
         self.trace_count = 0
         self.added = []
+        self.commit_count = 0
 
     def add(self, obj):
         self.added.append(obj)
@@ -39,7 +44,7 @@ class FakeSession:
             self.trace_count += 1
 
     def commit(self):
-        pass
+        self.commit_count += 1
 
     def flush(self):
         pass
@@ -54,6 +59,41 @@ class FakeSession:
             scalar=lambda: count,
             scalars=lambda: SimpleNamespace(all=lambda: [], first=lambda: None),
         )
+
+
+def test_event_app_keeps_legacy_contract_and_exports():
+    assert ChatbiAgentTraceEvent is EventLog
+    assert agent_run_repository.append_trace is event_repository.append_event
+    assert agent_run_repository.list_events_after is list_persisted_events_after
+    assert EventLog.__tablename__ == "chatbi_agent_trace_event"
+
+    frame = encode_sse_event(
+        EventPayload(
+            type="answer",
+            content={"content": "完成"},
+            record_id=7,
+            run_id=9,
+            sequence=3,
+        )
+    )
+    assert orjson.loads(frame.removeprefix("data:").strip()) == {
+        "type": "answer",
+        "content": {"content": "完成"},
+        "record_id": 7,
+        "run_id": 9,
+        "sequence": 3,
+    }
+
+
+def test_event_publisher_assigns_sequence_and_commits():
+    session = FakeSession()
+    publisher = EventPublisher(session)
+
+    first = publisher.publish(9, "run-started", {"record_id": 7})
+    second = publisher.publish(9, "answer", {"content": "完成"})
+
+    assert [first.sequence, second.sequence] == [1, 2]
+    assert session.commit_count == 2
 
 
 class ScriptedModel:
@@ -248,7 +288,7 @@ def _loop(model, config=None):
 
 
 def _event_types(events):
-    return [orjson.loads(event.removeprefix("data:"))["type"] for event in events]
+    return [event.type for event in events]
 
 
 def _tool_message(name, args, call_id="c1"):
@@ -335,11 +375,11 @@ def test_search_semantic_assets_trace_records_effective_understanding_input():
     )
     run, record = _run_and_record()
 
-    events = [orjson.loads(item.removeprefix("data:")) for item in _loop(model).run(run, record)]
+    events = list(_loop(model).run(run, record))
 
-    tool_event = next(item for item in events if item["type"] == "tool-called")
-    assert tool_event["content"]["args_summary"]["rewritten_question"] == "按城市看 gmv"
-    assert tool_event["content"]["args_summary"]["intent"]["metric_mentions"] == ["gmv"]
+    tool_event = next(item for item in events if item.type == "tool-called")
+    assert tool_event.content["args_summary"]["rewritten_question"] == "按城市看 gmv"
+    assert tool_event.content["args_summary"]["intent"]["metric_mentions"] == ["gmv"]
 
 
 def test_direct_text_treated_as_loose_finish():
