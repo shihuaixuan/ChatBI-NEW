@@ -13,7 +13,7 @@ from apps.chatbi.models import (
     AgentConfig,
     AgentRunStatus,
     ChatbiAgentRun,
-    ChatbiAgentTraceEvent,
+    EventLog,
     IntentRecognitionOutput,
     IntentValidationOutput,
     QuestionUnderstandingOutcome,
@@ -28,14 +28,11 @@ from apps.chatbi.services.understanding import (
 )
 from apps.conversation.models import ChatRecord
 from apps.event import (
-    EventLog,
-    EventPayload,
     EventPublisher,
     create_render_event,
     encode_sse_event,
 )
 from apps.event import list_events_after as list_persisted_events_after
-from apps.event.repository import sqlmodel as event_repository
 from apps.tool import ToolOutput, ToolRegistry
 from apps.trace import DisabledAgentTracer, TraceConfig
 from apps.trace.setup import (
@@ -53,7 +50,7 @@ class FakeSession:
 
     def add(self, obj):
         self.added.append(obj)
-        if isinstance(obj, ChatbiAgentTraceEvent):
+        if isinstance(obj, EventLog):
             self.trace_count += 1
 
     def commit(self):
@@ -75,15 +72,13 @@ class FakeSession:
         )
 
 
-def test_event_app_keeps_legacy_contract_and_exports():
-    assert ChatbiAgentTraceEvent is EventLog
-    assert agent_run_repository.append_trace is event_repository.append_event
+def test_event_app_exports_structured_contract():
     assert agent_run_repository.list_events_after is list_persisted_events_after
-    assert EventLog.__tablename__ == "chatbi_agent_trace_event"
+    assert EventLog.__tablename__ == "chatbi_agent_event"
 
     frame = encode_sse_event(
-        EventPayload(
-            type="answer",
+        create_render_event(
+            "answer",
             content={"content": "完成"},
             record_id=7,
             run_id=9,
@@ -91,11 +86,14 @@ def test_event_app_keeps_legacy_contract_and_exports():
         )
     )
     assert orjson.loads(frame.removeprefix("data:").strip()) == {
-        "type": "answer",
+        "kind": "text",
+        "phase": "end",
+        "domain": "answer.completed",
         "content": {"content": "完成"},
         "record_id": 7,
         "run_id": 9,
         "sequence": 3,
+        "block_id": "text:9",
     }
 
 
@@ -107,14 +105,14 @@ def test_event_publisher_assigns_sequence_and_commits():
     second = publisher.publish(9, "answer", {"content": "完成"})
 
     assert [first.sequence, second.sequence] == [1, 2]
-    assert (first.kind, first.phase, first.domain) == ("run", "start", "run")
-    assert (second.kind, second.phase, second.domain) == ("text", "end", "answer")
+    assert (first.kind, first.phase, first.domain) == ("run", "start", "run.started")
+    assert (second.kind, second.phase, second.domain) == ("text", "end", "answer.completed")
     assert session.added[0].payload["kind"] == "run"
-    assert session.added[1].payload["domain"] == "answer"
+    assert session.added[1].payload["domain"] == "answer.completed"
     assert session.commit_count == 2
 
 
-def test_render_event_contract_keeps_legacy_type_and_adds_block_id():
+def test_render_event_contract_adds_stable_domain_and_block_id():
     event = create_render_event(
         "tool-called",
         {"record_id": 7, "tool_name": "execute_sql"},
@@ -124,8 +122,7 @@ def test_render_event_contract_keeps_legacy_type_and_adds_block_id():
         step_id=3,
     )
 
-    assert event.type == "tool-called"
-    assert (event.kind, event.phase, event.domain) == ("tool", "start", "tool")
+    assert (event.kind, event.phase, event.domain) == ("tool", "start", "tool.called")
     assert event.block_id == "tool:3:execute_sql"
 
 
@@ -357,8 +354,8 @@ def _loop(model, config=None):
     )
 
 
-def _event_types(events):
-    return [event.type for event in events]
+def _event_domains(events):
+    return [event.domain for event in events]
 
 
 def _tool_message(name, args, call_id="c1"):
@@ -372,11 +369,11 @@ def test_happy_path_tool_then_finish():
     ])
     run, record = _run_and_record()
     events = list(_loop(model).run(run, record))
-    types = _event_types(events)
+    domains = _event_domains(events)
 
-    assert types[:3] == ["record-created", "run-started", "question-understood"]
-    assert "tool-called" in types and "tool-result" in types
-    assert types[-3:] == ["answer", "run-finished", "finish"]
+    assert domains[:3] == ["run.created", "run.started", "question.understood"]
+    assert "tool.called" in domains and "tool.completed" in domains
+    assert domains[-2:] == ["answer.completed", "run.finished"]
     assert run.status == AgentRunStatus.FINISHED.value
     assert record.status == "succeeded"
     assert record.finish is True
@@ -526,9 +523,9 @@ def test_runtime_tracing_failure_does_not_change_agent_events():
         tracer=ResilientAgentTracer(FailingTracer()),
     )
 
-    types = _event_types(list(loop.run(run, record)))
+    domains = _event_domains(list(loop.run(run, record)))
 
-    assert types[-3:] == ["answer", "run-finished", "finish"]
+    assert domains[-2:] == ["answer.completed", "run.finished"]
 
 
 def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
@@ -587,7 +584,7 @@ def test_search_semantic_assets_trace_records_effective_understanding_input():
 
     events = list(_loop(model).run(run, record))
 
-    tool_event = next(item for item in events if item.type == "tool-called")
+    tool_event = next(item for item in events if item.domain == "tool.called")
     assert tool_event.content["args_summary"]["rewritten_question"] == "按城市看 gmv"
     assert tool_event.content["args_summary"]["intent"]["metric_mentions"] == ["gmv"]
 
@@ -596,10 +593,10 @@ def test_direct_text_treated_as_loose_finish():
     model = ScriptedModel([AIMessage(content="这个问题不需要查数据：答案是 42。")])
     run, record = _run_and_record()
     events = list(_loop(model).run(run, record))
-    types = _event_types(events)
+    domains = _event_domains(events)
 
-    assert "thinking" in types
-    assert types[-3:] == ["answer", "run-finished", "finish"]
+    assert "reasoning.snapshot" in domains
+    assert domains[-2:] == ["answer.completed", "run.finished"]
     assert run.status == AgentRunStatus.FINISHED.value
     assert "42" in record.sql_answer
 
@@ -609,9 +606,9 @@ def test_budget_exhaustion_fails_run_honestly():
     model = ScriptedModel(responses)
     run, record = _run_and_record()
     events = list(_loop(model, AgentConfig(max_steps=2)).run(run, record))
-    types = _event_types(events)
+    domains = _event_domains(events)
 
-    assert types[-2:] == ["run-failed", "error"]
+    assert domains[-1:] == ["run.failed"]
     assert run.status == AgentRunStatus.FAILED.value
     assert record.status == "failed"
     assert record.finish is True
@@ -624,9 +621,9 @@ def test_budget_exhaustion_soft_wraps_when_execution_exists():
     model = ScriptedModel(responses)
     run, record = _run_and_record()
     events = list(_loop(model, AgentConfig(max_steps=2)).run(run, record))
-    types = _event_types(events)
+    domains = _event_domains(events)
 
-    assert types[-3:] == ["answer", "run-finished", "finish"]
+    assert domains[-2:] == ["answer.completed", "run.finished"]
     assert run.status == AgentRunStatus.FINISHED.value
     assert "预算已达上限" in record.sql_answer
     assert record.sql == "select 1"

@@ -106,11 +106,9 @@ function applyRunToRecord(run: GraphRunResponse, currentRecord: ChatRecord) {
   // 临时前端记录在首次 Run 查询后替换为服务端生成的真实记录 ID。
   if (run.record_id) currentRecord.id = run.record_id
   currentRecord.run_id = run.run_id
-  currentRecord.trace_id = run.run_id
   currentRecord.execution_type = 'graph'
   currentRecord.status = run.status
   currentRecord.execution_events = run.context_summary?.variables
-  currentRecord.execution_trace = currentRecord.execution_events
   currentRecord.clarification =
     run.context_summary?.pending_interaction?.status === 'pending'
       ? run.context_summary.pending_interaction
@@ -157,7 +155,7 @@ function applyRunToRecord(run: GraphRunResponse, currentRecord: ChatRecord) {
 }
 
 async function refreshRun(currentRecord: ChatRecord) {
-  const runId = currentRecord.run_id || currentRecord.trace_id
+  const runId = currentRecord.run_id
   if (!runId) return
   const run = await graphWorkflowApi.getRun(runId)
   applyRunToRecord(run, currentRecord)
@@ -288,7 +286,6 @@ async function sendMessage() {
   pendingLiveEvents.splice(0)
   answeredInteractionIds.clear()
   currentRecord.run_id = nextRunId()
-  currentRecord.trace_id = currentRecord.run_id
   currentRecord.status = 'running'
   currentRecord.clarification = undefined
   currentRecord.finish = false
@@ -315,7 +312,7 @@ async function submitInteraction(response: Record<string, any>) {
   const currentRecord: ChatRecord = _currentChat.value.records[index.value]
   const interaction = currentRecord.clarification as GraphPendingInteraction | undefined
   const interactionId = interaction?.interaction_id
-  const runId = currentRecord.run_id || currentRecord.trace_id
+  const runId = currentRecord.run_id
   if (!runId || !interactionId) return
   submittingInteraction.value = true
   answeredInteractionIds.add(interactionId)
@@ -349,7 +346,7 @@ function skipInteraction() {
 function stop() {
   resetStream()
   const currentRecord = props.message?.record
-  const runId = currentRecord?.run_id || currentRecord?.trace_id
+  const runId = currentRecord?.run_id
   if (runId && !currentRecord?.finish) {
     graphWorkflowApi
       .cancel(runId)
@@ -373,7 +370,7 @@ onMounted(() => {
   const currentRecord = props.message?.record
   // 终态历史直接展示 ChatRecord 快照，只恢复仍在运行或等待输入的 Run。
   if (
-    (currentRecord?.run_id || currentRecord?.trace_id) &&
+    currentRecord?.run_id &&
     ['running', 'waiting_input'].includes(currentRecord.status || '')
   ) {
     refreshRun(currentRecord)
@@ -393,7 +390,7 @@ defineExpose({ sendMessage, index: () => index.value, stop })
     :loading="_loading"
   >
     <GraphWorkflowTrace
-      :run-id="message.record?.run_id || message.record?.trace_id"
+      :run-id="message.record?.run_id"
       :refresh-key="traceRefreshKey"
       :events="liveEvents"
       :pending-interaction="pendingInteraction"

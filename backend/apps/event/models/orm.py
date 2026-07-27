@@ -11,12 +11,12 @@ from sqlmodel import Field, SQLModel
 class EventLog(SQLModel, table=True):
     """有序产品事件。
 
-    阶段 1 继续复用原表和 run_id 字段，避免同时引入数据库迁移。
+    阶段 6 评估后继续复用原表和 run_id 字段；代码边界通用化不等于物理表合并。
     """
 
-    __tablename__ = "chatbi_agent_trace_event"
+    __tablename__ = "chatbi_agent_event"
     __table_args__ = (
-        Index("ux_chatbi_agent_trace_sequence", "run_id", "sequence", unique=True),
+        Index("ux_chatbi_agent_event_sequence", "run_id", "sequence", unique=True),
     )
 
     id: int | None = Field(
@@ -39,8 +39,4 @@ class EventLog(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=False), nullable=True),
     )
 
-
-# 兼容旧模型名称；新代码统一使用 EventLog。
-ChatbiAgentTraceEvent = EventLog
-
-__all__ = ["ChatbiAgentTraceEvent", "EventLog"]
+__all__ = ["EventLog"]

@@ -12,7 +12,7 @@ from apps.chatbi.models import (
     AgentRunStatus,
     ChatbiAgentRun,
     ChatbiAgentStep,
-    ChatbiAgentTraceEvent,
+    EventLog,
 )
 from apps.chatbi.repository.sqlmodel.agent_run_repository import (
     AgentExecutionDeletionService,
@@ -56,8 +56,8 @@ def _cleanup_test_data(session: Session, current_user) -> None:
     ).all()
     if agent_run_ids:
         session.execute(
-            delete(ChatbiAgentTraceEvent).where(
-                ChatbiAgentTraceEvent.run_id.in_(agent_run_ids)
+            delete(EventLog).where(
+                EventLog.run_id.in_(agent_run_ids)
             )
         )
         session.execute(
@@ -150,7 +150,7 @@ def test_chat_deletion_removes_owned_workflow_data_but_keeps_standalone_run(
         execution_type="graph",
         question="删除测试",
         status="succeeded",
-        trace_id="owned-delete-run",
+        run_id="owned-delete-run",
         finish=True,
     )
     session.add(record)
@@ -165,7 +165,7 @@ def test_chat_deletion_removes_owned_workflow_data_but_keeps_standalone_run(
         execution_type="agent",
         question="Agent 删除测试",
         status="succeeded",
-        trace_id="1",
+        run_id="1",
         finish=True,
     )
     session.add(agent_record)
@@ -191,7 +191,7 @@ def test_chat_deletion_removes_owned_workflow_data_but_keeps_standalone_run(
         )
     )
     session.add(
-        ChatbiAgentTraceEvent(
+        EventLog(
             run_id=agent_run.id or 0,
             sequence=1,
             event_type="run-finished",

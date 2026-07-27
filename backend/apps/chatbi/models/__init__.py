@@ -1,7 +1,6 @@
 from apps.chatbi.models.dto import (
     AgentClarificationRequest,
     AgentConfig,
-    AgentEventPayload,
     AgentQuestionRequest,
     AgentResumeStreamRequest,
     AgentStartStreamRequest,
@@ -91,7 +90,7 @@ from apps.chatbi.models.orm import (
     ChatbiAgentClarification,
     ChatbiAgentRun,
     ChatbiAgentStep,
-    ChatbiAgentTraceEvent,
+    EventLog,
 )
 
 __all__ = [
@@ -100,7 +99,6 @@ __all__ = [
     "AgentClarificationStatus",
     "AgentConfig",
     "AgentErrorClass",
-    "AgentEventPayload",
     "AgentQuestionRequest",
     "AgentResumeStreamRequest",
     "AgentRunStatus",
@@ -123,7 +121,7 @@ __all__ = [
     "ChatbiAgentClarification",
     "ChatbiAgentRun",
     "ChatbiAgentStep",
-    "ChatbiAgentTraceEvent",
+    "EventLog",
     "ChartGenerationData",
     "ChartGenerationEvent",
     "DatasourceSelectionCandidate",

@@ -177,7 +177,7 @@ class ChatRecordProjectionGateway:
             record,
             status,
             expected_chat_id=chat_id,
-            trace_id=run_id,
+            run_id=run_id,
             execution_type=ChatRecordExecutionType.GRAPH,
             error="GRAPH_RUN_FAILED" if status == RunStatus.FAILED.value else None,
             result=result,
@@ -271,7 +271,7 @@ class ChatBIWorkflowApiExtension:
                 datasource_id=chat.datasource,
                 engine_type=chat.engine_type,
                 execution_type=ChatRecordExecutionType.GRAPH,
-                trace_id=run_id,
+                run_id=run_id,
             )
         )
         if record.id is None:
@@ -378,7 +378,7 @@ class ChatBIWorkflowApiExtension:
         for record in records:
             run = self._session.exec(
                 select(WorkflowRunModel).where(
-                    WorkflowRunModel.run_id == (record.run_id or record.trace_id),
+                    WorkflowRunModel.run_id == record.run_id,
                     WorkflowRunModel.oid == workspace_id,
                     WorkflowRunModel.user_id == user_id,
                     WorkflowRunModel.chat_id == chat_record.chat_id,

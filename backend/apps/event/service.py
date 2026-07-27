@@ -38,7 +38,7 @@ class EventPublisher:
             sequence=event.sequence,
             step_id=step_id,
         )
-        # Event log 同步保存新契约字段，旧 payload 字段仍保持平铺兼容。
+        # Event log 保存渲染契约，补拉和 Timeline 直接复用这些字段。
         event.payload = {
             **payload,
             "kind": render_event.kind,

@@ -55,7 +55,7 @@ def seed_graph_record(session: Session) -> tuple[Chat, ChatRecord]:
         question="本月销售额",
         finish=False,
         status="created",
-        trace_id="projection-run",
+        run_id="projection-run",
     )
     session.add(record)
     session.flush()
@@ -97,7 +97,7 @@ def _cleanup(session: Session) -> None:
     )
     session.execute(
         delete(ChatRecord).where(
-            ChatRecord.trace_id.in_(["projection-run", "projection-seed"])
+            ChatRecord.run_id.in_(["projection-run", "projection-seed"])
         )
     )
     session.execute(delete(Chat).where(Chat.brief == "projection-chat"))
@@ -143,7 +143,7 @@ def test_projector_writes_success_snapshot(session: Session):
 def test_projector_rejects_success_without_displayable_answer(session: Session):
     chat, record = seed_graph_record(session)
     original_snapshot = (
-        record.trace_id,
+        record.run_id,
         record.execution_type,
         record.status,
         record.finish,
@@ -162,7 +162,7 @@ def test_projector_rejects_success_without_displayable_answer(session: Session):
         graph_record_projector(session).project(run)
 
     assert (
-        record.trace_id,
+        record.run_id,
         record.execution_type,
         record.status,
         record.finish,
@@ -185,7 +185,7 @@ def test_projector_keeps_waiting_record_recoverable(session: Session):
     assert projected is not None
     assert projected.status == "waiting_user"
     assert projected.finish is False
-    assert projected.trace_id == run.run_id
+    assert projected.run_id == run.run_id
 
 
 def test_projector_writes_failed_snapshot(session: Session):
@@ -338,7 +338,7 @@ def test_run_repository_create_persists_physical_chat_ownership(session: Session
 
 def test_projecting_run_store_projects_before_caller_commit(session: Session):
     chat, record = seed_graph_record(session)
-    record.trace_id = "projection-seed"
+    record.run_id = "projection-seed"
     record.execution_type = "legacy"
     record.status = "seeded"
     session.flush()
@@ -352,7 +352,7 @@ def test_projecting_run_store_projects_before_caller_commit(session: Session):
     )
     created = store.create(run)
 
-    assert record.trace_id == run.run_id
+    assert record.run_id == run.run_id
     assert record.execution_type == "graph"
     assert record.status == "created"
     session.commit()

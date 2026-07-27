@@ -44,7 +44,7 @@ def test_get_chat_with_records_returns_graph_snapshot(monkeypatch, with_data):
             sql_answer="本月销售额为 100 元。",
             sql="select 100 as sales",
             status="succeeded",
-            trace_id="graph-history-1",
+            run_id="graph-history-1",
             finish=True,
         )
         session.add(record)
@@ -58,7 +58,7 @@ def test_get_chat_with_records_returns_graph_snapshot(monkeypatch, with_data):
             with_data=with_data,
         )
 
-        graph_record = next(item for item in result.records if item["trace_id"] == "graph-history-1")
+        graph_record = next(item for item in result.records if item["run_id"] == "graph-history-1")
         assert graph_record["execution_type"] == "graph"
         assert graph_record["status"] == "succeeded"
         assert graph_record["sql_answer"] == "本月销售额为 100 元。"

@@ -49,7 +49,6 @@ def test_sqlmodel_chat_record_repository_persists_canonical_lifecycle():
         assert stored.finish is True
         assert stored.finish_time is not None
         assert stored.run_id == "record-repository-test"
-        assert stored.trace_id == stored.run_id
 
         service.transition(stored, ChatRecordStatus.RUNNING)
         service.transition(

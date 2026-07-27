@@ -3,7 +3,6 @@
 from apps.event.models import (
     ArtifactEvent,
     EventLog,
-    EventPayload,
     InteractionEvent,
     RenderEvent,
     RunEvent,
@@ -24,7 +23,6 @@ from apps.event.service import EventPublisher
 __all__ = [
     "ArtifactEvent",
     "EventLog",
-    "EventPayload",
     "EventPublisher",
     "InteractionEvent",
     "RenderEvent",

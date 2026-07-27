@@ -31,7 +31,6 @@ class ChatRecordResult(BaseModel):
     finish: bool | None = None
     status: str | None = None
     run_id: str | None = None
-    trace_id: str | None = None
     # 响应层保持可选，兼容尚未投影执行类型的历史查询结果。
     execution_type: str | None = None
     error: str | None = None

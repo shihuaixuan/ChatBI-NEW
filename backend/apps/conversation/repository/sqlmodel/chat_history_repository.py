@@ -87,7 +87,6 @@ class SQLModelChatHistoryRepository:
             ChatRecord.execution_type,
             ChatRecord.status,
             ChatRecord.run_id,
-            ChatRecord.trace_id,
         ]
 
         if with_data:
@@ -208,7 +207,6 @@ class SQLModelChatHistoryRepository:
                         execution_type=row.execution_type,
                         status=row.status,
                         run_id=row.run_id,
-                        trace_id=row.trace_id,
                         sql_reasoning_content=row.sql_reasoning_content,
                         chart_reasoning_content=row.chart_reasoning_content,
                         analysis_reasoning_content=row.analysis_reasoning_content,
@@ -244,7 +242,6 @@ class SQLModelChatHistoryRepository:
                         execution_type=row.execution_type,
                         status=row.status,
                         run_id=row.run_id,
-                        trace_id=row.trace_id,
                         data=row.data,
                         predict_data=row.predict_data,
                     )

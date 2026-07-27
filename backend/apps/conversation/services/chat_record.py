@@ -290,7 +290,6 @@ class ChatRecordService:
         *,
         expected_chat_id: int | None = None,
         run_id: str | None = None,
-        trace_id: str | None = None,
         execution_type: str | ChatRecordExecutionType | None = None,
         error: str | None = None,
         result: ChatRecordResultProjection | None = None,
@@ -300,7 +299,6 @@ class ChatRecordService:
             status,
             expected_chat_id=expected_chat_id,
             run_id=run_id,
-            trace_id=trace_id,
             execution_type=execution_type,
             error=error,
             result=result,
@@ -347,7 +345,6 @@ class ChatRecordService:
         *,
         expected_chat_id: int | None = None,
         run_id: str | None = None,
-        trace_id: str | None = None,
         execution_type: str | ChatRecordExecutionType | None = None,
         error: str | None = None,
         result: ChatRecordResultProjection | None = None,
@@ -373,10 +370,8 @@ class ChatRecordService:
             current in _TERMINAL_STATUSES or bool(record.finish)
         ) and target not in _TERMINAL_STATUSES:
             self._clear_final_result(record)
-        execution_run_id = run_id if run_id is not None else trace_id
-        if execution_run_id is not None:
-            record.run_id = execution_run_id
-            record.trace_id = execution_run_id
+        if run_id is not None:
+            record.run_id = run_id
         if execution_type is not None:
             record.execution_type = ChatRecordExecutionType(execution_type).value
 

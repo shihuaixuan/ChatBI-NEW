@@ -7,39 +7,46 @@ import {
   reduceAgentEvent,
 } from '../answer/agentEventReducer.ts'
 
-test('新旧事件契约与事件字段产生相同的回答投影', () => {
-  const legacyRecord = { execution_trace: [] }
+const CONTRACT = {
+  'question.understood': { kind: 'thinking', phase: 'end' },
+  'step.started': { kind: 'run', phase: 'start' },
+  'reasoning.snapshot': { kind: 'thinking', phase: 'snapshot' },
+  'tool.called': { kind: 'tool', phase: 'start' },
+  'workflow.step': { kind: 'tool', phase: 'start' },
+  'clarification.required': { kind: 'interaction', phase: 'start' },
+  'clarification.accepted': { kind: 'interaction', phase: 'end' },
+  'run.failed': { kind: 'run', phase: 'error' },
+}
+
+function agentEvent(domain, payload = {}) {
+  return { ...CONTRACT[domain], domain, ...payload }
+}
+
+test('结构化事件契约产生回答投影', () => {
   const currentRecord = { execution_events: [] }
 
-  reduceAgentEvent(legacyRecord, {
-    type: 'answer',
-    content: { record_id: 7, content: '完成' },
-  })
   reduceAgentEvent(currentRecord, {
-    type: 'legacy-answer-name',
     kind: 'text',
     phase: 'end',
-    domain: 'answer',
+    domain: 'answer.completed',
     content: { record_id: 7, content: '完成' },
   })
 
-  assert.equal(currentRecord.sql_answer, legacyRecord.sql_answer)
-  assert.equal(currentRecord.chart_answer, legacyRecord.chart_answer)
-  assert.equal(currentRecord.execution_events[0].type, 'answer')
-  assert.equal(currentRecord.execution_trace, currentRecord.execution_events)
+  assert.equal(currentRecord.sql_answer, '完成')
+  assert.equal(currentRecord.chart_answer, '完成')
+  assert.equal(currentRecord.execution_events[0].domain, 'answer.completed')
 })
 
 test('未知 domain 不影响事件消费', () => {
   const event = normalizeAgentEvent({
-    type: 'extension-event',
     kind: 'extension',
     phase: 'snapshot',
-    domain: 'custom-domain',
+    domain: 'custom.domain',
     content: { value: 1 },
   })
 
-  assert.equal(event.type, 'extension-event')
-  assert.equal(event.domain, 'custom-domain')
+  assert.equal(event.domain, 'custom.domain')
+  assert.equal(event.value, 1)
 })
 
 test('完成的运行保留中间失败步骤，但整体展示为已完成并标记重试', () => {
@@ -82,21 +89,18 @@ test('流式事件能在工具结果返回前展示正在执行的节点', () =>
     undefined,
     [
       {
-        sequence: 1,
-        type: 'question-understood',
+        ...agentEvent('question.understood', { sequence: 1 }),
         rewritten_question: '今天店铺的客户数',
         intent_type: 'metric_query',
         validation: { status: 'valid' },
       },
-      { sequence: 2, type: 'step-started', step_index: 1 },
+      agentEvent('step.started', { sequence: 2, step_index: 1 }),
       {
-        sequence: 3,
-        type: 'thinking',
+        ...agentEvent('reasoning.snapshot', { sequence: 3 }),
         content: '需要先检索客户数对应的指标口径，再决定查询字段。',
       },
       {
-        sequence: 4,
-        type: 'tool-called',
+        ...agentEvent('tool.called', { sequence: 4 }),
         tool_name: 'search_semantic_assets',
         args_summary: {
           rewritten_question: '今天店铺的客户数',
@@ -129,9 +133,9 @@ test('失败终止事件会覆盖轮询到的旧运行状态', () => {
       events: [],
     },
     [
-      { sequence: 1, type: 'step-started', step_index: 1 },
-      { sequence: 2, type: 'tool-called', tool_name: 'execute_sql' },
-      { sequence: 3, type: 'run-failed', content: '已达最大步数 12' },
+      agentEvent('step.started', { sequence: 1, step_index: 1 }),
+      agentEvent('tool.called', { sequence: 2, tool_name: 'execute_sql' }),
+      agentEvent('run.failed', { sequence: 3, content: '已达最大步数 12' }),
     ],
     false
   )
@@ -144,26 +148,22 @@ test('失败终止事件会覆盖轮询到的旧运行状态', () => {
 test('前置澄清按工作流节点展示而不是模型工具调用', () => {
   const flow = buildAgentFlow(undefined, [
     {
-      sequence: 1,
-      type: 'question-understood',
+      ...agentEvent('question.understood', { sequence: 1 }),
       rewritten_question: '今天店铺的客户数',
       validation: { status: 'clarification_required' },
     },
-    { sequence: 2, type: 'step-started', step_index: 1 },
+    agentEvent('step.started', { sequence: 2, step_index: 1 }),
     {
-      sequence: 3,
-      type: 'thinking',
+      ...agentEvent('reasoning.snapshot', { sequence: 3 }),
       content: '“店铺”可能表示分组维度或筛选条件，需要先确认。',
     },
     {
-      sequence: 4,
-      type: 'workflow-step',
+      ...agentEvent('workflow.step', { sequence: 4 }),
       action: 'understanding_clarification',
       args_summary: { question: '请确认“店铺”在本次查询中的使用方式。' },
     },
     {
-      sequence: 5,
-      type: 'clarification',
+      ...agentEvent('clarification.required', { sequence: 5 }),
       clarification_id: 1,
       question: '请确认“店铺”在本次查询中的使用方式。',
     },
@@ -187,29 +187,22 @@ test('本地澄清接受事件会立即解除等待态', () => {
     },
     [
       {
-        sequence: 1,
-        type: 'question-understood',
+        ...agentEvent('question.understood', { sequence: 1 }),
         rewritten_question: '今天店铺的客户数',
         validation: { status: 'clarification_required' },
       },
-      { sequence: 2, type: 'step-started', step_index: 1 },
+      agentEvent('step.started', { sequence: 2, step_index: 1 }),
       {
-        sequence: 3,
-        type: 'workflow-step',
+        ...agentEvent('workflow.step', { sequence: 3 }),
         action: 'understanding_clarification',
         args_summary: { question: '请确认“店铺”在本次查询中的使用方式。' },
       },
       {
-        sequence: 4,
-        type: 'clarification',
+        ...agentEvent('clarification.required', { sequence: 4 }),
         clarification_id: 1,
         question: '请确认“店铺”在本次查询中的使用方式。',
       },
-      {
-        sequence: 4.001,
-        type: 'clarification-accepted',
-        synthetic: true,
-      },
+      agentEvent('clarification.accepted', { sequence: 4.001, synthetic: true }),
     ],
     true
   )
@@ -229,12 +222,11 @@ test('模型规划尚未返回时会立即展示思考下一步', () => {
     undefined,
     [
       {
-        sequence: 1,
-        type: 'question-understood',
+        ...agentEvent('question.understood', { sequence: 1 }),
         rewritten_question: '今天按店铺查看客户数',
         validation: { status: 'valid' },
       },
-      { sequence: 2, type: 'step-started', step_index: 2 },
+      agentEvent('step.started', { sequence: 2, step_index: 2 }),
     ],
     true
   )

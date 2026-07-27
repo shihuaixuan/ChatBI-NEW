@@ -33,7 +33,6 @@ class ChatRecordCreateData:
     engine_type: str
     execution_type: ChatRecordExecutionType
     run_id: str | None = None
-    trace_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

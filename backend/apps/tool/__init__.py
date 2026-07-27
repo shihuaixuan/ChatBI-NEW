@@ -26,7 +26,6 @@ from apps.tool.middleware import (
     ErrorNormalizeMiddleware,
     LatencyMiddleware,
     TimeoutMiddleware,
-    TracingMiddleware,
     apply_middleware,
     default_middlewares,
 )
@@ -46,7 +45,6 @@ __all__ = [
     "ToolOutput",
     "ToolRegistry",
     "ToolStatus",
-    "TracingMiddleware",
     "apply_middleware",
     "batch_tool_calls",
     "close_unfinished_tool_calls",

@@ -7,8 +7,8 @@ from apps.chatbi.models.orm.agent_run import (
     ChatbiAgentClarification,
     ChatbiAgentRun,
     ChatbiAgentStep,
-    ChatbiAgentTraceEvent,
 )
+from apps.event import EventLog
 
 __all__ = [
     "AgentClarificationResumeKind",
@@ -19,5 +19,5 @@ __all__ = [
     "ChatbiAgentClarification",
     "ChatbiAgentRun",
     "ChatbiAgentStep",
-    "ChatbiAgentTraceEvent",
+    "EventLog",
 ]

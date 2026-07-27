@@ -97,11 +97,11 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
     assert response.media_type == "text/event-stream"
     assert captured["request"].question == "销售额"
     payload = orjson.loads(body.removeprefix("data:").strip())
-    assert payload["type"] == "run-started"
+    assert payload["domain"] == "run.started"
     assert (payload["kind"], payload["phase"], payload["domain"]) == (
         "run",
         "start",
-        "run",
+        "run.started",
     )
 
 
@@ -176,10 +176,10 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
         "text": None,
     }
     assert captured["answer_text"] == "用户澄清回答：销售下单客户数"
-    assert "clarification-accepted" in body
+    assert "clarification.accepted" in body
 
 
-def test_timeline_and_legacy_trace_return_same_product_events(monkeypatch):
+def test_timeline_returns_product_events(monkeypatch):
     user = SimpleNamespace(id=7, oid=1)
     session = SimpleNamespace()
     expected = {
@@ -187,7 +187,7 @@ def test_timeline_and_legacy_trace_return_same_product_events(monkeypatch):
         "run_id": 5,
         "status": "finished",
         "steps": [],
-        "events": [{"sequence": 1, "type": "run-started"}],
+        "events": [{"sequence": 1, "domain": "run.started"}],
     }
     record_service = SimpleNamespace(get_owned=lambda user_id, record_id: object())
     monkeypatch.setattr(api, "build_chat_record_service", lambda _session: record_service)
@@ -198,7 +198,5 @@ def test_timeline_and_legacy_trace_return_same_product_events(monkeypatch):
     )
 
     timeline = asyncio.run(api.agent_timeline(session, user, 3))
-    legacy_trace = asyncio.run(api.agent_trace(session, user, 3))
 
     assert timeline == expected
-    assert legacy_trace == timeline

@@ -498,7 +498,7 @@ def test_graph_chat_history_survives_reload_boundary():
         assert record is not None
         assert run.chat_id == chat_id
         assert run.record_id == record.id
-        assert record.trace_id == run.run_id
+        assert record.run_id == run.run_id
         assert record.execution_type == "graph"
         assert record.status == "succeeded"
         assert record.finish is True
@@ -529,7 +529,7 @@ def test_standalone_graph_query_rejects_body_chat_id():
             is None
         )
         assert (
-            session.exec(select(ChatRecord).where(ChatRecord.trace_id == "api-standalone-body-chat-run")).one_or_none()
+            session.exec(select(ChatRecord).where(ChatRecord.run_id == "api-standalone-body-chat-run")).one_or_none()
             is None
         )
         _cleanup(session)
@@ -558,7 +558,7 @@ def test_graph_chat_query_rejects_unowned_chat_without_creating_history():
             is None
         )
         assert (
-            session.exec(select(ChatRecord).where(ChatRecord.trace_id == "api-chat-unowned-run")).one_or_none() is None
+            session.exec(select(ChatRecord).where(ChatRecord.run_id == "api-chat-unowned-run")).one_or_none() is None
         )
         _cleanup(session)
 
@@ -586,7 +586,7 @@ def test_graph_chat_query_rejects_dataset_mismatch_without_creating_history():
             is None
         )
         assert (
-            session.exec(select(ChatRecord).where(ChatRecord.trace_id == "api-chat-dataset-mismatch-run")).one_or_none()
+            session.exec(select(ChatRecord).where(ChatRecord.run_id == "api-chat-dataset-mismatch-run")).one_or_none()
             is None
         )
         _cleanup(session)
@@ -668,7 +668,7 @@ def test_graph_chat_query_stream_creates_owned_record_and_run():
         assert run.record_id is not None
         record = session.get(ChatRecord, run.record_id)
         assert record is not None
-        assert record.trace_id == run.run_id
+        assert record.run_id == run.run_id
         assert record.execution_type == "graph"
         _cleanup(session)
 
@@ -1124,7 +1124,7 @@ def test_graph_chat_query_loads_previous_semantic_context():
             question="今天店铺的访问人数",
             finish=True,
             status="succeeded",
-            trace_id="api-prev-context",
+            run_id="api-prev-context",
         )
         session.add(previous_record)
         session.flush()
@@ -1180,7 +1180,7 @@ def test_graph_chat_query_loads_previous_semantic_context():
             question="不应进入 Graph 上下文的传统问题",
             finish=True,
             status="succeeded",
-            trace_id="api-legacy-context",
+            run_id="api-legacy-context",
         )
         session.add(legacy_record)
         session.flush()
@@ -1218,7 +1218,7 @@ def test_graph_chat_query_loads_previous_semantic_context():
             question="失败的后续问题",
             finish=True,
             status="failed",
-            trace_id="api-failed-context",
+            run_id="api-failed-context",
         )
         session.add(failed_record)
         session.flush()
@@ -1259,7 +1259,7 @@ def test_graph_chat_query_loads_previous_semantic_context():
 
     with Session(engine) as session:
         stored = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-context-run")).one()
-        record = session.exec(select(ChatRecord).where(ChatRecord.trace_id == "api-context-run")).one()
+        record = session.exec(select(ChatRecord).where(ChatRecord.run_id == "api-context-run")).one()
         context = stored.context
         assert stored.request["chat_id"] == chat_id
         assert stored.request["record_id"] == record.id

@@ -58,9 +58,8 @@ class ChatRecord(SQLModel, table=True):
         sa_column=Column(Boolean, nullable=True, default=False)
     )
     status: str | None = Field(default=None, max_length=32, nullable=True)
-    # execution run 的明确标识；trace_id 在兼容期继续双写。
+    # Agent 与 Graph 统一使用明确的 execution run 标识。
     run_id: str | None = Field(default=None, max_length=64, nullable=True)
-    trace_id: str | None = Field(default=None, max_length=64, nullable=True)
     # 新记录默认进入 Graph；Agent 入口会显式覆盖为 agent。
     execution_type: str = Field(default="graph", max_length=32, nullable=False)
     error: str | None = Field(sa_column=Column(Text, nullable=True))

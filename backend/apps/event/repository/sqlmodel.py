@@ -65,13 +65,8 @@ def delete_events_for_runs(session: Session, run_ids: list[int]) -> None:
         return
     session.execute(delete(EventLog).where(col(EventLog.run_id).in_(run_ids)))
 
-
-# 兼容旧函数名称；新代码统一使用 append_event。
-append_trace = append_event
-
 __all__ = [
     "append_event",
-    "append_trace",
     "delete_events_for_runs",
     "list_events_after",
     "next_sequence",

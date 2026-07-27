@@ -1,7 +1,6 @@
 from apps.chatbi.models.dto.agent import (
     AgentClarificationRequest,
     AgentConfig,
-    AgentEventPayload,
     AgentQuestionRequest,
     AgentResumeStreamRequest,
     AgentStartStreamRequest,
@@ -126,7 +125,6 @@ from apps.chatbi.models.dto.tool_result import ToolResult
 __all__ = [
     "AgentClarificationRequest",
     "AgentConfig",
-    "AgentEventPayload",
     "AgentQuestionRequest",
     "AgentResumeStreamRequest",
     "AgentStartStreamRequest",

@@ -1,85 +1,66 @@
-"""产品事件的传输契约与兼容映射。"""
+"""产品事件的传输契约。"""
 
 from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel
 
+EventPhase: TypeAlias = Literal["start", "delta", "end", "snapshot", "error"]
 
-class EventPayload(BaseModel):
-    """兼容阶段 1 的旧 SSE 事件载荷。"""
 
-    type: str
+class RenderEvent(BaseModel):
+    """前端渲染使用的稳定事件基类。"""
+
     content: Any = None
     record_id: int | None = None
     run_id: int | None = None
     sequence: int | None = None
-    kind: str | None = None
-    phase: str | None = None
-    domain: str | None = None
-    block_id: str | None = None
-
-
-EventPhase: TypeAlias = Literal["start", "delta", "end", "snapshot", "error"]
-
-
-class RenderEvent(EventPayload):
-    """前端渲染使用的稳定事件基类。"""
-
     kind: str
     phase: EventPhase
     domain: str
-
+    block_id: str | None = None
 
 class RunEvent(RenderEvent):
     kind: Literal["run"] = "run"
-    domain: Literal["run"] = "run"
 
 
 class ThinkingEvent(RenderEvent):
     kind: Literal["thinking"] = "thinking"
-    domain: Literal["reasoning"] = "reasoning"
 
 
 class TextEvent(RenderEvent):
     kind: Literal["text"] = "text"
-    domain: Literal["answer"] = "answer"
 
 
 class ToolEvent(RenderEvent):
     kind: Literal["tool"] = "tool"
-    domain: Literal["tool"] = "tool"
 
 
 class ArtifactEvent(RenderEvent):
     kind: Literal["artifact"] = "artifact"
-    domain: Literal["artifact"] = "artifact"
 
 
 class InteractionEvent(RenderEvent):
     kind: Literal["interaction"] = "interaction"
-    domain: Literal["interaction"] = "interaction"
 
 
-_EVENT_CONTRACT: dict[str, tuple[type[RenderEvent], EventPhase]] = {
-    "record-created": (RunEvent, "start"),
-    "run-started": (RunEvent, "start"),
-    "step-started": (RunEvent, "start"),
-    "run-finished": (RunEvent, "end"),
-    "finish": (RunEvent, "end"),
-    "run-failed": (RunEvent, "error"),
-    "error": (RunEvent, "error"),
-    "question-understood": (ThinkingEvent, "end"),
-    "thinking": (ThinkingEvent, "snapshot"),
-    "answer": (TextEvent, "end"),
-    "tool-called": (ToolEvent, "start"),
-    "workflow-step": (ToolEvent, "start"),
-    "tool-result": (ToolEvent, "end"),
-    "sql-generated": (ArtifactEvent, "end"),
-    "sql-validated": (ArtifactEvent, "end"),
-    "sql-executed": (ArtifactEvent, "end"),
-    "chart-generated": (ArtifactEvent, "end"),
-    "clarification": (InteractionEvent, "start"),
-    "clarification-accepted": (InteractionEvent, "end"),
+_EVENT_CONTRACT: dict[str, tuple[type[RenderEvent], EventPhase, str]] = {
+    "record-created": (RunEvent, "start", "run.created"),
+    "run-started": (RunEvent, "start", "run.started"),
+    "step-started": (RunEvent, "start", "step.started"),
+    "run-finished": (RunEvent, "end", "run.finished"),
+    "run-failed": (RunEvent, "error", "run.failed"),
+    "question-understood": (ThinkingEvent, "end", "question.understood"),
+    "thinking": (ThinkingEvent, "snapshot", "reasoning.snapshot"),
+    "answer": (TextEvent, "end", "answer.completed"),
+    "tool-called": (ToolEvent, "start", "tool.called"),
+    "workflow-step": (ToolEvent, "start", "workflow.step"),
+    "tool-result": (ToolEvent, "end", "tool.completed"),
+    "sql-generated": (ArtifactEvent, "end", "sql.generated"),
+    "sql-validated": (ArtifactEvent, "end", "sql.validated"),
+    "sql-executed": (ArtifactEvent, "end", "sql.executed"),
+    "chart-generated": (ArtifactEvent, "end", "chart.generated"),
+    "clarification": (InteractionEvent, "start", "clarification.required"),
+    "clarification-accepted": (InteractionEvent, "end", "clarification.accepted"),
 }
 
 
@@ -92,13 +73,16 @@ def create_render_event(
     sequence: int,
     step_id: int | None = None,
 ) -> RenderEvent:
-    """把旧事件类型映射为稳定渲染契约，未知类型保持可消费。"""
+    """把内部事件名称映射为稳定渲染契约。"""
 
-    event_class, phase = _EVENT_CONTRACT.get(event_type, (ArtifactEvent, "snapshot"))
+    try:
+        event_class, phase, domain = _EVENT_CONTRACT[event_type]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported render event: {event_type}") from exc
     return event_class.model_validate(
         {
-            "type": event_type,
             "phase": phase,
+            "domain": domain,
             "content": content,
             "record_id": record_id,
             "run_id": run_id,
@@ -130,13 +114,8 @@ def _block_id(
     return None
 
 
-# 兼容旧导入；新代码使用 RenderEvent 或具体事件类型。
-AgentEventPayload = EventPayload
-
 __all__ = [
-    "AgentEventPayload",
     "ArtifactEvent",
-    "EventPayload",
     "InteractionEvent",
     "RenderEvent",
     "RunEvent",

@@ -13,7 +13,6 @@ from apps.chatbi.models.orm.agent_run import (
 )
 from apps.conversation.composition import build_chat_record_service
 from apps.event import (
-    append_event,
     delete_events_for_runs,
 )
 from apps.event import (
@@ -117,9 +116,7 @@ def update_run(
     session.add(run)
 
 
-# 兼容旧调用；事件仓储已迁移到 apps.event。
 next_sequence = next_event_sequence
-append_trace = append_event
 list_events_after = list_persisted_events_after
 
 
@@ -265,13 +262,9 @@ def build_timeline_response(session, record_id: int) -> dict:
             for step in steps
         ],
         "events": [
-            {"sequence": event.sequence, "type": event.event_type, **(event.payload or {})} for event in events
+            {"sequence": event.sequence, **(event.payload or {})} for event in events
         ],
     }
-
-
-# 兼容旧调用；新代码统一使用 Timeline 命名。
-build_trace_response = build_timeline_response
 
 
 class AgentExecutionDeletionService:

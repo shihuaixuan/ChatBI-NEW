@@ -127,7 +127,3 @@ def default_middlewares(
         TimeoutMiddleware(timeout_seconds=timeout_seconds),
         LatencyMiddleware(),
     ]
-
-
-# 兼容旧导入；该中间件只统计耗时，不创建可观测性 Trace。
-TracingMiddleware = LatencyMiddleware

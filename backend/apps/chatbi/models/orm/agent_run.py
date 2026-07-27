@@ -16,8 +16,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
-from apps.event import EventLog
-
 
 class AgentRunStatus(str, Enum):
     CREATED = "created"
@@ -120,10 +118,6 @@ class ChatbiAgentStep(SQLModel, table=True):
     error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
     finished_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
-
-
-# 兼容旧导入；Event log 模型已由 apps.event 统一管理。
-ChatbiAgentTraceEvent = EventLog
 
 
 class ChatbiAgentClarification(SQLModel, table=True):

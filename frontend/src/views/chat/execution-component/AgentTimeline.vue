@@ -36,10 +36,7 @@ const openedSteps = reactive<Record<string, boolean>>({})
 
 const currentRecordId = computed(() => props.recordId || props.record?.id)
 const liveEvents = computed<Array<Record<string, any>>>(
-  () =>
-    (props.record?.execution_events as Array<Record<string, any>>) ||
-    (props.record?.execution_trace as Array<Record<string, any>>) ||
-    []
+  () => (props.record?.execution_events as Array<Record<string, any>>) || []
 )
 const flow = computed(() => buildAgentFlow(timeline.value, liveEvents.value, props.runtimeLoading))
 const budget = computed(() => timeline.value?.budget || {})

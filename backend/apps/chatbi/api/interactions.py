@@ -4,8 +4,6 @@ from fastapi.responses import StreamingResponse
 from apps.chatbi.models import AgentRunStatus
 from apps.chatbi.models.dto.agent import (
     AgentClarificationRequest,
-    AgentQuestionRequest,
-    AgentResumeStreamRequest,
     AgentStartStreamRequest,
     AgentStreamRequest,
 )
@@ -47,34 +45,6 @@ async def agent_stream(current_user: CurrentUser, request: AgentStreamRequest):
     return StreamingResponse(encode_sse_events(events), media_type="text/event-stream")
 
 
-@router.post("/question", deprecated=True)
-async def agent_question(current_user: CurrentUser, request: AgentQuestionRequest):
-    """兼容旧客户端；新接入统一使用 /stream。"""
-
-    return await agent_stream(
-        current_user,
-        AgentStartStreamRequest(action="start", **request.model_dump()),
-    )
-
-
-@router.post("/record/{record_id}/clarification", deprecated=True)
-async def agent_clarification(
-    current_user: CurrentUser,
-    record_id: int,
-    request: AgentClarificationRequest,
-):
-    """兼容旧客户端；新接入统一使用 /stream。"""
-
-    return await agent_stream(
-        current_user,
-        AgentResumeStreamRequest(
-            action="resume",
-            record_id=record_id,
-            clarification=request,
-        ),
-    )
-
-
 def _clarification_answer_text(request: AgentClarificationRequest) -> str:
     parts = []
     for item in request.selections:
@@ -101,13 +71,6 @@ async def agent_timeline(session: SessionDep, current_user: CurrentUser, record_
     return _agent_timeline(session, current_user, record_id)
 
 
-@router.get("/record/{record_id}/trace", deprecated=True)
-async def agent_trace(session: SessionDep, current_user: CurrentUser, record_id: int):
-    """兼容旧客户端；返回内容与 Timeline 完全一致。"""
-
-    return _agent_timeline(session, current_user, record_id)
-
-
 @router.get("/runs/{run_id}/events")
 async def agent_events(session: SessionDep, current_user: CurrentUser, run_id: int, after_sequence: int = 0):
     run = agent_run_repository.get_run(session, run_id)
@@ -118,7 +81,7 @@ async def agent_events(session: SessionDep, current_user: CurrentUser, run_id: i
         "run_id": run_id,
         "status": run.status,
         "events": [
-            {"sequence": event.sequence, "type": event.event_type, **(event.payload or {})} for event in events
+            {"sequence": event.sequence, **(event.payload or {})} for event in events
         ],
     }
 

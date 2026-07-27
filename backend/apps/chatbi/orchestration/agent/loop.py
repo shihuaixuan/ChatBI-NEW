@@ -1033,7 +1033,6 @@ class AgentLoop:
         self.session.commit()
         yield self._emit(run, "answer", {"record_id": record.id, "content": answer}, step_id)
         yield self._emit(run, "run-finished", {"record_id": record.id, "content": answer}, step_id)
-        yield self._emit(run, "finish", {"record_id": record.id, "content": answer}, step_id)
 
     def _fail(self, run, record, messages, budget, message, error_class) -> Iterator[RenderEvent]:
         close_unfinished_tool_calls(
@@ -1056,7 +1055,6 @@ class AgentLoop:
         )
         self.session.commit()
         yield self._emit(run, "run-failed", {"record_id": record.id, "content": message, "error_class": error_class})
-        yield self._emit(run, "error", {"record_id": record.id, "content": message, "error_class": error_class})
 
     def _emit(
         self,
@@ -1083,9 +1081,9 @@ def _trace_terminal_result(
     """依据产品终止事件标记 span 结果，不让 Trace 反向控制事件流。"""
 
     for event in events:
-        if event.type in {"run-failed", "error"}:
+        if event.domain == "run.failed":
             span.set_attribute("gen_ai.agent.result", "failed")
-        elif event.type in {"run-finished", "finish"}:
+        elif event.domain == "run.finished":
             span.set_attribute("gen_ai.agent.result", "finished")
         yield event
 

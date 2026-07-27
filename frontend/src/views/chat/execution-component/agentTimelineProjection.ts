@@ -62,11 +62,11 @@ export function buildAgentFlow(
 
   for (const rawEvent of [...events].sort(compareEvents)) {
     const event = normalizeAgentEvent(rawEvent)
-    switch (event.type) {
-      case 'run-started':
+    switch (event.domain) {
+      case 'run.started':
         eventRunStatus = 'running'
         break
-      case 'question-understood':
+      case 'question.understood':
         eventRunStatus =
           event.validation?.status === 'clarification_required' ? 'waiting_user' : 'running'
         understandingStep = {
@@ -79,14 +79,14 @@ export function buildAgentFlow(
           understanding: event,
         }
         break
-      case 'step-started':
+      case 'step.started':
         eventRunStatus = 'running'
         currentIndex = Number(event.step_index)
         if (!Number.isFinite(currentIndex)) break
         // step-started 在模型调用前发出，此时工具尚未确定，应先展示规划状态。
         ensureThinkingStep(thinkingSteps, currentIndex).status = 'running'
         break
-      case 'thinking': {
+      case 'reasoning.snapshot': {
         if (currentIndex === undefined) break
         const step = ensureThinkingStep(thinkingSteps, currentIndex)
         const content = String(event.content || '').trim()
@@ -96,7 +96,7 @@ export function buildAgentFlow(
         step.status = 'success'
         break
       }
-      case 'tool-called': {
+      case 'tool.called': {
         finishThinkingStep(thinkingSteps, currentIndex)
         const step = currentStep(toolSteps, currentIndex)
         if (step) {
@@ -106,7 +106,7 @@ export function buildAgentFlow(
         }
         break
       }
-      case 'workflow-step': {
+      case 'workflow.step': {
         finishThinkingStep(thinkingSteps, currentIndex)
         const step = currentStep(toolSteps, currentIndex)
         if (step) {
@@ -116,7 +116,7 @@ export function buildAgentFlow(
         }
         break
       }
-      case 'tool-result': {
+      case 'tool.completed': {
         const step = currentStep(toolSteps, currentIndex)
         if (step) {
           step.result = { ...step.result, ...event }
@@ -124,13 +124,13 @@ export function buildAgentFlow(
         }
         break
       }
-      case 'sql-generated':
-      case 'sql-validated': {
+      case 'sql.generated':
+      case 'sql.validated': {
         const step = currentStep(toolSteps, currentIndex)
         if (step && event.sql) step.result.sql = event.sql
         break
       }
-      case 'sql-executed': {
+      case 'sql.executed': {
         const step = currentStep(toolSteps, currentIndex)
         if (step) {
           step.result.row_count = event.row_count
@@ -138,7 +138,7 @@ export function buildAgentFlow(
         }
         break
       }
-      case 'clarification': {
+      case 'clarification.required': {
         eventRunStatus = 'waiting_user'
         const step = currentStep(toolSteps, currentIndex)
         if (step) {
@@ -147,7 +147,7 @@ export function buildAgentFlow(
         }
         break
       }
-      case 'clarification-accepted': {
+      case 'clarification.accepted': {
         eventRunStatus = 'running'
         if (understandingStep) {
           // 澄清提交后后端会重新理解完整问题，用运行态覆盖旧的等待结果。
@@ -161,8 +161,7 @@ export function buildAgentFlow(
         if (waitingStep) waitingStep.status = 'success'
         break
       }
-      case 'run-failed':
-      case 'error': {
+      case 'run.failed': {
         eventRunStatus = 'failed'
         terminalStatus = 'failed'
         const thinkingStep =
@@ -178,8 +177,7 @@ export function buildAgentFlow(
         }
         break
       }
-      case 'run-finished':
-      case 'finish':
+      case 'run.finished':
         eventRunStatus = 'finished'
         terminalStatus = 'success'
         for (const step of thinkingSteps.values()) {

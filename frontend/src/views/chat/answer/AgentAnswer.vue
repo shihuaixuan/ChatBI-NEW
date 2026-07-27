@@ -78,7 +78,7 @@ async function pushOptimisticClarificationAccepted(currentRecord: ChatRecord) {
     sequence: latestAgentEventSequence(currentRecord) + 0.001,
     content: {
       record_id: currentRecord.id,
-      run_id: currentRecord.run_id || currentRecord.trace_id,
+      run_id: currentRecord.run_id,
       synthetic: true,
     },
   })
@@ -152,7 +152,6 @@ async function sendMessage() {
     return
   }
   currentRecord.execution_events = []
-  currentRecord.execution_trace = currentRecord.execution_events
   const controller = new AbortController()
   try {
     const response = await agentQuestionApi.stream(
@@ -209,7 +208,7 @@ function cancelClarification() {
   if (index.value < 0) return
   const currentRecord: ChatRecord = _currentChat.value.records[index.value]
   currentRecord.clarification = undefined
-  const runId = Number(currentRecord.run_id || currentRecord.trace_id)
+  const runId = Number(currentRecord.run_id)
   if (runId) {
     agentQuestionApi.cancel(runId).catch(() => {})
   }
@@ -223,7 +222,6 @@ async function restorePendingClarification() {
   if (!currentRecord?.id || currentRecord.status !== 'waiting_user') return
   const timeline = await agentQuestionApi.timeline(currentRecord.id)
   currentRecord.execution_events = timeline.events
-  currentRecord.execution_trace = currentRecord.execution_events
   if (timeline.clarification?.status === 'pending') {
     currentRecord.clarification = timeline.clarification
   }

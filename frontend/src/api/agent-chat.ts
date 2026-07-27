@@ -57,14 +57,7 @@ export const agentQuestionApi = {
     request.fetchStream('/chat/agent/stream', data, controller),
   timeline: (recordId: number) =>
     request.get<AgentTimelineResponse>(`/chat/agent/record/${recordId}/timeline`),
-  // 兼容旧调用；新代码统一使用 timeline。
-  trace: (recordId: number) =>
-    request.get<AgentTimelineResponse>(`/chat/agent/record/${recordId}/trace`),
   events: (runId: number, afterSequence: number = 0) =>
     request.get(`/chat/agent/runs/${runId}/events?after_sequence=${afterSequence}`),
   cancel: (runId: number) => request.post(`/chat/agent/runs/${runId}/cancel`),
 }
-
-// 兼容旧类型名称。
-export type AgentTraceStep = AgentTimelineStep
-export type AgentTraceResponse = AgentTimelineResponse

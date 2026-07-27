@@ -24,7 +24,7 @@ from tests.agent.test_agent_loop import (
     ProbeTool,
     ScriptedModel,
     StaticUnderstandingService,
-    _event_types,
+    _event_domains,
     _tool_message,
 )
 
@@ -95,9 +95,9 @@ def test_clarify_suspends_run_and_persists_messages():
     ])
     run, record = _run_and_record()
     events = list(_loop(model).run(run, record))
-    types = _event_types(events)
+    domains = _event_domains(events)
 
-    assert types[-1] == "clarification"
+    assert domains[-1] == "clarification.required"
     payload = events[-1].content
     assert payload["question"] == "你要查哪种额度？"
     assert payload["options"][0]["label"] == "授信额度"
@@ -164,11 +164,16 @@ def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval()
     )
 
     events = list(loop.run(run, record))
-    types = _event_types(events)
+    domains = _event_domains(events)
 
     assert model.calls == []
-    assert "tool-result" not in types
-    assert types[-4:] == ["step-started", "thinking", "workflow-step", "clarification"]
+    assert "tool.completed" not in domains
+    assert domains[-4:] == [
+        "step.started",
+        "reasoning.snapshot",
+        "workflow.step",
+        "clarification.required",
+    ]
     assert run.status == AgentRunStatus.WAITING_USER.value
     assert run.budget_snapshot["steps"] == 1
     assert run.budget_snapshot["clarifications"] == 1
@@ -283,10 +288,10 @@ def test_resume_continues_from_clarification_to_finish():
         options=[],
     )
     events = list(_loop(resume_model).resume(run, record, clarification, "用户澄清回答：授信额度"))
-    types = _event_types(events)
+    domains = _event_domains(events)
 
-    assert types[0] == "clarification-accepted"
-    assert types[-3:] == ["answer", "run-finished", "finish"]
+    assert domains[0] == "clarification.accepted"
+    assert domains[-2:] == ["answer.completed", "run.finished"]
     assert run.status == AgentRunStatus.FINISHED.value
     # 恢复后的首轮消息里包含澄清答案 ToolMessage
     first_call = resume_model.calls[0]
@@ -336,7 +341,7 @@ def test_resume_emits_acceptance_without_reunderstanding():
     events = loop.resume(run, record, clarification, "按店铺分组")
     first_event = next(events)
 
-    assert _event_types([first_event]) == ["clarification-accepted"]
+    assert _event_domains([first_event]) == ["clarification.accepted"]
     assert not understanding_service.called
 
 
@@ -366,7 +371,7 @@ def test_filter_role_clarification_resumes_to_targeted_value_clarification():
 
     events = list(loop.resume(run, record, clarification, "用户澄清回答：筛选具体店铺"))
 
-    assert _event_types(events)[-1] == "clarification"
+    assert _event_domains(events)[-1] == "clarification.required"
     assert run.status == AgentRunStatus.WAITING_USER.value
     updated_slot = run.derived_state["question_understanding"]["intent"]["dimension_slots"][0]
     assert updated_slot["role"] == "filter"
@@ -393,7 +398,10 @@ def test_filter_role_clarification_resumes_to_targeted_value_clarification():
         finish_loop.resume(run, record, next_clarification, "用户澄清回答：1号店铺")
     )
 
-    assert _event_types(finish_events)[:2] == ["clarification-accepted", "question-understood"]
+    assert _event_domains(finish_events)[:2] == [
+        "clarification.accepted",
+        "question.understood",
+    ]
     assert run.status == AgentRunStatus.FINISHED.value
     confirmed = run.derived_state["question_understanding"]
     assert confirmed["rewritten_question"] == "今天店铺的客户数"
@@ -421,9 +429,9 @@ def test_clarify_over_budget_rejected_and_loop_continues():
         AIMessage(content="好的，基于现有信息直接回答。"),
     ])
     events = list(_loop(resume_model).resume(run, record, clarification, "回答"))
-    types = _event_types(events)
+    domains = _event_domains(events)
 
-    assert "clarification" not in types  # 未再次挂起
+    assert "clarification.required" not in domains  # 未再次挂起
     assert run.status == AgentRunStatus.FINISHED.value
     rejected = [m for m in resume_model.calls[1] if isinstance(m, ToolMessage) and "上限" in str(m.content)]
     assert rejected
@@ -489,7 +497,10 @@ def test_resume_updates_target_slot_without_rewriting_or_reunderstanding():
 
     events = list(loop.resume(run, record, clarification, "用户澄清回答：按店铺分组"))
 
-    assert _event_types(events)[:2] == ["clarification-accepted", "question-understood"]
+    assert _event_domains(events)[:2] == [
+        "clarification.accepted",
+        "question.understood",
+    ]
     assert not understanding_service.called
     assert not any(isinstance(message, ToolMessage) for message in model.calls[0])
     assert any(

@@ -2,7 +2,6 @@
 
 from apps.event.models.dto import (
     ArtifactEvent,
-    EventPayload,
     InteractionEvent,
     RenderEvent,
     RunEvent,
@@ -16,7 +15,6 @@ from apps.event.models.orm import EventLog
 __all__ = [
     "ArtifactEvent",
     "EventLog",
-    "EventPayload",
     "InteractionEvent",
     "RenderEvent",
     "RunEvent",
