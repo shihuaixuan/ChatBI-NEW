@@ -62,13 +62,17 @@ export function reduceAgentEvent(
 ): AgentEventEffect {
   const event = normalizeAgentEvent(raw)
   const payload = isObject(raw.content) ? raw.content : event
-  currentRecord.execution_trace = currentRecord.execution_trace || []
-  currentRecord.execution_trace.push({ ...event, ...payload, _ts: Date.now() })
+  const executionEvents =
+    currentRecord.execution_events || currentRecord.execution_trace || []
+  currentRecord.execution_events = executionEvents
+  currentRecord.execution_trace = executionEvents
+  executionEvents.push({ ...event, ...payload, _ts: Date.now() })
 
   switch (event.type) {
     case 'record-created':
       currentRecord.id = payload.id || payload.record_id || event.record_id
-      currentRecord.trace_id = String(payload.run_id || event.run_id || '') || undefined
+      currentRecord.run_id = String(payload.run_id || event.run_id || '') || undefined
+      currentRecord.trace_id = currentRecord.run_id
       break
     case 'run-started':
       currentRecord.status = 'running'
@@ -113,7 +117,11 @@ export function reduceAgentEvent(
 }
 
 export function latestAgentEventSequence(currentRecord: ChatRecord) {
-  const events = Array.isArray(currentRecord.execution_trace) ? currentRecord.execution_trace : []
+  const events = Array.isArray(currentRecord.execution_events)
+    ? currentRecord.execution_events
+    : Array.isArray(currentRecord.execution_trace)
+      ? currentRecord.execution_trace
+      : []
   return events.reduce((max, event: AgentRenderEvent) => Math.max(max, Number(event.sequence || 0)), 0)
 }
 

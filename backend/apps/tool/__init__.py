@@ -24,6 +24,7 @@ from apps.tool.messages import (
 )
 from apps.tool.middleware import (
     ErrorNormalizeMiddleware,
+    LatencyMiddleware,
     TimeoutMiddleware,
     TracingMiddleware,
     apply_middleware,
@@ -38,6 +39,7 @@ __all__ = [
     "DEFAULT_OFFLOAD_CHARS",
     "ErrorNormalizeMiddleware",
     "FOLDED_PLACEHOLDER",
+    "LatencyMiddleware",
     "TimeoutMiddleware",
     "Tool",
     "ToolCallRequest",

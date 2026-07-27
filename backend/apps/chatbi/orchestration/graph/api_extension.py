@@ -378,7 +378,7 @@ class ChatBIWorkflowApiExtension:
         for record in records:
             run = self._session.exec(
                 select(WorkflowRunModel).where(
-                    WorkflowRunModel.run_id == record.trace_id,
+                    WorkflowRunModel.run_id == (record.run_id or record.trace_id),
                     WorkflowRunModel.oid == workspace_id,
                     WorkflowRunModel.user_id == user_id,
                     WorkflowRunModel.chat_id == chat_record.chat_id,

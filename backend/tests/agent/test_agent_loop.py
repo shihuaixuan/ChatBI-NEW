@@ -1,5 +1,6 @@
 """AgentLoop 端到端行为测试：FakeSession + 脚本化模型客户端，不依赖真实 DB/LLM。"""
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import orjson
@@ -36,6 +37,12 @@ from apps.event import (
 from apps.event import list_events_after as list_persisted_events_after
 from apps.event.repository import sqlmodel as event_repository
 from apps.tool import ToolOutput, ToolRegistry
+from apps.trace import DisabledAgentTracer, TraceConfig
+from apps.trace.setup import (
+    OpenTelemetryAgentTracer,
+    ResilientAgentTracer,
+    build_agent_tracer,
+)
 
 
 class FakeSession:
@@ -132,6 +139,43 @@ class ScriptedModel:
     def invoke(self, messages, tool_specs):
         self.calls.append(messages)
         return self.responses.pop(0)
+
+
+class RecordingTracer:
+    """记录 span 层级和关闭状态的测试 tracer。"""
+
+    def __init__(self):
+        self.active = []
+        self.spans = []
+
+    @contextmanager
+    def span(self, name, attributes=None):
+        item = SimpleNamespace(
+            name=name,
+            parent=self.active[-1].name if self.active else None,
+            attributes=dict(attributes or {}),
+            closed=False,
+            set_attribute=lambda key, value: item.attributes.__setitem__(key, value),
+        )
+        self.spans.append(item)
+        self.active.append(item)
+        try:
+            yield item
+        finally:
+            self.active.pop()
+            item.closed = True
+
+
+class FailingTracer:
+    def span(self, name, attributes=None):
+        class FailingManager:
+            def __enter__(self):
+                raise RuntimeError("exporter unavailable")
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        return FailingManager()
 
 
 class StaticUnderstandingService:
@@ -345,6 +389,146 @@ def test_happy_path_tool_then_finish():
     assert run.derived_state["question_understanding"]["intent"]["metric_mentions"] == ["gmv"]
     assert run.budget_snapshot["tokens_used"] == 17
     assert "时间筛选必须原样使用 `time_range.normalized`" in model.calls[0][0].content
+
+
+def test_agent_tracing_records_run_llm_and_tool_hierarchy():
+    tracer = RecordingTracer()
+    model = ScriptedModel([
+        _tool_message("probe", {"value": "x"}),
+        _tool_message("finish", {"value": ""}, "c2"),
+    ])
+    run, record = _run_and_record()
+    loop = AgentLoop(
+        FakeSession(),
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=5),
+        model_client=model,
+        registry=_registry(),
+        understanding_service=StaticUnderstandingService(),
+        tracer=tracer,
+    )
+
+    list(loop.run(run, record))
+
+    assert tracer.spans[0].name == "invoke_agent"
+    assert tracer.spans[0].attributes["app.run.id"] == run.id
+    assert [span.parent for span in tracer.spans[1:]] == ["invoke_agent"] * 4
+    assert [span.name for span in tracer.spans[1:]] == [
+        "chat",
+        "execute_tool",
+        "chat",
+        "execute_tool",
+    ]
+    assert tracer.spans[0].attributes["gen_ai.agent.result"] == "finished"
+    assert all(span.closed for span in tracer.spans)
+
+
+def test_opentelemetry_exporter_receives_agent_span_hierarchy():
+    trace_sdk = pytest.importorskip("opentelemetry.sdk.trace")
+    trace_export = pytest.importorskip("opentelemetry.sdk.trace.export")
+    memory_export = pytest.importorskip(
+        "opentelemetry.sdk.trace.export.in_memory_span_exporter"
+    )
+    provider = trace_sdk.TracerProvider()
+    exporter = memory_export.InMemorySpanExporter()
+    provider.add_span_processor(trace_export.SimpleSpanProcessor(exporter))
+    tracer = ResilientAgentTracer(
+        OpenTelemetryAgentTracer(provider.get_tracer("numora-agent-test"))
+    )
+    model = ScriptedModel([
+        _tool_message("probe", {"value": "x"}),
+        _tool_message("finish", {"value": ""}, "c2"),
+    ])
+    run, record = _run_and_record()
+    loop = AgentLoop(
+        FakeSession(),
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=5),
+        model_client=model,
+        registry=_registry(),
+        understanding_service=StaticUnderstandingService(),
+        tracer=tracer,
+    )
+
+    list(loop.run(run, record))
+
+    spans = exporter.get_finished_spans()
+    root = next(span for span in spans if span.name == "invoke_agent")
+    children = [span for span in spans if span.name in {"chat", "execute_tool"}]
+    assert [span.name for span in children] == [
+        "chat",
+        "execute_tool",
+        "chat",
+        "execute_tool",
+    ]
+    assert all(span.parent and span.parent.span_id == root.context.span_id for span in children)
+    assert root.attributes["gen_ai.agent.result"] == "finished"
+
+
+def test_agent_span_closes_when_event_generator_is_closed():
+    tracer = RecordingTracer()
+    model = ScriptedModel([AIMessage(content="完成")])
+    run, record = _run_and_record()
+    loop = AgentLoop(
+        FakeSession(),
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=5),
+        model_client=model,
+        registry=_registry(),
+        understanding_service=StaticUnderstandingService(),
+        tracer=tracer,
+    )
+
+    events = loop.run(run, record)
+    next(events)
+    events.close()
+
+    assert tracer.spans[0].name == "invoke_agent"
+    assert tracer.spans[0].closed is True
+
+
+def test_disabled_and_zero_sampling_do_not_load_opentelemetry(monkeypatch):
+    build_agent_tracer.cache_clear()
+    monkeypatch.setattr(
+        "apps.trace.setup.import_module",
+        lambda name: pytest.fail(f"不应加载 OpenTelemetry: {name}"),
+    )
+
+    assert isinstance(build_agent_tracer(TraceConfig(enabled=False)), DisabledAgentTracer)
+    assert isinstance(
+        build_agent_tracer(TraceConfig(enabled=True, sample_rate=0)),
+        DisabledAgentTracer,
+    )
+
+
+def test_enabled_tracing_without_dependencies_raises_clear_import_error(monkeypatch):
+    build_agent_tracer.cache_clear()
+
+    def missing_dependency(name):
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr("apps.trace.setup.import_module", missing_dependency)
+
+    with pytest.raises(ImportError, match="observability"):
+        build_agent_tracer(TraceConfig(enabled=True, sample_rate=1))
+
+
+def test_runtime_tracing_failure_does_not_change_agent_events():
+    model = ScriptedModel([AIMessage(content="完成")])
+    run, record = _run_and_record()
+    loop = AgentLoop(
+        FakeSession(),
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=5),
+        model_client=model,
+        registry=_registry(),
+        understanding_service=StaticUnderstandingService(),
+        tracer=ResilientAgentTracer(FailingTracer()),
+    )
+
+    types = _event_types(list(loop.run(run, record)))
+
+    assert types[-3:] == ["answer", "run-finished", "finish"]
 
 
 def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):

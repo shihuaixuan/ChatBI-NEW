@@ -31,7 +31,7 @@ export type AgentStreamRequest =
       clarification: AgentClarificationAnswer
     }
 
-export interface AgentTraceStep {
+export interface AgentTimelineStep {
   index: number
   tool_name?: string
   status: string
@@ -41,13 +41,13 @@ export interface AgentTraceStep {
   error?: string
 }
 
-export interface AgentTraceResponse {
+export interface AgentTimelineResponse {
   record_id: number
   run_id?: number
   status?: string
   error_class?: string
   budget?: Record<string, any>
-  steps: AgentTraceStep[]
+  steps: AgentTimelineStep[]
   events: Array<Record<string, any>>
   clarification?: AgentClarification
 }
@@ -55,9 +55,16 @@ export interface AgentTraceResponse {
 export const agentQuestionApi = {
   stream: (data: AgentStreamRequest, controller?: AbortController) =>
     request.fetchStream('/chat/agent/stream', data, controller),
+  timeline: (recordId: number) =>
+    request.get<AgentTimelineResponse>(`/chat/agent/record/${recordId}/timeline`),
+  // 兼容旧调用；新代码统一使用 timeline。
   trace: (recordId: number) =>
-    request.get<AgentTraceResponse>(`/chat/agent/record/${recordId}/trace`),
+    request.get<AgentTimelineResponse>(`/chat/agent/record/${recordId}/trace`),
   events: (runId: number, afterSequence: number = 0) =>
     request.get(`/chat/agent/runs/${runId}/events?after_sequence=${afterSequence}`),
   cancel: (runId: number) => request.post(`/chat/agent/runs/${runId}/cancel`),
 }
+
+// 兼容旧类型名称。
+export type AgentTraceStep = AgentTimelineStep
+export type AgentTraceResponse = AgentTimelineResponse

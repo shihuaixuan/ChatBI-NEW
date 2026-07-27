@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from sqlalchemy import or_
 from sqlmodel import Session, col, select
 
 from apps.conversation.models import Chat, ChatRecord, ChatRecordCreateData
@@ -27,7 +28,8 @@ class SQLModelChatRecordRepository:
             question=data.question,
             finish=False,
             status="created",
-            trace_id=data.trace_id,
+            run_id=data.run_id or data.trace_id,
+            trace_id=data.trace_id or data.run_id,
         )
         self._session.add(record)
         self._session.flush()
@@ -57,7 +59,10 @@ class SQLModelChatRecordRepository:
                 ChatRecord.execution_type == "graph",
                 ChatRecord.status == "succeeded",
                 col(ChatRecord.finish).is_(True),
-                col(ChatRecord.trace_id).is_not(None),
+                or_(
+                    col(ChatRecord.run_id).is_not(None),
+                    col(ChatRecord.trace_id).is_not(None),
+                ),
             )
             .order_by(
                 col(ChatRecord.create_time).desc(),

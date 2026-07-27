@@ -132,6 +132,11 @@ class Settings(BaseSettings):
     CHAT_AGENT_MAX_CLARIFICATIONS: int = 2
     CHAT_AGENT_HISTORY_ROUNDS: int = 3
     CHAT_AGENT_CONTEXT_FOLD_CHARS: int = 30000
+    # Agent 可观测性默认关闭；关闭或零采样时不加载 OpenTelemetry。
+    AGENT_TRACING_ENABLED: bool = False
+    AGENT_TRACING_SAMPLE_RATE: float = 0.0
+    AGENT_TRACING_SERVICE_NAME: str = "numora-agent"
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: str = ""
     QUERY_UNDERSTANDING_ENABLED: bool = True
     QUERY_UNDERSTANDING_MODEL_ENABLED: bool = True
     QUERY_UNDERSTANDING_TIMEOUT_MS: int = 20000

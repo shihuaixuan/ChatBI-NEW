@@ -177,3 +177,28 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
     }
     assert captured["answer_text"] == "用户澄清回答：销售下单客户数"
     assert "clarification-accepted" in body
+
+
+def test_timeline_and_legacy_trace_return_same_product_events(monkeypatch):
+    user = SimpleNamespace(id=7, oid=1)
+    session = SimpleNamespace()
+    expected = {
+        "record_id": 3,
+        "run_id": 5,
+        "status": "finished",
+        "steps": [],
+        "events": [{"sequence": 1, "type": "run-started"}],
+    }
+    record_service = SimpleNamespace(get_owned=lambda user_id, record_id: object())
+    monkeypatch.setattr(api, "build_chat_record_service", lambda _session: record_service)
+    monkeypatch.setattr(
+        api.agent_run_repository,
+        "build_timeline_response",
+        lambda _session, record_id: expected,
+    )
+
+    timeline = asyncio.run(api.agent_timeline(session, user, 3))
+    legacy_trace = asyncio.run(api.agent_trace(session, user, 3))
+
+    assert timeline == expected
+    assert legacy_trace == timeline

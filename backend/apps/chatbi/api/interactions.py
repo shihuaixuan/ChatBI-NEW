@@ -86,14 +86,26 @@ def _clarification_answer_text(request: AgentClarificationRequest) -> str:
     return "用户澄清回答：" + "；".join(parts) if parts else ""
 
 
-@router.get("/record/{record_id}/trace")
-async def agent_trace(session: SessionDep, current_user: CurrentUser, record_id: int):
+def _agent_timeline(session: SessionDep, current_user: CurrentUser, record_id: int):
+    """校验记录归属并返回产品 Timeline。"""
+
     try:
         build_chat_record_service(session).get_owned(current_user.id, record_id)
     except ChatRecordError:
         raise HTTPException(status_code=404, detail="Chat record not found")
+    return agent_run_repository.build_timeline_response(session, record_id)
 
-    return agent_run_repository.build_trace_response(session, record_id)
+
+@router.get("/record/{record_id}/timeline")
+async def agent_timeline(session: SessionDep, current_user: CurrentUser, record_id: int):
+    return _agent_timeline(session, current_user, record_id)
+
+
+@router.get("/record/{record_id}/trace", deprecated=True)
+async def agent_trace(session: SessionDep, current_user: CurrentUser, record_id: int):
+    """兼容旧客户端；返回内容与 Timeline 完全一致。"""
+
+    return _agent_timeline(session, current_user, record_id)
 
 
 @router.get("/runs/{run_id}/events")

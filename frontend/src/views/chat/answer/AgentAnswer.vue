@@ -4,7 +4,7 @@ import { chatApi, ChatInfo, type ChatMessage, ChatRecord } from '@/api/chat.ts'
 import { agentQuestionApi, type AgentClarificationAnswer } from '@/api/agent-chat'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ChartBlock from '@/views/chat/chat-block/ChartBlock.vue'
-import AgentTrace from '@/views/chat/execution-component/AgentTrace.vue'
+import AgentTimeline from '@/views/chat/execution-component/AgentTimeline.vue'
 import JSONBig from 'json-bigint'
 import {
   latestAgentEventSequence,
@@ -76,7 +76,11 @@ async function pushOptimisticClarificationAccepted(currentRecord: ChatRecord) {
     phase: 'end',
     domain: 'interaction',
     sequence: latestAgentEventSequence(currentRecord) + 0.001,
-    content: { record_id: currentRecord.id, run_id: currentRecord.trace_id, synthetic: true },
+    content: {
+      record_id: currentRecord.id,
+      run_id: currentRecord.run_id || currentRecord.trace_id,
+      synthetic: true,
+    },
   })
   await nextTick()
   emits('scrollBottom')
@@ -147,7 +151,8 @@ async function sendMessage() {
     _loading.value = false
     return
   }
-  currentRecord.execution_trace = []
+  currentRecord.execution_events = []
+  currentRecord.execution_trace = currentRecord.execution_events
   const controller = new AbortController()
   try {
     const response = await agentQuestionApi.stream(
@@ -204,7 +209,7 @@ function cancelClarification() {
   if (index.value < 0) return
   const currentRecord: ChatRecord = _currentChat.value.records[index.value]
   currentRecord.clarification = undefined
-  const runId = Number(currentRecord.trace_id)
+  const runId = Number(currentRecord.run_id || currentRecord.trace_id)
   if (runId) {
     agentQuestionApi.cancel(runId).catch(() => {})
   }
@@ -216,10 +221,11 @@ function cancelClarification() {
 async function restorePendingClarification() {
   const currentRecord = props.message?.record
   if (!currentRecord?.id || currentRecord.status !== 'waiting_user') return
-  const trace = await agentQuestionApi.trace(currentRecord.id)
-  currentRecord.execution_trace = trace.events
-  if (trace.clarification?.status === 'pending') {
-    currentRecord.clarification = trace.clarification
+  const timeline = await agentQuestionApi.timeline(currentRecord.id)
+  currentRecord.execution_events = timeline.events
+  currentRecord.execution_trace = currentRecord.execution_events
+  if (timeline.clarification?.status === 'pending') {
+    currentRecord.clarification = timeline.clarification
   }
 }
 
@@ -266,7 +272,7 @@ defineExpose({
 
 <template>
   <BaseAnswer v-if="message" :message="message" :reasoning-name="reasoningName" :loading="_loading">
-    <AgentTrace
+    <AgentTimeline
       :record="message.record"
       :record-id="message.record?.id"
       :runtime-loading="runtimeLoading"

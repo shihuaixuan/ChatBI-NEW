@@ -79,6 +79,8 @@ from apps.semantic.composition import (
     build_semantic_sql_compilation_service,
     build_semantic_term_query_service,
 )
+from apps.trace import AgentTracer, TraceConfig
+from apps.trace import build_agent_tracer as build_configured_agent_tracer
 from common.core.config import settings
 from common.core.db import engine
 from sqlbot_platform.workflow_engine.artifact_gateway import (
@@ -90,6 +92,19 @@ def build_agent_event_publisher(session: Session) -> EventPublisher:
     """装配 Agent 产品事件发布器。"""
 
     return EventPublisher(session)
+
+
+def build_agent_tracer() -> AgentTracer:
+    """按全局配置装配独立于 Event 链路的 Agent tracer。"""
+
+    return build_configured_agent_tracer(
+        TraceConfig(
+            enabled=settings.AGENT_TRACING_ENABLED,
+            sample_rate=settings.AGENT_TRACING_SAMPLE_RATE,
+            service_name=settings.AGENT_TRACING_SERVICE_NAME,
+            endpoint=settings.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+        )
+    )
 
 
 def build_query_service(
@@ -315,6 +330,7 @@ def build_chat_application_service(session: Session) -> ChatApplicationService:
 
 __all__ = [
     "build_agent_event_publisher",
+    "build_agent_tracer",
     "build_chat_application_service",
     "build_chat_deletion_service",
     "build_chat_log_service",

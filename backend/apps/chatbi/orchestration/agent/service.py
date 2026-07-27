@@ -83,7 +83,7 @@ def create_record_and_run(
     record_service.transition(
         record,
         ChatRecordStatus.CREATED,
-        trace_id=str(run.id),
+        run_id=str(run.id),
         execution_type=ChatRecordExecutionType.AGENT,
     )
     session.commit()

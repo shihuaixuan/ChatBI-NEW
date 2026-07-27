@@ -235,7 +235,9 @@ def latest_successful_rewritten_question(
     return None
 
 
-def build_trace_response(session, record_id: int) -> dict:
+def build_timeline_response(session, record_id: int) -> dict:
+    """构建产品运行时间线，不读取可观测性 Trace。"""
+
     run = get_latest_run_by_record(session, record_id)
     if not run:
         return {"record_id": record_id, "run_id": None, "status": None, "steps": [], "events": []}
@@ -266,6 +268,10 @@ def build_trace_response(session, record_id: int) -> dict:
             {"sequence": event.sequence, "type": event.event_type, **(event.payload or {})} for event in events
         ],
     }
+
+
+# 兼容旧调用；新代码统一使用 Timeline 命名。
+build_trace_response = build_timeline_response
 
 
 class AgentExecutionDeletionService:

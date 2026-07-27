@@ -7,9 +7,9 @@ import {
   reduceAgentEvent,
 } from '../answer/agentEventReducer.ts'
 
-test('新旧事件契约产生相同的回答投影', () => {
+test('新旧事件契约与事件字段产生相同的回答投影', () => {
   const legacyRecord = { execution_trace: [] }
-  const currentRecord = { execution_trace: [] }
+  const currentRecord = { execution_events: [] }
 
   reduceAgentEvent(legacyRecord, {
     type: 'answer',
@@ -25,7 +25,8 @@ test('新旧事件契约产生相同的回答投影', () => {
 
   assert.equal(currentRecord.sql_answer, legacyRecord.sql_answer)
   assert.equal(currentRecord.chart_answer, legacyRecord.chart_answer)
-  assert.equal(currentRecord.execution_trace[0].type, 'answer')
+  assert.equal(currentRecord.execution_events[0].type, 'answer')
+  assert.equal(currentRecord.execution_trace, currentRecord.execution_events)
 })
 
 test('未知 domain 不影响事件消费', () => {

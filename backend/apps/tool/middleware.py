@@ -1,4 +1,4 @@
-"""内置工具中间件：异常归一、超时、耗时追踪。
+"""内置工具中间件：异常归一、超时、耗时统计。
 
 领域硬门（问题理解 / 资产来源 / finish 门）不得放入 middleware。
 """
@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from apps.tool.base import Tool
 from apps.tool.output import ToolOutput
@@ -93,7 +94,7 @@ class TimeoutMiddleware:
                 )
 
 
-class TracingMiddleware:
+class LatencyMiddleware:
     """把 latency_ms 写入 payload._trace（不进 summary）。"""
 
     def around(
@@ -119,10 +120,14 @@ def default_middlewares(
     *,
     timeout_seconds: float = 60.0,
 ) -> list[Any]:
-    """默认横切链：外层 ErrorNormalize → Timeout → Tracing → tool。"""
+    """默认横切链：外层 ErrorNormalize → Timeout → Latency → tool。"""
 
     return [
         ErrorNormalizeMiddleware(),
         TimeoutMiddleware(timeout_seconds=timeout_seconds),
-        TracingMiddleware(),
+        LatencyMiddleware(),
     ]
+
+
+# 兼容旧导入；该中间件只统计耗时，不创建可观测性 Trace。
+TracingMiddleware = LatencyMiddleware

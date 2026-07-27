@@ -1,4 +1,4 @@
-import type { AgentTraceResponse, AgentTraceStep } from '@/api/agent-chat'
+import type { AgentTimelineResponse, AgentTimelineStep } from '@/api/agent-chat'
 import { normalizeAgentEvent } from '../answer/agentEventReducer.ts'
 
 export type AgentFlowStatus = 'running' | 'success' | 'failed' | 'waiting'
@@ -44,11 +44,11 @@ export function agentToolTitle(toolName?: string) {
 }
 
 export function buildAgentFlow(
-  trace?: AgentTraceResponse,
+  timeline?: AgentTimelineResponse,
   liveEvents: Array<Record<string, any>> = [],
   runtimeLoading = false
 ): AgentFlowView {
-  const events = liveEvents.length ? liveEvents : trace?.events || []
+  const events = liveEvents.length ? liveEvents : timeline?.events || []
   const toolSteps = new Map<number, AgentFlowStep>()
   const thinkingSteps = new Map<number, AgentFlowStep>()
   let understandingStep: AgentFlowStep | undefined
@@ -56,7 +56,7 @@ export function buildAgentFlow(
   let terminalStatus: 'success' | 'failed' | undefined
   let eventRunStatus: 'running' | 'waiting_user' | 'finished' | 'failed' | undefined
 
-  for (const persisted of trace?.steps || []) {
+  for (const persisted of timeline?.steps || []) {
     toolSteps.set(persisted.index, persistedStep(persisted))
   }
 
@@ -224,7 +224,7 @@ export function buildAgentFlow(
   const waiting = [...steps].reverse().find((step) => step.status === 'waiting')
   const running = [...steps].reverse().find((step) => step.status === 'running')
   // SSE 事件比挂载或刷新时获取的 trace 快照更新，运行状态必须遵循同一优先级。
-  const runStatus = eventRunStatus || String(trace?.status || '')
+  const runStatus = eventRunStatus || String(timeline?.status || '')
   if (waiting || runStatus === 'waiting_user') {
     return {
       status: 'waiting',
@@ -260,7 +260,7 @@ export function buildAgentFlow(
   }
 }
 
-function persistedStep(step: AgentTraceStep): AgentFlowStep {
+function persistedStep(step: AgentTimelineStep): AgentFlowStep {
   return {
     key: `step-${step.index}`,
     index: step.index,

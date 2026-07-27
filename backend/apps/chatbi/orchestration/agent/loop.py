@@ -25,6 +25,7 @@ from langchain_core.messages import (
 from apps.ai_model.model_factory import LLMFactory, get_default_config
 from apps.chatbi.composition import (
     build_agent_event_publisher,
+    build_agent_tracer,
     build_chat_record_service,
     build_physical_schema_service,
     build_query_service,
@@ -86,6 +87,13 @@ from apps.tool import (
     format_tool_message_content,
     maybe_offload_output,
 )
+from apps.trace import (
+    AgentSpan,
+    AgentTracer,
+    agent_attributes,
+    llm_attributes,
+    tool_attributes,
+)
 
 __all__ = ["AgentLoop", "DefaultAgentModelClient"]
 
@@ -127,11 +135,13 @@ class AgentLoop:
         physical_schema_service: PhysicalSchemaService | None = None,
         result_artifact_service: ResultArtifactService | None = None,
         event_publisher: EventPublisher | None = None,
+        tracer: AgentTracer | None = None,
     ):
         self.session = session
         self.current_user = current_user
         self.config = config or AgentConfig()
         self.event_publisher = event_publisher or build_agent_event_publisher(session)
+        self.tracer = tracer or build_agent_tracer()
         self.record_service = build_chat_record_service(session)
         self.model_client = model_client or DefaultAgentModelClient()
         self.registry = registry or self._build_registry()
@@ -174,6 +184,19 @@ class AgentLoop:
     # ---- 入口 ----
 
     def run(self, run: ChatbiAgentRun, record: Any) -> Iterator[RenderEvent]:
+        """在完整生成器生命周期内记录一次 Agent 调用。"""
+
+        with self.tracer.span(
+            "invoke_agent",
+            agent_attributes(
+                run_id=run.id or 0,
+                record_id=record.id or 0,
+                chat_id=run.chat_id,
+            ),
+        ) as span:
+            yield from _trace_terminal_result(self._run(run, record), span)
+
+    def _run(self, run: ChatbiAgentRun, record: Any) -> Iterator[RenderEvent]:
         budget = self._new_budget()
         ctx = self._new_ctx(run, record)
         messages = [HumanMessage(content=record.question or "")]
@@ -260,6 +283,28 @@ class AgentLoop:
             yield from self._fail(run, record, messages, budget, message, AgentErrorClass.UNEXPECTED.value)
 
     def resume(
+        self,
+        run: ChatbiAgentRun,
+        record: Any,
+        clarification: ChatbiAgentClarification,
+        answer_text: str,
+    ) -> Iterator[RenderEvent]:
+        """以新的调用 span 恢复挂起的 Agent run。"""
+
+        with self.tracer.span(
+            "invoke_agent",
+            agent_attributes(
+                run_id=run.id or 0,
+                record_id=record.id or 0,
+                chat_id=run.chat_id,
+            ),
+        ) as span:
+            yield from _trace_terminal_result(
+                self._resume(run, record, clarification, answer_text),
+                span,
+            )
+
+    def _resume(
         self,
         run: ChatbiAgentRun,
         record: Any,
@@ -481,8 +526,19 @@ class AgentLoop:
                     ),
                     *messages,
                 ]
-            response: AIMessage = self.model_client.invoke(invoke_messages, tool_specs)
-            usage = getattr(response, "usage_metadata", None) or {}
+            with self.tracer.span(
+                "chat",
+                llm_attributes(model=self.model_client.__class__.__name__),
+            ) as llm_span:
+                response: AIMessage = self.model_client.invoke(invoke_messages, tool_specs)
+                usage = getattr(response, "usage_metadata", None) or {}
+                for source, attribute in (
+                    ("input_tokens", "gen_ai.usage.input_tokens"),
+                    ("output_tokens", "gen_ai.usage.output_tokens"),
+                    ("total_tokens", "gen_ai.usage.total_tokens"),
+                ):
+                    if usage.get(source) is not None:
+                        llm_span.set_attribute(attribute, int(usage[source]))
             budget.record_llm_turn(usage)
             messages.append(response)
 
@@ -546,12 +602,22 @@ class AgentLoop:
                     )
 
                 def _execute_one(name: str, raw_args: dict) -> ToolOutput:
-                    if mode == "soft" and name not in {"finish", "clarify"}:
-                        return ToolOutput.denied(
-                            f"预算接近上限，禁止调用 {name}。请 finish 或 clarify。",
-                            error_code="budget_soft_tool_blocked",
+                    with self.tracer.span(
+                        "execute_tool",
+                        tool_attributes(tool_name=name, step_id=step.id),
+                    ) as tool_span:
+                        if mode == "soft" and name not in {"finish", "clarify"}:
+                            output = ToolOutput.denied(
+                                f"预算接近上限，禁止调用 {name}。请 finish 或 clarify。",
+                                error_code="budget_soft_tool_blocked",
+                            )
+                        else:
+                            output = self.registry.execute(name, ctx, raw_args)
+                        tool_span.set_attribute(
+                            "gen_ai.tool.call.result",
+                            output.status.value,
                         )
-                    return self.registry.execute(name, ctx, raw_args)
+                        return output
 
                 executed = execute_tool_batch(
                     batch,
@@ -1008,6 +1074,20 @@ class AgentLoop:
 
 
 # ---- 序列化与摘要 ----
+
+
+def _trace_terminal_result(
+    events: Iterator[RenderEvent],
+    span: AgentSpan,
+) -> Iterator[RenderEvent]:
+    """依据产品终止事件标记 span 结果，不让 Trace 反向控制事件流。"""
+
+    for event in events:
+        if event.type in {"run-failed", "error"}:
+            span.set_attribute("gen_ai.agent.result", "failed")
+        elif event.type in {"run-finished", "finish"}:
+            span.set_attribute("gen_ai.agent.result", "finished")
+        yield event
 
 
 def _serialize_messages(messages: list) -> list[dict]:

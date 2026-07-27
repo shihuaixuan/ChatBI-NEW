@@ -86,6 +86,7 @@ class SQLModelChatHistoryRepository:
             ChatRecord.error,
             ChatRecord.execution_type,
             ChatRecord.status,
+            ChatRecord.run_id,
             ChatRecord.trace_id,
         ]
 
@@ -206,6 +207,7 @@ class SQLModelChatHistoryRepository:
                         error=row.error,
                         execution_type=row.execution_type,
                         status=row.status,
+                        run_id=row.run_id,
                         trace_id=row.trace_id,
                         sql_reasoning_content=row.sql_reasoning_content,
                         chart_reasoning_content=row.chart_reasoning_content,
@@ -241,6 +243,7 @@ class SQLModelChatHistoryRepository:
                         error=row.error,
                         execution_type=row.execution_type,
                         status=row.status,
+                        run_id=row.run_id,
                         trace_id=row.trace_id,
                         data=row.data,
                         predict_data=row.predict_data,

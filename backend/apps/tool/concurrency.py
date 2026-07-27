@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from apps.tool.base import Tool
 from apps.tool.output import ToolOutput
@@ -86,8 +88,9 @@ def execute_tool_batch(
     workers = max(1, min(max_workers, len(batch)))
     results: dict[int, ToolOutput] = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
+        # 每个并行工具复制当前上下文，确保 OTEL 父 span 等 contextvars 不丢失。
         futures = {
-            pool.submit(execute, call.name, call.args): index
+            pool.submit(copy_context().run, execute, call.name, call.args): index
             for index, call in enumerate(batch)
         }
         for future in as_completed(futures):
