@@ -9,7 +9,10 @@ from typing import Any, cast
 
 import orjson
 
-from apps.chatbi.models import AgentClarificationResumeKind
+from apps.chatbi.models import (
+    AgentClarificationResumeKind,
+    ResultArtifactWriteData,
+)
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.messages import (
@@ -21,6 +24,8 @@ from apps.chatbi.orchestration.agent.messages import (
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.repository.sqlmodel import agent_run_repository
+from apps.chatbi.services.execution import ResultArtifactWriteError
+from apps.conversation import ChatRecordExecutionType
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import (
     RetryAdvice,
@@ -141,6 +146,11 @@ class AgentToolExecutor:
             )
 
             for call, result in executed:
+                result = _apply_chatbi_tool_result(
+                    context,
+                    call.name,
+                    result,
+                )
                 result = maybe_offload_result(
                     result,
                     store=offload_store,
@@ -412,6 +422,99 @@ def _result_data(result: ToolResult[Any]) -> dict[str, Any]:
 def _offload_ref(result: ToolResult[Any]) -> str | None:
     value = result.metadata.get("offload_ref")
     return str(value) if value else None
+
+
+def _apply_chatbi_tool_result(
+    context: AgentToolContext,
+    tool_name: str,
+    result: ToolResult[Any],
+) -> ToolResult[Any]:
+    """公共 Tool 保持无副作用，ChatBI 在执行边界投影必要的领域状态。"""
+
+    if result.status != ToolStatus.SUCCEEDED or result.data is None:
+        return result
+    payload = result.data.model_dump(mode="json")
+    if tool_name == "get_dataset_schema":
+        tables = set(context.state.get("allowed_tables") or [])
+        tables.update(
+            str(item.get("table"))
+            for item in payload.get("tables") or []
+            if isinstance(item, dict) and item.get("table")
+        )
+        context.state["allowed_tables"] = sorted(tables)
+        return result
+    if tool_name != "execute_sql":
+        return result
+    if (
+        context.result_artifact_service is None
+        or not context.execution_id
+        or context.chat_id is None
+        or context.record_id is None
+    ):
+        return ToolResult.failed(
+            "ChatBI 结果 Artifact 服务或执行归属未配置。",
+            error_code="result_artifact_service_required",
+            error_category=ToolErrorCategory.CONFIGURATION,
+            retry_advice=RetryAdvice.NEVER,
+        )
+    full_data = result.metadata.get("full_data")
+    rows = full_data if isinstance(full_data, list) else []
+    try:
+        artifact_ref = context.result_artifact_service.save(
+            ResultArtifactWriteData(
+                execution_id=context.execution_id,
+                execution_type=ChatRecordExecutionType.AGENT,
+                chat_id=context.chat_id,
+                record_id=context.record_id,
+                kind="sql_result",
+                payload={
+                    "query_id": "query-0",
+                    "fields": payload.get("fields") or [],
+                    "rows": rows,
+                    "row_count": payload.get("row_count") or 0,
+                },
+                metadata={
+                    "query_id": "query-0",
+                    "row_count": payload.get("row_count") or 0,
+                },
+            )
+        )
+    except ResultArtifactWriteError:
+        return ToolResult.failed(
+            "SQL 结果 Artifact 写入失败。",
+            error_code="sql_result_artifact_write_failed",
+            error_category=ToolErrorCategory.DOMAIN,
+            retry_advice=RetryAdvice.NEVER,
+        )
+    compiled = context.state.get("compiled_sql")
+    sql_source = (
+        "compiled"
+        if isinstance(compiled, str)
+        and _normalize_sql(str(payload.get("sql") or ""))
+        == _normalize_sql(compiled)
+        else "manual"
+    )
+    artifact_payload = artifact_ref.model_dump(mode="json")
+    context.state["last_execution"] = {
+        "sql": payload.get("sql"),
+        "fields": payload.get("fields") or [],
+        "row_count": payload.get("row_count") or 0,
+        "sample_rows": payload.get("sample_rows") or [],
+        "artifact_ref": artifact_payload,
+        "sql_source": sql_source,
+    }
+    context.state["full_data"] = rows
+    return result.with_updates(
+        metadata={
+            **result.metadata,
+            "artifact_ref": artifact_payload,
+            "sql_source": sql_source,
+        }
+    )
+
+
+def _normalize_sql(sql: str) -> str:
+    return " ".join(sql.lower().split()).rstrip(";")
 
 
 __all__ = [

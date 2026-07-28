@@ -7,28 +7,40 @@ from apps.chatbi.models import (
     PhysicalSchemaTable,
     SemanticQueryCompileResult,
 )
+from apps.chatbi.orchestration.agent.tool_execution import (
+    _apply_chatbi_tool_result,
+)
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.core import (
     CompileSemanticSqlArgs,
     CompileSemanticSqlTool,
-    ExecuteSqlArgs,
-    ExecuteSqlTool,
     FinishArgs,
     FinishTool,
-    GetDatasetSchemaArgs,
-    GetDatasetSchemaTool,
     SearchSemanticAssetsArgs,
     SearchSemanticAssetsTool,
+)
+from apps.datasource import (
+    DatasourceQueryData,
+    DatasourceQueryErrorCategory,
+    DatasourceQueryPolicy,
+    DatasourceQueryResult,
+    DatasourceQueryRetryAdvice,
+)
+from apps.tool import RetryAdvice, ToolStatus
+from apps.tool import ToolResult as AgentToolResult
+from apps.tool.tools.datasource import (
+    ExecuteSqlArgs,
+    ExecuteSqlResult,
+    ExecuteSqlTool,
+    GetDatasetSchemaArgs,
+    GetDatasetSchemaTool,
     ValidateSqlArgs,
     ValidateSqlTool,
 )
-from apps.datasource.models.dto import (
-    DatasourceQueryData,
-    DatasourceQueryPolicy,
-    DatasourceQueryResult,
+from apps.tool.tools.knowledge import (
+    GetSqlExamplesArgs,
+    GetSqlExamplesTool,
 )
-from apps.tool import ToolResult as AgentToolResult
-from apps.tool import ToolStatus
 
 
 def _succeeded(result: AgentToolResult) -> bool:
@@ -41,11 +53,7 @@ def _data(result: AgentToolResult) -> dict:
 
 
 def _ctx(
-    query_service=None,
     result_artifact_service=None,
-    semantic_query_service=None,
-    semantic_retrieval_service=None,
-    physical_schema_service=None,
     **state,
 ):
     values = {
@@ -64,13 +72,9 @@ def _ctx(
         execution_id="agent:10",
         chat_id=20,
         record_id=30,
-        query_service=query_service,
         result_artifact_service=(
             result_artifact_service or RecordingResultArtifactService()
         ),
-        semantic_query_service=semantic_query_service,
-        semantic_retrieval_service=semantic_retrieval_service,
-        physical_schema_service=physical_schema_service,
         state=values,
     )
 
@@ -182,6 +186,28 @@ class StaticPhysicalSchemaService:
         )
 
 
+class DeniedPhysicalSchemaService:
+    def get(self, datasource_id, *, subject, table_keyword=""):
+        raise PermissionError("physical_schema_access_denied")
+
+
+class StaticSqlExampleQueryService:
+    def __init__(self, items=None) -> None:
+        self.items = items or []
+        self.calls = []
+
+    def search(
+        self,
+        question,
+        workspace_id,
+        *,
+        datasource_id=None,
+        assistant_id=None,
+    ):
+        self.calls.append((question, workspace_id, datasource_id, assistant_id))
+        return self.items
+
+
 def test_finish_rejected_without_execution():
     output = FinishTool().execute(_ctx(), FinishArgs(answer_markdown="答案"))
     assert not _succeeded(output)
@@ -190,9 +216,9 @@ def test_finish_rejected_without_execution():
 
 def test_validate_sql_uses_chatbi_query_service():
     service = RecordingQueryService()
-    ctx = _ctx(query_service=service, allowed_tables=["orders"])
+    ctx = _ctx(allowed_tables=["orders"])
 
-    output = ValidateSqlTool().execute(
+    output = ValidateSqlTool(service).execute(
         ctx,
         ValidateSqlArgs(sql="select amount from orders"),
     )
@@ -206,17 +232,34 @@ def test_validate_sql_uses_chatbi_query_service():
     }
 
 
+def test_validate_sql_maps_datasource_authorization_rejection():
+    class RejectedQueryService(RecordingQueryService):
+        def validate(self, request):
+            return DatasourceQueryResult.rejected(
+                "表无访问权限",
+                error_code="table_out_of_scope",
+                error_category=DatasourceQueryErrorCategory.AUTHORIZATION,
+            )
+
+    output = ValidateSqlTool(RejectedQueryService()).execute(
+        _ctx(allowed_tables=["orders"]),
+        ValidateSqlArgs(sql="select * from secret_orders"),
+    )
+
+    assert output.status == ToolStatus.REJECTED
+    assert output.error_code == "table_out_of_scope"
+
+
 def test_execute_sql_uses_chatbi_query_service_with_identity_scope():
     service = RecordingQueryService()
     artifact_service = RecordingResultArtifactService()
     ctx = _ctx(
-        query_service=service,
         result_artifact_service=artifact_service,
         allowed_tables=["orders"],
         compiled_sql="select amount from orders",
     )
 
-    output = ExecuteSqlTool().execute(
+    output = ExecuteSqlTool(service).execute(
         ctx,
         ExecuteSqlArgs(sql="select amount from orders"),
     )
@@ -227,12 +270,11 @@ def test_execute_sql_uses_chatbi_query_service_with_identity_scope():
     assert request.datasource_id == 5
     assert request.subject.model_dump() == {"user_id": 1, "workspace_id": 1}
     assert request.selected_tables == ["orders"]
-    assert ctx.state["full_data"] == [{"amount": 10}, {"amount": 20}]
-    assert artifact_service.calls[0].payload["rows"] == [
+    assert output.metadata["full_data"] == [
         {"amount": 10},
         {"amount": 20},
     ]
-    assert _data(output)["sql_source"] == "compiled"
+    assert artifact_service.calls == []
 
 
 def test_finish_appends_non_standard_note_for_manual_sql():
@@ -252,25 +294,85 @@ def test_finish_no_note_for_compiled_sql_and_builds_chart():
     assert _data(output)["non_standard"] is False
 
 
-def test_execute_sql_preserves_artifact_reference_for_record_projection():
-    ctx = _ctx(query_service=RecordingQueryService())
+def test_execute_sql_does_not_write_chatbi_state_or_artifact():
+    service = RecordingQueryService()
+    artifact_service = RecordingResultArtifactService()
+    ctx = _ctx(
+        result_artifact_service=artifact_service,
+        allowed_tables=["orders"],
+    )
 
-    output = ExecuteSqlTool().execute(ctx, ExecuteSqlArgs(sql="select amount from orders"))
+    output = ExecuteSqlTool(service).execute(
+        ctx,
+        ExecuteSqlArgs(sql="select amount from orders"),
+    )
 
     assert _succeeded(output)
-    artifact_ref = ctx.state["last_execution"]["artifact_ref"]
-    assert artifact_ref["artifact_id"] == "result-1"
-    assert artifact_ref["metadata"]["execution_type"] == "agent"
+    assert "last_execution" not in ctx.state
+    assert "full_data" not in ctx.state
+    assert artifact_service.calls == []
+
+
+def test_chatbi_execution_boundary_saves_public_sql_result_artifact():
+    artifact_service = RecordingResultArtifactService()
+    ctx = _ctx(
+        result_artifact_service=artifact_service,
+        compiled_sql="select amount from orders",
+    )
+    result = AgentToolResult.succeeded(
+        "summary",
+        ExecuteSqlResult(
+            sql="select amount from orders",
+            fields=["amount"],
+            sample_rows=[{"amount": 10}],
+            row_count=2,
+            stats_summary={"amount": {"sum": 30}},
+        ),
+        metadata={"full_data": [{"amount": 10}, {"amount": 20}]},
+    )
+
+    projected = _apply_chatbi_tool_result(ctx, "execute_sql", result)
+
+    assert _succeeded(projected)
+    assert artifact_service.calls[0].payload["rows"] == [
+        {"amount": 10},
+        {"amount": 20},
+    ]
+    assert ctx.state["last_execution"]["sql_source"] == "compiled"
+    assert ctx.state["full_data"] == [{"amount": 10}, {"amount": 20}]
+
+
+def test_execute_sql_maps_transient_failure_to_same_input_retry():
+    class TransientQueryService(RecordingQueryService):
+        def execute(self, request):
+            return DatasourceQueryResult.failed(
+                "连接超时",
+                error_code="connection_timeout",
+                error_category=DatasourceQueryErrorCategory.TRANSIENT,
+                retry_advice=DatasourceQueryRetryAdvice.SAME_INPUT,
+            )
+
+    output = ExecuteSqlTool(TransientQueryService()).execute(
+        _ctx(allowed_tables=["orders"]),
+        ExecuteSqlArgs(sql="select amount from orders"),
+    )
+
+    assert output.status == ToolStatus.FAILED
+    assert output.retry_advice == RetryAdvice.SAME_INPUT
 
 
 def test_compile_requires_semantic_package_first():
     ctx = _ctx(dataset_id=3)
-    output = CompileSemanticSqlTool().execute(ctx, CompileSemanticSqlArgs(metric_asset_ids=[1]))
+    output = CompileSemanticSqlTool(RecordingSemanticCompilationService()).execute(
+        ctx,
+        CompileSemanticSqlArgs(metric_asset_ids=[1]),
+    )
     assert not _succeeded(output)
     assert output.error_code == "semantic_package_required"
 
 
-def test_compile_rejects_intent_that_still_requires_clarification():
+def test_compile_does_not_repeat_question_understanding_gate():
+    service = RecordingSemanticCompilationService()
     ctx = _ctx(
         dataset_id=3,
         semantic_asset_ids=[10],
@@ -281,15 +383,21 @@ def test_compile_rejects_intent_that_still_requires_clarification():
         },
     )
 
-    output = CompileSemanticSqlTool().execute(ctx, CompileSemanticSqlArgs(metric_asset_ids=[10]))
+    output = CompileSemanticSqlTool(service).execute(
+        ctx,
+        CompileSemanticSqlArgs(metric_asset_ids=[10]),
+    )
 
-    assert not _succeeded(output)
-    assert output.error_code == "question_clarification_required"
+    assert _succeeded(output)
+    assert len(service.calls) == 1
 
 
 def test_compile_rejects_asset_outside_package():
     ctx = _ctx(dataset_id=3, semantic_asset_ids=[10, 11])
-    output = CompileSemanticSqlTool().execute(ctx, CompileSemanticSqlArgs(metric_asset_ids=[10], dimension_asset_ids=[99]))
+    output = CompileSemanticSqlTool(RecordingSemanticCompilationService()).execute(
+        ctx,
+        CompileSemanticSqlArgs(metric_asset_ids=[10], dimension_asset_ids=[99]),
+    )
     assert not _succeeded(output)
     assert output.error_code == "asset_not_in_package"
     assert "99" in output.model_content
@@ -298,11 +406,10 @@ def test_compile_rejects_asset_outside_package():
 def test_compile_passes_known_assets_to_capability():
     service = RecordingSemanticCompilationService()
     ctx = _ctx(
-        semantic_query_service=service,
         dataset_id=3,
         semantic_asset_ids=[10, 11],
     )
-    output = CompileSemanticSqlTool().execute(
+    output = CompileSemanticSqlTool(service).execute(
         ctx, CompileSemanticSqlArgs(metric_asset_ids=[10], dimension_asset_ids=[11])
     )
     assert _succeeded(output)
@@ -322,7 +429,6 @@ def test_compile_normalizes_today_literal_from_confirmed_time_range():
     }
     service = RecordingSemanticCompilationService()
     ctx = _ctx(
-        semantic_query_service=service,
         dataset_id=3,
         semantic_asset_ids=[10, 11],
         question_understanding={
@@ -340,7 +446,7 @@ def test_compile_normalizes_today_literal_from_confirmed_time_range():
         },
     )
 
-    output = CompileSemanticSqlTool().execute(
+    output = CompileSemanticSqlTool(service).execute(
         ctx,
         CompileSemanticSqlArgs(
             metric_asset_ids=[10],
@@ -383,7 +489,7 @@ def test_compile_rejects_replacing_today_with_latest_data_date():
         },
     )
 
-    output = CompileSemanticSqlTool().execute(
+    output = CompileSemanticSqlTool(RecordingSemanticCompilationService()).execute(
         ctx,
         CompileSemanticSqlArgs(
             metric_asset_ids=[10],
@@ -413,8 +519,6 @@ def test_search_collects_asset_ids_and_tables_into_state():
     }
     service = RecordingSemanticRetrievalService(package)
     ctx = _ctx(
-        query_service=RecordingQueryService(),
-        semantic_retrieval_service=service,
         dataset_id=3,
         question_understanding={
             "rewritten_question": "按城市看 gmv",
@@ -422,7 +526,10 @@ def test_search_collects_asset_ids_and_tables_into_state():
             "validation": {"status": "valid"},
         },
     )
-    output = SearchSemanticAssetsTool().execute(ctx, SearchSemanticAssetsArgs())
+    output = SearchSemanticAssetsTool(
+        service,
+        RecordingQueryService(),
+    ).execute(ctx, SearchSemanticAssetsArgs())
     assert _succeeded(output)
     request = service.calls[0][0]
     assert request.rewritten_question == "按城市看 gmv"
@@ -433,9 +540,9 @@ def test_search_collects_asset_ids_and_tables_into_state():
 
 
 def test_physical_schema_tool_uses_chatbi_service():
-    ctx = _ctx(physical_schema_service=StaticPhysicalSchemaService())
+    ctx = _ctx()
 
-    output = GetDatasetSchemaTool().execute(
+    output = GetDatasetSchemaTool(StaticPhysicalSchemaService()).execute(
         ctx,
         GetDatasetSchemaArgs(table_keyword="订单"),
     )
@@ -446,11 +553,38 @@ def test_physical_schema_tool_uses_chatbi_service():
         "type": "numeric",
         "comment": "订单金额",
     }
-    assert ctx.state["allowed_tables"] == ["orders"]
+    assert "allowed_tables" not in ctx.state
+
+
+def test_physical_schema_tool_maps_access_denial():
+    output = GetDatasetSchemaTool(DeniedPhysicalSchemaService()).execute(
+        _ctx(),
+        GetDatasetSchemaArgs(),
+    )
+
+    assert output.status == ToolStatus.REJECTED
+    assert output.error_code == "physical_schema_access_denied"
+
+
+def test_sql_examples_tool_uses_injected_service_without_session_build():
+    service = StaticSqlExampleQueryService(
+        [{"question": "销售额", "suggestion_answer": "select 1"}]
+    )
+    output = GetSqlExamplesTool(service).execute(
+        _ctx(),
+        GetSqlExamplesArgs(question="销售额"),
+    )
+
+    assert _succeeded(output)
+    assert _data(output)["count"] == 1
+    assert service.calls == [("销售额", 1, 5, None)]
 
 
 def test_search_rejects_missing_confirmed_understanding():
-    output = SearchSemanticAssetsTool().execute(
+    output = SearchSemanticAssetsTool(
+        RecordingSemanticRetrievalService({}),
+        RecordingQueryService(),
+    ).execute(
         _ctx(dataset_id=3, question_understanding=None),
         SearchSemanticAssetsArgs(),
     )

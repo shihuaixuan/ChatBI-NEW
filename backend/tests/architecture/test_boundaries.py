@@ -293,7 +293,7 @@ def test_chatbi_artifact_service_has_no_workflow_or_persistence_dependency():
 
 def test_agent_and_graph_share_chatbi_result_artifact_service():
     agent_source = (
-        BACKEND_DIR__artifact / "apps/chatbi/orchestration/agent/tools/core.py"
+        BACKEND_DIR__artifact / "apps/chatbi/orchestration/agent/tool_execution.py"
     ).read_text(encoding="utf-8")
     graph_source = (
         BACKEND_DIR__artifact / "apps/chatbi/orchestration/graph/capabilities/adapters/sql.py"
@@ -829,13 +829,51 @@ def _imports__query(relative_path: str) -> set[str]:
     return modules
 
 
-def test_agent_sql_tools_only_use_chatbi_query_service():
-    imports = _imports__query("apps/chatbi/orchestration/agent/tools/core.py")
+def test_public_sql_tools_only_use_datasource_query_service():
+    imports = _imports__query("apps/tool/tools/datasource.py")
+    core_source = (
+        BACKEND_DIR__query / "apps/chatbi/orchestration/agent/tools/core.py"
+    ).read_text(encoding="utf-8")
 
-    assert "apps.chatbi.services.execution" in imports
+    assert "apps.datasource" in imports
+    assert not any(module.startswith("apps.chatbi") for module in imports)
     assert "apps.capabilities.sql.executor" not in imports
     assert "apps.capabilities.sql.permission" not in imports
     assert "apps.chatbi.services.execution.sql_validator" not in imports
+    assert "class ValidateSqlTool" not in core_source
+    assert "class ExecuteSqlTool" not in core_source
+
+
+def test_public_tools_do_not_read_chatbi_state_or_build_services_at_runtime():
+    tool_paths = (
+        "apps/tool/tools/datasource.py",
+        "apps/tool/tools/semantic.py",
+        "apps/tool/tools/knowledge.py",
+    )
+    for relative_path in tool_paths:
+        source = (BACKEND_DIR__query / relative_path).read_text(encoding="utf-8")
+        assert "ctx.state" not in source
+        assert "ctx.session" not in source
+        assert "build_" not in source
+        assert "result_artifact" not in source
+        assert "EventPublisher" not in source
+        assert "AgentTracer" not in source
+
+    core_source = (
+        BACKEND_DIR__query / "apps/chatbi/orchestration/agent/tools/core.py"
+    ).read_text(encoding="utf-8")
+    interaction_source = (
+        BACKEND_DIR__query / "apps/chatbi/orchestration/agent/tools/interaction.py"
+    ).read_text(encoding="utf-8")
+    for class_name in (
+        "GetDatasetSchemaTool",
+        "ValidateSqlTool",
+        "ExecuteSqlTool",
+        "SearchTerminologyTool",
+        "GetSqlExamplesTool",
+    ):
+        assert f"class {class_name}" not in core_source
+        assert f"class {class_name}" not in interaction_source
 
 
 def test_graph_sql_adapter_does_not_maintain_second_execution_chain():
@@ -883,12 +921,16 @@ def test_agent_semantic_retrieval_and_physical_schema_use_chatbi_services():
     source = (
         BACKEND_DIR__query / "apps/chatbi/orchestration/agent/tools/core.py"
     ).read_text(encoding="utf-8")
+    schema_source = (
+        BACKEND_DIR__query / "apps/tool/tools/datasource.py"
+    ).read_text(encoding="utf-8")
 
     assert "apps.capabilities.semantic.retrieval" not in imports
     assert "apps.datasource" in imports
     assert not any(module.startswith("apps.datasource.models") for module in imports)
     assert "semantic_retrieval_service.retrieve_for_agent" in source
-    assert "physical_schema_service.get" in source
+    assert "self._schema_reader.get" in schema_source
+    assert "class GetDatasetSchemaTool" not in source
 
 
 def test_graph_semantic_retrieval_uses_chatbi_service():

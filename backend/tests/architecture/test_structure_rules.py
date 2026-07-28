@@ -24,6 +24,7 @@ class ForbiddenImportRule:
     scope: str
     forbidden: tuple[str, ...]
     allowed: tuple[str, ...] = field(default_factory=tuple)
+    excluded: tuple[str, ...] = field(default_factory=tuple)
     reason: str = ""
 
 
@@ -59,7 +60,20 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
             "apps.event",
             "apps.trace",
         ),
+        excluded=("apps/tool/tools",),
         reason="apps.tool 只承载通用工具运行时，不得依赖业务域、产品事件或 Trace。",
+    ),
+    ForbiddenImportRule(
+        rule_id="public-tools-no-chatbi-imports",
+        scope="apps/tool/tools",
+        forbidden=(
+            "apps.chatbi",
+            "apps.conversation",
+            "apps.access_control",
+            "apps.event",
+            "apps.trace",
+        ),
+        reason="公共 Tool 可依赖领域公开契约，但不得依赖 ChatBI 状态、生命周期、Event 或 Trace。",
     ),
     ForbiddenImportRule(
         rule_id="datasource-services-no-concrete-tools",
@@ -190,6 +204,13 @@ def _find_violations(rule: ForbiddenImportRule) -> list[str]:
     violations: list[str] = []
     for py_file in sorted(scope_dir.rglob("*.py")):
         if "__pycache__" in py_file.parts:
+            continue
+        relative_file = str(py_file.relative_to(BACKEND_ROOT))
+        if any(
+            relative_file == excluded
+            or relative_file.startswith(f"{excluded}/")
+            for excluded in rule.excluded
+        ):
             continue
         for lineno, module in _iter_absolute_imports(py_file):
             if any(_module_matches(module, allow) for allow in rule.allowed):

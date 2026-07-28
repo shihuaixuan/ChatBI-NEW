@@ -84,13 +84,6 @@ class AgentRuntimeStateFactory:
             chat_id=run.chat_id,
             record_id=record.id,
             dataset_id=record.dataset_id,
-            term_query_service=self._tool_services.term_query_service,
-            query_service=self._tool_services.query_service,
-            semantic_query_service=self._tool_services.semantic_query_service,
-            semantic_retrieval_service=(
-                self._tool_services.semantic_retrieval_service
-            ),
-            physical_schema_service=self._tool_services.physical_schema_service,
             result_artifact_service=self._tool_services.result_artifact_service,
             config=self._config,
             state={"question": record.question or ""},

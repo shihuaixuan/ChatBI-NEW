@@ -7,13 +7,20 @@ from apps.chatbi.orchestration.agent.tools.base import (
     AgentTool,
     AgentToolContext,
 )
-from apps.chatbi.orchestration.agent.tools.core import build_default_tools
-from apps.chatbi.orchestration.agent.tools.interaction import (
-    ClarifyTool,
-    GetSqlExamplesTool,
-    SearchTerminologyTool,
+from apps.chatbi.orchestration.agent.tools.core import (
+    CompileSemanticSqlTool,
+    FinishTool,
+    SearchSemanticAssetsTool,
 )
+from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.tool import ToolCall, ToolRegistry, ToolResult, ToolStatus
+from apps.tool.tools.datasource import (
+    ExecuteSqlTool,
+    GetDatasetSchemaTool,
+    ValidateSqlTool,
+)
+from apps.tool.tools.knowledge import GetSqlExamplesTool
+from apps.tool.tools.semantic import SearchTerminologyTool
 
 
 class EchoArgs(BaseModel):
@@ -67,10 +74,15 @@ def test_executes_registered_tool_and_exposes_specs():
 
 def test_all_production_tools_have_input_and_output_schema():
     tools = [
-        *build_default_tools(),
+        SearchSemanticAssetsTool(object(), object()),  # type: ignore[arg-type]
+        CompileSemanticSqlTool(object()),  # type: ignore[arg-type]
+        FinishTool(),
         ClarifyTool(),
-        SearchTerminologyTool(),
-        GetSqlExamplesTool(),
+        GetDatasetSchemaTool(object()),  # type: ignore[arg-type]
+        ValidateSqlTool(object()),  # type: ignore[arg-type]
+        ExecuteSqlTool(object()),  # type: ignore[arg-type]
+        SearchTerminologyTool(object()),  # type: ignore[arg-type]
+        GetSqlExamplesTool(object()),  # type: ignore[arg-type]
     ]
     assert len(tools) == 9
     assert len({tool.name for tool in tools}) == 9
@@ -78,6 +90,8 @@ def test_all_production_tools_have_input_and_output_schema():
         definition = tool.definition()
         assert definition.input_schema["type"] == "object"
         assert definition.output_schema
+        assert tool.execution.timeout_seconds is not None
+        assert tool.execution.timeout_seconds > 0
 
 
 def test_default_model_client_isolates_langchain_message_and_tool_conversion():

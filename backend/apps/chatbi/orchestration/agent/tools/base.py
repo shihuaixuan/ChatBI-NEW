@@ -14,7 +14,6 @@ from apps.tool import Tool
 if TYPE_CHECKING:
     from apps.chatbi.models import (
         ChatBIResultArtifactRef,
-        PhysicalSchemaResult,
         ResultArtifactWriteData,
         SemanticQueryCompileData,
         SemanticQueryCompileResult,
@@ -23,21 +22,7 @@ if TYPE_CHECKING:
     from apps.datasource import (
         DatasourceQueryRequest,
         DatasourceQueryResult,
-        DatasourceQuerySubject,
     )
-    from apps.semantic.models.dto import TermSearchResult
-
-
-class TermQueryService(Protocol):
-    """Agent 对 Semantic 术语查询公开能力的最小依赖。"""
-
-    def search(
-        self,
-        oid: int,
-        dataset_id: int,
-        query: str,
-        limit: int = 10,
-    ) -> list[TermSearchResult]: ...
 
 
 class QueryService(Protocol):
@@ -85,27 +70,10 @@ class SemanticAssetRetriever(Protocol):
     ) -> dict[str, Any]: ...
 
 
-class PhysicalSchemaReader(Protocol):
-    """Agent 对 ChatBI 物理 Schema 入口的最小依赖。"""
-
-    def get(
-        self,
-        datasource_id: int,
-        *,
-        subject: DatasourceQuerySubject,
-        table_keyword: str = "",
-    ) -> PhysicalSchemaResult: ...
-
-
 @dataclass(frozen=True)
 class AgentToolContextServices:
     """创建工具执行上下文所需的稳定服务集合。"""
 
-    term_query_service: TermQueryService
-    query_service: QueryService
-    semantic_query_service: SemanticQueryCompiler
-    semantic_retrieval_service: SemanticAssetRetriever
-    physical_schema_service: PhysicalSchemaReader
     result_artifact_service: ResultArtifactWriter
 
 
@@ -121,15 +89,28 @@ class AgentToolContext:
     chat_id: int | None = None
     record_id: int | None = None
     dataset_id: int | None = None
-    term_query_service: TermQueryService | None = None
-    query_service: QueryService | None = None
-    semantic_query_service: SemanticQueryCompiler | None = None
-    semantic_retrieval_service: SemanticAssetRetriever | None = None
-    physical_schema_service: PhysicalSchemaReader | None = None
     result_artifact_service: ResultArtifactWriter | None = None
     config: Any = None
     # 循环内跨工具共享的运行时状态（语义包、执行结果标记等），由 loop 维护。
     state: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def workspace_id(self) -> int:
+        return self.oid
+
+    @property
+    def selected_tables(self) -> list[str]:
+        """把 ChatBI 派生状态投影成公共 Tool 的可信选表范围。"""
+
+        return [
+            str(table)
+            for table in self.state.get("allowed_tables") or []
+            if str(table).strip()
+        ]
+
+    @property
+    def summary_max_chars(self) -> int:
+        return int(getattr(self.config, "summary_max_chars", 4000) or 4000)
 
 
 class AgentTool(Tool):

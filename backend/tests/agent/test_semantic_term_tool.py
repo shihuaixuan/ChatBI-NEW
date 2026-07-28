@@ -5,13 +5,13 @@ import pytest
 from apps.chatbi.models import AgentQuestionRequest
 from apps.chatbi.orchestration.agent.service import create_record_and_run
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
-from apps.chatbi.orchestration.agent.tools.interaction import (
-    SearchTerminologyArgs,
-    SearchTerminologyTool,
-)
 from apps.conversation.models import Chat
 from apps.semantic.models.dto import TermSearchResult
 from apps.tool import ToolStatus
+from apps.tool.tools.semantic import (
+    SearchTerminologyArgs,
+    SearchTerminologyTool,
+)
 
 
 class _TermQueryService:
@@ -44,10 +44,9 @@ def test_search_terminology_uses_semantic_dataset_service():
         user_id=2,
         datasource_id=3,
         dataset_id=20,
-        term_query_service=service,
     )
 
-    result = SearchTerminologyTool().execute(
+    result = SearchTerminologyTool(service).execute(
         context,
         SearchTerminologyArgs(term="GMV"),
     )
@@ -65,10 +64,9 @@ def test_search_terminology_requires_semantic_dataset():
         oid=1,
         user_id=2,
         datasource_id=3,
-        term_query_service=_TermQueryService(),
     )
 
-    result = SearchTerminologyTool().execute(
+    result = SearchTerminologyTool(_TermQueryService()).execute(
         context,
         SearchTerminologyArgs(term="GMV"),
     )

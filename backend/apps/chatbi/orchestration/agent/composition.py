@@ -24,12 +24,8 @@ from apps.chatbi.orchestration.agent.reasoning import AgentModelClient, AgentRea
 from apps.chatbi.orchestration.agent.state import AgentRuntimeStateFactory
 from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContextServices
-from apps.chatbi.orchestration.agent.tools.core import build_default_tools
-from apps.chatbi.orchestration.agent.tools.interaction import (
-    ClarifyTool,
-    GetSqlExamplesTool,
-    SearchTerminologyTool,
-)
+from apps.chatbi.orchestration.agent.tools.core import build_chatbi_tools
+from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.chatbi.services.execution import ResultArtifactService
 from apps.chatbi.services.planning import (
     PhysicalSchemaService,
@@ -39,24 +35,49 @@ from apps.chatbi.services.planning import (
 from apps.chatbi.services.understanding import QuestionUnderstandingService
 from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
+from apps.knowledge.composition import build_sql_example_query_service
+from apps.knowledge.services.sql_example_query_service import SQLExampleQueryService
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
 from apps.tool import ToolRegistry, default_middlewares
+from apps.tool.tools.datasource import (
+    ExecuteSqlTool,
+    GetDatasetSchemaTool,
+    ValidateSqlTool,
+)
+from apps.tool.tools.knowledge import GetSqlExamplesTool
+from apps.tool.tools.semantic import SearchTerminologyTool
 from apps.trace import AgentTracer
 
 
-def build_agent_tool_registry(config: AgentConfig) -> ToolRegistry:
+def build_agent_tool_registry(
+    config: AgentConfig,
+    *,
+    query_service: DatasourceQueryService,
+    semantic_query_service: SemanticCompilationService,
+    semantic_retrieval_service: SemanticRetrievalService,
+    physical_schema_service: PhysicalSchemaService,
+    term_query_service: SemanticTermQueryService,
+    sql_example_query_service: SQLExampleQueryService,
+) -> ToolRegistry:
     """装配 Agent 默认工具集合及执行中间件。"""
 
     timeout = float(getattr(config, "tool_timeout_seconds", 60) or 60)
     registry = ToolRegistry(
         middlewares=default_middlewares(timeout_seconds=timeout)
     )
-    for tool in build_default_tools():
+    for tool in build_chatbi_tools(
+        query_service=query_service,
+        semantic_query_service=semantic_query_service,
+        semantic_retrieval_service=semantic_retrieval_service,
+    ):
         registry.register(tool)
     registry.register(ClarifyTool())
-    registry.register(SearchTerminologyTool())
-    registry.register(GetSqlExamplesTool())
+    registry.register(GetDatasetSchemaTool(physical_schema_service))
+    registry.register(ValidateSqlTool(query_service))
+    registry.register(ExecuteSqlTool(query_service))
+    registry.register(SearchTerminologyTool(term_query_service))
+    registry.register(GetSqlExamplesTool(sql_example_query_service))
     return registry
 
 
@@ -73,6 +94,7 @@ def build_agent_loop(
     semantic_query_service: SemanticCompilationService | None = None,
     semantic_retrieval_service: SemanticRetrievalService | None = None,
     physical_schema_service: PhysicalSchemaService | None = None,
+    sql_example_query_service: SQLExampleQueryService | None = None,
     result_artifact_service: ResultArtifactService | None = None,
     event_publisher: EventPublisher | None = None,
     tracer: AgentTracer | None = None,
@@ -91,7 +113,35 @@ def build_agent_loop(
         build_chat_record_service(session),
         resolved_publisher,
     )
-    resolved_registry = registry or build_agent_tool_registry(resolved_config)
+    resolved_query_service = query_service or build_query_service(
+        session,
+        default_limit=resolved_config.default_limit,
+        sample_rows=resolved_config.sample_rows,
+    )
+    resolved_semantic_query_service = (
+        semantic_query_service or build_semantic_query_service(session)
+    )
+    resolved_semantic_retrieval_service = (
+        semantic_retrieval_service or build_semantic_retrieval_service(session)
+    )
+    resolved_physical_schema_service = (
+        physical_schema_service or build_physical_schema_service(session)
+    )
+    resolved_term_query_service = (
+        term_query_service or build_semantic_term_query_service(session)
+    )
+    resolved_sql_example_query_service = (
+        sql_example_query_service or build_sql_example_query_service(session)
+    )
+    resolved_registry = registry or build_agent_tool_registry(
+        resolved_config,
+        query_service=resolved_query_service,
+        semantic_query_service=resolved_semantic_query_service,
+        semantic_retrieval_service=resolved_semantic_retrieval_service,
+        physical_schema_service=resolved_physical_schema_service,
+        term_query_service=resolved_term_query_service,
+        sql_example_query_service=resolved_sql_example_query_service,
+    )
     resolved_reasoner = reasoner or AgentReasoner(
         resolved_config,
         model_client or DefaultAgentModelClient(),
@@ -117,25 +167,6 @@ def build_agent_loop(
         resolved_publisher,
     )
     tool_services = AgentToolContextServices(
-        term_query_service=(
-            term_query_service or build_semantic_term_query_service(session)
-        ),
-        query_service=query_service
-        or build_query_service(
-            session,
-            default_limit=resolved_config.default_limit,
-            sample_rows=resolved_config.sample_rows,
-        ),
-        semantic_query_service=(
-            semantic_query_service or build_semantic_query_service(session)
-        ),
-        semantic_retrieval_service=(
-            semantic_retrieval_service
-            or build_semantic_retrieval_service(session)
-        ),
-        physical_schema_service=(
-            physical_schema_service or build_physical_schema_service(session)
-        ),
         result_artifact_service=(
             result_artifact_service or build_result_artifact_service(session)
         ),
