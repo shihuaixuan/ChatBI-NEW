@@ -49,6 +49,7 @@ _EVENT_CONTRACT: dict[str, tuple[type[RenderEvent], EventPhase, str]] = {
     "step-started": (RunEvent, "start", "step.started"),
     "run-finished": (RunEvent, "end", "run.finished"),
     "run-failed": (RunEvent, "error", "run.failed"),
+    "run-cancelled": (RunEvent, "end", "run.cancelled"),
     "question-understood": (ThinkingEvent, "end", "question.understood"),
     "thinking": (ThinkingEvent, "snapshot", "reasoning.snapshot"),
     "answer": (TextEvent, "end", "answer.completed"),

@@ -16,10 +16,10 @@ from apps.datasource import (
 )
 from apps.tool.base import (
     Tool,
-    ToolConcurrency,
     ToolExecutionPolicy,
     json_summary,
 )
+from apps.tool.context import current_tool_call_context
 from apps.tool.result import (
     RetryAdvice,
     ToolErrorCategory,
@@ -134,10 +134,8 @@ class ValidateSqlTool(
     )
     args_model = ValidateSqlArgs
     result_model = ValidateSqlResult
-    execution = ToolExecutionPolicy(
-        concurrency=ToolConcurrency.PARALLEL_SAFE,
-        timeout_seconds=10,
-    )
+    # 权限提供者可能持有请求级 SQLAlchemy Session，因此保持串行。
+    execution = ToolExecutionPolicy(timeout_seconds=10)
 
     def __init__(self, query_service: DatasourceQueryService) -> None:
         if query_service is None:
@@ -220,6 +218,7 @@ class ExecuteSqlTool(
             metadata={
                 "full_data": payload.full_data,
                 "execution_metadata": payload.execution_metadata,
+                "retry_count": result.retry_count,
             },
         )
 
@@ -235,6 +234,7 @@ def _query_request(
             error_category=ToolErrorCategory.CONFIGURATION,
             retry_advice=RetryAdvice.NEVER,
         )
+    call_context = current_tool_call_context()
     return DatasourceQueryRequest(
         sql=sql,
         datasource_id=ctx.datasource_id,
@@ -243,6 +243,11 @@ def _query_request(
             workspace_id=ctx.workspace_id,
         ),
         selected_tables=ctx.selected_tables,
+        deadline_monotonic=(
+            call_context.deadline_monotonic
+            if call_context is not None
+            else None
+        ),
     )
 
 
@@ -254,6 +259,7 @@ def _query_failure(result: DatasourceQueryResult) -> ToolResult[Any]:
         DatasourceQueryErrorCategory.DOMAIN: ToolErrorCategory.DOMAIN,
         DatasourceQueryErrorCategory.TRANSIENT: ToolErrorCategory.TRANSIENT,
         DatasourceQueryErrorCategory.CONFIGURATION: ToolErrorCategory.CONFIGURATION,
+        DatasourceQueryErrorCategory.TIMEOUT: ToolErrorCategory.TIMEOUT,
     }
     category = category_map.get(result.error_category, ToolErrorCategory.DOMAIN)
     if result.status == DatasourceQueryStatus.REJECTED:
@@ -267,6 +273,7 @@ def _query_failure(result: DatasourceQueryResult) -> ToolResult[Any]:
         error_code=result.error_code or "query_failed",
         error_category=category,
         retry_advice=RetryAdvice(result.retry_advice.value),
+        metadata={"retry_count": result.retry_count},
     )
 
 

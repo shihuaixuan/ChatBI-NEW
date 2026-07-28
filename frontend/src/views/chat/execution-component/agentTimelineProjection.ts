@@ -59,7 +59,7 @@ export function buildAgentFlow(
   let currentIndex: number | undefined
   let currentStepId: number | undefined
   let terminalStatus: 'success' | 'failed' | undefined
-  let eventRunStatus: 'running' | 'waiting_user' | 'finished' | 'failed' | undefined
+  let eventRunStatus: 'running' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | undefined
 
   for (const persisted of timeline?.steps || []) {
     if (persisted.id !== undefined) stepIdToIndex.set(persisted.id, persisted.index)
@@ -213,6 +213,13 @@ export function buildAgentFlow(
         }
         break
       }
+      case 'run.cancelled':
+        eventRunStatus = 'cancelled'
+        terminalStatus = 'failed'
+        for (const step of toolSteps.values()) {
+          if (step.status === 'running') step.status = 'failed'
+        }
+        break
       case 'run.finished':
         eventRunStatus = 'finished'
         terminalStatus = 'success'
@@ -275,7 +282,7 @@ export function buildAgentFlow(
     }
   }
   // 流式终止事件比轮询得到的旧状态更新，必须优先收口，避免失败后仍显示运行中。
-  if (terminalStatus === 'failed' || runStatus === 'failed') {
+  if (terminalStatus === 'failed' || runStatus === 'failed' || runStatus === 'cancelled') {
     const failed = [...steps].reverse().find((step) => step.status === 'failed')
     return {
       status: 'failed',

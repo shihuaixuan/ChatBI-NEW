@@ -39,4 +39,5 @@ class DatasourceConnectionGateway(Protocol):
         sql: str,
         *,
         origin_column: bool = False,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]: ...

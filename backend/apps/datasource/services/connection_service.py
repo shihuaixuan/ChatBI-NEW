@@ -74,11 +74,20 @@ class DatasourceConnectionService:
         sql: str,
         *,
         origin_column: bool = False,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
+        connection = self._get_connection(datasource_id)
+        if timeout_seconds is None:
+            return self._gateway.execute_query(
+                connection,
+                sql,
+                origin_column=origin_column,
+            )
         return self._gateway.execute_query(
-            self._get_connection(datasource_id),
+            connection,
             sql,
             origin_column=origin_column,
+            timeout_seconds=timeout_seconds,
         )
 
     def _get_connection(self, datasource_id: int) -> DatasourceConnection:

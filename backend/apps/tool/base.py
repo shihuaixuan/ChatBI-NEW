@@ -45,6 +45,7 @@ class ToolExecutionPolicy:
     timeout_seconds: float | None = None
     idempotent: bool = True
     destructive: bool = False
+    supports_cancellation: bool = False
 
 
 class Tool(Generic[ContextT, ArgsT, ResultT]):

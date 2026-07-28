@@ -154,6 +154,9 @@ class AgentLoop:
         budget = state.budget
 
         while True:
+            if state.cancellation.is_cancelled():
+                yield from self.lifecycle.cancel(state)
+                return
             mode = budget.planning_mode()
             if mode == "exhausted":
                 yield from self._budget_exhausted(state)
@@ -193,6 +196,15 @@ class AgentLoop:
             text = decision.reasoning
             if text:
                 yield self._emit(state, "thinking", {"record_id": record.id, "content": text}, step.id)
+
+            if state.cancellation.is_cancelled():
+                agent_run_repository.fail_step(
+                    self.session,
+                    step,
+                    "用户在模型规划期间请求取消",
+                )
+                yield from self.lifecycle.cancel(state)
+                return
 
             if decision.is_direct_answer:
                 if not _allows_direct_answer(state):

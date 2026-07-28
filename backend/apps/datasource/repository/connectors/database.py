@@ -1,5 +1,6 @@
 import base64
 import json
+import math
 import os
 import re
 import urllib.parse
@@ -218,8 +219,8 @@ def get_engine(ds: DatasourceTarget, timeout: int = 0) -> Engine:
     return engine
 
 
-def get_session(ds: DatasourceTarget):
-    engine = get_engine(ds)
+def get_session(ds: DatasourceTarget, timeout: int = 0):
+    engine = get_engine(ds, timeout)
     session_maker = sessionmaker(bind=engine)
     session = session_maker()
     return session
@@ -826,6 +827,7 @@ def exec_sql(
     ds: DatasourceTarget,
     sql: str,
     origin_column=False,
+    timeout_seconds: float | None = None,
 ):
     while sql.endswith(";"):
         sql = sql[:-1]
@@ -835,7 +837,17 @@ def exec_sql(
 
     db = DB.get_db(ds.type)
     if db.connect_type == ConnectType.sqlalchemy:
-        with get_session(ds) as session:
+        effective_timeout = (
+            max(1, int(math.ceil(timeout_seconds)))
+            if timeout_seconds is not None
+            else 0
+        )
+        with get_session(ds, effective_timeout) as session:
+            if effective_timeout > 0 and equals_ignore_case(ds.type, "pg"):
+                session.execute(
+                    text("SELECT set_config('statement_timeout', :timeout, true)"),
+                    {"timeout": f"{effective_timeout * 1000}ms"},
+                )
             with session.execute(text(sql)) as result:
                 try:
                     columns = (
@@ -860,6 +872,11 @@ def exec_sql(
                     raise ParseSQLResultError(str(ex))
     else:
         conf = DatasourceConf(**json.loads(aes_decrypt(ds.configuration)))
+        if timeout_seconds is not None:
+            conf.timeout = max(
+                1,
+                min(conf.timeout, int(math.ceil(timeout_seconds))),
+            )
         extra_config_dict = get_extra_config(conf)
         if equals_ignore_case(ds.type, "dm"):
             with (

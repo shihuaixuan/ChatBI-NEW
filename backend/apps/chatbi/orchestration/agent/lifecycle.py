@@ -244,6 +244,40 @@ class AgentLifecycle:
             },
         )
 
+    def cancel(
+        self,
+        state: AgentRuntimeState,
+        message: str = "用户已请求取消运行",
+    ) -> Iterator[RenderEvent]:
+        """在当前执行边界确认停止后，才把 Run 和问数记录置为已取消。"""
+
+        run = state.run
+        record = state.record
+        close_unfinished_tool_calls(
+            state.messages,
+            content="skipped: run cancelled before this tool executed",
+        )
+        self._record_service.transition(
+            record,
+            ChatRecordStatus.CANCELLED,
+            error=message,
+            execution_type=ChatRecordExecutionType.AGENT,
+        )
+        agent_run_repository.update_run(
+            self._session,
+            run,
+            status=AgentRunStatus.CANCELLED.value,
+            messages=state.serialized_messages(),
+            budget_snapshot=state.budget_snapshot(),
+            error=message,
+        )
+        self._session.commit()
+        yield self._publish(
+            state,
+            "run-cancelled",
+            {"record_id": record.id, "content": message},
+        )
+
     def _publish(
         self,
         state: AgentRuntimeState,

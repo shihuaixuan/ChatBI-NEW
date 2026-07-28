@@ -17,6 +17,9 @@ from apps.chatbi.models.dto.agent import (
     AgentResumeStreamRequest,
     AgentStartStreamRequest,
 )
+from apps.chatbi.orchestration.agent.cancellation import (
+    DatabaseRunCancellationSignal,
+)
 from apps.chatbi.orchestration.agent.composition import build_agent_loop
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.planning import resolve_execution_binding
@@ -137,7 +140,14 @@ def create_agent_start_events(
                 AgentQuestionRequest(**request.model_dump(exclude={"action"})),
                 config.model_dump(),
             )
-            loop = build_agent_loop(stream_session, current_user, config)
+            loop = build_agent_loop(
+                stream_session,
+                current_user,
+                config,
+                cancellation_signal_factory=lambda run_id: (
+                    DatabaseRunCancellationSignal(engine, run_id)
+                ),
+            )
             yield from loop.run(run, record)
 
     return stream()
@@ -185,7 +195,14 @@ def create_agent_resume_events(
             clarification.answered_at = agent_run_repository.now()
             stream_session.add(clarification)
             stream_session.commit()
-            loop = build_agent_loop(stream_session, current_user, config)
+            loop = build_agent_loop(
+                stream_session,
+                current_user,
+                config,
+                cancellation_signal_factory=lambda run_id: (
+                    DatabaseRunCancellationSignal(engine, run_id)
+                ),
+            )
             yield from loop.resume(run, record, clarification, answer_text)
 
     return stream()

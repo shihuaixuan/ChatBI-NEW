@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from dataclasses import dataclass
 from enum import StrEnum
-from time import perf_counter
+from time import monotonic, perf_counter
 from typing import Any, cast
 
 import orjson
@@ -28,12 +28,16 @@ from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import (
+    RetryAdvice,
+    ToolBatchExecutionError,
     ToolCall,
+    ToolCallContext,
     ToolErrorCategory,
     ToolRegistry,
     ToolResult,
     ToolStatus,
     batch_tool_calls,
+    effective_timeout_seconds,
     execute_tool_batch,
 )
 from apps.trace import AgentTracer, tool_attributes
@@ -46,6 +50,7 @@ class ToolExecutionStatus(StrEnum):
     SUSPENDED = "suspended"
     FINISHED = "finished"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -214,13 +219,56 @@ class AgentToolExecutor:
                         context,
                         state,
                         step,
-                        mode,
                         call,
                     ),
                     max_workers=int(
                         getattr(self._config, "tool_parallel_workers", 4) or 4
                     ),
                 )
+            except ToolBatchExecutionError as exc:
+                for call, outcome in exc.outcomes:
+                    if isinstance(outcome, ToolResult):
+                        result = outcome
+                        summary = {
+                            "success": result.status == ToolStatus.SUCCEEDED,
+                            "status": result.status.value,
+                            "error_code": result.error_code,
+                        }
+                    else:
+                        result = ToolResult.failed(
+                            "工具执行发生未声明异常。",
+                            error_code="tool_undeclared_exception",
+                            error_category=ToolErrorCategory.CONFIGURATION,
+                            retry_advice=RetryAdvice.NEVER,
+                        )
+                        summary = {
+                            "success": False,
+                            "status": result.status.value,
+                            "error_code": result.error_code,
+                        }
+                    row = tool_call_rows.pop(call.call_id, None)
+                    if row is not None:
+                        yield self._finish_tool_call_event(
+                            state,
+                            step,
+                            row,
+                            result,
+                            summary,
+                        )
+                yield from self._interrupt_open_tool_calls(
+                    state,
+                    step,
+                    calls,
+                    tool_call_rows,
+                    reason="工具执行发生未声明异常",
+                )
+                agent_run_repository.fail_step(
+                    self._session,
+                    step,
+                    "工具执行发生未声明异常",
+                )
+                self._session.commit()
+                raise exc.cause from exc
             except Exception:
                 yield from self._interrupt_open_tool_calls(
                     state,
@@ -286,6 +334,33 @@ class AgentToolExecutor:
                     completed_count += 1
                 else:
                     failed_count += 1
+
+                if result.error_category == ToolErrorCategory.CANCELLATION:
+                    state.messages.append(
+                        AgentMessage.tool(result.model_content, call_id)
+                    )
+                    yield from self._interrupt_open_tool_calls(
+                        state,
+                        step,
+                        calls,
+                        tool_call_rows,
+                        reason="当前运行已收到用户取消请求",
+                    )
+                    agent_run_repository.finish_step(
+                        self._session,
+                        step,
+                        {
+                            "tool_call_count": completed_count + failed_count,
+                            "failed_tool_call_count": failed_count,
+                        },
+                        usage,
+                    )
+                    self._session.commit()
+                    yield from self._lifecycle.cancel(
+                        state,
+                        result.model_content,
+                    )
+                    return ToolExecutionResult(ToolExecutionStatus.CANCELLED)
 
                 if (
                     projection.control == ToolControlAction.CLARIFY
@@ -417,10 +492,24 @@ class AgentToolExecutor:
         context: AgentToolContext,
         state: AgentRuntimeState,
         step: Any,
-        mode: str,
         call: ToolCall,
     ) -> ToolResult[Any]:
         started_at = perf_counter()
+        tool = self._registry.get(call.name)
+        declared_timeout = (
+            tool.execution.timeout_seconds if tool is not None else None
+        )
+        timeout_seconds = effective_timeout_seconds(
+            declared_timeout=declared_timeout,
+            default_timeout=float(self._config.tool_default_timeout_seconds),
+            maximum_timeout=float(self._config.tool_timeout_seconds),
+            run_remaining=state.budget.remaining_seconds(),
+        )
+        call_context = ToolCallContext(
+            tool_call_id=call.call_id,
+            deadline_monotonic=monotonic() + timeout_seconds,
+            cancellation=state.cancellation,
+        )
         with self._tracer.span(
             "execute_tool",
             tool_attributes(
@@ -430,14 +519,52 @@ class AgentToolExecutor:
                 tool_call_id=call.call_id,
             ),
         ) as tool_span:
-            if mode == "soft" and call.name not in {"finish", "clarify"}:
-                result = ToolResult.rejected(
-                    f"预算接近上限，禁止调用 {call.name}。请 finish 或 clarify。",
-                    error_code="budget_soft_tool_blocked",
-                    error_category=ToolErrorCategory.BUSINESS_RULE,
+            if state.cancellation.is_cancelled():
+                result = ToolResult.interrupted(
+                    "用户已请求取消，工具未开始执行。",
+                    error_code="tool_cancelled_before_start",
+                    metadata={"underlying_operation_started": False},
+                )
+            elif timeout_seconds <= 0:
+                result = ToolResult.interrupted(
+                    "运行截止时间已到，工具未开始执行。",
+                    error_code="tool_deadline_exceeded_before_start",
+                    error_category=ToolErrorCategory.TIMEOUT,
+                    metadata={"underlying_operation_started": False},
                 )
             else:
-                result = self._registry.execute(call, context)
+                result = self._registry.execute(
+                    call,
+                    context,
+                    call_context=call_context,
+                )
+                if state.cancellation.is_cancelled():
+                    supports_cancellation = bool(
+                        tool and tool.execution.supports_cancellation
+                    )
+                    result = ToolResult.interrupted(
+                        (
+                            "用户取消请求已生效。"
+                            if supports_cancellation
+                            else "用户已请求取消；该工具不支持执行中取消，底层操作会继续到返回，此时可能已经完成。"
+                        ),
+                        error_code="tool_cancelled",
+                        metadata={
+                            "underlying_operation_may_have_completed": (
+                                not supports_cancellation
+                            )
+                        },
+                    )
+                elif (
+                    call_context.deadline_exceeded()
+                    and result.status == ToolStatus.SUCCEEDED
+                ):
+                    result = ToolResult.interrupted(
+                        "工具超过有效截止时间后才返回，结果不再用于本次运行。",
+                        error_code="tool_deadline_exceeded",
+                        error_category=ToolErrorCategory.TIMEOUT,
+                        metadata={"underlying_operation_completed": True},
+                    )
             tool_span.set_attribute(
                 "gen_ai.tool.call.result",
                 result.status.value,

@@ -12,6 +12,19 @@ from apps.tool.context import ToolCall
 from apps.tool.result import ToolResult
 
 
+class ToolBatchExecutionError(RuntimeError):
+    """并发批次包含未声明异常，同时保留每个调用的实际执行结果。"""
+
+    def __init__(
+        self,
+        outcomes: list[tuple[ToolCall, ToolResult[Any] | BaseException]],
+        cause: BaseException,
+    ) -> None:
+        super().__init__("TOOL_BATCH_UNDECLARED_EXCEPTION")
+        self.outcomes = outcomes
+        self.cause = cause
+
+
 def batch_tool_calls(
     calls: list[ToolCall],
     resolve_tool: Callable[[str], Tool | None],
@@ -73,10 +86,13 @@ def execute_tool_batch(
     """执行一批工具调用；长度>1 时并行，结果按原顺序返回。"""
 
     if len(batch) <= 1:
-        return [(call, execute(call)) for call in batch]
+        try:
+            return [(call, execute(call)) for call in batch]
+        except Exception as exc:
+            raise ToolBatchExecutionError([(batch[0], exc)], exc) from exc
 
     workers = max(1, min(max_workers, len(batch)))
-    results: dict[int, ToolResult[Any]] = {}
+    outcomes: dict[int, ToolResult[Any] | BaseException] = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
         # 每个并行工具复制当前上下文，确保 OTEL 父 span 等 contextvars 不丢失。
         futures = {
@@ -85,5 +101,26 @@ def execute_tool_batch(
         }
         for future in as_completed(futures):
             index = futures[future]
-            results[index] = future.result()
-    return [(batch[index], results[index]) for index in range(len(batch))]
+            try:
+                outcomes[index] = future.result()
+            except Exception as exc:
+                outcomes[index] = exc
+    ordered = [(batch[index], outcomes[index]) for index in range(len(batch))]
+    first_error = next(
+        (outcome for _, outcome in ordered if isinstance(outcome, BaseException)),
+        None,
+    )
+    if first_error is not None:
+        raise ToolBatchExecutionError(ordered, first_error) from first_error
+    return [
+        (call, outcome)
+        for call, outcome in ordered
+        if isinstance(outcome, ToolResult)
+    ]
+
+
+__all__ = [
+    "ToolBatchExecutionError",
+    "batch_tool_calls",
+    "execute_tool_batch",
+]

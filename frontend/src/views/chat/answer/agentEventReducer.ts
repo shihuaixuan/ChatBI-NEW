@@ -81,6 +81,12 @@ export function reduceAgentEvent(
       currentRecord.error = event.content
       return alreadyFailed ? {} : { terminal: 'failed' }
     }
+    case 'run.cancelled': {
+      const alreadyCancelled = currentRecord.status === 'cancelled'
+      currentRecord.status = 'cancelled'
+      currentRecord.error = event.content
+      return alreadyCancelled ? {} : { terminal: 'failed' }
+    }
     case 'run.finished': {
       const alreadyFinished = currentRecord.finish === true
       currentRecord.status = 'finished'

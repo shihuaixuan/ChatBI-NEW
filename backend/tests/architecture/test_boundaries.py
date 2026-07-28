@@ -1238,7 +1238,8 @@ def test_agent_runtime_dependencies_are_owned_by_composition():
 
     assert "def build_agent_loop" in composition_source
     assert "def build_agent_tool_registry" in composition_source
-    assert "build_agent_loop(stream_session" in service_source
+    assert "build_agent_loop(" in service_source
+    assert "cancellation_signal_factory" in service_source
     assert "apps.chatbi.composition" not in loop_source
     assert "build_default_tools" not in loop_source
     assert "LLMFactory" not in loop_source

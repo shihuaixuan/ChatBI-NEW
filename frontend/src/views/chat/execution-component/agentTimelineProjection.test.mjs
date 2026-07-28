@@ -18,6 +18,7 @@ const CONTRACT = {
   'clarification.required': { kind: 'interaction', phase: 'start' },
   'clarification.accepted': { kind: 'interaction', phase: 'end' },
   'run.failed': { kind: 'run', phase: 'error' },
+  'run.cancelled': { kind: 'run', phase: 'end' },
 }
 
 function agentEvent(domain, payload = {}) {
@@ -217,6 +218,27 @@ test('失败终止事件会覆盖轮询到的旧运行状态', () => {
   assert.equal(flow.status, 'failed')
   assert.equal(flow.steps.find((step) => step.toolName === 'execute_sql')?.status, 'failed')
   assert.match(flow.headline, /执行失败/)
+})
+
+test('取消终止事件会结束运行中的工具节点', () => {
+  const currentRecord = { status: 'running', execution_events: [] }
+  reduceAgentEvent(
+    currentRecord,
+    agentEvent('run.cancelled', { sequence: 1, content: '用户已取消' })
+  )
+  const flow = buildAgentFlow(undefined, [
+    agentEvent('step.started', { sequence: 1, step_index: 1 }),
+    agentEvent('tool.called', {
+      sequence: 2,
+      tool_call_id: 'call-1',
+      tool_name: 'execute_sql',
+    }),
+    agentEvent('run.cancelled', { sequence: 3, content: '用户已取消' }),
+  ])
+
+  assert.equal(currentRecord.status, 'cancelled')
+  assert.equal(flow.status, 'failed')
+  assert.equal(flow.steps.find((step) => step.toolCallId === 'call-1')?.status, 'failed')
 })
 
 test('前置澄清按工作流节点展示而不是模型工具调用', () => {

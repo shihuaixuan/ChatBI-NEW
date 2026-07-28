@@ -1,5 +1,7 @@
 """Datasource 安全查询统一入口测试。"""
 
+import time
+
 import pytest
 
 from apps.datasource.models.dto import (
@@ -39,6 +41,16 @@ class RecordingExecutor:
     def execute(self, datasource_id, sql):
         self.calls.append((datasource_id, sql))
         return self.result
+
+
+class SequencedExecutor:
+    def __init__(self, results: list[DatasourceDriverResult]) -> None:
+        self.results = list(results)
+        self.calls = []
+
+    def execute(self, datasource_id, sql, *, timeout_seconds=None):
+        self.calls.append((datasource_id, sql, timeout_seconds))
+        return self.results.pop(0)
 
 
 def _request(
@@ -288,3 +300,72 @@ def test_query_service_classifies_sql_driver_failure_for_correct_input_retry():
 
     assert result.status == DatasourceQueryStatus.FAILED
     assert result.retry_advice == DatasourceQueryRetryAdvice.CORRECT_INPUT
+
+
+def test_query_service_retries_transient_failure_with_same_input_then_succeeds():
+    executor = SequencedExecutor(
+        [
+            DatasourceDriverResult(
+                succeeded=False,
+                error_code="connection_timeout",
+                message="timeout",
+                transient=True,
+            ),
+            DatasourceDriverResult(
+                succeeded=True,
+                payload={"fields": ["amount"], "data": [{"amount": 10}]},
+            ),
+        ]
+    )
+    service, provider, _ = _service()
+    service = DatasourceQueryService(
+        provider,
+        executor,
+        sample_rows=1,
+        max_transient_retries=1,
+    )
+
+    result = service.execute(_request())
+
+    assert result.status == DatasourceQueryStatus.SUCCEEDED
+    assert result.retry_count == 1
+    assert len(executor.calls) == 2
+    assert executor.calls[0][1] == executor.calls[1][1]
+
+
+def test_query_service_stops_after_transient_retry_budget_is_exhausted():
+    failure = DatasourceDriverResult(
+        succeeded=False,
+        error_code="connection_timeout",
+        message="timeout",
+        transient=True,
+    )
+    executor = SequencedExecutor([failure, failure])
+    service, provider, _ = _service()
+    service = DatasourceQueryService(
+        provider,
+        executor,
+        max_transient_retries=1,
+    )
+
+    result = service.execute(_request())
+
+    assert result.status == DatasourceQueryStatus.FAILED
+    assert result.retry_count == 1
+    assert result.retry_advice == DatasourceQueryRetryAdvice.SAME_INPUT
+    assert len(executor.calls) == 2
+
+
+def test_query_service_does_not_start_driver_after_deadline():
+    executor = SequencedExecutor([])
+    service, provider, _ = _service()
+    service = DatasourceQueryService(provider, executor)
+    request = _request().model_copy(
+        update={"deadline_monotonic": time.monotonic() - 1}
+    )
+
+    result = service.execute(request)
+
+    assert result.status == DatasourceQueryStatus.FAILED
+    assert result.error_code == "query_deadline_exceeded"
+    assert executor.calls == []

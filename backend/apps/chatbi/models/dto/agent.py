@@ -60,4 +60,6 @@ class AgentConfig(BaseModel):
     history_rounds: int = 3
     context_fold_chars: int = 30000
     tool_timeout_seconds: float = 60.0
+    tool_default_timeout_seconds: float = 30.0
+    query_transient_retries: int = 1
     tool_parallel_workers: int = 4

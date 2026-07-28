@@ -20,6 +20,7 @@ from sqlmodel import Field, SQLModel
 class AgentRunStatus(str, Enum):
     CREATED = "created"
     RUNNING = "running"
+    CANCEL_REQUESTED = "cancellation_requested"
     WAITING_USER = "waiting_user"
     FINISHED = "finished"
     FAILED = "failed"

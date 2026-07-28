@@ -50,12 +50,22 @@ class ChatBIToolResultProcessor:
         result: ToolResult[Any],
     ) -> ToolResultProjection:
         if result.status != ToolStatus.SUCCEEDED or result.data is None:
+            operation_state = {
+                key: result.metadata[key]
+                for key in (
+                    "underlying_operation_started",
+                    "underlying_operation_completed",
+                    "underlying_operation_may_have_completed",
+                )
+                if key in result.metadata
+            }
             return ToolResultProjection(
                 result=result,
                 audit_summary={
                     "success": False,
                     "status": result.status.value,
                     "error_code": result.error_code,
+                    **operation_state,
                 },
             )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from apps.chatbi.composition import (
@@ -41,6 +42,7 @@ from apps.knowledge.services.sql_example_query_service import SQLExampleQuerySer
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
 from apps.tool import ToolRegistry, default_middlewares
+from apps.tool.context import CancellationSignal
 from apps.tool.tools.datasource import (
     ExecuteSqlTool,
     GetDatasetSchemaTool,
@@ -52,7 +54,6 @@ from apps.trace import AgentTracer
 
 
 def build_agent_tool_registry(
-    config: AgentConfig,
     *,
     query_service: DatasourceQueryService,
     semantic_query_service: SemanticCompilationService,
@@ -63,10 +64,7 @@ def build_agent_tool_registry(
 ) -> ToolRegistry:
     """装配 Agent 默认工具集合及执行中间件。"""
 
-    timeout = float(getattr(config, "tool_timeout_seconds", 60) or 60)
-    registry = ToolRegistry(
-        middlewares=default_middlewares(timeout_seconds=timeout)
-    )
+    registry = ToolRegistry(middlewares=default_middlewares())
     for tool in build_chatbi_tools(
         query_service=query_service,
         semantic_query_service=semantic_query_service,
@@ -102,6 +100,7 @@ def build_agent_loop(
     reasoner: AgentReasoner | None = None,
     tool_executor: AgentToolExecutor | None = None,
     input_preparer: AgentInputPreparer | None = None,
+    cancellation_signal_factory: Callable[[int], CancellationSignal] | None = None,
 ) -> AgentLoop:
     """构造依赖完整的 AgentLoop；生产入口和测试统一使用此函数。"""
 
@@ -118,6 +117,7 @@ def build_agent_loop(
         session,
         default_limit=resolved_config.default_limit,
         sample_rows=resolved_config.sample_rows,
+        max_transient_retries=resolved_config.query_transient_retries,
     )
     resolved_semantic_query_service = (
         semantic_query_service or build_semantic_query_service(session)
@@ -135,7 +135,6 @@ def build_agent_loop(
         sql_example_query_service or build_sql_example_query_service(session)
     )
     resolved_registry = registry or build_agent_tool_registry(
-        resolved_config,
         query_service=resolved_query_service,
         semantic_query_service=resolved_semantic_query_service,
         semantic_retrieval_service=resolved_semantic_retrieval_service,
@@ -178,6 +177,7 @@ def build_agent_loop(
         current_user.id,
         resolved_config,
         tool_services,
+        cancellation_signal_factory,
     )
     return AgentLoop(
         session,

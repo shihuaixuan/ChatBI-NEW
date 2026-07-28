@@ -91,19 +91,32 @@ async def agent_cancel(session: SessionDep, current_user: CurrentUser, run_id: i
     run = agent_run_repository.get_run(session, run_id)
     if not run or run.created_by != current_user.id:
         raise HTTPException(status_code=404, detail="Run not found")
-    if run.status in {AgentRunStatus.FINISHED.value, AgentRunStatus.FAILED.value, AgentRunStatus.CANCELLED.value}:
+    if run.status in {
+        AgentRunStatus.FINISHED.value,
+        AgentRunStatus.FAILED.value,
+        AgentRunStatus.CANCELLED.value,
+        AgentRunStatus.CANCEL_REQUESTED.value,
+    }:
         return {"run_id": run_id, "status": run.status}
+    if run.status in {
+        AgentRunStatus.CREATED.value,
+        AgentRunStatus.WAITING_USER.value,
+    }:
+        target_status = AgentRunStatus.CANCELLED.value
+    else:
+        target_status = AgentRunStatus.CANCEL_REQUESTED.value
     agent_run_repository.update_run(
         session,
         run,
-        status=AgentRunStatus.CANCELLED.value,
+        status=target_status,
     )
-    record_service = build_chat_record_service(session)
-    record = record_service.get_owned(current_user.id, run.record_id)
-    record_service.transition(
-        record,
-        ChatRecordStatus.CANCELLED,
-        execution_type=ChatRecordExecutionType.AGENT,
-    )
+    if target_status == AgentRunStatus.CANCELLED.value:
+        record_service = build_chat_record_service(session)
+        record = record_service.get_owned(current_user.id, run.record_id)
+        record_service.transition(
+            record,
+            ChatRecordStatus.CANCELLED,
+            execution_type=ChatRecordExecutionType.AGENT,
+        )
     session.commit()
-    return {"run_id": run_id, "status": AgentRunStatus.CANCELLED.value}
+    return {"run_id": run_id, "status": target_status}

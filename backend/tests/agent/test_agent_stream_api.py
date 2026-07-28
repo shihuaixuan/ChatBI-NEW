@@ -66,7 +66,7 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
         return record, run
 
     class FakeLoop:
-        def __init__(self, session, current_user, config):
+        def __init__(self, session, current_user, config, **kwargs):
             pass
 
         def run(self, run_obj, record_obj):
@@ -141,7 +141,7 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
     )
 
     class FakeLoop:
-        def __init__(self, session, current_user, config):
+        def __init__(self, session, current_user, config, **kwargs):
             pass
 
         def resume(self, run_obj, record_obj, clarification_obj, answer_text):
@@ -200,3 +200,64 @@ def test_timeline_returns_product_events(monkeypatch):
     timeline = asyncio.run(api.agent_timeline(session, user, 3))
 
     assert timeline == expected
+
+
+def test_running_agent_cancel_records_request_instead_of_claiming_cancelled(
+    monkeypatch,
+):
+    user = SimpleNamespace(id=7, oid=1)
+    run = ChatbiAgentRun(
+        id=5,
+        oid=1,
+        chat_id=2,
+        record_id=3,
+        status=AgentRunStatus.RUNNING.value,
+        created_by=user.id,
+    )
+    session = SimpleNamespace(add=lambda _value: None, commit=lambda: None)
+    monkeypatch.setattr(
+        api.agent_run_repository,
+        "get_run",
+        lambda _session, _run_id: run,
+    )
+
+    response = asyncio.run(api.agent_cancel(session, user, run.id))
+
+    assert response == {
+        "run_id": run.id,
+        "status": AgentRunStatus.CANCEL_REQUESTED.value,
+    }
+    assert run.status == AgentRunStatus.CANCEL_REQUESTED.value
+
+
+def test_waiting_agent_cancel_can_reach_cancelled_immediately(monkeypatch):
+    user = SimpleNamespace(id=7, oid=1)
+    run = ChatbiAgentRun(
+        id=5,
+        oid=1,
+        chat_id=2,
+        record_id=3,
+        status=AgentRunStatus.WAITING_USER.value,
+        created_by=user.id,
+    )
+    transitioned = []
+    record_service = SimpleNamespace(
+        get_owned=lambda _user_id, _record_id: object(),
+        transition=lambda record, status, **kwargs: transitioned.append(status),
+    )
+    session = SimpleNamespace(add=lambda _value: None, commit=lambda: None)
+    monkeypatch.setattr(
+        api.agent_run_repository,
+        "get_run",
+        lambda _session, _run_id: run,
+    )
+    monkeypatch.setattr(
+        api,
+        "build_chat_record_service",
+        lambda _session: record_service,
+    )
+
+    response = asyncio.run(api.agent_cancel(session, user, run.id))
+
+    assert response["status"] == AgentRunStatus.CANCELLED.value
+    assert transitioned == ["cancelled"]

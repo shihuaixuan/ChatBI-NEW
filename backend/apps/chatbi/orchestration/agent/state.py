@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -13,7 +14,8 @@ from apps.chatbi.orchestration.agent.tools.base import (
     AgentToolContext,
     AgentToolContextServices,
 )
-from apps.tool import BudgetGuard
+from apps.tool import BudgetGuard, NeverCancelled
+from apps.tool.context import CancellationSignal
 
 
 @dataclass
@@ -25,6 +27,7 @@ class AgentRuntimeState:
     context: AgentToolContext
     messages: list[AgentMessage]
     budget: BudgetGuard
+    cancellation: CancellationSignal = field(default_factory=NeverCancelled)
     chatbi_budget: ChatBIBudgetPolicy = field(default_factory=ChatBIBudgetPolicy)
     system: AgentMessage | None = None
 
@@ -74,11 +77,13 @@ class AgentRuntimeStateFactory:
         user_id: int | None,
         config: AgentConfig,
         tool_services: AgentToolContextServices,
+        cancellation_signal_factory: Callable[[int], CancellationSignal] | None = None,
     ) -> None:
         self._session = session
         self._user_id = user_id
         self._config = config
         self._tool_services = tool_services
+        self._cancellation_signal_factory = cancellation_signal_factory
 
     def create(self, run: ChatbiAgentRun, record: Any) -> AgentRuntimeState:
         """创建状态，并统一校验 Run 与 ChatRecord 的执行归属。"""
@@ -114,6 +119,11 @@ class AgentRuntimeStateFactory:
             context=context,
             messages=[AgentMessage.user(record.question or "")],
             budget=budget,
+            cancellation=(
+                self._cancellation_signal_factory(run.id)
+                if self._cancellation_signal_factory is not None
+                else NeverCancelled()
+            ),
             chatbi_budget=chatbi_budget,
         )
 

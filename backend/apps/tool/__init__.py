@@ -14,14 +14,20 @@ from apps.tool.base import (
 )
 from apps.tool.budget import BudgetGuard, BudgetVerdict
 from apps.tool.concurrency import (
+    ToolBatchExecutionError,
     batch_tool_calls,
     execute_tool_batch,
 )
-from apps.tool.context import ToolCall, ToolCallContext
+from apps.tool.context import (
+    NeverCancelled,
+    ToolCall,
+    ToolCallContext,
+    current_tool_call_context,
+    effective_timeout_seconds,
+)
 from apps.tool.definition import ToolAnnotations, ToolDefinition
 from apps.tool.middleware import (
     LatencyMiddleware,
-    TimeoutMiddleware,
     apply_middleware,
     default_middlewares,
 )
@@ -39,9 +45,10 @@ __all__ = [
     "BudgetVerdict",
     "EmptyToolData",
     "LatencyMiddleware",
-    "TimeoutMiddleware",
+    "NeverCancelled",
     "Tool",
     "ToolAnnotations",
+    "ToolBatchExecutionError",
     "ToolCall",
     "ToolCallContext",
     "ToolConcurrency",
@@ -57,6 +64,8 @@ __all__ = [
     "batch_tool_calls",
     "default_middlewares",
     "execute_tool_batch",
+    "current_tool_call_context",
+    "effective_timeout_seconds",
     "json_summary",
     "truncate_summary",
 ]

@@ -7,7 +7,11 @@ from typing import Any
 from pydantic import ValidationError
 
 from apps.tool.base import Tool
-from apps.tool.context import ToolCall, ToolCallContext
+from apps.tool.context import (
+    ToolCall,
+    ToolCallContext,
+    bind_tool_call_context,
+)
 from apps.tool.definition import ToolDefinition
 from apps.tool.middleware import apply_middleware
 from apps.tool.result import (
@@ -87,13 +91,15 @@ class ToolRegistry:
         def invoke() -> ToolResult[Any]:
             return tool.execute(ctx, args)
 
-        result = apply_middleware(
-            self._middlewares,
-            tool,
-            call_context or ToolCallContext(tool_call_id=call.call_id),
-            args,
-            invoke,
-        )
+        resolved_context = call_context or ToolCallContext(tool_call_id=call.call_id)
+        with bind_tool_call_context(resolved_context):
+            result = apply_middleware(
+                self._middlewares,
+                tool,
+                resolved_context,
+                args,
+                invoke,
+            )
         if result.status == ToolStatus.SUCCEEDED:
             if result.data is None:
                 raise TypeError(f"TOOL_RESULT_DATA_REQUIRED:{tool.name}")

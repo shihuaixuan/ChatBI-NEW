@@ -14,12 +14,19 @@ class ConnectionDatasourceQueryExecutor:
     def __init__(self, connection_service: DatasourceConnectionService) -> None:
         self._connection_service = connection_service
 
-    def execute(self, datasource_id: int, sql: str) -> DatasourceDriverResult:
+    def execute(
+        self,
+        datasource_id: int,
+        sql: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> DatasourceDriverResult:
         try:
             payload = self._connection_service.execute_query(
                 datasource_id,
                 sql,
                 origin_column=False,
+                timeout_seconds=timeout_seconds,
             )
         except DatasourceNotFoundError:
             return DatasourceDriverResult(
@@ -27,7 +34,15 @@ class ConnectionDatasourceQueryExecutor:
                 error_code="datasource_not_found",
                 message="数据源不存在",
             )
-        except (TimeoutError, ConnectionError) as exc:
+        except TimeoutError as exc:
+            return DatasourceDriverResult(
+                succeeded=False,
+                error_code="datasource_query_timeout",
+                message=str(exc),
+                transient=True,
+                timed_out=True,
+            )
+        except ConnectionError as exc:
             return DatasourceDriverResult(
                 succeeded=False,
                 error_code="datasource_temporarily_unavailable",

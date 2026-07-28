@@ -61,6 +61,11 @@ class BudgetGuard:
             return BudgetVerdict(False, f"已超时（>{self.timeout_seconds}s）", "budget_exhausted")
         return BudgetVerdict(True)
 
+    def remaining_seconds(self) -> float:
+        """返回本次 Run 调用剩余的墙钟时间。"""
+
+        return max(self.timeout_seconds - (time.monotonic() - self.started_at), 0.0)
+
     def record_llm_turn(self, usage: dict | None) -> None:
         self.record_system_step()
         self.record_llm_usage(usage)

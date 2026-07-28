@@ -109,6 +109,7 @@ def build_query_service(
     *,
     default_limit: int = 100,
     sample_rows: int = 10,
+    max_transient_retries: int = 0,
 ) -> DatasourceQueryService:
     """装配使用真实数据权限策略的 ChatBI 查询服务。"""
 
@@ -120,6 +121,7 @@ def build_query_service(
         SessionDatasourceQueryPolicyProvider(policy_session_factory),
         default_limit=default_limit,
         sample_rows=sample_rows,
+        max_transient_retries=max_transient_retries,
     )
 
 

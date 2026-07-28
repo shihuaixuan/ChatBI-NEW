@@ -36,6 +36,7 @@ def build_datasource_query_service(
     *,
     default_limit: int | None = 100,
     sample_rows: int = 10,
+    max_transient_retries: int = 0,
 ) -> DatasourceQueryService:
     """装配必须具有权限提供者的安全查询服务。"""
 
@@ -45,6 +46,7 @@ def build_datasource_query_service(
         ConnectionDatasourceQueryExecutor(connection_service),
         default_limit=default_limit,
         sample_rows=sample_rows,
+        max_transient_retries=max_transient_retries,
     )
 
 

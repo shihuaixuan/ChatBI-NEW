@@ -25,6 +25,7 @@ class DatasourceQueryErrorCategory(StrEnum):
     DOMAIN = "domain"
     TRANSIENT = "transient"
     CONFIGURATION = "configuration"
+    TIMEOUT = "timeout"
 
 
 class DatasourceQueryRetryAdvice(StrEnum):
@@ -74,6 +75,7 @@ class DatasourceQueryRequest(BaseModel):
     datasource_id: int = Field(gt=0)
     subject: DatasourceQuerySubject
     selected_tables: list[str] = Field(default_factory=list)
+    deadline_monotonic: float | None = None
 
 
 class DatasourceQueryData(BaseModel):
@@ -100,6 +102,7 @@ class DatasourceQueryResult(BaseModel):
     message: str = ""
     error_category: DatasourceQueryErrorCategory | None = None
     retry_advice: DatasourceQueryRetryAdvice = DatasourceQueryRetryAdvice.NEVER
+    retry_count: int = 0
 
     @classmethod
     def succeeded(cls, data: DatasourceQueryData) -> DatasourceQueryResult:
@@ -146,6 +149,7 @@ class DatasourceDriverResult(BaseModel):
     error_code: str | None = None
     message: str = ""
     transient: bool = False
+    timed_out: bool = False
 
 
 __all__ = [

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Protocol, cast
 
 import sqlglot
@@ -33,7 +34,13 @@ class DatasourceQueryPolicyProvider(Protocol):
 class DatasourceQueryExecutor(Protocol):
     """执行已经过安全校验的 SQL。"""
 
-    def execute(self, datasource_id: int, sql: str) -> DatasourceDriverResult: ...
+    def execute(
+        self,
+        datasource_id: int,
+        sql: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> DatasourceDriverResult: ...
 
 
 class DatasourceQueryService:
@@ -46,6 +53,7 @@ class DatasourceQueryService:
         *,
         default_limit: int | None = 100,
         sample_rows: int = 10,
+        max_transient_retries: int = 0,
     ) -> None:
         if policy_provider is None:
             raise ValueError("DATASOURCE_QUERY_POLICY_PROVIDER_REQUIRED")
@@ -55,6 +63,7 @@ class DatasourceQueryService:
         self._executor = executor
         self._sql_rule = ReadOnlySQLRule(default_limit=default_limit)
         self._sample_rows = max(sample_rows, 0)
+        self._max_transient_retries = max(max_transient_retries, 0)
 
     def validate(self, request: DatasourceQueryRequest) -> DatasourceQueryResult:
         """解析权限并校验改写前后的 SQL，不执行驱动。"""
@@ -87,13 +96,35 @@ class DatasourceQueryService:
         if isinstance(prepared, DatasourceQueryResult):
             return prepared
         sql, tables, effective_tables = prepared
-        executed = self._executor.execute(request.datasource_id, sql)
+        retry_count = 0
+        while True:
+            timeout_seconds = self._remaining_timeout(request)
+            if timeout_seconds is not None and timeout_seconds <= 0:
+                return DatasourceQueryResult.failed(
+                    "SQL 执行截止时间已到",
+                    error_code="query_deadline_exceeded",
+                    error_category=DatasourceQueryErrorCategory.TIMEOUT,
+                    retry_advice=DatasourceQueryRetryAdvice.NEVER,
+                )
+            if timeout_seconds is None:
+                executed = self._executor.execute(request.datasource_id, sql)
+            else:
+                executed = self._executor.execute(
+                    request.datasource_id,
+                    sql,
+                    timeout_seconds=timeout_seconds,
+                )
+            if not executed.transient or retry_count >= self._max_transient_retries:
+                break
+            retry_count += 1
         if not executed.succeeded:
             return DatasourceQueryResult.failed(
                 executed.message or "SQL 执行失败",
                 error_code=executed.error_code or "sql_execute_error",
                 error_category=(
-                    DatasourceQueryErrorCategory.TRANSIENT
+                    DatasourceQueryErrorCategory.TIMEOUT
+                    if executed.timed_out
+                    else DatasourceQueryErrorCategory.TRANSIENT
                     if executed.transient
                     else DatasourceQueryErrorCategory.DOMAIN
                 ),
@@ -102,7 +133,7 @@ class DatasourceQueryService:
                     if executed.transient
                     else DatasourceQueryRetryAdvice.CORRECT_INPUT
                 ),
-            )
+            ).model_copy(update={"retry_count": retry_count})
 
         payload = executed.payload
         raw_fields = payload.get("fields") or []
@@ -128,6 +159,7 @@ class DatasourceQueryService:
             for key, value in payload.items()
             if key not in {"fields", "data", "rows"}
         }
+        metadata["retry_count"] = retry_count
         return DatasourceQueryResult.succeeded(
             DatasourceQueryData(
                 sql=sql,
@@ -141,7 +173,13 @@ class DatasourceQueryService:
                 execution_ms=int(payload.get("execution_ms") or 0),
                 execution_metadata=metadata,
             )
-        )
+        ).model_copy(update={"retry_count": retry_count})
+
+    @staticmethod
+    def _remaining_timeout(request: DatasourceQueryRequest) -> float | None:
+        if request.deadline_monotonic is None:
+            return None
+        return max(request.deadline_monotonic - time.monotonic(), 0.0)
 
     def _prepare(
         self,

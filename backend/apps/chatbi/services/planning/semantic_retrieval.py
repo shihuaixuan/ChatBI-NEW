@@ -13,7 +13,12 @@ class SemanticRetrievalService:
     def __init__(self, gateway: RetrievalService) -> None:
         self._gateway = gateway
 
-    def retrieve(self, data: SemanticRetrievalData) -> dict[str, Any]:
+    def retrieve(
+        self,
+        data: SemanticRetrievalData,
+        *,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
         request = build_semantic_binding_request(
             request_id=data.request_id,
             tenant_id=data.workspace_id,
@@ -23,16 +28,23 @@ class SemanticRetrievalService:
             rewritten_question=data.rewritten_question,
             intent=data.intent,
         )
-        return self._gateway.retrieve(request).payload
+        if timeout_ms is None:
+            return self._gateway.retrieve(request).payload
+        return self._gateway.retrieve(request, timeout_ms=timeout_ms).payload
 
     def retrieve_for_agent(
         self,
         data: SemanticRetrievalData,
         *,
         max_candidates_per_group: int = 5,
+        timeout_ms: int | None = None,
     ) -> dict[str, Any]:
+        if timeout_ms is None:
+            package = self.retrieve(data)
+        else:
+            package = self.retrieve(data, timeout_ms=timeout_ms)
         return self.project_agent_package(
-            self.retrieve(data),
+            package,
             max_candidates_per_group=max_candidates_per_group,
         )
 

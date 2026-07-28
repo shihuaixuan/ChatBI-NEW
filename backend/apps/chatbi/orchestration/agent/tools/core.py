@@ -32,6 +32,7 @@ from apps.tool import (
     ToolResult,
     json_summary,
 )
+from apps.tool.context import current_tool_call_context
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
 
@@ -131,17 +132,38 @@ class SearchSemanticAssetsTool(AgentTool):
                 error_code=policy.error_code or "authorized_tables_empty",
                 error_category=ToolErrorCategory.AUTHORIZATION,
             )
-        package = self._semantic_retrieval_service.retrieve_for_agent(
-            SemanticRetrievalData(
-                workspace_id=ctx.oid,
-                user_id=ctx.user_id,
-                dataset_id=dataset_id,
-                original_question=str(ctx.state.get("question") or question),
-                rewritten_question=question,
-                intent=intent,
-                request_id=str(ctx.state.get("run_id") or "") or None,
-            )
+        call_context = current_tool_call_context()
+        remaining = (
+            call_context.remaining_seconds()
+            if call_context is not None
+            else None
         )
+        retrieval_data = SemanticRetrievalData(
+            workspace_id=ctx.oid,
+            user_id=ctx.user_id,
+            dataset_id=dataset_id,
+            original_question=str(ctx.state.get("question") or question),
+            rewritten_question=question,
+            intent=intent,
+            request_id=str(ctx.state.get("run_id") or "") or None,
+        )
+        try:
+            if remaining is None:
+                package = self._semantic_retrieval_service.retrieve_for_agent(
+                    retrieval_data
+                )
+            else:
+                package = self._semantic_retrieval_service.retrieve_for_agent(
+                    retrieval_data,
+                    timeout_ms=max(1, int(remaining * 1000)),
+                )
+        except TimeoutError:
+            return ToolResult.failed(
+                "语义检索超过有效截止时间。",
+                error_code="semantic_retrieval_timeout",
+                error_category=ToolErrorCategory.TIMEOUT,
+                retry_advice=RetryAdvice.SAME_INPUT,
+            )
         package = self._semantic_retrieval_service.filter_authorized_tables(
             package,
             policy.authorized_tables,

@@ -83,10 +83,16 @@ class DatabaseDriverConnectionGateway:
         sql: str,
         *,
         origin_column: bool = False,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         return cast(
             dict[str, Any],
-            exec_sql(datasource, sql, origin_column=origin_column),
+            exec_sql(
+                datasource,
+                sql,
+                origin_column=origin_column,
+                timeout_seconds=timeout_seconds,
+            ),
         )
 
     @staticmethod

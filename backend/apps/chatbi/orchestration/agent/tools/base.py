@@ -61,6 +61,7 @@ class SemanticAssetRetriever(Protocol):
         data: SemanticRetrievalData,
         *,
         max_candidates_per_group: int = 5,
+        timeout_ms: int | None = None,
     ) -> dict[str, Any]: ...
 
     def filter_authorized_tables(

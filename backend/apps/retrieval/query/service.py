@@ -59,15 +59,26 @@ class RetrievalService:
         if self._query_timeout_ms <= 0:
             raise ValueError("RETRIEVAL_QUERY_TIMEOUT_MS 必须大于 0")
 
-    def retrieve(self, request: RetrievalRequest) -> RetrievalServiceResult:
+    def retrieve(
+        self,
+        request: RetrievalRequest,
+        *,
+        timeout_ms: int | None = None,
+    ) -> RetrievalServiceResult:
         """执行语义绑定策略，并返回 Graph/Agent 可直接消费的 payload。"""
 
         self._validate_request(request)
+        effective_timeout_ms = min(
+            self._query_timeout_ms,
+            timeout_ms if timeout_ms is not None else self._query_timeout_ms,
+        )
+        if effective_timeout_ms <= 0:
+            raise TimeoutError("RETRIEVAL_DEADLINE_EXCEEDED")
         execution = self._runner.run(
             self._session,
             request,
             request.strategy_version,
-            self._query_timeout_ms,
+            effective_timeout_ms,
         )
         return RetrievalServiceResult(
             payload=execution.payload,
