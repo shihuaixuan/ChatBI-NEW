@@ -7,8 +7,8 @@ from apps.chatbi.models import (
     PhysicalSchemaTable,
     SemanticQueryCompileResult,
 )
-from apps.chatbi.orchestration.agent.tool_execution import (
-    _apply_chatbi_tool_result,
+from apps.chatbi.orchestration.agent.tool_results import (
+    ChatBIToolResultProcessor,
 )
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.core import (
@@ -313,7 +313,7 @@ def test_execute_sql_does_not_write_chatbi_state_or_artifact():
     assert artifact_service.calls == []
 
 
-def test_chatbi_execution_boundary_saves_public_sql_result_artifact():
+def test_chatbi_result_processor_saves_public_sql_result_artifact():
     artifact_service = RecordingResultArtifactService()
     ctx = _ctx(
         result_artifact_service=artifact_service,
@@ -331,15 +331,23 @@ def test_chatbi_execution_boundary_saves_public_sql_result_artifact():
         metadata={"full_data": [{"amount": 10}, {"amount": 20}]},
     )
 
-    projected = _apply_chatbi_tool_result(ctx, "execute_sql", result)
+    projection = ChatBIToolResultProcessor().process(
+        ctx,
+        "execute_sql",
+        result,
+    )
 
-    assert _succeeded(projected)
+    assert _succeeded(projection.result)
     assert artifact_service.calls[0].payload["rows"] == [
         {"amount": 10},
         {"amount": 20},
     ]
-    assert ctx.state["last_execution"]["sql_source"] == "compiled"
-    assert ctx.state["full_data"] == [{"amount": 10}, {"amount": 20}]
+    assert projection.state_patch["last_execution"]["sql_source"] == "compiled"
+    assert projection.state_patch["full_data"] == [
+        {"amount": 10},
+        {"amount": 20},
+    ]
+    assert "last_execution" not in ctx.state
 
 
 def test_execute_sql_maps_transient_failure_to_same_input_retry():
@@ -416,8 +424,14 @@ def test_compile_passes_known_assets_to_capability():
     slots = service.calls[0].slots
     assert slots["metrics"] == [{"asset_id": 10, "asset_type": "METRIC"}]
     assert slots["dimensions"] == [{"asset_id": 11, "asset_type": "DIMENSION"}]
-    assert ctx.state["compiled_sql"] == "select 1"
-    assert "t" in ctx.state["allowed_tables"]
+    assert "compiled_sql" not in ctx.state
+    projection = ChatBIToolResultProcessor().process(
+        ctx,
+        "compile_semantic_sql",
+        output,
+    )
+    assert projection.state_patch["compiled_sql"] == "select 1"
+    assert "t" in projection.state_patch["allowed_tables"]
 
 
 def test_compile_normalizes_today_literal_from_confirmed_time_range():
@@ -502,7 +516,7 @@ def test_compile_rejects_replacing_today_with_latest_data_date():
     assert "禁止省略时间或替换成数据最大日期" in output.model_content
 
 
-def test_search_collects_asset_ids_and_tables_into_state():
+def test_search_result_processor_collects_asset_ids_and_tables():
     intent = {
         "intent_type": "metric_query",
         "metric_mentions": ["gmv"],
@@ -534,9 +548,15 @@ def test_search_collects_asset_ids_and_tables_into_state():
     request = service.calls[0][0]
     assert request.rewritten_question == "按城市看 gmv"
     assert request.intent is intent
-    assert ctx.state["semantic_asset_ids"] == [7, 8]
-    assert ctx.state["allowed_tables"] == ["dws_sales"]
-    assert ctx.state["semantic_package"] == package
+    assert "semantic_asset_ids" not in ctx.state
+    projection = ChatBIToolResultProcessor().process(
+        ctx,
+        "search_semantic_assets",
+        output,
+    )
+    assert projection.state_patch["semantic_asset_ids"] == [7, 8]
+    assert projection.state_patch["allowed_tables"] == ["dws_sales"]
+    assert projection.state_patch["semantic_package"] == package
 
 
 def test_physical_schema_tool_uses_chatbi_service():

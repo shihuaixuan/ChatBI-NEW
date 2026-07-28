@@ -26,15 +26,11 @@ class BudgetGuard:
     max_steps: int = 12
     token_budget: int = 100_000
     repeat_fuse_threshold: int = 3
-    max_sql_retries: int = 2
     timeout_seconds: int = 120
-    max_clarifications: int = 2
     soft_ratio: float = 0.8
 
     steps: int = 0
     tokens_used: int = 0
-    sql_failures: int = 0
-    clarifications: int = 0
     started_at: float = field(default_factory=time.monotonic)
     _last_call_key: str | None = None
     _repeat_count: int = 0
@@ -46,8 +42,6 @@ class BudgetGuard:
             return
         self.steps = int(snapshot.get("steps") or 0)
         self.tokens_used = int(snapshot.get("tokens_used") or 0)
-        self.sql_failures = int(snapshot.get("sql_failures") or 0)
-        self.clarifications = int(snapshot.get("clarifications") or 0)
 
     def planning_mode(self) -> PlanningMode:
         """当前规划模式：normal / soft（接近上限）/ exhausted（已耗尽）。"""
@@ -57,12 +51,6 @@ class BudgetGuard:
         if self._is_soft():
             return "soft"
         return "normal"
-
-    def soft_tool_allowlist(self, available: list[str]) -> list[str]:
-        """soft 模式下仅允许收口类工具。"""
-
-        preferred = ("finish", "clarify")
-        return [name for name in preferred if name in available]
 
     def check_before_step(self) -> BudgetVerdict:
         if self.steps >= self.max_steps:
@@ -103,34 +91,12 @@ class BudgetGuard:
             )
         return BudgetVerdict(True)
 
-    def record_sql_failure(self) -> BudgetVerdict:
-        self.sql_failures += 1
-        if self.sql_failures > self.max_sql_retries:
-            return BudgetVerdict(
-                False,
-                f"SQL 执行失败重试已达上限 {self.max_sql_retries} 次",
-                "sql_failed",
-            )
-        return BudgetVerdict(True)
-
-    def record_clarification(self) -> BudgetVerdict:
-        self.clarifications += 1
-        if self.clarifications > self.max_clarifications:
-            return BudgetVerdict(
-                False,
-                f"澄清次数已达上限 {self.max_clarifications} 次",
-                "budget_exhausted",
-            )
-        return BudgetVerdict(True)
-
     def snapshot(self) -> dict:
         return {
             "steps": self.steps,
             "max_steps": self.max_steps,
             "tokens_used": self.tokens_used,
             "token_budget": self.token_budget,
-            "sql_failures": self.sql_failures,
-            "clarifications": self.clarifications,
             "planning_mode": self.planning_mode(),
             "elapsed_seconds": round(time.monotonic() - self.started_at, 2),
         }

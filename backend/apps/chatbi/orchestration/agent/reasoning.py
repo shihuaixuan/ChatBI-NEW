@@ -12,6 +12,7 @@ from apps.chatbi.orchestration.agent.messages import (
     fold_tool_messages,
 )
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
+from apps.chatbi.orchestration.agent.tool_visibility import visible_tool_names
 from apps.tool import ToolCall, ToolDefinition, ToolRegistry
 from apps.trace import AgentTracer, llm_attributes
 
@@ -109,11 +110,19 @@ class AgentReasoner:
         state: AgentRuntimeState,
         mode: str,
     ) -> list[ToolDefinition]:
-        if mode == "soft":
-            allowed = state.budget.soft_tool_allowlist(self._registry.names())
-            if allowed:
-                return self._registry.definitions(allowed=allowed)
-        return self._registry.definitions()
+        allowed = self.available_tool_names(state, mode)
+        return self._registry.definitions(allowed=allowed)
+
+    def available_tool_names(
+        self,
+        state: AgentRuntimeState,
+        mode: str,
+    ) -> list[str]:
+        return visible_tool_names(
+            state,
+            mode,
+            self._registry.names(),
+        )
 
 
 def _content_text(message: AgentMessage) -> str:

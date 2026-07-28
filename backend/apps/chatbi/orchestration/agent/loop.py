@@ -158,6 +158,12 @@ class AgentLoop:
             if mode == "exhausted":
                 yield from self._budget_exhausted(state)
                 return
+            if mode == "soft" and not self.reasoner.available_tool_names(
+                state,
+                mode,
+            ):
+                yield from self._budget_exhausted(state)
+                return
 
             verdict = budget.check_before_step()
             if not verdict.allowed:
@@ -180,7 +186,19 @@ class AgentLoop:
                 yield self._emit(state, "thinking", {"record_id": record.id, "content": text}, step.id)
 
             if decision.is_direct_answer:
-                # 宽松 finish：模型直接给出文本回答。
+                if not _allows_direct_answer(state):
+                    close_unfinished_tool_calls(messages)
+                    agent_run_repository.fail_step(
+                        self.session,
+                        step,
+                        "问数消息没有成功查询结果，禁止直接回答",
+                    )
+                    yield from self.lifecycle.fail(
+                        state,
+                        "问数消息必须成功执行查询后才能结束，禁止生成看似来自数据库的直接回答。",
+                        AgentErrorClass.SQL.value,
+                    )
+                    return
                 close_unfinished_tool_calls(messages)
                 agent_run_repository.finish_step(self.session, step, {"mode": "direct_answer"}, usage)
                 yield from self.lifecycle.finish(
@@ -250,6 +268,17 @@ class AgentLoop:
             payload,
             step_id=step_id,
         )
+
+
+def _allows_direct_answer(state: AgentRuntimeState) -> bool:
+    """闲聊可直接回答；问数必须已经存在成功执行结果。"""
+
+    understanding = state.context.state.get("question_understanding")
+    is_chitchat = (
+        isinstance(understanding, dict)
+        and understanding.get("category") == "chitchat"
+    )
+    return is_chitchat or bool(state.context.state.get("last_execution"))
 
 
 # ---- Trace 结果 ----

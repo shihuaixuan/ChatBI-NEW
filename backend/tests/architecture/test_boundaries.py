@@ -293,7 +293,7 @@ def test_chatbi_artifact_service_has_no_workflow_or_persistence_dependency():
 
 def test_agent_and_graph_share_chatbi_result_artifact_service():
     agent_source = (
-        BACKEND_DIR__artifact / "apps/chatbi/orchestration/agent/tool_execution.py"
+        BACKEND_DIR__artifact / "apps/chatbi/orchestration/agent/tool_results.py"
     ).read_text(encoding="utf-8")
     graph_source = (
         BACKEND_DIR__artifact / "apps/chatbi/orchestration/graph/capabilities/adapters/sql.py"

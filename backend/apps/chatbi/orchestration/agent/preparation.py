@@ -103,6 +103,7 @@ class AgentInputPreparer:
 
         run = state.run
         state.budget.restore(run.budget_snapshot)
+        state.chatbi_budget.restore(run.budget_snapshot)
         # 恢复挂起前的派生状态，避免重复检索已经获得的语义资产。
         state.context.state.update(run.derived_state or {})
         state.messages = restore_messages(run.messages)
@@ -167,7 +168,7 @@ class AgentInputPreparer:
             self._session,
             state.run,
             messages=state.serialized_messages(),
-            budget_snapshot=state.budget.snapshot(),
+            budget_snapshot=state.budget_snapshot(),
             derived_state=state.persistable_context(),
         )
         self._session.commit()
@@ -299,7 +300,7 @@ class AgentInputPreparer:
                 verdict.error_class or AgentErrorClass.BUDGET.value,
             )
             return
-        clarify_verdict = state.budget.record_clarification()
+        clarify_verdict = state.chatbi_budget.record_clarification()
         if not clarify_verdict.allowed:
             yield from self._lifecycle.fail(
                 state,

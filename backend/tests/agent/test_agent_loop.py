@@ -23,6 +23,7 @@ from apps.chatbi.orchestration.agent.composition import build_agent_loop
 from apps.chatbi.orchestration.agent.messages import AgentMessage, ModelDecision
 from apps.chatbi.orchestration.agent.reasoning import AgentReasoner
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
+from apps.chatbi.orchestration.agent.tool_visibility import visible_tool_names
 from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolContext
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.understanding import (
@@ -305,6 +306,10 @@ class ProbeArgs(BaseModel):
     value: str = ""
 
 
+class ExecuteSqlFailureArgs(BaseModel):
+    sql: str
+
+
 class ProbeResult(BaseModel):
     value: str
 
@@ -373,7 +378,7 @@ class FailingExecuteSqlTool(AgentTool):
 
     name = "execute_sql"
     description = "failing execute sql"
-    args_model = ProbeArgs
+    args_model = ExecuteSqlFailureArgs
     result_model = ProbeResult
 
     def execute(self, ctx, args):
@@ -507,6 +512,11 @@ def test_reasoner_soft_mode_only_exposes_terminal_tools():
         budget=BudgetGuard(max_steps=5),
         system=AgentMessage.system("系统提示词"),
     )
+    state.context.state["last_execution"] = {
+        "sql": "select 1",
+        "fields": ["a"],
+        "row_count": 1,
+    }
     registry = _registry()
     reasoner = AgentReasoner(
         AgentConfig(),
@@ -522,6 +532,70 @@ def test_reasoner_soft_mode_only_exposes_terminal_tools():
     assert [item.name for item in model.tool_definition_calls[0]] == [
         "finish"
     ]
+
+
+def test_tool_visibility_follows_chatbi_stage():
+    run, record = _run_and_record()
+    state = AgentRuntimeState(
+        run=run,
+        record=record,
+        context=AgentToolContext(session=None, oid=1, user_id=1, datasource_id=5),
+        messages=[AgentMessage.user("按城市看 gmv")],
+        budget=BudgetGuard(max_steps=5),
+        system=AgentMessage.system("系统提示词"),
+    )
+    state.context.state["question_understanding"] = {
+        "validation": {"status": "valid"}
+    }
+    registered = [
+        "search_semantic_assets",
+        "search_terminology",
+        "get_sql_examples",
+        "get_dataset_schema",
+        "compile_semantic_sql",
+        "validate_sql",
+        "execute_sql",
+        "clarify",
+        "finish",
+    ]
+
+    assert visible_tool_names(state, "normal", registered) == registered[:4]
+
+    state.context.state["semantic_asset_ids"] = [1]
+    assert visible_tool_names(state, "normal", registered) == [
+        *registered[:4],
+        "compile_semantic_sql",
+    ]
+
+    state.context.state["allowed_tables"] = ["orders"]
+    assert visible_tool_names(state, "normal", registered) == [
+        *registered[:4],
+        "compile_semantic_sql",
+        "validate_sql",
+        "execute_sql",
+    ]
+
+    state.context.state["semantic_package"] = {"status": "metric_ambiguous"}
+    assert visible_tool_names(state, "normal", registered) == ["clarify"]
+    assert visible_tool_names(state, "soft", registered) == ["clarify"]
+
+    state.context.state["last_execution"] = {"sql": "select 1"}
+    assert visible_tool_names(state, "normal", registered) == ["finish"]
+    assert visible_tool_names(state, "soft", registered) == ["finish"]
+
+
+def test_soft_mode_without_legal_closure_tool_exposes_nothing():
+    run, record = _run_and_record()
+    state = AgentRuntimeState(
+        run=run,
+        record=record,
+        context=AgentToolContext(session=None, oid=1, user_id=1, datasource_id=5),
+        messages=[AgentMessage.user("按城市看 gmv")],
+        budget=BudgetGuard(max_steps=5),
+        system=AgentMessage.system("系统提示词"),
+    )
+
+    assert visible_tool_names(state, "soft", ["clarify", "finish"]) == []
 
 
 def test_happy_path_tool_then_finish():
@@ -620,8 +694,8 @@ def test_multiple_tool_calls_preserve_model_order_in_events_and_observations():
     ]
 
 
-def test_regular_tool_error_is_observed_and_loop_can_continue():
-    """普通工具失败是 Observation，不应直接把 Run 置为失败。"""
+def test_regular_tool_error_is_observed_but_cannot_masquerade_as_answer():
+    """普通工具失败仍是 Observation，但问数不能在无查询结果时直接成功。"""
 
     registry = _registry()
     registry.register(FailingProbeTool())
@@ -654,8 +728,8 @@ def test_regular_tool_error_is_observed_and_loop_can_continue():
         "status": "failed",
         "error_code": "probe_failed",
     }
-    assert run.status == AgentRunStatus.FINISHED.value
-    assert _event_domains(events)[-2:] == ["answer.completed", "run.finished"]
+    assert run.status == AgentRunStatus.FAILED.value
+    assert _event_domains(events)[-1] == "run.failed"
     second_call_tool_messages = [
         message
         for message in model.calls[1]
@@ -670,8 +744,9 @@ def test_execute_sql_retry_exhaustion_has_single_failed_terminal_event():
     registry = ToolRegistry()
     registry.register(FailingExecuteSqlTool())
     model = ScriptedModel([
-        _tool_message("execute_sql", {"value": "select 1"}, "sql-1"),
-        _tool_message("execute_sql", {"value": "select 2"}, "sql-2"),
+        _tool_message("execute_sql", {"sql": "select 1"}, "sql-1"),
+        _tool_message("execute_sql", {"sql": "select 2"}, "sql-2"),
+        _tool_message("execute_sql", {"sql": "select 3"}, "sql-3"),
     ])
     run, record = _run_and_record()
     loop = build_agent_loop(
@@ -686,7 +761,7 @@ def test_execute_sql_retry_exhaustion_has_single_failed_terminal_event():
     events = list(loop.run(run, record))
     domains = _event_domains(events)
 
-    assert len(model.calls) == 2
+    assert len(model.calls) == 3
     assert domains.count("tool.completed") == 2
     assert [domain for domain in domains if domain in {"run.finished", "run.failed"}] == [
         "run.failed"
@@ -695,7 +770,7 @@ def test_execute_sql_retry_exhaustion_has_single_failed_terminal_event():
     assert run.status == AgentRunStatus.FAILED.value
     assert record.status == "failed"
     assert run.error_class == "sql_failed"
-    assert "SQL 执行失败重试已达上限" in run.error
+    assert "SQL 修正次数已达上限 1 次" in run.error
 
 
 def test_agent_tracing_records_run_llm_and_tool_hierarchy():
@@ -821,7 +896,10 @@ def test_enabled_tracing_without_dependencies_raises_clear_import_error(monkeypa
 
 
 def test_runtime_tracing_failure_does_not_change_agent_events():
-    model = ScriptedModel([AIMessage(content="完成")])
+    model = ScriptedModel([
+        _tool_message("probe", {"value": "x"}),
+        _tool_message("finish", {"value": ""}, "c2"),
+    ])
     run, record = _run_and_record()
     loop = build_agent_loop(
         FakeSession(),
@@ -899,16 +977,17 @@ def test_search_semantic_assets_trace_records_effective_understanding_input():
     assert tool_event.content["args_summary"]["intent"]["metric_mentions"] == ["gmv"]
 
 
-def test_direct_text_treated_as_loose_finish():
+def test_data_question_direct_text_without_execution_is_rejected():
     model = ScriptedModel([AIMessage(content="这个问题不需要查数据：答案是 42。")])
     run, record = _run_and_record()
     events = list(_loop(model).run(run, record))
     domains = _event_domains(events)
 
     assert "reasoning.snapshot" in domains
-    assert domains[-2:] == ["answer.completed", "run.finished"]
-    assert run.status == AgentRunStatus.FINISHED.value
-    assert "42" in record.sql_answer
+    assert domains[-1] == "run.failed"
+    assert run.status == AgentRunStatus.FAILED.value
+    assert run.error_class == "sql_failed"
+    assert record.sql_answer is None
 
 
 def test_budget_exhaustion_fails_run_honestly():
@@ -950,7 +1029,7 @@ def test_repeat_fuse_fails_run():
     assert "重复熔断" in run.error
 
 
-def test_unknown_tool_is_rejected_but_loop_continues():
+def test_unknown_tool_is_rejected_and_direct_data_answer_still_fails():
     model = ScriptedModel([
         _tool_message("hack_tool", {"x": 1}),
         AIMessage(content="好的，我换个方式直接回答。"),
@@ -958,7 +1037,7 @@ def test_unknown_tool_is_rejected_but_loop_continues():
     run, record = _run_and_record()
     list(_loop(model).run(run, record))
 
-    assert run.status == AgentRunStatus.FINISHED.value
+    assert run.status == AgentRunStatus.FAILED.value
     # 第二轮的消息历史里包含拒绝回写
     second_call_messages = model.calls[1]
     tool_messages = [m for m in second_call_messages if m.role.value == "tool"]

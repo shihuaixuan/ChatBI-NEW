@@ -146,20 +146,6 @@ class SearchSemanticAssetsTool(AgentTool):
             package,
             policy.authorized_tables,
         )
-        # 语义包与合法资产集合入 state，供 compile 校验"只接受出现过的资产"。
-        ctx.state["semantic_package"] = package
-        asset_ids = set(ctx.state.get("semantic_asset_ids") or [])
-        for group in (package.get("candidate_groups") or {}).values():
-            asset_ids.update(item["asset_id"] for item in group if item.get("asset_id") is not None)
-        for group in (package.get("selected_assets") or {}).values():
-            if isinstance(group, list):
-                asset_ids.update(
-                    item.get("asset_id") for item in group if isinstance(item, dict) and item.get("asset_id") is not None
-                )
-        ctx.state["semantic_asset_ids"] = sorted(asset_ids)
-        tables = set(ctx.state.get("allowed_tables") or [])
-        tables.update(package.get("tables") or [])
-        ctx.state["allowed_tables"] = sorted(tables)
         data = SearchSemanticAssetsResult(package)
         return ToolResult.succeeded(
             json_summary(package, _summary_limit(ctx)),
@@ -308,10 +294,6 @@ class CompileSemanticSqlTool(AgentTool):
             dataset_id=result.dataset_id,
             strategy="semantic_sql_compiler",
         )
-        ctx.state["compiled_sql"] = data.sql
-        tables = set(ctx.state.get("allowed_tables") or [])
-        tables.update(data.tables)
-        ctx.state["allowed_tables"] = sorted(tables)
         return ToolResult.succeeded(
             json_summary(data.model_dump(mode="json"), _summary_limit(ctx)),
             data,

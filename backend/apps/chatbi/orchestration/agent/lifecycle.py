@@ -72,7 +72,7 @@ class AgentLifecycle:
             run,
             status=AgentRunStatus.RUNNING.value,
             messages=state.serialized_messages(),
-            budget_snapshot=state.budget.snapshot(),
+            budget_snapshot=state.budget_snapshot(),
             derived_state=state.persistable_context(),
         )
         self._record_service.transition(
@@ -128,7 +128,7 @@ class AgentLifecycle:
             run,
             status=AgentRunStatus.WAITING_USER.value,
             messages=state.serialized_messages(),
-            budget_snapshot=state.budget.snapshot(),
+            budget_snapshot=state.budget_snapshot(),
             derived_state=state.persistable_context(),
         )
         self._session.commit()
@@ -186,7 +186,7 @@ class AgentLifecycle:
             run,
             status=AgentRunStatus.FINISHED.value,
             messages=state.serialized_messages(),
-            budget_snapshot=state.budget.snapshot(),
+            budget_snapshot=state.budget_snapshot(),
         )
         self._session.commit()
         yield self._publish(
@@ -227,7 +227,7 @@ class AgentLifecycle:
             run,
             status=AgentRunStatus.FAILED.value,
             messages=state.serialized_messages(),
-            budget_snapshot=state.budget.snapshot(),
+            budget_snapshot=state.budget_snapshot(),
             error_class=error_class,
             error=message,
         )

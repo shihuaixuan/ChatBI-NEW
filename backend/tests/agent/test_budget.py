@@ -1,4 +1,5 @@
-from apps.tool import BudgetGuard
+from apps.chatbi.orchestration.agent.budget import ChatBIBudgetPolicy
+from apps.tool import BudgetGuard, RetryAdvice, ToolErrorCategory, ToolResult
 
 
 def test_step_budget_exhaustion():
@@ -39,12 +40,41 @@ def test_repeat_fuse_resets_on_different_args():
 
 
 def test_sql_retry_budget():
-    guard = BudgetGuard(max_sql_retries=2)
-    assert guard.record_sql_failure().allowed
-    assert guard.record_sql_failure().allowed
-    verdict = guard.record_sql_failure()
+    guard = ChatBIBudgetPolicy(max_sql_retries=1)
+    failed = ToolResult.failed(
+        "SQL 错误",
+        error_code="sql_error",
+        error_category=ToolErrorCategory.DOMAIN,
+        retry_advice=RetryAdvice.CORRECT_INPUT,
+    )
+    guard.record_sql_result("select 1", failed)
+    assert guard.check_sql_call("select 2").allowed
+    guard.record_sql_result("select 2", failed)
+    verdict = guard.check_sql_call("select 3")
     assert not verdict.allowed
     assert verdict.error_class == "sql_failed"
+
+
+def test_sql_same_input_and_transient_retry_do_not_count_as_correction():
+    guard = ChatBIBudgetPolicy(max_sql_retries=1)
+    correct_input = ToolResult.failed(
+        "SQL 错误",
+        error_code="sql_error",
+        error_category=ToolErrorCategory.DOMAIN,
+        retry_advice=RetryAdvice.CORRECT_INPUT,
+    )
+    transient = ToolResult.failed(
+        "连接超时",
+        error_code="timeout",
+        error_category=ToolErrorCategory.TRANSIENT,
+        retry_advice=RetryAdvice.SAME_INPUT,
+    )
+
+    guard.record_sql_result("select 1", correct_input)
+    assert guard.check_sql_call("select 1").allowed
+    guard.record_sql_result("select 1", transient)
+
+    assert guard.sql_corrections == 0
 
 
 def test_snapshot_reports_usage():

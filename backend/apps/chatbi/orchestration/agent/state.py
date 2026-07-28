@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from apps.chatbi.models import ChatbiAgentRun
 from apps.chatbi.models.dto.agent import AgentConfig
+from apps.chatbi.orchestration.agent.budget import ChatBIBudgetPolicy
 from apps.chatbi.orchestration.agent.messages import AgentMessage
 from apps.chatbi.orchestration.agent.tools.base import (
     AgentToolContext,
@@ -24,6 +25,7 @@ class AgentRuntimeState:
     context: AgentToolContext
     messages: list[AgentMessage]
     budget: BudgetGuard
+    chatbi_budget: ChatBIBudgetPolicy = field(default_factory=ChatBIBudgetPolicy)
     system: AgentMessage | None = None
 
     def require_system(self) -> AgentMessage:
@@ -52,6 +54,14 @@ class AgentRuntimeState:
             key: value
             for key, value in self.context.state.items()
             if key not in {"full_data", "tool_offloads"}
+        }
+
+    def budget_snapshot(self) -> dict[str, Any]:
+        """合并通用预算与 ChatBI 业务预算的持久化快照。"""
+
+        return {
+            **self.budget.snapshot(),
+            **self.chatbi_budget.snapshot(),
         }
 
 
@@ -92,8 +102,10 @@ class AgentRuntimeStateFactory:
             max_steps=self._config.max_steps,
             token_budget=self._config.token_budget,
             repeat_fuse_threshold=self._config.repeat_fuse_threshold,
-            max_sql_retries=self._config.max_sql_retries,
             timeout_seconds=self._config.timeout_seconds,
+        )
+        chatbi_budget = ChatBIBudgetPolicy(
+            max_sql_retries=self._config.max_sql_retries,
             max_clarifications=self._config.max_clarifications,
         )
         return AgentRuntimeState(
@@ -102,6 +114,7 @@ class AgentRuntimeStateFactory:
             context=context,
             messages=[AgentMessage.user(record.question or "")],
             budget=budget,
+            chatbi_budget=chatbi_budget,
         )
 
 

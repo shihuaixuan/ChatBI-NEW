@@ -410,7 +410,7 @@ def test_filter_role_clarification_resumes_to_targeted_value_clarification():
         "clarification.accepted",
         "question.understood",
     ]
-    assert run.status == AgentRunStatus.FINISHED.value
+    assert run.status == AgentRunStatus.FAILED.value
     confirmed = run.derived_state["question_understanding"]
     assert confirmed["rewritten_question"] == "今天店铺的客户数"
     assert confirmed["intent"]["dimension_slots"][0]["value"] == "1号店铺"
@@ -440,7 +440,8 @@ def test_clarify_over_budget_rejected_and_loop_continues():
     domains = _event_domains(events)
 
     assert "clarification.required" not in domains  # 未再次挂起
-    assert run.status == AgentRunStatus.FINISHED.value
+    # 澄清预算拒绝后没有成功查询结果，不能用普通文本伪装问数成功。
+    assert run.status == AgentRunStatus.FAILED.value
     rejected = [
         m
         for m in resume_model.calls[1]

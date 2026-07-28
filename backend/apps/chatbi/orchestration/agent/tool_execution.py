@@ -9,10 +9,7 @@ from typing import Any, cast
 
 import orjson
 
-from apps.chatbi.models import (
-    AgentClarificationResumeKind,
-    ResultArtifactWriteData,
-)
+from apps.chatbi.models import AgentClarificationResumeKind
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.messages import (
@@ -22,13 +19,14 @@ from apps.chatbi.orchestration.agent.messages import (
     maybe_offload_result,
 )
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
+from apps.chatbi.orchestration.agent.tool_results import (
+    ChatBIToolResultProcessor,
+    ToolControlAction,
+)
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.repository.sqlmodel import agent_run_repository
-from apps.chatbi.services.execution import ResultArtifactWriteError
-from apps.conversation import ChatRecordExecutionType
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import (
-    RetryAdvice,
     ToolCall,
     ToolErrorCategory,
     ToolRegistry,
@@ -69,6 +67,7 @@ class AgentToolExecutor:
         tracer: AgentTracer,
         lifecycle: AgentLifecycle,
         event_publisher: EventPublisher,
+        result_processor: ChatBIToolResultProcessor,
     ) -> None:
         self._session = session
         self._config = config
@@ -76,6 +75,7 @@ class AgentToolExecutor:
         self._tracer = tracer
         self._lifecycle = lifecycle
         self._event_publisher = event_publisher
+        self._result_processor = result_processor
 
     def execute(
         self,
@@ -116,6 +116,17 @@ class AgentToolExecutor:
                         cast(str, fuse.error_class),
                     )
                     return ToolExecutionResult(ToolExecutionStatus.FAILED)
+                if call.name == "execute_sql":
+                    sql_verdict = state.chatbi_budget.check_sql_call(
+                        str(call.args.get("sql") or "")
+                    )
+                    if not sql_verdict.allowed:
+                        yield from self._lifecycle.fail(
+                            state,
+                            cast(str, sql_verdict.reason),
+                            cast(str, sql_verdict.error_class),
+                        )
+                        return ToolExecutionResult(ToolExecutionStatus.FAILED)
 
             for call in batch:
                 step.tool_name = call.name
@@ -146,11 +157,13 @@ class AgentToolExecutor:
             )
 
             for call, result in executed:
-                result = _apply_chatbi_tool_result(
+                projection = self._result_processor.process(
                     context,
                     call.name,
                     result,
                 )
+                result = projection.result
+                context.state.update(projection.state_patch)
                 result = maybe_offload_result(
                     result,
                     store=offload_store,
@@ -163,13 +176,15 @@ class AgentToolExecutor:
                 call_id = call.call_id
                 data = _result_data(result)
 
-                if tool_name == "clarify" and result.status == ToolStatus.SUCCEEDED:
-                    clarify_verdict = budget.record_clarification()
+                if (
+                    projection.control == ToolControlAction.CLARIFY
+                    and result.status == ToolStatus.SUCCEEDED
+                ):
+                    clarify_verdict = state.chatbi_budget.record_clarification()
                     if not clarify_verdict.allowed:
                         state.messages.append(
                             AgentMessage.tool(
-                                    "澄清次数已达上限，请基于现有信息继续，或如实说明无法完成。"
-                                ,
+                                "澄清次数已达上限，请基于现有信息继续，或如实说明无法完成。",
                                 call_id,
                             )
                         )
@@ -207,7 +222,10 @@ class AgentToolExecutor:
                     )
                 )
 
-                if tool_name == "finish" and result.status == ToolStatus.SUCCEEDED:
+                if (
+                    projection.control == ToolControlAction.FINISH
+                    and result.status == ToolStatus.SUCCEEDED
+                ):
                     close_unfinished_tool_calls(state.messages)
                     agent_run_repository.finish_step(
                         self._session,
@@ -233,7 +251,7 @@ class AgentToolExecutor:
                     )
                     return ToolExecutionResult(ToolExecutionStatus.FINISHED)
 
-                result_summary = _result_summary(tool_name, result)
+                result_summary = projection.audit_summary
                 if result.status == ToolStatus.SUCCEEDED:
                     agent_run_repository.finish_step(
                         self._session,
@@ -257,32 +275,25 @@ class AgentToolExecutor:
                     },
                     step.id,
                 )
-                for event_type, payload in _semantic_events(
-                    tool_name,
-                    result,
-                    record.id,
-                ):
-                    yield self._publish(state, event_type, payload, step.id)
+                for event in projection.events:
+                    yield self._publish(
+                        state,
+                        event.event_type,
+                        {"record_id": record.id, **event.payload},
+                        step.id,
+                    )
 
-                if (
-                    tool_name == "execute_sql"
-                    and result.status == ToolStatus.FAILED
-                    and result.retry_advice == RetryAdvice.CORRECT_INPUT
-                ):
-                    retry = budget.record_sql_failure()
-                    if not retry.allowed:
-                        yield from self._lifecycle.fail(
-                            state,
-                            cast(str, retry.reason),
-                            cast(str, retry.error_class),
-                        )
-                        return ToolExecutionResult(ToolExecutionStatus.FAILED)
+                if tool_name == "execute_sql":
+                    state.chatbi_budget.record_sql_result(
+                        str(call.args.get("sql") or ""),
+                        result,
+                    )
 
         agent_run_repository.update_run(
             self._session,
             state.run,
             messages=state.serialized_messages(),
-            budget_snapshot=budget.snapshot(),
+            budget_snapshot=state.budget_snapshot(),
             derived_state=state.persistable_context(),
         )
         self._session.commit()
@@ -355,64 +366,6 @@ def _tool_args_summary(
     )
 
 
-def _result_summary(tool_name: str, result: ToolResult[Any]) -> dict[str, Any]:
-    base = {
-        "success": result.status == ToolStatus.SUCCEEDED,
-        "status": result.status.value,
-    }
-    if result.status != ToolStatus.SUCCEEDED:
-        base["error_code"] = result.error_code
-        return base
-    payload = _result_data(result)
-    if tool_name == "execute_sql":
-        return {
-            **base,
-            "row_count": payload.get("row_count"),
-            "fields": payload.get("fields"),
-        }
-    if tool_name in {"compile_semantic_sql", "validate_sql"}:
-        return {**base, "sql": payload.get("sql")}
-    if tool_name == "search_semantic_assets":
-        return {
-            **base,
-            "status": payload.get("status") or result.status.value,
-            "metrics": payload.get("metrics"),
-            "dimensions": payload.get("dimensions"),
-            "tables": payload.get("tables"),
-        }
-    if tool_name == "get_dataset_schema":
-        return {**base, "table_count": payload.get("table_count")}
-    if tool_name in {"search_terminology", "get_sql_examples"}:
-        return {**base, "count": payload.get("count")}
-    return base
-
-
-def _semantic_events(
-    tool_name: str,
-    result: ToolResult[Any],
-    record_id: int,
-) -> list[tuple[str, dict[str, Any]]]:
-    if result.status != ToolStatus.SUCCEEDED:
-        return []
-    payload = _result_data(result)
-    if tool_name == "compile_semantic_sql":
-        return [("sql-generated", {"record_id": record_id, "sql": payload.get("sql")})]
-    if tool_name == "validate_sql":
-        return [("sql-validated", {"record_id": record_id, "sql": payload.get("sql")})]
-    if tool_name == "execute_sql":
-        return [
-            (
-                "sql-executed",
-                {
-                    "record_id": record_id,
-                    "row_count": payload.get("row_count"),
-                    "fields": payload.get("fields"),
-                },
-            )
-        ]
-    return []
-
-
 def _result_data(result: ToolResult[Any]) -> dict[str, Any]:
     if result.data is None:
         return {}
@@ -422,99 +375,6 @@ def _result_data(result: ToolResult[Any]) -> dict[str, Any]:
 def _offload_ref(result: ToolResult[Any]) -> str | None:
     value = result.metadata.get("offload_ref")
     return str(value) if value else None
-
-
-def _apply_chatbi_tool_result(
-    context: AgentToolContext,
-    tool_name: str,
-    result: ToolResult[Any],
-) -> ToolResult[Any]:
-    """公共 Tool 保持无副作用，ChatBI 在执行边界投影必要的领域状态。"""
-
-    if result.status != ToolStatus.SUCCEEDED or result.data is None:
-        return result
-    payload = result.data.model_dump(mode="json")
-    if tool_name == "get_dataset_schema":
-        tables = set(context.state.get("allowed_tables") or [])
-        tables.update(
-            str(item.get("table"))
-            for item in payload.get("tables") or []
-            if isinstance(item, dict) and item.get("table")
-        )
-        context.state["allowed_tables"] = sorted(tables)
-        return result
-    if tool_name != "execute_sql":
-        return result
-    if (
-        context.result_artifact_service is None
-        or not context.execution_id
-        or context.chat_id is None
-        or context.record_id is None
-    ):
-        return ToolResult.failed(
-            "ChatBI 结果 Artifact 服务或执行归属未配置。",
-            error_code="result_artifact_service_required",
-            error_category=ToolErrorCategory.CONFIGURATION,
-            retry_advice=RetryAdvice.NEVER,
-        )
-    full_data = result.metadata.get("full_data")
-    rows = full_data if isinstance(full_data, list) else []
-    try:
-        artifact_ref = context.result_artifact_service.save(
-            ResultArtifactWriteData(
-                execution_id=context.execution_id,
-                execution_type=ChatRecordExecutionType.AGENT,
-                chat_id=context.chat_id,
-                record_id=context.record_id,
-                kind="sql_result",
-                payload={
-                    "query_id": "query-0",
-                    "fields": payload.get("fields") or [],
-                    "rows": rows,
-                    "row_count": payload.get("row_count") or 0,
-                },
-                metadata={
-                    "query_id": "query-0",
-                    "row_count": payload.get("row_count") or 0,
-                },
-            )
-        )
-    except ResultArtifactWriteError:
-        return ToolResult.failed(
-            "SQL 结果 Artifact 写入失败。",
-            error_code="sql_result_artifact_write_failed",
-            error_category=ToolErrorCategory.DOMAIN,
-            retry_advice=RetryAdvice.NEVER,
-        )
-    compiled = context.state.get("compiled_sql")
-    sql_source = (
-        "compiled"
-        if isinstance(compiled, str)
-        and _normalize_sql(str(payload.get("sql") or ""))
-        == _normalize_sql(compiled)
-        else "manual"
-    )
-    artifact_payload = artifact_ref.model_dump(mode="json")
-    context.state["last_execution"] = {
-        "sql": payload.get("sql"),
-        "fields": payload.get("fields") or [],
-        "row_count": payload.get("row_count") or 0,
-        "sample_rows": payload.get("sample_rows") or [],
-        "artifact_ref": artifact_payload,
-        "sql_source": sql_source,
-    }
-    context.state["full_data"] = rows
-    return result.with_updates(
-        metadata={
-            **result.metadata,
-            "artifact_ref": artifact_payload,
-            "sql_source": sql_source,
-        }
-    )
-
-
-def _normalize_sql(sql: str) -> str:
-    return " ".join(sql.lower().split()).rstrip(";")
 
 
 __all__ = [

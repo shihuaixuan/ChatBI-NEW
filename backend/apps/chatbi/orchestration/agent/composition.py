@@ -23,6 +23,7 @@ from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
 from apps.chatbi.orchestration.agent.reasoning import AgentModelClient, AgentReasoner
 from apps.chatbi.orchestration.agent.state import AgentRuntimeStateFactory
 from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
+from apps.chatbi.orchestration.agent.tool_results import ChatBIToolResultProcessor
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContextServices
 from apps.chatbi.orchestration.agent.tools.core import build_chatbi_tools
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
@@ -155,6 +156,7 @@ def build_agent_loop(
         resolved_tracer,
         lifecycle,
         resolved_publisher,
+        ChatBIToolResultProcessor(),
     )
     resolved_understanding_service = (
         understanding_service or build_question_understanding_service()
