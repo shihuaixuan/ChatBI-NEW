@@ -9,9 +9,6 @@ from apps.chatbi.models import (
     SemanticQueryCompileResult,
 )
 from apps.chatbi.orchestration.graph.capabilities import planning
-from apps.chatbi.orchestration.graph.capabilities.adapters.permission import (
-    SQLPermissionService,
-)
 from apps.chatbi.orchestration.graph.capabilities.adapters.sql_repair import (
     SQLRepairStrategy,
 )
@@ -24,16 +21,19 @@ from apps.chatbi.orchestration.graph.capabilities.execution import (
     validate_execution_output,
 )
 from apps.chatbi.services.execution import (
-    GuardedQueryService,
     ResultArtifactService,
     ResultArtifactWriteError,
-    SQLExecutor,
 )
-from apps.chatbi.services.execution.sql_validator import SqlValidateTool
 from apps.chatbi.services.planning import (
     SemanticCompilationService,
 )
 from apps.conversation import ChatRecordExecutionType
+from apps.datasource import (
+    DatasourceQueryRequest,
+    DatasourceQueryService,
+    DatasourceQueryStatus,
+    DatasourceQuerySubject,
+)
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.semantic.services.sql_compilation_service import (
     SemanticSQLCompilationService,
@@ -50,15 +50,12 @@ class SqlAdapter:
         self,
         schema_provider: DatasetSchemaProvider | None = None,
         compiler: SemanticSQLCompiler | None = None,
-        execute_tool: SQLExecutor | None = None,
-        validate_tool: SqlValidateTool | None = None,
-        permission_adapter: SQLPermissionService | None = None,
         repair_strategy: SQLRepairStrategy | None = None,
         result_artifact_service: ResultArtifactService | None = None,
         sample_row_limit: int | None = None,
         max_parallel_queries: int | None = None,
         config: ChatBIConfig | None = None,
-        query_service: GuardedQueryService | None = None,
+        query_service: DatasourceQueryService | None = None,
         semantic_query_service: SemanticCompilationService | None = None,
     ) -> None:
         config = config or ChatBIConfig()
@@ -70,7 +67,6 @@ class SqlAdapter:
                     compiler or SemanticSQLCompiler(),
                 )
             )
-        self._permission_adapter = permission_adapter or SQLPermissionService()
         self._repair_strategy = repair_strategy or SQLRepairStrategy()
         self._result_artifact_service = result_artifact_service
         self._sample_row_limit = max(
@@ -81,12 +77,9 @@ class SqlAdapter:
             max_parallel_queries if max_parallel_queries is not None else config.sql_max_parallel_queries,
             1,
         )
-        self._query_service = query_service or GuardedQueryService(
-            sample_rows=self._sample_row_limit,
-            permission_service=self._permission_adapter,
-            validate_tool=validate_tool,
-            execute_tool=execute_tool,
-        )
+        if query_service is None:
+            raise ValueError("DATASOURCE_QUERY_SERVICE_REQUIRED")
+        self._query_service = query_service
 
     def generate(self, request: dict[str, Any]) -> dict[str, Any]:
         ctx = ChatBIRunContext(request)
@@ -133,17 +126,22 @@ class SqlAdapter:
             )
         )
         self._reject_same_repair_sql(result.sql, repair_context)
-        validated = self._query_service.validate_sql(
-            result.sql,
-            allowed_tables=result.tables,
+        validated = self._query_service.validate(
+            DatasourceQueryRequest(
+                sql=result.sql,
+                datasource_id=result.datasource_id,
+                subject=self._query_subject(ctx),
+                selected_tables=result.tables,
+            )
         )
-        if not validated.success:
+        if validated.status != DatasourceQueryStatus.SUCCEEDED or validated.data is None:
             raise ValueError(validated.error_code or "SQL_VALIDATE_FAILED")
-        validated_sql = (validated.payload or {}).get("sql") or result.sql
+        validated_sql = validated.data.sql
         return {
             "sql": validated_sql,
             "strategy": "semantic_sql_compiler",
             "datasource_id": result.datasource_id,
+            "tables": result.tables,
             "explanation": "基于 Semantic 语义资产生成 SQL",
             "used_assets": [
                 {
@@ -181,6 +179,11 @@ class SqlAdapter:
                 and item.get("biz_name")
                 and item.get("asset_type") == "DIMENSION"
             ],
+            tables=[
+                str(table)
+                for table in (sql_info.get("tables") or [])
+                if str(table).strip()
+            ],
         )
         result = self._execute_query(ctx, query)
         return build_execution_output([query], [result])
@@ -190,23 +193,25 @@ class SqlAdapter:
         ctx: ChatBIRunContext,
         query: ExecutionQuery,
     ) -> ExecutionResult:
-        result = self._query_service.execute_sql(
-            sql=query.sql,
-            datasource_id=query.datasource_id,
-            workspace_id=self._int_or_none(ctx.request_value("tenant_id")),
-            user_id=self._int_or_none(ctx.request_value("user_id")),
+        result = self._query_service.execute(
+            DatasourceQueryRequest(
+                sql=query.sql,
+                datasource_id=query.datasource_id,
+                subject=self._query_subject(ctx),
+                selected_tables=query.tables,
+            )
         )
-        if not result.success:
+        if result.status != DatasourceQueryStatus.SUCCEEDED or result.data is None:
             return self._failed_result(
                 query.query_id,
                 result.error_code or "SQL_EXECUTE_FAILED",
                 result.message or "SQL 执行失败",
             )
-        payload = result.payload or {}
-        rows = payload.get("full_data") or []
-        fields = payload.get("fields") or []
-        row_count = int(payload.get("row_count") or len(rows))
-        sample_rows = payload.get("sample_rows") or []
+        payload = result.data
+        rows = payload.full_data
+        fields = payload.fields
+        row_count = payload.row_count
+        sample_rows = payload.sample_rows
         artifact_ref = None
         if self._result_artifact_service is not None:
             try:
@@ -244,7 +249,18 @@ class SqlAdapter:
             sampled_row_count=len(sample_rows),
             result_truncated=row_count > len(sample_rows),
             artifact_ref=artifact_ref,
-            execution_ms=int(payload.get("execution_ms") or 0),
+            execution_ms=payload.execution_ms,
+        )
+
+    @staticmethod
+    def _query_subject(ctx: ChatBIRunContext) -> DatasourceQuerySubject:
+        tenant_id = SqlAdapter._int_or_none(ctx.request_value("tenant_id"))
+        user_id = SqlAdapter._int_or_none(ctx.request_value("user_id"))
+        if tenant_id is None or user_id is None:
+            raise ValueError("DATASOURCE_QUERY_SUBJECT_REQUIRED")
+        return DatasourceQuerySubject(
+            workspace_id=tenant_id,
+            user_id=user_id,
         )
 
     @staticmethod
@@ -281,13 +297,17 @@ class SqlAdapter:
                     having=planning.slot_items(slots.get("having") or plan.get("having")),
                 )
             )
-            validated = self._query_service.validate_sql(
-                compiled.sql,
-                allowed_tables=compiled.tables,
+            validated = self._query_service.validate(
+                DatasourceQueryRequest(
+                    sql=compiled.sql,
+                    datasource_id=compiled.datasource_id,
+                    subject=self._query_subject(ctx),
+                    selected_tables=compiled.tables,
+                )
             )
-            if not validated.success:
+            if validated.status != DatasourceQueryStatus.SUCCEEDED or validated.data is None:
                 raise ValueError(validated.error_code or "SQL_VALIDATE_FAILED")
-            sql = (validated.payload or {}).get("sql") or compiled.sql
+            sql = validated.data.sql
             queries.append(
                 {
                     "plan_ref": index,
@@ -297,6 +317,7 @@ class SqlAdapter:
                     "dimensions": plan.get("dimensions") or compiled.dimensions,
                     "sql": sql,
                     "datasource_id": compiled.datasource_id,
+                    "tables": compiled.tables,
                 }
             )
         return {
@@ -351,6 +372,11 @@ class SqlAdapter:
                         str(item)
                         for item in raw_query.get("dimensions") or []
                         if item is not None
+                    ],
+                    tables=[
+                        str(table)
+                        for table in raw_query.get("tables") or []
+                        if str(table).strip()
                     ],
                 )
             )

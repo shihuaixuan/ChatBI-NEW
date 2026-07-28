@@ -13,19 +13,24 @@ from apps.chatbi.models import (
     SemanticRetrievalData,
 )
 from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolContext
-from apps.chatbi.services.execution import (
-    GuardedQueryService,
-    ResultArtifactWriteError,
-)
+from apps.chatbi.services.execution import ResultArtifactWriteError
 from apps.chatbi.services.generation import (
     FinalReplyProjectionError,
     project_query_final_reply,
 )
 from apps.chatbi.services.planning import (
+    PhysicalSchemaAccessDeniedError,
     SemanticQueryCompileError,
 )
 from apps.chatbi.services.understanding.time_range import normalize_time_range
 from apps.conversation import ChatRecordExecutionType
+from apps.datasource import (
+    DatasourceQueryErrorCategory,
+    DatasourceQueryRequest,
+    DatasourceQueryResult,
+    DatasourceQueryStatus,
+    DatasourceQuerySubject,
+)
 from apps.tool import (
     RetryAdvice,
     ToolConcurrency,
@@ -68,6 +73,35 @@ def _execution_gate(ctx: AgentToolContext) -> ToolResult | None:
             error_category=ToolErrorCategory.BUSINESS_RULE,
         )
     return None
+
+
+def _query_failure(result: DatasourceQueryResult) -> ToolResult[Any]:
+    """把 Datasource 查询失败映射为 Agent Tool 结果。"""
+
+    category_map = {
+        DatasourceQueryErrorCategory.AUTHORIZATION: ToolErrorCategory.AUTHORIZATION,
+        DatasourceQueryErrorCategory.SAFETY: ToolErrorCategory.SAFETY,
+        DatasourceQueryErrorCategory.VALIDATION: ToolErrorCategory.VALIDATION,
+        DatasourceQueryErrorCategory.DOMAIN: ToolErrorCategory.DOMAIN,
+        DatasourceQueryErrorCategory.TRANSIENT: ToolErrorCategory.TRANSIENT,
+        DatasourceQueryErrorCategory.CONFIGURATION: ToolErrorCategory.CONFIGURATION,
+    }
+    category = category_map.get(
+        result.error_category,
+        ToolErrorCategory.DOMAIN,
+    )
+    if result.status == DatasourceQueryStatus.REJECTED:
+        return ToolResult.rejected(
+            result.message or "查询被拒绝",
+            error_code=result.error_code or "query_rejected",
+            error_category=category,
+        )
+    return ToolResult.failed(
+        result.message or "查询失败",
+        error_code=result.error_code or "query_failed",
+        error_category=category,
+        retry_advice=RetryAdvice(result.retry_advice.value),
+    )
 
 
 def _ensure_dataset_id(ctx: AgentToolContext) -> int | None:
@@ -142,6 +176,24 @@ class SearchSemanticAssetsTool(AgentTool):
                 error_category=ToolErrorCategory.CONFIGURATION,
                 retry_advice=RetryAdvice.NEVER,
             )
+        if ctx.query_service is None or not ctx.datasource_id or not ctx.user_id:
+            return ToolResult.failed(
+                "Datasource 权限服务或可信身份未配置。",
+                error_code="query_policy_service_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
+            )
+        subject = DatasourceQuerySubject(
+            user_id=ctx.user_id,
+            workspace_id=ctx.oid,
+        )
+        policy = ctx.query_service.resolve_policy(subject, ctx.datasource_id)
+        if not policy.allowed or not policy.authorized_tables:
+            return ToolResult.rejected(
+                policy.reason or "当前身份没有可访问的表。",
+                error_code=policy.error_code or "authorized_tables_empty",
+                error_category=ToolErrorCategory.AUTHORIZATION,
+            )
         package = ctx.semantic_retrieval_service.retrieve_for_agent(
             SemanticRetrievalData(
                 workspace_id=ctx.oid,
@@ -152,6 +204,10 @@ class SearchSemanticAssetsTool(AgentTool):
                 intent=intent,
                 request_id=str(ctx.state.get("run_id") or "") or None,
             )
+        )
+        package = ctx.semantic_retrieval_service.filter_authorized_tables(
+            package,
+            policy.authorized_tables,
         )
         # 语义包与合法资产集合入 state，供 compile 校验"只接受出现过的资产"。
         ctx.state["semantic_package"] = package
@@ -215,10 +271,28 @@ class GetDatasetSchemaTool(AgentTool):
                 error_category=ToolErrorCategory.CONFIGURATION,
                 retry_advice=RetryAdvice.NEVER,
             )
-        schema = ctx.physical_schema_service.get(
-            ctx.datasource_id,
-            table_keyword=args.table_keyword,
-        )
+        if not ctx.user_id:
+            return ToolResult.failed(
+                "缺少可信用户身份，无法查看表结构。",
+                error_code="query_subject_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
+            )
+        try:
+            schema = ctx.physical_schema_service.get(
+                ctx.datasource_id,
+                subject=DatasourceQuerySubject(
+                    user_id=ctx.user_id,
+                    workspace_id=ctx.oid,
+                ),
+                table_keyword=args.table_keyword,
+            )
+        except PhysicalSchemaAccessDeniedError as exc:
+            return ToolResult.rejected(
+                "当前身份无权读取该数据源的物理结构。",
+                error_code=str(exc),
+                error_category=ToolErrorCategory.AUTHORIZATION,
+            )
         items = [
             {
                 "table": table.name,
@@ -431,21 +505,30 @@ class ValidateSqlTool(AgentTool):
         blocked = _execution_gate(ctx)
         if blocked:
             return blocked
-        service = ctx.query_service or GuardedQueryService(
-            default_limit=getattr(ctx.config, "default_limit", 100),
-        )
-        result = service.validate_sql(
-            args.sql,
-            allowed_tables=ctx.state.get("allowed_tables") or [],
-        )
-        if not result.success:
+        if ctx.query_service is None or not ctx.datasource_id or not ctx.user_id:
             return ToolResult.failed(
-                result.message or "SQL 校验失败",
-                error_code=result.error_code or "sql_validation_failed",
-                error_category=ToolErrorCategory.DOMAIN,
-                retry_advice=RetryAdvice.CORRECT_INPUT,
+                "Datasource 查询服务或可信身份未配置。",
+                error_code="query_service_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
             )
-        data = ValidateSqlResult.model_validate(result.payload)
+        result = ctx.query_service.validate(
+            DatasourceQueryRequest(
+                sql=args.sql,
+                datasource_id=ctx.datasource_id,
+                subject=DatasourceQuerySubject(
+                    user_id=ctx.user_id,
+                    workspace_id=ctx.oid,
+                ),
+                selected_tables=ctx.state.get("allowed_tables") or [],
+            )
+        )
+        if result.status != DatasourceQueryStatus.SUCCEEDED or result.data is None:
+            return _query_failure(result)
+        data = ValidateSqlResult(
+            sql=result.data.sql,
+            tables=result.data.tables,
+        )
         return ToolResult.succeeded(
             json_summary(data.model_dump(mode="json"), _summary_limit(ctx)),
             data,
@@ -490,7 +573,7 @@ class ExecuteSqlTool(AgentTool):
         blocked = _execution_gate(ctx)
         if blocked:
             return blocked
-        if not ctx.datasource_id:
+        if not ctx.datasource_id or not ctx.user_id:
             return ToolResult.failed(
                 "缺少数据源，无法执行。",
                 error_code="datasource_required",
@@ -516,21 +599,20 @@ class ExecuteSqlTool(AgentTool):
                 error_category=ToolErrorCategory.CONFIGURATION,
                 retry_advice=RetryAdvice.NEVER,
             )
-        result = ctx.query_service.execute_sql(
-            sql=args.sql,
-            datasource_id=ctx.datasource_id,
-            workspace_id=ctx.oid,
-            user_id=ctx.user_id,
-            allowed_tables=ctx.state.get("allowed_tables") or [],
-        )
-        if not result.success:
-            return ToolResult.failed(
-                result.message or result.error_code or "执行失败",
-                error_code=result.error_code or "sql_execution_failed",
-                error_category=ToolErrorCategory.DOMAIN,
-                retry_advice=RetryAdvice.CORRECT_INPUT,
+        result = ctx.query_service.execute(
+            DatasourceQueryRequest(
+                sql=args.sql,
+                datasource_id=ctx.datasource_id,
+                subject=DatasourceQuerySubject(
+                    user_id=ctx.user_id,
+                    workspace_id=ctx.oid,
+                ),
+                selected_tables=ctx.state.get("allowed_tables") or [],
             )
-        payload = dict(result.payload or {})
+        )
+        if result.status != DatasourceQueryStatus.SUCCEEDED or result.data is None:
+            return _query_failure(result)
+        payload = result.data.model_dump(mode="json")
         full_data = payload.pop("full_data", [])
         try:
             artifact_ref = ctx.result_artifact_service.save(

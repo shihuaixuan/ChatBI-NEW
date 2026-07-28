@@ -30,13 +30,14 @@ from apps.chatbi.orchestration.agent.tools.interaction import (
     GetSqlExamplesTool,
     SearchTerminologyTool,
 )
-from apps.chatbi.services.execution import GuardedQueryService, ResultArtifactService
+from apps.chatbi.services.execution import ResultArtifactService
 from apps.chatbi.services.planning import (
     PhysicalSchemaService,
     SemanticCompilationService,
     SemanticRetrievalService,
 )
 from apps.chatbi.services.understanding import QuestionUnderstandingService
+from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
 from apps.semantic.composition import build_semantic_term_query_service
 from apps.semantic.services.term_query_service import SemanticTermQueryService
@@ -68,7 +69,7 @@ def build_agent_loop(
     registry: ToolRegistry | None = None,
     understanding_service: QuestionUnderstandingService | None = None,
     term_query_service: SemanticTermQueryService | None = None,
-    query_service: GuardedQueryService | None = None,
+    query_service: DatasourceQueryService | None = None,
     semantic_query_service: SemanticCompilationService | None = None,
     semantic_retrieval_service: SemanticRetrievalService | None = None,
     physical_schema_service: PhysicalSchemaService | None = None,

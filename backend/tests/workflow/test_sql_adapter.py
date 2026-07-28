@@ -1,13 +1,122 @@
+import re
 import threading
+from dataclasses import replace
 
 import pytest
 
 from apps.chatbi.models import ChatBIResultArtifactRef, ToolResult
-from apps.chatbi.orchestration.graph.capabilities.adapters.sql import SqlAdapter
+from apps.chatbi.orchestration.graph.capabilities.adapters.sql import (
+    SqlAdapter as ProductionSqlAdapter,
+)
 from apps.chatbi.orchestration.graph.capabilities.config import ChatBIConfig
 from apps.chatbi.services.execution import ResultArtifactWriteError
+from apps.datasource.models.dto import (
+    DatasourceDriverResult,
+    DatasourceQueryPolicy,
+    DatasourceQuerySubject,
+)
+from apps.datasource.services import DatasourceQueryService
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.sql_compiler import SemanticSQLCompileResult
+
+
+class _DynamicPolicyProvider:
+    def __init__(self, denied: bool = False) -> None:
+        self.denied = denied
+        self.authorized_tables: list[str] = []
+
+    def resolve(self, subject, datasource_id):
+        if self.denied:
+            return DatasourceQueryPolicy(
+                allowed=False,
+                reason="没有数据源权限",
+                error_code="permission_denied",
+            )
+        return DatasourceQueryPolicy(
+            authorized_tables=self.authorized_tables,
+        )
+
+
+class _LegacyExecutorAdapter:
+    def __init__(self, execute_tool=None) -> None:
+        self.execute_tool = execute_tool
+
+    def execute(self, datasource_id, sql):
+        if self.execute_tool is None:
+            return DatasourceDriverResult(succeeded=True)
+        result = self.execute_tool.run(
+            {"sql": sql, "datasource_id": datasource_id}
+        )
+        return DatasourceDriverResult(
+            succeeded=result.success,
+            payload=result.payload or {},
+            error_code=result.error_code,
+            message=result.message or "",
+        )
+
+
+class _AdapterTestQueryService(DatasourceQueryService):
+    def __init__(self, execute_tool=None, *, denied: bool = False, sample_rows: int = 10):
+        self.policy = _DynamicPolicyProvider(denied=denied)
+        super().__init__(
+            self.policy,
+            _LegacyExecutorAdapter(execute_tool),
+            sample_rows=sample_rows,
+        )
+
+    def validate(self, request):
+        request = self._with_test_scope(request)
+        return super().validate(request)
+
+    def execute(self, request):
+        request = self._with_test_scope(request)
+        return super().execute(request)
+
+    def _with_test_scope(self, request):
+        selected = request.selected_tables or re.findall(
+            r"\b(?:from|join)\s+([A-Za-z_][A-Za-z0-9_]*)",
+            request.sql,
+            flags=re.IGNORECASE,
+        ) or ["__scalar_query__"]
+        self.policy.authorized_tables = list(selected)
+        return request.model_copy(update={"selected_tables": list(selected)})
+
+
+class _TestSqlAdapter(ProductionSqlAdapter):
+    @staticmethod
+    def _query_subject(ctx):
+        return DatasourceQuerySubject(
+            workspace_id=int(ctx.request_value("tenant_id") or 10),
+            user_id=int(ctx.request_value("user_id") or 20),
+        )
+
+    def _compile_semantic_query(self, data):
+        result = super()._compile_semantic_query(data)
+        if result.datasource_id is None:
+            return replace(result, datasource_id=5)
+        return result
+
+
+def _sql_adapter(**kwargs):
+    execute_tool = kwargs.pop("execute_tool", None)
+    permission_adapter = kwargs.pop("permission_adapter", None)
+    config = kwargs.get("config") or ChatBIConfig()
+    sample_rows = kwargs.get("sample_row_limit")
+    sample_rows = (
+        int(sample_rows)
+        if sample_rows is not None
+        else int(config.sql_sample_row_limit)
+    )
+    kwargs["query_service"] = _AdapterTestQueryService(
+        execute_tool,
+        denied=permission_adapter is not None,
+        sample_rows=sample_rows,
+    )
+    return _TestSqlAdapter(**kwargs)
+
+
+# 本文件只测试 Graph 适配行为；安全范围本身由 Datasource 查询服务测试覆盖。
+SqlAdapter = _sql_adapter
 
 
 class FakeDatasetSchemaProvider:
@@ -97,6 +206,7 @@ def test_sql_adapter_generates_sql_from_semantic_selected_assets():
         ),
         "strategy": "semantic_sql_compiler",
         "datasource_id": 5,
+        "tables": ["stall_traffic_1d"],
         "explanation": "基于 Semantic 语义资产生成 SQL",
         "used_assets": [
             {"asset_type": "METRIC", "asset_id": 100, "biz_name": "visit_uv"},

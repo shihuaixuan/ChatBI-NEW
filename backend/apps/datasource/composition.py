@@ -19,12 +19,33 @@ from apps.datasource.repository.sqlmodel import (
     SQLModelDatasourceRepository,
 )
 from apps.datasource.services import (
+    ConnectionDatasourceQueryExecutor,
     DatasourceConnectionService,
     DatasourceMetadataService,
     DatasourcePhysicalRelationService,
+    DatasourceQueryPolicyProvider,
+    DatasourceQueryService,
     DatasourceService,
     ExcelImportService,
 )
+
+
+def build_datasource_query_service(
+    session: Session,
+    policy_provider: DatasourceQueryPolicyProvider,
+    *,
+    default_limit: int | None = 100,
+    sample_rows: int = 10,
+) -> DatasourceQueryService:
+    """装配必须具有权限提供者的安全查询服务。"""
+
+    connection_service = build_datasource_connection_service(session)
+    return DatasourceQueryService(
+        policy_provider,
+        ConnectionDatasourceQueryExecutor(connection_service),
+        default_limit=default_limit,
+        sample_rows=sample_rows,
+    )
 
 
 def build_datasource_connection_service(

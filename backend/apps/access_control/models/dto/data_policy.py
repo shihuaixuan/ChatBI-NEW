@@ -54,6 +54,7 @@ class DataPolicy(BaseModel):
     allowed: bool = True
     reason: str = "permission_applied"
     error_code: str | None = None
+    authorized_tables: list[str] = Field(default_factory=list)
     row_filters: list[DataPolicyRowFilter] = Field(default_factory=list)
     denied_columns: list[DataPolicyDeniedColumn] = Field(default_factory=list)
 

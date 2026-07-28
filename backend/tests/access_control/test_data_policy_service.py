@@ -144,6 +144,7 @@ def test_system_variable_resolves_to_escaped_structured_row_filter() -> None:
     policy = _service([row_permission], system_variable).resolve(_subject(), 7)
 
     assert policy.row_filters[0].condition == "((`owner` = 'O''Reilly'))"
+    assert policy.authorized_tables == ["orders"]
     predicate = policy.row_filters[0].expressions[0].items[0]
     assert predicate.values == ["O'Reilly"]
 
@@ -211,7 +212,8 @@ def test_system_admin_has_no_row_or_column_restrictions() -> None:
     assert policy.allowed is True
     assert policy.row_filters == []
     assert policy.denied_columns == []
-    service._datasource_catalog.get_policy_schema.assert_not_called()
+    assert policy.authorized_tables == ["orders"]
+    service._datasource_catalog.get_policy_schema.assert_called_once()
 
 
 def test_requested_unknown_table_never_returns_empty_policy() -> None:

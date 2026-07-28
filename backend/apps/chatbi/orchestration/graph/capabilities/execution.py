@@ -6,8 +6,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from apps.chatbi.adapters.execution import DatasourceQueryExecutor
-from apps.chatbi.models import ChatBIResultArtifactRef, ToolResult
+from apps.chatbi.models import ChatBIResultArtifactRef
+from apps.datasource import DatasourceDriverResult
+from apps.datasource.composition import build_datasource_connection_service
+from apps.datasource.services import ConnectionDatasourceQueryExecutor
 
 
 class SessionSqlExecutionGateway:
@@ -16,14 +18,20 @@ class SessionSqlExecutionGateway:
     def __init__(
         self,
         session_factory: Callable[[], Session],
-        execute_tool_factory: Callable[[Session], DatasourceQueryExecutor] = DatasourceQueryExecutor,
+        execute_tool_factory: Callable[
+            [Session], ConnectionDatasourceQueryExecutor
+        ] | None = None,
     ) -> None:
         self._session_factory = session_factory
-        self._execute_tool_factory = execute_tool_factory
+        self._execute_tool_factory = execute_tool_factory or (
+            lambda session: ConnectionDatasourceQueryExecutor(
+                build_datasource_connection_service(session)
+            )
+        )
 
-    def run(self, payload: dict[str, Any]) -> ToolResult:
+    def execute(self, datasource_id: int, sql: str) -> DatasourceDriverResult:
         with self._session_factory() as session:
-            return self._execute_tool_factory(session).run(payload)
+            return self._execute_tool_factory(session).execute(datasource_id, sql)
 
 
 class ExecutionQuery(BaseModel):
@@ -37,6 +45,7 @@ class ExecutionQuery(BaseModel):
     model_id: int | None = None
     metrics: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
+    tables: list[str] = Field(default_factory=list)
 
 
 class ExecutionResult(BaseModel):

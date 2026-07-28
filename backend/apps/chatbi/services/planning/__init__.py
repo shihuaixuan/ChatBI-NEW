@@ -16,7 +16,10 @@ from apps.chatbi.services.planning.execution_binding import (
     ExecutionBindingError,
     resolve_execution_binding,
 )
-from apps.chatbi.services.planning.physical_schema import PhysicalSchemaService
+from apps.chatbi.services.planning.physical_schema import (
+    PhysicalSchemaAccessDeniedError,
+    PhysicalSchemaService,
+)
 from apps.chatbi.services.planning.semantic_compilation import (
     SemanticCompilationService,
     SemanticQueryCompileError,
@@ -32,6 +35,7 @@ __all__ = [
     "DatasourceSelectionService",
     "ExecutionBindingError",
     "PhysicalSchemaService",
+    "PhysicalSchemaAccessDeniedError",
     "SemanticCompilationService",
     "SemanticQueryCompileError",
     "SemanticRetrievalService",

@@ -33,6 +33,19 @@ from apps.datasource.models.dto.physical_schema import (
     PhysicalTableDetail,
     PhysicalTableSnapshot,
 )
+from apps.datasource.models.dto.query import (
+    DatasourceDeniedColumn,
+    DatasourceDriverResult,
+    DatasourceQueryData,
+    DatasourceQueryErrorCategory,
+    DatasourceQueryPolicy,
+    DatasourceQueryRequest,
+    DatasourceQueryResult,
+    DatasourceQueryRetryAdvice,
+    DatasourceQueryStatus,
+    DatasourceQuerySubject,
+    DatasourceRowFilter,
+)
 
 __all__ = [
     "ColumnSchema",
@@ -40,7 +53,18 @@ __all__ = [
     "CreateDatasource",
     "DatasourceConnection",
     "DatasourceConf",
+    "DatasourceDeniedColumn",
+    "DatasourceDriverResult",
+    "DatasourceQueryData",
+    "DatasourceQueryErrorCategory",
+    "DatasourceQueryPolicy",
+    "DatasourceQueryRequest",
+    "DatasourceQueryResult",
+    "DatasourceQueryRetryAdvice",
+    "DatasourceQueryStatus",
+    "DatasourceQuerySubject",
     "DatasourceRecord",
+    "DatasourceRowFilter",
     "ExcelImportResult",
     "FieldInfo",
     "FieldObj",

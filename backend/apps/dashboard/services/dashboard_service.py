@@ -14,6 +14,7 @@ from apps.dashboard.models import (
     QueryDashboard,
 )
 from apps.dashboard.repository import DashboardRepository
+from apps.datasource import DatasourceQuerySubject
 from common.core.deps import CurrentUser
 from common.utils.tree_utils import build_tree_generic
 
@@ -24,7 +25,10 @@ class DashboardService:
     def __init__(
         self,
         repository: DashboardRepository,
-        load_chart_data: Callable[[int | str, str], dict[str, Any]],
+        load_chart_data: Callable[
+            [int | str, str, DatasourceQuerySubject],
+            dict[str, Any],
+        ],
     ) -> None:
         self._repository = repository
         self._load_chart_data = load_chart_data
@@ -48,19 +52,31 @@ class DashboardService:
         )
 
     def load_resource(
-        self, dashboard: QueryDashboard
+        self,
+        dashboard: QueryDashboard,
+        current_user: CurrentUser,
     ) -> dict[str, Any] | None:
         resource = self._repository.get_detail(dashboard.id)
         if resource is None:
             return None
+        if resource.get("create_by") != str(current_user.id):
+            raise PermissionError("DASHBOARD_ACCESS_DENIED")
         canvas_view_info = resource.get("canvas_view_info")
         if not canvas_view_info:
             return resource
+        subject = DatasourceQuerySubject(
+            user_id=current_user.id,
+            workspace_id=current_user.oid if current_user.oid is not None else 1,
+        )
         canvas_view = orjson.loads(canvas_view_info)
         for item in canvas_view.values():
             if item.get("datasource") is None or item.get("sql") is None:
                 continue
-            data_result = self._load_chart_data(item["datasource"], item["sql"])
+            data_result = self._load_chart_data(
+                item["datasource"],
+                item["sql"],
+                subject,
+            )
             item["data"]["data"] = data_result["data"]
             item["status"] = data_result["status"]
             item["message"] = data_result["message"]

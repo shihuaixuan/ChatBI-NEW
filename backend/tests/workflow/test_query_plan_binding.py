@@ -7,9 +7,9 @@ golden 对比：对既有可表达的查询形态，"经 bind_query_plan 计划�
 
 import pytest
 
-from apps.chatbi.orchestration.graph.capabilities.adapters.sql import SqlAdapter
 from apps.chatbi.orchestration.graph.capabilities.planning import QueryPlanBinder
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
+from tests.workflow.test_sql_adapter import _sql_adapter as SqlAdapter
 
 
 class FakeDatasetSchemaProvider:

@@ -73,18 +73,19 @@ async def _collect_stream_frames(stream):
 @pytest.fixture(autouse=True)
 def _fake_chatbi_v1_sql_execute_tool(monkeypatch):
     class FakeDatasourceQueryExecutor:
-        def __init__(self, session) -> None:
-            self.session = session
+        def __init__(self, session_factory) -> None:
+            self.session_factory = session_factory
 
-        def run(self, payload: dict):
+        def execute(self, datasource_id: int, sql: str):
             return SimpleNamespace(
-                success=True,
+                succeeded=True,
                 payload={"fields": [], "data": [{"placeholder_value": 1}], "execution_ms": 1},
                 error_code=None,
-                message=None,
+                message="",
+                transient=False,
             )
 
-    monkeypatch.setattr(chatbi_runtime, "DatasourceQueryExecutor", FakeDatasourceQueryExecutor)
+    monkeypatch.setattr(chatbi_runtime, "SessionSqlExecutionGateway", FakeDatasourceQueryExecutor)
 
 
 @pytest.fixture(autouse=True)
@@ -95,17 +96,40 @@ def _fake_chatbi_v1_data_policy_provider(monkeypatch):
         def __init__(self, session_factory) -> None:
             self.session_factory = session_factory
 
-        def get_policy(self, payload: dict) -> dict:
-            return {
-                "allowed": True,
-                "row_filters": [],
-                "denied_columns": [],
-            }
+        def resolve(self, subject, datasource_id):
+            return SimpleNamespace(
+                allowed=True,
+                reason="permission_applied",
+                error_code=None,
+                authorized_tables=[
+                    "stall_traffic_1d",
+                    "stall_traffic_daily",
+                    "orders",
+                ],
+                row_filters=[],
+                denied_columns=[],
+            )
 
     monkeypatch.setattr(
         chatbi_runtime,
-        "SessionDataPolicyProvider",
+        "SessionDatasourceQueryPolicyProvider",
         FakeDataPolicyProvider,
+    )
+
+    class FakeDatasetBindingService:
+        """Graph API 测试不依赖真实语义数据集绑定。"""
+
+        def resolve_execution_binding(self, workspace_id, dataset_id):
+            return SimpleNamespace(
+                dataset_id=dataset_id,
+                dataset_name="测试数据集",
+                datasource_id=5,
+            )
+
+    monkeypatch.setattr(
+        chatbi_runtime,
+        "build_semantic_dataset_binding_service",
+        lambda session: FakeDatasetBindingService(),
     )
 
 

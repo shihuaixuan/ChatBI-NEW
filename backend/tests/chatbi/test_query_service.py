@@ -1,184 +1,290 @@
-from apps.chatbi.models import ToolResult
-from apps.chatbi.orchestration.graph.capabilities.adapters.permission import (
-    SQLPermissionService,
+"""Datasource 安全查询统一入口测试。"""
+
+import pytest
+
+from apps.datasource.models.dto import (
+    DatasourceDeniedColumn,
+    DatasourceDriverResult,
+    DatasourceQueryPolicy,
+    DatasourceQueryRequest,
+    DatasourceQueryRetryAdvice,
+    DatasourceQueryStatus,
+    DatasourceQuerySubject,
+    DatasourceRowFilter,
 )
-from apps.chatbi.services.execution import GuardedQueryService
+from apps.datasource.services import DatasourceQueryService
+
+
+class StaticPolicyProvider:
+    def __init__(self, policy: DatasourceQueryPolicy) -> None:
+        self.policy = policy
+        self.calls = []
+
+    def resolve(self, subject, datasource_id):
+        self.calls.append((subject, datasource_id))
+        return self.policy
 
 
 class RecordingExecutor:
-    def __init__(self) -> None:
-        self.payloads: list[dict] = []
-
-    def run(self, payload: dict) -> ToolResult:
-        self.payloads.append(payload)
-        return ToolResult(
-            success=True,
+    def __init__(self, result: DatasourceDriverResult | None = None) -> None:
+        self.calls = []
+        self.result = result or DatasourceDriverResult(
+            succeeded=True,
             payload={
                 "fields": ["amount"],
                 "data": [{"amount": 10}, {"amount": 20}],
             },
         )
 
-
-class StaticPolicyProvider:
-    def __init__(self, policy: dict) -> None:
-        self.policy = policy
-        self.payloads: list[dict] = []
-
-    def get_policy(self, payload: dict) -> dict:
-        self.payloads.append(payload)
-        return self.policy
+    def execute(self, datasource_id, sql):
+        self.calls.append((datasource_id, sql))
+        return self.result
 
 
-class UnsafePermissionService:
-    def apply(self, payload: dict) -> dict:
-        _ = payload
-        return {
-            "allowed": True,
-            "reason": "permission_applied",
-            "sql": "delete from orders",
-            "error_code": None,
-        }
-
-
-def test_query_service_applies_permission_before_validation_and_execution():
-    executor = RecordingExecutor()
-    provider = StaticPolicyProvider(
-        {
-            "allowed": True,
-            "row_filters": [
-                {"table": "orders", "condition": "workspace_id = 3"}
-            ],
-            "denied_columns": [],
-        }
-    )
-    service = GuardedQueryService(
-        sample_rows=1,
-        permission_service=SQLPermissionService(policy_provider=provider),
-        execute_tool=executor,
-    )
-
-    result = service.execute_sql(
-        sql="select amount from orders",
+def _request(
+    sql: str = "select amount from orders",
+    *,
+    selected_tables: list[str] | None = None,
+) -> DatasourceQueryRequest:
+    return DatasourceQueryRequest(
+        sql=sql,
         datasource_id=8,
-        workspace_id=3,
-        user_id=9,
-        allowed_tables=["orders"],
+        subject=DatasourceQuerySubject(user_id=9, workspace_id=3),
+        selected_tables=(
+            ["orders"] if selected_tables is None else selected_tables
+        ),
     )
 
-    assert result.success
-    assert provider.payloads == [
-        {"datasource_id": 8, "tenant_id": 3, "user_id": 9}
-    ]
-    assert executor.payloads == [
-        {
-            "sql": (
-                "SELECT amount FROM orders WHERE orders.workspace_id = 3 "
-                "limit 100"
+
+def _service(
+    *,
+    authorized_tables: list[str] | None = None,
+    row_filters: list[DatasourceRowFilter] | None = None,
+    denied_columns: list[DatasourceDeniedColumn] | None = None,
+    executor: RecordingExecutor | None = None,
+) -> tuple[DatasourceQueryService, StaticPolicyProvider, RecordingExecutor]:
+    provider = StaticPolicyProvider(
+        DatasourceQueryPolicy(
+            authorized_tables=(
+                ["orders", "customers"]
+                if authorized_tables is None
+                else authorized_tables
             ),
-            "datasource_id": 8,
-        }
+            row_filters=row_filters or [],
+            denied_columns=denied_columns or [],
+        )
+    )
+    query_executor = executor or RecordingExecutor()
+    return (
+        DatasourceQueryService(provider, query_executor, sample_rows=1),
+        provider,
+        query_executor,
+    )
+
+
+def test_query_service_uses_authorized_and_selected_table_intersection():
+    service, provider, executor = _service(
+        row_filters=[
+            DatasourceRowFilter(
+                table="orders",
+                condition="workspace_id = 3",
+            )
+        ]
+    )
+
+    result = service.execute(_request())
+
+    assert result.status == DatasourceQueryStatus.SUCCEEDED
+    assert provider.calls == [(_request().subject, 8)]
+    assert executor.calls == [
+        (
+            8,
+            "SELECT amount FROM orders WHERE orders.workspace_id = 3 LIMIT 100",
+        )
     ]
-    assert result.payload["sample_rows"] == [{"amount": 10}]
-    assert result.payload["full_data"] == [{"amount": 10}, {"amount": 20}]
-    assert result.payload["stats_summary"]["amount"]["sum"] == 30
+    assert result.data is not None
+    assert result.data.effective_tables == ["orders"]
+    assert result.data.sample_rows == [{"amount": 10}]
+    assert result.data.stats_summary["amount"]["sum"] == 30
 
 
-def test_query_service_does_not_execute_when_policy_denies():
-    executor = RecordingExecutor()
-    provider = StaticPolicyProvider(
-        {
-            "allowed": False,
-            "reason": "没有数据源权限",
-            "error_code": "data_policy_denied",
-        }
-    )
-    service = GuardedQueryService(
-        permission_service=SQLPermissionService(policy_provider=provider),
-        execute_tool=executor,
-    )
+@pytest.mark.parametrize(
+    ("authorized_tables", "selected_tables", "error_code"),
+    [
+        ([], ["orders"], "authorized_tables_empty"),
+        (["orders"], [], "selected_tables_required"),
+        (["orders"], ["customers"], "effective_tables_empty"),
+    ],
+)
+def test_query_service_never_treats_empty_scope_as_full_access(
+    authorized_tables,
+    selected_tables,
+    error_code,
+):
+    service, _, executor = _service(authorized_tables=authorized_tables)
 
-    result = service.execute_sql(
-        sql="select amount from orders",
-        datasource_id=8,
-        workspace_id=3,
-        user_id=9,
-    )
+    result = service.execute(_request(selected_tables=selected_tables))
 
-    assert not result.success
-    assert result.error_code == "data_policy_denied"
-    assert executor.payloads == []
+    assert result.status == DatasourceQueryStatus.REJECTED
+    assert result.error_code == error_code
+    assert executor.calls == []
 
 
-def test_query_service_revalidates_permission_rewritten_sql():
-    executor = RecordingExecutor()
-    service = GuardedQueryService(
-        permission_service=UnsafePermissionService(),
-        execute_tool=executor,
+def test_query_service_rejects_sql_table_outside_effective_scope():
+    service, _, executor = _service()
+
+    result = service.execute(
+        _request("select name from customers", selected_tables=["orders"])
     )
 
-    result = service.execute_sql(
-        sql="select amount from orders",
-        datasource_id=8,
-        workspace_id=3,
-        user_id=9,
+    assert result.status == DatasourceQueryStatus.REJECTED
+    assert result.error_code == "table_out_of_scope"
+    assert executor.calls == []
+
+
+@pytest.mark.parametrize(
+    "sql",
+    ["delete from orders", "select * from orders; select * from customers"],
+)
+def test_query_service_rejects_unsafe_or_multiple_statements(sql):
+    service, _, executor = _service()
+
+    result = service.execute(_request(sql))
+
+    assert result.status == DatasourceQueryStatus.REJECTED
+    assert executor.calls == []
+
+
+def test_query_service_rejects_denied_column_before_execution():
+    service, _, executor = _service(
+        denied_columns=[
+            DatasourceDeniedColumn(table="orders", column="secret_cost")
+        ]
     )
 
-    assert not result.success
-    assert result.error_code == "unsafe_statement"
-    assert executor.payloads == []
+    result = service.execute(_request("select secret_cost from orders"))
+
+    assert result.status == DatasourceQueryStatus.REJECTED
+    assert result.error_code == "column_permission_denied"
+    assert executor.calls == []
 
 
-def test_old_graph_permission_import_is_same_service_object():
-    assert SQLPermissionService is SQLPermissionService
-
-
-def test_query_service_preserves_execution_metadata():
-    executor = RecordingExecutor()
-    executor.run = lambda payload: ToolResult(
-        success=True,
-        payload={
-            "fields": ["amount"],
-            "data": [{"amount": 10}],
-            "sql": "encoded-sql",
-            "driver": "mysql",
-        },
-    )
-    service = GuardedQueryService(
-        permission_service=SQLPermissionService(),
-        execute_tool=executor,
+def test_query_service_rejects_select_star_when_table_has_denied_column():
+    service, _, executor = _service(
+        denied_columns=[
+            DatasourceDeniedColumn(table="orders", column="secret_cost")
+        ]
     )
 
-    result = service.execute_sql(
-        sql="select amount from orders",
-        datasource_id=8,
-        workspace_id=3,
-        user_id=9,
+    result = service.execute(_request("select * from orders"))
+
+    assert result.status == DatasourceQueryStatus.REJECTED
+    assert result.error_code == "column_permission_denied"
+    assert executor.calls == []
+
+
+def test_query_service_treats_cte_name_as_query_alias_not_physical_table():
+    service, _, executor = _service()
+
+    result = service.execute(
+        _request(
+            "with recent_orders as (select amount from orders) "
+            "select amount from recent_orders"
+        )
     )
 
-    assert result.success
-    assert result.payload["execution_metadata"] == {
-        "sql": "encoded-sql",
-        "driver": "mysql",
-    }
-
-
-def test_query_service_can_validate_without_adding_limit():
-    executor = RecordingExecutor()
-    service = GuardedQueryService(
-        default_limit=None,
-        permission_service=SQLPermissionService(),
-        execute_tool=executor,
-    )
-
-    result = service.execute_sql(
-        sql="select amount from orders",
-        datasource_id=8,
-        workspace_id=3,
-        user_id=9,
-    )
-
-    assert result.success
-    assert executor.payloads == [
-        {"sql": "select amount from orders", "datasource_id": 8}
+    assert result.status == DatasourceQueryStatus.SUCCEEDED
+    assert executor.calls == [
+        (
+            8,
+            "with recent_orders as (select amount from orders) "
+            "select amount from recent_orders limit 100",
+        )
     ]
+
+
+def test_query_service_rejects_unauthorized_physical_table_inside_cte():
+    service, _, executor = _service()
+
+    result = service.execute(
+        _request(
+            "with private_orders as (select name from customers) "
+            "select name from private_orders",
+            selected_tables=["orders"],
+        )
+    )
+
+    assert result.status == DatasourceQueryStatus.REJECTED
+    assert result.error_code == "table_out_of_scope"
+    assert executor.calls == []
+
+
+def test_query_service_applies_row_filter_inside_cte_query_level():
+    service, _, executor = _service(
+        row_filters=[
+            DatasourceRowFilter(
+                table="orders",
+                condition="workspace_id = 3",
+            )
+        ]
+    )
+
+    result = service.execute(
+        _request(
+            "with recent_orders as (select amount from orders) "
+            "select amount from recent_orders"
+        )
+    )
+
+    assert result.status == DatasourceQueryStatus.SUCCEEDED
+    assert executor.calls == [
+        (
+            8,
+            "WITH recent_orders AS (SELECT amount FROM orders "
+            "WHERE orders.workspace_id = 3) "
+            "SELECT amount FROM recent_orders LIMIT 100",
+        )
+    ]
+
+
+def test_query_service_requires_policy_provider_and_executor():
+    with pytest.raises(ValueError, match="POLICY_PROVIDER_REQUIRED"):
+        DatasourceQueryService(None, RecordingExecutor())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="EXECUTOR_REQUIRED"):
+        DatasourceQueryService(  # type: ignore[arg-type]
+            StaticPolicyProvider(DatasourceQueryPolicy()),
+            None,
+        )
+
+
+def test_query_service_classifies_transient_driver_failure_for_same_input_retry():
+    executor = RecordingExecutor(
+        DatasourceDriverResult(
+            succeeded=False,
+            error_code="connection_timeout",
+            message="timeout",
+            transient=True,
+        )
+    )
+    service, _, _ = _service(executor=executor)
+
+    result = service.execute(_request())
+
+    assert result.status == DatasourceQueryStatus.FAILED
+    assert result.retry_advice == DatasourceQueryRetryAdvice.SAME_INPUT
+
+
+def test_query_service_classifies_sql_driver_failure_for_correct_input_retry():
+    executor = RecordingExecutor(
+        DatasourceDriverResult(
+            succeeded=False,
+            error_code="unknown_column",
+            message="unknown column",
+        )
+    )
+    service, _, _ = _service(executor=executor)
+
+    result = service.execute(_request())
+
+    assert result.status == DatasourceQueryStatus.FAILED
+    assert result.retry_advice == DatasourceQueryRetryAdvice.CORRECT_INPUT

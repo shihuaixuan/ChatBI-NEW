@@ -164,6 +164,7 @@ class SqlGenerateOutput(BaseModel):
     sql: str
     strategy: str = "placeholder"
     datasource_id: int | None = None
+    tables: list[str] = Field(default_factory=list)
     explanation: str | None = None
     used_assets: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -181,6 +182,7 @@ class SqlExecuteInput(BaseModel):
 
     sql: str
     datasource_id: int
+    tables: list[str] = Field(default_factory=list)
     permission: dict[str, Any] = Field(default_factory=dict)
 
 

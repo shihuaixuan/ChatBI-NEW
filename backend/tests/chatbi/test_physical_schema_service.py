@@ -1,5 +1,19 @@
 from apps.chatbi.services.planning import PhysicalSchemaService
-from apps.datasource.models.dto import PhysicalField, PhysicalTable
+from apps.datasource.models.dto import (
+    DatasourceQueryPolicy,
+    DatasourceQuerySubject,
+    PhysicalField,
+    PhysicalTable,
+)
+
+
+class StaticQueryService:
+    def resolve_policy(self, subject, datasource_id):
+        assert subject == DatasourceQuerySubject(user_id=7, workspace_id=3)
+        assert datasource_id == 5
+        return DatasourceQueryPolicy(
+            authorized_tables=["orders"],
+        )
 
 
 class StaticMetadataReader:
@@ -49,8 +63,12 @@ class StaticMetadataReader:
 
 
 def test_physical_schema_service_filters_tables_and_fields_once():
-    result = PhysicalSchemaService(StaticMetadataReader()).get(
+    result = PhysicalSchemaService(
+        StaticMetadataReader(),  # type: ignore[arg-type]
+        StaticQueryService(),  # type: ignore[arg-type]
+    ).get(
         5,
+        subject=DatasourceQuerySubject(user_id=7, workspace_id=3),
         table_keyword="订单",
     )
 

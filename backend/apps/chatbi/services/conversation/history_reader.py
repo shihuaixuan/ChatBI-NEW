@@ -10,10 +10,13 @@ from typing import Any, cast
 from apps.assistant.public import AssistantOutDsFactory
 from apps.chatbi.services.generation import DYNAMIC_DATASOURCE_ASSISTANT_TYPES
 from apps.conversation import ChatInfo, ConversationService, HistoryQueryService
-from apps.datasource.services import DatasourceNotFoundError
-from apps.datasource.services.connection_service import (
-    DatasourceConnectionService,
+from apps.datasource import (
+    DatasourceQueryRequest,
+    DatasourceQueryService,
+    DatasourceQueryStatus,
+    DatasourceQuerySubject,
 )
+from apps.datasource.services import DatasourceNotFoundError
 from apps.datasource.services.datasource_service import DatasourceService
 from apps.semantic.services.dataset_catalog_service import (
     SemanticDatasetCatalogService,
@@ -31,13 +34,13 @@ class ConversationHistoryReader:
         history_service: HistoryQueryService,
         dataset_catalog_service: SemanticDatasetCatalogService,
         datasource_service: DatasourceService,
-        connection_service: DatasourceConnectionService,
+        query_service: DatasourceQueryService,
     ) -> None:
         self._conversation_service = conversation_service
         self._history_service = history_service
         self._dataset_catalog_service = dataset_catalog_service
         self._datasource_service = datasource_service
-        self._connection_service = connection_service
+        self._query_service = query_service
 
     def get_chat_with_records(
         self,
@@ -116,12 +119,21 @@ class ConversationHistoryReader:
         )
         if binding is None:
             return {"status": "success", "data": [], "message": ""}
-        return self.execute_chart_data(binding.datasource_id, binding.sql)
+        workspace_id = current_user.oid if current_user.oid is not None else 1
+        return self.execute_chart_data(
+            binding.datasource_id,
+            binding.sql,
+            DatasourceQuerySubject(
+                user_id=current_user.id,
+                workspace_id=workspace_id,
+            ),
+        )
 
     def execute_chart_data(
         self,
         datasource_id: int | None,
         sql: str | None,
+        subject: DatasourceQuerySubject,
     ) -> dict[str, Any]:
         json_result: dict[str, Any] = {
             "status": "success",
@@ -130,23 +142,27 @@ class ConversationHistoryReader:
         }
         if datasource_id is None or sql is None:
             return json_result
-        try:
-            result = self._connection_service.execute_query(
-                datasource_id,
-                sql,
-                origin_column=False,
+        policy = self._query_service.resolve_policy(subject, datasource_id)
+        result = self._query_service.execute(
+            DatasourceQueryRequest(
+                datasource_id=datasource_id,
+                sql=sql,
+                subject=subject,
+                # 历史 SQL 没有保存选表快照，只能使用服务端授权表作为可信上限。
+                selected_tables=policy.authorized_tables,
             )
-            _data = DataFormat.convert_large_numbers_in_object_array(  # type: ignore[no-untyped-call]
-                result.get("data")
-            )
-            _data = DataFormat.normalize_qualified_sql_column_keys_in_object_array(
-                _data
-            )
-            json_result["data"] = _data
-        except Exception as e:
-            SQLBotLogUtil.error(f"Function failed: {e}")
+        )
+        if result.status != DatasourceQueryStatus.SUCCEEDED or result.data is None:
+            SQLBotLogUtil.error(f"Function failed: {result.message}")
             json_result["status"] = "failed"
-            json_result["message"] = f"{e}"
+            json_result["message"] = result.message
+            return json_result
+        data = DataFormat.convert_large_numbers_in_object_array(  # type: ignore[no-untyped-call]
+            result.data.full_data
+        )
+        json_result["data"] = (
+            DataFormat.normalize_qualified_sql_column_keys_in_object_array(data)
+        )
         return json_result
 
 

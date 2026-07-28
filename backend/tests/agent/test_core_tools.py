@@ -7,9 +7,6 @@ from apps.chatbi.models import (
     PhysicalSchemaTable,
     SemanticQueryCompileResult,
 )
-from apps.chatbi.models import (
-    ToolResult as QueryToolResult,
-)
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.core import (
     CompileSemanticSqlArgs,
@@ -24,6 +21,11 @@ from apps.chatbi.orchestration.agent.tools.core import (
     SearchSemanticAssetsTool,
     ValidateSqlArgs,
     ValidateSqlTool,
+)
+from apps.datasource.models.dto import (
+    DatasourceQueryData,
+    DatasourceQueryPolicy,
+    DatasourceQueryResult,
 )
 from apps.tool import ToolResult as AgentToolResult
 from apps.tool import ToolStatus
@@ -75,26 +77,36 @@ def _ctx(
 
 class RecordingQueryService:
     def __init__(self) -> None:
-        self.validate_calls: list[tuple[str, list[str]]] = []
-        self.execute_calls: list[dict] = []
+        self.validate_calls = []
+        self.execute_calls = []
 
-    def validate_sql(self, sql: str, *, allowed_tables=None) -> QueryToolResult:
-        self.validate_calls.append((sql, allowed_tables or []))
-        return QueryToolResult(success=True, payload={"sql": f"{sql} limit 100"})
-
-    def execute_sql(self, **payload) -> QueryToolResult:
-        self.execute_calls.append(payload)
-        return QueryToolResult(
-            success=True,
-            payload={
-                "sql": "select amount from orders limit 100",
-                "fields": ["amount"],
-                "sample_rows": [{"amount": 10}],
-                "row_count": 2,
-                "stats_summary": {"amount": {"sum": 30.0}},
-                "full_data": [{"amount": 10}, {"amount": 20}],
-            },
+    def validate(self, request) -> DatasourceQueryResult:
+        self.validate_calls.append(request)
+        return DatasourceQueryResult.succeeded(
+            DatasourceQueryData(
+                sql=f"{request.sql} limit 100",
+                tables=["orders"],
+                effective_tables=["orders"],
+            )
         )
+
+    def execute(self, request) -> DatasourceQueryResult:
+        self.execute_calls.append(request)
+        return DatasourceQueryResult.succeeded(
+            DatasourceQueryData(
+                sql="select amount from orders limit 100",
+                tables=["orders"],
+                effective_tables=["orders"],
+                fields=["amount"],
+                sample_rows=[{"amount": 10}],
+                row_count=2,
+                stats_summary={"amount": {"sum": 30.0}},
+                full_data=[{"amount": 10}, {"amount": 20}],
+            )
+        )
+
+    def resolve_policy(self, subject, datasource_id):
+        return DatasourceQueryPolicy(authorized_tables=["orders", "dws_sales"])
 
 
 class RecordingResultArtifactService:
@@ -144,10 +156,14 @@ class RecordingSemanticRetrievalService:
         self.calls.append((data, max_candidates_per_group))
         return self.package
 
+    def filter_authorized_tables(self, package, authorized_tables):
+        return package
+
 
 class StaticPhysicalSchemaService:
-    def get(self, datasource_id, *, table_keyword=""):
+    def get(self, datasource_id, *, subject, table_keyword=""):
         assert datasource_id == 5
+        assert subject.model_dump() == {"user_id": 1, "workspace_id": 1}
         assert table_keyword == "订单"
         return PhysicalSchemaResult(
             tables=[
@@ -182,9 +198,12 @@ def test_validate_sql_uses_chatbi_query_service():
     )
 
     assert _succeeded(output)
-    assert service.validate_calls == [
-        ("select amount from orders", ["orders"])
-    ]
+    assert service.validate_calls[0].sql == "select amount from orders"
+    assert service.validate_calls[0].selected_tables == ["orders"]
+    assert service.validate_calls[0].subject.model_dump() == {
+        "user_id": 1,
+        "workspace_id": 1,
+    }
 
 
 def test_execute_sql_uses_chatbi_query_service_with_identity_scope():
@@ -203,15 +222,11 @@ def test_execute_sql_uses_chatbi_query_service_with_identity_scope():
     )
 
     assert _succeeded(output)
-    assert service.execute_calls == [
-        {
-            "sql": "select amount from orders",
-            "datasource_id": 5,
-            "workspace_id": 1,
-            "user_id": 1,
-            "allowed_tables": ["orders"],
-        }
-    ]
+    request = service.execute_calls[0]
+    assert request.sql == "select amount from orders"
+    assert request.datasource_id == 5
+    assert request.subject.model_dump() == {"user_id": 1, "workspace_id": 1}
+    assert request.selected_tables == ["orders"]
     assert ctx.state["full_data"] == [{"amount": 10}, {"amount": 20}]
     assert artifact_service.calls[0].payload["rows"] == [
         {"amount": 10},
@@ -398,6 +413,7 @@ def test_search_collects_asset_ids_and_tables_into_state():
     }
     service = RecordingSemanticRetrievalService(package)
     ctx = _ctx(
+        query_service=RecordingQueryService(),
         semantic_retrieval_service=service,
         dataset_id=3,
         question_understanding={
@@ -413,7 +429,7 @@ def test_search_collects_asset_ids_and_tables_into_state():
     assert request.intent is intent
     assert ctx.state["semantic_asset_ids"] == [7, 8]
     assert ctx.state["allowed_tables"] == ["dws_sales"]
-    assert ctx.state["semantic_package"] is package
+    assert ctx.state["semantic_package"] == package
 
 
 def test_physical_schema_tool_uses_chatbi_service():

@@ -40,7 +40,8 @@ class RealChatBICapabilityGateway:
         self._answer_adapter = answer_adapter or AnswerAdapter()
         self._knowledge_adapter = knowledge_adapter or SemanticKnowledgeAdapter()
         self._interaction_adapter = interaction_adapter or InteractionAdapter()
-        self._sql_adapter = sql_adapter or SqlAdapter()
+        # 非 SQL 能力可独立测试；真正调用 SQL 能力时必须显式装配安全查询服务。
+        self._sql_adapter = sql_adapter
         self._recommendation_adapter = recommendation_adapter or RecommendationAdapter()
         self._planning_binder = planning_binder or QueryPlanBinder()
         self._fallback_gateway = fallback_gateway or PlaceholderChatBICapabilityGateway()
@@ -72,17 +73,17 @@ class RealChatBICapabilityGateway:
         if capability == "interaction.ask_cross_model_split":
             return self._interaction_adapter.ask_cross_model_split(request)
         if capability == "sql.generate":
-            return self._sql_adapter.generate(request)
+            return self._required_sql_adapter().generate(request)
         if capability == "sql.generate_split":
-            return self._sql_adapter.generate_split(request)
+            return self._required_sql_adapter().generate_split(request)
         if capability == "sql.execute":
-            return self._sql_adapter.execute(request)
+            return self._required_sql_adapter().execute(request)
         if capability == "sql.execute_split":
-            return self._sql_adapter.execute_split(request)
+            return self._required_sql_adapter().execute_split(request)
         if capability == "execution.validate":
-            return self._sql_adapter.validate_result(request)
+            return self._required_sql_adapter().validate_result(request)
         if capability == "sql.handle_error":
-            return self._sql_adapter.handle_error(request)
+            return self._required_sql_adapter().handle_error(request)
         if capability == "answer.reject":
             return self._answer_adapter.reject(request)
         if capability == "answer.chitchat":
@@ -94,3 +95,8 @@ class RealChatBICapabilityGateway:
         if capability == "answer.compose":
             return self._answer_adapter.compose(request)
         return self._fallback_gateway.invoke(capability, request, idempotency_key)
+
+    def _required_sql_adapter(self) -> SqlAdapter:
+        if self._sql_adapter is None:
+            raise ValueError("DATASOURCE_QUERY_SERVICE_REQUIRED")
+        return self._sql_adapter

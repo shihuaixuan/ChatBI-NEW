@@ -25,13 +25,16 @@ async def load_resource_api(
     current_user: CurrentUser,
     dashboard: QueryDashboard,
 ):
-    resource = build_dashboard_service(session).load_resource(dashboard)
-    if resource and resource.get("create_by") != str(current_user.id):
+    try:
+        return build_dashboard_service(session).load_resource(
+            dashboard,
+            current_user,
+        )
+    except PermissionError as exc:
         raise HTTPException(
             status_code=403,
             detail="You do not have permission to access this resource",
-        )
-    return resource
+        ) from exc
 
 
 @router.post(

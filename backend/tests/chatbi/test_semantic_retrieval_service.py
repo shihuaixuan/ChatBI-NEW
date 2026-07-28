@@ -77,3 +77,40 @@ def test_agent_projection_trims_candidates_and_preserves_decision():
     assert result["truncated"] == {"metrics": 2}
     assert "internal" not in result["candidate_groups"]["metrics"][0]
     assert result["decision"] == {"status": "accepted"}
+
+
+def test_semantic_retrieval_filters_unauthorized_tables_in_nested_assets():
+    package = {
+        "tables": ["orders", "secret_orders"],
+        "candidate_groups": {
+            "metrics": [
+                {"biz_name": "amount", "physical_table": "orders"},
+                {
+                    "biz_name": "secret_amount",
+                    "physical_table": "secret_orders",
+                },
+            ]
+        },
+        "slot_bindings": {
+            "metrics": [
+                {"biz_name": "amount", "table_name": "orders"},
+                {
+                    "biz_name": "secret_amount",
+                    "table_name": "secret_orders",
+                },
+            ]
+        },
+    }
+
+    result = SemanticRetrievalService.filter_authorized_tables(
+        package,
+        ["orders"],
+    )
+
+    assert result["tables"] == ["orders"]
+    assert result["candidate_groups"]["metrics"] == [
+        {"biz_name": "amount", "physical_table": "orders"}
+    ]
+    assert result["slot_bindings"]["metrics"] == [
+        {"biz_name": "amount", "table_name": "orders"}
+    ]

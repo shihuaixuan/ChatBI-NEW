@@ -3,13 +3,12 @@ from collections.abc import Callable
 from sqlmodel import Session
 
 from apps.access_control.composition import build_data_policy_service
-from apps.access_control.data_policy import SessionDataPolicyProvider
+from apps.access_control.data_policy import SessionDatasourceQueryPolicyProvider
 from apps.assistant.composition import build_assistant_service
 from apps.chatbi.adapters.embedding_ranking import (
     EmbeddingDatasourceSelectionCandidateRanker,
     EmbeddingSchemaRankingClient,
 )
-from apps.chatbi.adapters.execution import DatasourceQueryExecutor
 from apps.chatbi.adapters.execution_cleanup import (
     CommittedAgentCleanupGateway,
     WorkflowArtifactCleanupGateway,
@@ -29,11 +28,7 @@ from apps.chatbi.services.conversation.history_reader import (
     ConversationHistoryReader,
 )
 from apps.chatbi.services.conversation.ports import ExecutionCleanupGateway
-from apps.chatbi.services.execution import (
-    GuardedQueryService,
-    ResultArtifactService,
-    SQLPermissionService,
-)
+from apps.chatbi.services.execution import ResultArtifactService
 from apps.chatbi.services.generation import (
     GenerationContextService,
     SchemaContextService,
@@ -67,8 +62,10 @@ from apps.conversation.composition import (
 from apps.datasource.composition import (
     build_datasource_connection_service,
     build_datasource_metadata_service,
+    build_datasource_query_service,
     build_datasource_service,
 )
+from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
 from apps.knowledge.composition import build_sql_example_query_service
 from apps.knowledge.recommended import build_recommended_problem_service
@@ -112,19 +109,17 @@ def build_query_service(
     *,
     default_limit: int = 100,
     sample_rows: int = 10,
-) -> GuardedQueryService:
+) -> DatasourceQueryService:
     """装配使用真实数据权限策略的 ChatBI 查询服务。"""
 
     def policy_session_factory() -> Session:
         return Session(engine)
 
-    return GuardedQueryService(
+    return build_datasource_query_service(
+        session,
+        SessionDatasourceQueryPolicyProvider(policy_session_factory),
         default_limit=default_limit,
         sample_rows=sample_rows,
-        permission_service=SQLPermissionService(
-            policy_provider=SessionDataPolicyProvider(policy_session_factory)
-        ),
-        execute_tool=DatasourceQueryExecutor(session),
     )
 
 
@@ -148,7 +143,10 @@ def build_semantic_retrieval_service(
 def build_physical_schema_service(session: Session) -> PhysicalSchemaService:
     """装配 Agent 读取物理表字段的 ChatBI 服务。"""
 
-    return PhysicalSchemaService(build_datasource_metadata_service(session))
+    return PhysicalSchemaService(
+        build_datasource_metadata_service(session),
+        build_query_service(session),
+    )
 
 
 def build_result_artifact_service(session: Session) -> ResultArtifactService:
@@ -249,7 +247,7 @@ def build_conversation_history_reader(
         build_conversation_history_query_service(session),
         build_semantic_dataset_catalog_service(session),
         build_datasource_service(session),
-        build_datasource_connection_service(session),
+        build_query_service(session),
     )
 
 

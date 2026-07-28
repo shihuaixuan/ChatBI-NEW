@@ -78,8 +78,6 @@ class DataPolicyService:
         table_names: list[str] | None = None,
         table_id: int | None = None,
     ) -> DataPolicy:
-        if subject.is_system_admin:
-            return DataPolicy()
         schema = self._datasource_catalog.get_policy_schema(
             subject.workspace_id,
             datasource_id,
@@ -100,8 +98,11 @@ class DataPolicyService:
                 raise DataPolicyConfigurationError(
                     f"TABLE_NOT_FOUND:{missing_names[0]}"
                 )
+        authorized_tables = [table.name for table in schema.tables]
+        if subject.is_system_admin:
+            return DataPolicy(authorized_tables=authorized_tables)
         if not schema.tables:
-            return DataPolicy()
+            return DataPolicy(authorized_tables=[])
 
         permissions = self._repository.list_permissions(
             datasource_id,
@@ -193,6 +194,7 @@ class DataPolicyService:
                 )
 
         return DataPolicy(
+            authorized_tables=authorized_tables,
             row_filters=[
                 DataPolicyRowFilter(
                     table_id=table_id_value,

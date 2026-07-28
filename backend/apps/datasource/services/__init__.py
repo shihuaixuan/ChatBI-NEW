@@ -20,14 +20,24 @@ from apps.datasource.services.metadata_service import (
 from apps.datasource.services.physical_relation_service import (
     DatasourcePhysicalRelationService,
 )
+from apps.datasource.services.query_executor import ConnectionDatasourceQueryExecutor
+from apps.datasource.services.query_service import (
+    DatasourceQueryExecutor,
+    DatasourceQueryPolicyProvider,
+    DatasourceQueryService,
+)
 
 __all__ = [
     "DatasourceConnectionService",
+    "ConnectionDatasourceQueryExecutor",
     "DatasourceMetadataService",
     "DatasourceNameConflictError",
     "DatasourceNotFoundError",
     "DatasourcePhysicalRelationError",
     "DatasourcePhysicalRelationService",
+    "DatasourceQueryExecutor",
+    "DatasourceQueryPolicyProvider",
+    "DatasourceQueryService",
     "DatasourceService",
     "DatasourceTableNotFoundError",
     "ExcelImportFileError",

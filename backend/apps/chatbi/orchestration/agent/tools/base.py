@@ -20,6 +20,11 @@ if TYPE_CHECKING:
         SemanticQueryCompileResult,
         SemanticRetrievalData,
     )
+    from apps.datasource import (
+        DatasourceQueryRequest,
+        DatasourceQueryResult,
+        DatasourceQuerySubject,
+    )
     from apps.semantic.models.dto import TermSearchResult
 
 
@@ -36,24 +41,13 @@ class TermQueryService(Protocol):
 
 
 class QueryService(Protocol):
-    """Agent 对 ChatBI 查询服务的最小依赖。"""
+    """Agent 对 Datasource 安全查询服务的最小依赖。"""
 
-    def validate_sql(
-        self,
-        sql: str,
-        *,
-        allowed_tables: list[str] | None = None,
-    ) -> Any: ...
+    def validate(self, request: DatasourceQueryRequest) -> DatasourceQueryResult: ...
 
-    def execute_sql(
-        self,
-        *,
-        sql: str,
-        datasource_id: int,
-        workspace_id: int | None,
-        user_id: int | None,
-        allowed_tables: list[str] | None = None,
-    ) -> Any: ...
+    def execute(self, request: DatasourceQueryRequest) -> DatasourceQueryResult: ...
+
+    def resolve_policy(self, subject, datasource_id): ...
 
 
 class ResultArtifactWriter(Protocol):
@@ -84,6 +78,12 @@ class SemanticAssetRetriever(Protocol):
         max_candidates_per_group: int = 5,
     ) -> dict[str, Any]: ...
 
+    def filter_authorized_tables(
+        self,
+        package: dict[str, Any],
+        authorized_tables: list[str],
+    ) -> dict[str, Any]: ...
+
 
 class PhysicalSchemaReader(Protocol):
     """Agent 对 ChatBI 物理 Schema 入口的最小依赖。"""
@@ -92,6 +92,7 @@ class PhysicalSchemaReader(Protocol):
         self,
         datasource_id: int,
         *,
+        subject: DatasourceQuerySubject,
         table_keyword: str = "",
     ) -> PhysicalSchemaResult: ...
 

@@ -37,6 +37,59 @@ class SemanticRetrievalService:
         )
 
     @classmethod
+    def filter_authorized_tables(
+        cls,
+        package: dict[str, Any],
+        authorized_tables: list[str],
+    ) -> dict[str, Any]:
+        """过滤带物理表标识的语义资产，避免返回未授权元数据。"""
+
+        allowed = {table.lower() for table in authorized_tables}
+        filtered = cls._filter_nested_assets(package, allowed)
+        filtered["tables"] = [
+            table
+            for table in package.get("tables") or []
+            if str(table).lower() in allowed
+        ]
+        return filtered
+
+    @classmethod
+    def _filter_nested_assets(
+        cls,
+        value: Any,
+        allowed: set[str],
+    ) -> Any:
+        """递归过滤候选、槽位和多查询计划中的物理表引用。"""
+
+        if isinstance(value, list):
+            return [
+                cls._filter_nested_assets(item, allowed)
+                for item in value
+                if not cls._has_unauthorized_table(item, allowed)
+            ]
+        if isinstance(value, dict):
+            return {
+                key: cls._filter_nested_assets(item, allowed)
+                for key, item in value.items()
+                if not cls._has_unauthorized_table(item, allowed)
+            }
+        return value
+
+    @staticmethod
+    def _has_unauthorized_table(item: Any, allowed: set[str]) -> bool:
+        if not isinstance(item, dict):
+            return False
+        table = next(
+            (
+                item.get(key)
+                for key in ("table", "table_name", "physical_table")
+                if item.get(key)
+            ),
+            None,
+        )
+        return table is not None and str(table).lower() not in allowed
+
+    @classmethod
     def project_agent_package(
         cls,
         raw: dict[str, Any],
@@ -90,6 +143,10 @@ class SemanticRetrievalService:
             "source",
             "model_id",
             "description",
+            # 物理表标识用于授权过滤，属于可公开的最小必要元数据。
+            "table",
+            "table_name",
+            "physical_table",
         )
         return {key: item.get(key) for key in keys if item.get(key) is not None}
 

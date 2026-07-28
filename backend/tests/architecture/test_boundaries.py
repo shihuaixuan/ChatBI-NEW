@@ -849,11 +849,11 @@ def test_graph_sql_adapter_does_not_maintain_second_execution_chain():
     assert "self._permission_adapter.apply" not in source
 
 
-def test_chatbi_query_service_has_no_session_or_datasource_dependency():
-    imports = _imports__query("apps/chatbi/services/execution/guarded_query_service.py")
+def test_datasource_query_service_has_no_session_or_repository_dependency():
+    imports = _imports__query("apps/datasource/services/query_service.py")
 
     assert "sqlmodel" not in imports
-    assert not any(module.startswith("apps.datasource") for module in imports)
+    assert not any(".repository" in module for module in imports)
 
 
 def test_agent_and_graph_share_chatbi_semantic_query_service():
@@ -885,7 +885,8 @@ def test_agent_semantic_retrieval_and_physical_schema_use_chatbi_services():
     ).read_text(encoding="utf-8")
 
     assert "apps.capabilities.semantic.retrieval" not in imports
-    assert not any(module.startswith("apps.datasource") for module in imports)
+    assert "apps.datasource" in imports
+    assert not any(module.startswith("apps.datasource.models") for module in imports)
     assert "semantic_retrieval_service.retrieve_for_agent" in source
     assert "physical_schema_service.get" in source
 
@@ -1862,15 +1863,19 @@ def test_r6c_conversations_use_public_axis_schema():
     assert "common.utils.data_format_schema" in api_imports
 
 
-def test_r6c_query_execution_adapter_owns_exec_sql():
+def test_r6c_datasource_query_executor_owns_direct_connection_execution():
     adapter_source = (
-        BACKEND_DIR__r6c / "apps/chatbi/adapters/query_execution.py"
+        BACKEND_DIR__r6c / "apps/datasource/services/query_executor.py"
     ).read_text(encoding="utf-8")
-    queries_source = (
-        BACKEND_DIR__r6c / "apps/chatbi/api/queries.py"
+    history_source = (
+        BACKEND_DIR__r6c / "apps/chatbi/services/conversation/history_reader.py"
     ).read_text(encoding="utf-8")
-    assert "exec_sql(" in adapter_source
-    assert "exec_sql(" not in queries_source
+    dashboard_source = (
+        BACKEND_DIR__r6c / "apps/dashboard/composition.py"
+    ).read_text(encoding="utf-8")
+    assert ".execute_query(" in adapter_source
+    assert ".execute_query(" not in history_source
+    assert ".execute_query(" not in dashboard_source
 
 
 # ======================================================================
