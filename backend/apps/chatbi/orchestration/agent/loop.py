@@ -18,6 +18,7 @@ from apps.chatbi.models import (
     ChatbiAgentRun,
 )
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
+from apps.chatbi.orchestration.agent.messages import close_unfinished_tool_calls
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
 from apps.chatbi.orchestration.agent.reasoning import AgentReasoner
 from apps.chatbi.orchestration.agent.state import (
@@ -27,7 +28,6 @@ from apps.chatbi.orchestration.agent.state import (
 from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.event import EventPublisher, RenderEvent
-from apps.tool import close_unfinished_tool_calls
 from apps.trace import (
     AgentSpan,
     AgentTracer,

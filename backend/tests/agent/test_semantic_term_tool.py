@@ -11,6 +11,7 @@ from apps.chatbi.orchestration.agent.tools.interaction import (
 )
 from apps.conversation.models import Chat
 from apps.semantic.models.dto import TermSearchResult
+from apps.tool import ToolStatus
 
 
 class _TermQueryService:
@@ -51,9 +52,10 @@ def test_search_terminology_uses_semantic_dataset_service():
         SearchTerminologyArgs(term="GMV"),
     )
 
-    assert result.success is True
-    assert result.payload["count"] == 1
-    assert result.payload["items"][0]["term_id"] == 7
+    assert result.status == ToolStatus.SUCCEEDED
+    assert result.data is not None
+    assert result.data.count == 1
+    assert result.data.items[0]["term_id"] == 7
     assert service.calls == [(1, 20, "GMV", 10)]
 
 
@@ -71,7 +73,7 @@ def test_search_terminology_requires_semantic_dataset():
         SearchTerminologyArgs(term="GMV"),
     )
 
-    assert result.success is False
+    assert result.status == ToolStatus.FAILED
     assert result.error_code == "semantic_dataset_not_found"
 
 

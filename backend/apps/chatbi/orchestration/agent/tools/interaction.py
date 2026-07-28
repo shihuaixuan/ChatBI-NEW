@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolContext
 from apps.knowledge.composition import build_sql_example_query_service
-from apps.tool import ToolOutput, json_summary
+from apps.tool import (
+    RetryAdvice,
+    ToolErrorCategory,
+    ToolExecutionPolicy,
+    ToolResult,
+    json_summary,
+)
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
 
@@ -31,6 +39,11 @@ class ClarifyArgs(BaseModel):
     )
 
 
+class ClarifyResult(BaseModel):
+    question: str
+    options: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ClarifyTool(AgentTool):
     """clarify 是终止动作：execute 只做结构校验，挂起和持久化由 Agent 编排层处理。"""
 
@@ -40,17 +53,20 @@ class ClarifyTool(AgentTool):
         "必须给出结构化选项（来自语义包候选）。不要为可以合理默认的小事澄清。"
     )
     args_model = ClarifyArgs
-    is_read_only = False
-    is_concurrency_safe = False
+    result_model = ClarifyResult
+    execution = ToolExecutionPolicy()
 
-    def execute(self, ctx: AgentToolContext, args: ClarifyArgs) -> ToolOutput:
-        return ToolOutput(
-            success=True,
-            summary="clarify",
-            payload={
-                "question": args.question,
-                "options": [option.model_dump() for option in args.options],
-            },
+    def execute(
+        self,
+        ctx: AgentToolContext,
+        args: ClarifyArgs,
+    ) -> ToolResult[ClarifyResult]:
+        return ToolResult.succeeded(
+            "clarify",
+            ClarifyResult(
+                question=args.question,
+                options=[option.model_dump() for option in args.options],
+            ),
         )
 
 
@@ -58,27 +74,38 @@ class SearchTerminologyArgs(BaseModel):
     term: str = Field(min_length=1, description="要查询的业务术语或口语说法")
 
 
+class SearchTerminologyResult(BaseModel):
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+
+
 class SearchTerminologyTool(AgentTool):
     name = "search_terminology"
     description = "查询业务术语的解释与映射（同义词、口径说明）。用于理解问题中的黑话/缩写。"
     args_model = SearchTerminologyArgs
-    is_read_only = True
+    result_model = SearchTerminologyResult
     # 共享 Session 下禁止并行读。
-    is_concurrency_safe = False
+    execution = ToolExecutionPolicy()
 
-    def execute(self, ctx: AgentToolContext, args: SearchTerminologyArgs) -> ToolOutput:
+    def execute(
+        self,
+        ctx: AgentToolContext,
+        args: SearchTerminologyArgs,
+    ) -> ToolResult[SearchTerminologyResult]:
         dataset_id = ctx.dataset_id or ctx.state.get("dataset_id")
         if not isinstance(dataset_id, int) or dataset_id <= 0:
-            return ToolOutput(
-                success=False,
-                summary="当前问数记录没有绑定 Semantic 数据集，无法查询业务术语。",
+            return ToolResult.failed(
+                "当前问数记录没有绑定 Semantic 数据集，无法查询业务术语。",
                 error_code="semantic_dataset_not_found",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
             )
         if ctx.term_query_service is None:
-            return ToolOutput(
-                success=False,
-                summary="Semantic 术语查询服务未装配。",
+            return ToolResult.failed(
+                "Semantic 术语查询服务未装配。",
                 error_code="semantic_term_query_unavailable",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
             )
 
         results = ctx.term_query_service.search(
@@ -88,14 +115,28 @@ class SearchTerminologyTool(AgentTool):
             limit=10,
         )
         items = [result.model_dump() for result in results]
-        payload = {"items": items, "count": len(items)}
+        data = SearchTerminologyResult(items=items, count=len(items))
         if not results:
-            return ToolOutput(success=True, summary=f"术语库中未找到与「{args.term}」相关的条目。", payload=payload)
-        return ToolOutput(success=True, summary=json_summary(payload, _summary_limit(ctx)), payload=payload)
+            return ToolResult.succeeded(
+                f"术语库中未找到与「{args.term}」相关的条目。",
+                data,
+            )
+        return ToolResult.succeeded(
+            json_summary(data.model_dump(mode="json"), _summary_limit(ctx)),
+            data,
+        )
 
 
 class GetSqlExamplesArgs(BaseModel):
     question: str = Field(min_length=1, description="用于召回相似示例的问题文本")
+
+
+class GetSqlExamplesResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+    note: str
 
 
 class GetSqlExamplesTool(AgentTool):
@@ -105,17 +146,28 @@ class GetSqlExamplesTool(AgentTool):
         "注意：示例仅供写 SQL 参考，不是真实查询结果，禁止当作答案。"
     )
     args_model = GetSqlExamplesArgs
-    is_read_only = True
+    result_model = GetSqlExamplesResult
     # 内部会 build_*_service(ctx.session)，共享 Session 下禁止并行。
-    is_concurrency_safe = False
+    execution = ToolExecutionPolicy()
 
-    def execute(self, ctx: AgentToolContext, args: GetSqlExamplesArgs) -> ToolOutput:
+    def execute(
+        self,
+        ctx: AgentToolContext,
+        args: GetSqlExamplesArgs,
+    ) -> ToolResult[GetSqlExamplesResult]:
         results = build_sql_example_query_service(ctx.session).search(
             args.question,
             ctx.oid,
             datasource_id=ctx.datasource_id,
         )
-        payload = {"items": results[:5], "count": len(results), "note": "仅供参考，非真实结果"}
+        data = GetSqlExamplesResult(
+            items=results[:5],
+            count=len(results),
+            note="仅供参考，非真实结果",
+        )
         if not results:
-            return ToolOutput(success=True, summary="没有召回到相似的 SQL 示例。", payload=payload)
-        return ToolOutput(success=True, summary=json_summary(payload, _summary_limit(ctx)), payload=payload)
+            return ToolResult.succeeded("没有召回到相似的 SQL 示例。", data)
+        return ToolResult.succeeded(
+            json_summary(data.model_dump(mode="json"), _summary_limit(ctx)),
+            data,
+        )

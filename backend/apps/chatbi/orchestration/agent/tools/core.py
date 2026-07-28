@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from apps.chatbi.models import (
     QueryFinalReplyProjectionData,
@@ -13,7 +13,6 @@ from apps.chatbi.models import (
     SemanticRetrievalData,
 )
 from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolContext
-from apps.tool import ToolOutput, json_summary
 from apps.chatbi.services.execution import (
     GuardedQueryService,
     ResultArtifactWriteError,
@@ -27,6 +26,15 @@ from apps.chatbi.services.planning import (
 )
 from apps.chatbi.services.understanding.time_range import normalize_time_range
 from apps.conversation import ChatRecordExecutionType
+from apps.tool import (
+    RetryAdvice,
+    ToolConcurrency,
+    ToolErrorCategory,
+    ToolExecutionPolicy,
+    ToolResult,
+    ToolSideEffect,
+    json_summary,
+)
 
 SUMMARY_MAX_CHARS_DEFAULT = 4000
 
@@ -35,26 +43,29 @@ def _summary_limit(ctx: AgentToolContext) -> int:
     return getattr(ctx.config, "summary_max_chars", SUMMARY_MAX_CHARS_DEFAULT)
 
 
-def _execution_gate(ctx: AgentToolContext) -> ToolOutput | None:
+def _execution_gate(ctx: AgentToolContext) -> ToolResult | None:
     """统一阻止未完成问题理解或仍需澄清的意图进入 SQL 阶段。"""
 
     understanding = ctx.state.get("question_understanding")
     if not isinstance(understanding, dict):
-        return ToolOutput.denied(
+        return ToolResult.rejected(
             "缺少已确认的问题理解，禁止生成或执行 SQL。",
             error_code="question_understanding_required",
+            error_category=ToolErrorCategory.BUSINESS_RULE,
         )
     validation = understanding.get("validation")
     if not isinstance(validation, dict):
-        return ToolOutput.denied(
+        return ToolResult.rejected(
             "问题理解缺少校验结果，禁止生成或执行 SQL。",
             error_code="question_understanding_invalid",
+            error_category=ToolErrorCategory.BUSINESS_RULE,
         )
     if validation.get("status") != "valid":
         slots = validation.get("clarification_slots") or []
-        return ToolOutput.denied(
+        return ToolResult.rejected(
             f"当前问题仍需澄清槽位 {slots}，禁止生成或执行 SQL。请先调用 clarify。",
             error_code="question_clarification_required",
+            error_category=ToolErrorCategory.BUSINESS_RULE,
         )
     return None
 
@@ -82,6 +93,10 @@ class SearchSemanticAssetsArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SearchSemanticAssetsResult(RootModel[dict[str, Any]]):
+    """语义检索包；详细字段由 Semantic 公开契约继续收敛。"""
+
+
 class SearchSemanticAssetsTool(AgentTool):
     name = "search_semantic_assets"
     description = (
@@ -89,37 +104,43 @@ class SearchSemanticAssetsTool(AgentTool):
         "返回的语义包（asset_id、口径、置信度、歧义提示）是后续编译 SQL 的唯一合法依据。"
     )
     args_model = SearchSemanticAssetsArgs
-    is_read_only = True
-    is_concurrency_safe = False
+    result_model = SearchSemanticAssetsResult
+    execution = ToolExecutionPolicy()
 
-    def execute(self, ctx: AgentToolContext, args: SearchSemanticAssetsArgs) -> ToolOutput:
+    def execute(
+        self,
+        ctx: AgentToolContext,
+        args: SearchSemanticAssetsArgs,
+    ) -> ToolResult[SearchSemanticAssetsResult]:
         dataset_id = _ensure_dataset_id(ctx)
         if dataset_id is None:
-            return ToolOutput(
-                success=False,
-                summary="当前数据源未绑定可用的语义数据集，无法进行语义检索。可改用 get_dataset_schema 查看物理表结构。",
+            return ToolResult.failed(
+                "当前数据源未绑定可用的语义数据集，无法进行语义检索。可改用 get_dataset_schema 查看物理表结构。",
                 error_code="semantic_dataset_not_found",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
             )
         understanding = ctx.state.get("question_understanding")
         if not isinstance(understanding, dict):
-            return ToolOutput(
-                success=False,
-                summary="缺少已确认的问题理解，禁止在工具选择阶段重新生成检索意图。",
+            return ToolResult.rejected(
+                "缺少已确认的问题理解，禁止在工具选择阶段重新生成检索意图。",
                 error_code="question_understanding_required",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
             )
         intent = understanding.get("intent")
         question = understanding.get("rewritten_question")
         if not isinstance(intent, dict) or not isinstance(question, str) or not question.strip():
-            return ToolOutput(
-                success=False,
-                summary="已确认的问题理解结构不完整，无法执行语义检索。",
+            return ToolResult.rejected(
+                "已确认的问题理解结构不完整，无法执行语义检索。",
                 error_code="question_understanding_invalid",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
             )
         if ctx.semantic_retrieval_service is None:
-            return ToolOutput(
-                success=False,
-                summary="ChatBI 语义检索服务未配置。",
+            return ToolResult.failed(
+                "ChatBI 语义检索服务未配置。",
                 error_code="semantic_retrieval_service_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
             )
         package = ctx.semantic_retrieval_service.retrieve_for_agent(
             SemanticRetrievalData(
@@ -146,13 +167,22 @@ class SearchSemanticAssetsTool(AgentTool):
         tables = set(ctx.state.get("allowed_tables") or [])
         tables.update(package.get("tables") or [])
         ctx.state["allowed_tables"] = sorted(tables)
-        return ToolOutput(success=True, summary=json_summary(package, _summary_limit(ctx)), payload=package)
+        data = SearchSemanticAssetsResult(package)
+        return ToolResult.succeeded(
+            json_summary(package, _summary_limit(ctx)),
+            data,
+        )
 
 
 class GetDatasetSchemaArgs(BaseModel):
     """查看当前数据源的物理表结构。"""
 
     table_keyword: str = Field(default="", description="可选，按表名/注释过滤")
+
+
+class GetDatasetSchemaResult(BaseModel):
+    tables: list[dict[str, Any]] = Field(default_factory=list)
+    table_count: int = 0
 
 
 class GetDatasetSchemaTool(AgentTool):
@@ -162,18 +192,28 @@ class GetDatasetSchemaTool(AgentTool):
         "基于此结构手写 SQL；手写 SQL 属于非标准口径，结果会附带口径提示。"
     )
     args_model = GetDatasetSchemaArgs
-    is_read_only = True
-    # 共享 Session 下禁止并行读，避免 SQLAlchemy 会话竞态。
-    is_concurrency_safe = False
+    result_model = GetDatasetSchemaResult
+    # 共享 Session 下保持串行，避免 SQLAlchemy 会话竞态。
+    execution = ToolExecutionPolicy()
 
-    def execute(self, ctx: AgentToolContext, args: GetDatasetSchemaArgs) -> ToolOutput:
+    def execute(
+        self,
+        ctx: AgentToolContext,
+        args: GetDatasetSchemaArgs,
+    ) -> ToolResult[GetDatasetSchemaResult]:
         if not ctx.datasource_id:
-            return ToolOutput(success=False, summary="缺少数据源，无法查看表结构。", error_code="datasource_required")
+            return ToolResult.failed(
+                "缺少数据源，无法查看表结构。",
+                error_code="datasource_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
+            )
         if ctx.physical_schema_service is None:
-            return ToolOutput(
-                success=False,
-                summary="ChatBI 物理 Schema 服务未配置。",
+            return ToolResult.failed(
+                "ChatBI 物理 Schema 服务未配置。",
                 error_code="physical_schema_service_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
             )
         schema = ctx.physical_schema_service.get(
             ctx.datasource_id,
@@ -197,11 +237,10 @@ class GetDatasetSchemaTool(AgentTool):
         allowed = set(ctx.state.get("allowed_tables") or [])
         allowed.update(item["table"] for item in items)
         ctx.state["allowed_tables"] = sorted(allowed)
-        payload = {"tables": items, "table_count": len(items)}
-        return ToolOutput(
-            success=True,
-            summary=json_summary(payload, _summary_limit(ctx)),
-            payload=payload,
+        data = GetDatasetSchemaResult(tables=items, table_count=len(items))
+        return ToolResult.succeeded(
+            json_summary(data.model_dump(mode="json"), _summary_limit(ctx)),
+            data,
         )
 
 
@@ -234,6 +273,15 @@ class CompileSemanticSqlArgs(BaseModel):
     limit: int | None = None
 
 
+class CompileSemanticSqlResult(BaseModel):
+    sql: str
+    tables: list[str] = Field(default_factory=list)
+    metrics: list[str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=list)
+    dataset_id: int
+    strategy: str
+
+
 class CompileSemanticSqlTool(AgentTool):
     name = "compile_semantic_sql"
     description = (
@@ -241,30 +289,41 @@ class CompileSemanticSqlTool(AgentTool):
         "所有 asset_id 必须来自 search_semantic_assets 返回的语义包，否则会被拒绝。"
     )
     args_model = CompileSemanticSqlArgs
-    is_read_only = True
-    is_concurrency_safe = False
+    result_model = CompileSemanticSqlResult
+    execution = ToolExecutionPolicy()
 
-    def execute(self, ctx: AgentToolContext, args: CompileSemanticSqlArgs) -> ToolOutput:
+    def execute(
+        self,
+        ctx: AgentToolContext,
+        args: CompileSemanticSqlArgs,
+    ) -> ToolResult[CompileSemanticSqlResult]:
         blocked = _execution_gate(ctx)
         if blocked:
             return blocked
         dataset_id = _ensure_dataset_id(ctx)
         if dataset_id is None:
-            return ToolOutput(success=False, summary="当前数据源未绑定语义数据集，无法编译。", error_code="semantic_dataset_not_found")
+            return ToolResult.failed(
+                "当前数据源未绑定语义数据集，无法编译。",
+                error_code="semantic_dataset_not_found",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
+            )
         known_ids = set(ctx.state.get("semantic_asset_ids") or [])
         requested = set(args.metric_asset_ids) | set(args.dimension_asset_ids) | {f.asset_id for f in args.filters}
         if args.time_bucket and isinstance(args.time_bucket.get("asset_id"), int):
             requested.add(args.time_bucket["asset_id"])
         unknown = sorted(requested - known_ids)
         if not known_ids:
-            return ToolOutput.denied(
+            return ToolResult.rejected(
                 "尚未检索语义资产，请先调用 search_semantic_assets。",
                 error_code="semantic_package_required",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
             )
         if unknown:
-            return ToolOutput.denied(
+            return ToolResult.rejected(
                 f"以下 asset_id 未出现在语义包中，禁止编造口径: {unknown}。请只使用检索结果里的资产。",
                 error_code="asset_not_in_package",
+                error_category=ToolErrorCategory.SAFETY,
             )
         filters = [filter_item.model_dump(mode="json") for filter_item in args.filters]
         understanding = ctx.state.get("question_understanding") or {}
@@ -273,10 +332,10 @@ class CompileSemanticSqlTool(AgentTool):
         if isinstance(time_range, dict) and time_range.get("value_status") == "provided":
             normalized_time = time_range.get("normalized")
             if not isinstance(normalized_time, dict) or normalized_time.get("kind") == "unsupported":
-                return ToolOutput(
-                    success=False,
-                    summary="已确认时间范围尚未归一化，禁止生成 SQL。请先澄清为系统支持的时间表达。",
+                return ToolResult.rejected(
+                    "已确认时间范围尚未归一化，禁止生成 SQL。请先澄清为系统支持的时间表达。",
                     error_code="time_range_unsupported",
+                    error_category=ToolErrorCategory.BUSINESS_RULE,
                 )
             matched_time_filter = False
             for filter_item in filters:
@@ -286,13 +345,13 @@ class CompileSemanticSqlTool(AgentTool):
                     filter_item["value"] = normalized_time
                     matched_time_filter = True
             if not matched_time_filter:
-                return ToolOutput(
-                    success=False,
-                    summary=(
+                return ToolResult.rejected(
+                    (
                         f"时间筛选与已确认问题不一致。必须原样使用 time_range.normalized={normalized_time}，"
                         "禁止省略时间或替换成数据最大日期。"
                     ),
                     error_code="time_filter_mismatch",
+                    error_category=ToolErrorCategory.SAFETY,
                 )
         slots: dict[str, Any] = {
             "metrics": [{"asset_id": i, "asset_type": "METRIC"} for i in args.metric_asset_ids],
@@ -300,10 +359,11 @@ class CompileSemanticSqlTool(AgentTool):
             "filters": [{**filter_item, "asset_type": "DIMENSION"} for filter_item in filters],
         }
         if ctx.semantic_query_service is None:
-            return ToolOutput(
-                success=False,
-                summary="ChatBI 语义查询服务未配置。",
+            return ToolResult.failed(
+                "ChatBI 语义查询服务未配置。",
                 error_code="semantic_query_service_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
             )
         try:
             result = ctx.semantic_query_service.compile(
@@ -318,28 +378,37 @@ class CompileSemanticSqlTool(AgentTool):
                 )
             )
         except SemanticQueryCompileError as exc:
-            return ToolOutput(
-                success=False,
-                summary="语义资产不足，无法使用规则编译生成 SQL",
+            return ToolResult.failed(
+                "语义资产不足，无法使用规则编译生成 SQL",
                 error_code=str(exc),
+                error_category=ToolErrorCategory.DOMAIN,
+                retry_advice=RetryAdvice.CORRECT_INPUT,
             )
-        payload = {
-            "sql": result.sql,
-            "tables": result.tables,
-            "metrics": result.metrics,
-            "dimensions": result.dimensions,
-            "dataset_id": result.dataset_id,
-            "strategy": "semantic_sql_compiler",
-        }
-        ctx.state["compiled_sql"] = payload["sql"]
+        data = CompileSemanticSqlResult(
+            sql=result.sql,
+            tables=result.tables,
+            metrics=result.metrics,
+            dimensions=result.dimensions,
+            dataset_id=result.dataset_id,
+            strategy="semantic_sql_compiler",
+        )
+        ctx.state["compiled_sql"] = data.sql
         tables = set(ctx.state.get("allowed_tables") or [])
-        tables.update(payload.get("tables") or [])
+        tables.update(data.tables)
         ctx.state["allowed_tables"] = sorted(tables)
-        return ToolOutput(success=True, summary=json_summary(payload, _summary_limit(ctx)), payload=payload)
+        return ToolResult.succeeded(
+            json_summary(data.model_dump(mode="json"), _summary_limit(ctx)),
+            data,
+        )
 
 
 class ValidateSqlArgs(BaseModel):
     sql: str = Field(min_length=1, description="待校验的 SQL")
+
+
+class ValidateSqlResult(BaseModel):
+    sql: str
+    tables: list[str] = Field(default_factory=list)
 
 
 class ValidateSqlTool(AgentTool):
@@ -349,10 +418,16 @@ class ValidateSqlTool(AgentTool):
         "手写 SQL 在执行前必须先通过校验。"
     )
     args_model = ValidateSqlArgs
-    is_read_only = True
-    is_concurrency_safe = True
+    result_model = ValidateSqlResult
+    execution = ToolExecutionPolicy(
+        concurrency=ToolConcurrency.PARALLEL_SAFE,
+    )
 
-    def execute(self, ctx: AgentToolContext, args: ValidateSqlArgs) -> ToolOutput:
+    def execute(
+        self,
+        ctx: AgentToolContext,
+        args: ValidateSqlArgs,
+    ) -> ToolResult[ValidateSqlResult]:
         blocked = _execution_gate(ctx)
         if blocked:
             return blocked
@@ -364,12 +439,33 @@ class ValidateSqlTool(AgentTool):
             allowed_tables=ctx.state.get("allowed_tables") or [],
         )
         if not result.success:
-            return ToolOutput(success=False, summary=result.message or "SQL 校验失败", error_code=result.error_code)
-        return ToolOutput(success=True, summary=json_summary(result.payload, _summary_limit(ctx)), payload=result.payload)
+            return ToolResult.failed(
+                result.message or "SQL 校验失败",
+                error_code=result.error_code or "sql_validation_failed",
+                error_category=ToolErrorCategory.DOMAIN,
+                retry_advice=RetryAdvice.CORRECT_INPUT,
+            )
+        data = ValidateSqlResult.model_validate(result.payload)
+        return ToolResult.succeeded(
+            json_summary(data.model_dump(mode="json"), _summary_limit(ctx)),
+            data,
+        )
 
 
 class ExecuteSqlArgs(BaseModel):
     sql: str = Field(min_length=1, description="要执行的 SQL；优先使用 compile_semantic_sql 的产出")
+
+
+class ExecuteSqlResult(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    sql: str
+    fields: list[str] = Field(default_factory=list)
+    sample_rows: list[dict[str, Any]] = Field(default_factory=list)
+    row_count: int = 0
+    stats_summary: dict[str, Any] = Field(default_factory=dict)
+    artifact_ref: dict[str, Any]
+    sql_source: Literal["compiled", "manual"]
 
 
 class ExecuteSqlTool(AgentTool):
@@ -379,20 +475,34 @@ class ExecuteSqlTool(AgentTool):
         "完整结果自动存档，不要试图获取全量数据。"
     )
     args_model = ExecuteSqlArgs
-    is_read_only = False
-    is_concurrency_safe = False
+    result_model = ExecuteSqlResult
+    # 当前 Tool 仍会保存 Artifact，阶段 3 收回副作用后再改为 read。
+    execution = ToolExecutionPolicy(
+        side_effect=ToolSideEffect.WRITE,
+        idempotent=False,
+    )
 
-    def execute(self, ctx: AgentToolContext, args: ExecuteSqlArgs) -> ToolOutput:
+    def execute(
+        self,
+        ctx: AgentToolContext,
+        args: ExecuteSqlArgs,
+    ) -> ToolResult[ExecuteSqlResult]:
         blocked = _execution_gate(ctx)
         if blocked:
             return blocked
         if not ctx.datasource_id:
-            return ToolOutput(success=False, summary="缺少数据源，无法执行。", error_code="datasource_required")
+            return ToolResult.failed(
+                "缺少数据源，无法执行。",
+                error_code="datasource_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
+            )
         if ctx.query_service is None:
-            return ToolOutput(
-                success=False,
-                summary="ChatBI 查询服务未配置。",
+            return ToolResult.failed(
+                "ChatBI 查询服务未配置。",
                 error_code="query_service_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
             )
         if (
             ctx.result_artifact_service is None
@@ -400,10 +510,11 @@ class ExecuteSqlTool(AgentTool):
             or ctx.chat_id is None
             or ctx.record_id is None
         ):
-            return ToolOutput(
-                success=False,
-                summary="ChatBI 结果 Artifact 服务或执行归属未配置。",
+            return ToolResult.failed(
+                "ChatBI 结果 Artifact 服务或执行归属未配置。",
                 error_code="result_artifact_service_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
             )
         result = ctx.query_service.execute_sql(
             sql=args.sql,
@@ -413,7 +524,12 @@ class ExecuteSqlTool(AgentTool):
             allowed_tables=ctx.state.get("allowed_tables") or [],
         )
         if not result.success:
-            return ToolOutput(success=False, summary=result.message or (result.error_code or "执行失败"), error_code=result.error_code)
+            return ToolResult.failed(
+                result.message or result.error_code or "执行失败",
+                error_code=result.error_code or "sql_execution_failed",
+                error_category=ToolErrorCategory.DOMAIN,
+                retry_advice=RetryAdvice.CORRECT_INPUT,
+            )
         payload = dict(result.payload or {})
         full_data = payload.pop("full_data", [])
         try:
@@ -437,10 +553,11 @@ class ExecuteSqlTool(AgentTool):
                 )
             )
         except ResultArtifactWriteError:
-            return ToolOutput(
-                success=False,
-                summary="SQL 结果 Artifact 写入失败。",
+            return ToolResult.failed(
+                "SQL 结果 Artifact 写入失败。",
                 error_code="sql_result_artifact_write_failed",
+                error_category=ToolErrorCategory.DOMAIN,
+                retry_advice=RetryAdvice.NEVER,
             )
         artifact_ref_payload = artifact_ref.model_dump(mode="json")
         payload["artifact_ref"] = artifact_ref_payload
@@ -457,7 +574,11 @@ class ExecuteSqlTool(AgentTool):
         ctx.state["full_data"] = full_data
         summary_view = {key: payload[key] for key in ("sql", "fields", "sample_rows", "row_count", "stats_summary")}
         summary_view["sql_source"] = sql_source
-        return ToolOutput(success=True, summary=json_summary(summary_view, _summary_limit(ctx)), payload={**payload, "sql_source": sql_source})
+        data = ExecuteSqlResult.model_validate({**payload, "sql_source": sql_source})
+        return ToolResult.succeeded(
+            json_summary(summary_view, _summary_limit(ctx)),
+            data,
+        )
 
 
 class FinishArgs(BaseModel):
@@ -469,6 +590,13 @@ class FinishArgs(BaseModel):
     y_fields: list[str] = Field(default_factory=list, description="数值系列字段名")
 
 
+class FinishResult(BaseModel):
+    answer: str
+    chart: dict[str, Any] = Field(default_factory=dict)
+    sql: str | None = None
+    non_standard: bool = False
+
+
 class FinishTool(AgentTool):
     name = "finish"
     description = (
@@ -476,10 +604,14 @@ class FinishTool(AgentTool):
         "没有数据时应改为如实说明失败原因。"
     )
     args_model = FinishArgs
-    is_read_only = False
-    is_concurrency_safe = False
+    result_model = FinishResult
+    execution = ToolExecutionPolicy()
 
-    def execute(self, ctx: AgentToolContext, args: FinishArgs) -> ToolOutput:
+    def execute(
+        self,
+        ctx: AgentToolContext,
+        args: FinishArgs,
+    ) -> ToolResult[FinishResult]:
         try:
             result = project_query_final_reply(
                 QueryFinalReplyProjectionData(
@@ -491,14 +623,15 @@ class FinishTool(AgentTool):
                 )
             )
         except FinalReplyProjectionError as exc:
-            return ToolOutput.denied(
+            return ToolResult.rejected(
                 str(exc),
                 error_code=exc.error_code,
+                error_category=ToolErrorCategory.BUSINESS_RULE,
             )
-        return ToolOutput(
-            success=True,
-            summary="finish",
-            payload=result.model_dump(mode="json"),
+        data = FinishResult.model_validate(result.model_dump(mode="json"))
+        return ToolResult.succeeded(
+            "finish",
+            data,
         )
 
 

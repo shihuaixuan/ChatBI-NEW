@@ -1,6 +1,6 @@
 """Agent 工具基座：ChatBI 执行上下文 + 领域工具基类。
 
-通用运行时（Tool/ToolOutput/Registry）在 apps.tool。
+通用运行时（Tool/ToolResult/Registry）在 apps.tool。
 本模块只保留问数执行上下文与服务端口。
 """
 

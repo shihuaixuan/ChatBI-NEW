@@ -36,6 +36,7 @@ RULE_NAMES = (
     "cross_domain_api_imports",
     "workflow_engine_business_imports",
     "function_local_app_imports",
+    "tool_runtime_langchain_imports",
 )
 
 
@@ -148,6 +149,9 @@ def _collect_violations() -> dict[str, set[str]]:
 
         if record.function_local and record.module.startswith("apps."):
             violations["function_local_app_imports"].add(record.key)
+
+        if record.source_app == "tool" and record.module.startswith("langchain"):
+            violations["tool_runtime_langchain_imports"].add(record.key)
 
     return violations
 

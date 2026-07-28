@@ -5,11 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-
 from apps.chatbi.models.dto.agent import AgentConfig
+from apps.chatbi.orchestration.agent.messages import (
+    AgentMessage,
+    ModelDecision,
+    fold_tool_messages,
+)
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
-from apps.tool import ToolCallRequest, ToolRegistry, fold_tool_messages
+from apps.tool import ToolCall, ToolDefinition, ToolRegistry
 from apps.trace import AgentTracer, llm_attributes
 
 
@@ -18,18 +21,18 @@ class AgentModelClient(Protocol):
 
     def invoke(
         self,
-        messages: list[BaseMessage],
-        tool_specs: list[dict[str, Any]],
-    ) -> AIMessage: ...
+        messages: list[AgentMessage],
+        tool_definitions: list[ToolDefinition],
+    ) -> ModelDecision: ...
 
 
 @dataclass(frozen=True)
 class AgentDecision:
     """LLM 一轮输出的稳定决策结果。"""
 
-    response: AIMessage
+    response: AgentMessage
     reasoning: str
-    tool_calls: list[ToolCallRequest]
+    tool_calls: list[ToolCall]
     usage: dict[str, Any]
 
     @property
@@ -59,13 +62,14 @@ class AgentReasoner:
             raise ValueError(f"Unsupported reasoning mode: {mode}")
         fold_tool_messages(state.messages, self._config.context_fold_chars)
         invoke_messages = self._invoke_messages(state, mode)
-        tool_specs = self._tool_specs(state, mode)
+        tool_definitions = self._tool_definitions(state, mode)
         with self._tracer.span(
             "chat",
             llm_attributes(model=self._model_client.__class__.__name__),
         ) as llm_span:
-            response = self._model_client.invoke(invoke_messages, tool_specs)
-            usage = dict(getattr(response, "usage_metadata", None) or {})
+            model_decision = self._model_client.invoke(invoke_messages, tool_definitions)
+            response = model_decision.message
+            usage = model_decision.usage
             for source, attribute in (
                 ("input_tokens", "gen_ai.usage.input_tokens"),
                 ("output_tokens", "gen_ai.usage.output_tokens"),
@@ -79,14 +83,7 @@ class AgentReasoner:
         return AgentDecision(
             response=response,
             reasoning=_content_text(response),
-            tool_calls=[
-                ToolCallRequest(
-                    name=call.get("name") or "",
-                    args=call.get("args") or {},
-                    call_id=call.get("id") or "",
-                )
-                for call in list(getattr(response, "tool_calls", None) or [])
-            ],
+            tool_calls=model_decision.tool_calls,
             usage=usage,
         )
 
@@ -94,44 +91,33 @@ class AgentReasoner:
         self,
         state: AgentRuntimeState,
         mode: str,
-    ) -> list[BaseMessage]:
+    ) -> list[AgentMessage]:
         system = state.require_system()
         if mode == "soft":
             return [
                 system,
-                HumanMessage(
-                    content=(
-                        "<system-reminder>预算接近上限。请基于已有工具结果尽快 finish；"
-                        "若关键歧义未消可 clarify；不要再启动新的检索或 SQL 探索。</system-reminder>"
-                    )
+                AgentMessage.user(
+                    "<system-reminder>预算接近上限。请基于已有工具结果尽快 finish；"
+                    "若关键歧义未消可 clarify；不要再启动新的检索或 SQL 探索。</system-reminder>"
                 ),
                 *state.messages,
             ]
         return [system, *state.messages]
 
-    def _tool_specs(
+    def _tool_definitions(
         self,
         state: AgentRuntimeState,
         mode: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ToolDefinition]:
         if mode == "soft":
             allowed = state.budget.soft_tool_allowlist(self._registry.names())
             if allowed:
-                return self._registry.tool_specs(allowed=allowed)
-        return self._registry.tool_specs()
+                return self._registry.definitions(allowed=allowed)
+        return self._registry.definitions()
 
 
-def _content_text(message: AIMessage) -> str:
-    content = message.content
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        return "".join(
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict)
-        ).strip()
-    return ""
+def _content_text(message: AgentMessage) -> str:
+    return message.content.strip() or str(message.reasoning_content or "").strip()
 
 
 __all__ = ["AgentDecision", "AgentModelClient", "AgentReasoner"]

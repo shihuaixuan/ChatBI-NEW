@@ -56,8 +56,49 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
             "apps.ai_model",
             "apps.system",
             "apps.platform_config",
+            "apps.event",
+            "apps.trace",
         ),
-        reason="apps.tool 只承载通用工具运行时，不得依赖任何业务域。",
+        reason="apps.tool 只承载通用工具运行时，不得依赖业务域、产品事件或 Trace。",
+    ),
+    ForbiddenImportRule(
+        rule_id="datasource-services-no-concrete-tools",
+        scope="apps/datasource/services",
+        forbidden=(
+            "apps.tool.tools",
+            "apps.chatbi.orchestration.agent.tools",
+        ),
+        reason="Datasource 领域服务不得反向调用公共 Tool 或 ChatBI Tool。",
+    ),
+    ForbiddenImportRule(
+        rule_id="semantic-services-no-concrete-tools",
+        scope="apps/semantic/services",
+        forbidden=(
+            "apps.tool.tools",
+            "apps.chatbi.orchestration.agent.tools",
+        ),
+        reason="Semantic 领域服务不得反向调用公共 Tool 或 ChatBI Tool。",
+    ),
+    ForbiddenImportRule(
+        rule_id="knowledge-services-no-concrete-tools",
+        scope="apps/knowledge/services",
+        forbidden=(
+            "apps.tool.tools",
+            "apps.chatbi.orchestration.agent.tools",
+        ),
+        reason="Knowledge 领域服务不得反向调用公共 Tool 或 ChatBI Tool。",
+    ),
+    ForbiddenImportRule(
+        rule_id="chatbi-tools-no-host-lifecycle-imports",
+        scope="apps/chatbi/orchestration/agent/tools",
+        forbidden=(
+            "apps.chatbi.orchestration.agent.lifecycle",
+            "apps.chatbi.orchestration.agent.tool_execution",
+            "apps.chatbi.repository",
+            "apps.event",
+            "apps.trace",
+        ),
+        reason="ChatBI Tool 只做能力适配，不得直接处理宿主生命周期、持久化、Event 或 Trace。",
     ),
     ForbiddenImportRule(
         rule_id="engine-domain-no-business-imports",

@@ -14,10 +14,16 @@ from apps.chatbi.models import (
     DimensionSlot,
 )
 from apps.chatbi.orchestration.agent.composition import build_agent_loop
+from apps.chatbi.orchestration.agent.messages import (
+    FOLDED_PLACEHOLDER,
+    AgentMessage,
+    AgentMessageRole,
+    fold_tool_messages,
+)
 from apps.chatbi.orchestration.agent.prompts import build_system_prompt
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.conversation.models import ChatRecord
-from apps.tool import FOLDED_PLACEHOLDER, ToolRegistry, fold_tool_messages
+from apps.tool import ToolRegistry
 from tests.agent.test_agent_loop import (
     FakeSession,
     FinishProbeTool,
@@ -109,7 +115,7 @@ def test_clarify_suspends_run_and_persists_messages():
     assert record.finish_time is None
     assert run.budget_snapshot["clarifications"] == 1
     # 消息历史保留了带未回填 tool_call 的 assistant 消息
-    assert run.messages[-1]["type"] == "ai"
+    assert run.messages[-1]["role"] == "assistant"
     # 派生状态随挂起持久化（不含全量数据），恢复后回填避免重复检索
     assert run.derived_state["last_execution"]["sql"] == "select 1"
     assert "full_data" not in run.derived_state
@@ -180,7 +186,7 @@ def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval()
     assert run.budget_snapshot["steps"] == 1
     assert run.budget_snapshot["clarifications"] == 1
     # 工作流澄清没有伪造助手工具调用，挂起前只保留规范化后的用户问题。
-    assert [message["type"] for message in run.messages] == ["human"]
+    assert [message["role"] for message in run.messages] == ["user"]
     clarification_payload = events[-1].content
     assert clarification_payload["question"] == "请确认“店铺”在本次查询中的使用方式。"
     assert [item["value"] for item in clarification_payload["options"]] == [
@@ -228,7 +234,7 @@ def test_openai_payload_does_not_add_reasoning_content_to_regular_message():
 
 def test_resume_restores_derived_state_into_tool_context():
     run, record = _run_and_record()
-    run.messages = [{"type": "human", "data": {"content": "q", "type": "human"}}]
+    run.messages = [AgentMessage.user("q").model_dump(mode="json")]
     run.derived_state = {"semantic_asset_ids": [7, 8], "allowed_tables": ["t1"], "question": "q"}
     captured = {}
 
@@ -297,7 +303,7 @@ def test_resume_continues_from_clarification_to_finish():
     assert run.status == AgentRunStatus.FINISHED.value
     # 恢复后的首轮消息里包含澄清答案 ToolMessage
     first_call = resume_model.calls[0]
-    tool_messages = [m for m in first_call if isinstance(m, ToolMessage)]
+    tool_messages = [m for m in first_call if m.role == AgentMessageRole.TOOL]
     assert any("授信额度" in m.content for m in tool_messages)
     # 预算从快照恢复：挂起时 1 步 + 恢复后 2 步
     assert run.budget_snapshot["steps"] == 3
@@ -320,7 +326,7 @@ def test_resume_emits_acceptance_without_reunderstanding():
 
     run, record = _run_and_record()
     run.status = AgentRunStatus.WAITING_USER.value
-    run.messages = [{"type": "human", "data": {"content": "今天店铺的客户数", "type": "human"}}]
+    run.messages = [AgentMessage.user("今天店铺的客户数").model_dump(mode="json")]
     run.derived_state = _ambiguous_store_understanding_state()
     understanding_service = TrackingUnderstandingService()
     loop = build_agent_loop(
@@ -350,7 +356,7 @@ def test_resume_emits_acceptance_without_reunderstanding():
 def test_filter_role_clarification_resumes_to_targeted_value_clarification():
     run, record = _run_and_record()
     run.status = AgentRunStatus.WAITING_USER.value
-    run.messages = [{"type": "human", "data": {"content": "今天店铺的客户数", "type": "human"}}]
+    run.messages = [AgentMessage.user("今天店铺的客户数").model_dump(mode="json")]
     run.derived_state = _ambiguous_store_understanding_state()
     session = FakeSession()
     understanding_service = StaticUnderstandingService()
@@ -424,7 +430,7 @@ def test_clarify_over_budget_rejected_and_loop_continues():
         options=[],
     )
     run.messages = [
-        {"type": "human", "data": {"content": "额度趋势", "type": "human"}},
+        AgentMessage.user("额度趋势").model_dump(mode="json"),
     ]
     resume_model = ScriptedModel([
         _tool_message("clarify", {"question": "再问一次？", "options": []}, "c2"),
@@ -435,13 +441,17 @@ def test_clarify_over_budget_rejected_and_loop_continues():
 
     assert "clarification.required" not in domains  # 未再次挂起
     assert run.status == AgentRunStatus.FINISHED.value
-    rejected = [m for m in resume_model.calls[1] if isinstance(m, ToolMessage) and "上限" in str(m.content)]
+    rejected = [
+        m
+        for m in resume_model.calls[1]
+        if m.role == AgentMessageRole.TOOL and "上限" in m.content
+    ]
     assert rejected
 
 
 def test_resume_updates_target_slot_without_rewriting_or_reunderstanding():
     run, record = _run_and_record()
-    run.messages = [{"type": "human", "data": {"content": "今天店铺的客户数", "type": "human"}}]
+    run.messages = [AgentMessage.user("今天店铺的客户数").model_dump(mode="json")]
     run.derived_state = _ambiguous_store_understanding_state()
     run.derived_state["semantic_asset_ids"] = [272, 276]
     captured_state = {}
@@ -504,9 +514,9 @@ def test_resume_updates_target_slot_without_rewriting_or_reunderstanding():
         "question.understood",
     ]
     assert not understanding_service.called
-    assert not any(isinstance(message, ToolMessage) for message in model.calls[0])
+    assert not any(message.role == AgentMessageRole.TOOL for message in model.calls[0])
     assert any(
-        isinstance(message, HumanMessage) and message.content == "今天店铺的客户数"
+        message.role == AgentMessageRole.USER and message.content == "今天店铺的客户数"
         for message in model.calls[0]
     )
     updated = captured_state["question_understanding"]
@@ -518,11 +528,11 @@ def test_resume_updates_target_slot_without_rewriting_or_reunderstanding():
 
 def test_fold_messages_folds_old_tool_results_only():
     messages = [
-        HumanMessage(content="q"),
-        AIMessage(content=""),
-        ToolMessage(content="x" * 500, tool_call_id="a"),
-        AIMessage(content=""),
-        ToolMessage(content="y" * 500, tool_call_id="b"),
+        AgentMessage.user("q"),
+        AgentMessage.assistant(""),
+        AgentMessage.tool("x" * 500, "a"),
+        AgentMessage.assistant(""),
+        AgentMessage.tool("y" * 500, "b"),
     ]
     fold_tool_messages(messages, max_chars=100, keep_recent=2)
     assert messages[2].content == FOLDED_PLACEHOLDER

@@ -8,25 +8,29 @@ from enum import StrEnum
 from typing import Any, cast
 
 import orjson
-from langchain_core.messages import ToolMessage
 
 from apps.chatbi.models import AgentClarificationResumeKind
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
+from apps.chatbi.orchestration.agent.messages import (
+    AgentMessage,
+    close_unfinished_tool_calls,
+    format_tool_message_content,
+    maybe_offload_result,
+)
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import (
-    ToolCallRequest,
-    ToolOutput,
+    RetryAdvice,
+    ToolCall,
+    ToolErrorCategory,
     ToolRegistry,
+    ToolResult,
     ToolStatus,
     batch_tool_calls,
-    close_unfinished_tool_calls,
     execute_tool_batch,
-    format_tool_message_content,
-    maybe_offload_output,
 )
 from apps.trace import AgentTracer, tool_attributes
 
@@ -72,7 +76,7 @@ class AgentToolExecutor:
         self,
         state: AgentRuntimeState,
         step: Any,
-        calls: list[ToolCallRequest],
+        calls: list[ToolCall],
         usage: dict[str, Any],
         mode: str,
     ) -> Generator[RenderEvent, None, ToolExecutionResult]:
@@ -125,21 +129,20 @@ class AgentToolExecutor:
 
             executed = execute_tool_batch(
                 batch,
-                lambda name, raw_args: self._execute_one(
+                lambda call: self._execute_one(
                     context,
                     step,
                     mode,
-                    name,
-                    raw_args,
+                    call,
                 ),
                 max_workers=int(
                     getattr(self._config, "tool_parallel_workers", 4) or 4
                 ),
             )
 
-            for call, output in executed:
-                output = maybe_offload_output(
-                    output,
+            for call, result in executed:
+                result = maybe_offload_result(
+                    result,
                     store=offload_store,
                     tool_name=call.name,
                     max_chars=int(
@@ -148,16 +151,16 @@ class AgentToolExecutor:
                 )
                 tool_name = call.name
                 call_id = call.call_id
+                data = _result_data(result)
 
-                if tool_name == "clarify" and output.success:
+                if tool_name == "clarify" and result.status == ToolStatus.SUCCEEDED:
                     clarify_verdict = budget.record_clarification()
                     if not clarify_verdict.allowed:
                         state.messages.append(
-                            ToolMessage(
-                                content=(
+                            AgentMessage.tool(
                                     "澄清次数已达上限，请基于现有信息继续，或如实说明无法完成。"
-                                ),
-                                tool_call_id=call_id,
+                                ,
+                                call_id,
                             )
                         )
                         agent_run_repository.finish_step(
@@ -175,7 +178,8 @@ class AgentToolExecutor:
                     )
                     yield self._lifecycle.suspend(
                         state,
-                        output,
+                        str(data["question"]),
+                        list(data.get("options") or []),
                         call_id,
                         step.id,
                         resume_kind=AgentClarificationResumeKind.AGENT_TOOL,
@@ -184,16 +188,16 @@ class AgentToolExecutor:
                     return ToolExecutionResult(ToolExecutionStatus.SUSPENDED)
 
                 state.messages.append(
-                    ToolMessage(
-                        content=format_tool_message_content(
-                            output.summary,
-                            offload_ref=output.offload_ref,
+                    AgentMessage.tool(
+                        format_tool_message_content(
+                            result.model_content,
+                            offload_ref=_offload_ref(result),
                         ),
-                        tool_call_id=call_id,
+                        call_id,
                     )
                 )
 
-                if tool_name == "finish" and output.success:
+                if tool_name == "finish" and result.status == ToolStatus.SUCCEEDED:
                     close_unfinished_tool_calls(state.messages)
                     agent_run_repository.finish_step(
                         self._session,
@@ -201,27 +205,26 @@ class AgentToolExecutor:
                         {"tool": "finish"},
                         usage,
                     )
-                    payload = output.payload
-                    if payload.get("chart"):
+                    if data.get("chart"):
                         yield self._publish(
                             state,
                             "chart-generated",
-                            {"record_id": record.id, "chart": payload["chart"]},
+                            {"record_id": record.id, "chart": data["chart"]},
                             step.id,
                         )
                     yield from self._lifecycle.finish(
                         state,
-                        answer=payload.get("answer") or "",
-                        chart=payload.get("chart") or {},
-                        sql=payload.get("sql"),
+                        answer=data.get("answer") or "",
+                        chart=data.get("chart") or {},
+                        sql=data.get("sql"),
                         step_id=step.id,
                         full_data=context.state.get("full_data"),
                         execution=context.state.get("last_execution"),
                     )
                     return ToolExecutionResult(ToolExecutionStatus.FINISHED)
 
-                result_summary = _result_summary(tool_name, output)
-                if output.success:
+                result_summary = _result_summary(tool_name, result)
+                if result.status == ToolStatus.SUCCEEDED:
                     agent_run_repository.finish_step(
                         self._session,
                         step,
@@ -232,7 +235,7 @@ class AgentToolExecutor:
                     agent_run_repository.fail_step(
                         self._session,
                         step,
-                        output.summary[:500],
+                        result.model_content[:500],
                     )
                 yield self._publish(
                     state,
@@ -246,15 +249,15 @@ class AgentToolExecutor:
                 )
                 for event_type, payload in _semantic_events(
                     tool_name,
-                    output,
+                    result,
                     record.id,
                 ):
                     yield self._publish(state, event_type, payload, step.id)
 
                 if (
                     tool_name == "execute_sql"
-                    and not output.success
-                    and output.status != ToolStatus.DENIED
+                    and result.status == ToolStatus.FAILED
+                    and result.retry_advice == RetryAdvice.CORRECT_INPUT
                 ):
                     retry = budget.record_sql_failure()
                     if not retry.allowed:
@@ -280,25 +283,25 @@ class AgentToolExecutor:
         context: AgentToolContext,
         step: Any,
         mode: str,
-        name: str,
-        raw_args: dict[str, Any],
-    ) -> ToolOutput:
+        call: ToolCall,
+    ) -> ToolResult[Any]:
         with self._tracer.span(
             "execute_tool",
-            tool_attributes(tool_name=name, step_id=step.id),
+            tool_attributes(tool_name=call.name, step_id=step.id),
         ) as tool_span:
-            if mode == "soft" and name not in {"finish", "clarify"}:
-                output = ToolOutput.denied(
-                    f"预算接近上限，禁止调用 {name}。请 finish 或 clarify。",
+            if mode == "soft" and call.name not in {"finish", "clarify"}:
+                result = ToolResult.rejected(
+                    f"预算接近上限，禁止调用 {call.name}。请 finish 或 clarify。",
                     error_code="budget_soft_tool_blocked",
+                    error_category=ToolErrorCategory.BUSINESS_RULE,
                 )
             else:
-                output = self._registry.execute(name, context, raw_args)
+                result = self._registry.execute(call, context)
             tool_span.set_attribute(
                 "gen_ai.tool.call.result",
-                getattr(output.status, "value", output.status),
+                result.status.value,
             )
-            return output
+            return result
 
     def _publish(
         self,
@@ -342,18 +345,15 @@ def _tool_args_summary(
     )
 
 
-def _result_summary(tool_name: str, output: ToolOutput) -> dict[str, Any]:
-    status = getattr(output.status, "value", output.status)
+def _result_summary(tool_name: str, result: ToolResult[Any]) -> dict[str, Any]:
     base = {
-        "success": bool(output.success),
-        "status": status,
+        "success": result.status == ToolStatus.SUCCEEDED,
+        "status": result.status.value,
     }
-    if output.offload_ref:
-        base["offload_ref"] = output.offload_ref
-    if not output.success:
-        base["error_code"] = output.error_code
+    if result.status != ToolStatus.SUCCEEDED:
+        base["error_code"] = result.error_code
         return base
-    payload = output.payload
+    payload = _result_data(result)
     if tool_name == "execute_sql":
         return {
             **base,
@@ -365,7 +365,7 @@ def _result_summary(tool_name: str, output: ToolOutput) -> dict[str, Any]:
     if tool_name == "search_semantic_assets":
         return {
             **base,
-            "status": payload.get("status") or status,
+            "status": payload.get("status") or result.status.value,
             "metrics": payload.get("metrics"),
             "dimensions": payload.get("dimensions"),
             "tables": payload.get("tables"),
@@ -379,12 +379,12 @@ def _result_summary(tool_name: str, output: ToolOutput) -> dict[str, Any]:
 
 def _semantic_events(
     tool_name: str,
-    output: ToolOutput,
+    result: ToolResult[Any],
     record_id: int,
 ) -> list[tuple[str, dict[str, Any]]]:
-    if not output.success:
+    if result.status != ToolStatus.SUCCEEDED:
         return []
-    payload = output.payload
+    payload = _result_data(result)
     if tool_name == "compile_semantic_sql":
         return [("sql-generated", {"record_id": record_id, "sql": payload.get("sql")})]
     if tool_name == "validate_sql":
@@ -401,6 +401,17 @@ def _semantic_events(
             )
         ]
     return []
+
+
+def _result_data(result: ToolResult[Any]) -> dict[str, Any]:
+    if result.data is None:
+        return {}
+    return result.data.model_dump(mode="json")
+
+
+def _offload_ref(result: ToolResult[Any]) -> str | None:
+    value = result.metadata.get("offload_ref")
+    return str(value) if value else None
 
 
 __all__ = [

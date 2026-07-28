@@ -5,37 +5,25 @@ from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
-from dataclasses import dataclass
 from typing import Any
 
-from apps.tool.base import Tool
-from apps.tool.output import ToolOutput
-
-
-@dataclass(frozen=True)
-class ToolCallRequest:
-    name: str
-    args: dict[str, Any]
-    call_id: str
-
-
-def is_terminal_tool(name: str) -> bool:
-    return name in {"clarify", "finish"}
+from apps.tool.base import Tool, ToolConcurrency
+from apps.tool.context import ToolCall
+from apps.tool.result import ToolResult
 
 
 def batch_tool_calls(
-    calls: list[ToolCallRequest],
+    calls: list[ToolCall],
     resolve_tool: Callable[[str], Tool | None],
-) -> list[list[ToolCallRequest]]:
-    """按 is_concurrency_safe 把调用切成串行批次。
+) -> list[list[ToolCall]]:
+    """只按 Tool 执行属性切分串行和并行批次。
 
-    - 终止动作（clarify/finish）单独成批，强制串行
-    - 连续 concurrency_safe 工具合并为一批（可并行）
+    - 连续 parallel_safe 工具合并为一批
     - 其余工具各自成批
     """
 
-    batches: list[list[ToolCallRequest]] = []
-    current: list[ToolCallRequest] = []
+    batches: list[list[ToolCall]] = []
+    current: list[ToolCall] = []
 
     def flush() -> None:
         nonlocal current
@@ -47,10 +35,9 @@ def batch_tool_calls(
         tool = resolve_tool(call.name)
         concurrent = (
             tool is not None
-            and tool.is_concurrency_safe
-            and not is_terminal_tool(call.name)
+            and tool.execution.concurrency == ToolConcurrency.PARALLEL_SAFE
         )
-        if is_terminal_tool(call.name) or not concurrent:
+        if not concurrent:
             flush()
             batches.append([call])
             continue
@@ -62,44 +49,41 @@ def batch_tool_calls(
 
 
 def _batch_is_concurrent(
-    batch: list[ToolCallRequest],
+    batch: list[ToolCall],
     resolve_tool: Callable[[str], Tool | None],
 ) -> bool:
     if not batch:
         return False
     for call in batch:
         tool = resolve_tool(call.name)
-        if tool is None or not tool.is_concurrency_safe or is_terminal_tool(call.name):
+        if (
+            tool is None
+            or tool.execution.concurrency != ToolConcurrency.PARALLEL_SAFE
+        ):
             return False
     return True
 
 
 def execute_tool_batch(
-    batch: list[ToolCallRequest],
-    execute: Callable[[str, dict[str, Any]], ToolOutput],
+    batch: list[ToolCall],
+    execute: Callable[[ToolCall], ToolResult[Any]],
     *,
     max_workers: int = 4,
-) -> list[tuple[ToolCallRequest, ToolOutput]]:
+) -> list[tuple[ToolCall, ToolResult[Any]]]:
     """执行一批工具调用；长度>1 时并行，结果按原顺序返回。"""
 
     if len(batch) <= 1:
-        return [(call, execute(call.name, call.args)) for call in batch]
+        return [(call, execute(call)) for call in batch]
 
     workers = max(1, min(max_workers, len(batch)))
-    results: dict[int, ToolOutput] = {}
+    results: dict[int, ToolResult[Any]] = {}
     with ThreadPoolExecutor(max_workers=workers) as pool:
         # 每个并行工具复制当前上下文，确保 OTEL 父 span 等 contextvars 不丢失。
         futures = {
-            pool.submit(copy_context().run, execute, call.name, call.args): index
+            pool.submit(copy_context().run, execute, call): index
             for index, call in enumerate(batch)
         }
         for future in as_completed(futures):
             index = futures[future]
-            try:
-                results[index] = future.result()
-            except Exception as exc:  # 兜底：并行线程内未捕获异常
-                results[index] = ToolOutput.error(
-                    f"工具并行执行异常: {exc}",
-                    error_code="tool_parallel_exception",
-                )
+            results[index] = future.result()
     return [(batch[index], results[index]) for index in range(len(batch))]

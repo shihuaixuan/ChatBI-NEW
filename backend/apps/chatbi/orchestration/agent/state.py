@@ -5,15 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from langchain_core.messages import (
-    BaseMessage,
-    HumanMessage,
-    SystemMessage,
-    message_to_dict,
-)
-
 from apps.chatbi.models import ChatbiAgentRun
 from apps.chatbi.models.dto.agent import AgentConfig
+from apps.chatbi.orchestration.agent.messages import AgentMessage
 from apps.chatbi.orchestration.agent.tools.base import (
     AgentToolContext,
     AgentToolContextServices,
@@ -28,11 +22,11 @@ class AgentRuntimeState:
     run: ChatbiAgentRun
     record: Any
     context: AgentToolContext
-    messages: list[BaseMessage]
+    messages: list[AgentMessage]
     budget: BudgetGuard
-    system: SystemMessage | None = None
+    system: AgentMessage | None = None
 
-    def require_system(self) -> SystemMessage:
+    def require_system(self) -> AgentMessage:
         """进入规划循环前必须已经构造系统消息。"""
 
         if self.system is None:
@@ -49,7 +43,7 @@ class AgentRuntimeState:
     def serialized_messages(self) -> list[dict[str, Any]]:
         """返回可写入 Run 快照的消息结构。"""
 
-        return [message_to_dict(message) for message in self.messages]
+        return [message.model_dump(mode="json") for message in self.messages]
 
     def persistable_context(self) -> dict[str, Any]:
         """排除全量结果和临时卸载对象，返回可恢复的派生状态。"""
@@ -113,7 +107,7 @@ class AgentRuntimeStateFactory:
             run=run,
             record=record,
             context=context,
-            messages=[HumanMessage(content=record.question or "")],
+            messages=[AgentMessage.user(record.question or "")],
             budget=budget,
         )
 

@@ -8,6 +8,7 @@ from typing import Any
 import orjson
 
 from apps.chatbi.models import AgentClarificationResumeKind, AgentRunStatus
+from apps.chatbi.orchestration.agent.messages import close_unfinished_tool_calls
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.conversation import (
@@ -17,7 +18,6 @@ from apps.conversation import (
     ChatRecordStatus,
 )
 from apps.event import EventPublisher, RenderEvent
-from apps.tool import ToolOutput, close_unfinished_tool_calls
 
 
 class AgentLifecycle:
@@ -90,7 +90,8 @@ class AgentLifecycle:
     def suspend(
         self,
         state: AgentRuntimeState,
-        output: ToolOutput,
+        question: str,
+        options: list[dict[str, Any]],
         call_id: str | None,
         step_id: int | None,
         *,
@@ -110,8 +111,8 @@ class AgentLifecycle:
         clarification = agent_run_repository.create_clarification(
             self._session,
             run,
-            question=output.payload["question"],
-            options=output.payload.get("options") or [],
+            question=question,
+            options=options,
             tool_call_id=call_id,
             resume_kind=resume_kind.value,
             resume_payload=resume_payload,

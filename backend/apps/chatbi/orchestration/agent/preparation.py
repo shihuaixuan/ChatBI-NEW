@@ -5,12 +5,7 @@ from __future__ import annotations
 from collections.abc import Generator, Iterator
 from typing import Any
 
-from langchain_core.messages import (
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-    messages_from_dict,
-)
+from pydantic import BaseModel, Field
 
 from apps.chatbi.errors import QuestionUnderstandingError
 from apps.chatbi.models import (
@@ -20,6 +15,7 @@ from apps.chatbi.models import (
 )
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
+from apps.chatbi.orchestration.agent.messages import AgentMessage, restore_messages
 from apps.chatbi.orchestration.agent.prompts import build_system_prompt
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.repository.sqlmodel import agent_run_repository
@@ -28,7 +24,15 @@ from apps.chatbi.services.understanding import (
     apply_question_understanding_clarification,
 )
 from apps.event import EventPublisher, RenderEvent
-from apps.tool import ToolOutput
+
+
+class PreflightClarification(BaseModel):
+    """问题理解阶段产生的确定性澄清请求。"""
+
+    question: str
+    options: list[dict[str, Any]] = Field(default_factory=list)
+    reason: str
+    resume_payload: dict[str, Any]
 
 
 class AgentInputPreparer:
@@ -74,7 +78,7 @@ class AgentInputPreparer:
                 "question_understanding": understanding,
             }
         )
-        state.messages = [HumanMessage(content=outcome.output.rewritten_question)]
+        state.messages = [AgentMessage.user(outcome.output.rewritten_question)]
         state.system = self._build_system(
             state,
             conversation_context=conversation_context,
@@ -101,7 +105,7 @@ class AgentInputPreparer:
         state.budget.restore(run.budget_snapshot)
         # 恢复挂起前的派生状态，避免重复检索已经获得的语义资产。
         state.context.state.update(run.derived_state or {})
-        state.messages = messages_from_dict(run.messages)
+        state.messages = restore_messages(run.messages)
 
         try:
             resume_kind = AgentClarificationResumeKind(clarification.resume_kind)
@@ -123,7 +127,7 @@ class AgentInputPreparer:
                     "AGENT_TOOL_CLARIFICATION_CALL_ID_MISSING"
                 )
             state.messages.append(
-                ToolMessage(content=answer_text, tool_call_id=tool_call_id)
+                AgentMessage.tool(answer_text, tool_call_id)
             )
             understanding = previous_understanding
         elif resume_kind == AgentClarificationResumeKind.QUESTION_UNDERSTANDING:
@@ -196,7 +200,7 @@ class AgentInputPreparer:
         *,
         conversation_context: dict[str, Any],
         question_understanding: dict[str, Any] | None,
-    ) -> SystemMessage:
+    ) -> AgentMessage:
         history = conversation_context.get("history") or []
         history_summary = None
         if history:
@@ -204,8 +208,8 @@ class AgentInputPreparer:
                 f"- 问：{item['question']}\n  SQL：{item['sql'] or '（无）'}\n  答（摘要）：{item['answer_brief']}"
                 for item in history
             )
-        return SystemMessage(
-            content=build_system_prompt(
+        return AgentMessage.system(
+            build_system_prompt(
                 datasource_id=state.record.datasource,
                 oid=state.run.oid,
                 max_clarifications=self._config.max_clarifications,
@@ -215,7 +219,9 @@ class AgentInputPreparer:
         )
 
     @staticmethod
-    def _preflight_clarification(understanding: dict[str, Any]) -> ToolOutput | None:
+    def _preflight_clarification(
+        understanding: dict[str, Any],
+    ) -> PreflightClarification | None:
         """自然语言层已发现的维度歧义必须在资产检索前澄清。"""
 
         validation = understanding.get("validation")
@@ -239,12 +245,9 @@ class AgentInputPreparer:
             if slot is None:
                 return None
             name = str(slot.get("name") or "维度").strip() or "维度"
-            return ToolOutput(
-                success=True,
-                summary="clarify dimension role",
-                payload={
-                    "question": f"请确认“{name}”在本次查询中的使用方式。",
-                    "options": [
+            return PreflightClarification(
+                question=f"请确认“{name}”在本次查询中的使用方式。",
+                options=[
                         {"label": f"按{name}分组查看", "value": f"group_by:{name}"},
                         {"label": f"筛选某个具体{name}", "value": f"filter:{name}"},
                         {
@@ -252,11 +255,10 @@ class AgentInputPreparer:
                             "value": f"ignore:{name}",
                         },
                     ],
-                    "reason": f"“{name}”可能表示分组维度、筛选条件或业务对象，需要先确认后再检索指标口径。",
-                    "resume_payload": {
-                        "operation": "set_dimension_role",
-                        "slot_name": name,
-                    },
+                reason=f"“{name}”可能表示分组维度、筛选条件或业务对象，需要先确认后再检索指标口径。",
+                resume_payload={
+                    "operation": "set_dimension_role",
+                    "slot_name": name,
                 },
             )
         if "dimension_filter_value_missing" in reason_codes:
@@ -271,17 +273,13 @@ class AgentInputPreparer:
             if slot is None:
                 return None
             name = str(slot.get("name") or "维度").strip() or "维度"
-            return ToolOutput(
-                success=True,
-                summary="clarify dimension filter value",
-                payload={
-                    "question": f"请补充需要筛选的具体{name}。",
-                    "options": [],
-                    "reason": f"已确认{name}用于筛选，但还缺少具体筛选值。",
-                    "resume_payload": {
-                        "operation": "set_dimension_filter_value",
-                        "slot_name": name,
-                    },
+            return PreflightClarification(
+                question=f"请补充需要筛选的具体{name}。",
+                options=[],
+                reason=f"已确认{name}用于筛选，但还缺少具体筛选值。",
+                resume_payload={
+                    "operation": "set_dimension_filter_value",
+                    "slot_name": name,
                 },
             )
         return None
@@ -289,7 +287,7 @@ class AgentInputPreparer:
     def _suspend_for_preflight_clarification(
         self,
         state: AgentRuntimeState,
-        output: ToolOutput,
+        output: PreflightClarification,
     ) -> Iterator[RenderEvent]:
         """把问题理解产生的确定性澄清记录成完整步骤。"""
 
@@ -313,11 +311,11 @@ class AgentInputPreparer:
         state.budget.record_system_step()
         step_index = state.budget.steps
         args_summary = {
-            "question": output.payload["question"],
-            "options": output.payload.get("options") or [],
+            "question": output.question,
+            "options": output.options,
             "source": "question_understanding",
         }
-        reasoning_content = output.payload.get("reason") or "需要先澄清问题。"
+        reasoning_content = output.reason or "需要先澄清问题。"
         step = agent_run_repository.start_step(
             self._session,
             state.run,
@@ -358,11 +356,12 @@ class AgentInputPreparer:
         )
         yield self._lifecycle.suspend(
             state,
-            output,
+            output.question,
+            output.options,
             None,
             step.id,
             resume_kind=AgentClarificationResumeKind.QUESTION_UNDERSTANDING,
-            resume_payload=output.payload["resume_payload"],
+            resume_payload=output.resume_payload,
         )
 
     def _question_understood_event(

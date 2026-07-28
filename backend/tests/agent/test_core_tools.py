@@ -6,7 +6,9 @@ from apps.chatbi.models import (
     PhysicalSchemaResult,
     PhysicalSchemaTable,
     SemanticQueryCompileResult,
-    ToolResult,
+)
+from apps.chatbi.models import (
+    ToolResult as QueryToolResult,
 )
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.core import (
@@ -23,6 +25,17 @@ from apps.chatbi.orchestration.agent.tools.core import (
     ValidateSqlArgs,
     ValidateSqlTool,
 )
+from apps.tool import ToolResult as AgentToolResult
+from apps.tool import ToolStatus
+
+
+def _succeeded(result: AgentToolResult) -> bool:
+    return result.status == ToolStatus.SUCCEEDED
+
+
+def _data(result: AgentToolResult) -> dict:
+    assert result.data is not None
+    return result.data.model_dump(mode="json")
 
 
 def _ctx(
@@ -65,13 +78,13 @@ class RecordingQueryService:
         self.validate_calls: list[tuple[str, list[str]]] = []
         self.execute_calls: list[dict] = []
 
-    def validate_sql(self, sql: str, *, allowed_tables=None) -> ToolResult:
+    def validate_sql(self, sql: str, *, allowed_tables=None) -> QueryToolResult:
         self.validate_calls.append((sql, allowed_tables or []))
-        return ToolResult(success=True, payload={"sql": f"{sql} limit 100"})
+        return QueryToolResult(success=True, payload={"sql": f"{sql} limit 100"})
 
-    def execute_sql(self, **payload) -> ToolResult:
+    def execute_sql(self, **payload) -> QueryToolResult:
         self.execute_calls.append(payload)
-        return ToolResult(
+        return QueryToolResult(
             success=True,
             payload={
                 "sql": "select amount from orders limit 100",
@@ -155,7 +168,7 @@ class StaticPhysicalSchemaService:
 
 def test_finish_rejected_without_execution():
     output = FinishTool().execute(_ctx(), FinishArgs(answer_markdown="答案"))
-    assert not output.success
+    assert not _succeeded(output)
     assert output.error_code == "execution_required_before_finish"
 
 
@@ -168,7 +181,7 @@ def test_validate_sql_uses_chatbi_query_service():
         ValidateSqlArgs(sql="select amount from orders"),
     )
 
-    assert output.success
+    assert _succeeded(output)
     assert service.validate_calls == [
         ("select amount from orders", ["orders"])
     ]
@@ -189,7 +202,7 @@ def test_execute_sql_uses_chatbi_query_service_with_identity_scope():
         ExecuteSqlArgs(sql="select amount from orders"),
     )
 
-    assert output.success
+    assert _succeeded(output)
     assert service.execute_calls == [
         {
             "sql": "select amount from orders",
@@ -204,24 +217,24 @@ def test_execute_sql_uses_chatbi_query_service_with_identity_scope():
         {"amount": 10},
         {"amount": 20},
     ]
-    assert output.payload["sql_source"] == "compiled"
+    assert _data(output)["sql_source"] == "compiled"
 
 
 def test_finish_appends_non_standard_note_for_manual_sql():
     ctx = _ctx(last_execution={"sql": "select 1", "fields": ["a"], "row_count": 1, "sql_source": "manual"})
     output = FinishTool().execute(ctx, FinishArgs(answer_markdown="答案"))
-    assert output.success
-    assert "非标准指标口径" in output.payload["answer"]
-    assert output.payload["non_standard"] is True
+    assert _succeeded(output)
+    assert "非标准指标口径" in _data(output)["answer"]
+    assert _data(output)["non_standard"] is True
 
 
 def test_finish_no_note_for_compiled_sql_and_builds_chart():
     ctx = _ctx(last_execution={"sql": "select 1", "fields": ["city", "gmv"], "row_count": 3, "sql_source": "compiled"})
     output = FinishTool().execute(ctx, FinishArgs(answer_markdown="答案", chart_type="bar", x_field="city", y_fields=["gmv"]))
-    assert output.success
-    assert "非标准" not in output.payload["answer"]
-    assert output.payload["chart"] == {"type": "bar", "x": "city", "y": ["gmv"]}
-    assert output.payload["non_standard"] is False
+    assert _succeeded(output)
+    assert "非标准" not in _data(output)["answer"]
+    assert _data(output)["chart"] == {"type": "bar", "x": "city", "y": ["gmv"]}
+    assert _data(output)["non_standard"] is False
 
 
 def test_execute_sql_preserves_artifact_reference_for_record_projection():
@@ -229,7 +242,7 @@ def test_execute_sql_preserves_artifact_reference_for_record_projection():
 
     output = ExecuteSqlTool().execute(ctx, ExecuteSqlArgs(sql="select amount from orders"))
 
-    assert output.success
+    assert _succeeded(output)
     artifact_ref = ctx.state["last_execution"]["artifact_ref"]
     assert artifact_ref["artifact_id"] == "result-1"
     assert artifact_ref["metadata"]["execution_type"] == "agent"
@@ -238,7 +251,7 @@ def test_execute_sql_preserves_artifact_reference_for_record_projection():
 def test_compile_requires_semantic_package_first():
     ctx = _ctx(dataset_id=3)
     output = CompileSemanticSqlTool().execute(ctx, CompileSemanticSqlArgs(metric_asset_ids=[1]))
-    assert not output.success
+    assert not _succeeded(output)
     assert output.error_code == "semantic_package_required"
 
 
@@ -255,16 +268,16 @@ def test_compile_rejects_intent_that_still_requires_clarification():
 
     output = CompileSemanticSqlTool().execute(ctx, CompileSemanticSqlArgs(metric_asset_ids=[10]))
 
-    assert not output.success
+    assert not _succeeded(output)
     assert output.error_code == "question_clarification_required"
 
 
 def test_compile_rejects_asset_outside_package():
     ctx = _ctx(dataset_id=3, semantic_asset_ids=[10, 11])
     output = CompileSemanticSqlTool().execute(ctx, CompileSemanticSqlArgs(metric_asset_ids=[10], dimension_asset_ids=[99]))
-    assert not output.success
+    assert not _succeeded(output)
     assert output.error_code == "asset_not_in_package"
-    assert "99" in output.summary
+    assert "99" in output.model_content
 
 
 def test_compile_passes_known_assets_to_capability():
@@ -277,7 +290,7 @@ def test_compile_passes_known_assets_to_capability():
     output = CompileSemanticSqlTool().execute(
         ctx, CompileSemanticSqlArgs(metric_asset_ids=[10], dimension_asset_ids=[11])
     )
-    assert output.success
+    assert _succeeded(output)
     slots = service.calls[0].slots
     assert slots["metrics"] == [{"asset_id": 10, "asset_type": "METRIC"}]
     assert slots["dimensions"] == [{"asset_id": 11, "asset_type": "DIMENSION"}]
@@ -320,7 +333,7 @@ def test_compile_normalizes_today_literal_from_confirmed_time_range():
         ),
     )
 
-    assert output.success
+    assert _succeeded(output)
     assert service.calls[0].slots["filters"] == [
         {
             "asset_id": 11,
@@ -363,9 +376,9 @@ def test_compile_rejects_replacing_today_with_latest_data_date():
         ),
     )
 
-    assert not output.success
+    assert not _succeeded(output)
     assert output.error_code == "time_filter_mismatch"
-    assert "禁止省略时间或替换成数据最大日期" in output.summary
+    assert "禁止省略时间或替换成数据最大日期" in output.model_content
 
 
 def test_search_collects_asset_ids_and_tables_into_state():
@@ -394,7 +407,7 @@ def test_search_collects_asset_ids_and_tables_into_state():
         },
     )
     output = SearchSemanticAssetsTool().execute(ctx, SearchSemanticAssetsArgs())
-    assert output.success
+    assert _succeeded(output)
     request = service.calls[0][0]
     assert request.rewritten_question == "按城市看 gmv"
     assert request.intent is intent
@@ -411,8 +424,8 @@ def test_physical_schema_tool_uses_chatbi_service():
         GetDatasetSchemaArgs(table_keyword="订单"),
     )
 
-    assert output.success
-    assert output.payload["tables"][0]["fields"][0] == {
+    assert _succeeded(output)
+    assert _data(output)["tables"][0]["fields"][0] == {
         "name": "amount",
         "type": "numeric",
         "comment": "订单金额",
@@ -426,5 +439,5 @@ def test_search_rejects_missing_confirmed_understanding():
         SearchSemanticAssetsArgs(),
     )
 
-    assert not output.success
+    assert not _succeeded(output)
     assert output.error_code == "question_understanding_required"

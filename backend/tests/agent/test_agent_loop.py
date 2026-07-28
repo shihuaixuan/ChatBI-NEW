@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import orjson
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
 from apps.chatbi.errors import QuestionUnderstandingError
@@ -20,6 +20,7 @@ from apps.chatbi.models import (
     QuestionUnderstandingOutput,
 )
 from apps.chatbi.orchestration.agent.composition import build_agent_loop
+from apps.chatbi.orchestration.agent.messages import AgentMessage, ModelDecision
 from apps.chatbi.orchestration.agent.reasoning import AgentReasoner
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolContext
@@ -35,7 +36,14 @@ from apps.event import (
     encode_sse_event,
 )
 from apps.event import list_events_after as list_persisted_events_after
-from apps.tool import BudgetGuard, ToolOutput, ToolRegistry
+from apps.tool import (
+    BudgetGuard,
+    RetryAdvice,
+    ToolCall,
+    ToolErrorCategory,
+    ToolRegistry,
+    ToolResult,
+)
 from apps.trace import DisabledAgentTracer, TraceConfig
 from apps.trace.setup import (
     OpenTelemetryAgentTracer,
@@ -134,12 +142,33 @@ class ScriptedModel:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
-        self.tool_specs_calls = []
+        self.tool_definition_calls = []
 
-    def invoke(self, messages, tool_specs):
+    def invoke(self, messages, tool_definitions):
         self.calls.append(messages)
-        self.tool_specs_calls.append(tool_specs)
-        return self.responses.pop(0)
+        self.tool_definition_calls.append(tool_definitions)
+        response = self.responses.pop(0)
+        if isinstance(response, ModelDecision):
+            return response
+        tool_calls = [
+            ToolCall(
+                name=str(call.get("name") or ""),
+                args=dict(call.get("args") or {}),
+                call_id=str(call.get("id") or ""),
+            )
+            for call in response.tool_calls
+        ]
+        usage = dict(response.usage_metadata or {})
+        message = AgentMessage.assistant(
+            str(response.content or ""),
+            tool_calls=tool_calls,
+            reasoning_content=str(
+                response.additional_kwargs.get("reasoning_content") or ""
+            )
+            or None,
+            usage=usage,
+        )
+        return ModelDecision(message=message, tool_calls=tool_calls, usage=usage)
 
 
 class RecordingTracer:
@@ -276,6 +305,24 @@ class ProbeArgs(BaseModel):
     value: str = ""
 
 
+class ProbeResult(BaseModel):
+    value: str
+
+
+class SearchSemanticAssetsProbeResult(BaseModel):
+    status: str
+    metrics: list[str]
+    dimensions: list[str]
+    tables: list[str]
+
+
+class FinishProbeResult(BaseModel):
+    answer: str
+    chart: dict
+    sql: str | None = None
+    non_standard: bool = False
+
+
 class SearchSemanticAssetsProbeArgs(BaseModel):
     pass
 
@@ -284,11 +331,12 @@ class ProbeTool(AgentTool):
     name = "probe"
     description = "probe"
     args_model = ProbeArgs
+    result_model = ProbeResult
 
     def execute(self, ctx, args):
         ctx.state["last_execution"] = {"sql": "select 1", "fields": ["a"], "row_count": 1, "sql_source": "compiled"}
         ctx.state["full_data"] = [{"a": 1}]
-        return ToolOutput(success=True, summary="probed", payload={"value": args.value})
+        return ToolResult.succeeded("probed", ProbeResult(value=args.value))
 
 
 class NoopTool(AgentTool):
@@ -297,9 +345,10 @@ class NoopTool(AgentTool):
     name = "noop"
     description = "noop"
     args_model = ProbeArgs
+    result_model = ProbeResult
 
     def execute(self, ctx, args):
-        return ToolOutput(success=True, summary="noop", payload={"value": args.value})
+        return ToolResult.succeeded("noop", ProbeResult(value=args.value))
 
 
 class FailingProbeTool(AgentTool):
@@ -308,9 +357,15 @@ class FailingProbeTool(AgentTool):
     name = "failing_probe"
     description = "failing probe"
     args_model = ProbeArgs
+    result_model = ProbeResult
 
     def execute(self, ctx, args):
-        return ToolOutput.error("探测工具执行失败", error_code="probe_failed")
+        return ToolResult.failed(
+            "探测工具执行失败",
+            error_code="probe_failed",
+            error_category=ToolErrorCategory.DOMAIN,
+            retry_advice=RetryAdvice.NEVER,
+        )
 
 
 class FailingExecuteSqlTool(AgentTool):
@@ -319,9 +374,15 @@ class FailingExecuteSqlTool(AgentTool):
     name = "execute_sql"
     description = "failing execute sql"
     args_model = ProbeArgs
+    result_model = ProbeResult
 
     def execute(self, ctx, args):
-        return ToolOutput.error("数据库暂不可用", error_code="database_unavailable")
+        return ToolResult.failed(
+            "数据库暂不可用",
+            error_code="database_unavailable",
+            error_category=ToolErrorCategory.DOMAIN,
+            retry_advice=RetryAdvice.CORRECT_INPUT,
+        )
 
 
 class SearchSemanticAssetsProbeTool(AgentTool):
@@ -330,12 +391,17 @@ class SearchSemanticAssetsProbeTool(AgentTool):
     name = "search_semantic_assets"
     description = "search semantic assets"
     args_model = SearchSemanticAssetsProbeArgs
+    result_model = SearchSemanticAssetsProbeResult
 
     def execute(self, ctx, args):
-        return ToolOutput(
-            success=True,
-            summary="searched",
-            payload={"status": "hit", "metrics": ["gmv"], "dimensions": [], "tables": []},
+        return ToolResult.succeeded(
+            "searched",
+            SearchSemanticAssetsProbeResult(
+                status="hit",
+                metrics=["gmv"],
+                dimensions=[],
+                tables=[],
+            ),
         )
 
 
@@ -343,12 +409,17 @@ class FinishProbeTool(AgentTool):
     name = "finish"
     description = "finish"
     args_model = ProbeArgs
+    result_model = FinishProbeResult
 
     def execute(self, ctx, args):
-        return ToolOutput(
-            success=True,
-            summary="finish",
-            payload={"answer": "最终答案", "chart": {}, "sql": "select 1", "non_standard": False},
+        return ToolResult.succeeded(
+            "finish",
+            FinishProbeResult(
+                answer="最终答案",
+                chart={},
+                sql="select 1",
+                non_standard=False,
+            ),
         )
 
 
@@ -402,9 +473,9 @@ def test_reasoner_returns_structured_function_call_and_records_usage():
         run=run,
         record=record,
         context=AgentToolContext(session=None, oid=1, user_id=1, datasource_id=5),
-        messages=[HumanMessage(content="按城市看 gmv")],
+        messages=[AgentMessage.user("按城市看 gmv")],
         budget=BudgetGuard(max_steps=5, token_budget=100),
-        system=SystemMessage(content="系统提示词"),
+        system=AgentMessage.system("系统提示词"),
     )
     reasoner = AgentReasoner(
         AgentConfig(),
@@ -421,7 +492,8 @@ def test_reasoner_returns_structured_function_call_and_records_usage():
     ]
     assert state.budget.steps == 1
     assert state.budget.tokens_used == 5
-    assert state.messages[-1] is response
+    assert state.messages[-1] is decision.response
+    assert state.messages[-1].content == response.content
 
 
 def test_reasoner_soft_mode_only_exposes_terminal_tools():
@@ -431,9 +503,9 @@ def test_reasoner_soft_mode_only_exposes_terminal_tools():
         run=run,
         record=record,
         context=AgentToolContext(session=None, oid=1, user_id=1, datasource_id=5),
-        messages=[HumanMessage(content="按城市看 gmv")],
+        messages=[AgentMessage.user("按城市看 gmv")],
         budget=BudgetGuard(max_steps=5),
-        system=SystemMessage(content="系统提示词"),
+        system=AgentMessage.system("系统提示词"),
     )
     registry = _registry()
     reasoner = AgentReasoner(
@@ -447,7 +519,7 @@ def test_reasoner_soft_mode_only_exposes_terminal_tools():
 
     assert decision.is_direct_answer is True
     assert "预算接近上限" in str(model.calls[0][1].content)
-    assert [item["function"]["name"] for item in model.tool_specs_calls[0]] == [
+    assert [item.name for item in model.tool_definition_calls[0]] == [
         "finish"
     ]
 
@@ -497,6 +569,57 @@ def test_success_events_have_strict_sequence_and_single_terminal_event():
     assert domains[-2:] == ["answer.completed", "run.finished"]
 
 
+def test_multiple_tool_calls_preserve_model_order_in_events_and_observations():
+    """同一推理轮的多个 Tool Call 必须按模型顺序发布并回写。"""
+
+    model = ScriptedModel(
+        [
+            AIMessage(
+                content="需要连续调用两个工具",
+                tool_calls=[
+                    {
+                        "name": "probe",
+                        "args": {"value": "first"},
+                        "id": "call-1",
+                        "type": "tool_call",
+                    },
+                    {
+                        "name": "noop",
+                        "args": {"value": "second"},
+                        "id": "call-2",
+                        "type": "tool_call",
+                    },
+                ],
+            ),
+            _tool_message("finish", {"value": ""}, "call-3"),
+        ]
+    )
+    run, record = _run_and_record()
+
+    events = list(_loop(model).run(run, record))
+
+    called = [event for event in events if event.domain == "tool.called"]
+    completed = [event for event in events if event.domain == "tool.completed"]
+    assert [event.content["tool_name"] for event in called[:2]] == [
+        "probe",
+        "noop",
+    ]
+    assert [event.content["tool_name"] for event in completed[:2]] == [
+        "probe",
+        "noop",
+    ]
+
+    second_turn_tool_messages = [
+        message
+        for message in model.calls[1]
+        if message.role.value == "tool"
+    ]
+    assert [message.tool_call_id for message in second_turn_tool_messages] == [
+        "call-1",
+        "call-2",
+    ]
+
+
 def test_regular_tool_error_is_observed_and_loop_can_continue():
     """普通工具失败是 Observation，不应直接把 Run 置为失败。"""
 
@@ -528,7 +651,7 @@ def test_regular_tool_error_is_observed_and_loop_can_continue():
         "record_id": record.id,
         "tool_name": "failing_probe",
         "success": False,
-        "status": "error",
+        "status": "failed",
         "error_code": "probe_failed",
     }
     assert run.status == AgentRunStatus.FINISHED.value
@@ -536,7 +659,7 @@ def test_regular_tool_error_is_observed_and_loop_can_continue():
     second_call_tool_messages = [
         message
         for message in model.calls[1]
-        if message.__class__.__name__ == "ToolMessage"
+        if message.role.value == "tool"
     ]
     assert any("探测工具执行失败" in message.content for message in second_call_tool_messages)
 
@@ -838,7 +961,7 @@ def test_unknown_tool_is_rejected_but_loop_continues():
     assert run.status == AgentRunStatus.FINISHED.value
     # 第二轮的消息历史里包含拒绝回写
     second_call_messages = model.calls[1]
-    tool_messages = [m for m in second_call_messages if m.__class__.__name__ == "ToolMessage"]
+    tool_messages = [m for m in second_call_messages if m.role.value == "tool"]
     assert any("不在白名单" in m.content for m in tool_messages)
     # dangling tool_calls 已收口
     assert any(getattr(m, "tool_call_id", None) for m in tool_messages)
