@@ -9,7 +9,7 @@ from apps.event.repository import sqlmodel as event_repository
 
 
 class EventPublisher:
-    """统一执行事件序号分配、持久化和提交。"""
+    """统一执行事件序号分配、持久化和渲染契约构造。"""
 
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -21,7 +21,7 @@ class EventPublisher:
         payload: dict[str, Any],
         step_id: int | None = None,
     ) -> RenderEvent:
-        """提交事件并返回包含持久化序号的渲染事件。"""
+        """追加事件并返回渲染对象；事务提交由应用层统一控制。"""
 
         event = event_repository.append_event(
             self._session,
@@ -46,7 +46,6 @@ class EventPublisher:
             "domain": render_event.domain,
             **({"block_id": render_event.block_id} if render_event.block_id else {}),
         }
-        self._session.commit()
         return render_event
 
 

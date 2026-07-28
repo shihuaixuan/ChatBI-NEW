@@ -32,6 +32,14 @@ class AgentStepStatus(str, Enum):
     FAILED = "failed"
 
 
+class AgentToolCallStatus(str, Enum):
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    REJECTED = "rejected"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
 class AgentErrorClass(str, Enum):
     UNDERSTANDING = "understanding_failed"
     RETRIEVAL = "retrieval_missed"
@@ -118,6 +126,35 @@ class ChatbiAgentStep(SQLModel, table=True):
     error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
     finished_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
+
+
+class ChatbiAgentToolCall(SQLModel, table=True):
+    """一次模型 Tool Call 的独立事实记录。"""
+
+    __tablename__ = "chatbi_agent_tool_call"
+    __table_args__ = (
+        Index("ux_chatbi_agent_tool_call_id", "run_id", "tool_call_id", unique=True),
+        Index("idx_chatbi_agent_tool_call_run_step", "run_id", "step_id"),
+    )
+
+    id: int | None = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
+    run_id: int = Field(sa_column=Column(BigInteger, nullable=False))
+    step_id: int = Field(sa_column=Column(BigInteger, nullable=False))
+    tool_call_id: str = Field(max_length=128, nullable=False)
+    tool_name: str = Field(max_length=128, nullable=False)
+    status: str = Field(default=AgentToolCallStatus.RUNNING.value, max_length=32, nullable=False)
+    args_summary: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    )
+    result_summary: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    )
+    error_code: str | None = Field(default=None, max_length=128, nullable=True)
+    started_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
+    finished_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
+    latency_ms: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
 
 
 class ChatbiAgentClarification(SQLModel, table=True):

@@ -87,9 +87,11 @@ from apps.chatbi.models.orm import (
     AgentErrorClass,
     AgentRunStatus,
     AgentStepStatus,
+    AgentToolCallStatus,
     ChatbiAgentClarification,
     ChatbiAgentRun,
     ChatbiAgentStep,
+    ChatbiAgentToolCall,
     EventLog,
 )
 
@@ -104,6 +106,7 @@ __all__ = [
     "AgentRunStatus",
     "AgentStartStreamRequest",
     "AgentStepStatus",
+    "AgentToolCallStatus",
     "AgentStreamRequest",
     "ModelMessage",
     "ModelStreamChunk",
@@ -121,6 +124,7 @@ __all__ = [
     "ChatbiAgentClarification",
     "ChatbiAgentRun",
     "ChatbiAgentStep",
+    "ChatbiAgentToolCall",
     "EventLog",
     "ChartGenerationData",
     "ChartGenerationEvent",

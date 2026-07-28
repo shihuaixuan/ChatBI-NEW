@@ -138,6 +138,8 @@ class AgentLifecycle:
             {
                 "record_id": record.id,
                 "clarification_id": clarification.id,
+                "tool_call_id": call_id,
+                "step_id": step_id,
                 "question": clarification.question,
                 "options": clarification.options or [],
             },
@@ -249,12 +251,14 @@ class AgentLifecycle:
         payload: dict[str, Any],
         step_id: int | None = None,
     ) -> RenderEvent:
-        return self._event_publisher.publish(
+        event = self._event_publisher.publish(
             state.require_run_id(),
             event_type,
             payload,
             step_id=step_id,
         )
+        self._session.commit()
+        return event
 
 
 __all__ = ["AgentLifecycle"]

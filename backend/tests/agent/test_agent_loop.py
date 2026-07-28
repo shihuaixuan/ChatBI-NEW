@@ -13,6 +13,8 @@ from apps.chatbi.models import (
     AgentConfig,
     AgentRunStatus,
     ChatbiAgentRun,
+    ChatbiAgentStep,
+    ChatbiAgentToolCall,
     EventLog,
     IntentRecognitionOutput,
     IntentValidationOutput,
@@ -58,6 +60,7 @@ class FakeSession:
         self.trace_count = 0
         self.added = []
         self.commit_count = 0
+        self.tool_event_commits = []
 
     def add(self, obj):
         self.added.append(obj)
@@ -66,6 +69,24 @@ class FakeSession:
 
     def commit(self):
         self.commit_count += 1
+        if not self.added or not isinstance(self.added[-1], EventLog):
+            return
+        event = self.added[-1]
+        if event.event_type not in {"tool-called", "tool-result", "tool-failed"}:
+            return
+        tool_call_id = (event.payload or {}).get("tool_call_id")
+        row = next(
+            (
+                item
+                for item in reversed(self.added[:-1])
+                if isinstance(item, ChatbiAgentToolCall)
+                and item.tool_call_id == tool_call_id
+            ),
+            None,
+        )
+        self.tool_event_commits.append(
+            (event.event_type, tool_call_id, getattr(row, "status", None))
+        )
 
     def flush(self):
         pass
@@ -108,7 +129,7 @@ def test_event_app_exports_structured_contract():
     }
 
 
-def test_event_publisher_assigns_sequence_and_commits():
+def test_event_publisher_assigns_sequence_without_committing_application_state():
     session = FakeSession()
     publisher = EventPublisher(session)
 
@@ -120,13 +141,17 @@ def test_event_publisher_assigns_sequence_and_commits():
     assert (second.kind, second.phase, second.domain) == ("text", "end", "answer.completed")
     assert session.added[0].payload["kind"] == "run"
     assert session.added[1].payload["domain"] == "answer.completed"
-    assert session.commit_count == 2
+    assert session.commit_count == 0
 
 
 def test_render_event_contract_adds_stable_domain_and_block_id():
     event = create_render_event(
         "tool-called",
-        {"record_id": 7, "tool_name": "execute_sql"},
+        {
+            "record_id": 7,
+            "tool_call_id": "call-1",
+            "tool_name": "execute_sql",
+        },
         record_id=7,
         run_id=9,
         sequence=4,
@@ -134,7 +159,7 @@ def test_render_event_contract_adds_stable_domain_and_block_id():
     )
 
     assert (event.kind, event.phase, event.domain) == ("tool", "start", "tool.called")
-    assert event.block_id == "tool:3:execute_sql"
+    assert event.block_id == "tool:9:call-1"
 
 
 class ScriptedModel:
@@ -659,7 +684,7 @@ def test_multiple_tool_calls_preserve_model_order_in_events_and_observations():
                     },
                     {
                         "name": "noop",
-                        "args": {"value": "second"},
+                        "args": {"value": "second", "api_token": "secret"},
                         "id": "call-2",
                         "type": "tool_call",
                     },
@@ -670,7 +695,16 @@ def test_multiple_tool_calls_preserve_model_order_in_events_and_observations():
     )
     run, record = _run_and_record()
 
-    events = list(_loop(model).run(run, record))
+    session = FakeSession()
+    loop = build_agent_loop(
+        session,
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=5),
+        model_client=model,
+        registry=_registry(),
+        understanding_service=StaticUnderstandingService(),
+    )
+    events = list(loop.run(run, record))
 
     called = [event for event in events if event.domain == "tool.called"]
     completed = [event for event in events if event.domain == "tool.completed"]
@@ -682,6 +716,36 @@ def test_multiple_tool_calls_preserve_model_order_in_events_and_observations():
         "probe",
         "noop",
     ]
+    assert [event.block_id for event in called[:2]] == [
+        "tool:100:call-1",
+        "tool:100:call-2",
+    ]
+    assert called[1].content["args_summary"]["api_token"] == "[REDACTED]"
+
+    rows = list(
+        {
+            id(item): item
+            for item in session.added
+            if isinstance(item, ChatbiAgentToolCall)
+        }.values()
+    )
+    first_step_rows = [item for item in rows if item.tool_call_id in {"call-1", "call-2"}]
+    assert [item.tool_call_id for item in first_step_rows] == ["call-1", "call-2"]
+    assert [item.status for item in first_step_rows] == ["succeeded", "succeeded"]
+    assert first_step_rows[0].step_id == first_step_rows[1].step_id
+    assert session.tool_event_commits[:4] == [
+        ("tool-called", "call-1", "running"),
+        ("tool-called", "call-2", "running"),
+        ("tool-result", "call-1", "succeeded"),
+        ("tool-result", "call-2", "succeeded"),
+    ]
+    first_step = next(
+        item
+        for item in session.added
+        if isinstance(item, ChatbiAgentStep) and item.step_index == 1
+    )
+    assert first_step.tool_name is None
+    assert first_step.args_summary == {}
 
     second_turn_tool_messages = [
         message
@@ -717,17 +781,15 @@ def test_regular_tool_error_is_observed_but_cannot_masquerade_as_answer():
     failed_tool_event = next(
         event
         for event in events
-        if event.domain == "tool.completed"
+        if event.domain == "tool.failed"
         and event.content.get("tool_name") == "failing_probe"
     )
 
-    assert failed_tool_event.content == {
-        "record_id": record.id,
-        "tool_name": "failing_probe",
-        "success": False,
-        "status": "failed",
-        "error_code": "probe_failed",
-    }
+    assert failed_tool_event.content["record_id"] == record.id
+    assert failed_tool_event.content["tool_call_id"] == "c1"
+    assert failed_tool_event.content["tool_name"] == "failing_probe"
+    assert failed_tool_event.content["status"] == "failed"
+    assert failed_tool_event.content["error_code"] == "probe_failed"
     assert run.status == AgentRunStatus.FAILED.value
     assert _event_domains(events)[-1] == "run.failed"
     second_call_tool_messages = [
@@ -762,7 +824,7 @@ def test_execute_sql_retry_exhaustion_has_single_failed_terminal_event():
     domains = _event_domains(events)
 
     assert len(model.calls) == 3
-    assert domains.count("tool.completed") == 2
+    assert domains.count("tool.failed") == 3
     assert [domain for domain in domains if domain in {"run.finished", "run.failed"}] == [
         "run.failed"
     ]
@@ -802,6 +864,14 @@ def test_agent_tracing_records_run_llm_and_tool_hierarchy():
         "execute_tool",
     ]
     assert tracer.spans[0].attributes["gen_ai.agent.result"] == "finished"
+    tool_spans = [span for span in tracer.spans if span.name == "execute_tool"]
+    assert [span.attributes["app.tool_call.id"] for span in tool_spans] == [
+        "c1",
+        "c2",
+    ]
+    assert all(span.attributes["app.run.id"] == run.id for span in tool_spans)
+    assert all("app.tool.latency_ms" in span.attributes for span in tool_spans)
+    assert all(span.attributes["app.domain.retry_count"] == 0 for span in tool_spans)
     assert all(span.closed for span in tracer.spans)
 
 

@@ -4,9 +4,11 @@ from apps.chatbi.models.orm.agent_run import (
     AgentErrorClass,
     AgentRunStatus,
     AgentStepStatus,
+    AgentToolCallStatus,
     ChatbiAgentClarification,
     ChatbiAgentRun,
     ChatbiAgentStep,
+    ChatbiAgentToolCall,
 )
 from apps.event import EventLog
 
@@ -16,8 +18,10 @@ __all__ = [
     "AgentErrorClass",
     "AgentRunStatus",
     "AgentStepStatus",
+    "AgentToolCallStatus",
     "ChatbiAgentClarification",
     "ChatbiAgentRun",
     "ChatbiAgentStep",
+    "ChatbiAgentToolCall",
     "EventLog",
 ]

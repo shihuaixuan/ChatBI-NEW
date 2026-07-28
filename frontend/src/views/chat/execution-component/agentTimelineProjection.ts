@@ -1,4 +1,4 @@
-import type { AgentTimelineResponse, AgentTimelineStep } from '@/api/agent-chat'
+import type { AgentTimelineResponse, AgentTimelineToolCall } from '@/api/agent-chat'
 import { normalizeAgentEvent } from '../answer/agentEventReducer.ts'
 
 export type AgentFlowStatus = 'running' | 'success' | 'failed' | 'waiting'
@@ -10,6 +10,8 @@ export interface AgentFlowStep {
   title: string
   status: AgentFlowStatus
   toolName?: string
+  toolCallId?: string
+  stepId?: number
   latencyMs?: number
   args: Record<string, any>
   result: Record<string, any>
@@ -49,15 +51,24 @@ export function buildAgentFlow(
   runtimeLoading = false
 ): AgentFlowView {
   const events = liveEvents.length ? liveEvents : timeline?.events || []
-  const toolSteps = new Map<number, AgentFlowStep>()
+  const toolSteps = new Map<string, AgentFlowStep>()
+  const workflowSteps = new Map<number, AgentFlowStep>()
   const thinkingSteps = new Map<number, AgentFlowStep>()
+  const stepIdToIndex = new Map<number, number>()
   let understandingStep: AgentFlowStep | undefined
   let currentIndex: number | undefined
+  let currentStepId: number | undefined
   let terminalStatus: 'success' | 'failed' | undefined
   let eventRunStatus: 'running' | 'waiting_user' | 'finished' | 'failed' | undefined
 
   for (const persisted of timeline?.steps || []) {
-    toolSteps.set(persisted.index, persistedStep(persisted))
+    if (persisted.id !== undefined) stepIdToIndex.set(persisted.id, persisted.index)
+  }
+  for (const persisted of timeline?.tool_calls || []) {
+    toolSteps.set(
+      persisted.tool_call_id,
+      persistedToolCall(persisted, stepIdToIndex.get(persisted.step_id))
+    )
   }
 
   for (const rawEvent of [...events].sort(compareEvents)) {
@@ -83,6 +94,12 @@ export function buildAgentFlow(
         eventRunStatus = 'running'
         currentIndex = Number(event.step_index)
         if (!Number.isFinite(currentIndex)) break
+        currentStepId = Number(event.step_id)
+        if (Number.isFinite(currentStepId)) {
+          stepIdToIndex.set(currentStepId, currentIndex)
+        } else {
+          currentStepId = undefined
+        }
         // step-started 在模型调用前发出，此时工具尚未确定，应先展示规划状态。
         ensureThinkingStep(thinkingSteps, currentIndex).status = 'running'
         break
@@ -98,17 +115,21 @@ export function buildAgentFlow(
       }
       case 'tool.called': {
         finishThinkingStep(thinkingSteps, currentIndex)
-        const step = currentStep(toolSteps, currentIndex)
-        if (step) {
-          step.toolName = event.tool_name
-          step.title = agentToolTitle(event.tool_name)
-          step.args = { ...step.args, ...(event.args_summary || {}) }
-        }
+        const step = ensureToolCallStep(
+          toolSteps,
+          event,
+          currentIndex,
+          currentStepId,
+          stepIdToIndex
+        )
+        step.toolName = event.tool_name
+        step.title = agentToolTitle(event.tool_name)
+        step.args = { ...step.args, ...(event.args_summary || {}) }
         break
       }
       case 'workflow.step': {
         finishThinkingStep(thinkingSteps, currentIndex)
-        const step = currentStep(toolSteps, currentIndex)
+        const step = currentWorkflowStep(workflowSteps, currentIndex)
         if (step) {
           step.toolName = event.action
           step.title = agentToolTitle(event.action)
@@ -117,21 +138,32 @@ export function buildAgentFlow(
         break
       }
       case 'tool.completed': {
-        const step = currentStep(toolSteps, currentIndex)
+        const step = findToolCallStep(toolSteps, event.tool_call_id)
         if (step) {
-          step.result = { ...step.result, ...event }
-          step.status = event.success === false ? 'failed' : 'success'
+          step.result = { ...step.result, ...(event.result_summary || {}), ...event }
+          step.status = 'success'
+          step.latencyMs = event.latency_ms ?? step.latencyMs
+        }
+        break
+      }
+      case 'tool.failed': {
+        const step = findToolCallStep(toolSteps, event.tool_call_id)
+        if (step) {
+          step.result = { ...step.result, ...(event.result_summary || {}), ...event }
+          step.status = 'failed'
+          step.error = String(event.error_code || event.result_summary?.error_code || '')
+          step.latencyMs = event.latency_ms ?? step.latencyMs
         }
         break
       }
       case 'sql.generated':
       case 'sql.validated': {
-        const step = currentStep(toolSteps, currentIndex)
+        const step = findToolCallStep(toolSteps, event.tool_call_id)
         if (step && event.sql) step.result.sql = event.sql
         break
       }
       case 'sql.executed': {
-        const step = currentStep(toolSteps, currentIndex)
+        const step = findToolCallStep(toolSteps, event.tool_call_id)
         if (step) {
           step.result.row_count = event.row_count
           step.result.fields = event.fields
@@ -140,7 +172,9 @@ export function buildAgentFlow(
       }
       case 'clarification.required': {
         eventRunStatus = 'waiting_user'
-        const step = currentStep(toolSteps, currentIndex)
+        const step = event.tool_call_id
+          ? findToolCallStep(toolSteps, event.tool_call_id)
+          : currentWorkflowStep(workflowSteps, currentIndex)
         if (step) {
           step.status = 'waiting'
           step.result = { ...step.result, ...event }
@@ -155,7 +189,7 @@ export function buildAgentFlow(
           understandingStep.status = 'running'
           understandingStep.understanding = undefined
         }
-        const waitingStep = [...toolSteps.values()]
+        const waitingStep = [...toolSteps.values(), ...workflowSteps.values()]
           .reverse()
           .find((step) => step.status === 'waiting')
         if (waitingStep) waitingStep.status = 'success'
@@ -170,8 +204,10 @@ export function buildAgentFlow(
           thinkingStep.status = 'failed'
           thinkingStep.error = String(event.content || '')
         }
-        const step = currentStep(toolSteps, currentIndex)
-        if (step && step.status === 'running') {
+        const step = [...toolSteps.values(), ...workflowSteps.values()]
+          .reverse()
+          .find((item) => item.status === 'running')
+        if (step) {
           step.status = 'failed'
           step.error = String(event.content || '')
         }
@@ -186,26 +222,33 @@ export function buildAgentFlow(
         for (const step of toolSteps.values()) {
           if (step.status === 'running') step.status = 'success'
         }
+        for (const step of workflowSteps.values()) {
+          if (step.status === 'running') step.status = 'success'
+        }
         break
     }
   }
 
   // 同一轮先展示模型为什么这样做，再展示实际工具调用，保留 Agent 的决策脉络。
   const steps: AgentFlowStep[] = understandingStep ? [understandingStep] : []
-  const stepIndexes = [...new Set([...toolSteps.keys(), ...thinkingSteps.keys()])].sort(
-    (a, b) => a - b
-  )
+  const indexedTools = [...toolSteps.values(), ...workflowSteps.values()]
+  const stepIndexes = [
+    ...new Set([
+      ...thinkingSteps.keys(),
+      ...indexedTools
+        .map((step) => step.index)
+        .filter((index): index is number => index !== undefined),
+    ]),
+  ].sort((a, b) => a - b)
   for (const stepIndex of stepIndexes) {
     const thinkingStep = thinkingSteps.get(stepIndex)
     if (thinkingStep) steps.push(thinkingStep)
-    const toolStep = toolSteps.get(stepIndex)
-    // 持久化步骤可能早于模型结果被轮询到，工具未确定前不展示重复的占位节点。
-    const pendingToolDecision =
-      toolStep &&
-      !toolStep.toolName &&
-      toolStep.status === 'running' &&
-      thinkingStep?.status === 'running'
-    if (toolStep && !pendingToolDecision) steps.push(toolStep)
+    for (const toolStep of indexedTools.filter((item) => item.index === stepIndex)) {
+      steps.push(toolStep)
+    }
+  }
+  for (const toolStep of indexedTools.filter((item) => item.index === undefined)) {
+    steps.push(toolStep)
   }
   if (!steps.length && runtimeLoading) {
     steps.push({
@@ -250,34 +293,74 @@ export function buildAgentFlow(
     }
   }
   const retryText = failedCount ? `，期间重试 ${failedCount} 次` : ''
+  const toolCount = toolSteps.size + workflowSteps.size
   return {
     status: 'success',
-    headline: `执行完成，共 ${toolSteps.size} 个步骤${retryText}`,
+    headline: `执行完成，共 ${toolCount} 个工具调用${retryText}`,
     steps,
     failedCount,
   }
 }
 
-function persistedStep(step: AgentTimelineStep): AgentFlowStep {
+function persistedToolCall(toolCall: AgentTimelineToolCall, stepIndex?: number): AgentFlowStep {
   return {
-    key: `step-${step.index}`,
-    index: step.index,
+    key: `tool-${toolCall.tool_call_id}`,
+    index: stepIndex,
     kind: 'tool',
-    title: agentToolTitle(step.tool_name),
-    status: normalizeStatus(step.status),
-    toolName: step.tool_name,
-    latencyMs: step.latency_ms,
-    args: step.args_summary || {},
-    result: step.result_summary || {},
-    error: step.error,
+    title: agentToolTitle(toolCall.tool_name),
+    status: normalizeStatus(toolCall.status),
+    toolName: toolCall.tool_name,
+    toolCallId: toolCall.tool_call_id,
+    stepId: toolCall.step_id,
+    latencyMs: toolCall.latency_ms,
+    args: toolCall.args_summary || {},
+    result: toolCall.result_summary || {},
+    error: toolCall.error_code,
   }
 }
 
-function ensureStep(steps: Map<number, AgentFlowStep>, index: number) {
-  let step = steps.get(index)
+function ensureToolCallStep(
+  steps: Map<string, AgentFlowStep>,
+  event: Record<string, any>,
+  currentIndex: number | undefined,
+  currentStepId: number | undefined,
+  stepIdToIndex: Map<number, number>
+) {
+  const toolCallId = String(
+    event.tool_call_id || `${event.step_id || currentStepId || currentIndex}:${event.tool_name}`
+  )
+  let step = steps.get(toolCallId)
+  if (!step) {
+    const stepId = Number(event.step_id || currentStepId)
+    const index = Number.isFinite(stepId) ? stepIdToIndex.get(stepId) || currentIndex : currentIndex
+    step = {
+      key: `tool-${toolCallId}`,
+      index,
+      kind: 'tool',
+      title: agentToolTitle(event.tool_name),
+      status: 'running',
+      toolName: event.tool_name,
+      toolCallId,
+      stepId: Number.isFinite(stepId) ? stepId : undefined,
+      args: {},
+      result: {},
+    }
+    steps.set(toolCallId, step)
+  }
+  return step
+}
+
+function findToolCallStep(steps: Map<string, AgentFlowStep>, toolCallId?: string) {
+  if (toolCallId) return steps.get(String(toolCallId))
+  return [...steps.values()].reverse()[0]
+}
+
+function currentWorkflowStep(steps: Map<number, AgentFlowStep>, index?: number) {
+  const resolvedIndex = index ?? 0
+  let step = steps.get(resolvedIndex)
   if (!step) {
     step = {
-      key: `step-${index}`,
+      key: `workflow-${resolvedIndex}`,
       index,
       kind: 'tool',
       title: '规划下一步',
@@ -285,7 +368,7 @@ function ensureStep(steps: Map<number, AgentFlowStep>, index: number) {
       args: {},
       result: {},
     }
-    steps.set(index, step)
+    steps.set(resolvedIndex, step)
   }
   return step
 }
@@ -313,13 +396,8 @@ function finishThinkingStep(steps: Map<number, AgentFlowStep>, index?: number) {
   if (step?.status === 'running') step.status = 'success'
 }
 
-function currentStep(steps: Map<number, AgentFlowStep>, index?: number) {
-  if (index !== undefined) return ensureStep(steps, index)
-  return [...steps.values()].sort((a, b) => Number(b.index || 0) - Number(a.index || 0))[0]
-}
-
 function normalizeStatus(status?: string): AgentFlowStatus {
-  if (status === 'failed') return 'failed'
+  if (status === 'failed' || status === 'rejected' || status === 'interrupted') return 'failed'
   if (status === 'success' || status === 'succeeded') return 'success'
   if (status === 'waiting' || status === 'waiting_user') return 'waiting'
   return 'running'

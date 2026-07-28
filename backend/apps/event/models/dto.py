@@ -55,6 +55,7 @@ _EVENT_CONTRACT: dict[str, tuple[type[RenderEvent], EventPhase, str]] = {
     "tool-called": (ToolEvent, "start", "tool.called"),
     "workflow-step": (ToolEvent, "start", "workflow.step"),
     "tool-result": (ToolEvent, "end", "tool.completed"),
+    "tool-failed": (ToolEvent, "error", "tool.failed"),
     "sql-generated": (ArtifactEvent, "end", "sql.generated"),
     "sql-validated": (ArtifactEvent, "end", "sql.validated"),
     "sql-executed": (ArtifactEvent, "end", "sql.executed"),
@@ -106,8 +107,9 @@ def _block_id(
     if event_class is TextEvent:
         return f"text:{step_id or run_id}"
     if event_class is ToolEvent:
+        tool_call_id = content.get("tool_call_id") if isinstance(content, dict) else None
         tool_name = content.get("tool_name") if isinstance(content, dict) else None
-        return f"tool:{step_id or run_id}:{tool_name or event_type}"
+        return f"tool:{run_id}:{tool_call_id or tool_name or event_type}"
     if event_class is InteractionEvent and isinstance(content, dict):
         clarification_id = content.get("clarification_id")
         return f"interaction:{clarification_id or run_id}"

@@ -175,9 +175,18 @@ class AgentLoop:
                 return
 
             step_index = budget.steps + 1
-            step = agent_run_repository.start_step(self.session, run, step_index, None, {})
+            step = agent_run_repository.start_step(self.session, run, step_index)
             self.session.commit()
-            yield self._emit(state, "step-started", {"record_id": record.id, "step_index": step_index}, step.id)
+            yield self._emit(
+                state,
+                "step-started",
+                {
+                    "record_id": record.id,
+                    "step_id": step.id,
+                    "step_index": step_index,
+                },
+                step.id,
+            )
 
             decision = self.reasoner.decide(state, mode)
             usage = decision.usage
@@ -262,12 +271,14 @@ class AgentLoop:
         payload: dict[str, Any],
         step_id: int | None = None,
     ) -> RenderEvent:
-        return self.event_publisher.publish(
+        event = self.event_publisher.publish(
             state.require_run_id(),
             event_type,
             payload,
             step_id=step_id,
         )
+        self.session.commit()
+        return event
 
 
 def _allows_direct_answer(state: AgentRuntimeState) -> bool:

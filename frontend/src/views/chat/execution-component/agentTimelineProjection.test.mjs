@@ -12,6 +12,8 @@ const CONTRACT = {
   'step.started': { kind: 'run', phase: 'start' },
   'reasoning.snapshot': { kind: 'thinking', phase: 'snapshot' },
   'tool.called': { kind: 'tool', phase: 'start' },
+  'tool.completed': { kind: 'tool', phase: 'end' },
+  'tool.failed': { kind: 'tool', phase: 'error' },
   'workflow.step': { kind: 'tool', phase: 'start' },
   'clarification.required': { kind: 'interaction', phase: 'start' },
   'clarification.accepted': { kind: 'interaction', phase: 'end' },
@@ -55,22 +57,30 @@ test('完成的运行保留中间失败步骤，但整体展示为已完成并�
     run_id: 2,
     status: 'finished',
     steps: [
+      { id: 11, index: 1, status: 'success' },
+      { id: 12, index: 2, status: 'success' },
+      { id: 13, index: 3, status: 'success' },
+    ],
+    tool_calls: [
       {
-        index: 1,
+        tool_call_id: 'compile-1',
+        step_id: 11,
         tool_name: 'compile_semantic_sql',
-        status: 'success',
+        status: 'succeeded',
         result_summary: { sql: 'select 1' },
       },
       {
-        index: 2,
+        tool_call_id: 'execute-1',
+        step_id: 12,
         tool_name: 'execute_sql',
         status: 'failed',
-        error: "Incorrect DATE value: 'today'",
+        error_code: 'invalid_date',
       },
       {
-        index: 3,
+        tool_call_id: 'execute-2',
+        step_id: 13,
         tool_name: 'execute_sql',
-        status: 'success',
+        status: 'succeeded',
         result_summary: { row_count: 1, fields: ['customer_count'] },
       },
     ],
@@ -82,6 +92,70 @@ test('完成的运行保留中间失败步骤，但整体展示为已完成并�
   assert.match(flow.headline, /期间重试 1 次/)
   assert.equal(flow.steps[1].title, '执行查询')
   assert.equal(flow.steps[1].status, 'failed')
+})
+
+test('同一推理轮的多个 Tool Call 分别展示且失败互不覆盖', () => {
+  const flow = buildAgentFlow(undefined, [
+    agentEvent('step.started', { sequence: 1, step_id: 21, step_index: 1 }),
+    agentEvent('tool.called', {
+      sequence: 2,
+      step_id: 21,
+      tool_call_id: 'call-a',
+      tool_name: 'search_terminology',
+      args_summary: { query: 'GMV' },
+    }),
+    agentEvent('tool.called', {
+      sequence: 3,
+      step_id: 21,
+      tool_call_id: 'call-b',
+      tool_name: 'get_sql_examples',
+      args_summary: { query: 'GMV' },
+    }),
+    agentEvent('tool.failed', {
+      sequence: 4,
+      step_id: 21,
+      tool_call_id: 'call-a',
+      tool_name: 'search_terminology',
+      status: 'failed',
+      error_code: 'search_failed',
+    }),
+    agentEvent('tool.completed', {
+      sequence: 5,
+      step_id: 21,
+      tool_call_id: 'call-b',
+      tool_name: 'get_sql_examples',
+      status: 'succeeded',
+      result_summary: { count: 2 },
+    }),
+  ])
+
+  const tools = flow.steps.filter((step) => step.kind === 'tool')
+  assert.equal(tools.length, 2)
+  assert.deepEqual(
+    tools.map((step) => [step.toolCallId, step.status]),
+    [
+      ['call-a', 'failed'],
+      ['call-b', 'success'],
+    ]
+  )
+  assert.equal(tools[1].result.count, 2)
+})
+
+test('按 sequence 补拉相同事件不会重复写入记录', () => {
+  const currentRecord = { execution_events: [] }
+  const event = {
+    kind: 'tool',
+    phase: 'start',
+    domain: 'tool.called',
+    run_id: 8,
+    sequence: 3,
+    content: { tool_call_id: 'call-1', tool_name: 'execute_sql' },
+  }
+
+  reduceAgentEvent(currentRecord, event)
+  reduceAgentEvent(currentRecord, event)
+
+  assert.equal(currentRecord.execution_events.length, 1)
 })
 
 test('流式事件能在工具结果返回前展示正在执行的节点', () => {

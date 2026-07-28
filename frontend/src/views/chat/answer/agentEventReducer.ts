@@ -39,6 +39,13 @@ export function reduceAgentEvent(
   const event = normalizeAgentEvent(raw)
   const executionEvents = currentRecord.execution_events || []
   currentRecord.execution_events = executionEvents
+  const duplicate =
+    event.sequence !== undefined &&
+    executionEvents.some(
+      (item: AgentRenderEvent) =>
+        item.run_id === event.run_id && Number(item.sequence) === Number(event.sequence)
+    )
+  if (duplicate) return {}
   executionEvents.push({ ...event, _ts: Date.now() })
 
   switch (event.domain) {
@@ -88,7 +95,10 @@ export function reduceAgentEvent(
 
 export function latestAgentEventSequence(currentRecord: ChatRecord) {
   const events = Array.isArray(currentRecord.execution_events) ? currentRecord.execution_events : []
-  return events.reduce((max, event: AgentRenderEvent) => Math.max(max, Number(event.sequence || 0)), 0)
+  return events.reduce(
+    (max, event: AgentRenderEvent) => Math.max(max, Number(event.sequence || 0)),
+    0
+  )
 }
 
 function isObject(value: unknown): value is Record<string, any> {

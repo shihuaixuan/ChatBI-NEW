@@ -321,8 +321,6 @@ class AgentInputPreparer:
             self._session,
             state.run,
             step_index,
-            "understanding_clarification",
-            args_summary,
         )
         agent_run_repository.finish_step(
             self._session,
@@ -336,7 +334,11 @@ class AgentInputPreparer:
         yield self._publish(
             state,
             "step-started",
-            {"record_id": state.record.id, "step_index": step_index},
+            {
+                "record_id": state.record.id,
+                "step_id": step.id,
+                "step_index": step_index,
+            },
             step.id,
         )
         yield self._publish(
@@ -390,12 +392,14 @@ class AgentInputPreparer:
         payload: dict[str, Any],
         step_id: int | None = None,
     ) -> RenderEvent:
-        return self._event_publisher.publish(
+        event = self._event_publisher.publish(
             state.require_run_id(),
             event_type,
             payload,
             step_id=step_id,
         )
+        self._session.commit()
+        return event
 
 
 __all__ = ["AgentInputPreparer"]

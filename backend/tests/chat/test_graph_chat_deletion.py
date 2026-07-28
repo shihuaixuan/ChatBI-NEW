@@ -12,6 +12,7 @@ from apps.chatbi.models import (
     AgentRunStatus,
     ChatbiAgentRun,
     ChatbiAgentStep,
+    ChatbiAgentToolCall,
     EventLog,
 )
 from apps.chatbi.repository.sqlmodel.agent_run_repository import (
@@ -58,6 +59,11 @@ def _cleanup_test_data(session: Session, current_user) -> None:
         session.execute(
             delete(EventLog).where(
                 EventLog.run_id.in_(agent_run_ids)
+            )
+        )
+        session.execute(
+            delete(ChatbiAgentToolCall).where(
+                ChatbiAgentToolCall.run_id.in_(agent_run_ids)
             )
         )
         session.execute(
@@ -181,15 +187,26 @@ def test_chat_deletion_removes_owned_workflow_data_but_keeps_standalone_run(
     )
     session.add(agent_run)
     session.flush()
-    session.add(
-        ChatbiAgentStep(
-            run_id=agent_run.id or 0,
-            step_index=1,
-            status="success",
-            created_at=now.replace(tzinfo=None),
-            finished_at=now.replace(tzinfo=None),
-        )
+    agent_step = ChatbiAgentStep(
+        run_id=agent_run.id or 0,
+        step_index=1,
+        status="success",
+        created_at=now.replace(tzinfo=None),
+        finished_at=now.replace(tzinfo=None),
     )
+    session.add(agent_step)
+    session.flush()
+    agent_tool_call = ChatbiAgentToolCall(
+        run_id=agent_run.id or 0,
+        step_id=agent_step.id or 0,
+        tool_call_id="delete-call-1",
+        tool_name="execute_sql",
+        status="succeeded",
+        started_at=now.replace(tzinfo=None),
+        finished_at=now.replace(tzinfo=None),
+    )
+    session.add(agent_tool_call)
+    session.flush()
     session.add(
         EventLog(
             run_id=agent_run.id or 0,
@@ -282,6 +299,7 @@ def test_chat_deletion_removes_owned_workflow_data_but_keeps_standalone_run(
     record_id = record.id or 0
     agent_record_id = agent_record.id or 0
     agent_run_id = agent_run.id or 0
+    agent_tool_call_id = agent_tool_call.id or 0
     owned_run_id = owned_run.run_id
     standalone_run_id = standalone.run_id
 
@@ -299,6 +317,7 @@ def test_chat_deletion_removes_owned_workflow_data_but_keeps_standalone_run(
     assert session.get(ChatRecord, record_id) is None
     assert session.get(ChatRecord, agent_record_id) is None
     assert session.get(ChatbiAgentRun, agent_run_id) is None
+    assert session.get(ChatbiAgentToolCall, agent_tool_call_id) is None
     assert session.exec(
         select(WorkflowRunModel).where(WorkflowRunModel.run_id == owned_run_id)
     ).one_or_none() is None

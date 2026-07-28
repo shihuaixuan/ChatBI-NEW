@@ -7,9 +7,11 @@ from apps.chatbi.models.orm.agent_run import (
     AgentClarificationStatus,
     AgentRunStatus,
     AgentStepStatus,
+    AgentToolCallStatus,
     ChatbiAgentClarification,
     ChatbiAgentRun,
     ChatbiAgentStep,
+    ChatbiAgentToolCall,
 )
 from apps.conversation.composition import build_chat_record_service
 from apps.event import (
@@ -55,12 +57,12 @@ def create_run(
     return run
 
 
-def start_step(session, run: ChatbiAgentRun, step_index: int, tool_name: str | None, args_summary: dict) -> ChatbiAgentStep:
+def start_step(session, run: ChatbiAgentRun, step_index: int) -> ChatbiAgentStep:
+    """创建模型推理轮次；单个工具事实由 Tool Call 记录承载。"""
+
     step = ChatbiAgentStep(
         run_id=run.id,
         step_index=step_index,
-        tool_name=tool_name,
-        args_summary=args_summary,
         status=AgentStepStatus.RUNNING.value,
         created_at=now(),
     )
@@ -87,6 +89,55 @@ def fail_step(session, step: ChatbiAgentStep, error: str) -> None:
     if step.created_at:
         step.latency_ms = int((step.finished_at - step.created_at).total_seconds() * 1000)
     session.add(step)
+
+
+def start_tool_call(
+    session,
+    *,
+    run_id: int,
+    step_id: int,
+    tool_call_id: str,
+    tool_name: str,
+    args_summary: dict,
+) -> ChatbiAgentToolCall:
+    """创建独立 Tool Call 记录；事务提交由编排层统一控制。"""
+
+    tool_call = ChatbiAgentToolCall(
+        run_id=run_id,
+        step_id=step_id,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        status=AgentToolCallStatus.RUNNING.value,
+        args_summary=args_summary,
+        started_at=now(),
+    )
+    session.add(tool_call)
+    session.flush()
+    session.refresh(tool_call)
+    return tool_call
+
+
+def finish_tool_call(
+    session,
+    tool_call: ChatbiAgentToolCall,
+    *,
+    status: AgentToolCallStatus,
+    result_summary: dict,
+    error_code: str | None = None,
+) -> None:
+    """设置 Tool Call 终态；记录与对应事件必须由调用方在同一事务提交。"""
+
+    if status == AgentToolCallStatus.RUNNING:
+        raise ValueError("TOOL_CALL_TERMINAL_STATUS_REQUIRED")
+    tool_call.status = status.value
+    tool_call.result_summary = result_summary
+    tool_call.error_code = error_code
+    tool_call.finished_at = now()
+    if tool_call.started_at:
+        tool_call.latency_ms = int(
+            (tool_call.finished_at - tool_call.started_at).total_seconds() * 1000
+        )
+    session.add(tool_call)
 
 
 def update_run(
@@ -241,6 +292,11 @@ def build_timeline_response(session, record_id: int) -> dict:
     steps = session.exec(
         select(ChatbiAgentStep).where(ChatbiAgentStep.run_id == run.id).order_by(ChatbiAgentStep.step_index)
     ).scalars().all()
+    tool_calls = session.exec(
+        select(ChatbiAgentToolCall)
+        .where(ChatbiAgentToolCall.run_id == run.id)
+        .order_by(ChatbiAgentToolCall.started_at, ChatbiAgentToolCall.id)
+    ).scalars().all()
     events = list_persisted_events_after(session, run.id, 0)
     return {
         "record_id": record_id,
@@ -250,6 +306,7 @@ def build_timeline_response(session, record_id: int) -> dict:
         "budget": run.budget_snapshot or {},
         "steps": [
             {
+                "id": step.id,
                 "index": step.step_index,
                 "tool_name": step.tool_name,
                 "status": step.status,
@@ -260,6 +317,19 @@ def build_timeline_response(session, record_id: int) -> dict:
                 "error": step.error,
             }
             for step in steps
+        ],
+        "tool_calls": [
+            {
+                "tool_call_id": item.tool_call_id,
+                "step_id": item.step_id,
+                "tool_name": item.tool_name,
+                "status": item.status,
+                "latency_ms": item.latency_ms,
+                "args_summary": item.args_summary or {},
+                "result_summary": item.result_summary or {},
+                "error_code": item.error_code,
+            }
+            for item in tool_calls
         ],
         "events": [
             {"sequence": event.sequence, **(event.payload or {})} for event in events
@@ -286,6 +356,11 @@ class AgentExecutionDeletionService:
         self._session.execute(
             delete(ChatbiAgentClarification).where(
                 col(ChatbiAgentClarification.run_id).in_(run_ids)
+            )
+        )
+        self._session.execute(
+            delete(ChatbiAgentToolCall).where(
+                col(ChatbiAgentToolCall.run_id).in_(run_ids)
             )
         )
         self._session.execute(

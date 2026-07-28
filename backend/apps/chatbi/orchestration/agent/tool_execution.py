@@ -5,11 +5,12 @@ from __future__ import annotations
 from collections.abc import Generator
 from dataclasses import dataclass
 from enum import StrEnum
+from time import perf_counter
 from typing import Any, cast
 
 import orjson
 
-from apps.chatbi.models import AgentClarificationResumeKind
+from apps.chatbi.models import AgentClarificationResumeKind, AgentToolCallStatus
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.messages import (
@@ -97,14 +98,64 @@ class AgentToolExecutor:
         budget = state.budget
         batches = batch_tool_calls(calls, self._registry.get)
         offload_store = context.state.setdefault("tool_offloads", {})
+        tool_call_rows: dict[str, Any] = {}
+        completed_count = 0
+        failed_count = 0
+
+        # 模型一次返回的每个 Tool Call 都先建立独立事实记录和开始事件。
+        for call in calls:
+            if not call.call_id:
+                raise ValueError("AGENT_TOOL_CALL_ID_REQUIRED")
+            args_summary = _tool_args_summary(call.name, call.args, context)
+            tool_call_rows[call.call_id] = agent_run_repository.start_tool_call(
+                self._session,
+                run_id=state.require_run_id(),
+                step_id=step.id,
+                tool_call_id=call.call_id,
+                tool_name=call.name,
+                args_summary=args_summary,
+            )
+            yield self._publish(
+                state,
+                "tool-called",
+                {
+                    "record_id": record.id,
+                    "tool_call_id": call.call_id,
+                    "step_id": step.id,
+                    "tool_name": call.name,
+                    "status": AgentToolCallStatus.RUNNING.value,
+                    "args_summary": args_summary,
+                },
+                step.id,
+            )
 
         for batch in batches:
             for call in batch:
                 fuse = budget.check_tool_call(call.name, call.args)
                 if not fuse.allowed:
-                    step.tool_name = call.name
-                    step.args_summary = _tool_args_summary(call.name, call.args, context)
-                    self._session.add(step)
+                    result = ToolResult.rejected(
+                        cast(str, fuse.reason),
+                        error_code="tool_call_budget_rejected",
+                        error_category=ToolErrorCategory.BUSINESS_RULE,
+                    )
+                    yield self._finish_tool_call_event(
+                        state,
+                        step,
+                        tool_call_rows.pop(call.call_id),
+                        result,
+                        {
+                            "success": False,
+                            "status": result.status.value,
+                            "error_code": result.error_code,
+                        },
+                    )
+                    yield from self._interrupt_open_tool_calls(
+                        state,
+                        step,
+                        calls,
+                        tool_call_rows,
+                        reason="当前运行已被工具调用预算终止",
+                    )
                     agent_run_repository.fail_step(
                         self._session,
                         step,
@@ -121,6 +172,34 @@ class AgentToolExecutor:
                         str(call.args.get("sql") or "")
                     )
                     if not sql_verdict.allowed:
+                        result = ToolResult.rejected(
+                            cast(str, sql_verdict.reason),
+                            error_code="sql_correction_budget_rejected",
+                            error_category=ToolErrorCategory.BUSINESS_RULE,
+                        )
+                        yield self._finish_tool_call_event(
+                            state,
+                            step,
+                            tool_call_rows.pop(call.call_id),
+                            result,
+                            {
+                                "success": False,
+                                "status": result.status.value,
+                                "error_code": result.error_code,
+                            },
+                        )
+                        yield from self._interrupt_open_tool_calls(
+                            state,
+                            step,
+                            calls,
+                            tool_call_rows,
+                            reason="当前运行已被 SQL 修正预算终止",
+                        )
+                        agent_run_repository.fail_step(
+                            self._session,
+                            step,
+                            cast(str, sql_verdict.reason),
+                        )
                         yield from self._lifecycle.fail(
                             state,
                             cast(str, sql_verdict.reason),
@@ -128,33 +207,35 @@ class AgentToolExecutor:
                         )
                         return ToolExecutionResult(ToolExecutionStatus.FAILED)
 
-            for call in batch:
-                step.tool_name = call.name
-                step.args_summary = _tool_args_summary(call.name, call.args, context)
-                self._session.add(step)
-                yield self._publish(
-                    state,
-                    "tool-called",
-                    {
-                        "record_id": record.id,
-                        "tool_name": call.name,
-                        "args_summary": step.args_summary,
-                    },
-                    step.id,
+            try:
+                executed = execute_tool_batch(
+                    batch,
+                    lambda call: self._execute_one(
+                        context,
+                        state,
+                        step,
+                        mode,
+                        call,
+                    ),
+                    max_workers=int(
+                        getattr(self._config, "tool_parallel_workers", 4) or 4
+                    ),
                 )
-
-            executed = execute_tool_batch(
-                batch,
-                lambda call: self._execute_one(
-                    context,
+            except Exception:
+                yield from self._interrupt_open_tool_calls(
+                    state,
                     step,
-                    mode,
-                    call,
-                ),
-                max_workers=int(
-                    getattr(self._config, "tool_parallel_workers", 4) or 4
-                ),
-            )
+                    calls,
+                    tool_call_rows,
+                    reason="工具执行发生未声明异常",
+                )
+                agent_run_repository.fail_step(
+                    self._session,
+                    step,
+                    "工具执行发生未声明异常",
+                )
+                self._session.commit()
+                raise
 
             for call, result in executed:
                 projection = self._result_processor.process(
@@ -182,25 +263,51 @@ class AgentToolExecutor:
                 ):
                     clarify_verdict = state.chatbi_budget.record_clarification()
                     if not clarify_verdict.allowed:
-                        state.messages.append(
-                            AgentMessage.tool(
-                                "澄清次数已达上限，请基于现有信息继续，或如实说明无法完成。",
-                                call_id,
-                            )
+                        result = ToolResult.rejected(
+                            "澄清次数已达上限，请基于现有信息继续，或如实说明无法完成。",
+                            error_code="clarification_budget_rejected",
+                            error_category=ToolErrorCategory.BUSINESS_RULE,
                         )
-                        agent_run_repository.finish_step(
-                            self._session,
-                            step,
-                            {"tool": "clarify", "rejected": "budget"},
-                            usage,
+                        projection = self._result_processor.process(
+                            context,
+                            call.name,
+                            result,
                         )
-                        continue
+
+                result_summary = _bounded_summary(projection.audit_summary)
+                yield self._finish_tool_call_event(
+                    state,
+                    step,
+                    tool_call_rows.pop(call_id),
+                    result,
+                    result_summary,
+                )
+                if result.status == ToolStatus.SUCCEEDED:
+                    completed_count += 1
+                else:
+                    failed_count += 1
+
+                if (
+                    projection.control == ToolControlAction.CLARIFY
+                    and result.status == ToolStatus.SUCCEEDED
+                ):
+                    yield from self._interrupt_open_tool_calls(
+                        state,
+                        step,
+                        calls,
+                        tool_call_rows,
+                        reason="当前运行已进入澄清等待",
+                    )
                     agent_run_repository.finish_step(
                         self._session,
                         step,
-                        {"tool": "clarify"},
+                        {
+                            "tool_call_count": completed_count + failed_count,
+                            "failed_tool_call_count": failed_count,
+                        },
                         usage,
                     )
+                    self._session.commit()
                     yield self._lifecycle.suspend(
                         state,
                         str(data["question"]),
@@ -226,18 +333,34 @@ class AgentToolExecutor:
                     projection.control == ToolControlAction.FINISH
                     and result.status == ToolStatus.SUCCEEDED
                 ):
+                    yield from self._interrupt_open_tool_calls(
+                        state,
+                        step,
+                        calls,
+                        tool_call_rows,
+                        reason="当前运行已完成",
+                    )
                     close_unfinished_tool_calls(state.messages)
                     agent_run_repository.finish_step(
                         self._session,
                         step,
-                        {"tool": "finish"},
+                        {
+                            "tool_call_count": completed_count + failed_count,
+                            "failed_tool_call_count": failed_count,
+                        },
                         usage,
                     )
+                    self._session.commit()
                     if data.get("chart"):
                         yield self._publish(
                             state,
                             "chart-generated",
-                            {"record_id": record.id, "chart": data["chart"]},
+                            {
+                                "record_id": record.id,
+                                "tool_call_id": call_id,
+                                "step_id": step.id,
+                                "chart": data["chart"],
+                            },
                             step.id,
                         )
                     yield from self._lifecycle.finish(
@@ -251,35 +374,16 @@ class AgentToolExecutor:
                     )
                     return ToolExecutionResult(ToolExecutionStatus.FINISHED)
 
-                result_summary = projection.audit_summary
-                if result.status == ToolStatus.SUCCEEDED:
-                    agent_run_repository.finish_step(
-                        self._session,
-                        step,
-                        result_summary,
-                        usage,
-                    )
-                else:
-                    agent_run_repository.fail_step(
-                        self._session,
-                        step,
-                        result.model_content[:500],
-                    )
-                yield self._publish(
-                    state,
-                    "tool-result",
-                    {
-                        "record_id": record.id,
-                        "tool_name": tool_name,
-                        **result_summary,
-                    },
-                    step.id,
-                )
                 for event in projection.events:
                     yield self._publish(
                         state,
                         event.event_type,
-                        {"record_id": record.id, **event.payload},
+                        {
+                            "record_id": record.id,
+                            "tool_call_id": call_id,
+                            "step_id": step.id,
+                            **_bounded_summary(event.payload),
+                        },
                         step.id,
                     )
 
@@ -289,6 +393,15 @@ class AgentToolExecutor:
                         result,
                     )
 
+        agent_run_repository.finish_step(
+            self._session,
+            step,
+            {
+                "tool_call_count": completed_count + failed_count,
+                "failed_tool_call_count": failed_count,
+            },
+            usage,
+        )
         agent_run_repository.update_run(
             self._session,
             state.run,
@@ -302,13 +415,20 @@ class AgentToolExecutor:
     def _execute_one(
         self,
         context: AgentToolContext,
+        state: AgentRuntimeState,
         step: Any,
         mode: str,
         call: ToolCall,
     ) -> ToolResult[Any]:
+        started_at = perf_counter()
         with self._tracer.span(
             "execute_tool",
-            tool_attributes(tool_name=call.name, step_id=step.id),
+            tool_attributes(
+                tool_name=call.name,
+                run_id=state.require_run_id(),
+                step_id=step.id,
+                tool_call_id=call.call_id,
+            ),
         ) as tool_span:
             if mode == "soft" and call.name not in {"finish", "clarify"}:
                 result = ToolResult.rejected(
@@ -322,7 +442,88 @@ class AgentToolExecutor:
                 "gen_ai.tool.call.result",
                 result.status.value,
             )
+            if result.error_category is not None:
+                tool_span.set_attribute(
+                    "gen_ai.tool.error.type",
+                    result.error_category.value,
+                )
+            tool_span.set_attribute(
+                "app.domain.retry_count",
+                int(result.metadata.get("retry_count") or 0),
+            )
+            tool_span.set_attribute(
+                "app.tool.latency_ms",
+                int((perf_counter() - started_at) * 1000),
+            )
             return result
+
+    def _finish_tool_call_event(
+        self,
+        state: AgentRuntimeState,
+        step: Any,
+        tool_call_row: Any,
+        result: ToolResult[Any],
+        result_summary: dict[str, Any],
+    ) -> RenderEvent:
+        status = AgentToolCallStatus(result.status.value)
+        agent_run_repository.finish_tool_call(
+            self._session,
+            tool_call_row,
+            status=status,
+            result_summary=result_summary,
+            error_code=result.error_code,
+        )
+        event_type = (
+            "tool-result"
+            if result.status == ToolStatus.SUCCEEDED
+            else "tool-failed"
+        )
+        return self._publish(
+            state,
+            event_type,
+            {
+                "record_id": state.record.id,
+                "tool_call_id": tool_call_row.tool_call_id,
+                "step_id": step.id,
+                "tool_name": tool_call_row.tool_name,
+                "status": status.value,
+                "latency_ms": tool_call_row.latency_ms,
+                "result_summary": result_summary,
+                **result_summary,
+            },
+            step.id,
+        )
+
+    def _interrupt_open_tool_calls(
+        self,
+        state: AgentRuntimeState,
+        step: Any,
+        calls: list[ToolCall],
+        tool_call_rows: dict[str, Any],
+        *,
+        reason: str,
+    ) -> Generator[RenderEvent, None, None]:
+        """按模型调用顺序关闭尚未产生结果的 Tool Call。"""
+
+        for call in calls:
+            row = tool_call_rows.pop(call.call_id, None)
+            if row is None:
+                continue
+            result = ToolResult.interrupted(
+                reason,
+                error_code="tool_call_interrupted",
+            )
+            yield self._finish_tool_call_event(
+                state,
+                step,
+                row,
+                result,
+                {
+                    "success": False,
+                    "status": result.status.value,
+                    "error_code": result.error_code,
+                },
+            )
 
     def _publish(
         self,
@@ -331,19 +532,45 @@ class AgentToolExecutor:
         payload: dict[str, Any],
         step_id: int | None = None,
     ) -> RenderEvent:
-        return self._event_publisher.publish(
+        event = self._event_publisher.publish(
             state.require_run_id(),
             event_type,
             payload,
             step_id=step_id,
         )
+        self._session.commit()
+        return event
 
 
 def _args_summary(args: dict[str, Any]) -> dict[str, Any]:
-    encoded = orjson.dumps(args).decode()
+    return _bounded_summary(args)
+
+
+def _bounded_summary(value: dict[str, Any]) -> dict[str, Any]:
+    """递归脱敏并限制摘要长度，避免事件和事实表保存敏感或大体积内容。"""
+
+    sanitized = _redact_sensitive(value)
+    encoded = orjson.dumps(sanitized).decode()
     if len(encoded) > 2000:
         return {"_truncated": encoded[:2000]}
-    return args
+    return sanitized
+
+
+def _redact_sensitive(value: Any, key: str = "") -> Any:
+    normalized_key = key.lower().replace("-", "_")
+    if any(
+        marker in normalized_key
+        for marker in ("password", "secret", "token", "credential", "api_key")
+    ):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {
+            str(item_key): _redact_sensitive(item_value, str(item_key))
+            for item_key, item_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+    return value
 
 
 def _tool_args_summary(

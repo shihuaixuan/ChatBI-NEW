@@ -13,10 +13,14 @@ _ALLOWED_ATTRIBUTES = {
     "gen_ai.usage.total_tokens",
     "gen_ai.tool.name",
     "gen_ai.tool.call.result",
+    "gen_ai.tool.error.type",
     "app.chat.id",
     "app.record.id",
     "app.run.id",
     "app.step.id",
+    "app.tool_call.id",
+    "app.tool.latency_ms",
+    "app.domain.retry_count",
 }
 
 
@@ -49,10 +53,19 @@ def llm_attributes(*, model: str) -> dict[str, Any]:
     }
 
 
-def tool_attributes(*, tool_name: str, step_id: int | None) -> dict[str, Any]:
+def tool_attributes(
+    *,
+    tool_name: str,
+    run_id: int,
+    step_id: int | None,
+    tool_call_id: str,
+) -> dict[str, Any]:
     attributes: dict[str, Any] = {
         "gen_ai.operation.name": "execute_tool",
+        "gen_ai.agent.name": "chatbi",
         "gen_ai.tool.name": tool_name,
+        "app.run.id": run_id,
+        "app.tool_call.id": tool_call_id,
     }
     if step_id is not None:
         attributes["app.step.id"] = step_id

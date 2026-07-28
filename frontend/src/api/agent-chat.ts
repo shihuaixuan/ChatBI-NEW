@@ -32,6 +32,7 @@ export type AgentStreamRequest =
     }
 
 export interface AgentTimelineStep {
+  id?: number
   index: number
   tool_name?: string
   status: string
@@ -41,6 +42,17 @@ export interface AgentTimelineStep {
   error?: string
 }
 
+export interface AgentTimelineToolCall {
+  tool_call_id: string
+  step_id: number
+  tool_name: string
+  status: string
+  latency_ms?: number
+  args_summary?: Record<string, any>
+  result_summary?: Record<string, any>
+  error_code?: string
+}
+
 export interface AgentTimelineResponse {
   record_id: number
   run_id?: number
@@ -48,6 +60,7 @@ export interface AgentTimelineResponse {
   error_class?: string
   budget?: Record<string, any>
   steps: AgentTimelineStep[]
+  tool_calls?: AgentTimelineToolCall[]
   events: Array<Record<string, any>>
   clarification?: AgentClarification
 }
