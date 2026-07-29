@@ -34,10 +34,8 @@ export type AgentStreamRequest =
 export interface AgentTimelineStep {
   id?: number
   index: number
-  tool_name?: string
   status: string
   latency_ms?: number
-  args_summary?: Record<string, any>
   result_summary?: Record<string, any>
   error?: string
 }

@@ -120,7 +120,6 @@ from apps.chatbi.models.dto.sql_generation import (
     SQLGenerationResult,
 )
 from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
-from apps.chatbi.models.dto.tool_result import ToolResult
 
 __all__ = [
     "AgentClarificationRequest",
@@ -203,5 +202,4 @@ __all__ = [
     "SQLGenerationEvent",
     "SQLGenerationResult",
     "TimeRange",
-    "ToolResult",
 ]

@@ -56,7 +56,7 @@
 | E2 | 原 5 套流式 DTO 旧名、7 个旧 Client 协议名、5 个旧 LangChain 客户端类名 | 旧别名删除，调用方统一使用 ModelMessage / ModelStreamChunk / GenerationModelClient / LangChainGenerationModelClient | 无 | 调用方改用共享名 | R4-d | 已清 |
 | E3 | 原 `QuestionModelService = StructuredModelService` 别名 | 旧名删除，调用方统一使用 `StructuredModelService` | 无 | 调用方改用 `StructuredModelService` | R4-d | 已清 |
 | E4 | 原 `understanding/graph_contracts.py` 中 `QuestionIntentValidationService` 薄包装类 | Graph 与测试已直接调用 `validate_intent()`、`intent_retry_feedback()` | 无 | B7 删除时一并清偿 | R4-c | 已清 |
-| E5 | 原 `QueryService = GuardedQueryService` 别名 | 旧名删除；运行时调用方统一使用 `GuardedQueryService`，Agent 工具局部 Protocol 不属于该别名 | 无 | 调用方改用新名 | R4-d | 已清 |
+| E5 | 原 `QueryService = GuardedQueryService` 别名 | 旧名和旧服务均已删除；Agent、Graph 统一使用 Datasource `DatasourceQueryService` | 无 | 调用方改用 Datasource 公开查询入口 | R4-d | 已清 |
 | E6 | 原 `SemanticQueryService = SemanticCompilationService` 别名 | 旧名删除，调用方统一使用 `SemanticCompilationService` | 无 | 同上 | R4-d | 已清 |
 | E7 | 原 `GenerationSchemaContextService = SchemaContextService` 别名 | 旧名删除，调用方统一使用 `SchemaContextService` | 无 | 调用方改用新名 | R4-d | 已清 |
 | E8 | 原 `apps/dashboard/models/dashboard_model.py` | Dashboard 的 Xpack 旧模型入口已删除 | 无 | 项目移除 Xpack 依赖 | R6 | 已清 |

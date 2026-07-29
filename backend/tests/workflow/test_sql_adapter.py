@@ -1,10 +1,11 @@
 import re
 import threading
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
+from typing import Any
 
 import pytest
 
-from apps.chatbi.models import ChatBIResultArtifactRef, ToolResult
+from apps.chatbi.models import ChatBIResultArtifactRef
 from apps.chatbi.orchestration.graph.capabilities.adapters.sql import (
     SqlAdapter as ProductionSqlAdapter,
 )
@@ -18,6 +19,16 @@ from apps.datasource.models.dto import (
 from apps.datasource.services import DatasourceQueryService
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.sql_compiler import SemanticSQLCompileResult
+
+
+@dataclass
+class _ExecutorResult:
+    """旧执行器测试替身的局部返回值，不进入生产领域契约。"""
+
+    success: bool
+    payload: dict[str, Any] = field(default_factory=dict)
+    message: str | None = None
+    error_code: str | None = None
 
 
 class _DynamicPolicyProvider:
@@ -772,11 +783,11 @@ def test_sql_adapter_rejects_retry_when_regenerated_sql_is_same_as_failed_sql():
 
 
 class FakeDatasourceQueryExecutor:
-    def __init__(self, result: ToolResult) -> None:
+    def __init__(self, result: _ExecutorResult) -> None:
         self.result = result
         self.payloads: list[dict] = []
 
-    def run(self, payload: dict) -> ToolResult:
+    def run(self, payload: dict) -> _ExecutorResult:
         self.payloads.append(payload)
         return self.result
 
@@ -807,7 +818,7 @@ class BlockingDatasourceQueryExecutor:
         self.active_calls = 0
         self.max_active_calls = 0
 
-    def run(self, payload: dict) -> ToolResult:
+    def run(self, payload: dict) -> _ExecutorResult:
         with self.lock:
             self.active_calls += 1
             self.max_active_calls = max(self.max_active_calls, self.active_calls)
@@ -815,21 +826,21 @@ class BlockingDatasourceQueryExecutor:
         with self.lock:
             self.active_calls -= 1
         value = 1 if "first" in payload["sql"] else 2
-        return ToolResult(
+        return _ExecutorResult(
             success=True,
             payload={"fields": ["value"], "data": [{"value": value}]},
         )
 
 
 class SelectiveFailureDatasourceQueryExecutor:
-    def run(self, payload: dict) -> ToolResult:
+    def run(self, payload: dict) -> _ExecutorResult:
         if "failed" in payload["sql"]:
-            return ToolResult(
+            return _ExecutorResult(
                 success=False,
                 error_code="sql_execute_error",
                 message="query failed",
             )
-        return ToolResult(
+        return _ExecutorResult(
             success=True,
             payload={"fields": ["value"], "data": [{"value": 1}]},
         )
@@ -842,7 +853,7 @@ class DenySQLPermissionService:
 
 def test_sql_adapter_executes_sql_and_normalizes_result_rows():
     execute_tool = FakeDatasourceQueryExecutor(
-        ToolResult(
+        _ExecutorResult(
             success=True,
             payload={
                 "fields": ["visit_uv"],
@@ -882,7 +893,7 @@ def test_sql_adapter_executes_sql_and_normalizes_result_rows():
 
 def test_sql_adapter_executes_single_query_with_uniform_result_and_artifact():
     execute_tool = FakeDatasourceQueryExecutor(
-        ToolResult(
+        _ExecutorResult(
             success=True,
             payload={
                 "fields": ["value"],
@@ -922,7 +933,7 @@ def test_sql_adapter_executes_single_query_with_uniform_result_and_artifact():
 
 def test_sql_adapter_returns_stable_failure_when_artifact_write_fails():
     execute_tool = FakeDatasourceQueryExecutor(
-        ToolResult(success=True, payload={"fields": ["value"], "data": [{"value": 1}]})
+        _ExecutorResult(success=True, payload={"fields": ["value"], "data": [{"value": 1}]})
     )
     adapter = SqlAdapter(
         execute_tool=execute_tool,
@@ -997,7 +1008,7 @@ def test_sql_adapter_executes_cross_model_plans_as_independent_queries():
         ],
     )
     execute_tool = FakeDatasourceQueryExecutor(
-        ToolResult(success=True, payload={"fields": ["value"], "data": [{"value": 10}]})
+        _ExecutorResult(success=True, payload={"fields": ["value"], "data": [{"value": 10}]})
     )
     adapter = SqlAdapter(
         schema_provider=FakeDatasetSchemaProvider(schema),
@@ -1117,7 +1128,7 @@ def test_sql_adapter_preserves_successful_split_result_when_sibling_fails():
 
 def test_sql_adapter_keeps_only_sample_rows_for_large_result():
     execute_tool = FakeDatasourceQueryExecutor(
-        ToolResult(
+        _ExecutorResult(
             success=True,
             payload={
                 "fields": ["visit_uv"],
@@ -1147,7 +1158,7 @@ def test_sql_adapter_keeps_only_sample_rows_for_large_result():
 
 def test_sql_adapter_uses_chatbi_config_sample_row_limit():
     execute_tool = FakeDatasourceQueryExecutor(
-        ToolResult(
+        _ExecutorResult(
             success=True,
             payload={
                 "fields": ["visit_uv"],
@@ -1177,7 +1188,7 @@ def test_sql_adapter_uses_chatbi_config_sample_row_limit():
 
 def test_sql_adapter_returns_failed_result_when_execute_tool_fails():
     execute_tool = FakeDatasourceQueryExecutor(
-        ToolResult(success=False, error_code="sql_execute_error", message="table not found")
+        _ExecutorResult(success=False, error_code="sql_execute_error", message="table not found")
     )
     adapter = SqlAdapter(execute_tool=execute_tool)
 
@@ -1200,7 +1211,7 @@ def test_sql_adapter_returns_failed_result_when_execute_tool_fails():
 
 
 def test_sql_adapter_does_not_execute_sql_when_permission_denied():
-    execute_tool = FakeDatasourceQueryExecutor(ToolResult(success=True, payload={"fields": [], "data": []}))
+    execute_tool = FakeDatasourceQueryExecutor(_ExecutorResult(success=True, payload={"fields": [], "data": []}))
     adapter = SqlAdapter(execute_tool=execute_tool, permission_adapter=DenySQLPermissionService())
 
     result = adapter.execute(
@@ -1337,7 +1348,7 @@ def test_execute_split_preserves_sub_plan_role_for_share_analysis_e2e():
         def run(self, payload):
             sql = payload.get("sql", "")
             if "shop_name" in sql:
-                return ToolResult(
+                return _ExecutorResult(
                     success=True,
                     payload={
                         "fields": ["shop_name", "visit_uv"],
@@ -1347,7 +1358,7 @@ def test_execute_split_preserves_sub_plan_role_for_share_analysis_e2e():
                         ],
                     },
                 )
-            return ToolResult(
+            return _ExecutorResult(
                 success=True,
                 payload={"fields": ["visit_uv"], "data": [{"visit_uv": 100}]},
             )

@@ -308,10 +308,8 @@ def build_timeline_response(session, record_id: int) -> dict:
             {
                 "id": step.id,
                 "index": step.step_index,
-                "tool_name": step.tool_name,
                 "status": step.status,
                 "latency_ms": step.latency_ms,
-                "args_summary": step.args_summary or {},
                 "result_summary": step.result_summary or {},
                 "token_usage": step.token_usage,
                 "error": step.error,

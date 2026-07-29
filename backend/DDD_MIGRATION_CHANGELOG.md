@@ -2558,3 +2558,12 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
 3. `COMPAT_LEDGER` 将 C2（`/chat`、`/chat/agent`、`/graph`）转正为正式接口；内部
    `legacy_*` 实现登记为已清。`apps/chatbi/__init__.py` 公共面不导出会话内部实现。
 4. 架构守卫与会话删除回归同步切换到新组合入口。
+
+## ChatBI Agent Tool 架构阶段 7（2026-07-28）：旧契约清理与总验收
+
+1. 删除仅由 Graph SQL 适配测试替身使用的旧 ChatBI `ToolResult(success, payload)` DTO 及公共导出；测试替身改用测试文件内局部返回类型，生产 Tool 只保留 `apps.tool.ToolResult`。
+2. 新增迁移 `098_remove_agent_step_tool_facts`，删除 `chatbi_agent_step.tool_name` 和 `args_summary`。Step 只保存推理轮次事实，具体工具名称、参数、结果和耗时统一由 `chatbi_agent_tool_call` 保存。
+3. Timeline Step 契约和前端类型同步删除旧字段；Tool 展示只读取独立 Tool Call 或产品 Event，不再回退到 Step 工具字段。
+4. 同步 `BACKEND_STRUCTURE.md`、Agent Event/Trace 方案和 ChatBI Agent Tool 设计，明确项目自有 Tool Runtime、Datasource 统一查询入口、Event 应用层事务、Tool Call、真实超时和取消状态均为当前实现。
+5. 本地 PostgreSQL 已完成 `097 → 098 → 097 → 098` 升级、降级和再升级验证，最终位于 `098_remove_agent_step_tool_facts`。
+6. 架构守卫 124 项、完整后端测试 1244 项、前端 Timeline 11 项、前端生产构建、变更范围 Ruff 和定向 ESLint 通过。全目录 Mypy 仍有项目既有基线，未在本批进行无关类型重构。

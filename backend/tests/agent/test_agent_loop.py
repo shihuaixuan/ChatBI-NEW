@@ -744,8 +744,7 @@ def test_multiple_tool_calls_preserve_model_order_in_events_and_observations():
         for item in session.added
         if isinstance(item, ChatbiAgentStep) and item.step_index == 1
     )
-    assert first_step.tool_name is None
-    assert first_step.args_summary == {}
+    assert first_step.result_summary["tool_call_count"] == 2
 
     second_turn_tool_messages = [
         message

@@ -79,7 +79,6 @@ from apps.chatbi.models.dto import (
     SQLGenerationEvent,
     SQLGenerationResult,
     TimeRange,
-    ToolResult,
 )
 from apps.chatbi.models.orm import (
     AgentClarificationResumeKind,
@@ -187,5 +186,4 @@ __all__ = [
     "SQLGenerationEvent",
     "SQLGenerationResult",
     "TimeRange",
-    "ToolResult",
 ]

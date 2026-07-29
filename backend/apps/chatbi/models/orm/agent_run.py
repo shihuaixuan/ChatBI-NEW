@@ -112,11 +112,6 @@ class ChatbiAgentStep(SQLModel, table=True):
     id: int | None = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
     run_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     step_index: int = Field(sa_column=Column(Integer, nullable=False))
-    tool_name: str | None = Field(default=None, max_length=128, nullable=True)
-    args_summary: dict = Field(
-        default_factory=dict,
-        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
-    )
     result_summary: dict = Field(
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
