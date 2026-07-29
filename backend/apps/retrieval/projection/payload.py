@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Literal, cast
 
-from apps.chatbi.services.understanding.time_range import (
-    normalize_time_range_payload,
-)
 from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,
@@ -26,6 +23,7 @@ from apps.retrieval.models.dto import (
     RetrievalSlotDecision,
     RetrievalSourceType,
 )
+from apps.semantic import normalize_time_range_payload
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 _GROUP_TYPES = {

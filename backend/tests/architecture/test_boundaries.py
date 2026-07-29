@@ -869,6 +869,8 @@ def test_public_tools_do_not_read_chatbi_state_or_build_services_at_runtime():
         "GetDatasetSchemaTool",
         "ValidateSqlTool",
         "ExecuteSqlTool",
+        "SearchSemanticAssetsTool",
+        "CompileSemanticSqlTool",
         "SearchTerminologyTool",
         "GetSqlExamplesTool",
     ):
@@ -894,66 +896,78 @@ def test_datasource_query_service_has_no_session_or_repository_dependency():
     assert not any(".repository" in module for module in imports)
 
 
-def test_agent_and_graph_share_chatbi_semantic_query_service():
-    agent_source = (
+def test_agent_uses_public_semantic_tool_and_graph_keeps_its_adapter():
+    public_tool_source = (
+        BACKEND_DIR__query / "apps/tool/tools/semantic.py"
+    ).read_text(encoding="utf-8")
+    public_tool_imports = _imports__query("apps/tool/tools/semantic.py")
+    agent_core_source = (
         BACKEND_DIR__query / "apps/chatbi/orchestration/agent/tools/core.py"
     ).read_text(encoding="utf-8")
     graph_source = (
         BACKEND_DIR__query / "apps/chatbi/orchestration/graph/capabilities/adapters/sql.py"
     ).read_text(encoding="utf-8")
 
-    assert "semantic_query_service.compile" in agent_source
-    assert "compile_semantic_sql(" not in agent_source
+    assert "self._compilation_service.compile" in public_tool_source
+    assert not any(module.startswith("apps.chatbi") for module in public_tool_imports)
+    assert "class CompileSemanticSqlTool" not in agent_core_source
     assert "_compile_semantic_query" in graph_source
     assert "self._compiler.compile" not in graph_source
 
 
-def test_chatbi_semantic_query_service_has_no_session_or_repository_dependency():
-    imports = _imports__query("apps/chatbi/services/planning/semantic_compilation.py")
+def test_chatbi_no_longer_owns_semantic_forwarding_services_or_dtos():
+    removed_paths = (
+        "apps/chatbi/services/planning/semantic_compilation.py",
+        "apps/chatbi/services/planning/semantic_retrieval.py",
+        "apps/chatbi/models/dto/semantic_query.py",
+        "apps/chatbi/models/dto/semantic_retrieval.py",
+    )
 
-    assert "sqlmodel" not in imports
-    assert not any(".repository" in module for module in imports)
-    assert not any(".models.orm" in module for module in imports)
+    for relative_path in removed_paths:
+        assert not (BACKEND_DIR__query / relative_path).exists()
 
 
-def test_agent_semantic_retrieval_and_physical_schema_use_chatbi_services():
-    imports = _imports__query("apps/chatbi/orchestration/agent/tools/core.py")
+def test_public_semantic_retrieval_and_physical_schema_use_domain_services():
+    imports = _imports__query("apps/tool/tools/semantic.py")
     source = (
+        BACKEND_DIR__query / "apps/tool/tools/semantic.py"
+    ).read_text(encoding="utf-8")
+    core_source = (
         BACKEND_DIR__query / "apps/chatbi/orchestration/agent/tools/core.py"
     ).read_text(encoding="utf-8")
     schema_source = (
         BACKEND_DIR__query / "apps/tool/tools/datasource.py"
     ).read_text(encoding="utf-8")
 
-    assert "apps.capabilities.semantic.retrieval" not in imports
     assert "apps.datasource" in imports
+    assert "apps.retrieval" in imports
+    assert "apps.semantic" in imports
+    assert not any(module.startswith("apps.chatbi") for module in imports)
     assert not any(module.startswith("apps.datasource.models") for module in imports)
-    assert "semantic_retrieval_service.retrieve_for_agent" in source
+    assert "self._retrieval_service.retrieve" in source
     assert "self._schema_reader.get" in schema_source
-    assert "class GetDatasetSchemaTool" not in source
+    assert "class SearchSemanticAssetsTool" not in core_source
+    assert "class GetDatasetSchemaTool" not in core_source
 
 
-def test_graph_semantic_retrieval_uses_chatbi_service():
+def test_graph_semantic_retrieval_uses_public_retrieval_service():
     imports = _imports__query("apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py")
     source = (
         BACKEND_DIR__query / "apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py"
     ).read_text(encoding="utf-8")
 
-    assert "apps.chatbi.services.planning" in imports
-    assert "build_semantic_binding_request" not in source
-    assert "semantic_retrieval_service.retrieve" in source
+    assert "apps.retrieval" in imports
+    assert "apps.chatbi.services.planning" not in imports
+    assert "build_semantic_binding_request" in source
+    assert "self._retrieval_service.retrieve" in source
 
 
-def test_chatbi_retrieval_and_schema_services_have_no_runtime_dependency():
-    retrieval_imports = _imports__query(
-        "apps/chatbi/services/planning/semantic_retrieval.py"
-    )
+def test_chatbi_physical_schema_service_has_no_runtime_dependency():
     schema_imports = _imports__query("apps/chatbi/services/planning/physical_schema.py")
 
-    for imports in (retrieval_imports, schema_imports):
-        assert "sqlmodel" not in imports
-        assert not any(".repository" in module for module in imports)
-        assert not any(".models.orm" in module for module in imports)
+    assert "sqlmodel" not in schema_imports
+    assert not any(".repository" in module for module in schema_imports)
+    assert not any(".models.orm" in module for module in schema_imports)
 
 
 def test_agent_dataset_context_does_not_resolve_arbitrary_dataset_by_datasource():

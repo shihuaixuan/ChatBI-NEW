@@ -1,4 +1,4 @@
-from apps.chatbi.services.understanding.time_range import (
+from apps.semantic import (
     is_time_expression,
     normalize_time_range,
 )

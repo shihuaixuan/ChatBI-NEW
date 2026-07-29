@@ -50,7 +50,7 @@ def visible_tool_names(
         return _available(("clarify",), available)
 
     names = list(PREPARATION_TOOLS)
-    if context.get("semantic_asset_ids"):
+    if context.get("semantic_scope"):
         names.append("compile_semantic_sql")
     if context.get("allowed_tables"):
         names.extend(("validate_sql", "execute_sql"))

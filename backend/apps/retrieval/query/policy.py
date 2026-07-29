@@ -7,9 +7,6 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from apps.chatbi.services.understanding.time_range import (
-    normalize_time_range_payload,
-)
 from apps.retrieval.errors import (
     RetrievalProviderUnavailableError,
     RetrievalQueryError,
@@ -40,6 +37,7 @@ from apps.retrieval.query.profiles import (
     SemanticBindingGateThreshold,
     get_retrieval_profile,
 )
+from apps.semantic import normalize_time_range_payload
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 

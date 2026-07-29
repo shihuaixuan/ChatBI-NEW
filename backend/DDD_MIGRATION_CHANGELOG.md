@@ -2567,3 +2567,22 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
 4. 同步 `BACKEND_STRUCTURE.md`、Agent Event/Trace 方案和 ChatBI Agent Tool 设计，明确项目自有 Tool Runtime、Datasource 统一查询入口、Event 应用层事务、Tool Call、真实超时和取消状态均为当前实现。
 5. 本地 PostgreSQL 已完成 `097 → 098 → 097 → 098` 升级、降级和再升级验证，最终位于 `098_remove_agent_step_tool_facts`。
 6. 架构守卫 124 项、完整后端测试 1244 项、前端 Timeline 11 项、前端生产构建、变更范围 Ruff 和定向 ESLint 通过。全目录 Mypy 仍有项目既有基线，未在本批进行无关类型重构。
+
+## ChatBI Agent Tool 架构阶段 8（2026-07-29）：Semantic Tool 公共化
+
+1. `search_semantic_assets` 与 `compile_semantic_sql` 从 ChatBI 专属 Tool 迁入
+   `apps/tool/tools/semantic.py`；ChatBI 直接注册公共 Tool，`tools/core.py` 只保留
+   `FinishTool`，未增加 Agent 专属转发 Tool。
+2. 新增 `SemanticToolContext` 与 `SemanticAssetScope`。Agent 运行层负责投影已确认的
+   `RetrievalRequest` 并保存检索范围，公共 Tool 不读取 ChatBI `state`。
+3. SQL 编译白名单统一使用 `RetrievalDecision.allowed_asset_ids`。结果处理器不再扫描
+   `candidate_groups`，候选资产不能直接进入编译范围；编译前重新校验工作空间、用户、
+   数据源、数据集和当前表权限。
+4. `datasource_id` 与 `used_assets` 由 `SemanticSQLCompilationService` 统一生成，ChatBI
+   编译适配器只转换公开结果；时间表达归一化迁入 Semantic 公共模块，Retrieval 与
+   ChatBI 共用同一实现。
+5. Graph 的 `SemanticKnowledgeAdapter` 与 `SqlAdapter` 直接调用公共
+   `RetrievalService` 和 `SemanticSQLCompilationService`；删除 ChatBI 的语义检索、
+   SQL 编译转发 Service、重复 DTO 及组合工厂。
+6. 完整后端回归 1241 项通过，依赖基线测试 6 项通过；变更范围 Ruff 和核心源文件
+   严格 Mypy 通过。

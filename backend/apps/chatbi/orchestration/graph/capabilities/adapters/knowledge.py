@@ -4,15 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from apps.chatbi.models import SemanticRetrievalData
 from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContext
 from apps.chatbi.orchestration.graph.capabilities.interactions import (
     apply_slot_response_to_intent,
 )
-from apps.chatbi.services.planning import SemanticRetrievalService
 from apps.datasource import DatasourceQueryService, DatasourceQuerySubject
-from apps.retrieval.errors import RetrievalConfigurationError, RetrievalQueryError
-from apps.retrieval.query.service import RetrievalService
+from apps.retrieval import (
+    RetrievalConfigurationError,
+    RetrievalQueryError,
+    RetrievalService,
+    build_semantic_binding_request,
+    filter_semantic_payload_tables,
+)
 from apps.semantic.services.dataset_binding_service import (
     SemanticDatasetBindingService,
 )
@@ -24,15 +27,10 @@ class SemanticKnowledgeAdapter:
     def __init__(
         self,
         retrieval_service: RetrievalService | None = None,
-        semantic_retrieval_service: SemanticRetrievalService | None = None,
         dataset_binding_service: SemanticDatasetBindingService | None = None,
         query_service: DatasourceQueryService | None = None,
     ) -> None:
-        self._semantic_retrieval_service = semantic_retrieval_service
-        if self._semantic_retrieval_service is None and retrieval_service is not None:
-            self._semantic_retrieval_service = SemanticRetrievalService(
-                retrieval_service
-            )
+        self._retrieval_service = retrieval_service
         self._dataset_binding_service = dataset_binding_service
         self._query_service = query_service
         if (dataset_binding_service is None) != (query_service is None):
@@ -41,7 +39,7 @@ class SemanticKnowledgeAdapter:
     def retrieve(self, request: dict[str, Any]) -> dict[str, Any]:
         ctx = ChatBIRunContext(request)
         intent = apply_slot_response_to_intent(ctx.intent, ctx.slot_response)
-        if self._semantic_retrieval_service is None:
+        if self._retrieval_service is None:
             raise RetrievalConfigurationError(
                 "Workflow 未配置统一检索服务",
                 details={"reason_code": "RETRIEVAL_SERVICE_MISSING"},
@@ -51,17 +49,16 @@ class SemanticKnowledgeAdapter:
                 "语义检索缺少问题或数据集",
                 details={"reason_code": "SEMANTIC_BINDING_REQUEST_INCOMPLETE"},
             )
-        package = self._semantic_retrieval_service.retrieve(
-            SemanticRetrievalData(
-                workspace_id=ctx.tenant_id,
-                user_id=ctx.user_id,
-                dataset_id=ctx.dataset_id,
-                original_question=ctx.raw_question or ctx.question,
-                rewritten_question=ctx.question,
-                intent=intent,
-                request_id=ctx.run_id or None,
-            )
+        retrieval_request = build_semantic_binding_request(
+            tenant_id=ctx.tenant_id,
+            actor_id=ctx.user_id or 1,
+            dataset_id=ctx.dataset_id,
+            original_question=ctx.raw_question or ctx.question,
+            rewritten_question=ctx.question,
+            intent=intent,
+            request_id=ctx.run_id or None,
         )
+        package = self._retrieval_service.retrieve(retrieval_request).payload
         if self._dataset_binding_service is None or self._query_service is None:
             return package
         binding = self._dataset_binding_service.resolve_execution_binding(
@@ -83,7 +80,7 @@ class SemanticKnowledgeAdapter:
                     or "SEMANTIC_TABLE_ACCESS_DENIED"
                 },
             )
-        return self._semantic_retrieval_service.filter_authorized_tables(
+        return filter_semantic_payload_tables(
             package,
             policy.authorized_tables,
         )

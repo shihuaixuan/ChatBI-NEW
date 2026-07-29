@@ -9,30 +9,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
+from apps.retrieval import RetrievalRequest, build_semantic_binding_request
 from apps.tool import Tool
+from apps.tool.tools.semantic_contracts import SemanticAssetScope
 
 if TYPE_CHECKING:
     from apps.chatbi.models import (
         ChatBIResultArtifactRef,
         ResultArtifactWriteData,
-        SemanticQueryCompileData,
-        SemanticQueryCompileResult,
-        SemanticRetrievalData,
     )
-    from apps.datasource import (
-        DatasourceQueryRequest,
-        DatasourceQueryResult,
-    )
-
-
-class QueryService(Protocol):
-    """Agent 对 Datasource 安全查询服务的最小依赖。"""
-
-    def validate(self, request: DatasourceQueryRequest) -> DatasourceQueryResult: ...
-
-    def execute(self, request: DatasourceQueryRequest) -> DatasourceQueryResult: ...
-
-    def resolve_policy(self, subject, datasource_id): ...
 
 
 class ResultArtifactWriter(Protocol):
@@ -42,33 +27,6 @@ class ResultArtifactWriter(Protocol):
         self,
         data: ResultArtifactWriteData,
     ) -> ChatBIResultArtifactRef: ...
-
-
-class SemanticQueryCompiler(Protocol):
-    """Agent 对 ChatBI 语义 SQL 编译入口的最小依赖。"""
-
-    def compile(
-        self,
-        data: SemanticQueryCompileData,
-    ) -> SemanticQueryCompileResult: ...
-
-
-class SemanticAssetRetriever(Protocol):
-    """Agent 对 ChatBI 语义资产检索入口的最小依赖。"""
-
-    def retrieve_for_agent(
-        self,
-        data: SemanticRetrievalData,
-        *,
-        max_candidates_per_group: int = 5,
-        timeout_ms: int | None = None,
-    ) -> dict[str, Any]: ...
-
-    def filter_authorized_tables(
-        self,
-        package: dict[str, Any],
-        authorized_tables: list[str],
-    ) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -113,8 +71,57 @@ class AgentToolContext:
     def summary_max_chars(self) -> int:
         return int(getattr(self.config, "summary_max_chars", 4000) or 4000)
 
+    @property
+    def semantic_default_limit(self) -> int:
+        return int(getattr(self.config, "default_limit", 100) or 100)
 
-class AgentTool(Tool):
+    @property
+    def semantic_retrieval_request(self) -> RetrievalRequest | None:
+        """把 ChatBI 已确认问题投影为公共检索请求。"""
+
+        understanding = self.state.get("question_understanding")
+        if not isinstance(understanding, dict):
+            return None
+        rewritten_question = understanding.get("rewritten_question")
+        intent = understanding.get("intent")
+        dataset_id = self.dataset_id or self.state.get("dataset_id")
+        if (
+            not isinstance(rewritten_question, str)
+            or not rewritten_question.strip()
+            or not isinstance(intent, dict)
+            or not isinstance(dataset_id, int)
+            or dataset_id <= 0
+            or self.user_id is None
+            or self.user_id <= 0
+        ):
+            return None
+        return build_semantic_binding_request(
+            request_id=self.execution_id,
+            tenant_id=self.oid,
+            actor_id=self.user_id,
+            dataset_id=dataset_id,
+            original_question=str(
+                self.state.get("original_question")
+                or self.state.get("question")
+                or rewritten_question
+            ),
+            rewritten_question=rewritten_question,
+            intent=intent,
+        )
+
+    @property
+    def semantic_asset_scope(self) -> SemanticAssetScope | None:
+        """读取由公共检索 Tool 结果处理器保存的可信编译范围。"""
+
+        value = self.state.get("semantic_scope")
+        if value is None:
+            return None
+        if isinstance(value, SemanticAssetScope):
+            return value
+        return SemanticAssetScope.model_validate(value)
+
+
+class AgentTool(Tool[AgentToolContext, Any, Any]):
     """ChatBI 领域工具基类；继承通用 Tool 协议。"""
 
 

@@ -18,7 +18,30 @@ def _schema() -> DatasetSchema:
             name="经营分析",
             biz_name="business",
             type="DATASET",
-        )
+        ),
+        models=[{"id": 10, "datasource_id": 5}],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="经营分析",
+                model=10,
+                id=100,
+                name="销售额",
+                biz_name="gmv",
+                type="METRIC",
+            )
+        ],
+        dimensions=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="经营分析",
+                model=10,
+                id=200,
+                name="城市",
+                biz_name="city",
+                type="DIMENSION",
+            )
+        ],
     )
 
 
@@ -71,3 +94,5 @@ def test_compilation_service_loads_schema_and_forwards_complete_plan():
     }
     assert result.sql == "select 1"
     assert result.schema.data_set.id == 20
+    assert result.datasource_id == 5
+    assert [asset.asset_id for asset in result.used_assets] == [100, 200]

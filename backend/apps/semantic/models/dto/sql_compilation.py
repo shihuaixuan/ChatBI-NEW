@@ -21,6 +21,15 @@ class SemanticQueryCompileRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SemanticUsedAsset:
+    """SQL 编译结果实际使用的语义资产。"""
+
+    asset_type: str
+    asset_id: int
+    biz_name: str
+
+
+@dataclass(frozen=True, slots=True)
 class SemanticQueryCompileResult:
     """Semantic 编译结果及其使用的数据集 Schema。"""
 
@@ -30,6 +39,12 @@ class SemanticQueryCompileResult:
     metrics: list[str]
     dimensions: list[str]
     schema: DatasetSchema
+    datasource_id: int | None = None
+    used_assets: list[SemanticUsedAsset] = field(default_factory=list)
 
 
-__all__ = ["SemanticQueryCompileRequest", "SemanticQueryCompileResult"]
+__all__ = [
+    "SemanticQueryCompileRequest",
+    "SemanticQueryCompileResult",
+    "SemanticUsedAsset",
+]

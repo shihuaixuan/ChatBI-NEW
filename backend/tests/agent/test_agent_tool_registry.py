@@ -8,9 +8,7 @@ from apps.chatbi.orchestration.agent.tools.base import (
     AgentToolContext,
 )
 from apps.chatbi.orchestration.agent.tools.core import (
-    CompileSemanticSqlTool,
     FinishTool,
-    SearchSemanticAssetsTool,
 )
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.tool import ToolCall, ToolRegistry, ToolResult, ToolStatus
@@ -20,7 +18,11 @@ from apps.tool.tools.datasource import (
     ValidateSqlTool,
 )
 from apps.tool.tools.knowledge import GetSqlExamplesTool
-from apps.tool.tools.semantic import SearchTerminologyTool
+from apps.tool.tools.semantic import (
+    CompileSemanticSqlTool,
+    SearchSemanticAssetsTool,
+    SearchTerminologyTool,
+)
 
 
 class EchoArgs(BaseModel):
@@ -75,7 +77,7 @@ def test_executes_registered_tool_and_exposes_specs():
 def test_all_production_tools_have_input_and_output_schema():
     tools = [
         SearchSemanticAssetsTool(object(), object()),  # type: ignore[arg-type]
-        CompileSemanticSqlTool(object()),  # type: ignore[arg-type]
+        CompileSemanticSqlTool(object(), object()),  # type: ignore[arg-type]
         FinishTool(),
         ClarifyTool(),
         GetDatasetSchemaTool(object()),  # type: ignore[arg-type]

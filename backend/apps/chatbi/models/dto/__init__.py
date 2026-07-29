@@ -108,12 +108,6 @@ from apps.chatbi.models.dto.result_artifact import (
     ChatBIResultArtifactRef,
     ResultArtifactWriteData,
 )
-from apps.chatbi.models.dto.semantic_query import (
-    SemanticQueryCompileData,
-    SemanticQueryCompileResult,
-    SemanticQueryUsedAsset,
-)
-from apps.chatbi.models.dto.semantic_retrieval import SemanticRetrievalData
 from apps.chatbi.models.dto.sql_generation import (
     SQLGenerationData,
     SQLGenerationEvent,
@@ -194,10 +188,6 @@ __all__ = [
     "RecommendedQuestionGenerationData",
     "RecommendedQuestionGenerationEvent",
     "ResultArtifactWriteData",
-    "SemanticRetrievalData",
-    "SemanticQueryCompileData",
-    "SemanticQueryCompileResult",
-    "SemanticQueryUsedAsset",
     "SQLGenerationData",
     "SQLGenerationEvent",
     "SQLGenerationResult",

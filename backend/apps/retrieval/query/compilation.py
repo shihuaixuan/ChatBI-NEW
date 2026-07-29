@@ -19,16 +19,34 @@ def validate_compilation_assets(
 ) -> tuple[ExecutableAssetReference, ...]:
     """拒绝未完成决策或不在统一白名单中的 SQL 资产。"""
 
+    return validate_compilation_allowlist(
+        decision.status,
+        decision.allowed_asset_ids,
+        metric_ids=metric_ids,
+        dimension_ids=dimension_ids,
+    )
+
+
+def validate_compilation_allowlist(
+    decision_status: RetrievalDecisionStatus,
+    allowed_assets: list[ExecutableAssetReference]
+    | tuple[ExecutableAssetReference, ...],
+    *,
+    metric_ids: list[int],
+    dimension_ids: list[int],
+) -> tuple[ExecutableAssetReference, ...]:
+    """校验服务端保存的检索决策状态和资产白名单。"""
+
     executable_statuses = {
         RetrievalDecisionStatus.RESOLVED,
         RetrievalDecisionStatus.CROSS_MODEL,
     }
-    if decision.status not in executable_statuses:
+    if decision_status not in executable_statuses:
         raise RetrievalQueryError(
             "SEMANTIC_BINDING_DECISION_NOT_EXECUTABLE",
             details={
                 "reason_code": "SEMANTIC_BINDING_DECISION_NOT_EXECUTABLE",
-                "decision_status": decision.status.value,
+                "decision_status": decision_status.value,
             },
         )
 
@@ -36,7 +54,7 @@ def validate_compilation_assets(
     requested.update(
         (RetrievalResourceType.DIMENSION, asset_id) for asset_id in dimension_ids
     )
-    allowed = {(item.asset_type, item.asset_id) for item in decision.allowed_asset_ids}
+    allowed = {(item.asset_type, item.asset_id) for item in allowed_assets}
     denied = sorted(
         requested - allowed,
         key=lambda item: (item[0].value, item[1]),
@@ -53,10 +71,8 @@ def validate_compilation_assets(
             },
         )
     return tuple(
-        item
-        for item in decision.allowed_asset_ids
-        if (item.asset_type, item.asset_id) in requested
+        item for item in allowed_assets if (item.asset_type, item.asset_id) in requested
     )
 
 
-__all__ = ["validate_compilation_assets"]
+__all__ = ["validate_compilation_allowlist", "validate_compilation_assets"]

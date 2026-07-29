@@ -66,7 +66,7 @@ from apps.chatbi.services.understanding import (
     graph_contracts,
     intent_projection,
 )
-from apps.chatbi.services.understanding.time_range import normalize_time_range_payload
+from apps.semantic import normalize_time_range_payload
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 
 __all__ = [

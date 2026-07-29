@@ -1,4 +1,4 @@
-"""ChatBI 时间表达识别与归一化的权威实现。"""
+"""语义查询共用的时间表达识别与归一化。"""
 
 from __future__ import annotations
 
@@ -49,7 +49,10 @@ def is_time_expression(value: Any) -> bool:
     return re.fullmatch(r"(最近|近)\d+(天|日|周|个月|月|年)", text) is not None
 
 
-def normalize_time_range(raw: Any, timezone: str = "Asia/Shanghai") -> dict[str, Any] | None:
+def normalize_time_range(
+    raw: Any,
+    timezone: str = "Asia/Shanghai",
+) -> dict[str, Any] | None:
     """把常见时间范围归一为 SQL 层可消费的受控结构。"""
 
     text = _normalize_text(raw)
@@ -74,7 +77,10 @@ def normalize_time_range(raw: Any, timezone: str = "Asia/Shanghai") -> dict[str,
             "timezone": timezone,
         }
 
-    absolute_date = re.fullmatch(r"(\d{4})(?:年|-)(\d{1,2})(?:月|-)(\d{1,2})日?", text)
+    absolute_date = re.fullmatch(
+        r"(\d{4})(?:年|-)(\d{1,2})(?:月|-)(\d{1,2})日?",
+        text,
+    )
     if absolute_date:
         try:
             start = date(*(int(part) for part in absolute_date.groups()))
@@ -87,7 +93,6 @@ def normalize_time_range(raw: Any, timezone: str = "Asia/Shanghai") -> dict[str,
             "timezone": timezone,
         }
 
-    # 绝对月份统一转换为左闭右开区间，避免月底天数差异。
     absolute_month = re.fullmatch(r"(\d{4})年(\d{1,2})月", text)
     if absolute_month:
         year = int(absolute_month.group(1))
@@ -103,7 +108,6 @@ def normalize_time_range(raw: Any, timezone: str = "Asia/Shanghai") -> dict[str,
             "timezone": timezone,
         }
 
-    # 模型可能把“每天/按天”等粒度词一并放入 raw，只消费开头的范围部分。
     matched = re.match(r"(最近|近)(\d+)(天|日|周|个月|月|年)", text)
     if matched:
         unit = {
@@ -132,7 +136,11 @@ def normalize_time_range(raw: Any, timezone: str = "Asia/Shanghai") -> dict[str,
         "本年": "year",
     }
     if text in current_periods:
-        return {"kind": "current_period", "unit": current_periods[text], "timezone": timezone}
+        return {
+            "kind": "current_period",
+            "unit": current_periods[text],
+            "timezone": timezone,
+        }
 
     previous_periods = {
         "上周": "week",
@@ -142,8 +150,11 @@ def normalize_time_range(raw: Any, timezone: str = "Asia/Shanghai") -> dict[str,
         "去年": "year",
     }
     if text in previous_periods:
-        return {"kind": "previous_period", "unit": previous_periods[text], "timezone": timezone}
-
+        return {
+            "kind": "previous_period",
+            "unit": previous_periods[text],
+            "timezone": timezone,
+        }
     return {"kind": "unsupported", "raw": raw, "timezone": timezone}
 
 

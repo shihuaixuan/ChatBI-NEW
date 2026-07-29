@@ -586,7 +586,7 @@ def test_tool_visibility_follows_chatbi_stage():
 
     assert visible_tool_names(state, "normal", registered) == registered[:4]
 
-    state.context.state["semantic_asset_ids"] = [1]
+    state.context.state["semantic_scope"] = {"allowed_assets": [{"asset_id": 1}]}
     assert visible_tool_names(state, "normal", registered) == [
         *registered[:4],
         "compile_semantic_sql",

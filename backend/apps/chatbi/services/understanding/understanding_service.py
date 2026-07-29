@@ -34,10 +34,10 @@ from apps.chatbi.services.understanding.prompts import (
     METRIC_TIME_EXTRACTION_RULES,
     QUESTION_REWRITE_BUSINESS_RULES,
 )
-from apps.chatbi.services.understanding.time_range import normalize_time_range_payload
 from apps.chatbi.services.understanding.validation import (
     validate_question_understanding,
 )
+from apps.semantic import normalize_time_range_payload
 
 QuestionUnderstandingModelResponse = QuestionModelResponse
 

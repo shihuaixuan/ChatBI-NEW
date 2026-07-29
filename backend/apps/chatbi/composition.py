@@ -36,8 +36,6 @@ from apps.chatbi.services.generation import (
 from apps.chatbi.services.planning import (
     DatasourceSelectionCandidateService,
     PhysicalSchemaService,
-    SemanticCompilationService,
-    SemanticRetrievalService,
 )
 from apps.chatbi.services.understanding import QuestionUnderstandingService
 from apps.conversation import (
@@ -69,11 +67,9 @@ from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
 from apps.knowledge.composition import build_sql_example_query_service
 from apps.knowledge.recommended import build_recommended_problem_service
-from apps.retrieval.query.service import RetrievalService, build_retrieval_service
 from apps.semantic.composition import (
     build_semantic_dataset_binding_service,
     build_semantic_dataset_catalog_service,
-    build_semantic_sql_compilation_service,
     build_semantic_term_query_service,
 )
 from apps.trace import AgentTracer, TraceConfig
@@ -123,23 +119,6 @@ def build_query_service(
         sample_rows=sample_rows,
         max_transient_retries=max_transient_retries,
     )
-
-
-def build_semantic_query_service(session: Session) -> SemanticCompilationService:
-    """装配 Agent 与 Graph 共用的语义 SQL 编译入口。"""
-
-    return SemanticCompilationService(build_semantic_sql_compilation_service(session))
-
-
-def build_semantic_retrieval_service(
-    session: Session,
-    *,
-    retrieval_gateway: RetrievalService | None = None,
-) -> SemanticRetrievalService:
-    """装配 Agent 与 Graph 共用的语义资产检索入口。"""
-
-    gateway = retrieval_gateway or build_retrieval_service(session)
-    return SemanticRetrievalService(gateway)
 
 
 def build_physical_schema_service(session: Session) -> PhysicalSchemaService:
@@ -348,6 +327,4 @@ __all__ = [
     "build_question_understanding_service",
     "configure_agent_cleanup",
     "resolve_dataset_chat_binding",
-    "build_semantic_query_service",
-    "build_semantic_retrieval_service",
 ]

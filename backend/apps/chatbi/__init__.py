@@ -30,8 +30,6 @@ _PUBLIC: dict[str, str] = {
     "ResultArtifactService": _EXECUTION,
     "SQLGenerationService": _GENERATION,
     "SchemaContextService": _GENERATION,
-    "SemanticCompilationService": _PLANNING,
-    "SemanticRetrievalService": _PLANNING,
     "apply_question_understanding_clarification": _UNDERSTANDING,
     "project_answer_context": _GENERATION,
     "project_final_reply": _GENERATION,

@@ -1,23 +1,20 @@
 """核心工具的守护行为测试（不依赖真实 DB/LLM）。"""
 
+from types import SimpleNamespace
+
 from apps.chatbi.models import (
     ChatBIResultArtifactRef,
     PhysicalSchemaField,
     PhysicalSchemaResult,
     PhysicalSchemaTable,
-    SemanticQueryCompileResult,
 )
 from apps.chatbi.orchestration.agent.tool_results import (
     ChatBIToolResultProcessor,
 )
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.core import (
-    CompileSemanticSqlArgs,
-    CompileSemanticSqlTool,
     FinishArgs,
     FinishTool,
-    SearchSemanticAssetsArgs,
-    SearchSemanticAssetsTool,
 )
 from apps.datasource import (
     DatasourceQueryData,
@@ -26,6 +23,11 @@ from apps.datasource import (
     DatasourceQueryResult,
     DatasourceQueryRetryAdvice,
 )
+from apps.retrieval import (
+    ExecutableAssetReference,
+    RetrievalDecisionStatus,
+)
+from apps.retrieval.models.dto import RetrievalResourceType
 from apps.tool import RetryAdvice, ToolStatus
 from apps.tool import ToolResult as AgentToolResult
 from apps.tool.tools.datasource import (
@@ -41,6 +43,13 @@ from apps.tool.tools.knowledge import (
     GetSqlExamplesArgs,
     GetSqlExamplesTool,
 )
+from apps.tool.tools.semantic import (
+    CompileSemanticSqlArgs,
+    CompileSemanticSqlTool,
+    SearchSemanticAssetsArgs,
+    SearchSemanticAssetsTool,
+)
+from apps.tool.tools.semantic_contracts import SemanticAssetScope
 
 
 def _succeeded(result: AgentToolResult) -> bool:
@@ -64,11 +73,41 @@ def _ctx(
         }
     }
     values.update(state)
+    semantic_asset_ids = values.get("semantic_asset_ids") or []
+    if semantic_asset_ids and "semantic_scope" not in values:
+        normalized_time = (
+            (values.get("question_understanding") or {})
+            .get("intent", {})
+            .get("time_range", {})
+            .get("normalized")
+        )
+        values["semantic_scope"] = SemanticAssetScope(
+            workspace_id=1,
+            user_id=1,
+            datasource_id=5,
+            dataset_id=int(values.get("dataset_id") or 3),
+            retrieval_id="test-retrieval",
+            decision_status=RetrievalDecisionStatus.RESOLVED,
+            allowed_assets=tuple(
+                ExecutableAssetReference(asset_type=asset_type, asset_id=asset_id)
+                for asset_id in semantic_asset_ids
+                for asset_type in (
+                    RetrievalResourceType.METRIC,
+                    RetrievalResourceType.DIMENSION,
+                )
+            ),
+            normalized_time_range=normalized_time,
+        ).model_dump(mode="json")
     return AgentToolContext(
         session=None,
         oid=1,
         user_id=1,
         datasource_id=5,
+        dataset_id=(
+            int(values["dataset_id"])
+            if isinstance(values.get("dataset_id"), int)
+            else None
+        ),
         execution_id="agent:10",
         chat_id=20,
         record_id=30,
@@ -110,7 +149,7 @@ class RecordingQueryService:
         )
 
     def resolve_policy(self, subject, datasource_id):
-        return DatasourceQueryPolicy(authorized_tables=["orders", "dws_sales"])
+        return DatasourceQueryPolicy(authorized_tables=["orders", "dws_sales", "t"])
 
 
 class RecordingResultArtifactService:
@@ -140,7 +179,7 @@ class RecordingSemanticCompilationService:
 
     def compile(self, data):
         self.calls.append(data)
-        return SemanticQueryCompileResult(
+        return SimpleNamespace(
             dataset_id=data.dataset_id,
             sql="select 1",
             tables=["t"],
@@ -156,12 +195,25 @@ class RecordingSemanticRetrievalService:
         self.package = package
         self.calls = []
 
-    def retrieve_for_agent(self, data, *, max_candidates_per_group=5):
-        self.calls.append((data, max_candidates_per_group))
-        return self.package
-
-    def filter_authorized_tables(self, package, authorized_tables):
-        return package
+    def retrieve(self, request, *, timeout_ms=None):
+        self.calls.append((request, timeout_ms))
+        allowed_assets = [
+            ExecutableAssetReference.model_validate(item)
+            for item in self.package.get("allowed_asset_ids") or []
+        ]
+        decision_status = (
+            (self.package.get("decision") or {}).get("status") or "resolved"
+        )
+        return SimpleNamespace(
+            payload=self.package,
+            bundle=SimpleNamespace(
+                request_id=request.request_id,
+                decision=SimpleNamespace(
+                    status=RetrievalDecisionStatus(decision_status),
+                    allowed_asset_ids=allowed_assets,
+                ),
+            ),
+        )
 
 
 class StaticPhysicalSchemaService:
@@ -278,7 +330,14 @@ def test_execute_sql_uses_chatbi_query_service_with_identity_scope():
 
 
 def test_finish_appends_non_standard_note_for_manual_sql():
-    ctx = _ctx(last_execution={"sql": "select 1", "fields": ["a"], "row_count": 1, "sql_source": "manual"})
+    ctx = _ctx(
+        last_execution={
+            "sql": "select 1",
+            "fields": ["a"],
+            "row_count": 1,
+            "sql_source": "manual",
+        }
+    )
     output = FinishTool().execute(ctx, FinishArgs(answer_markdown="答案"))
     assert _succeeded(output)
     assert "非标准指标口径" in _data(output)["answer"]
@@ -286,8 +345,20 @@ def test_finish_appends_non_standard_note_for_manual_sql():
 
 
 def test_finish_no_note_for_compiled_sql_and_builds_chart():
-    ctx = _ctx(last_execution={"sql": "select 1", "fields": ["city", "gmv"], "row_count": 3, "sql_source": "compiled"})
-    output = FinishTool().execute(ctx, FinishArgs(answer_markdown="答案", chart_type="bar", x_field="city", y_fields=["gmv"]))
+    ctx = _ctx(
+        last_execution={
+            "sql": "select 1",
+            "fields": ["city", "gmv"],
+            "row_count": 3,
+            "sql_source": "compiled",
+        }
+    )
+    output = FinishTool().execute(
+        ctx,
+        FinishArgs(
+            answer_markdown="答案", chart_type="bar", x_field="city", y_fields=["gmv"]
+        ),
+    )
     assert _succeeded(output)
     assert "非标准" not in _data(output)["answer"]
     assert _data(output)["chart"] == {"type": "bar", "x": "city", "y": ["gmv"]}
@@ -371,7 +442,9 @@ def test_execute_sql_maps_transient_failure_to_same_input_retry():
 
 def test_compile_requires_semantic_package_first():
     ctx = _ctx(dataset_id=3)
-    output = CompileSemanticSqlTool(RecordingSemanticCompilationService()).execute(
+    output = CompileSemanticSqlTool(
+        RecordingSemanticCompilationService(), RecordingQueryService()
+    ).execute(
         ctx,
         CompileSemanticSqlArgs(metric_asset_ids=[1]),
     )
@@ -387,11 +460,14 @@ def test_compile_does_not_repeat_question_understanding_gate():
         question_understanding={
             "rewritten_question": "看一下最近7天的数据",
             "intent": {"intent_type": "metric_query", "metric_mentions": []},
-            "validation": {"status": "clarification_required", "clarification_slots": ["metric"]},
+            "validation": {
+                "status": "clarification_required",
+                "clarification_slots": ["metric"],
+            },
         },
     )
 
-    output = CompileSemanticSqlTool(service).execute(
+    output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
         ctx,
         CompileSemanticSqlArgs(metric_asset_ids=[10]),
     )
@@ -402,7 +478,9 @@ def test_compile_does_not_repeat_question_understanding_gate():
 
 def test_compile_rejects_asset_outside_package():
     ctx = _ctx(dataset_id=3, semantic_asset_ids=[10, 11])
-    output = CompileSemanticSqlTool(RecordingSemanticCompilationService()).execute(
+    output = CompileSemanticSqlTool(
+        RecordingSemanticCompilationService(), RecordingQueryService()
+    ).execute(
         ctx,
         CompileSemanticSqlArgs(metric_asset_ids=[10], dimension_asset_ids=[99]),
     )
@@ -411,13 +489,37 @@ def test_compile_rejects_asset_outside_package():
     assert "99" in output.model_content
 
 
+def test_compile_rejects_scope_from_another_workspace():
+    ctx = _ctx(dataset_id=3, semantic_asset_ids=[10])
+    ctx.state["semantic_scope"]["workspace_id"] = 2
+
+    output = CompileSemanticSqlTool(
+        RecordingSemanticCompilationService(), RecordingQueryService()
+    ).execute(ctx, CompileSemanticSqlArgs(metric_asset_ids=[10]))
+
+    assert output.status == ToolStatus.REJECTED
+    assert output.error_code == "semantic_scope_mismatch"
+
+
+def test_compile_rechecks_tables_after_permissions_change():
+    ctx = _ctx(dataset_id=3, semantic_asset_ids=[10])
+    ctx.state["semantic_scope"]["authorized_tables"] = ["secret_orders"]
+
+    output = CompileSemanticSqlTool(
+        RecordingSemanticCompilationService(), RecordingQueryService()
+    ).execute(ctx, CompileSemanticSqlArgs(metric_asset_ids=[10]))
+
+    assert output.status == ToolStatus.REJECTED
+    assert output.error_code == "semantic_scope_permission_changed"
+
+
 def test_compile_passes_known_assets_to_capability():
     service = RecordingSemanticCompilationService()
     ctx = _ctx(
         dataset_id=3,
         semantic_asset_ids=[10, 11],
     )
-    output = CompileSemanticSqlTool(service).execute(
+    output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
         ctx, CompileSemanticSqlArgs(metric_asset_ids=[10], dimension_asset_ids=[11])
     )
     assert _succeeded(output)
@@ -460,7 +562,7 @@ def test_compile_normalizes_today_literal_from_confirmed_time_range():
         },
     )
 
-    output = CompileSemanticSqlTool(service).execute(
+    output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
         ctx,
         CompileSemanticSqlArgs(
             metric_asset_ids=[10],
@@ -503,7 +605,9 @@ def test_compile_rejects_replacing_today_with_latest_data_date():
         },
     )
 
-    output = CompileSemanticSqlTool(RecordingSemanticCompilationService()).execute(
+    output = CompileSemanticSqlTool(
+        RecordingSemanticCompilationService(), RecordingQueryService()
+    ).execute(
         ctx,
         CompileSemanticSqlArgs(
             metric_asset_ids=[10],
@@ -527,9 +631,33 @@ def test_search_result_processor_collects_asset_ids_and_tables():
     package = {
         "hit": True,
         "status": "hit",
+        "dataset_id": 3,
         "tables": ["dws_sales"],
-        "candidate_groups": {"metrics": [{"asset_id": 7, "biz_name": "gmv"}]},
-        "selected_assets": {"dimensions": [{"asset_id": 8, "biz_name": "city"}]},
+        "candidate_groups": {
+            "metrics": [
+                {"asset_type": "METRIC", "asset_id": 7, "biz_name": "gmv"},
+                {
+                    "asset_type": "METRIC",
+                    "asset_id": 9,
+                    "biz_name": "candidate_only",
+                    "internal": "hidden",
+                },
+            ]
+        },
+        "selected_assets": {
+            "metrics": [{"asset_type": "METRIC", "asset_id": 7, "biz_name": "gmv"}],
+            "dimensions": [
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": 8,
+                    "biz_name": "city",
+                }
+            ],
+        },
+        "allowed_asset_ids": [
+            {"asset_type": "METRIC", "asset_id": 7},
+            {"asset_type": "DIMENSION", "asset_id": 8},
+        ],
     }
     service = RecordingSemanticRetrievalService(package)
     ctx = _ctx(
@@ -547,7 +675,7 @@ def test_search_result_processor_collects_asset_ids_and_tables():
     assert _succeeded(output)
     request = service.calls[0][0]
     assert request.rewritten_question == "按城市看 gmv"
-    assert request.intent is intent
+    assert request.intent.metric_mentions == ["gmv"]
     assert "semantic_asset_ids" not in ctx.state
     projection = ChatBIToolResultProcessor().process(
         ctx,
@@ -556,7 +684,50 @@ def test_search_result_processor_collects_asset_ids_and_tables():
     )
     assert projection.state_patch["semantic_asset_ids"] == [7, 8]
     assert projection.state_patch["allowed_tables"] == ["dws_sales"]
-    assert projection.state_patch["semantic_package"] == package
+    assert projection.state_patch["semantic_package"]["dataset_id"] == 3
+    assert (
+        "internal"
+        not in projection.state_patch["semantic_package"]["candidate_groups"][
+            "metrics"
+        ][1]
+    )
+    assert projection.state_patch["semantic_scope"]["retrieval_id"]
+
+
+def test_search_maps_dimension_ambiguity_for_agent_flow():
+    package = {
+        "status": "metric_ambiguous",
+        "dataset_id": 3,
+        "tables": ["dws_sales"],
+        "decision": {"status": "ambiguous"},
+        "ambiguities": [{"type": "dimension"}],
+    }
+    output = SearchSemanticAssetsTool(
+        RecordingSemanticRetrievalService(package),
+        RecordingQueryService(),
+    ).execute(_ctx(dataset_id=3), SearchSemanticAssetsArgs())
+
+    assert _succeeded(output)
+    assert _data(output)["package"]["status"] == "dimension_ambiguous"
+
+
+def test_search_reports_missing_time_dimension_configuration():
+    package = {
+        "status": "missed",
+        "dataset_id": 3,
+        "tables": ["dws_sales"],
+        "decision": {
+            "status": "partial",
+            "reason_codes": ["TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL"],
+        },
+    }
+    output = SearchSemanticAssetsTool(
+        RecordingSemanticRetrievalService(package),
+        RecordingQueryService(),
+    ).execute(_ctx(dataset_id=3), SearchSemanticAssetsArgs())
+
+    assert _succeeded(output)
+    assert _data(output)["package"]["status"] == "time_dimension_not_configured"
 
 
 def test_physical_schema_tool_uses_chatbi_service():
@@ -610,4 +781,4 @@ def test_search_rejects_missing_confirmed_understanding():
     )
 
     assert not _succeeded(output)
-    assert output.error_code == "question_understanding_required"
+    assert output.error_code == "semantic_retrieval_request_required"

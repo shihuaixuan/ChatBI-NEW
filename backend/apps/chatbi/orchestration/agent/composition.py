@@ -13,8 +13,6 @@ from apps.chatbi.composition import (
     build_query_service,
     build_question_understanding_service,
     build_result_artifact_service,
-    build_semantic_query_service,
-    build_semantic_retrieval_service,
 )
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
@@ -26,20 +24,22 @@ from apps.chatbi.orchestration.agent.state import AgentRuntimeStateFactory
 from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
 from apps.chatbi.orchestration.agent.tool_results import ChatBIToolResultProcessor
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContextServices
-from apps.chatbi.orchestration.agent.tools.core import build_chatbi_tools
+from apps.chatbi.orchestration.agent.tools.core import FinishTool
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.chatbi.services.execution import ResultArtifactService
-from apps.chatbi.services.planning import (
-    PhysicalSchemaService,
-    SemanticCompilationService,
-    SemanticRetrievalService,
-)
+from apps.chatbi.services.planning import PhysicalSchemaService
 from apps.chatbi.services.understanding import QuestionUnderstandingService
 from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
 from apps.knowledge.composition import build_sql_example_query_service
 from apps.knowledge.services.sql_example_query_service import SQLExampleQueryService
-from apps.semantic.composition import build_semantic_term_query_service
+from apps.retrieval import RetrievalService
+from apps.retrieval.query.service import build_retrieval_service
+from apps.semantic import SemanticSQLCompilationService
+from apps.semantic.composition import (
+    build_semantic_sql_compilation_service,
+    build_semantic_term_query_service,
+)
 from apps.semantic.services.term_query_service import SemanticTermQueryService
 from apps.tool import ToolRegistry, default_middlewares
 from apps.tool.context import CancellationSignal
@@ -49,15 +49,19 @@ from apps.tool.tools.datasource import (
     ValidateSqlTool,
 )
 from apps.tool.tools.knowledge import GetSqlExamplesTool
-from apps.tool.tools.semantic import SearchTerminologyTool
+from apps.tool.tools.semantic import (
+    CompileSemanticSqlTool,
+    SearchSemanticAssetsTool,
+    SearchTerminologyTool,
+)
 from apps.trace import AgentTracer
 
 
 def build_agent_tool_registry(
     *,
     query_service: DatasourceQueryService,
-    semantic_query_service: SemanticCompilationService,
-    semantic_retrieval_service: SemanticRetrievalService,
+    semantic_query_service: SemanticSQLCompilationService,
+    semantic_retrieval_service: RetrievalService,
     physical_schema_service: PhysicalSchemaService,
     term_query_service: SemanticTermQueryService,
     sql_example_query_service: SQLExampleQueryService,
@@ -65,12 +69,11 @@ def build_agent_tool_registry(
     """装配 Agent 默认工具集合及执行中间件。"""
 
     registry = ToolRegistry(middlewares=default_middlewares())
-    for tool in build_chatbi_tools(
-        query_service=query_service,
-        semantic_query_service=semantic_query_service,
-        semantic_retrieval_service=semantic_retrieval_service,
-    ):
-        registry.register(tool)
+    registry.register(
+        SearchSemanticAssetsTool(semantic_retrieval_service, query_service)
+    )
+    registry.register(CompileSemanticSqlTool(semantic_query_service, query_service))
+    registry.register(FinishTool())
     registry.register(ClarifyTool())
     registry.register(GetDatasetSchemaTool(physical_schema_service))
     registry.register(ValidateSqlTool(query_service))
@@ -90,8 +93,8 @@ def build_agent_loop(
     understanding_service: QuestionUnderstandingService | None = None,
     term_query_service: SemanticTermQueryService | None = None,
     query_service: DatasourceQueryService | None = None,
-    semantic_query_service: SemanticCompilationService | None = None,
-    semantic_retrieval_service: SemanticRetrievalService | None = None,
+    semantic_query_service: SemanticSQLCompilationService | None = None,
+    semantic_retrieval_service: RetrievalService | None = None,
     physical_schema_service: PhysicalSchemaService | None = None,
     sql_example_query_service: SQLExampleQueryService | None = None,
     result_artifact_service: ResultArtifactService | None = None,
@@ -120,10 +123,10 @@ def build_agent_loop(
         max_transient_retries=resolved_config.query_transient_retries,
     )
     resolved_semantic_query_service = (
-        semantic_query_service or build_semantic_query_service(session)
+        semantic_query_service or build_semantic_sql_compilation_service(session)
     )
     resolved_semantic_retrieval_service = (
-        semantic_retrieval_service or build_semantic_retrieval_service(session)
+        semantic_retrieval_service or build_retrieval_service(session)
     )
     resolved_physical_schema_service = (
         physical_schema_service or build_physical_schema_service(session)

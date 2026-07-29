@@ -45,11 +45,6 @@ from apps.chatbi.services.understanding.prompts import (
     METRIC_TIME_EXTRACTION_RULES,
     QUESTION_REWRITE_BUSINESS_RULES,
 )
-from apps.chatbi.services.understanding.time_range import (
-    is_time_expression,
-    normalize_time_range,
-    normalize_time_range_payload,
-)
 from apps.chatbi.services.understanding.understanding_service import (
     DIMENSION_SYSTEM_PROMPT,
     INTENT_SYSTEM_PROMPT,
@@ -61,6 +56,11 @@ from apps.chatbi.services.understanding.understanding_service import (
 )
 from apps.chatbi.services.understanding.validation import (
     validate_question_understanding,
+)
+from apps.semantic import (
+    is_time_expression,
+    normalize_time_range,
+    normalize_time_range_payload,
 )
 
 __all__ = [

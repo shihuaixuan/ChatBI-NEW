@@ -18,10 +18,6 @@ class ExecutionBindingError(ChatBIError, ValueError):
     """执行请求与会话绑定不一致。"""
 
 
-class SemanticQueryCompileError(ChatBIError, ValueError):
-    """语义查询计划无法编译。"""
-
-
 class DatasourceSelectionError(ChatBIError, ValueError):
     """数据源选择输入或模型结果不合法。"""
 
@@ -108,5 +104,4 @@ __all__ = [
     "QuestionUnderstandingError",
     "ResultArtifactError",
     "ResultArtifactWriteError",
-    "SemanticQueryCompileError",
 ]

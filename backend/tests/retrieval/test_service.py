@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from apps.chatbi.models import SemanticRetrievalData
 from apps.chatbi.orchestration.graph.capabilities.adapters.knowledge import (
     SemanticKnowledgeAdapter,
 )
-from apps.chatbi.services.planning import SemanticRetrievalService
+from apps.retrieval import filter_semantic_payload_tables
 from apps.retrieval.errors import RetrievalQueryError
 from apps.retrieval.models.dto import (
     RetrievalBindings,
@@ -182,7 +181,7 @@ def test_service_executes_semantic_binding_as_the_only_strategy():
     ]
 
 
-def test_graph_and_agent_consume_the_same_semantic_binding_result():
+def test_graph_consumes_the_retrieval_service_payload_directly():
     service = RetrievalService(object(), semantic_binding_runner=_Runner())
     graph = SemanticKnowledgeAdapter(retrieval_service=service).retrieve(
         {
@@ -198,57 +197,27 @@ def test_graph_and_agent_consume_the_same_semantic_binding_result():
             },
         }
     )
-    agent = SemanticRetrievalService(service).retrieve_for_agent(
-        SemanticRetrievalData(
-            workspace_id=1,
-            user_id=2,
-            dataset_id=20,
-            original_question="GMV",
-            rewritten_question="GMV",
-            intent={
-                "intent_type": "metric_query",
-                "metric_mentions": ["GMV"],
-            },
-            request_id="run-1",
-        )
-    )
+    direct = service.retrieve(_request()).payload
 
-    assert graph["status"] == agent["status"] == "missed"
-    assert graph["decision"] == agent["decision"]
+    assert graph["status"] == direct["status"] == "missed"
+    assert graph["decision"] == direct["decision"]
     assert graph["retrieval_strategy_version"] == SEMANTIC_BINDING_STRATEGY_VERSION
 
 
-@pytest.mark.parametrize(
-    ("ambiguity_type", "expected_status"),
-    [("metric", "metric_ambiguous"), ("dimension", "dimension_ambiguous")],
-)
-def test_agent_semantic_status_identifies_ambiguous_slot_type(
-    ambiguity_type: str,
-    expected_status: str,
-):
-    status = SemanticRetrievalService.agent_semantic_status(
-        {
-            "status": "metric_ambiguous",
-            "decision": {"status": "ambiguous"},
-            "ambiguities": [{"type": ambiguity_type}],
-        }
-    )
+def test_semantic_payload_filter_removes_nested_unauthorized_tables():
+    payload = {
+        "tables": ["orders", "secret_orders"],
+        "candidate_groups": {
+            "metrics": [
+                {"biz_name": "amount", "physical_table": "orders"},
+                {"biz_name": "secret", "physical_table": "secret_orders"},
+            ]
+        },
+    }
 
-    assert status == expected_status
+    result = filter_semantic_payload_tables(payload, ["orders"])
 
-
-def test_agent_semantic_status_reports_missing_time_dimension_configuration():
-    status = SemanticRetrievalService.agent_semantic_status(
-        {
-            "status": "missed",
-            "decision": {
-                "status": "partial",
-                "reason_codes": [
-                    "SEMANTIC_BINDING_PARTIAL",
-                    "TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL",
-                ],
-            },
-        }
-    )
-
-    assert status == "time_dimension_not_configured"
+    assert result["tables"] == ["orders"]
+    assert result["candidate_groups"]["metrics"] == [
+        {"biz_name": "amount", "physical_table": "orders"}
+    ]

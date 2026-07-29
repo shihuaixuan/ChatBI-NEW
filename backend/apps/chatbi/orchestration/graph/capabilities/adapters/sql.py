@@ -3,11 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from apps.chatbi.models import (
-    ResultArtifactWriteData,
-    SemanticQueryCompileData,
-    SemanticQueryCompileResult,
-)
+from apps.chatbi.models import ResultArtifactWriteData
 from apps.chatbi.orchestration.graph.capabilities import planning
 from apps.chatbi.orchestration.graph.capabilities.adapters.sql_repair import (
     SQLRepairStrategy,
@@ -24,9 +20,6 @@ from apps.chatbi.services.execution import (
     ResultArtifactService,
     ResultArtifactWriteError,
 )
-from apps.chatbi.services.planning import (
-    SemanticCompilationService,
-)
 from apps.conversation import ChatRecordExecutionType
 from apps.datasource import (
     DatasourceQueryRequest,
@@ -34,10 +27,12 @@ from apps.datasource import (
     DatasourceQueryStatus,
     DatasourceQuerySubject,
 )
-from apps.semantic.services.schema_service import DatasetSchemaProvider
-from apps.semantic.services.sql_compilation_service import (
+from apps.semantic import (
+    SemanticQueryCompileRequest,
+    SemanticQueryCompileResult,
     SemanticSQLCompilationService,
 )
+from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.semantic.services.sql_compiler import (
     SemanticSQLCompiler,
 )
@@ -56,16 +51,14 @@ class SqlAdapter:
         max_parallel_queries: int | None = None,
         config: ChatBIConfig | None = None,
         query_service: DatasourceQueryService | None = None,
-        semantic_query_service: SemanticCompilationService | None = None,
+        semantic_query_service: SemanticSQLCompilationService | None = None,
     ) -> None:
         config = config or ChatBIConfig()
         self._semantic_query_service = semantic_query_service
         if self._semantic_query_service is None and schema_provider is not None:
-            self._semantic_query_service = SemanticCompilationService(
-                SemanticSQLCompilationService(
-                    schema_provider,
-                    compiler or SemanticSQLCompiler(),
-                )
+            self._semantic_query_service = SemanticSQLCompilationService(
+                schema_provider,
+                compiler or SemanticSQLCompiler(),
             )
         self._repair_strategy = repair_strategy or SQLRepairStrategy()
         self._result_artifact_service = result_artifact_service
@@ -112,7 +105,7 @@ class SqlAdapter:
             select_mode = "aggregate"
         repair_context = self._repair_context(ctx)
         result = self._compile_semantic_query(
-            SemanticQueryCompileData(
+            SemanticQueryCompileRequest(
                 workspace_id=ctx.tenant_id,
                 dataset_id=dataset_id,
                 question=question,
@@ -126,10 +119,11 @@ class SqlAdapter:
             )
         )
         self._reject_same_repair_sql(result.sql, repair_context)
+        datasource_id = self._require_compiled_datasource_id(result)
         validated = self._query_service.validate(
             DatasourceQueryRequest(
                 sql=result.sql,
-                datasource_id=result.datasource_id,
+                datasource_id=datasource_id,
                 subject=self._query_subject(ctx),
                 selected_tables=result.tables,
             )
@@ -140,7 +134,7 @@ class SqlAdapter:
         return {
             "sql": validated_sql,
             "strategy": "semantic_sql_compiler",
-            "datasource_id": result.datasource_id,
+            "datasource_id": datasource_id,
             "tables": result.tables,
             "explanation": "基于 Semantic 语义资产生成 SQL",
             "used_assets": [
@@ -288,7 +282,7 @@ class SqlAdapter:
         for index, plan in enumerate(plans):
             slots = plan.get("slots") if isinstance(plan.get("slots"), dict) else {}
             compiled = self._compile_semantic_query(
-                SemanticQueryCompileData(
+                SemanticQueryCompileRequest(
                     workspace_id=ctx.tenant_id,
                     dataset_id=dataset_id,
                     question=ctx.raw_question,
@@ -297,10 +291,11 @@ class SqlAdapter:
                     having=planning.slot_items(slots.get("having") or plan.get("having")),
                 )
             )
+            datasource_id = self._require_compiled_datasource_id(compiled)
             validated = self._query_service.validate(
                 DatasourceQueryRequest(
                     sql=compiled.sql,
-                    datasource_id=compiled.datasource_id,
+                    datasource_id=datasource_id,
                     subject=self._query_subject(ctx),
                     selected_tables=compiled.tables,
                 )
@@ -316,7 +311,7 @@ class SqlAdapter:
                     "metrics": plan.get("metrics") or compiled.metrics,
                     "dimensions": plan.get("dimensions") or compiled.dimensions,
                     "sql": sql,
-                    "datasource_id": compiled.datasource_id,
+                    "datasource_id": datasource_id,
                     "tables": compiled.tables,
                 }
             )
@@ -336,11 +331,19 @@ class SqlAdapter:
 
     def _compile_semantic_query(
         self,
-        data: SemanticQueryCompileData,
+        data: SemanticQueryCompileRequest,
     ) -> SemanticQueryCompileResult:
         if self._semantic_query_service is None:
             raise ValueError("SEMANTIC_QUERY_SERVICE_REQUIRED")
         return self._semantic_query_service.compile(data)
+
+    @staticmethod
+    def _require_compiled_datasource_id(
+        result: SemanticQueryCompileResult,
+    ) -> int:
+        if result.datasource_id is None:
+            raise ValueError("SEMANTIC_COMPILED_DATASOURCE_REQUIRED")
+        return result.datasource_id
 
     def execute_split(self, request: dict[str, Any]) -> dict[str, Any]:
         """并行执行已生成的跨模型 SQL，不承担 SQL 编译职责。"""

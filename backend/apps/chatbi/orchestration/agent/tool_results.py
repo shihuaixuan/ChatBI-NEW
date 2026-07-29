@@ -146,31 +146,25 @@ class ChatBIToolResultProcessor:
         self,
         context: AgentToolContext,
         result: ToolResult[Any],
-        package: dict[str, Any],
+        payload: dict[str, Any],
         base_summary: dict[str, Any],
     ) -> ToolResultProjection:
-        asset_ids = set(context.state.get("semantic_asset_ids") or [])
-        for group in (package.get("candidate_groups") or {}).values():
-            if isinstance(group, list):
-                asset_ids.update(
-                    item.get("asset_id")
-                    for item in group
-                    if isinstance(item, dict)
-                    and item.get("asset_id") is not None
-                )
-        for group in (package.get("selected_assets") or {}).values():
-            if isinstance(group, list):
-                asset_ids.update(
-                    item.get("asset_id")
-                    for item in group
-                    if isinstance(item, dict)
-                    and item.get("asset_id") is not None
-                )
+        package = payload.get("package") or {}
+        scope = payload.get("scope") or {}
+        asset_ids = sorted(
+            {
+                int(item["asset_id"])
+                for item in scope.get("allowed_assets") or []
+                if isinstance(item, dict) and isinstance(item.get("asset_id"), int)
+            }
+        )
         return ToolResultProjection(
             result=result,
             state_patch={
                 "semantic_package": package,
-                "semantic_asset_ids": sorted(asset_ids),
+                "semantic_scope": scope,
+                # 保留审计和恢复所需的派生字段，唯一来源是检索决策白名单。
+                "semantic_asset_ids": asset_ids,
                 "allowed_tables": self._merge_tables(
                     context,
                     package.get("tables") or [],
@@ -294,9 +288,7 @@ class ChatBIToolResultProcessor:
             for table in context.state.get("allowed_tables") or []
             if str(table).strip()
         }
-        tables.update(
-            str(table) for table in new_tables if str(table).strip()
-        )
+        tables.update(str(table) for table in new_tables if str(table).strip())
         return sorted(tables)
 
     @staticmethod

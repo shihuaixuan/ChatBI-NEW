@@ -9,7 +9,7 @@ from apps.chatbi.models.dto.question_understanding import (
     QuestionUnderstandingValidationIssue,
     QuestionUnderstandingValidationResult,
 )
-from apps.chatbi.services.understanding.time_range import is_time_expression
+from apps.semantic import is_time_expression
 
 
 def validate_question_understanding(

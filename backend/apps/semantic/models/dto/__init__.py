@@ -41,6 +41,7 @@ from apps.semantic.models.dto.model import (
 from apps.semantic.models.dto.sql_compilation import (
     SemanticQueryCompileRequest,
     SemanticQueryCompileResult,
+    SemanticUsedAsset,
 )
 from apps.semantic.models.dto.term import (
     LegacyTerminologyDTO,
@@ -83,6 +84,7 @@ __all__ = [
     "SemanticDatasetSummary",
     "SemanticQueryCompileRequest",
     "SemanticQueryCompileResult",
+    "SemanticUsedAsset",
     "SemanticTableMeta",
     "TermPayload",
     "TermSearchResult",

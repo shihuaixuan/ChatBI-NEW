@@ -8,7 +8,7 @@ from apps.chatbi.models.dto.question_understanding import (
     QuestionIntentProjectionData,
     QuestionIntentProjectionResult,
 )
-from apps.chatbi.services.understanding.time_range import normalize_time_range_payload
+from apps.semantic import normalize_time_range_payload
 
 _INTENT_TYPES = {
     "metric_query",

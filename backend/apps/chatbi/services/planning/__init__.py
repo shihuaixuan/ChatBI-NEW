@@ -20,11 +20,6 @@ from apps.chatbi.services.planning.physical_schema import (
     PhysicalSchemaAccessDeniedError,
     PhysicalSchemaService,
 )
-from apps.chatbi.services.planning.semantic_compilation import (
-    SemanticCompilationService,
-    SemanticQueryCompileError,
-)
-from apps.chatbi.services.planning.semantic_retrieval import SemanticRetrievalService
 
 __all__ = [
     "DatasourceSelectionCandidateRanker",
@@ -36,8 +31,5 @@ __all__ = [
     "ExecutionBindingError",
     "PhysicalSchemaService",
     "PhysicalSchemaAccessDeniedError",
-    "SemanticCompilationService",
-    "SemanticQueryCompileError",
-    "SemanticRetrievalService",
     "resolve_execution_binding",
 ]

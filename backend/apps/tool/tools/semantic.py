@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from apps.datasource import DatasourceQueryService, DatasourceQuerySubject
+from apps.retrieval import (
+    ExecutableAssetReference,
+    RetrievalPermissionError,
+    RetrievalQueryError,
+    RetrievalService,
+    filter_semantic_payload_tables,
+    validate_compilation_allowlist,
+)
+from apps.semantic import (
+    SemanticQueryCompileRequest,
+    SemanticSQLCompilationService,
+    SemanticUsedAsset,
+    normalize_time_range,
+)
 from apps.tool.base import Tool, ToolExecutionPolicy, json_summary
+from apps.tool.context import current_tool_call_context
 from apps.tool.result import RetryAdvice, ToolErrorCategory, ToolResult
 from apps.tool.tools.context import TrustedToolContext
+from apps.tool.tools.semantic_contracts import (
+    SemanticAssetScope,
+    SemanticToolContext,
+)
 
 
 class TermQueryService(Protocol):
@@ -75,9 +95,509 @@ class SearchTerminologyTool(
         )
 
 
+class SearchSemanticAssetsArgs(BaseModel):
+    """检索输入由 Agent 运行层确认，模型调用时不重复提交。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class SemanticAssetPackage(BaseModel):
+    """提供给模型和 Agent 结果处理器的语义检索包。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    hit: bool = False
+    status: str | None = None
+    dataset_id: int | None = None
+    tables: list[str] = Field(default_factory=list)
+    metrics: list[str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=list)
+    terms: list[str] = Field(default_factory=list)
+    candidate_groups: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    selected_assets: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    slot_bindings: dict[str, Any] = Field(default_factory=dict)
+    decision: dict[str, Any] = Field(default_factory=dict)
+    ambiguities: list[dict[str, Any]] = Field(default_factory=list)
+    multi_query_plans: list[dict[str, Any]] = Field(default_factory=list)
+    allowed_asset_ids: list[ExecutableAssetReference] = Field(default_factory=list)
+
+
+class SearchSemanticAssetsResult(BaseModel):
+    package: SemanticAssetPackage
+    scope: SemanticAssetScope
+
+
+class SearchSemanticAssetsTool(
+    Tool[
+        SemanticToolContext,
+        SearchSemanticAssetsArgs,
+        SearchSemanticAssetsResult,
+    ]
+):
+    name = "search_semantic_assets"
+    description = (
+        "按上游已确认的问题理解检索候选指标、维度、术语与数据表，无需传入参数。回答问数问题前必须先调用，"
+        "返回的语义包（asset_id、口径、置信度、歧义提示）是后续编译 SQL 的唯一合法依据。"
+    )
+    args_model = SearchSemanticAssetsArgs
+    result_model = SearchSemanticAssetsResult
+    execution = ToolExecutionPolicy(timeout_seconds=30)
+
+    def __init__(
+        self,
+        retrieval_service: RetrievalService,
+        query_service: DatasourceQueryService,
+    ) -> None:
+        if retrieval_service is None:
+            raise ValueError("SEMANTIC_RETRIEVAL_SERVICE_REQUIRED")
+        if query_service is None:
+            raise ValueError("DATASOURCE_QUERY_SERVICE_REQUIRED")
+        self._retrieval_service = retrieval_service
+        self._query_service = query_service
+
+    def execute(
+        self,
+        ctx: SemanticToolContext,
+        args: SearchSemanticAssetsArgs,
+    ) -> ToolResult[SearchSemanticAssetsResult]:
+        if ctx.dataset_id is None or ctx.dataset_id <= 0:
+            return ToolResult.failed(
+                "当前数据源未绑定可用的语义数据集，无法进行语义检索。可改用 get_dataset_schema 查看物理表结构。",
+                error_code="semantic_dataset_not_found",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
+            )
+        if ctx.user_id is None or ctx.user_id <= 0 or ctx.datasource_id is None:
+            return ToolResult.failed(
+                "Datasource 权限服务或可信身份未配置。",
+                error_code="query_policy_service_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+                retry_advice=RetryAdvice.NEVER,
+            )
+        request = ctx.semantic_retrieval_request
+        if request is None:
+            return ToolResult.rejected(
+                "缺少已确认的语义检索请求，禁止在工具选择阶段重新生成检索意图。",
+                error_code="semantic_retrieval_request_required",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
+            )
+        if (
+            request.tenant_id != ctx.workspace_id
+            or request.actor_id != ctx.user_id
+            or request.scope.dataset_ids != [ctx.dataset_id]
+        ):
+            return ToolResult.rejected(
+                "语义检索请求与当前可信身份或数据集不一致。",
+                error_code="semantic_retrieval_scope_mismatch",
+                error_category=ToolErrorCategory.SAFETY,
+            )
+
+        policy = self._query_service.resolve_policy(
+            DatasourceQuerySubject(
+                user_id=ctx.user_id,
+                workspace_id=ctx.workspace_id,
+            ),
+            ctx.datasource_id,
+        )
+        if not policy.allowed or not policy.authorized_tables:
+            return ToolResult.rejected(
+                policy.reason or "当前身份没有可访问的表。",
+                error_code=policy.error_code or "authorized_tables_empty",
+                error_category=ToolErrorCategory.AUTHORIZATION,
+            )
+        call_context = current_tool_call_context()
+        remaining = (
+            call_context.remaining_seconds() if call_context is not None else None
+        )
+        try:
+            if remaining is None:
+                retrieval = self._retrieval_service.retrieve(request)
+            else:
+                retrieval = self._retrieval_service.retrieve(
+                    request,
+                    timeout_ms=max(1, int(remaining * 1000)),
+                )
+        except TimeoutError:
+            return ToolResult.failed(
+                "语义检索超过有效截止时间。",
+                error_code="semantic_retrieval_timeout",
+                error_category=ToolErrorCategory.TIMEOUT,
+                retry_advice=RetryAdvice.SAME_INPUT,
+            )
+
+        authorized = {table.lower() for table in policy.authorized_tables}
+        retrieved_tables = [
+            str(table) for table in retrieval.payload.get("tables") or []
+        ]
+        unauthorized = [
+            table for table in retrieved_tables if table.lower() not in authorized
+        ]
+        if unauthorized:
+            return ToolResult.rejected(
+                f"语义检索结果包含无权访问的表: {sorted(unauthorized)}。",
+                error_code="semantic_table_out_of_scope",
+                error_category=ToolErrorCategory.AUTHORIZATION,
+            )
+
+        package = _project_semantic_package(retrieval.payload, authorized)
+        package_keys = {
+            (item.asset_type, item.asset_id) for item in package.allowed_asset_ids
+        }
+        allowed_assets = tuple(
+            item
+            for item in retrieval.bundle.decision.allowed_asset_ids
+            if (item.asset_type, item.asset_id) in package_keys
+        )
+        time_range = request.intent.time_range
+        normalized_time_range = (
+            time_range.get("normalized")
+            if isinstance(time_range.get("normalized"), dict)
+            else None
+        )
+        scope = SemanticAssetScope(
+            workspace_id=ctx.workspace_id,
+            user_id=ctx.user_id,
+            datasource_id=ctx.datasource_id,
+            dataset_id=ctx.dataset_id,
+            retrieval_id=retrieval.bundle.request_id,
+            decision_status=retrieval.bundle.decision.status,
+            allowed_assets=allowed_assets,
+            authorized_tables=tuple(retrieved_tables),
+            normalized_time_range=normalized_time_range,
+            permission_version=request.scope.permission_version,
+        )
+        data = SearchSemanticAssetsResult(package=package, scope=scope)
+        return ToolResult.succeeded(
+            json_summary(package.model_dump(mode="json"), ctx.summary_max_chars),
+            data,
+        )
+
+
+class CompileFilter(BaseModel):
+    asset_id: int = Field(description="过滤维度的 asset_id，必须来自语义包")
+    operator: str = Field(
+        default="=",
+        description="过滤操作符，如 = / != / > / >= / < / <= / in / like",
+    )
+    value: str | int | float | bool | dict[str, Any] = Field(
+        description="过滤值；时间筛选必须使用已确认的归一化时间范围"
+    )
+
+
+class CompileOrderBy(BaseModel):
+    biz_name: str = Field(description="排序字段的 biz_name（指标或维度）")
+    direction: Literal["asc", "desc"] = "desc"
+
+
+class CompileSemanticSqlArgs(BaseModel):
+    """把结构化查询计划确定性编译为 SQL。"""
+
+    metric_asset_ids: list[int] = Field(default_factory=list)
+    dimension_asset_ids: list[int] = Field(default_factory=list)
+    filters: list[CompileFilter] = Field(default_factory=list)
+    time_bucket: dict[str, Any] | None = None
+    order_by: list[CompileOrderBy] = Field(default_factory=list)
+    limit: int | None = None
+
+
+class CompileSemanticSqlResult(BaseModel):
+    sql: str
+    tables: list[str] = Field(default_factory=list)
+    metrics: list[str] = Field(default_factory=list)
+    dimensions: list[str] = Field(default_factory=list)
+    dataset_id: int
+    datasource_id: int | None = None
+    used_assets: list[SemanticUsedAsset] = Field(default_factory=list)
+    strategy: str
+
+
+class CompileSemanticSqlTool(
+    Tool[
+        SemanticToolContext,
+        CompileSemanticSqlArgs,
+        CompileSemanticSqlResult,
+    ]
+):
+    name = "compile_semantic_sql"
+    description = (
+        "把结构化查询计划确定性编译为 SQL，口径由语义层保证。所有 asset_id 必须来自 "
+        "search_semantic_assets 返回的编译白名单。"
+    )
+    args_model = CompileSemanticSqlArgs
+    result_model = CompileSemanticSqlResult
+    execution = ToolExecutionPolicy(timeout_seconds=30)
+
+    def __init__(
+        self,
+        compilation_service: SemanticSQLCompilationService,
+        query_service: DatasourceQueryService,
+    ) -> None:
+        if compilation_service is None:
+            raise ValueError("SEMANTIC_COMPILATION_SERVICE_REQUIRED")
+        if query_service is None:
+            raise ValueError("DATASOURCE_QUERY_SERVICE_REQUIRED")
+        self._compilation_service = compilation_service
+        self._query_service = query_service
+
+    def execute(
+        self,
+        ctx: SemanticToolContext,
+        args: CompileSemanticSqlArgs,
+    ) -> ToolResult[CompileSemanticSqlResult]:
+        scope = ctx.semantic_asset_scope
+        if scope is None:
+            return ToolResult.rejected(
+                "尚未检索语义资产，请先调用 search_semantic_assets。",
+                error_code="semantic_package_required",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
+            )
+        if not _scope_matches_context(ctx, scope):
+            return ToolResult.rejected(
+                "语义资产范围与当前可信身份、数据源或数据集不一致。",
+                error_code="semantic_scope_mismatch",
+                error_category=ToolErrorCategory.SAFETY,
+            )
+        assert ctx.user_id is not None
+        assert ctx.datasource_id is not None
+        policy = self._query_service.resolve_policy(
+            DatasourceQuerySubject(
+                user_id=ctx.user_id,
+                workspace_id=ctx.workspace_id,
+            ),
+            ctx.datasource_id,
+        )
+        current_tables = {table.lower() for table in policy.authorized_tables}
+        if (
+            not policy.allowed
+            or not current_tables
+            or any(
+                table.lower() not in current_tables for table in scope.authorized_tables
+            )
+        ):
+            return ToolResult.rejected(
+                policy.reason or "语义检索后的数据权限已经变化，请重新检索。",
+                error_code=policy.error_code or "semantic_scope_permission_changed",
+                error_category=ToolErrorCategory.AUTHORIZATION,
+            )
+
+        dimension_ids = [
+            *args.dimension_asset_ids,
+            *(item.asset_id for item in args.filters),
+        ]
+        if args.time_bucket and isinstance(args.time_bucket.get("asset_id"), int):
+            dimension_ids.append(args.time_bucket["asset_id"])
+        try:
+            validate_compilation_allowlist(
+                scope.decision_status,
+                scope.allowed_assets,
+                metric_ids=args.metric_asset_ids,
+                dimension_ids=dimension_ids,
+            )
+        except RetrievalPermissionError as exc:
+            denied_assets = exc.details.get("denied_assets") or []
+            return ToolResult.rejected(
+                f"{exc}: {denied_assets}",
+                error_code="asset_not_in_package",
+                error_category=ToolErrorCategory.SAFETY,
+            )
+        except RetrievalQueryError as exc:
+            return ToolResult.rejected(
+                str(exc),
+                error_code="semantic_decision_not_executable",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
+            )
+
+        filters = [item.model_dump(mode="json") for item in args.filters]
+        if scope.normalized_time_range is not None:
+            normalized_time = scope.normalized_time_range
+            if normalized_time.get("kind") == "unsupported":
+                return ToolResult.rejected(
+                    "已确认时间范围尚未归一化，禁止生成 SQL。",
+                    error_code="time_range_unsupported",
+                    error_category=ToolErrorCategory.BUSINESS_RULE,
+                )
+            matched_time_filter = False
+            for filter_item in filters:
+                value = filter_item["value"]
+                candidate = (
+                    normalize_time_range(value) if isinstance(value, str) else None
+                )
+                if value == normalized_time or candidate == normalized_time:
+                    filter_item["value"] = normalized_time
+                    matched_time_filter = True
+            if not matched_time_filter:
+                return ToolResult.rejected(
+                    "时间筛选与已确认问题不一致，禁止省略时间或替换成数据最大日期。",
+                    error_code="time_filter_mismatch",
+                    error_category=ToolErrorCategory.SAFETY,
+                )
+
+        slots: dict[str, Any] = {
+            "metrics": [
+                {"asset_id": asset_id, "asset_type": "METRIC"}
+                for asset_id in args.metric_asset_ids
+            ],
+            "dimensions": [
+                {"asset_id": asset_id, "asset_type": "DIMENSION"}
+                for asset_id in args.dimension_asset_ids
+            ],
+            "filters": [
+                {**filter_item, "asset_type": "DIMENSION"} for filter_item in filters
+            ],
+        }
+        try:
+            compiled = self._compilation_service.compile(
+                SemanticQueryCompileRequest(
+                    workspace_id=ctx.workspace_id,
+                    dataset_id=scope.dataset_id,
+                    question=(
+                        ctx.semantic_retrieval_request.rewritten_question
+                        if ctx.semantic_retrieval_request
+                        else ""
+                    ),
+                    slots=slots,
+                    order_by=[item.model_dump(mode="json") for item in args.order_by],
+                    limit=args.limit or ctx.semantic_default_limit,
+                    time_bucket=args.time_bucket,
+                )
+            )
+        except ValueError as exc:
+            return ToolResult.failed(
+                "语义资产不足，无法使用规则编译生成 SQL",
+                error_code=str(exc),
+                error_category=ToolErrorCategory.DOMAIN,
+                retry_advice=RetryAdvice.CORRECT_INPUT,
+            )
+        if compiled.datasource_id not in {None, ctx.datasource_id}:
+            return ToolResult.rejected(
+                "语义编译结果使用了当前范围之外的数据源。",
+                error_code="compiled_datasource_out_of_scope",
+                error_category=ToolErrorCategory.AUTHORIZATION,
+            )
+        if any(table.lower() not in current_tables for table in compiled.tables):
+            return ToolResult.rejected(
+                "语义编译结果使用了当前范围之外的数据表。",
+                error_code="compiled_table_out_of_scope",
+                error_category=ToolErrorCategory.AUTHORIZATION,
+            )
+        data = CompileSemanticSqlResult(
+            sql=compiled.sql,
+            tables=compiled.tables,
+            metrics=compiled.metrics,
+            dimensions=compiled.dimensions,
+            dataset_id=compiled.dataset_id,
+            datasource_id=compiled.datasource_id,
+            used_assets=compiled.used_assets,
+            strategy="semantic_sql_compiler",
+        )
+        return ToolResult.succeeded(
+            json_summary(data.model_dump(mode="json"), ctx.summary_max_chars),
+            data,
+        )
+
+
+def _scope_matches_context(
+    ctx: SemanticToolContext,
+    scope: SemanticAssetScope,
+) -> bool:
+    return bool(
+        ctx.user_id is not None
+        and ctx.datasource_id is not None
+        and ctx.dataset_id is not None
+        and scope.workspace_id == ctx.workspace_id
+        and scope.user_id == ctx.user_id
+        and scope.datasource_id == ctx.datasource_id
+        and scope.dataset_id == ctx.dataset_id
+    )
+
+
+def _project_semantic_package(
+    payload: dict[str, Any],
+    authorized_tables: set[str],
+) -> SemanticAssetPackage:
+    filtered = filter_semantic_payload_tables(payload, authorized_tables)
+    candidate_groups = filtered.get("candidate_groups") or {}
+    truncated = {
+        group: len(items) - 5
+        for group, items in candidate_groups.items()
+        if isinstance(items, list) and len(items) > 5
+    }
+    filtered["candidate_groups"] = {
+        group: [_public_candidate(item) for item in items[:5] if isinstance(item, dict)]
+        for group, items in candidate_groups.items()
+        if isinstance(items, list)
+    }
+    filtered["truncated"] = truncated
+    filtered["status"] = _semantic_status(filtered)
+    selected_keys = {
+        (str(item.get("asset_type") or asset_type), item.get("asset_id"))
+        for group, asset_type in (("metrics", "METRIC"), ("dimensions", "DIMENSION"))
+        for item in (filtered.get("selected_assets") or {}).get(group, [])
+        if isinstance(item, dict) and item.get("asset_id") is not None
+    }
+    filtered["allowed_asset_ids"] = [
+        item
+        for item in filtered.get("allowed_asset_ids") or []
+        if isinstance(item, dict)
+        and (str(item.get("asset_type") or ""), item.get("asset_id")) in selected_keys
+    ]
+    return SemanticAssetPackage.model_validate(filtered)
+
+
+def _public_candidate(item: dict[str, Any]) -> dict[str, Any]:
+    fields = (
+        "asset_type",
+        "asset_id",
+        "biz_name",
+        "display_name",
+        "score",
+        "source",
+        "model_id",
+        "description",
+        "table",
+        "table_name",
+        "physical_table",
+        "matched_text",
+        "matched_field",
+        "retrieval_scores",
+        "retrieval_ranks",
+    )
+    return {key: item[key] for key in fields if item.get(key) is not None}
+
+
+def _semantic_status(package: dict[str, Any]) -> str | None:
+    decision = package.get("decision")
+    if not isinstance(decision, dict):
+        return package.get("status")
+    reason_codes = {str(code) for code in decision.get("reason_codes") or [] if code}
+    if "TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL" in reason_codes:
+        return "time_dimension_not_configured"
+    if decision.get("status") != "ambiguous":
+        return package.get("status")
+    ambiguity_types = {
+        str(item.get("type") or "")
+        for item in package.get("ambiguities") or []
+        if isinstance(item, dict) and item.get("type")
+    }
+    if ambiguity_types == {"metric"}:
+        return "metric_ambiguous"
+    if ambiguity_types == {"dimension"}:
+        return "dimension_ambiguous"
+    return "semantic_ambiguous"
+
+
 __all__ = [
+    "CompileFilter",
+    "CompileOrderBy",
+    "CompileSemanticSqlArgs",
+    "CompileSemanticSqlResult",
+    "CompileSemanticSqlTool",
+    "SearchSemanticAssetsArgs",
+    "SearchSemanticAssetsResult",
+    "SearchSemanticAssetsTool",
     "SearchTerminologyArgs",
     "SearchTerminologyResult",
     "SearchTerminologyTool",
+    "SemanticAssetPackage",
     "TermQueryService",
 ]

@@ -3,8 +3,6 @@ from sqlmodel import Session
 from apps.access_control.data_policy import SessionDatasourceQueryPolicyProvider
 from apps.chatbi.composition import (
     build_result_artifact_service,
-    build_semantic_query_service,
-    build_semantic_retrieval_service,
 )
 from apps.chatbi.orchestration.graph.capabilities.adapters.answer import AnswerAdapter
 from apps.chatbi.orchestration.graph.capabilities.adapters.interaction import (
@@ -47,6 +45,7 @@ from apps.retrieval.query.service import build_retrieval_service
 from apps.semantic.composition import (
     build_semantic_dataset_binding_service,
     build_semantic_schema_service,
+    build_semantic_sql_compilation_service,
 )
 from common.core.db import engine
 from sqlbot_platform.workflow_engine.composition import (
@@ -138,10 +137,7 @@ def build_real_chatbi_v1_runtime(
         ),
         answer_adapter=AnswerAdapter(model_client=answer_model_client),
         knowledge_adapter=SemanticKnowledgeAdapter(
-            semantic_retrieval_service=build_semantic_retrieval_service(
-                session,
-                retrieval_gateway=retrieval_service,
-            ),
+            retrieval_service=retrieval_service,
             dataset_binding_service=build_semantic_dataset_binding_service(
                 session
             ),
@@ -149,7 +145,7 @@ def build_real_chatbi_v1_runtime(
         ),
         interaction_adapter=InteractionAdapter(schema_provider=schema_provider),
         sql_adapter=SqlAdapter(
-            semantic_query_service=build_semantic_query_service(session),
+            semantic_query_service=build_semantic_sql_compilation_service(session),
             query_service=query_service,
             result_artifact_service=result_artifact_service,
         ),
