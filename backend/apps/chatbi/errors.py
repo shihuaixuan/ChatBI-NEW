@@ -88,6 +88,27 @@ class QuestionModelOutputError(QuestionModelError):
     """问题理解模型输出不符合 JSON 对象契约。"""
 
 
+# --- 语义澄清（semantic clarification） ---
+
+
+class SemanticClarificationError(ChatBIError, RuntimeError):
+    """语义资产澄清回答无法通过服务端候选校验。"""
+
+    SCOPE_REQUIRED = "SEMANTIC_CLARIFICATION_SCOPE_REQUIRED"
+    RETRIEVAL_MISMATCH = "SEMANTIC_CLARIFICATION_RETRIEVAL_MISMATCH"
+    OPTIONS_REQUIRED = "SEMANTIC_CLARIFICATION_OPTIONS_REQUIRED"
+    STRUCTURED_SELECTION_REQUIRED = (
+        "SEMANTIC_CLARIFICATION_STRUCTURED_SELECTION_REQUIRED"
+    )
+    OPTION_NOT_FOUND = "SEMANTIC_CLARIFICATION_OPTION_NOT_FOUND"
+    SNAPSHOT_REQUIRED = "SEMANTIC_CLARIFICATION_SNAPSHOT_REQUIRED"
+    PAYLOAD_REQUIRED = "SEMANTIC_CLARIFICATION_PAYLOAD_REQUIRED"
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
 __all__ = [
     "ChatBIError",
     "ChartGenerationError",
@@ -98,6 +119,7 @@ __all__ = [
     "PermissionSQLGenerationError",
     "QueryResultProjectionError",
     "SQLGenerationError",
+    "SemanticClarificationError",
     "QuestionModelCallError",
     "QuestionModelError",
     "QuestionModelOutputError",

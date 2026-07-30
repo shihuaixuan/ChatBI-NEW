@@ -69,7 +69,13 @@ class AgentReasoner:
             llm_attributes(model=self._model_client.__class__.__name__),
         ) as llm_span:
             model_decision = self._model_client.invoke(invoke_messages, tool_definitions)
-            response = model_decision.message
+            tool_calls = [
+                self._registry.prepare_call(call, state.context)
+                for call in model_decision.tool_calls
+            ]
+            response = model_decision.message.model_copy(
+                update={"tool_calls": tool_calls}
+            )
             usage = model_decision.usage
             for source, attribute in (
                 ("input_tokens", "gen_ai.usage.input_tokens"),
@@ -80,11 +86,16 @@ class AgentReasoner:
                     llm_span.set_attribute(attribute, int(usage[source]))
 
         state.budget.record_llm_turn(usage)
+        _record_tool_call_preparations(
+            state,
+            model_decision.tool_calls,
+            tool_calls,
+        )
         state.messages.append(response)
         return AgentDecision(
             response=response,
             reasoning=_content_text(response),
-            tool_calls=model_decision.tool_calls,
+            tool_calls=tool_calls,
             usage=usage,
         )
 
@@ -127,6 +138,32 @@ class AgentReasoner:
 
 def _content_text(message: AgentMessage) -> str:
     return message.content.strip() or str(message.reasoning_content or "").strip()
+
+
+def _record_tool_call_preparations(
+    state: AgentRuntimeState,
+    original_calls: list[ToolCall],
+    prepared_calls: list[ToolCall],
+) -> None:
+    """记录模型参数被可信工具计划调整的事实，供运行审计与问题定位。"""
+
+    adjustments = [
+        {
+            "tool_call_id": original.call_id,
+            "tool_name": original.name,
+            "original_args": original.args,
+            "prepared_args": prepared.args,
+        }
+        for original, prepared in zip(original_calls, prepared_calls, strict=True)
+        if original.args != prepared.args
+    ]
+    if not adjustments:
+        return
+    history = state.context.state.setdefault("tool_call_preparations", [])
+    if not isinstance(history, list):
+        raise TypeError("AGENT_TOOL_CALL_PREPARATIONS_INVALID")
+    history.extend(adjustments)
+    del history[:-20]
 
 
 __all__ = ["AgentDecision", "AgentModelClient", "AgentReasoner"]

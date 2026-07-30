@@ -37,18 +37,6 @@ from apps.chatbi.orchestration.graph.capabilities.adapters.question_common impor
 from apps.chatbi.orchestration.graph.capabilities.adapters.question_dimension import (
     build_dimension_slots_prompt,
 )
-from apps.chatbi.orchestration.graph.capabilities.adapters.question_dimension import (
-    dimension_candidate_by_text as _dimension_candidate_by_text,
-)
-from apps.chatbi.orchestration.graph.capabilities.adapters.question_dimension import (
-    dimension_candidate_from_schema_element as _dimension_candidate_from_schema_element,
-)
-from apps.chatbi.orchestration.graph.capabilities.adapters.question_dimension import (
-    dimension_text_key as _dimension_text_key,
-)
-from apps.chatbi.orchestration.graph.capabilities.adapters.question_dimension import (
-    normalize_dimension_candidates as _normalize_dimension_candidates,
-)
 from apps.chatbi.orchestration.graph.capabilities.adapters.question_input import (
     build_question_classification_prompt,
     build_question_rewrite_prompt,
@@ -65,6 +53,18 @@ from apps.chatbi.services.understanding import (
     StructuredModelService,
     graph_contracts,
     intent_projection,
+)
+from apps.chatbi.services.understanding.dimension_candidates import (
+    dimension_candidate_by_text as _dimension_candidate_by_text,
+)
+from apps.chatbi.services.understanding.dimension_candidates import (
+    dimension_candidate_from_schema_element as _dimension_candidate_from_schema_element,
+)
+from apps.chatbi.services.understanding.dimension_candidates import (
+    dimension_text_key as _dimension_text_key,
+)
+from apps.chatbi.services.understanding.dimension_candidates import (
+    normalize_dimension_candidates as _normalize_dimension_candidates,
 )
 from apps.semantic import normalize_time_range_payload
 from apps.semantic.services.schema_service import DatasetSchemaProvider

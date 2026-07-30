@@ -383,14 +383,18 @@ class AgentToolExecutor:
                         usage,
                     )
                     self._session.commit()
+                    clarification_options = list(data.get("options") or [])
                     yield self._lifecycle.suspend(
                         state,
                         str(data["question"]),
-                        list(data.get("options") or []),
+                        clarification_options,
                         call_id,
                         step.id,
                         resume_kind=AgentClarificationResumeKind.AGENT_TOOL,
-                        resume_payload={},
+                        resume_payload=_agent_tool_resume_payload(
+                            context.state,
+                            clarification_options,
+                        ),
                     )
                     return ToolExecutionResult(ToolExecutionStatus.SUSPENDED)
 
@@ -680,7 +684,7 @@ def _bounded_summary(value: dict[str, Any]) -> dict[str, Any]:
     encoded = orjson.dumps(sanitized).decode()
     if len(encoded) > 2000:
         return {"_truncated": encoded[:2000]}
-    return sanitized
+    return cast(dict[str, Any], sanitized)
 
 
 def _redact_sensitive(value: Any, key: str = "") -> Any:
@@ -720,10 +724,30 @@ def _tool_args_summary(
     )
 
 
+def _agent_tool_resume_payload(
+    state: dict[str, Any],
+    options: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """只为带确定性语义绑定的澄清保存恢复数据。"""
+
+    if not any(
+        isinstance(option, dict) and option.get("bindings")
+        for option in options
+    ):
+        return {}
+    scope = state.get("semantic_scope")
+    retrieval_id = scope.get("retrieval_id") if isinstance(scope, dict) else None
+    return {
+        "operation": "resolve_semantic_bindings",
+        "retrieval_id": retrieval_id,
+        "options": options,
+    }
+
+
 def _result_data(result: ToolResult[Any]) -> dict[str, Any]:
     if result.data is None:
         return {}
-    return result.data.model_dump(mode="json")
+    return cast(dict[str, Any], result.data.model_dump(mode="json"))
 
 
 def _offload_ref(result: ToolResult[Any]) -> str | None:

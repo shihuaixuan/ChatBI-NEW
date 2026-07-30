@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from apps.datasource import DatasourceQueryService, DatasourceQuerySubject
 from apps.retrieval import (
     ExecutableAssetReference,
+    RetrievalDecisionStatus,
     RetrievalPermissionError,
     RetrievalQueryError,
     RetrievalService,
@@ -28,6 +29,7 @@ from apps.tool.tools.context import TrustedToolContext
 from apps.tool.tools.semantic_contracts import (
     SemanticAssetScope,
     SemanticToolContext,
+    build_semantic_compile_plan,
 )
 
 
@@ -264,16 +266,28 @@ class SearchSemanticAssetsTool(
             allowed_assets=allowed_assets,
             authorized_tables=tuple(retrieved_tables),
             normalized_time_range=normalized_time_range,
+            compile_plan=build_semantic_compile_plan(package.slot_bindings),
             permission_version=request.scope.permission_version,
         )
         data = SearchSemanticAssetsResult(package=package, scope=scope)
+        metadata = {
+            "semantic_payload": retrieval.payload,
+            "semantic_retrieval_request": request.model_dump(mode="json"),
+            "semantic_retrieval_filters": getattr(retrieval, "filters", {}),
+        }
+        bundle_dump = getattr(retrieval.bundle, "model_dump", None)
+        if callable(bundle_dump):
+            metadata["semantic_bundle"] = bundle_dump(mode="json")
         return ToolResult.succeeded(
             json_summary(package.model_dump(mode="json"), ctx.summary_max_chars),
             data,
+            metadata=metadata,
         )
 
 
 class CompileFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     asset_id: int = Field(description="过滤维度的 asset_id，必须来自语义包")
     operator: str = Field(
         default="=",
@@ -285,12 +299,16 @@ class CompileFilter(BaseModel):
 
 
 class CompileOrderBy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     biz_name: str = Field(description="排序字段的 biz_name（指标或维度）")
     direction: Literal["asc", "desc"] = "desc"
 
 
 class CompileSemanticSqlArgs(BaseModel):
     """把结构化查询计划确定性编译为 SQL。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     metric_asset_ids: list[int] = Field(default_factory=list)
     dimension_asset_ids: list[int] = Field(default_factory=list)
@@ -320,8 +338,9 @@ class CompileSemanticSqlTool(
 ):
     name = "compile_semantic_sql"
     description = (
-        "把结构化查询计划确定性编译为 SQL，口径由语义层保证。所有 asset_id 必须来自 "
-        "search_semantic_assets 返回的编译白名单。"
+        "把结构化查询计划确定性编译为 SQL，口径由语义层保证。参数只允许 "
+        "metric_asset_ids、dimension_asset_ids、filters、time_bucket、order_by、limit；"
+        "所有 asset_id 必须来自 search_semantic_assets 返回的编译白名单。"
     )
     args_model = CompileSemanticSqlArgs
     result_model = CompileSemanticSqlResult
@@ -339,11 +358,33 @@ class CompileSemanticSqlTool(
         self._compilation_service = compilation_service
         self._query_service = query_service
 
+    def prepare_args(
+        self,
+        ctx: SemanticToolContext,
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        """用已收敛的服务端语义计划覆盖模型重复提交的资产绑定。"""
+
+        scope = ctx.semantic_asset_scope
+        if (
+            scope is None
+            or scope.decision_status != RetrievalDecisionStatus.RESOLVED
+            or scope.compile_plan is None
+            or not scope.compile_plan.metric_asset_ids
+        ):
+            return dict(args)
+        prepared = dict(args)
+        prepared.update(scope.compile_plan.model_dump(mode="json"))
+        return prepared
+
     def execute(
         self,
         ctx: SemanticToolContext,
         args: CompileSemanticSqlArgs,
     ) -> ToolResult[CompileSemanticSqlResult]:
+        args = CompileSemanticSqlArgs.model_validate(
+            self.prepare_args(ctx, args.model_dump(mode="json"))
+        )
         scope = ctx.semantic_asset_scope
         if scope is None:
             return ToolResult.rejected(
@@ -401,10 +442,15 @@ class CompileSemanticSqlTool(
                 error_category=ToolErrorCategory.SAFETY,
             )
         except RetrievalQueryError as exc:
+            details = {
+                **exc.details,
+                "retry_action": "clarify_semantic_binding",
+            }
             return ToolResult.rejected(
-                str(exc),
+                f"{exc}；当前语义决策尚不可执行，请完成语义澄清后再编译。",
                 error_code="semantic_decision_not_executable",
                 error_category=ToolErrorCategory.BUSINESS_RULE,
+                details=details,
             )
 
         filters = [item.model_dump(mode="json") for item in args.filters]

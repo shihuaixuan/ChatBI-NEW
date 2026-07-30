@@ -40,6 +40,21 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
+    def prepare_call(self, call: ToolCall, ctx: Any) -> ToolCall:
+        """在预算、分批和执行前应用工具自己的可信参数准备规则。"""
+
+        tool = self._tools.get(call.name)
+        if tool is None:
+            return call
+        prepared_args = tool.prepare_args(ctx, dict(call.args or {}))
+        if not isinstance(prepared_args, dict):
+            raise TypeError(f"TOOL_PREPARED_ARGS_MUST_BE_DICT:{call.name}")
+        return ToolCall(
+            name=call.name,
+            args=prepared_args,
+            call_id=call.call_id,
+        )
+
     def definitions(self, allowed: list[str] | None = None) -> list[ToolDefinition]:
         """导出厂商无关定义；allowed 非空时仅暴露子集。"""
 
@@ -65,6 +80,7 @@ class ToolRegistry:
                 error_code="tool_not_allowed",
                 error_category=ToolErrorCategory.AUTHORIZATION,
             )
+        call = self.prepare_call(call, ctx)
         try:
             args = tool.args_model.model_validate(call.args or {})
         except ValidationError as exc:

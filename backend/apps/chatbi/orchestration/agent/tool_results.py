@@ -158,18 +158,27 @@ class ChatBIToolResultProcessor:
                 if isinstance(item, dict) and isinstance(item.get("asset_id"), int)
             }
         )
+        state_patch = {
+            "semantic_package": package,
+            "semantic_scope": scope,
+            # 保留审计和恢复所需的派生字段，唯一来源是检索决策白名单。
+            "semantic_asset_ids": asset_ids,
+            "allowed_tables": self._merge_tables(
+                context,
+                package.get("tables") or [],
+            ),
+        }
+        for key in (
+            "semantic_bundle",
+            "semantic_payload",
+            "semantic_retrieval_request",
+            "semantic_retrieval_filters",
+        ):
+            if key in result.metadata:
+                state_patch[key] = result.metadata[key]
         return ToolResultProjection(
             result=result,
-            state_patch={
-                "semantic_package": package,
-                "semantic_scope": scope,
-                # 保留审计和恢复所需的派生字段，唯一来源是检索决策白名单。
-                "semantic_asset_ids": asset_ids,
-                "allowed_tables": self._merge_tables(
-                    context,
-                    package.get("tables") or [],
-                ),
-            },
+            state_patch=state_patch,
             audit_summary={
                 **base_summary,
                 "semantic_status": package.get("status"),

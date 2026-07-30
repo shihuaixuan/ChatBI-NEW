@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Literal, cast
 
+from apps.retrieval.errors import RetrievalQueryError
 from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,
@@ -184,7 +186,7 @@ def bundle_to_semantic_payload(
         else []
     )
     public_candidates = _public_candidate_groups(candidate_groups)
-    hit, payload_status = _payload_status(bundle)
+    hit, payload_status = _clarified_payload_status(bundle)
     return {
         "hit": hit,
         "status": payload_status,
@@ -208,6 +210,7 @@ def bundle_to_semantic_payload(
         },
         "ambiguities": [
             {
+                "subquery_id": ambiguity.subquery_id,
                 "type": next(
                     (
                         slot.purpose.value
@@ -234,6 +237,110 @@ def bundle_to_semantic_payload(
         "retrieval_strategy_version": bundle.diagnostics.strategy_version,
         "retrieval_diagnostics": bundle.diagnostics.model_dump(mode="json"),
     }
+
+
+def apply_decision_to_semantic_payload(
+    request: RetrievalRequest,
+    raw: dict[str, Any],
+    bundle: RetrievalBundle,
+) -> dict[str, Any]:
+    """把收敛后的统一决策写回现有语义包，不重新生成候选事实。"""
+
+    updated = deepcopy(raw)
+    candidate_groups = _candidate_groups_with_selected(raw)
+    candidates_by_key = {
+        _candidate_key(candidate): candidate
+        for candidates in candidate_groups.values()
+        for candidate in candidates
+    }
+    selected_assets: dict[str, list[dict[str, Any]]] = {
+        "metrics": [],
+        "dimensions": [],
+        "values": [],
+        "terms": [],
+    }
+    group_by_type = {
+        RetrievalResourceType.METRIC: "metrics",
+        RetrievalResourceType.DIMENSION: "dimensions",
+        RetrievalResourceType.VALUE: "values",
+        RetrievalResourceType.TERM: "terms",
+    }
+    for slot in bundle.decision.slot_decisions:
+        for asset in slot.selected_assets:
+            group = group_by_type.get(asset.asset_type)
+            if group is None:
+                continue
+            candidate = candidates_by_key.get(
+                (asset.asset_type.value, asset.asset_id, asset.model_id)
+            )
+            if candidate is None:
+                raise RetrievalQueryError(
+                    "澄清选中的资产不在原始语义包候选中",
+                    details={
+                        "reason_code": "CLARIFIED_ASSET_NOT_IN_SEMANTIC_PAYLOAD",
+                        "asset_type": asset.asset_type.value,
+                        "asset_id": asset.asset_id,
+                        "model_id": asset.model_id,
+                    },
+                )
+            if not any(
+                _candidate_key(item) == _candidate_key(candidate)
+                for item in selected_assets[group]
+            ):
+                selected_assets[group].append(candidate)
+
+    selected_with_dimensions = _selected_assets_with_dimension_groups(selected_assets)
+    hit, payload_status = _clarified_payload_status(bundle)
+    updated.update(
+        {
+            "hit": hit,
+            "status": payload_status,
+            "fields": _fields(selected_assets),
+            "metrics": [item.get("biz_name") for item in selected_assets["metrics"]],
+            "dimensions": [
+                item.get("biz_name") for item in selected_assets["dimensions"]
+            ],
+            "terms": [item.get("biz_name") for item in selected_assets["terms"]],
+            "selected_assets": selected_with_dimensions,
+            "slot_bindings": _slot_bindings(
+                selected_assets,
+                request.intent.model_dump(mode="json"),
+            ),
+            "decision": {
+                "status": bundle.decision.status.value,
+                "strategy": "semantic_binding",
+                "reason_codes": bundle.decision.reason_codes,
+            },
+            "ambiguities": [
+                {
+                    "subquery_id": ambiguity.subquery_id,
+                    "type": next(
+                        (
+                            slot.purpose.value
+                            for slot in bundle.decision.slot_decisions
+                            if slot.subquery_id == ambiguity.subquery_id
+                        ),
+                        "semantic_slot",
+                    ),
+                    "reason_code": ambiguity.reason_code,
+                    "candidates": [
+                        candidates_by_key[
+                            (asset.asset_type.value, asset.asset_id, asset.model_id)
+                        ]
+                        for asset in ambiguity.candidate_assets
+                    ],
+                }
+                for ambiguity in bundle.decision.ambiguities
+            ],
+            "allowed_asset_ids": [
+                item.model_dump(mode="json")
+                for item in bundle.decision.allowed_asset_ids
+            ],
+        }
+    )
+    if bundle.decision.status != RetrievalDecisionStatus.CROSS_MODEL:
+        updated["multi_query_plans"] = []
+    return updated
 
 
 def _schema_elements_by_asset(
@@ -330,6 +437,22 @@ def _payload_status(bundle: RetrievalBundle) -> tuple[bool, str]:
     if status == RetrievalDecisionStatus.DEGRADED and bundle.decision.allowed_asset_ids:
         return True, "hit"
     return False, "missed"
+
+
+def _clarified_payload_status(bundle: RetrievalBundle) -> tuple[bool, str]:
+    if bundle.decision.status != RetrievalDecisionStatus.AMBIGUOUS:
+        return _payload_status(bundle)
+    purposes = {
+        slot.purpose
+        for ambiguity in bundle.decision.ambiguities
+        for slot in bundle.decision.slot_decisions
+        if slot.subquery_id == ambiguity.subquery_id
+    }
+    if purposes == {RetrievalPurpose.METRIC}:
+        return True, "metric_ambiguous"
+    if purposes == {RetrievalPurpose.DIMENSION}:
+        return True, "dimension_ambiguous"
+    return True, "semantic_ambiguous"
 
 
 def _selected_assets_with_dimension_groups(

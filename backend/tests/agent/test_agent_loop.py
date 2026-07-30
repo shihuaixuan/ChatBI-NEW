@@ -240,7 +240,15 @@ class StaticUnderstandingService:
     def __init__(self, rewritten_question="按城市看 gmv"):
         self.rewritten_question = rewritten_question
 
-    def understand(self, *, question, datasource_id, conversation_context=None):
+    def understand(
+        self,
+        *,
+        question,
+        datasource_id,
+        conversation_context=None,
+        tenant_id=None,
+        dataset_id=None,
+    ):
         return QuestionUnderstandingOutcome(
             output=QuestionUnderstandingOutput(
                 original_question=question,
@@ -524,6 +532,57 @@ def test_reasoner_returns_structured_function_call_and_records_usage():
     assert state.budget.tokens_used == 5
     assert state.messages[-1] is decision.response
     assert state.messages[-1].content == response.content
+
+
+def test_reasoner_prepares_tool_call_before_recording_message():
+    class PreparedProbeTool(ProbeTool):
+        name = "prepared_probe"
+
+        def prepare_args(self, ctx, args):
+            return {"value": "trusted"}
+
+    response = AIMessage(
+        content="执行工具",
+        tool_calls=[
+            {
+                "name": "prepared_probe",
+                "args": {"value": "model"},
+                "id": "call-prepare",
+                "type": "tool_call",
+            }
+        ],
+    )
+    model = ScriptedModel([response])
+    run, record = _run_and_record()
+    state = AgentRuntimeState(
+        run=run,
+        record=record,
+        context=AgentToolContext(session=None, oid=1, user_id=1, datasource_id=5),
+        messages=[AgentMessage.user("执行")],
+        budget=BudgetGuard(max_steps=5),
+        system=AgentMessage.system("系统提示词"),
+    )
+    registry = _registry()
+    registry.register(PreparedProbeTool())
+    reasoner = AgentReasoner(
+        AgentConfig(),
+        model,
+        registry,
+        DisabledAgentTracer(),
+    )
+
+    decision = reasoner.decide(state, "normal")
+
+    assert decision.tool_calls[0].args == {"value": "trusted"}
+    assert state.messages[-1].tool_calls[0].args == {"value": "trusted"}
+    assert state.context.state["tool_call_preparations"] == [
+        {
+            "tool_call_id": "call-prepare",
+            "tool_name": "prepared_probe",
+            "original_args": {"value": "model"},
+            "prepared_args": {"value": "trusted"},
+        }
+    ]
 
 
 def test_reasoner_soft_mode_only_exposes_terminal_tools():
@@ -989,7 +1048,15 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
     captured_context = {}
 
     class CapturingUnderstandingService(StaticUnderstandingService):
-        def understand(self, *, question, datasource_id, conversation_context=None):
+        def understand(
+            self,
+            *,
+            question,
+            datasource_id,
+            conversation_context=None,
+            tenant_id=None,
+            dataset_id=None,
+        ):
             captured_context.update(conversation_context or {})
             return super().understand(
                 question=question,

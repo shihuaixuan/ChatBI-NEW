@@ -187,6 +187,18 @@ class ExecutableAssetReference(_StrictModel):
     model_id: int | None = Field(default=None, gt=0)
 
 
+class SemanticClarificationBinding(_StrictModel):
+    """用户澄清选项中由服务端验证的语义槽位绑定。"""
+
+    subquery_id: str = Field(min_length=1)
+    asset_type: Literal[
+        RetrievalResourceType.METRIC,
+        RetrievalResourceType.DIMENSION,
+    ]
+    asset_id: int = Field(gt=0)
+    model_id: int | None = Field(default=None, gt=0)
+
+
 class RetrievalScores(_StrictModel):
     """保留各通道原始分数，禁止把不同量纲伪装成同一置信度。"""
 
@@ -416,4 +428,5 @@ __all__ = [
     "RetrievalSlotDecision",
     "RetrievalSourceType",
     "RetrievalSubQuery",
+    "SemanticClarificationBinding",
 ]

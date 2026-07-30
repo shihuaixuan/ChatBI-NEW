@@ -37,9 +37,11 @@ from apps.retrieval import RetrievalService
 from apps.retrieval.query.service import build_retrieval_service
 from apps.semantic import SemanticSQLCompilationService
 from apps.semantic.composition import (
+    build_semantic_schema_service,
     build_semantic_sql_compilation_service,
     build_semantic_term_query_service,
 )
+from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.semantic.services.term_query_service import SemanticTermQueryService
 from apps.tool import ToolRegistry, default_middlewares
 from apps.tool.context import CancellationSignal
@@ -95,6 +97,7 @@ def build_agent_loop(
     query_service: DatasourceQueryService | None = None,
     semantic_query_service: SemanticSQLCompilationService | None = None,
     semantic_retrieval_service: RetrievalService | None = None,
+    semantic_schema_provider: DatasetSchemaProvider | None = None,
     physical_schema_service: PhysicalSchemaService | None = None,
     sql_example_query_service: SQLExampleQueryService | None = None,
     result_artifact_service: ResultArtifactService | None = None,
@@ -127,6 +130,9 @@ def build_agent_loop(
     )
     resolved_semantic_retrieval_service = (
         semantic_retrieval_service or build_retrieval_service(session)
+    )
+    resolved_semantic_schema_provider = (
+        semantic_schema_provider or build_semantic_schema_service(session)
     )
     resolved_physical_schema_service = (
         physical_schema_service or build_physical_schema_service(session)
@@ -161,12 +167,14 @@ def build_agent_loop(
         ChatBIToolResultProcessor(),
     )
     resolved_understanding_service = (
-        understanding_service or build_question_understanding_service()
+        understanding_service
+        or build_question_understanding_service(resolved_semantic_schema_provider)
     )
     resolved_input_preparer = input_preparer or AgentInputPreparer(
         session,
         resolved_config,
         resolved_understanding_service,
+        resolved_semantic_schema_provider,
         lifecycle,
         resolved_publisher,
     )

@@ -72,6 +72,7 @@ from apps.semantic.composition import (
     build_semantic_dataset_catalog_service,
     build_semantic_term_query_service,
 )
+from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.trace import AgentTracer, TraceConfig
 from apps.trace import build_agent_tracer as build_configured_agent_tracer
 from common.core.config import settings
@@ -177,11 +178,14 @@ def build_datasource_selection_candidate_service(
     )
 
 
-def build_question_understanding_service() -> QuestionUnderstandingService:
+def build_question_understanding_service(
+    schema_provider: DatasetSchemaProvider | None = None,
+) -> QuestionUnderstandingService:
     """装配 Agent 使用的严格问题理解服务。"""
 
     return QuestionUnderstandingService(
-        question_model_service=build_question_model_service()
+        question_model_service=build_question_model_service(),
+        schema_provider=schema_provider,
     )
 
 

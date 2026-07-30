@@ -2,6 +2,9 @@
 
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
+
 from apps.chatbi.models import (
     ChatBIResultArtifactRef,
     PhysicalSchemaField,
@@ -16,6 +19,7 @@ from apps.chatbi.orchestration.agent.tools.core import (
     FinishArgs,
     FinishTool,
 )
+from apps.chatbi.orchestration.agent.tools.interaction import ClarifyArgs, ClarifyTool
 from apps.datasource import (
     DatasourceQueryData,
     DatasourceQueryErrorCategory,
@@ -27,7 +31,17 @@ from apps.retrieval import (
     ExecutableAssetReference,
     RetrievalDecisionStatus,
 )
-from apps.retrieval.models.dto import RetrievalResourceType
+from apps.retrieval.models.dto import (
+    AssetReference,
+    RetrievalAmbiguity,
+    RetrievalBindings,
+    RetrievalBundle,
+    RetrievalDecision,
+    RetrievalDiagnostics,
+    RetrievalPurpose,
+    RetrievalResourceType,
+    RetrievalSlotDecision,
+)
 from apps.tool import RetryAdvice, ToolStatus
 from apps.tool import ToolResult as AgentToolResult
 from apps.tool.tools.datasource import (
@@ -452,6 +466,160 @@ def test_compile_requires_semantic_package_first():
     assert output.error_code == "semantic_package_required"
 
 
+def test_compile_args_reject_unknown_asset_fields():
+    with pytest.raises(ValidationError, match="asset_ids"):
+        CompileSemanticSqlArgs.model_validate(
+            {
+                "asset_ids": [10, 11],
+                "group_dimension_ids": [11],
+                "time_range": {"anchor": "today"},
+            }
+        )
+
+
+def test_compile_reports_ambiguous_decision_details():
+    ctx = _ctx(dataset_id=3)
+    ctx.state["semantic_scope"] = SemanticAssetScope(
+        workspace_id=1,
+        user_id=1,
+        datasource_id=5,
+        dataset_id=3,
+        retrieval_id="ambiguous-retrieval",
+        decision_status=RetrievalDecisionStatus.AMBIGUOUS,
+    ).model_dump(mode="json")
+
+    output = CompileSemanticSqlTool(
+        RecordingSemanticCompilationService(), RecordingQueryService()
+    ).execute(ctx, CompileSemanticSqlArgs(metric_asset_ids=[10]))
+
+    assert output.status == ToolStatus.REJECTED
+    assert output.error_code == "semantic_decision_not_executable"
+    assert output.details["decision_status"] == "ambiguous"
+    assert output.details["retry_action"] == "clarify_semantic_binding"
+
+
+def _ambiguous_metric_clarification_context():
+    ctx = _ctx(dataset_id=3)
+    asset = AssetReference(
+        asset_type=RetrievalResourceType.METRIC,
+        asset_id=274,
+        model_id=246,
+    )
+    bundle = RetrievalBundle(
+        request_id="ambiguous-retrieval",
+        bindings=RetrievalBindings(),
+        decision=RetrievalDecision(
+            status=RetrievalDecisionStatus.AMBIGUOUS,
+            slot_decisions=[
+                RetrievalSlotDecision(
+                    subquery_id="metric:1",
+                    purpose=RetrievalPurpose.METRIC,
+                    status=RetrievalDecisionStatus.AMBIGUOUS,
+                    candidate_assets=[asset],
+                )
+            ],
+            ambiguities=[
+                RetrievalAmbiguity(
+                    subquery_id="metric:1",
+                    reason_code="MULTIPLE_IDENTITY_MATCHES",
+                    candidate_assets=[asset],
+                )
+            ],
+        ),
+        diagnostics=RetrievalDiagnostics(
+            strategy_version="semantic-binding",
+            index_generation="generation-1",
+        ),
+    )
+    ctx.state["semantic_scope"] = SemanticAssetScope(
+        workspace_id=1,
+        user_id=1,
+        datasource_id=5,
+        dataset_id=3,
+        retrieval_id="ambiguous-retrieval",
+        decision_status=RetrievalDecisionStatus.AMBIGUOUS,
+    ).model_dump(mode="json")
+    ctx.state["semantic_bundle"] = bundle.model_dump(mode="json")
+    ctx.state["semantic_payload"] = {
+        "candidate_groups": {
+            "metrics": [
+                {
+                    "asset_type": "METRIC",
+                    "asset_id": 274,
+                    "model_id": 246,
+                    "display_name": "总下单客户数",
+                    "biz_name": "order_customer_cnt_total",
+                }
+            ]
+        }
+    }
+    ctx.state["semantic_retrieval_filters"] = {
+        "subqueries": [{"subquery_id": "metric:1", "required": True}]
+    }
+    return ctx
+
+
+def test_semantic_clarification_infers_binding_from_exact_candidate_name():
+    ctx = _ambiguous_metric_clarification_context()
+
+    output = ClarifyTool().execute(
+        ctx,
+        ClarifyArgs(
+            question="请选择指标口径",
+            options=[{"label": "总下单客户数", "value": "总下单客户数"}],
+        ),
+    )
+
+    assert _succeeded(output)
+    assert _data(output)["options"][0]["bindings"] == [
+        {
+            "subquery_id": "metric:1",
+            "asset_type": "METRIC",
+            "asset_id": 274,
+            "model_id": 246,
+        }
+    ]
+
+
+def test_semantic_clarification_rejects_unmapped_option():
+    output = ClarifyTool().execute(
+        _ambiguous_metric_clarification_context(),
+        ClarifyArgs(
+            question="请选择指标口径",
+            options=[{"label": "未知口径", "value": "metric-999"}],
+        ),
+    )
+
+    assert output.status == ToolStatus.REJECTED
+    assert output.error_code == "semantic_clarification_option_invalid"
+
+
+def test_semantic_clarification_corrects_model_generated_slot_id():
+    output = ClarifyTool().execute(
+        _ambiguous_metric_clarification_context(),
+        ClarifyArgs(
+            question="请选择指标口径",
+            options=[
+                {
+                    "label": "总下单客户数",
+                    "value": "总下单客户数",
+                    "bindings": [
+                        {
+                            "subquery_id": "m1",
+                            "asset_type": "METRIC",
+                            "asset_id": 274,
+                            "model_id": 246,
+                        }
+                    ],
+                }
+            ],
+        ),
+    )
+
+    assert _succeeded(output)
+    assert _data(output)["options"][0]["bindings"][0]["subquery_id"] == "metric:1"
+
+
 def test_compile_does_not_repeat_question_understanding_gate():
     service = RecordingSemanticCompilationService()
     ctx = _ctx(
@@ -487,6 +655,73 @@ def test_compile_rejects_asset_outside_package():
     assert not _succeeded(output)
     assert output.error_code == "asset_not_in_package"
     assert "99" in output.model_content
+
+
+def test_compile_uses_trusted_plan_instead_of_model_extra_assets():
+    normalized_time = {
+        "kind": "single_date",
+        "anchor": "today",
+        "offset_days": 0,
+        "timezone": "Asia/Shanghai",
+    }
+    service = RecordingSemanticCompilationService()
+    ctx = _ctx(
+        dataset_id=3,
+        semantic_asset_ids=[274, 278, 276],
+        question_understanding={
+            "rewritten_question": "今天店铺的客户数",
+            "intent": {
+                "intent_type": "metric_query",
+                "metric_mentions": ["客户数"],
+                "time_range": {
+                    "raw": "今天",
+                    "value_status": "provided",
+                    "normalized": normalized_time,
+                },
+            },
+            "validation": {"status": "valid"},
+        },
+    )
+    ctx.state["semantic_scope"]["compile_plan"] = {
+        "metric_asset_ids": [274],
+        "dimension_asset_ids": [278],
+        "filters": [
+            {
+                "asset_id": 276,
+                "operator": "=",
+                "value": normalized_time,
+            }
+        ],
+    }
+
+    output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
+        ctx,
+        CompileSemanticSqlArgs(
+            metric_asset_ids=[274],
+            dimension_asset_ids=[278, 277],
+            filters=[
+                {
+                    "asset_id": 276,
+                    "operator": "=",
+                    "value": normalized_time,
+                }
+            ],
+        ),
+    )
+
+    assert _succeeded(output)
+    assert service.calls[0].slots == {
+        "metrics": [{"asset_id": 274, "asset_type": "METRIC"}],
+        "dimensions": [{"asset_id": 278, "asset_type": "DIMENSION"}],
+        "filters": [
+            {
+                "asset_id": 276,
+                "asset_type": "DIMENSION",
+                "operator": "=",
+                "value": normalized_time,
+            }
+        ],
+    }
 
 
 def test_compile_rejects_scope_from_another_workspace():
@@ -654,6 +889,14 @@ def test_search_result_processor_collects_asset_ids_and_tables():
                 }
             ],
         },
+        "slot_bindings": {
+            "metrics": [{"asset_type": "METRIC", "asset_id": 7}],
+            "group_dimensions": [
+                {"asset_type": "DIMENSION", "asset_id": 8}
+            ],
+            "dimension_filters": [],
+            "time_filters": [],
+        },
         "allowed_asset_ids": [
             {"asset_type": "METRIC", "asset_id": 7},
             {"asset_type": "DIMENSION", "asset_id": 8},
@@ -692,6 +935,11 @@ def test_search_result_processor_collects_asset_ids_and_tables():
         ][1]
     )
     assert projection.state_patch["semantic_scope"]["retrieval_id"]
+    assert projection.state_patch["semantic_scope"]["compile_plan"] == {
+        "metric_asset_ids": [7],
+        "dimension_asset_ids": [8],
+        "filters": [],
+    }
 
 
 def test_search_maps_dimension_ambiguity_for_agent_flow():

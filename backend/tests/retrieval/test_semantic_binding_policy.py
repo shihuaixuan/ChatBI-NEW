@@ -25,10 +25,12 @@ from apps.retrieval.models.dto import (
     RetrievalScores,
     RetrievalSourceType,
     RetrievalSubQuery,
+    SemanticClarificationBinding,
 )
 from apps.retrieval.projection.payload import bundle_to_semantic_payload
 from apps.retrieval.projection.planner import RetrievalQueryPlan
 from apps.retrieval.query.compilation import validate_compilation_assets
+from apps.retrieval.query.decision import apply_semantic_clarification
 from apps.retrieval.query.hybrid import HybridRecallResult, SubQueryRecallResult
 from apps.retrieval.query.policy import (
     RerankCandidate,
@@ -349,6 +351,231 @@ def test_multiple_identity_matches_are_ambiguous_and_not_auto_bound():
     assert (
         result.bundle.decision.ambiguities[0].reason_code == "MULTIPLE_IDENTITY_MATCHES"
     )
+
+
+def test_user_clarification_resolves_metric_and_dimension_together():
+    result = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [
+                    _hit(100, "总下单客户数", exact=1.0, model_id=10),
+                    _hit(101, "支付客户数", alias=1.0, model_id=11),
+                ],
+            ),
+            _slot(
+                "dimension:1",
+                RetrievalPurpose.DIMENSION,
+                [
+                    _hit(
+                        200,
+                        "店铺名称",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        alias=1.0,
+                        model_id=10,
+                    ),
+                    _hit(
+                        201,
+                        "店铺名称",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        alias=1.0,
+                        model_id=11,
+                    ),
+                ],
+            ),
+        )
+    )
+
+    clarified = apply_semantic_clarification(
+        result.bundle,
+        [
+            SemanticClarificationBinding(
+                subquery_id="metric:1",
+                asset_type=RetrievalResourceType.METRIC,
+                asset_id=100,
+                model_id=10,
+            ),
+            SemanticClarificationBinding(
+                subquery_id="dimension:1",
+                asset_type=RetrievalResourceType.DIMENSION,
+                asset_id=200,
+                model_id=10,
+            ),
+        ],
+        required_subquery_ids={"metric:1", "dimension:1"},
+    )
+
+    assert clarified.decision.status == RetrievalDecisionStatus.RESOLVED
+    assert clarified.decision.ambiguities == []
+    assert [item.asset_id for item in clarified.decision.allowed_asset_ids] == [
+        100,
+        200,
+    ]
+
+
+def test_partial_user_clarification_remains_non_executable():
+    result = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [
+                    _hit(100, "总下单客户数", exact=1.0),
+                    _hit(101, "支付客户数", alias=1.0),
+                ],
+            ),
+            _slot(
+                "dimension:1",
+                RetrievalPurpose.DIMENSION,
+                [
+                    _hit(
+                        200,
+                        "店铺名称",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        alias=1.0,
+                    ),
+                    _hit(
+                        201,
+                        "店铺编码",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        alias=1.0,
+                    ),
+                ],
+            ),
+        )
+    )
+
+    clarified = apply_semantic_clarification(
+        result.bundle,
+        [
+            SemanticClarificationBinding(
+                subquery_id="metric:1",
+                asset_type=RetrievalResourceType.METRIC,
+                asset_id=100,
+                model_id=10,
+            )
+        ],
+        required_subquery_ids={"metric:1", "dimension:1"},
+    )
+
+    assert clarified.decision.status == RetrievalDecisionStatus.AMBIGUOUS
+    assert [item.subquery_id for item in clarified.decision.ambiguities] == [
+        "dimension:1"
+    ]
+    with pytest.raises(RetrievalQueryError, match="DECISION_NOT_EXECUTABLE"):
+        validate_compilation_assets(
+            clarified.decision,
+            metric_ids=[100],
+            dimension_ids=[],
+        )
+
+
+def test_metric_clarification_auto_resolves_unique_compatible_dimension():
+    result = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [
+                    _hit(
+                        100,
+                        "总下单客户数",
+                        exact=1.0,
+                        model_id=10,
+                        metadata={
+                            "model_id": 10,
+                            "compatible_dimension_ids": [200],
+                        },
+                    ),
+                    _hit(
+                        101,
+                        "支付客户数",
+                        alias=1.0,
+                        model_id=11,
+                        metadata={
+                            "model_id": 11,
+                            "compatible_dimension_ids": [201],
+                        },
+                    ),
+                ],
+            ),
+            _slot(
+                "dimension:1",
+                RetrievalPurpose.DIMENSION,
+                [
+                    _hit(
+                        200,
+                        "店铺名称",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        alias=1.0,
+                        model_id=10,
+                    ),
+                    _hit(
+                        201,
+                        "店铺名称",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        alias=1.0,
+                        model_id=11,
+                    ),
+                ],
+            ),
+        )
+    )
+
+    clarified = apply_semantic_clarification(
+        result.bundle,
+        [
+            SemanticClarificationBinding(
+                subquery_id="metric:1",
+                asset_type=RetrievalResourceType.METRIC,
+                asset_id=100,
+                model_id=10,
+            )
+        ],
+        required_subquery_ids={"metric:1", "dimension:1"},
+    )
+
+    assert clarified.decision.status == RetrievalDecisionStatus.RESOLVED
+    assert clarified.decision.ambiguities == []
+    assert [item.asset_id for item in clarified.decision.allowed_asset_ids] == [
+        100,
+        200,
+    ]
+    assert clarified.decision.slot_decisions[1].reason_codes == [
+        "IDENTITY_DISAMBIGUATED_BY_METRIC_MODEL_COMPATIBILITY"
+    ]
+
+
+def test_user_clarification_rejects_asset_outside_original_candidates():
+    result = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [
+                    _hit(100, "总下单客户数", exact=1.0),
+                    _hit(101, "支付客户数", alias=1.0),
+                ],
+            )
+        )
+    )
+
+    with pytest.raises(
+        RetrievalQueryError,
+        match="必须唯一匹配原始候选",
+    ):
+        apply_semantic_clarification(
+            result.bundle,
+            [
+                SemanticClarificationBinding(
+                    subquery_id="metric:1",
+                    asset_type=RetrievalResourceType.METRIC,
+                    asset_id=999,
+                    model_id=10,
+                )
+            ],
+        )
 
 
 def test_dimension_identity_matches_use_selected_metric_model_to_resolve():

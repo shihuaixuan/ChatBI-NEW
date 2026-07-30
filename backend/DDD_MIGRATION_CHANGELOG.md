@@ -2586,3 +2586,9 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
    SQL 编译转发 Service、重复 DTO 及组合工厂。
 6. 完整后端回归 1241 项通过，依赖基线测试 6 项通过；变更范围 Ruff 和核心源文件
    严格 Mypy 通过。
+7. 同步 Tool 架构设计、实施计划、阶段 0 历史基线和可迁移技术指南；HTML 增加
+   Agent 与 Workflow 两种调用方式、公共 Semantic Tool 调用关系，并完成 Mermaid、
+   代码高亮、导航和页面宽度检查。
+8. 修复 Agent Tool 语义澄清恢复链路：服务端依据原始候选补全并校正槽位绑定，恢复时
+   由 Retrieval 公共决策函数重新计算状态和编译白名单，并在指标确认后重新应用维度模型
+   兼容规则；同时禁止编译参数静默忽略未知字段，并保留不可执行决策的状态明细。

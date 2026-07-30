@@ -24,6 +24,7 @@ from apps.retrieval.models.dto.retrieval import (
     RetrievalSlotDecision,
     RetrievalSourceType,
     RetrievalSubQuery,
+    SemanticClarificationBinding,
 )
 
 __all__ = [
@@ -50,4 +51,5 @@ __all__ = [
     "RetrievalSlotDecision",
     "RetrievalSourceType",
     "RetrievalSubQuery",
+    "SemanticClarificationBinding",
 ]

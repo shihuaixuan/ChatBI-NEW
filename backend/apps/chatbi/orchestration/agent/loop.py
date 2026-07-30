@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
-from apps.chatbi.errors import QuestionUnderstandingError
+from apps.chatbi.errors import QuestionUnderstandingError, SemanticClarificationError
 from apps.chatbi.models import (
     AgentErrorClass,
     ChatbiAgentClarification,
@@ -139,6 +139,12 @@ class AgentLoop:
                 state,
                 str(exc),
                 AgentErrorClass.UNDERSTANDING.value,
+            )
+        except SemanticClarificationError as exc:
+            yield from self.lifecycle.fail(
+                state,
+                str(exc),
+                AgentErrorClass.RETRIEVAL.value,
             )
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__

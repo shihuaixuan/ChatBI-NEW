@@ -8,7 +8,7 @@ from apps.chatbi.orchestration.graph.capabilities.adapters.question_common impor
     markdown_user_prompt,
     normalize_subject_domain_candidates,
 )
-from apps.chatbi.orchestration.graph.capabilities.adapters.question_dimension import (
+from apps.chatbi.services.understanding.dimension_candidates import (
     normalize_dimension_candidates,
 )
 from apps.chatbi.services.understanding.prompts import (
@@ -334,4 +334,3 @@ def build_semantic_mentions_prompt(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
     )
-

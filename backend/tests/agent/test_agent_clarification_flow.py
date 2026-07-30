@@ -23,6 +23,26 @@ from apps.chatbi.orchestration.agent.messages import (
 from apps.chatbi.orchestration.agent.prompts import build_system_prompt
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.conversation.models import ChatRecord
+from apps.retrieval.models.dto import (
+    AssetReference,
+    RetrievalAmbiguity,
+    RetrievalBindings,
+    RetrievalBundle,
+    RetrievalDecision,
+    RetrievalDecisionStatus,
+    RetrievalDiagnostics,
+    RetrievalHit,
+    RetrievalIntent,
+    RetrievalProfileName,
+    RetrievalPurpose,
+    RetrievalRequest,
+    RetrievalResourceType,
+    RetrievalScope,
+    RetrievalSlotDecision,
+    RetrievalSourceType,
+)
+from apps.retrieval.query.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
+from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.tool import ToolRegistry
 from tests.agent.test_agent_loop import (
     FakeSession,
@@ -83,6 +103,21 @@ def _ambiguous_store_understanding_state():
     }
 
 
+def _semantic_hit(asset: AssetReference, title: str) -> RetrievalHit:
+    return RetrievalHit(
+        resource_id=f"{asset.asset_type.value}:{asset.asset_id}",
+        resource_type=asset.asset_type,
+        source_type=RetrievalSourceType.SEMANTIC,
+        source_id="headless:dataset:3",
+        source_resource_id=f"{asset.asset_type.value}:{asset.asset_id}",
+        unit_id=f"unit:{asset.asset_type.value}:{asset.asset_id}",
+        content_kind="identity",
+        title=title,
+        source_version="generation-1",
+        asset_ref=asset,
+    )
+
+
 def _loop(model, config=None):
     return build_agent_loop(
         FakeSession(),
@@ -123,7 +158,15 @@ def test_clarify_suspends_run_and_persists_messages():
 
 def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval():
     class AmbiguousDimensionUnderstandingService(StaticUnderstandingService):
-        def understand(self, *, question, datasource_id, conversation_context=None):
+        def understand(
+            self,
+            *,
+            question,
+            datasource_id,
+            conversation_context=None,
+            tenant_id=None,
+            dataset_id=None,
+        ):
             outcome = super().understand(
                 question=question,
                 datasource_id=datasource_id,
@@ -275,6 +318,354 @@ def test_resume_restores_derived_state_into_tool_context():
     assert captured["allowed_tables"] == ["t1"]
 
 
+def test_resume_applies_structured_semantic_clarification_to_trusted_scope():
+    metric = AssetReference(
+        asset_type=RetrievalResourceType.METRIC,
+        asset_id=274,
+        model_id=10,
+    )
+    other_metric = AssetReference(
+        asset_type=RetrievalResourceType.METRIC,
+        asset_id=273,
+        model_id=11,
+    )
+    dimension = AssetReference(
+        asset_type=RetrievalResourceType.DIMENSION,
+        asset_id=280,
+        model_id=10,
+    )
+    other_dimension = AssetReference(
+        asset_type=RetrievalResourceType.DIMENSION,
+        asset_id=283,
+        model_id=11,
+    )
+    bundle = RetrievalBundle(
+        request_id="run-216-retrieval",
+        bindings=RetrievalBindings(
+            metrics=[
+                _semantic_hit(metric, "总下单客户数"),
+                _semantic_hit(other_metric, "支付客户数"),
+            ],
+            dimensions=[
+                _semantic_hit(dimension, "店铺名称"),
+                _semantic_hit(other_dimension, "店铺名称"),
+            ],
+        ),
+        decision=RetrievalDecision(
+            status=RetrievalDecisionStatus.AMBIGUOUS,
+            slot_decisions=[
+                RetrievalSlotDecision(
+                    subquery_id="metric:1",
+                    purpose=RetrievalPurpose.METRIC,
+                    status=RetrievalDecisionStatus.AMBIGUOUS,
+                    candidate_assets=[metric, other_metric],
+                ),
+                RetrievalSlotDecision(
+                    subquery_id="dimension:1",
+                    purpose=RetrievalPurpose.DIMENSION,
+                    status=RetrievalDecisionStatus.AMBIGUOUS,
+                    candidate_assets=[dimension, other_dimension],
+                ),
+            ],
+            ambiguities=[
+                RetrievalAmbiguity(
+                    subquery_id="metric:1",
+                    reason_code="MULTIPLE_IDENTITY_MATCHES",
+                    candidate_assets=[metric, other_metric],
+                ),
+                RetrievalAmbiguity(
+                    subquery_id="dimension:1",
+                    reason_code="MULTIPLE_IDENTITY_MATCHES",
+                    candidate_assets=[dimension, other_dimension],
+                ),
+            ],
+            reason_codes=["SEMANTIC_BINDING_AMBIGUOUS"],
+        ),
+        diagnostics=RetrievalDiagnostics(
+            strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
+            index_generation="generation-1",
+        ),
+    )
+    request = RetrievalRequest(
+        request_id=bundle.request_id,
+        tenant_id=1,
+        actor_id=1,
+        original_question="今天店铺的客户数",
+        rewritten_question="今天店铺的客户数",
+        intent=RetrievalIntent(
+            intent_type="metric_query",
+            metric_mentions=["客户数"],
+            dimension_mentions=["店铺"],
+            dimension_slots=[{"name": "店铺", "role": "group_by"}],
+            time_mentions=["今天"],
+            time_range={
+                "raw": "今天",
+                "value_status": "provided",
+                "normalized": {
+                    "kind": "single_date",
+                    "anchor": "today",
+                    "offset_days": 0,
+                    "timezone": "Asia/Shanghai",
+                },
+            },
+        ),
+        scope=RetrievalScope(dataset_ids=[3]),
+        profiles=[RetrievalProfileName.SEMANTIC_BINDING],
+        strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
+    )
+    raw_payload = {
+        "hit": True,
+        "status": "metric_ambiguous",
+        "dataset_id": 3,
+        "tables": [],
+        "candidate_groups": {
+            "metrics": [
+                {
+                    "asset_type": "METRIC",
+                    "asset_id": 274,
+                    "model_id": 10,
+                    "name": "总下单客户数",
+                    "biz_name": "total_order_customers",
+                    "payload": {},
+                },
+                {
+                    "asset_type": "METRIC",
+                    "asset_id": 273,
+                    "model_id": 11,
+                    "name": "支付客户数",
+                    "biz_name": "paid_customers",
+                    "payload": {},
+                },
+            ],
+            "dimensions": [
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": 280,
+                    "model_id": 10,
+                    "name": "店铺名称",
+                    "biz_name": "shop_name",
+                    "payload": {},
+                },
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": 283,
+                    "model_id": 11,
+                    "name": "店铺名称",
+                    "biz_name": "store_name",
+                    "payload": {},
+                },
+            ],
+        },
+        "selected_assets": {"metrics": [], "dimensions": []},
+        "decision": {"status": "ambiguous", "reason_codes": []},
+        "ambiguities": [],
+        "allowed_asset_ids": [],
+    }
+    run, record = _run_and_record()
+    run.status = AgentRunStatus.WAITING_USER.value
+    run.messages = [AgentMessage.user("今天店铺的客户数").model_dump(mode="json")]
+    run.derived_state = {
+        **_ambiguous_store_understanding_state(),
+        "semantic_bundle": bundle.model_dump(mode="json"),
+        "semantic_payload": raw_payload,
+        "semantic_package": raw_payload,
+        "semantic_retrieval_request": request.model_dump(mode="json"),
+        "semantic_retrieval_filters": {
+            "subqueries": [
+                {"subquery_id": "metric:1", "required": True},
+                {"subquery_id": "dimension:1", "required": True},
+            ]
+        },
+        "semantic_scope": {
+            "workspace_id": 1,
+            "user_id": 1,
+            "datasource_id": 5,
+            "dataset_id": 3,
+            "retrieval_id": bundle.request_id,
+            "decision_status": "ambiguous",
+            "allowed_assets": [],
+            "authorized_tables": [],
+            "normalized_time_range": request.intent.time_range["normalized"],
+            "permission_version": None,
+        },
+    }
+    captured = {}
+
+    class StateProbeTool(ProbeTool):
+        name = "probe"
+
+        def execute(self, ctx, args):
+            captured.update(ctx.state)
+            return super().execute(ctx, args)
+
+    registry = ToolRegistry()
+    registry.register(StateProbeTool())
+    registry.register(FinishProbeTool())
+    registry.register(ClarifyTool())
+    model = ScriptedModel(
+        [
+            _tool_message("probe", {"value": "x"}),
+            _tool_message("finish", {"value": ""}, "finish-1"),
+        ]
+    )
+    schema = DatasetSchema(
+        data_set=SchemaElement(
+            data_set_id=3,
+            data_set_name="测试数据集",
+            id=3,
+            name="测试数据集",
+            biz_name="test_dataset",
+            type="DATASET",
+        ),
+        models=[
+            {"id": 10, "tableQuery": "fct_store_order_daily"},
+            {"id": 11, "tableQuery": "fct_other_order_daily"},
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=3,
+                data_set_name="测试数据集",
+                model=10,
+                id=274,
+                name="总下单客户数",
+                biz_name="total_order_customers",
+                type="METRIC",
+            ),
+            SchemaElement(
+                data_set_id=3,
+                data_set_name="测试数据集",
+                model=11,
+                id=273,
+                name="支付客户数",
+                biz_name="paid_customers",
+                type="METRIC",
+            ),
+        ],
+        dimensions=[
+            SchemaElement(
+                data_set_id=3,
+                data_set_name="测试数据集",
+                model=10,
+                id=280,
+                name="店铺名称",
+                biz_name="shop_name",
+                type="DIMENSION",
+            ),
+            SchemaElement(
+                data_set_id=3,
+                data_set_name="测试数据集",
+                model=11,
+                id=283,
+                name="店铺名称",
+                biz_name="store_name",
+                type="DIMENSION",
+            ),
+            SchemaElement(
+                data_set_id=3,
+                data_set_name="测试数据集",
+                model=10,
+                id=281,
+                name="统计日期",
+                biz_name="stat_date",
+                type="DIMENSION",
+                ext_info={
+                    "is_default_time": True,
+                    "dimension_type": "partition_time",
+                    "dimension_data_type": "date",
+                },
+            ),
+        ],
+    )
+    loop = build_agent_loop(
+        FakeSession(),
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=6),
+        model_client=model,
+        registry=registry,
+        understanding_service=StaticUnderstandingService(),
+        semantic_schema_provider=SimpleNamespace(
+            build_dataset_schema=lambda _oid, _dataset_id: schema
+        ),
+    )
+    option = {
+        "label": "总下单客户数（按店铺名称分组）",
+        "value": "metric-274-dimension-280",
+        "bindings": [
+            {
+                "subquery_id": "metric:1",
+                "asset_type": "METRIC",
+                "asset_id": 274,
+                "model_id": 10,
+            },
+            {
+                "subquery_id": "dimension:1",
+                "asset_type": "DIMENSION",
+                "asset_id": 280,
+                "model_id": 10,
+            },
+        ],
+    }
+    clarification = SimpleNamespace(
+        tool_call_id="clarify-semantic",
+        resume_kind=AgentClarificationResumeKind.AGENT_TOOL.value,
+        resume_payload={
+            "operation": "resolve_semantic_bindings",
+            "retrieval_id": bundle.request_id,
+            "options": [option],
+        },
+        answer={
+            "selections": [
+                {"label": option["label"], "value": option["value"]}
+            ],
+            "text": None,
+        },
+        question="请选择口径",
+        options=[option],
+    )
+
+    list(
+        loop.resume(
+            run,
+            record,
+            clarification,
+            f"用户澄清回答：{option['label']}",
+        )
+    )
+
+    assert captured["semantic_scope"]["decision_status"] == "resolved"
+    assert [
+        item["asset_id"] for item in captured["semantic_scope"]["allowed_assets"]
+    ] == [274, 280, 281]
+    assert captured["semantic_package"]["ambiguities"] == []
+    assert captured["semantic_package"]["slot_bindings"]["time_filters"] == [
+        {
+            "asset_type": "DIMENSION",
+            "asset_id": 281,
+            "display_name": "统计日期",
+            "biz_name": "stat_date",
+            "confidence": 1.0,
+            "source": "intent_time_range",
+            "operator": "=",
+            "value": request.intent.time_range["normalized"],
+        }
+    ]
+    assert captured["semantic_scope"]["compile_plan"] == {
+        "metric_asset_ids": [274],
+        "dimension_asset_ids": [280],
+        "filters": [
+            {
+                "asset_id": 281,
+                "operator": "=",
+                "value": request.intent.time_range["normalized"],
+            }
+        ],
+    }
+    first_call = model.calls[0]
+    tool_messages = [m for m in first_call if m.role == AgentMessageRole.TOOL]
+    assert any('"metric_asset_ids": [274]' in m.content for m in tool_messages)
+    assert any('"asset_id": 281' in m.content for m in tool_messages)
+
+
 def test_resume_continues_from_clarification_to_finish():
     suspend_model = ScriptedModel([
         _tool_message("clarify", {"question": "哪种额度？", "options": []}, "call_clarify"),
@@ -316,7 +707,15 @@ def test_resume_emits_acceptance_without_reunderstanding():
             super().__init__(rewritten_question="用户澄清后的完整问题")
             self.called = False
 
-        def understand(self, *, question, datasource_id, conversation_context=None):
+        def understand(
+            self,
+            *,
+            question,
+            datasource_id,
+            conversation_context=None,
+            tenant_id=None,
+            dataset_id=None,
+        ):
             self.called = True
             return super().understand(
                 question=question,
@@ -462,7 +861,15 @@ def test_resume_updates_target_slot_without_rewriting_or_reunderstanding():
             super().__init__()
             self.called = False
 
-        def understand(self, *, question, datasource_id, conversation_context=None):
+        def understand(
+            self,
+            *,
+            question,
+            datasource_id,
+            conversation_context=None,
+            tenant_id=None,
+            dataset_id=None,
+        ):
             self.called = True
             return super().understand(
                 question=question,

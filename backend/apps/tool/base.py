@@ -59,6 +59,15 @@ class Tool(Generic[ContextT, ArgsT, ResultT]):
     execution: ClassVar[ToolExecutionPolicy] = ToolExecutionPolicy()
     args_validator: ClassVar[ToolArgsValidator | None] = None
 
+    def prepare_args(
+        self,
+        ctx: ContextT,
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        """在参数校验和执行前，把模型参数投影为可信工具参数。"""
+
+        return dict(args)
+
     def execute(
         self,
         ctx: ContextT,

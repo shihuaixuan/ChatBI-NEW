@@ -130,7 +130,7 @@ class DimensionRecognitionOutput(BaseModel):
 
     dimension_mentions: list[str] = Field(default_factory=list)
     dimension_slots: list[DimensionSlot] = Field(default_factory=list)
-    filter_mentions: list[dict[str, Any]] = Field(default_factory=list)
+    residual_filter_mentions: list[dict[str, Any]] = Field(default_factory=list)
     ambiguous_slots: list[str] = Field(default_factory=list)
     conflict_slots: list[str] = Field(default_factory=list)
 

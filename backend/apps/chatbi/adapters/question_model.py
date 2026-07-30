@@ -26,7 +26,9 @@ class LangChainQuestionModelClient:
             [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt),
-            ]
+            ],
+            # 问题理解是结构抽取任务，固定低随机性以减少同问不同结构。
+            temperature=0,
         )
         return QuestionModelResponse(
             content=_message_content_text(response),

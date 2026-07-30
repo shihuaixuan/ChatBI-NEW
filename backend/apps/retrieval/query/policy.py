@@ -32,6 +32,10 @@ from apps.retrieval.models.dto import (
     RetrievalSlotDecision,
     RetrievalSourceType,
 )
+from apps.retrieval.query.decision import (
+    compatible_dimension_selections,
+    selection_requires_cross_model,
+)
 from apps.retrieval.query.hybrid import HybridRecallResult, SubQueryRecallResult
 from apps.retrieval.query.profiles import (
     SemanticBindingGateThreshold,
@@ -437,53 +441,10 @@ def _is_cross_model(resolved: list[_SlotPolicyResult]) -> bool:
         for hit in item.hits
         if hit.asset_ref is not None and hit.asset_ref in item.decision.selected_assets
     ]
-    metric_hits = [
-        hit
-        for hit in selected_hits
-        if hit.resource_type == RetrievalResourceType.METRIC
+    selected_assets = [
+        hit.asset_ref for hit in selected_hits if hit.asset_ref is not None
     ]
-    metric_model_ids = {
-        hit.asset_ref.model_id
-        for hit in metric_hits
-        if hit.asset_ref is not None and hit.asset_ref.model_id is not None
-    }
-    if len(metric_model_ids) > 1:
-        return True
-    if not metric_model_ids:
-        executable_models = {
-            hit.asset_ref.model_id
-            for hit in selected_hits
-            if hit.resource_type
-            in {RetrievalResourceType.METRIC, RetrievalResourceType.DIMENSION}
-            and hit.asset_ref is not None
-            and hit.asset_ref.model_id is not None
-        }
-        return len(executable_models) > 1
-
-    metric_model_id = next(iter(metric_model_ids))
-    compatible_dimension_ids_by_metric = [
-        {
-            int(value)
-            for value in hit.metadata.get("compatible_dimension_ids", [])
-            if isinstance(value, int) and value > 0
-        }
-        for hit in metric_hits
-    ]
-    for hit in selected_hits:
-        if hit.resource_type not in {
-            RetrievalResourceType.DIMENSION,
-            RetrievalResourceType.VALUE,
-        }:
-            continue
-        assert hit.asset_ref is not None
-        if hit.asset_ref.model_id == metric_model_id:
-            continue
-        if not all(
-            hit.asset_ref.asset_id in compatible_ids
-            for compatible_ids in compatible_dimension_ids_by_metric
-        ):
-            return True
-    return False
+    return selection_requires_cross_model(selected_hits, selected_assets)
 
 
 def _resolve_identity_dimensions_by_metric_compatibility(
@@ -491,46 +452,26 @@ def _resolve_identity_dimensions_by_metric_compatibility(
 ) -> list[_SlotPolicyResult]:
     """同义维度身份命中不唯一时，用已选指标的可执行模型关系确定唯一资产。"""
 
-    metric_hits = [
-        hit
-        for item in slot_results
-        if item.decision.status == RetrievalDecisionStatus.RESOLVED
-        for hit in item.hits
-        if hit.resource_type == RetrievalResourceType.METRIC
-        and hit.asset_ref is not None
-        and hit.asset_ref in item.decision.selected_assets
-    ]
-    if not metric_hits:
+    selections = compatible_dimension_selections(
+        (hit for item in slot_results for hit in item.hits),
+        [item.decision for item in slot_results],
+    )
+    if not selections:
         return slot_results
 
     resolved_results: list[_SlotPolicyResult] = []
     for item in slot_results:
-        if (
-            item.slot.subquery.purpose != RetrievalPurpose.DIMENSION
-            or item.decision.status != RetrievalDecisionStatus.AMBIGUOUS
-        ):
+        selected = selections.get(item.decision.subquery_id)
+        if selected is None:
             resolved_results.append(item)
             continue
-        compatible_identity_hits = [
-            hit
-            for hit in item.hits
-            if hit.asset_ref is not None
-            and (hit.scores.exact is not None or hit.scores.alias is not None)
-            and _dimension_is_compatible_with_metrics(hit, metric_hits)
-        ]
-        unique_hits = _unique_hits_by_asset(compatible_identity_hits)
-        if len(unique_hits) != 1:
-            resolved_results.append(item)
-            continue
-        selected = unique_hits[0]
-        assert selected.asset_ref is not None
         resolved_results.append(
             item.model_copy(
                 update={
                     "decision": item.decision.model_copy(
                         update={
                             "status": RetrievalDecisionStatus.RESOLVED,
-                            "selected_assets": [selected.asset_ref],
+                            "selected_assets": [selected],
                             "reason_codes": [
                                 "IDENTITY_DISAMBIGUATED_BY_METRIC_MODEL_COMPATIBILITY"
                             ],
@@ -541,44 +482,6 @@ def _resolve_identity_dimensions_by_metric_compatibility(
             )
         )
     return resolved_results
-
-
-def _dimension_is_compatible_with_metrics(
-    dimension_hit: RetrievalHit,
-    metric_hits: list[RetrievalHit],
-) -> bool:
-    assert dimension_hit.asset_ref is not None
-    dimension = dimension_hit.asset_ref
-    for metric_hit in metric_hits:
-        assert metric_hit.asset_ref is not None
-        metric = metric_hit.asset_ref
-        if dimension.model_id is not None and dimension.model_id == metric.model_id:
-            continue
-        compatible_ids = {
-            int(value)
-            for value in metric_hit.metadata.get("compatible_dimension_ids", [])
-            if isinstance(value, int) and value > 0
-        }
-        if dimension.asset_id not in compatible_ids:
-            return False
-    return True
-
-
-def _unique_hits_by_asset(hits: list[RetrievalHit]) -> list[RetrievalHit]:
-    unique: list[RetrievalHit] = []
-    seen: set[tuple[str, int, int | None]] = set()
-    for hit in hits:
-        assert hit.asset_ref is not None
-        key = (
-            hit.asset_ref.asset_type.value,
-            hit.asset_ref.asset_id,
-            hit.asset_ref.model_id,
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(hit)
-    return unique
 
 
 def _allowed_executable_assets(

@@ -1,6 +1,4 @@
 """内置 Tool 中间件：内部耗时统计。
-
-领域硬门（问题理解 / 资产来源 / finish 门）不得放入 middleware。
 """
 
 from __future__ import annotations

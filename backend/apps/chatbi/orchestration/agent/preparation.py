@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Generator, Iterator
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-from apps.chatbi.errors import QuestionUnderstandingError
+from apps.chatbi.errors import QuestionUnderstandingError, SemanticClarificationError
 from apps.chatbi.models import (
     AgentClarificationResumeKind,
     AgentErrorClass,
@@ -24,6 +25,19 @@ from apps.chatbi.services.understanding import (
     apply_question_understanding_clarification,
 )
 from apps.event import EventPublisher, RenderEvent
+from apps.retrieval import (
+    RetrievalBundle,
+    RetrievalQueryError,
+    RetrievalRequest,
+    RetrievalResourceType,
+    SemanticClarificationBinding,
+    apply_decision_to_semantic_payload,
+    apply_semantic_clarification,
+    bind_default_time_dimensions,
+    bundle_to_semantic_payload,
+)
+from apps.semantic.services.schema_service import DatasetSchemaProvider
+from apps.tool.tools.semantic_contracts import build_semantic_compile_plan
 
 
 class PreflightClarification(BaseModel):
@@ -43,12 +57,14 @@ class AgentInputPreparer:
         session: Any,
         config: AgentConfig,
         understanding_service: QuestionUnderstandingService,
+        semantic_schema_provider: DatasetSchemaProvider,
         lifecycle: AgentLifecycle,
         event_publisher: EventPublisher,
     ) -> None:
         self._session = session
         self._config = config
         self._understanding_service = understanding_service
+        self._semantic_schema_provider = semantic_schema_provider
         self._lifecycle = lifecycle
         self._event_publisher = event_publisher
 
@@ -63,6 +79,8 @@ class AgentInputPreparer:
         outcome = self._understanding_service.understand(
             question=record.question or "",
             datasource_id=record.datasource,
+            tenant_id=state.run.oid,
+            dataset_id=record.dataset_id,
             conversation_context={
                 "last_rewritten_question": conversation_context.get(
                     "last_rewritten_question"
@@ -127,9 +145,16 @@ class AgentInputPreparer:
                 raise QuestionUnderstandingError(
                     "AGENT_TOOL_CLARIFICATION_CALL_ID_MISSING"
                 )
-            state.messages.append(
-                AgentMessage.tool(answer_text, tool_call_id)
-            )
+            tool_answer = answer_text
+            if (clarification.resume_payload or {}).get("operation") == (
+                "resolve_semantic_bindings"
+            ):
+                tool_answer = self._apply_semantic_clarification(
+                    state,
+                    clarification,
+                    answer_text,
+                )
+            state.messages.append(AgentMessage.tool(tool_answer, tool_call_id))
             understanding = previous_understanding
         elif resume_kind == AgentClarificationResumeKind.QUESTION_UNDERSTANDING:
             outcome = apply_question_understanding_clarification(
@@ -162,6 +187,164 @@ class AgentInputPreparer:
                 yield from self._suspend_for_preflight_clarification(state, preflight)
                 return False
         return True
+
+    def _apply_semantic_clarification(
+        self,
+        state: AgentRuntimeState,
+        clarification: ChatbiAgentClarification,
+        answer_text: str,
+    ) -> str:
+        """验证用户选择并更新服务端可信语义决策。"""
+
+        resume_payload = clarification.resume_payload or {}
+        scope = state.context.state.get("semantic_scope")
+        if not isinstance(scope, dict):
+            raise SemanticClarificationError(
+                SemanticClarificationError.SCOPE_REQUIRED
+            )
+        if resume_payload.get("retrieval_id") != scope.get("retrieval_id"):
+            raise SemanticClarificationError(
+                SemanticClarificationError.RETRIEVAL_MISMATCH
+            )
+        options = resume_payload.get("options")
+        if not isinstance(options, list):
+            raise SemanticClarificationError(
+                SemanticClarificationError.OPTIONS_REQUIRED
+            )
+        option_by_value = {
+            str(option["value"]): option
+            for option in options
+            if isinstance(option, dict) and option.get("value") is not None
+        }
+        answer = clarification.answer or {}
+        selections = answer.get("selections")
+        selected_values = (
+            [
+                str(item["value"])
+                for item in selections
+                if isinstance(item, dict) and item.get("value") is not None
+            ]
+            if isinstance(selections, list)
+            else []
+        )
+        if not selected_values:
+            raise SemanticClarificationError(
+                SemanticClarificationError.STRUCTURED_SELECTION_REQUIRED
+            )
+        selected_options = []
+        for value in selected_values:
+            option = option_by_value.get(value)
+            if option is None:
+                raise SemanticClarificationError(
+                    SemanticClarificationError.OPTION_NOT_FOUND
+                )
+            selected_options.append(option)
+        bindings = [
+            SemanticClarificationBinding.model_validate(binding)
+            for option in selected_options
+            for binding in option.get("bindings") or []
+        ]
+
+        raw_bundle = state.context.state.get("semantic_bundle")
+        raw_request = state.context.state.get("semantic_retrieval_request")
+        raw_payload = state.context.state.get("semantic_payload")
+        if not isinstance(raw_bundle, dict) or not isinstance(raw_request, dict):
+            raise SemanticClarificationError(
+                SemanticClarificationError.SNAPSHOT_REQUIRED
+            )
+        if not isinstance(raw_payload, dict):
+            raise SemanticClarificationError(
+                SemanticClarificationError.PAYLOAD_REQUIRED
+            )
+        bundle = RetrievalBundle.model_validate(raw_bundle)
+        request = RetrievalRequest.model_validate(raw_request)
+        try:
+            updated_bundle = apply_semantic_clarification(
+                bundle,
+                bindings,
+                required_subquery_ids=_required_subquery_ids(
+                    state.context.state.get("semantic_retrieval_filters")
+                ),
+            )
+        except RetrievalQueryError as exc:
+            reason_code = exc.details.get("reason_code") or str(exc)
+            raise SemanticClarificationError(str(reason_code)) from exc
+        try:
+            time_range = request.intent.time_range
+            if str(time_range.get("value_status") or "").lower() == "provided":
+                # 指标在澄清后才收敛时，必须重新按指标模型绑定默认时间维度。
+                schema = self._semantic_schema_provider.build_dataset_schema(
+                    request.tenant_id,
+                    request.scope.dataset_ids[0],
+                )
+                updated_bundle = bind_default_time_dimensions(
+                    request,
+                    updated_bundle,
+                    schema,
+                )
+                updated_payload = bundle_to_semantic_payload(
+                    request,
+                    updated_bundle,
+                    schema,
+                )
+            else:
+                updated_payload = apply_decision_to_semantic_payload(
+                    request,
+                    raw_payload,
+                    updated_bundle,
+                )
+        except RetrievalQueryError as exc:
+            reason_code = exc.details.get("reason_code") or str(exc)
+            raise SemanticClarificationError(str(reason_code)) from exc
+        allowed_assets = [
+            item.model_dump(mode="json")
+            for item in updated_bundle.decision.allowed_asset_ids
+        ]
+        updated_scope = {
+            **scope,
+            "decision_status": updated_bundle.decision.status.value,
+            "allowed_assets": allowed_assets,
+            "compile_plan": build_semantic_compile_plan(
+                updated_payload.get("slot_bindings") or {}
+            ).model_dump(mode="json"),
+        }
+        state.context.state.update(
+            {
+                "semantic_bundle": updated_bundle.model_dump(mode="json"),
+                "semantic_payload": updated_payload,
+                "semantic_package": updated_payload,
+                "semantic_scope": updated_scope,
+                "semantic_asset_ids": sorted(
+                    {int(item["asset_id"]) for item in allowed_assets}
+                ),
+            }
+        )
+        metric_ids = [
+            item.asset_id
+            for item in updated_bundle.decision.allowed_asset_ids
+            if item.asset_type == RetrievalResourceType.METRIC
+        ]
+        dimension_ids = [
+            item.asset_id
+            for item in updated_bundle.decision.allowed_asset_ids
+            if item.asset_type == RetrievalResourceType.DIMENSION
+        ]
+        return json.dumps(
+            {
+                "user_answer": answer_text,
+                "semantic_binding": {
+                    "decision_status": updated_bundle.decision.status.value,
+                    "metric_asset_ids": metric_ids,
+                    "dimension_asset_ids": dimension_ids,
+                    "slot_bindings": updated_payload.get("slot_bindings") or {},
+                    "remaining_ambiguities": _remaining_ambiguity_summary(
+                        updated_payload
+                    ),
+                },
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
 
     def _persist_snapshot(self, state: AgentRuntimeState) -> None:
         agent_run_repository.update_run(
@@ -400,6 +583,51 @@ class AgentInputPreparer:
         )
         self._session.commit()
         return event
+
+
+def _required_subquery_ids(raw_filters: Any) -> set[str] | None:
+    if not isinstance(raw_filters, dict):
+        return None
+    subqueries = raw_filters.get("subqueries")
+    if not isinstance(subqueries, list):
+        return None
+    return {
+        str(item["subquery_id"])
+        for item in subqueries
+        if isinstance(item, dict)
+        and item.get("required") is True
+        and item.get("subquery_id")
+    }
+
+
+def _remaining_ambiguity_summary(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for ambiguity in payload.get("ambiguities") or []:
+        if not isinstance(ambiguity, dict):
+            continue
+        candidates = [
+            {
+                key: candidate.get(key)
+                for key in (
+                    "asset_type",
+                    "asset_id",
+                    "model_id",
+                    "display_name",
+                    "biz_name",
+                )
+                if candidate.get(key) is not None
+            }
+            for candidate in ambiguity.get("candidates") or []
+            if isinstance(candidate, dict)
+        ]
+        result.append(
+            {
+                "subquery_id": ambiguity.get("subquery_id"),
+                "type": ambiguity.get("type"),
+                "candidates": candidates,
+            }
+        )
+    return result
 
 
 __all__ = ["AgentInputPreparer"]

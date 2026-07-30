@@ -34,3 +34,5 @@ def test_agent_and_graph_share_dimension_extraction_rules():
 
     assert DIMENSION_EXTRACTION_RULES in DIMENSION_SYSTEM_PROMPT
     assert DIMENSION_EXTRACTION_RULES in graph_prompt.system_prompt
+    assert "residual_filter_mentions" in DIMENSION_SYSTEM_PROMPT
+    assert "不能输出字符串" in DIMENSION_SYSTEM_PROMPT
