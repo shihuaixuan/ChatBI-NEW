@@ -1,14 +1,18 @@
 from collections.abc import Iterator
+from datetime import datetime
+from typing import Any
 
 from sqlmodel import Session
 
 from apps.chatbi.composition import (
+    build_agent_trace_recorder,
     build_chat_record_service,
     build_conversation_reader_service,
 )
 from apps.chatbi.models import (
     AgentClarificationStatus,
     AgentRunStatus,
+    ChatbiAgentRun,
     ExecutionBindingData,
 )
 from apps.chatbi.models.dto.agent import (
@@ -30,6 +34,7 @@ from apps.conversation import (
     ChatRecordStatus,
 )
 from apps.event import RenderEvent
+from apps.trace import TraceNodeSpec, TraceNodeType, agent_attributes
 from common.core.config import settings
 from common.core.db import engine
 
@@ -43,11 +48,11 @@ class AgentDatasourceNotAllowedError(ValueError):
 
 
 def create_record_and_run(
-    session,
-    current_user,
+    session: Any,
+    current_user: Any,
     request: AgentQuestionRequest,
-    config: dict,
-):
+    config: dict[str, Any],
+) -> tuple[Any, ChatbiAgentRun]:
     """在同一事务内创建问答记录和 Agent 运行记录。"""
 
     chat = build_conversation_reader_service(session).get_owned(
@@ -116,11 +121,12 @@ def get_agent_config() -> AgentConfig:
 
 
 def create_agent_start_events(
-    current_user,
+    current_user: Any,
     request: AgentStartStreamRequest,
 ) -> Iterator[RenderEvent]:
     """创建 Agent 首次提问的结构化事件流。"""
 
+    request_started_at = datetime.now()
     config = get_agent_config()
     if not config.enabled:
         raise AgentNotEnabledError("Agent ChatBI is not enabled")
@@ -140,10 +146,41 @@ def create_agent_start_events(
                 AgentQuestionRequest(**request.model_dump(exclude={"action"})),
                 config.model_dump(),
             )
+            recorder = build_agent_trace_recorder()
+            with recorder.node(
+                TraceNodeSpec(
+                    run_id=run.id or 0,
+                    node_key="request_access:initial",
+                    node_type=TraceNodeType.PHASE,
+                    name="request_access",
+                    display_name="用户输入与请求接入",
+                    attributes=agent_attributes(
+                        run_id=run.id or 0,
+                        record_id=record.id or 0,
+                        chat_id=run.chat_id,
+                    ),
+                ),
+                input_data={
+                    "chat_id": request.chat_id,
+                    "datasource_id": request.datasource_id,
+                },
+                input_detail={"question": request.question},
+                started_at=request_started_at,
+            ) as access_node:
+                access_node.set_output(
+                    {
+                        "access_status": "accepted",
+                        "record_id": record.id,
+                        "run_id": run.id,
+                        "conversation_owned": True,
+                        "datasource_allowed": True,
+                    }
+                )
             loop = build_agent_loop(
                 stream_session,
                 current_user,
                 config,
+                recorder=recorder,
                 cancellation_signal_factory=lambda run_id: (
                     DatabaseRunCancellationSignal(engine, run_id)
                 ),
@@ -154,12 +191,13 @@ def create_agent_start_events(
 
 
 def create_agent_resume_events(
-    current_user,
+    current_user: Any,
     request: AgentResumeStreamRequest,
     answer_text: str,
 ) -> Iterator[RenderEvent]:
     """校验挂起状态并创建 Agent 恢复执行的结构化事件流。"""
 
+    request_started_at = datetime.now()
     config = get_agent_config()
     if not config.enabled:
         raise AgentNotEnabledError("Agent ChatBI is not enabled")
@@ -195,10 +233,40 @@ def create_agent_resume_events(
             clarification.answered_at = agent_run_repository.now()
             stream_session.add(clarification)
             stream_session.commit()
+            recorder = build_agent_trace_recorder()
+            with recorder.node(
+                TraceNodeSpec(
+                    run_id=run.id or 0,
+                    node_key=f"request_access:resume:{clarification.id}",
+                    node_type=TraceNodeType.PHASE,
+                    name="request_access",
+                    display_name="澄清回复接入",
+                    attributes=agent_attributes(
+                        run_id=run.id or 0,
+                        record_id=record.id or 0,
+                        chat_id=run.chat_id,
+                    ),
+                    metadata={"clarification_id": clarification.id},
+                ),
+                input_data={
+                    "record_id": request.record_id,
+                    "clarification_id": clarification.id,
+                },
+                input_detail={"answer_text": answer_text},
+                started_at=request_started_at,
+            ) as access_node:
+                access_node.set_output(
+                    {
+                        "access_status": "accepted",
+                        "run_status": run.status,
+                        "clarification_status": clarification.status,
+                    }
+                )
             loop = build_agent_loop(
                 stream_session,
                 current_user,
                 config,
+                recorder=recorder,
                 cancellation_signal_factory=lambda run_id: (
                     DatabaseRunCancellationSignal(engine, run_id)
                 ),

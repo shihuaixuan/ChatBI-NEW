@@ -50,11 +50,17 @@ from apps.tool import (
     ToolRegistry,
     ToolResult,
 )
-from apps.trace import DisabledAgentTracer, TraceConfig
+from apps.trace import (
+    AgentTraceRecorder,
+    DisabledAgentTraceRecorder,
+    DisabledTraceExporter,
+    DisabledTraceRepository,
+    TraceConfig,
+)
 from apps.trace.setup import (
-    OpenTelemetryAgentTracer,
-    ResilientAgentTracer,
-    build_agent_tracer,
+    OpenTelemetryTraceExporter,
+    ResilientTraceExporter,
+    build_trace_exporter,
 )
 
 
@@ -200,8 +206,8 @@ class ScriptedModel:
         return ModelDecision(message=message, tool_calls=tool_calls, usage=usage)
 
 
-class RecordingTracer:
-    """记录 span 层级和关闭状态的测试 tracer。"""
+class RecordingExporter:
+    """记录外部 span 层级和关闭状态的测试导出器。"""
 
     def __init__(self):
         self.active = []
@@ -215,6 +221,7 @@ class RecordingTracer:
             attributes=dict(attributes or {}),
             closed=False,
             set_attribute=lambda key, value: item.attributes.__setitem__(key, value),
+            identifiers=lambda: ("trace-id", f"span-{len(self.spans)}"),
         )
         self.spans.append(item)
         self.active.append(item)
@@ -225,7 +232,7 @@ class RecordingTracer:
             item.closed = True
 
 
-class FailingTracer:
+class FailingExporter:
     def span(self, name, attributes=None):
         class FailingManager:
             def __enter__(self):
@@ -566,6 +573,7 @@ def _loop(model, config=None):
         model_client=model,
         registry=_registry(),
         understanding_service=StaticUnderstandingService(),
+        recorder=DisabledAgentTraceRecorder(),
     )
 
 
@@ -599,7 +607,7 @@ def test_reasoner_returns_structured_function_call_and_records_usage():
         AgentConfig(),
         model,
         _registry(),
-        DisabledAgentTracer(),
+        DisabledAgentTraceRecorder(),
     )
 
     decision = reasoner.decide(state, "normal")
@@ -651,7 +659,7 @@ def test_reasoner_prepares_tool_call_before_recording_message():
         AgentConfig(),
         model,
         registry,
-        DisabledAgentTracer(),
+        DisabledAgentTraceRecorder(),
     )
 
     decision = reasoner.decide(state, "normal")
@@ -689,7 +697,7 @@ def test_reasoner_uses_existing_trusted_sql_for_execute_action():
         AgentConfig(),
         model,
         _registry(),
-        DisabledAgentTracer(),
+        DisabledAgentTraceRecorder(),
     )
 
     decision = reasoner.decide(state, "normal")
@@ -732,7 +740,7 @@ def test_reasoner_corrects_stale_search_to_the_only_compile_action():
         AgentConfig(),
         model,
         registry,
-        DisabledAgentTracer(),
+        DisabledAgentTraceRecorder(),
     )
 
     decision = reasoner.decide(state, "normal")
@@ -763,7 +771,7 @@ def test_reasoner_soft_mode_only_exposes_terminal_tools():
         AgentConfig(),
         model,
         registry,
-        DisabledAgentTracer(),
+        DisabledAgentTraceRecorder(),
     )
 
     decision = reasoner.decide(state, "soft")
@@ -940,6 +948,7 @@ def test_multiple_tool_calls_preserve_model_order_in_events_and_observations():
         model_client=model,
         registry=_registry(),
         understanding_service=StaticUnderstandingService(),
+        recorder=DisabledAgentTraceRecorder(),
     )
     events = list(loop.run(run, record))
 
@@ -1011,6 +1020,7 @@ def test_regular_tool_error_is_observed_but_cannot_masquerade_as_answer():
         model_client=model,
         registry=registry,
         understanding_service=StaticUnderstandingService(),
+        recorder=DisabledAgentTraceRecorder(),
     )
 
     events = list(loop.run(run, record))
@@ -1059,6 +1069,7 @@ def test_execute_sql_retry_exhaustion_has_single_failed_terminal_event():
         model_client=model,
         registry=registry,
         understanding_service=StaticUnderstandingService(),
+        recorder=DisabledAgentTraceRecorder(),
     )
 
     events = list(loop.run(run, record))
@@ -1077,7 +1088,8 @@ def test_execute_sql_retry_exhaustion_has_single_failed_terminal_event():
 
 
 def test_agent_tracing_records_run_llm_and_tool_hierarchy():
-    tracer = RecordingTracer()
+    exporter = RecordingExporter()
+    recorder = AgentTraceRecorder(DisabledTraceRepository(), exporter)
     model = ScriptedModel([
         _tool_message("probe", {"value": "x"}),
         _tool_message("finish", {"value": ""}, "c2"),
@@ -1090,22 +1102,39 @@ def test_agent_tracing_records_run_llm_and_tool_hierarchy():
         model_client=model,
         registry=_registry(),
         understanding_service=StaticUnderstandingService(),
-        tracer=tracer,
+        recorder=recorder,
     )
 
     list(loop.run(run, record))
 
-    assert tracer.spans[0].name == "invoke_agent"
-    assert tracer.spans[0].attributes["app.run.id"] == run.id
-    assert [span.parent for span in tracer.spans[1:]] == ["invoke_agent"] * 4
-    assert [span.name for span in tracer.spans[1:]] == [
+    assert exporter.spans[0].name == "invoke_agent"
+    assert exporter.spans[0].attributes["app.run.id"] == run.id
+    understanding_span = next(
+        span for span in exporter.spans if span.name == "question_understanding"
+    )
+    assert understanding_span.parent == "invoke_agent"
+    preparation_children = [
+        span
+        for span in exporter.spans
+        if span.name
+        in {"load_conversation_context", "persist_understanding_snapshot"}
+    ]
+    assert [span.parent for span in preparation_children] == [
+        "question_understanding",
+        "question_understanding",
+    ]
+    runtime_spans = [
+        span for span in exporter.spans if span.name in {"chat", "execute_tool"}
+    ]
+    assert [span.parent for span in runtime_spans] == ["invoke_agent"] * 4
+    assert [span.name for span in runtime_spans] == [
         "chat",
         "execute_tool",
         "chat",
         "execute_tool",
     ]
-    assert tracer.spans[0].attributes["gen_ai.agent.result"] == "finished"
-    tool_spans = [span for span in tracer.spans if span.name == "execute_tool"]
+    assert exporter.spans[0].attributes["gen_ai.agent.result"] == "finished"
+    tool_spans = [span for span in exporter.spans if span.name == "execute_tool"]
     assert [span.attributes["app.tool_call.id"] for span in tool_spans] == [
         "c1",
         "c2",
@@ -1113,7 +1142,7 @@ def test_agent_tracing_records_run_llm_and_tool_hierarchy():
     assert all(span.attributes["app.run.id"] == run.id for span in tool_spans)
     assert all("app.tool.latency_ms" in span.attributes for span in tool_spans)
     assert all(span.attributes["app.domain.retry_count"] == 0 for span in tool_spans)
-    assert all(span.closed for span in tracer.spans)
+    assert all(span.closed for span in exporter.spans)
 
 
 def test_opentelemetry_exporter_receives_agent_span_hierarchy():
@@ -1125,9 +1154,10 @@ def test_opentelemetry_exporter_receives_agent_span_hierarchy():
     provider = trace_sdk.TracerProvider()
     exporter = memory_export.InMemorySpanExporter()
     provider.add_span_processor(trace_export.SimpleSpanProcessor(exporter))
-    tracer = ResilientAgentTracer(
-        OpenTelemetryAgentTracer(provider.get_tracer("numora-agent-test"))
+    trace_exporter = ResilientTraceExporter(
+        OpenTelemetryTraceExporter(provider.get_tracer("numora-agent-test"))
     )
+    recorder = AgentTraceRecorder(DisabledTraceRepository(), trace_exporter)
     model = ScriptedModel([
         _tool_message("probe", {"value": "x"}),
         _tool_message("finish", {"value": ""}, "c2"),
@@ -1140,7 +1170,7 @@ def test_opentelemetry_exporter_receives_agent_span_hierarchy():
         model_client=model,
         registry=_registry(),
         understanding_service=StaticUnderstandingService(),
-        tracer=tracer,
+        recorder=recorder,
     )
 
     list(loop.run(run, record))
@@ -1159,7 +1189,8 @@ def test_opentelemetry_exporter_receives_agent_span_hierarchy():
 
 
 def test_agent_span_closes_when_event_generator_is_closed():
-    tracer = RecordingTracer()
+    exporter = RecordingExporter()
+    recorder = AgentTraceRecorder(DisabledTraceRepository(), exporter)
     model = ScriptedModel([AIMessage(content="完成")])
     run, record = _run_and_record()
     loop = build_agent_loop(
@@ -1169,33 +1200,35 @@ def test_agent_span_closes_when_event_generator_is_closed():
         model_client=model,
         registry=_registry(),
         understanding_service=StaticUnderstandingService(),
-        tracer=tracer,
+        recorder=recorder,
     )
 
     events = loop.run(run, record)
     next(events)
     events.close()
 
-    assert tracer.spans[0].name == "invoke_agent"
-    assert tracer.spans[0].closed is True
+    assert exporter.spans[0].name == "invoke_agent"
+    assert exporter.spans[0].closed is True
 
 
 def test_disabled_and_zero_sampling_do_not_load_opentelemetry(monkeypatch):
-    build_agent_tracer.cache_clear()
+    build_trace_exporter.cache_clear()
     monkeypatch.setattr(
         "apps.trace.setup.import_module",
         lambda name: pytest.fail(f"不应加载 OpenTelemetry: {name}"),
     )
 
-    assert isinstance(build_agent_tracer(TraceConfig(enabled=False)), DisabledAgentTracer)
     assert isinstance(
-        build_agent_tracer(TraceConfig(enabled=True, sample_rate=0)),
-        DisabledAgentTracer,
+        build_trace_exporter(TraceConfig(enabled=False)), DisabledTraceExporter
+    )
+    assert isinstance(
+        build_trace_exporter(TraceConfig(enabled=True, sample_rate=0)),
+        DisabledTraceExporter,
     )
 
 
 def test_enabled_tracing_without_dependencies_raises_clear_import_error(monkeypatch):
-    build_agent_tracer.cache_clear()
+    build_trace_exporter.cache_clear()
 
     def missing_dependency(name):
         raise ModuleNotFoundError(name)
@@ -1203,7 +1236,7 @@ def test_enabled_tracing_without_dependencies_raises_clear_import_error(monkeypa
     monkeypatch.setattr("apps.trace.setup.import_module", missing_dependency)
 
     with pytest.raises(ImportError, match="observability"):
-        build_agent_tracer(TraceConfig(enabled=True, sample_rate=1))
+        build_trace_exporter(TraceConfig(enabled=True, sample_rate=1))
 
 
 def test_runtime_tracing_failure_does_not_change_agent_events():
@@ -1219,7 +1252,10 @@ def test_runtime_tracing_failure_does_not_change_agent_events():
         model_client=model,
         registry=_registry(),
         understanding_service=StaticUnderstandingService(),
-        tracer=ResilientAgentTracer(FailingTracer()),
+        recorder=AgentTraceRecorder(
+            DisabledTraceRepository(),
+            ResilientTraceExporter(FailingExporter()),
+        ),
     )
 
     domains = _event_domains(list(loop.run(run, record)))
@@ -1272,6 +1308,7 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
         model_client=model,
         registry=_registry(),
         understanding_service=CapturingUnderstandingService(),
+        recorder=DisabledAgentTraceRecorder(),
     )
 
     list(loop.run(run, record))

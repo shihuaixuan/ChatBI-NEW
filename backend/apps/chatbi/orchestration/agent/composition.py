@@ -7,7 +7,7 @@ from typing import Any
 
 from apps.chatbi.composition import (
     build_agent_event_publisher,
-    build_agent_tracer,
+    build_agent_trace_recorder,
     build_chat_record_service,
     build_physical_schema_service,
     build_query_service,
@@ -56,7 +56,7 @@ from apps.tool.tools.semantic import (
     SearchSemanticAssetsTool,
     SearchTerminologyTool,
 )
-from apps.trace import AgentTracer
+from apps.trace import AgentTraceRecorder
 
 
 def build_agent_tool_registry(
@@ -102,7 +102,7 @@ def build_agent_loop(
     sql_example_query_service: SQLExampleQueryService | None = None,
     result_artifact_service: ResultArtifactService | None = None,
     event_publisher: EventPublisher | None = None,
-    tracer: AgentTracer | None = None,
+    recorder: AgentTraceRecorder | None = None,
     reasoner: AgentReasoner | None = None,
     tool_executor: AgentToolExecutor | None = None,
     input_preparer: AgentInputPreparer | None = None,
@@ -112,7 +112,7 @@ def build_agent_loop(
 
     resolved_config = config or AgentConfig()
     resolved_publisher = event_publisher or build_agent_event_publisher(session)
-    resolved_tracer = tracer or build_agent_tracer()
+    resolved_recorder = recorder or build_agent_trace_recorder()
     lifecycle = AgentLifecycle(
         session,
         current_user.id,
@@ -155,20 +155,23 @@ def build_agent_loop(
         resolved_config,
         model_client or DefaultAgentModelClient(),
         resolved_registry,
-        resolved_tracer,
+        resolved_recorder,
     )
     resolved_tool_executor = tool_executor or AgentToolExecutor(
         session,
         resolved_config,
         resolved_registry,
-        resolved_tracer,
+        resolved_recorder,
         lifecycle,
         resolved_publisher,
         ChatBIToolResultProcessor(),
     )
     resolved_understanding_service = (
         understanding_service
-        or build_question_understanding_service(resolved_semantic_schema_provider)
+        or build_question_understanding_service(
+            resolved_semantic_schema_provider,
+            trace_recorder=resolved_recorder,
+        )
     )
     resolved_input_preparer = input_preparer or AgentInputPreparer(
         session,
@@ -177,6 +180,7 @@ def build_agent_loop(
         resolved_semantic_schema_provider,
         lifecycle,
         resolved_publisher,
+        resolved_recorder,
     )
     tool_services = AgentToolContextServices(
         result_artifact_service=(
@@ -193,7 +197,7 @@ def build_agent_loop(
     return AgentLoop(
         session,
         event_publisher=resolved_publisher,
-        tracer=resolved_tracer,
+        recorder=resolved_recorder,
         lifecycle=lifecycle,
         reasoner=resolved_reasoner,
         tool_executor=resolved_tool_executor,

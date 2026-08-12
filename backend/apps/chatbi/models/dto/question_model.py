@@ -34,6 +34,7 @@ class QuestionModelResult:
 
     payload: dict[str, Any]
     usage_metadata: dict[str, Any] = field(default_factory=dict)
+    raw_content: str = ""
 
 
 __all__ = [

@@ -39,6 +39,12 @@ from apps.retrieval import (
 )
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.tool.tools.semantic_contracts import project_semantic_compile_plan
+from apps.trace import (
+    AgentTraceRecorder,
+    TraceNodeSpec,
+    TraceNodeStatus,
+    TraceNodeType,
+)
 
 
 class PreflightClarification(BaseModel):
@@ -61,6 +67,7 @@ class AgentInputPreparer:
         semantic_schema_provider: DatasetSchemaProvider,
         lifecycle: AgentLifecycle,
         event_publisher: EventPublisher,
+        trace_recorder: AgentTraceRecorder,
     ) -> None:
         self._session = session
         self._config = config
@@ -68,6 +75,7 @@ class AgentInputPreparer:
         self._semantic_schema_provider = semantic_schema_provider
         self._lifecycle = lifecycle
         self._event_publisher = event_publisher
+        self._trace_recorder = trace_recorder
 
     def prepare_initial(
         self,
@@ -76,47 +84,108 @@ class AgentInputPreparer:
         """完成首次问题理解；返回值表示是否可以进入 Agent 主循环。"""
 
         record = state.record
-        conversation_context = self._load_conversation_context(state)
-        outcome = self._understanding_service.understand(
-            question=record.question or "",
-            datasource_id=record.datasource,
-            tenant_id=state.run.oid,
-            dataset_id=record.dataset_id,
-            temporal_context=state.temporal_context,
-            conversation_context={
-                "last_rewritten_question": conversation_context.get(
-                    "last_rewritten_question"
-                ),
+        run_id = state.require_run_id()
+        with self._trace_recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key="phase:question_understanding",
+                node_type=TraceNodeType.PHASE,
+                name="question_understanding",
+                display_name="问题理解",
+            ),
+            input_data={
+                "datasource_id": record.datasource,
+                "dataset_id": record.dataset_id,
             },
-        )
-        state.budget.record_llm_usage(outcome.usage_metadata)
-        understanding = outcome.output.model_dump(mode="json")
-        state.context.state.update(
-            {
-                "original_question": record.question or "",
-                "question": outcome.output.rewritten_question,
-                "question_understanding": understanding,
-            }
-        )
-        if outcome.temporal_shadow is not None:
-            # 旁路结果只用于后续评估，不参与检索、计划或 SQL。
-            state.context.state["temporal_shadow_observation"] = (
-                outcome.temporal_shadow.model_dump(mode="json")
+            input_detail={"original_question": record.question or ""},
+        ) as understanding_node:
+            with self._trace_recorder.node(
+                TraceNodeSpec(
+                    run_id=run_id,
+                    node_type=TraceNodeType.PHASE,
+                    name="load_conversation_context",
+                    display_name="读取会话上下文",
+                ),
+                input_data={"history_rounds": self._config.history_rounds},
+            ) as context_node:
+                conversation_context = self._load_conversation_context(state)
+                context_node.set_output(
+                    {
+                        "history_count": len(conversation_context.get("history") or []),
+                        "has_last_rewritten_question": bool(
+                            conversation_context.get("last_rewritten_question")
+                        ),
+                    }
+                )
+                context_node.set_output_detail(
+                    {"conversation_context": conversation_context}
+                )
+            outcome = self._understanding_service.understand(
+                question=record.question or "",
+                datasource_id=record.datasource,
+                tenant_id=state.run.oid,
+                dataset_id=record.dataset_id,
+                temporal_context=state.temporal_context,
+                conversation_context={
+                    "last_rewritten_question": conversation_context.get(
+                        "last_rewritten_question"
+                    ),
+                },
             )
-        state.messages = [AgentMessage.user(outcome.output.rewritten_question)]
-        state.system = self._build_system(
-            state,
-            conversation_context=conversation_context,
-            question_understanding=understanding,
-        )
-        self._persist_snapshot(state)
-        yield self._question_understood_event(state, understanding)
+            state.budget.record_llm_usage(outcome.usage_metadata)
+            understanding = outcome.output.model_dump(mode="json")
+            state.context.state.update(
+                {
+                    "original_question": record.question or "",
+                    "question": outcome.output.rewritten_question,
+                    "question_understanding": understanding,
+                }
+            )
+            if outcome.temporal_shadow is not None:
+                # 旁路结果只用于后续评估，不参与检索、计划或 SQL。
+                state.context.state["temporal_shadow_observation"] = (
+                    outcome.temporal_shadow.model_dump(mode="json")
+                )
+            state.messages = [AgentMessage.user(outcome.output.rewritten_question)]
+            state.system = self._build_system(
+                state,
+                conversation_context=conversation_context,
+                question_understanding=understanding,
+            )
+            understanding_node.set_output(
+                {
+                    "message_type": outcome.output.message_type,
+                    "intent_type": outcome.output.intent.intent_type,
+                    "validation_status": outcome.output.validation.status,
+                }
+            )
+            understanding_node.set_output_detail(
+                {"question_understanding": understanding}
+            )
+            with self._trace_recorder.node(
+                TraceNodeSpec(
+                    run_id=run_id,
+                    node_type=TraceNodeType.PERSISTENCE,
+                    name="persist_understanding_snapshot",
+                    display_name="持久化问题理解快照",
+                ),
+                input_data={"validation_status": outcome.output.validation.status},
+            ) as persistence_node:
+                self._persist_snapshot(state)
+                persistence_node.set_output(
+                    {
+                        "message_count": len(state.messages),
+                        "derived_state_keys": sorted(state.context.state),
+                    }
+                )
+            yield self._question_understood_event(state, understanding)
 
-        preflight = self._preflight_clarification(understanding)
-        if preflight is not None:
-            yield from self._suspend_for_preflight_clarification(state, preflight)
-            return False
-        return True
+            preflight = self._preflight_clarification(understanding)
+            if preflight is not None:
+                understanding_node.set_status(TraceNodeStatus.WAITING)
+                yield from self._suspend_for_preflight_clarification(state, preflight)
+                return False
+            return True
 
     def prepare_resume(
         self,

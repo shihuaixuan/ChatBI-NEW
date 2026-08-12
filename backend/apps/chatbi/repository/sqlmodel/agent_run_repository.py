@@ -13,6 +13,9 @@ from apps.chatbi.models.orm.agent_run import (
     ChatbiAgentStep,
     ChatbiAgentToolCall,
 )
+from apps.chatbi.repository.sqlmodel.agent_trace_repository import (
+    delete_nodes_for_runs,
+)
 from apps.conversation.composition import build_chat_record_service
 from apps.event import (
     delete_events_for_runs,
@@ -355,6 +358,7 @@ class AgentExecutionDeletionService:
             return 0
 
         delete_events_for_runs(self._session, run_ids)
+        delete_nodes_for_runs(self._session, run_ids)
         self._session.execute(
             delete(ChatbiAgentClarification).where(
                 col(ChatbiAgentClarification.run_id).in_(run_ids)

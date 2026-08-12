@@ -5,6 +5,10 @@ from sqlmodel import Session
 from apps.access_control.composition import build_data_policy_service
 from apps.access_control.data_policy import SessionDatasourceQueryPolicyProvider
 from apps.assistant.composition import build_assistant_service
+from apps.chatbi.adapters.agent_trace import (
+    ChatBITraceDetailGateway,
+    ChatBITraceRepository,
+)
 from apps.chatbi.adapters.embedding_ranking import (
     EmbeddingDatasourceSelectionCandidateRanker,
     EmbeddingSchemaRankingClient,
@@ -73,8 +77,7 @@ from apps.semantic.composition import (
     build_semantic_term_query_service,
 )
 from apps.semantic.services.schema_service import DatasetSchemaProvider
-from apps.trace import AgentTracer, TraceConfig
-from apps.trace import build_agent_tracer as build_configured_agent_tracer
+from apps.trace import AgentTraceRecorder, TraceConfig, build_trace_exporter
 from common.core.config import settings
 from common.core.db import engine
 from sqlbot_platform.workflow_engine.artifact_gateway import (
@@ -88,16 +91,27 @@ def build_agent_event_publisher(session: Session) -> EventPublisher:
     return EventPublisher(session)
 
 
-def build_agent_tracer() -> AgentTracer:
-    """按全局配置装配独立于 Event 链路的 Agent tracer。"""
+def build_agent_trace_recorder() -> AgentTraceRecorder:
+    """装配全量持久化 Trace 和可选 OpenTelemetry 导出。"""
 
-    return build_configured_agent_tracer(
+    def trace_session_factory() -> Session:
+        return Session(engine)
+
+    exporter = build_trace_exporter(
         TraceConfig(
             enabled=settings.AGENT_TRACING_ENABLED,
             sample_rate=settings.AGENT_TRACING_SAMPLE_RATE,
             service_name=settings.AGENT_TRACING_SERVICE_NAME,
             endpoint=settings.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
         )
+    )
+    return AgentTraceRecorder(
+        ChatBITraceRepository(trace_session_factory),
+        exporter,
+        ChatBITraceDetailGateway(
+            trace_session_factory,
+            build_result_artifact_service,
+        ),
     )
 
 
@@ -180,6 +194,8 @@ def build_datasource_selection_candidate_service(
 
 def build_question_understanding_service(
     schema_provider: DatasetSchemaProvider | None = None,
+    *,
+    trace_recorder: AgentTraceRecorder | None = None,
 ) -> QuestionUnderstandingService:
     """装配 Agent 使用的严格问题理解服务。"""
 
@@ -188,6 +204,7 @@ def build_question_understanding_service(
         schema_provider=schema_provider,
         temporal_shadow_enabled=settings.TEMPORAL_MODEL_SHADOW_ENABLED,
         temporal_authority_enabled=settings.TEMPORAL_MODEL_AUTHORITY_ENABLED,
+        trace_recorder=trace_recorder,
     )
 
 
@@ -315,7 +332,7 @@ def build_chat_application_service(session: Session) -> ChatApplicationService:
 
 __all__ = [
     "build_agent_event_publisher",
-    "build_agent_tracer",
+    "build_agent_trace_recorder",
     "build_chat_application_service",
     "build_chat_deletion_service",
     "build_chat_log_service",

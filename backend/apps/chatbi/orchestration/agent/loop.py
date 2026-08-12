@@ -29,8 +29,11 @@ from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.event import EventPublisher, RenderEvent
 from apps.trace import (
-    AgentSpan,
-    AgentTracer,
+    AgentTraceRecorder,
+    TraceNodeHandle,
+    TraceNodeSpec,
+    TraceNodeStatus,
+    TraceNodeType,
     agent_attributes,
 )
 
@@ -43,7 +46,7 @@ class AgentLoop:
         session: Any,
         *,
         event_publisher: EventPublisher,
-        tracer: AgentTracer,
+        recorder: AgentTraceRecorder,
         lifecycle: AgentLifecycle,
         reasoner: AgentReasoner,
         tool_executor: AgentToolExecutor,
@@ -52,7 +55,7 @@ class AgentLoop:
     ) -> None:
         self.session = session
         self.event_publisher = event_publisher
-        self.tracer = tracer
+        self.recorder = recorder
         self.lifecycle = lifecycle
         self.reasoner = reasoner
         self.tool_executor = tool_executor
@@ -64,15 +67,22 @@ class AgentLoop:
     def run(self, run: ChatbiAgentRun, record: Any) -> Iterator[RenderEvent]:
         """在完整生成器生命周期内记录一次 Agent 调用。"""
 
-        with self.tracer.span(
-            "invoke_agent",
-            agent_attributes(
+        with self.recorder.node(
+            TraceNodeSpec(
                 run_id=run.id or 0,
-                record_id=record.id or 0,
-                chat_id=run.chat_id,
+                node_key="invocation:initial",
+                node_type=TraceNodeType.INVOCATION,
+                name="invoke_agent",
+                display_name="首次执行",
+                attributes=agent_attributes(
+                    run_id=run.id or 0,
+                    record_id=record.id or 0,
+                    chat_id=run.chat_id,
+                ),
             ),
-        ) as span:
-            yield from _trace_terminal_result(self._run(run, record), span)
+            input_data={"record_id": record.id or 0, "chat_id": run.chat_id},
+        ) as node:
+            yield from _trace_terminal_result(self._run(run, record), node)
 
     def _run(self, run: ChatbiAgentRun, record: Any) -> Iterator[RenderEvent]:
         state = self.state_factory.create(run, record)
@@ -102,17 +112,27 @@ class AgentLoop:
     ) -> Iterator[RenderEvent]:
         """以新的调用 span 恢复挂起的 Agent run。"""
 
-        with self.tracer.span(
-            "invoke_agent",
-            agent_attributes(
+        clarification_id = getattr(clarification, "id", None)
+        resume_key = clarification_id or clarification.tool_call_id or "pending"
+        with self.recorder.node(
+            TraceNodeSpec(
                 run_id=run.id or 0,
-                record_id=record.id or 0,
-                chat_id=run.chat_id,
+                node_key=f"invocation:resume:{resume_key}",
+                node_type=TraceNodeType.INVOCATION,
+                name="invoke_agent",
+                display_name="澄清恢复",
+                attributes=agent_attributes(
+                    run_id=run.id or 0,
+                    record_id=record.id or 0,
+                    chat_id=run.chat_id,
+                ),
+                metadata={"clarification_id": clarification_id},
             ),
-        ) as span:
+            input_data={"record_id": record.id or 0, "chat_id": run.chat_id},
+        ) as node:
             yield from _trace_terminal_result(
                 self._resume(run, record, clarification, answer_text),
-                span,
+                node,
             )
 
     def _resume(
@@ -315,13 +335,21 @@ def _allows_direct_answer(state: AgentRuntimeState) -> bool:
 
 def _trace_terminal_result(
     events: Iterator[RenderEvent],
-    span: AgentSpan,
+    node: TraceNodeHandle,
 ) -> Iterator[RenderEvent]:
-    """依据产品终止事件标记 span 结果，不让 Trace 反向控制事件流。"""
+    """依据产品终止事件标记调用节点，不让 Trace 反向控制事件流。"""
 
     for event in events:
         if event.domain == "run.failed":
-            span.set_attribute("gen_ai.agent.result", "failed")
+            node.set_attribute("gen_ai.agent.result", "failed")
+            node.set_status(TraceNodeStatus.FAILED)
         elif event.domain == "run.finished":
-            span.set_attribute("gen_ai.agent.result", "finished")
+            node.set_attribute("gen_ai.agent.result", "finished")
+            node.set_status(TraceNodeStatus.SUCCEEDED)
+        elif event.domain == "run.cancelled":
+            node.set_attribute("gen_ai.agent.result", "cancelled")
+            node.set_status(TraceNodeStatus.CANCELLED)
+        elif event.domain == "clarification.required":
+            node.set_attribute("gen_ai.agent.result", "waiting")
+            node.set_status(TraceNodeStatus.WAITING)
         yield event

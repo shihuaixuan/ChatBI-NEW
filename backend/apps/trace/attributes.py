@@ -21,6 +21,9 @@ _ALLOWED_ATTRIBUTES = {
     "app.tool_call.id",
     "app.tool.latency_ms",
     "app.domain.retry_count",
+    "app.trace.node.id",
+    "app.trace.node.name",
+    "app.trace.node.type",
 }
 
 

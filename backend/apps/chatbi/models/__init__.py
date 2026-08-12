@@ -91,6 +91,7 @@ from apps.chatbi.models.orm import (
     ChatbiAgentRun,
     ChatbiAgentStep,
     ChatbiAgentToolCall,
+    ChatbiAgentTraceNode,
     EventLog,
 )
 
@@ -124,6 +125,7 @@ __all__ = [
     "ChatbiAgentRun",
     "ChatbiAgentStep",
     "ChatbiAgentToolCall",
+    "ChatbiAgentTraceNode",
     "EventLog",
     "ChartGenerationData",
     "ChartGenerationEvent",

@@ -20,7 +20,12 @@ from apps.chatbi.orchestration.agent.working_state import (
     project_working_state,
 )
 from apps.tool import ToolCall, ToolDefinition, ToolRegistry
-from apps.trace import AgentTracer, llm_attributes
+from apps.trace import (
+    AgentTraceRecorder,
+    TraceNodeSpec,
+    TraceNodeType,
+    llm_attributes,
+)
 
 
 class AgentModelClient(Protocol):
@@ -55,12 +60,12 @@ class AgentReasoner:
         config: AgentConfig,
         model_client: AgentModelClient,
         registry: ToolRegistry,
-        tracer: AgentTracer,
+        recorder: AgentTraceRecorder,
     ) -> None:
         self._config = config
         self._model_client = model_client
         self._registry = registry
-        self._tracer = tracer
+        self._recorder = recorder
 
     def decide(self, state: AgentRuntimeState, mode: str) -> AgentDecision:
         """执行一轮 Reason，并把模型响应转换为结构化决策。"""
@@ -71,10 +76,23 @@ class AgentReasoner:
         available_tools = self.available_tool_names(state, mode)
         invoke_messages = self._invoke_messages(state, mode, available_tools)
         tool_definitions = self._registry.definitions(allowed=available_tools)
-        with self._tracer.span(
-            "chat",
-            llm_attributes(model=self._model_client.__class__.__name__),
-        ) as llm_span:
+        with self._recorder.node(
+            TraceNodeSpec(
+                run_id=state.require_run_id(),
+                node_type=TraceNodeType.LLM,
+                name="chat",
+                display_name="Agent 推理模型",
+                attributes=llm_attributes(
+                    model=self._model_client.__class__.__name__
+                ),
+                metadata={"mode": mode},
+            ),
+            input_data={
+                "message_count": len(invoke_messages),
+                "available_tool_count": len(tool_definitions),
+                "mode": mode,
+            },
+        ) as llm_node:
             model_decision = self._model_client.invoke(
                 invoke_messages, tool_definitions
             )
@@ -86,13 +104,20 @@ class AgentReasoner:
                 update={"tool_calls": tool_calls}
             )
             usage = model_decision.usage
+            llm_node.set_output(
+                {
+                    "tool_call_count": len(tool_calls),
+                    "direct_answer": not tool_calls,
+                }
+            )
+            llm_node.set_token_usage(usage)
             for source, attribute in (
                 ("input_tokens", "gen_ai.usage.input_tokens"),
                 ("output_tokens", "gen_ai.usage.output_tokens"),
                 ("total_tokens", "gen_ai.usage.total_tokens"),
             ):
                 if usage.get(source) is not None:
-                    llm_span.set_attribute(attribute, int(usage[source]))
+                    llm_node.set_attribute(attribute, int(usage[source]))
 
         state.budget.record_llm_turn(usage)
         _record_tool_call_preparations(

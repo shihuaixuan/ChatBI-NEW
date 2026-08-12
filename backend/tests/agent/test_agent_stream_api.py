@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import orjson
@@ -17,6 +18,22 @@ from apps.chatbi.models import (
 from apps.chatbi.orchestration.agent import service
 from apps.conversation.models import ChatRecord
 from apps.event import create_render_event
+
+
+class RecordingAccessTrace:
+    def __init__(self):
+        self.nodes = []
+
+    @contextmanager
+    def node(self, spec, **kwargs):
+        item = {"spec": spec, **kwargs, "output": {}}
+        self.nodes.append(item)
+
+        class Handle:
+            def set_output(self, output):
+                item["output"] = dict(output)
+
+        yield Handle()
 
 
 async def _read_stream(response: StreamingResponse) -> str:
@@ -58,6 +75,7 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
     record = ChatRecord(id=3, chat_id=2, create_by=user.id, question="销售额")
     run = ChatbiAgentRun(id=5, oid=1, chat_id=2, record_id=record.id, created_by=user.id)
     captured = {}
+    recorder = RecordingAccessTrace()
     _enable_agent(monkeypatch)
     _mock_stream_session(monkeypatch)
 
@@ -79,6 +97,7 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
             )
 
     monkeypatch.setattr(service, "create_record_and_run", fake_create_record_and_run)
+    monkeypatch.setattr(service, "build_agent_trace_recorder", lambda: recorder)
     monkeypatch.setattr(service, "build_agent_loop", FakeLoop)
 
     response = asyncio.run(
@@ -103,6 +122,14 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
         "start",
         "run.started",
     )
+    assert len(recorder.nodes) == 1
+    access = recorder.nodes[0]
+    assert access["spec"].name == "request_access"
+    assert access["spec"].node_key == "request_access:initial"
+    assert access["input_data"] == {"chat_id": 2, "datasource_id": 4}
+    assert access["input_detail"] == {"question": "销售额"}
+    assert access["output"]["conversation_owned"] is True
+    assert access["output"]["datasource_allowed"] is True
 
 
 def test_unified_stream_resumes_pending_clarification(monkeypatch):
@@ -127,6 +154,7 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
         created_by=user.id,
     )
     captured = {}
+    recorder = RecordingAccessTrace()
     _enable_agent(monkeypatch)
     _mock_stream_session(monkeypatch, record)
     monkeypatch.setattr(
@@ -139,6 +167,7 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
         "get_pending_clarification",
         lambda session, record_id: clarification,
     )
+    monkeypatch.setattr(service, "build_agent_trace_recorder", lambda: recorder)
 
     class FakeLoop:
         def __init__(self, session, current_user, config, **kwargs):
@@ -177,6 +206,13 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
     }
     assert captured["answer_text"] == "用户澄清回答：销售下单客户数"
     assert "clarification.accepted" in body
+    assert len(recorder.nodes) == 1
+    access = recorder.nodes[0]
+    assert access["spec"].node_key == "request_access:resume:9"
+    assert access["input_detail"] == {
+        "answer_text": "用户澄清回答：销售下单客户数"
+    }
+    assert access["output"]["access_status"] == "accepted"
 
 
 def test_timeline_returns_product_events(monkeypatch):

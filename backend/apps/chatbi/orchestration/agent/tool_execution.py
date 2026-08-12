@@ -50,7 +50,13 @@ from apps.tool import (
     effective_timeout_seconds,
     execute_tool_batch,
 )
-from apps.trace import AgentTracer, tool_attributes
+from apps.trace import (
+    AgentTraceRecorder,
+    TraceNodeSpec,
+    TraceNodeStatus,
+    TraceNodeType,
+    tool_attributes,
+)
 
 _MISSING = object()
 
@@ -82,7 +88,7 @@ class AgentToolExecutor:
         session: Any,
         config: AgentConfig,
         registry: ToolRegistry,
-        tracer: AgentTracer,
+        recorder: AgentTraceRecorder,
         lifecycle: AgentLifecycle,
         event_publisher: EventPublisher,
         result_processor: ChatBIToolResultProcessor,
@@ -90,7 +96,7 @@ class AgentToolExecutor:
         self._session = session
         self._config = config
         self._registry = registry
-        self._tracer = tracer
+        self._recorder = recorder
         self._lifecycle = lifecycle
         self._event_publisher = event_publisher
         self._result_processor = result_processor
@@ -642,15 +648,30 @@ class AgentToolExecutor:
             deadline_monotonic=monotonic() + timeout_seconds,
             cancellation=state.cancellation,
         )
-        with self._tracer.span(
-            "execute_tool",
-            tool_attributes(
-                tool_name=call.name,
+        with self._recorder.node(
+            TraceNodeSpec(
                 run_id=state.require_run_id(),
-                step_id=step.id,
-                tool_call_id=call.call_id,
+                node_type=TraceNodeType.TOOL,
+                name="execute_tool",
+                display_name=f"工具执行：{call.name}",
+                attributes=tool_attributes(
+                    tool_name=call.name,
+                    run_id=state.require_run_id(),
+                    step_id=step.id,
+                    tool_call_id=call.call_id,
+                ),
+                metadata={
+                    "tool_name": call.name,
+                    "tool_call_id": call.call_id,
+                    "step_id": step.id,
+                },
             ),
-        ) as tool_span:
+            input_data={
+                "tool_name": call.name,
+                "tool_call_id": call.call_id,
+                "timeout_seconds": timeout_seconds,
+            },
+        ) as tool_node:
             if state.cancellation.is_cancelled():
                 result = ToolResult.interrupted(
                     "用户已请求取消，工具未开始执行。",
@@ -697,20 +718,32 @@ class AgentToolExecutor:
                         error_category=ToolErrorCategory.TIMEOUT,
                         metadata={"underlying_operation_completed": True},
                     )
-            tool_span.set_attribute(
+            tool_node.set_output(
+                {
+                    "status": result.status.value,
+                    "error_code": result.error_code,
+                    "error_category": (
+                        result.error_category.value
+                        if result.error_category is not None
+                        else None
+                    ),
+                }
+            )
+            tool_node.set_status(TraceNodeStatus(result.status.value))
+            tool_node.set_attribute(
                 "gen_ai.tool.call.result",
                 result.status.value,
             )
             if result.error_category is not None:
-                tool_span.set_attribute(
+                tool_node.set_attribute(
                     "gen_ai.tool.error.type",
                     result.error_category.value,
                 )
-            tool_span.set_attribute(
+            tool_node.set_attribute(
                 "app.domain.retry_count",
                 int(result.metadata.get("retry_count") or 0),
             )
-            tool_span.set_attribute(
+            tool_node.set_attribute(
                 "app.tool.latency_ms",
                 int((perf_counter() - started_at) * 1000),
             )

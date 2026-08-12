@@ -32,6 +32,12 @@ class StructuredModelService:
     def __init__(self, model_client: QuestionModelClient) -> None:
         self._model_client = model_client
 
+    @property
+    def model_name(self) -> str:
+        """返回可用于低基数 Trace 属性的客户端类型。"""
+
+        return self._model_client.__class__.__name__
+
     def invoke(self, data: QuestionModelInvocationData) -> QuestionModelResult:
         self._validate(data)
         try:
@@ -67,6 +73,7 @@ class StructuredModelService:
         return QuestionModelResult(
             payload=payload,
             usage_metadata=dict(response.usage_metadata),
+            raw_content=content,
         )
 
     @staticmethod

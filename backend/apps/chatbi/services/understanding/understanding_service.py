@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from contextvars import copy_context
 from typing import Any, Protocol, TypeVar
 
 import orjson
@@ -60,6 +62,15 @@ from apps.temporal import (
     TemporalContext,
     build_run_temporal_context,
     normalize_time_range_payload,
+)
+from apps.trace import (
+    AgentTraceRecorder,
+    DisabledAgentTraceRecorder,
+    TraceNodeHandle,
+    TraceNodeSpec,
+    TraceNodeStatus,
+    TraceNodeType,
+    llm_attributes,
 )
 
 QuestionUnderstandingModelResponse = QuestionModelResponse
@@ -248,6 +259,7 @@ class QuestionUnderstandingService:
         temporal_interpretation_service: TemporalInterpretationService | None = None,
         temporal_shadow_enabled: bool = False,
         temporal_authority_enabled: bool = False,
+        trace_recorder: AgentTraceRecorder | None = None,
     ) -> None:
         if temporal_shadow_enabled and temporal_authority_enabled:
             raise ValueError("TEMPORAL_INTERPRETATION_MODE_CONFLICT")
@@ -260,6 +272,7 @@ class QuestionUnderstandingService:
         else:
             raise ValueError("QUESTION_UNDERSTANDING_MODEL_SERVICE_REQUIRED")
         self._schema_provider = schema_provider
+        self._trace_recorder = trace_recorder or DisabledAgentTraceRecorder()
         temporal_enabled = temporal_shadow_enabled or temporal_authority_enabled
         if temporal_interpretation_service is not None and not temporal_enabled:
             raise ValueError("TEMPORAL_INTERPRETATION_SERVICE_DISABLED")
@@ -281,12 +294,32 @@ class QuestionUnderstandingService:
         dataset_id: int | None = None,
         temporal_context: TemporalContext | None = None,
     ) -> QuestionUnderstandingOutcome:
+        trace_run_id = self._trace_recorder.current_run_id()
         fixed_temporal_context = temporal_context or build_run_temporal_context()
         context = conversation_context or {}
-        available_dimensions = self._load_dimension_candidates(
-            tenant_id=tenant_id,
-            dataset_id=dataset_id,
-        )
+        with self._trace_node(
+            trace_run_id,
+            TraceNodeType.PHASE,
+            "load_dimension_candidates",
+            "加载维度候选",
+            input_data={"tenant_id": tenant_id, "dataset_id": dataset_id},
+        ) as candidate_node:
+            available_dimensions = self._load_dimension_candidates(
+                tenant_id=tenant_id,
+                dataset_id=dataset_id,
+            )
+            if candidate_node is not None:
+                candidate_node.set_output(
+                    {
+                        "candidate_count": len(available_dimensions),
+                        "time_dimension_count": sum(
+                            1 for item in available_dimensions if item.get("is_time")
+                        ),
+                    }
+                )
+                candidate_node.set_output_detail(
+                    {"available_dimensions": available_dimensions}
+                )
         rewrite, rewrite_usage = self._invoke_validated_model(
             "QUESTION_REWRITE",
             REWRITE_SYSTEM_PROMPT,
@@ -296,6 +329,7 @@ class QuestionUnderstandingService:
                 "conversation_context": context,
             },
             QuestionRewriteOutput,
+            trace_run_id=trace_run_id,
         )
 
         intent_payload = {
@@ -313,75 +347,161 @@ class QuestionUnderstandingService:
             ],
         }
         # 两个任务只依赖重写结果，并行执行可避免意图错误污染维度模型输入。
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            intent_future = executor.submit(
-                self._invoke_validated_model,
-                "INTENT_RECOGNITION",
-                INTENT_SYSTEM_PROMPT,
-                intent_payload,
-                IntentRecognitionOutput,
-            )
-            dimension_future = executor.submit(
-                self._invoke_validated_model,
-                "DIMENSION_RECOGNITION",
-                DIMENSION_SYSTEM_PROMPT,
-                dimension_payload,
-                DimensionRecognitionOutput,
-                normalizer=lambda payload: _normalize_dimension_payload(
-                    payload,
-                    available_dimensions,
-                    rewritten_question=rewrite.rewritten_question,
-                    metric_mentions=[],
+        with self._trace_node(
+            trace_run_id,
+            TraceNodeType.PHASE,
+            "parallel_understanding",
+            "并行意图与维度识别",
+            input_data={"rewritten_question": rewrite.rewritten_question},
+        ) as parallel_node:
+            intent_context = copy_context()
+            dimension_context = copy_context()
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                intent_future = executor.submit(
+                    intent_context.run,
+                    self._invoke_validated_model,
+                    "INTENT_RECOGNITION",
+                    INTENT_SYSTEM_PROMPT,
+                    intent_payload,
+                    IntentRecognitionOutput,
+                    trace_run_id=trace_run_id,
+                )
+                dimension_future = executor.submit(
+                    dimension_context.run,
+                    self._invoke_validated_model,
+                    "DIMENSION_RECOGNITION",
+                    DIMENSION_SYSTEM_PROMPT,
+                    dimension_payload,
+                    DimensionRecognitionOutput,
+                    normalizer=lambda payload: _normalize_dimension_payload(
+                        payload,
+                        available_dimensions,
+                        rewritten_question=rewrite.rewritten_question,
+                        metric_mentions=[],
+                    ),
+                    validation_fallback=_repair_dimension_coverage,
+                    trace_run_id=trace_run_id,
+                )
+                intent, intent_usage = intent_future.result()
+                dimensions, dimension_usage = dimension_future.result()
+            if parallel_node is not None:
+                parallel_node.set_output(
+                    {
+                        "intent_type": intent.intent_type,
+                        "dimension_slot_count": len(dimensions.dimension_slots),
+                    }
+                )
+        with self._trace_node(
+            trace_run_id,
+            TraceNodeType.PROJECTION,
+            "merge_understanding_results",
+            "合并问题理解结果",
+            input_data={
+                "intent_type": intent.intent_type,
+                "dimension_slot_count": len(dimensions.dimension_slots),
+            },
+        ) as merge_node:
+            intent = _stabilize_intent(
+                intent.model_copy(
+                    update={
+                        "dimension_mentions": dimensions.dimension_mentions,
+                        "dimension_slots": dimensions.dimension_slots,
+                        "filter_mentions": dimensions.residual_filter_mentions,
+                        "ambiguous_slots": _unique_strings(
+                            [*intent.ambiguous_slots, *dimensions.ambiguous_slots]
+                        ),
+                        "conflict_slots": _unique_strings(
+                            [*intent.conflict_slots, *dimensions.conflict_slots]
+                        ),
+                    }
                 ),
-                validation_fallback=_repair_dimension_coverage,
+                fixed_temporal_context,
+                use_legacy_time_interpretation=not self._temporal_authority_enabled,
             )
-            intent, intent_usage = intent_future.result()
-            dimensions, dimension_usage = dimension_future.result()
-        intent = _stabilize_intent(
-            intent.model_copy(
-                update={
-                    "dimension_mentions": dimensions.dimension_mentions,
-                    "dimension_slots": dimensions.dimension_slots,
-                    "filter_mentions": dimensions.residual_filter_mentions,
-                    "ambiguous_slots": _unique_strings(
-                        [*intent.ambiguous_slots, *dimensions.ambiguous_slots]
-                    ),
-                    "conflict_slots": _unique_strings(
-                        [*intent.conflict_slots, *dimensions.conflict_slots]
-                    ),
-                }
-            ),
-            fixed_temporal_context,
-            use_legacy_time_interpretation=not self._temporal_authority_enabled,
-        )
+            if merge_node is not None:
+                merge_node.set_output(
+                    {
+                        "intent_type": intent.intent_type,
+                        "metric_count": len(intent.metric_mentions),
+                        "dimension_slot_count": len(intent.dimension_slots),
+                        "ambiguous_slot_count": len(intent.ambiguous_slots),
+                    }
+                )
+                merge_node.set_output_detail(
+                    {"merged_intent": intent.model_dump(mode="json")}
+                )
         temporal_interpretation = None
         temporal_shadow = None
-        if self._temporal_authority_enabled:
-            temporal_interpretation, temporal_usage = (
-                self._interpret_authoritative_plan(
+        with self._trace_node(
+            trace_run_id,
+            TraceNodeType.PHASE,
+            "temporal_processing",
+            "时间处理",
+            input_data={
+                "authority_enabled": self._temporal_authority_enabled,
+                "time_mentions": intent.time_mentions,
+            },
+        ) as temporal_node:
+            if self._temporal_authority_enabled:
+                temporal_interpretation, temporal_usage = (
+                    self._interpret_authoritative_plan(
+                        rewritten_question=rewrite.rewritten_question,
+                        intent=intent,
+                        temporal_context=fixed_temporal_context,
+                        conversation_context=context,
+                    )
+                )
+                intent = _apply_temporal_interpretation(
+                    intent,
+                    temporal_interpretation,
+                    temporal_context=fixed_temporal_context,
+                )
+            else:
+                temporal_shadow, temporal_usage = self._observe_temporal_plan(
                     rewritten_question=rewrite.rewritten_question,
                     intent=intent,
                     temporal_context=fixed_temporal_context,
                     conversation_context=context,
                 )
-            )
-            intent = _apply_temporal_interpretation(
+            if temporal_node is not None:
+                if temporal_usage:
+                    # 时间模型没有独立子节点时，由时间处理节点承载本次 Token。
+                    temporal_node.set_token_usage(temporal_usage)
+                temporal_node.set_output(
+                    {
+                        "mode": (
+                            "authority" if self._temporal_authority_enabled else "legacy"
+                        ),
+                        "time_value_status": intent.time_range.value_status,
+                        "shadow_status": (
+                            temporal_shadow.status if temporal_shadow is not None else None
+                        ),
+                    }
+                )
+        with self._trace_node(
+            trace_run_id,
+            TraceNodeType.VALIDATION,
+            "validate_question_understanding",
+            "问题理解确定性校验",
+            input_data={
+                "intent_type": intent.intent_type,
+                "ambiguous_slots": intent.ambiguous_slots,
+                "conflict_slots": intent.conflict_slots,
+            },
+        ) as validation_node:
+            validation = _validate_understanding(
+                rewrite,
                 intent,
-                temporal_interpretation,
-                temporal_context=fixed_temporal_context,
+                temporal_interpretation=temporal_interpretation,
             )
-        else:
-            temporal_shadow, temporal_usage = self._observe_temporal_plan(
-                rewritten_question=rewrite.rewritten_question,
-                intent=intent,
-                temporal_context=fixed_temporal_context,
-                conversation_context=context,
-            )
-        validation = _validate_understanding(
-            rewrite,
-            intent,
-            temporal_interpretation=temporal_interpretation,
-        )
+            if validation_node is not None:
+                validation_node.set_output(
+                    {
+                        "status": validation.status,
+                        "reason_codes": validation.reason_codes,
+                        "clarification_slots": validation.clarification_slots,
+                    }
+                )
         output = QuestionUnderstandingOutput(
             original_question=question,
             message_type=rewrite.message_type,
@@ -586,6 +706,7 @@ class QuestionUnderstandingService:
         *,
         normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         validation_fallback: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        trace_run_id: int | None = None,
     ) -> tuple[ModelType, dict[str, int]]:
         """复用 Graph 的修复重试方式，格式错误时把精确校验信息反馈给模型。"""
 
@@ -601,40 +722,92 @@ class QuestionUnderstandingService:
                     ),
                     "instruction": "只修复字段结构和类型，保持原问题语义不变。",
                 }
+            user_prompt = orjson.dumps(current_payload).decode()
             try:
-                response = self._invoke_model(
-                    stage,
-                    system_prompt,
-                    orjson.dumps(current_payload).decode(),
-                )
+                with self._trace_node(
+                    trace_run_id,
+                    TraceNodeType.LLM,
+                    stage.lower(),
+                    _stage_display_name(stage, attempt),
+                    input_data={
+                        "stage": stage,
+                        "attempt": attempt + 1,
+                        "repair": validation_error is not None,
+                    },
+                    input_detail={
+                        "system_prompt": system_prompt,
+                        "user_prompt": user_prompt,
+                    },
+                    attributes=llm_attributes(
+                        model=self._question_model_service.model_name
+                    ),
+                    metadata={"stage": stage, "attempt": attempt + 1},
+                ) as model_node:
+                    response = self._invoke_model(stage, system_prompt, user_prompt)
+                    usage_items.append(response.usage_metadata)
+                    payload = (
+                        normalizer(response.payload)
+                        if normalizer is not None
+                        else response.payload
+                    )
+                    if model_node is not None:
+                        model_node.set_token_usage(response.usage_metadata)
+                        model_node.set_output_detail(
+                            {
+                                "raw_content": response.raw_content,
+                                "parsed_payload": response.payload,
+                                "normalized_payload": payload,
+                            }
+                        )
+                    try:
+                        validated = model_type.model_validate(payload)
+                    except ValidationError as exc:
+                        validation_error = exc
+                        if model_node is not None:
+                            model_node.set_status(TraceNodeStatus.REJECTED)
+                            model_node.set_output(
+                                {
+                                    "stage": stage,
+                                    "attempt": attempt + 1,
+                                    "validation_status": "invalid",
+                                    "validation_errors": _serializable_validation_errors(
+                                        exc
+                                    ),
+                                }
+                            )
+                        if attempt == 1 and validation_fallback is not None:
+                            try:
+                                validated = model_type.model_validate(
+                                    validation_fallback(payload)
+                                )
+                            except ValidationError as fallback_exc:
+                                validation_error = fallback_exc
+                            else:
+                                if model_node is not None:
+                                    model_node.set_status(TraceNodeStatus.SUCCEEDED)
+                                    model_node.set_output(
+                                        {
+                                            "stage": stage,
+                                            "attempt": attempt + 1,
+                                            "validation_status": "fallback_repaired",
+                                        }
+                                    )
+                                return validated, _merge_usage(*usage_items)
+                    else:
+                        if model_node is not None:
+                            model_node.set_output(
+                                {
+                                    "stage": stage,
+                                    "attempt": attempt + 1,
+                                    "validation_status": "valid",
+                                }
+                            )
+                        return validated, _merge_usage(*usage_items)
             except QuestionUnderstandingError:
                 # 修复调用失败时保留第一次精确的结构校验错误，避免错误原因被覆盖。
                 if validation_error is not None:
                     break
                 raise
-            usage_items.append(response.usage_metadata)
-            payload = (
-                normalizer(response.payload)
-                if normalizer is not None
-                else response.payload
-            )
-            try:
-                return (
-                    model_type.model_validate(payload),
-                    _merge_usage(*usage_items),
-                )
-            except ValidationError as exc:
-                validation_error = exc
-                if attempt == 1 and validation_fallback is not None:
-                    try:
-                        return (
-                            model_type.model_validate(validation_fallback(payload)),
-                            _merge_usage(*usage_items),
-                        )
-                    except ValidationError as fallback_exc:
-                        validation_error = fallback_exc
-                if attempt == 0:
-                    continue
         assert validation_error is not None
         raise QuestionUnderstandingError(
             f"{stage}_MODEL_OUTPUT_INVALID: {validation_error}"
@@ -670,6 +843,36 @@ class QuestionUnderstandingService:
             raise QuestionUnderstandingError(
                 f"{stage}_MODEL_INVOCATION_INVALID"
             ) from exc
+
+    @contextmanager
+    def _trace_node(
+        self,
+        run_id: int | None,
+        node_type: TraceNodeType,
+        name: str,
+        display_name: str,
+        *,
+        input_data: dict[str, Any] | None = None,
+        input_detail: dict[str, Any] | None = None,
+        attributes: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Iterator[TraceNodeHandle | None]:
+        if run_id is None or run_id <= 0:
+            yield None
+            return
+        with self._trace_recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_type=node_type,
+                name=name,
+                display_name=display_name,
+                attributes=attributes or {},
+                metadata=metadata or {},
+            ),
+            input_data=input_data,
+            input_detail=input_detail,
+        ) as node:
+            yield node
 
 
 def apply_question_understanding_clarification(
@@ -878,6 +1081,16 @@ def _temporal_clarification_answer(
 
 
 ModelType = TypeVar("ModelType", bound=BaseModel)
+
+
+def _stage_display_name(stage: str, attempt: int) -> str:
+    names = {
+        "QUESTION_REWRITE": "问题重写模型",
+        "INTENT_RECOGNITION": "意图识别模型",
+        "DIMENSION_RECOGNITION": "维度识别模型",
+    }
+    base = names.get(stage, stage)
+    return base if attempt == 0 else f"{base}（格式修复 {attempt}）"
 
 
 def _serializable_validation_errors(

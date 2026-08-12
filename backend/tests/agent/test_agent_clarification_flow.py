@@ -46,6 +46,7 @@ from apps.retrieval.query.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERS
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.temporal import build_temporal_context
 from apps.tool import ToolRegistry
+from apps.trace import DisabledAgentTraceRecorder
 from tests.agent.test_agent_loop import (
     FakeSession,
     FinishProbeTool,
@@ -135,6 +136,7 @@ def _loop(model, config=None):
         model_client=model,
         registry=_registry_with_clarify(),
         understanding_service=StaticUnderstandingService(rewritten_question="额度趋势"),
+        recorder=DisabledAgentTraceRecorder(),
     )
 
 
@@ -236,6 +238,7 @@ def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval()
         model_client=model,
         registry=_registry_with_clarify(),
         understanding_service=AmbiguousDimensionUnderstandingService(),
+        recorder=DisabledAgentTraceRecorder(),
     )
 
     events = list(loop.run(run, record))
@@ -343,6 +346,7 @@ def test_resume_restores_derived_state_into_tool_context():
         model_client=model,
         registry=registry,
         understanding_service=StaticUnderstandingService(),
+        recorder=DisabledAgentTraceRecorder(),
     )
     clarification = SimpleNamespace(
         tool_call_id="prev",
@@ -627,6 +631,7 @@ def test_resume_applies_structured_semantic_clarification_to_trusted_scope():
         semantic_schema_provider=SimpleNamespace(
             build_dataset_schema=lambda _oid, _dataset_id: schema
         ),
+        recorder=DisabledAgentTraceRecorder(),
     )
     option = {
         "label": "总下单客户数（按店铺名称分组）",
@@ -791,6 +796,7 @@ def test_resume_emits_acceptance_without_reunderstanding():
         model_client=ScriptedModel([]),
         registry=_registry_with_clarify(),
         understanding_service=understanding_service,
+        recorder=DisabledAgentTraceRecorder(),
     )
     clarification = SimpleNamespace(
         tool_call_id=None,
@@ -825,6 +831,7 @@ def test_filter_role_clarification_resumes_to_targeted_value_clarification():
         model_client=ScriptedModel([]),
         registry=_registry_with_clarify(),
         understanding_service=understanding_service,
+        recorder=DisabledAgentTraceRecorder(),
     )
     clarification = SimpleNamespace(
         tool_call_id=None,
@@ -863,6 +870,7 @@ def test_filter_role_clarification_resumes_to_targeted_value_clarification():
         model_client=finish_model,
         registry=_registry_with_clarify(),
         understanding_service=understanding_service,
+        recorder=DisabledAgentTraceRecorder(),
     )
 
     finish_events = list(
@@ -1033,6 +1041,7 @@ def test_resume_updates_target_slot_without_rewriting_or_reunderstanding():
         model_client=model,
         registry=registry,
         understanding_service=understanding_service,
+        recorder=DisabledAgentTraceRecorder(),
     )
     clarification = SimpleNamespace(
         tool_call_id=None,
