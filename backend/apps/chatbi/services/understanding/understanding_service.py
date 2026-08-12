@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol, TypeVar
 
 import orjson
@@ -98,6 +99,20 @@ Agent 上下文规则：
 - conversation_context.last_rewritten_question 只表示最近一次成功执行后的完整问题。
 - “那上个月呢”“换成订单数”等依赖上文的表达属于 followup，只从 last_rewritten_question 继承本轮缺失的语义。
 - 当前输入明显在回答挂起澄清时，message_type=clarification_reply。
+
+典型示例：
+
+示例 1：可独立理解的新问题
+输入：{"question":"本月新增客户数是多少？","conversation_context":{}}
+输出：{"message_type":"new_question","rewritten_question":"本月新增客户数是多少？","inherited_context":{},"need_user_input":false,"missing_slots":[],"confidence":1.0}
+
+示例 2：只替换上一轮时间的追问
+输入：{"question":"那上个月呢？","conversation_context":{"last_rewritten_question":"查询本月新增客户数"}}
+输出：{"message_type":"followup","rewritten_question":"查询上个月新增客户数","inherited_context":{"metric":"新增客户数"},"need_user_input":false,"missing_slots":[],"confidence":0.95}
+
+示例 3：无法确定引用对象
+输入：{"question":"那另一个呢？","conversation_context":{}}
+输出：{"message_type":"followup","rewritten_question":"那另一个呢？","inherited_context":{},"need_user_input":true,"missing_slots":["context"],"confidence":0.3}
 """.strip(),
     ]
 )
@@ -113,14 +128,8 @@ INTENT_SYSTEM_PROMPT = "\n\n".join(
   "intent_type": "metric_query | trend_analysis | ranking_analysis | comparison_analysis | detail_query | share_analysis | anomaly_analysis | unknown",
   "confidence": 0.0,
   "metric_mentions": [],
-  "dimension_mentions": [],
-  "dimension_slots": [
-    {"name": "自然语言维度名", "role": "group_by | filter | ambiguous", "value": null, "value_status": "provided | not_provided | ambiguous", "value_confidence": 0.0}
-  ],
   "time_mentions": [],
   "time_range": {"raw": null, "value_status": "provided | not_provided"},
-  "filter_mentions": [],
-  "required_slot_types": [],
   "query_shape": {
     "select_mode": "aggregate | detail",
     "needs_group_by": false,
@@ -145,9 +154,8 @@ INTENT_SYSTEM_PROMPT = "\n\n".join(
         METRIC_TIME_EXTRACTION_RULES,
         """
 Agent 输出约束：
-- dimension_mentions、dimension_slots 和 filter_mentions 固定输出空数组；维度与筛选由独立维度子任务识别。
-- required_slot_types 固定输出空数组，由服务端根据通过校验的理解结果派生。
-- metric_mentions 必须保留完整业务修饰关系，优先输出用户原文中的最长完整指标短语，不能把“客户当日GMV”缩短成“GMV”。
+- 不输出 dimension_mentions、dimension_slots、filter_mentions 和 required_slot_types；维度与筛选由并行的独立维度任务识别，必需槽位由服务端派生。
+- metric_mentions 只提供后续语义检索所需的指标候选，不要求本阶段确定完整指标口径。
 - query_shape 必须完整输出全部字段，只表示用户问题中的查询组织语义，不得绑定资产或生成 SQL。
 - detail_query 的 select_mode=detail，其他意图的 select_mode=aggregate。
 - 只有用户表达分组、趋势分桶、排名、比较或占比时，needs_group_by 才能为 true。
@@ -156,12 +164,19 @@ Agent 输出约束：
 - limit 只填写用户明确表达的 1～1000 整数，没有明确数量时必须为 null，不得补默认 TopN。
 - time_grain 只填写用户明确表达的按天、周、月、季度或年粒度，没有明确粒度时必须为 null。
 
-示例：
-- “按城市看本月订单数”：metric_mentions=["订单数"]，time_range.raw="本月"，query_shape.needs_group_by=true，维度相关字段保持空数组。
-- “按天查看最近7天销售额走势”：intent_type=trend_analysis，query_shape.needs_group_by=true，time_grain=day。
-- “销售额最高的5个门店”：intent_type=ranking_analysis，query_shape.needs_group_by=true、needs_order_by=true、order_direction=desc、limit=5。
-- “北京 App 端的销售额”：metric_mentions=["销售额"]，维度和筛选相关字段保持空数组。
-- “最近7天的上月销售额”：metric_mentions=["销售额"]，并将冲突时间放入 conflict_slots。
+典型示例：
+
+示例 1：排名查询
+输入：{"rewritten_question":"本月新增客户数最高的5个店铺是哪些？","inherited_context":{}}
+输出：{"intent_type":"ranking_analysis","confidence":0.98,"metric_mentions":["新增客户数"],"time_mentions":["本月"],"time_range":{"raw":"本月","value_status":"provided"},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":true,"order_direction":"desc","limit":5,"time_grain":null},"ambiguous_slots":[],"conflict_slots":[]}
+
+示例 2：按天趋势
+输入：{"rewritten_question":"查看最近7天每天的销售额趋势","inherited_context":{}}
+输出：{"intent_type":"trend_analysis","confidence":0.98,"metric_mentions":["销售额"],"time_mentions":["最近7天"],"time_range":{"raw":"最近7天","value_status":"provided"},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":false,"order_direction":null,"limit":null,"time_grain":"day"},"ambiguous_slots":[],"conflict_slots":[]}
+
+示例 3：普通指标查询
+输入：{"rewritten_question":"今天店铺100011的活跃客户数是多少？","inherited_context":{}}
+输出：{"intent_type":"metric_query","confidence":0.98,"metric_mentions":["活跃客户数"],"time_mentions":["今天"],"time_range":{"raw":"今天","value_status":"provided"},"query_shape":{"select_mode":"aggregate","needs_group_by":false,"needs_order_by":false,"order_direction":null,"limit":null,"time_grain":null},"ambiguous_slots":[],"conflict_slots":[]}
 """.strip(),
     ]
 )
@@ -195,11 +210,28 @@ Agent 示例：
 - 同一维度包含多个明确筛选值时，value 必须输出数组，例如 value=["100011", "100012"]；禁止拼接成逗号字符串。
 - 已进入 dimension_slots 的筛选条件禁止重复写入 residual_filter_mentions。
 - residual_filter_mentions 只保留无法归属到任何 available_dimensions 的剩余条件，每个元素必须是对象，不能输出字符串。
+- “最高的5个门店”“最低的3个商品”中的门店、商品是被排名对象，role=group_by。
+- “各渠道占比”中的渠道是构成维度，role=group_by。
+- “比较北京和上海的销售额”中承载北京、上海的维度是比较维度；有明确值时 role=filter 且 value 为值数组。
 - “今天门店的客户数”：门店 role=ambiguous。
 - “今天各门店的客户数”：门店 role=group_by。
 - “今天1号门店的客户数”：门店 role=filter，value="1号"。
 - “比较店铺100011和100012的GMV”：店铺 role=filter，value=["100011", "100012"]。
 - “今天新增客户数”：新增属于指标修饰词，不输出维度。
+
+典型示例：
+
+示例 1：排名对象
+输入：{"rewritten_question":"本月新增客户数最高的5个店铺是哪些？","available_dimensions":[{"name":"店铺ID","aliases":["店铺"]}],"time_dimensions":[{"name":"时间","aliases":[]}]}
+输出：{"dimension_mentions":["店铺ID"],"dimension_slots":[{"name":"店铺ID","role":"group_by","value":null,"value_status":"not_provided","value_confidence":1.0}],"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}
+
+示例 2：明确筛选值
+输入：{"rewritten_question":"今天店铺100011的活跃客户数是多少？","available_dimensions":[{"name":"店铺ID","aliases":["店铺"]}],"time_dimensions":[{"name":"时间","aliases":[]}]}
+输出：{"dimension_mentions":["店铺ID"],"dimension_slots":[{"name":"店铺ID","role":"filter","value":"100011","value_status":"provided","value_confidence":1.0}],"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}
+
+示例 3：用途不明确
+输入：{"rewritten_question":"最近7天店铺的新增客户数是多少？","available_dimensions":[{"name":"店铺ID","aliases":["店铺"]}],"time_dimensions":[{"name":"时间","aliases":[]}]}
+输出：{"dimension_mentions":["店铺ID"],"dimension_slots":[{"name":"店铺ID","role":"ambiguous","value":null,"value_status":"not_provided","value_confidence":0.5}],"residual_filter_mentions":[],"ambiguous_slots":["店铺ID"],"conflict_slots":[]}
 """.strip(),
     ]
 )
@@ -266,39 +298,45 @@ class QuestionUnderstandingService:
             QuestionRewriteOutput,
         )
 
-        intent, intent_usage = self._invoke_validated_model(
-            "INTENT_RECOGNITION",
-            INTENT_SYSTEM_PROMPT,
-            {
-                "rewritten_question": rewrite.rewritten_question,
-                "inherited_context": rewrite.inherited_context,
-            },
-            IntentRecognitionOutput,
-        )
-        dimensions, dimension_usage = self._invoke_validated_model(
-            "DIMENSION_RECOGNITION",
-            DIMENSION_SYSTEM_PROMPT,
-            {
-                "rewritten_question": rewrite.rewritten_question,
-                "metric_mentions": intent.metric_mentions,
-                "time_mentions": intent.time_mentions,
-                "inherited_context": rewrite.inherited_context,
-                "available_dimensions": [
-                    item for item in available_dimensions if not item.get("is_time")
-                ],
-                "time_dimensions": [
-                    item for item in available_dimensions if item.get("is_time")
-                ],
-            },
-            DimensionRecognitionOutput,
-            normalizer=lambda payload: _normalize_dimension_payload(
-                payload,
-                available_dimensions,
-                rewritten_question=rewrite.rewritten_question,
-                metric_mentions=intent.metric_mentions,
-            ),
-            validation_fallback=_repair_dimension_coverage,
-        )
+        intent_payload = {
+            "rewritten_question": rewrite.rewritten_question,
+            "inherited_context": rewrite.inherited_context,
+        }
+        dimension_payload = {
+            "rewritten_question": rewrite.rewritten_question,
+            "inherited_context": rewrite.inherited_context,
+            "available_dimensions": [
+                item for item in available_dimensions if not item.get("is_time")
+            ],
+            "time_dimensions": [
+                item for item in available_dimensions if item.get("is_time")
+            ],
+        }
+        # 两个任务只依赖重写结果，并行执行可避免意图错误污染维度模型输入。
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            intent_future = executor.submit(
+                self._invoke_validated_model,
+                "INTENT_RECOGNITION",
+                INTENT_SYSTEM_PROMPT,
+                intent_payload,
+                IntentRecognitionOutput,
+            )
+            dimension_future = executor.submit(
+                self._invoke_validated_model,
+                "DIMENSION_RECOGNITION",
+                DIMENSION_SYSTEM_PROMPT,
+                dimension_payload,
+                DimensionRecognitionOutput,
+                normalizer=lambda payload: _normalize_dimension_payload(
+                    payload,
+                    available_dimensions,
+                    rewritten_question=rewrite.rewritten_question,
+                    metric_mentions=[],
+                ),
+                validation_fallback=_repair_dimension_coverage,
+            )
+            intent, intent_usage = intent_future.result()
+            dimensions, dimension_usage = dimension_future.result()
         intent = _stabilize_intent(
             intent.model_copy(
                 update={
@@ -710,12 +748,36 @@ def apply_question_understanding_clarification(
         )
         dimension_mentions = intent.dimension_mentions
 
+    query_shape = intent.query_shape
+    if operation == "set_dimension_role":
+        # 这里不重新解释自然语言，只把用户已经确认的维度角色同步到查询组织方式。
+        has_group_by_slot = any(item.role == "group_by" for item in slots)
+        has_comparison_values = (
+            intent.intent_type in {"comparison_analysis", "share_analysis"}
+            and any(
+                item.role == "filter"
+                and isinstance(item.value, list)
+                and len(item.value) >= 2
+                for item in slots
+            )
+        )
+        query_shape = query_shape.model_copy(
+            update={
+                "needs_group_by": bool(
+                    has_group_by_slot
+                    or has_comparison_values
+                    or query_shape.time_grain is not None
+                )
+            }
+        )
+
     updated_intent = _stabilize_intent(
         intent.model_copy(
             update={
                 "dimension_mentions": dimension_mentions,
                 "dimension_slots": slots,
                 "ambiguous_slots": ambiguous_slots,
+                "query_shape": query_shape,
             }
         ),
         temporal_context,

@@ -1061,6 +1061,7 @@ def test_resume_updates_target_slot_without_rewriting_or_reunderstanding():
     updated = captured_state["question_understanding"]
     assert updated["validation"]["status"] == "valid"
     assert updated["intent"]["dimension_slots"][0]["role"] == "group_by"
+    assert updated["intent"]["query_shape"]["needs_group_by"] is True
     assert updated["rewritten_question"] == "今天店铺的客户数"
     assert run.derived_state["semantic_asset_ids"] == [272, 276]
 

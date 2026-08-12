@@ -234,3 +234,30 @@ def test_validation_reports_conflicting_query_shape_fields():
         "limit_without_order",
         "time_grain_without_grouping",
     ]
+
+
+def test_validation_rejects_group_by_slot_not_declared_in_query_shape():
+    result = validate_question_understanding(
+        QuestionUnderstandingValidationData(
+            intent_type="metric_query",
+            metric_mentions=("销售额",),
+            dimension_slots=(
+                {
+                    "name": "门店",
+                    "role": "group_by",
+                    "value": None,
+                    "value_status": "not_provided",
+                },
+            ),
+            query_shape={
+                "select_mode": "aggregate",
+                "needs_group_by": False,
+                "needs_order_by": False,
+                "order_direction": None,
+                "limit": None,
+                "time_grain": None,
+            },
+        )
+    )
+
+    assert result.reason_codes == ["group_by_not_declared"]

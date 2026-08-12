@@ -153,9 +153,14 @@ def test_agent_understanding_retries_invalid_filter_mentions_and_uses_schema_ali
     ]
     assert outcome.output.validation.status == "valid"
     assert len(model.calls) == 4
-    first_dimension_input = orjson.loads(model.calls[2][1])
+    dimension_calls = [
+        call for call in model.calls if "维度槽位识别器" in call[0]
+    ]
+    first_dimension_input = orjson.loads(dimension_calls[0][1])
     assert first_dimension_input["available_dimensions"][0]["name"] == "档口ID"
     assert "店铺" in first_dimension_input["available_dimensions"][0]["aliases"]
+    assert "metric_mentions" not in first_dimension_input
+    assert "time_mentions" not in first_dimension_input
     retry_input = orjson.loads(model.calls[3][1])
     assert retry_input["repair_feedback"]["reason_code"] == (
         "DIMENSION_RECOGNITION_MODEL_OUTPUT_INVALID"
@@ -576,7 +581,7 @@ def test_agent_understanding_repairs_repeated_dimension_coverage_mismatch():
     assert "dimension_role_ambiguous" in outcome.output.validation.reason_codes
 
 
-def test_agent_understanding_stabilizes_share_dimension_and_drops_metric_modifier():
+def test_agent_understanding_does_not_silently_drop_independent_dimension_result():
     question = "2026年6月店铺100011线上和线下客户当日GMV占比分别是多少？"
     model = SequenceQuestionModel(
         [
@@ -639,9 +644,11 @@ def test_agent_understanding_stabilizes_share_dimension_and_drops_metric_modifie
     intent = outcome.output.intent
     assert [slot.name for slot in intent.dimension_slots] == [
         "档口ID",
+        "客户名称",
         "交易渠道，如线上或线下",
     ]
     assert intent.query_shape.needs_group_by is True
     assert "dimension" in intent.required_slot_types
     assert intent.ambiguous_slots == []
-    assert outcome.output.validation.status == "valid"
+    assert outcome.output.validation.status == "clarification_required"
+    assert "dimension_role_ambiguous" in outcome.output.validation.reason_codes

@@ -17,8 +17,8 @@ QUESTION_REWRITE_BUSINESS_RULES = """
 METRIC_TIME_EXTRACTION_RULES = """
 指标和时间抽取规则：
 - 只抽取用户明确表达的线索，不推断、补全、改写或标准化业务口径。
-- metric_mentions 只包含指标、事实或可度量业务结果，并保留“支付订单数”“新增用户数”等完整修饰关系。
-- “当前库存件数”“近7天销量”“近30天销量”等完整指标短语中的时间修饰属于指标口径，必须保留在 metric_mentions 中，不得单独加入 time_mentions 或 conflict_slots。
+- metric_mentions 只抽取可供后续语义检索使用的指标、事实或可度量业务结果候选，不要求在本阶段确定完整指标口径。
+- 查询时间默认进入 time_mentions 和 time_range，不要为了扩大指标候选范围而并入 metric_mentions。
 - 时间表达、分组对象、筛选值、比较方式、排序、TopN、展示方式和单纯维度名不得进入 metric_mentions。
 - 时间表达不能作为普通维度或维度值。
 - “本财年”“上财季”“2026财年第2季度”“FY2026 Q2”等财政时间必须原样进入 time_mentions 和 time_range；不得改写成自然年或自然季度。

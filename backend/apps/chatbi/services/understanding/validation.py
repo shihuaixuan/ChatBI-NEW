@@ -113,6 +113,18 @@ def validate_question_understanding(
                     clarification_slots=("time_dimension",),
                 )
             )
+        has_dimension_grouping = bool(group_by_slots) or (
+            data.intent_type in {"comparison_analysis", "share_analysis"}
+            and bool(multi_value_filters)
+        )
+        if has_dimension_grouping and not needs_group_by:
+            issues.append(
+                QuestionUnderstandingValidationIssue(
+                    code="group_by_not_declared",
+                    category="repair",
+                    clarification_slots=("dimension",),
+                )
+            )
         if needs_group_by and not (
             group_by_slots or multi_value_filters or time_grain is not None
         ):

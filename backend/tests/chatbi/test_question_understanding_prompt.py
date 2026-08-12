@@ -36,10 +36,23 @@ def test_agent_and_graph_share_dimension_extraction_rules():
     assert DIMENSION_EXTRACTION_RULES in graph_prompt.system_prompt
     assert "residual_filter_mentions" in DIMENSION_SYSTEM_PROMPT
     assert "不能输出字符串" in DIMENSION_SYSTEM_PROMPT
+    assert "最高的5个门店" in DIMENSION_SYSTEM_PROMPT
 
 
 def test_agent_intent_prompt_requires_model_generated_query_shape():
     assert "query_shape 必须完整输出全部字段" in INTENT_SYSTEM_PROMPT
     assert "没有明确数量时必须为 null" in INTENT_SYSTEM_PROMPT
     assert "time_grain 只填写用户明确表达" in INTENT_SYSTEM_PROMPT
-    assert "required_slot_types 固定输出空数组" in INTENT_SYSTEM_PROMPT
+    assert "不输出 dimension_mentions" in INTENT_SYSTEM_PROMPT
+    assert "必需槽位由服务端派生" in INTENT_SYSTEM_PROMPT
+    assert "不要求本阶段确定完整指标口径" in INTENT_SYSTEM_PROMPT
+
+
+def test_agent_prompts_include_typical_few_shot_examples():
+    assert "只替换上一轮时间的追问" in REWRITE_SYSTEM_PROMPT
+    assert '"message_type":"followup"' in REWRITE_SYSTEM_PROMPT
+    assert "示例 1：排名查询" in INTENT_SYSTEM_PROMPT
+    assert '"order_direction":"desc","limit":5' in INTENT_SYSTEM_PROMPT
+    assert "示例 2：明确筛选值" in DIMENSION_SYSTEM_PROMPT
+    assert '"role":"filter","value":"100011"' in DIMENSION_SYSTEM_PROMPT
+    assert "示例 3：用途不明确" in DIMENSION_SYSTEM_PROMPT
