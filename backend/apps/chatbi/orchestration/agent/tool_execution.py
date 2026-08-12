@@ -192,32 +192,92 @@ class AgentToolExecutor:
             if not call.call_id:
                 raise ValueError("AGENT_TOOL_CALL_ID_REQUIRED")
             args_summary = _tool_args_summary(call.name, call.args, context)
-            tool_call_rows[call.call_id] = agent_run_repository.start_tool_call(
-                self._session,
-                run_id=state.require_run_id(),
-                step_id=step.id,
-                tool_call_id=call.call_id,
-                tool_name=call.name,
-                args_summary=args_summary,
-            )
-            yield self._publish(
-                state,
-                "tool-called",
-                {
-                    "record_id": record.id,
-                    "tool_call_id": call.call_id,
-                    "step_id": step.id,
+            with self._recorder.node(
+                TraceNodeSpec(
+                    run_id=state.require_run_id(),
+                    node_key=f"tool_call_started:{step.id}:{call.call_id}",
+                    node_type=TraceNodeType.PERSISTENCE,
+                    name="persist_tool_call_started",
+                    display_name=f"创建工具调用记录：{call.name}",
+                    attributes=tool_attributes(
+                        tool_name=call.name,
+                        run_id=state.require_run_id(),
+                        step_id=step.id,
+                        tool_call_id=call.call_id,
+                    ),
+                ),
+                input_data={
                     "tool_name": call.name,
-                    "status": AgentToolCallStatus.RUNNING.value,
-                    "args_summary": args_summary,
+                    "tool_call_id": call.call_id,
                 },
-                step.id,
-            )
+                input_detail={"args_summary": args_summary},
+            ) as persistence_node:
+                tool_call_rows[call.call_id] = (
+                    agent_run_repository.start_tool_call(
+                        self._session,
+                        run_id=state.require_run_id(),
+                        step_id=step.id,
+                        tool_call_id=call.call_id,
+                        tool_name=call.name,
+                        args_summary=args_summary,
+                    )
+                )
+                persistence_node.set_output(
+                    {
+                        "tool_call_id": call.call_id,
+                        "status": AgentToolCallStatus.RUNNING.value,
+                    }
+                )
+                yield self._publish(
+                    state,
+                    "tool-called",
+                    {
+                        "record_id": record.id,
+                        "tool_call_id": call.call_id,
+                        "step_id": step.id,
+                        "tool_name": call.name,
+                        "status": AgentToolCallStatus.RUNNING.value,
+                        "args_summary": args_summary,
+                    },
+                    step.id,
+                )
 
         for batch in batches:
             executable_batch: list[ToolCall] = []
             for call in batch:
-                action_rejection = self._check_action(state, call, mode)
+                with self._recorder.node(
+                    TraceNodeSpec(
+                        run_id=state.require_run_id(),
+                        node_key=f"action_guard:{step.id}:{call.call_id}",
+                        node_type=TraceNodeType.VALIDATION,
+                        name="validate_tool_action",
+                        display_name=f"校验工具是否允许：{call.name}",
+                        attributes=tool_attributes(
+                            tool_name=call.name,
+                            run_id=state.require_run_id(),
+                            step_id=step.id,
+                            tool_call_id=call.call_id,
+                        ),
+                    ),
+                    input_data={"tool_name": call.name, "mode": mode},
+                    input_detail={"args": call.args},
+                ) as action_node:
+                    action_rejection = self._check_action(state, call, mode)
+                    action_node.set_output(
+                        {
+                            "allowed": action_rejection is None,
+                            "error_code": (
+                                action_rejection.error_code
+                                if action_rejection is not None
+                                else None
+                            ),
+                        }
+                    )
+                    if action_rejection is not None:
+                        action_node.set_status(TraceNodeStatus.REJECTED)
+                        action_node.set_output_detail(
+                            {"rejection": _tool_result_detail(action_rejection)}
+                        )
                 if action_rejection is not None:
                     observation = project_tool_observation(
                         context.state,
@@ -249,7 +309,33 @@ class AgentToolExecutor:
                     )
                     failed_count += 1
                     continue
-                fuse = budget.check_tool_call(call.name, call.args)
+                with self._recorder.node(
+                    TraceNodeSpec(
+                        run_id=state.require_run_id(),
+                        node_key=f"tool_budget_guard:{step.id}:{call.call_id}",
+                        node_type=TraceNodeType.VALIDATION,
+                        name="validate_tool_budget",
+                        display_name=f"校验工具重复调用预算：{call.name}",
+                        attributes=tool_attributes(
+                            tool_name=call.name,
+                            run_id=state.require_run_id(),
+                            step_id=step.id,
+                            tool_call_id=call.call_id,
+                        ),
+                    ),
+                    input_data={"tool_name": call.name},
+                    input_detail={"args": call.args},
+                ) as budget_node:
+                    fuse = budget.check_tool_call(call.name, call.args)
+                    budget_node.set_output(
+                        {
+                            "allowed": fuse.allowed,
+                            "reason": fuse.reason,
+                            "error_class": fuse.error_class,
+                        }
+                    )
+                    if not fuse.allowed:
+                        budget_node.set_status(TraceNodeStatus.REJECTED)
                 if not fuse.allowed:
                     result = ToolResult.rejected(
                         cast(str, fuse.reason),
@@ -286,9 +372,35 @@ class AgentToolExecutor:
                     )
                     return ToolExecutionResult(ToolExecutionStatus.FAILED)
                 if call.name == "execute_sql":
-                    sql_verdict = state.chatbi_budget.check_sql_call(
-                        str(call.args.get("sql") or "")
-                    )
+                    with self._recorder.node(
+                        TraceNodeSpec(
+                            run_id=state.require_run_id(),
+                            node_key=f"sql_budget_guard:{step.id}:{call.call_id}",
+                            node_type=TraceNodeType.VALIDATION,
+                            name="validate_sql_retry_budget",
+                            display_name="校验 SQL 修正预算",
+                            attributes=tool_attributes(
+                                tool_name=call.name,
+                                run_id=state.require_run_id(),
+                                step_id=step.id,
+                                tool_call_id=call.call_id,
+                            ),
+                        ),
+                        input_data={"tool_call_id": call.call_id},
+                        input_detail={"sql": call.args.get("sql")},
+                    ) as sql_budget_node:
+                        sql_verdict = state.chatbi_budget.check_sql_call(
+                            str(call.args.get("sql") or "")
+                        )
+                        sql_budget_node.set_output(
+                            {
+                                "allowed": sql_verdict.allowed,
+                                "reason": sql_verdict.reason,
+                                "error_class": sql_verdict.error_class,
+                            }
+                        )
+                        if not sql_verdict.allowed:
+                            sql_budget_node.set_status(TraceNodeStatus.REJECTED)
                     if not sql_verdict.allowed:
                         result = ToolResult.rejected(
                             cast(str, sql_verdict.reason),
@@ -403,66 +515,123 @@ class AgentToolExecutor:
                 raise
 
             for call, result in executed:
-                projection = self._result_processor.process(
-                    context,
-                    call.name,
-                    result,
-                )
-                result = projection.result
-                state_changed = any(
-                    context.state.get(key, _MISSING) != value
-                    for key, value in projection.state_patch.items()
-                )
-                context.state.update(projection.state_patch)
-                if state_changed:
-                    context.state["state_revision"] = (
-                        int(context.state.get("state_revision") or 0) + 1
-                    )
-                result = maybe_offload_result(
-                    result,
-                    store=offload_store,
-                    tool_name=call.name,
-                    max_chars=int(
-                        getattr(self._config, "summary_max_chars", 4000) or 4000
+                before_projection = {
+                    "state_revision": int(context.state.get("state_revision") or 0),
+                    "state_keys": sorted(context.state),
+                }
+                with self._recorder.node(
+                    TraceNodeSpec(
+                        run_id=state.require_run_id(),
+                        node_key=f"tool_projection:{step.id}:{call.call_id}",
+                        node_type=TraceNodeType.PROJECTION,
+                        name="project_tool_result",
+                        display_name=f"投影工具结果：{call.name}",
+                        attributes=tool_attributes(
+                            tool_name=call.name,
+                            run_id=state.require_run_id(),
+                            step_id=step.id,
+                            tool_call_id=call.call_id,
+                        ),
                     ),
-                )
-                tool_name = call.name
-                call_id = call.call_id
-                data = _result_data(result)
-
-                if (
-                    projection.control == ToolControlAction.CLARIFY
-                    and result.status == ToolStatus.SUCCEEDED
-                ):
-                    clarify_verdict = state.chatbi_budget.record_clarification()
-                    if not clarify_verdict.allowed:
-                        result = ToolResult.rejected(
-                            "澄清次数已达上限，请基于现有信息继续，或如实说明无法完成。",
-                            error_code="clarification_budget_rejected",
-                            error_category=ToolErrorCategory.BUSINESS_RULE,
+                    input_data={
+                        "tool_name": call.name,
+                        "tool_call_id": call.call_id,
+                        "status": result.status.value,
+                    },
+                    input_detail={"tool_result": _tool_result_detail(result)},
+                ) as projection_node:
+                    projection = self._result_processor.process(
+                        context,
+                        call.name,
+                        result,
+                    )
+                    result = projection.result
+                    state_changed = any(
+                        context.state.get(key, _MISSING) != value
+                        for key, value in projection.state_patch.items()
+                    )
+                    context.state.update(projection.state_patch)
+                    if state_changed:
+                        context.state["state_revision"] = (
+                            int(context.state.get("state_revision") or 0) + 1
                         )
-                        projection = self._result_processor.process(
-                            context,
-                            call.name,
-                            result,
+                    result = maybe_offload_result(
+                        result,
+                        store=offload_store,
+                        tool_name=call.name,
+                        max_chars=int(
+                            getattr(self._config, "summary_max_chars", 4000) or 4000
+                        ),
+                    )
+                    tool_name = call.name
+                    call_id = call.call_id
+                    data = _result_data(result)
+
+                    if (
+                        projection.control == ToolControlAction.CLARIFY
+                        and result.status == ToolStatus.SUCCEEDED
+                    ):
+                        clarify_verdict = state.chatbi_budget.record_clarification()
+                        if not clarify_verdict.allowed:
+                            result = ToolResult.rejected(
+                                "澄清次数已达上限，请基于现有信息继续，或如实说明无法完成。",
+                                error_code="clarification_budget_rejected",
+                                error_category=ToolErrorCategory.BUSINESS_RULE,
+                            )
+                            projection = self._result_processor.process(
+                                context,
+                                call.name,
+                                result,
+                            )
+
+                    observation = project_tool_observation(
+                        context.state,
+                        call.name,
+                        result,
+                        state_changed=state_changed,
+                    )
+                    self._record_observation(context, observation)
+
+                    result_summary = _bounded_summary(projection.audit_summary)
+                    after_projection = {
+                        "state_revision": int(
+                            context.state.get("state_revision") or 0
+                        ),
+                        "state_keys": sorted(context.state),
+                        "changed_keys": sorted(projection.state_patch),
+                    }
+                    projection_node.set_output(
+                        {
+                            "status": result.status.value,
+                            "control": projection.control.value,
+                            "state_changed": state_changed,
+                            "changed_keys": sorted(projection.state_patch),
+                            "error_code": result.error_code,
+                        }
+                    )
+                    projection_node.set_state_diff(
+                        before_projection,
+                        after_projection,
+                    )
+                    projection_node.set_output_detail(
+                        {
+                            "projected_result": _tool_result_detail(result),
+                            "state_patch": projection.state_patch,
+                            "observation": observation,
+                            "audit_summary": result_summary,
+                        }
+                    )
+                    if result.status is not ToolStatus.SUCCEEDED:
+                        projection_node.set_status(
+                            TraceNodeStatus(result.status.value)
                         )
-
-                observation = project_tool_observation(
-                    context.state,
-                    call.name,
-                    result,
-                    state_changed=state_changed,
-                )
-                self._record_observation(context, observation)
-
-                result_summary = _bounded_summary(projection.audit_summary)
-                yield self._finish_tool_call_event(
-                    state,
-                    step,
-                    tool_call_rows.pop(call_id),
-                    result,
-                    result_summary,
-                )
+                    yield self._finish_tool_call_event(
+                        state,
+                        step,
+                        tool_call_rows.pop(call_id),
+                        result,
+                        result_summary,
+                    )
                 if result.status == ToolStatus.SUCCEEDED:
                     completed_count += 1
                 else:
@@ -608,23 +777,47 @@ class AgentToolExecutor:
                         result,
                     )
 
-        agent_run_repository.finish_step(
-            self._session,
-            step,
-            {
+        with self._recorder.node(
+            TraceNodeSpec(
+                run_id=state.require_run_id(),
+                node_key=f"step_snapshot:{step.id}",
+                node_type=TraceNodeType.PERSISTENCE,
+                name="persist_agent_step_snapshot",
+                display_name="持久化步骤结果与运行快照",
+                metadata={"step_id": step.id},
+            ),
+            input_data={
+                "step_id": step.id,
                 "tool_call_count": completed_count + failed_count,
                 "failed_tool_call_count": failed_count,
             },
-            usage,
-        )
-        agent_run_repository.update_run(
-            self._session,
-            state.run,
-            messages=state.serialized_messages(),
-            budget_snapshot=state.budget_snapshot(),
-            derived_state=state.persistable_context(),
-        )
-        self._session.commit()
+        ) as snapshot_node:
+            agent_run_repository.finish_step(
+                self._session,
+                step,
+                {
+                    "tool_call_count": completed_count + failed_count,
+                    "failed_tool_call_count": failed_count,
+                },
+                usage,
+            )
+            agent_run_repository.update_run(
+                self._session,
+                state.run,
+                messages=state.serialized_messages(),
+                budget_snapshot=state.budget_snapshot(),
+                derived_state=state.persistable_context(),
+            )
+            self._session.commit()
+            snapshot_node.set_output(
+                {
+                    "step_status": step.status,
+                    "message_count": len(state.messages),
+                    "state_revision": int(
+                        state.context.state.get("state_revision") or 0
+                    ),
+                }
+            )
         return ToolExecutionResult(ToolExecutionStatus.CONTINUE)
 
     def _execute_one(
@@ -670,7 +863,9 @@ class AgentToolExecutor:
                 "tool_name": call.name,
                 "tool_call_id": call.call_id,
                 "timeout_seconds": timeout_seconds,
+                "arg_count": len(call.args),
             },
+            input_detail={"args": call.args},
         ) as tool_node:
             if state.cancellation.is_cancelled():
                 result = ToolResult.interrupted(
@@ -721,6 +916,15 @@ class AgentToolExecutor:
             tool_node.set_output(
                 {
                     "status": result.status.value,
+                    "runtime_stage": (
+                        "validation_failed"
+                        if result.error_category
+                        in {
+                            ToolErrorCategory.VALIDATION,
+                            ToolErrorCategory.AUTHORIZATION,
+                        }
+                        else "executed"
+                    ),
                     "error_code": result.error_code,
                     "error_category": (
                         result.error_category.value
@@ -729,6 +933,19 @@ class AgentToolExecutor:
                     ),
                 }
             )
+            tool_node.set_output_detail(
+                {"tool_result": _tool_result_detail(result)}
+            )
+            if result.status is not ToolStatus.SUCCEEDED:
+                tool_node.set_error(
+                    result.error_code,
+                    (
+                        result.error_category.value
+                        if result.error_category is not None
+                        else "tool_error"
+                    ),
+                    result.model_content,
+                )
             tool_node.set_status(TraceNodeStatus(result.status.value))
             tool_node.set_attribute(
                 "gen_ai.tool.call.result",
@@ -757,32 +974,64 @@ class AgentToolExecutor:
         result: ToolResult[Any],
         result_summary: dict[str, Any],
     ) -> RenderEvent:
-        status = AgentToolCallStatus(result.status.value)
-        agent_run_repository.finish_tool_call(
-            self._session,
-            tool_call_row,
-            status=status,
-            result_summary=result_summary,
-            error_code=result.error_code,
-        )
-        event_type = (
-            "tool-result" if result.status == ToolStatus.SUCCEEDED else "tool-failed"
-        )
-        return self._publish(
-            state,
-            event_type,
-            {
-                "record_id": state.record.id,
-                "tool_call_id": tool_call_row.tool_call_id,
-                "step_id": step.id,
+        with self._recorder.node(
+            TraceNodeSpec(
+                run_id=state.require_run_id(),
+                node_key=(
+                    f"tool_call_finished:{step.id}:{tool_call_row.tool_call_id}"
+                ),
+                node_type=TraceNodeType.PERSISTENCE,
+                name="persist_tool_call_result",
+                display_name=f"持久化工具结果：{tool_call_row.tool_name}",
+                attributes=tool_attributes(
+                    tool_name=tool_call_row.tool_name,
+                    run_id=state.require_run_id(),
+                    step_id=step.id,
+                    tool_call_id=tool_call_row.tool_call_id,
+                ),
+            ),
+            input_data={
                 "tool_name": tool_call_row.tool_name,
-                "status": status.value,
-                "latency_ms": tool_call_row.latency_ms,
-                "result_summary": result_summary,
-                **result_summary,
+                "tool_call_id": tool_call_row.tool_call_id,
+                "result_status": result.status.value,
             },
-            step.id,
-        )
+            input_detail={"result_summary": result_summary},
+        ) as persistence_node:
+            status = AgentToolCallStatus(result.status.value)
+            agent_run_repository.finish_tool_call(
+                self._session,
+                tool_call_row,
+                status=status,
+                result_summary=result_summary,
+                error_code=result.error_code,
+            )
+            event_type = (
+                "tool-result"
+                if result.status == ToolStatus.SUCCEEDED
+                else "tool-failed"
+            )
+            persistence_node.set_output(
+                {
+                    "status": status.value,
+                    "event_type": event_type,
+                    "error_code": result.error_code,
+                }
+            )
+            return self._publish(
+                state,
+                event_type,
+                {
+                    "record_id": state.record.id,
+                    "tool_call_id": tool_call_row.tool_call_id,
+                    "step_id": step.id,
+                    "tool_name": tool_call_row.tool_name,
+                    "status": status.value,
+                    "latency_ms": tool_call_row.latency_ms,
+                    "result_summary": result_summary,
+                    **result_summary,
+                },
+                step.id,
+            )
 
     def _interrupt_open_tool_calls(
         self,
@@ -906,6 +1155,27 @@ def _result_data(result: ToolResult[Any]) -> dict[str, Any]:
     if result.data is None:
         return {}
     return cast(dict[str, Any], result.data.model_dump(mode="json"))
+
+
+def _tool_result_detail(result: ToolResult[Any]) -> dict[str, Any]:
+    """提取工具结果信封，供脱敏后的 Trace Artifact 保存。"""
+
+    return {
+        "status": result.status.value,
+        "model_content": result.model_content,
+        "data": (
+            result.data.model_dump(mode="json") if result.data is not None else None
+        ),
+        "metadata": result.metadata,
+        "error_code": result.error_code,
+        "error_category": (
+            result.error_category.value
+            if result.error_category is not None
+            else None
+        ),
+        "retry_advice": result.retry_advice.value,
+        "details": result.details,
+    }
 
 
 def _offload_ref(result: ToolResult[Any]) -> str | None:

@@ -56,6 +56,10 @@ from apps.trace import (
     DisabledTraceExporter,
     DisabledTraceRepository,
     TraceConfig,
+    TraceNodeFinishInput,
+    TraceNodeRef,
+    TraceNodeStartInput,
+    TraceNodeStatus,
 )
 from apps.trace.setup import (
     OpenTelemetryTraceExporter,
@@ -230,6 +234,60 @@ class RecordingExporter:
         finally:
             self.active.pop()
             item.closed = True
+
+
+class RecordingTraceRepository:
+    """保存完整节点数据，供阶段 4 调用树断言。"""
+
+    def __init__(self):
+        self.started = []
+        self.finished = []
+        self.roots = {}
+        self.next_id = 1
+
+    def ensure_run_root(self, data: TraceNodeStartInput):
+        existing = self.roots.get(data.run_id)
+        if existing is not None:
+            return existing, False
+        root = self._ref(data)
+        self.roots[data.run_id] = root
+        self.started.append(data)
+        return root, True
+
+    def start_node(self, data: TraceNodeStartInput):
+        node = self._ref(data)
+        self.started.append(data)
+        return node
+
+    def finish_node(self, data: TraceNodeFinishInput):
+        self.finished.append(data)
+
+    def mark_run_partial(self, run_id, *, lost_nodes=1):
+        raise AssertionError(f"Trace 不应丢失节点: run_id={run_id}, lost={lost_nodes}")
+
+    def _ref(self, data: TraceNodeStartInput):
+        node_id = self.next_id
+        self.next_id += 1
+        return TraceNodeRef(
+            id=node_id,
+            run_id=data.run_id,
+            parent_id=data.parent_id,
+            node_key=data.node_key or f"{data.name}:{node_id}",
+            sequence=node_id,
+            node_type=data.node_type,
+        )
+
+
+class RecordingTraceDetails:
+    def __init__(self):
+        self.writes = []
+
+    def write(self, data):
+        self.writes.append(data)
+        return {
+            "artifact_id": f"trace-detail-{len(self.writes)}",
+            "kind": f"agent_trace_{data.side}",
+        }
 
 
 class FailingExporter:
@@ -1126,7 +1184,7 @@ def test_agent_tracing_records_run_llm_and_tool_hierarchy():
     runtime_spans = [
         span for span in exporter.spans if span.name in {"chat", "execute_tool"}
     ]
-    assert [span.parent for span in runtime_spans] == ["invoke_agent"] * 4
+    assert [span.parent for span in runtime_spans] == ["react_iteration"] * 4
     assert [span.name for span in runtime_spans] == [
         "chat",
         "execute_tool",
@@ -1143,6 +1201,154 @@ def test_agent_tracing_records_run_llm_and_tool_hierarchy():
     assert all("app.tool.latency_ms" in span.attributes for span in tool_spans)
     assert all(span.attributes["app.domain.retry_count"] == 0 for span in tool_spans)
     assert all(span.closed for span in exporter.spans)
+
+
+def test_stage4_trace_records_react_decision_tool_projection_and_final_state():
+    repository = RecordingTraceRepository()
+    details = RecordingTraceDetails()
+    recorder = AgentTraceRecorder(
+        repository,
+        DisabledTraceExporter(),
+        details,
+    )
+    model = ScriptedModel(
+        [
+            _tool_message("probe", {"value": "x"}),
+            _tool_message("finish", {"value": ""}, "c2"),
+        ]
+    )
+    run, record = _run_and_record()
+    loop = build_agent_loop(
+        FakeSession(),
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=5),
+        model_client=model,
+        registry=_registry(),
+        understanding_service=StaticUnderstandingService(),
+        recorder=recorder,
+    )
+
+    events = list(loop.run(run, record))
+
+    assert _event_domains(events)[-2:] == ["answer.completed", "run.finished"]
+    indexed_nodes = list(enumerate(repository.started, start=1))
+    ids_by_name = {}
+    for node_id, item in indexed_nodes:
+        ids_by_name.setdefault(item.name, []).append(node_id)
+    assert set(ids_by_name) >= {
+        "react_iteration",
+        "validate_react_iteration",
+        "persist_agent_step_started",
+        "prepare_reasoning_context",
+        "chat",
+        "project_agent_decision",
+        "persist_tool_call_started",
+        "validate_tool_action",
+        "validate_tool_budget",
+        "execute_tool",
+        "project_tool_result",
+        "persist_tool_call_result",
+        "persist_agent_step_snapshot",
+        "persist_run_finished",
+    }
+    assert len(ids_by_name["react_iteration"]) == 2
+    iteration_ids = set(ids_by_name["react_iteration"])
+    assert {
+        item.parent_id
+        for item in repository.started
+        if item.name in {"chat", "execute_tool", "project_tool_result"}
+    } == iteration_ids
+
+    finished_by_id = {item.node_id: item for item in repository.finished}
+    assert [
+        finished_by_id[node_id].status
+        for node_id in ids_by_name["react_iteration"]
+    ] == [TraceNodeStatus.SUCCEEDED, TraceNodeStatus.SUCCEEDED]
+    assert finished_by_id[ids_by_name["persist_run_finished"][0]].output_summary[
+        "run_status"
+    ] == AgentRunStatus.FINISHED.value
+
+    first_chat_id = ids_by_name["chat"][0]
+    first_tool_id = ids_by_name["execute_tool"][0]
+    first_projection_id = ids_by_name["project_tool_result"][0]
+    chat_input = next(
+        item.payload
+        for item in details.writes
+        if item.node_id == first_chat_id and item.side == "input"
+    )
+    tool_input = next(
+        item.payload
+        for item in details.writes
+        if item.node_id == first_tool_id and item.side == "input"
+    )
+    projection_output = next(
+        item.payload
+        for item in details.writes
+        if item.node_id == first_projection_id and item.side == "output"
+    )
+    assert chat_input["messages"]
+    assert chat_input["tool_definitions"]
+    assert tool_input["args"] == {"value": "x"}
+    assert projection_output["state_patch"] == {}
+    assert projection_output["observation"]["status"] == "succeeded"
+    assert all(
+        finished_by_id[node_id].input_artifact_ref is not None
+        and finished_by_id[node_id].output_artifact_ref is not None
+        for node_id in [first_chat_id, first_tool_id, first_projection_id]
+    )
+
+
+def test_stage4_trace_distinguishes_tool_argument_validation_failure():
+    repository = RecordingTraceRepository()
+    details = RecordingTraceDetails()
+    recorder = AgentTraceRecorder(
+        repository,
+        DisabledTraceExporter(),
+        details,
+    )
+    model = ScriptedModel(
+        [
+            _tool_message("prepare_sql", {}, "invalid-probe"),
+            AIMessage(content="无法继续执行。"),
+        ]
+    )
+    run, record = _run_and_record()
+    registry = _registry()
+    registry.register(PrepareSqlProbeTool())
+    loop = build_agent_loop(
+        FakeSession(),
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=5),
+        model_client=model,
+        registry=registry,
+        understanding_service=StaticUnderstandingService(),
+        recorder=recorder,
+    )
+
+    list(loop.run(run, record))
+
+    execute_node_id = next(
+        node_id
+        for node_id, item in enumerate(repository.started, start=1)
+        if item.name == "execute_tool"
+    )
+    finished = next(
+        item for item in repository.finished if item.node_id == execute_node_id
+    )
+    output_detail = next(
+        item.payload
+        for item in details.writes
+        if item.node_id == execute_node_id and item.side == "output"
+    )
+    assert finished.status == TraceNodeStatus.FAILED
+    assert finished.output_summary == {
+        "status": "failed",
+        "runtime_stage": "validation_failed",
+        "error_code": "invalid_tool_args",
+        "error_category": "validation",
+    }
+    assert output_detail["tool_result"]["retry_advice"] == "correct_input"
+    assert output_detail["tool_result"]["details"]["errors"]
 
 
 def test_opentelemetry_exporter_receives_agent_span_hierarchy():
@@ -1177,6 +1383,12 @@ def test_opentelemetry_exporter_receives_agent_span_hierarchy():
 
     spans = exporter.get_finished_spans()
     root = next(span for span in spans if span.name == "invoke_agent")
+    iterations = [span for span in spans if span.name == "react_iteration"]
+    assert len(iterations) == 2
+    assert all(
+        span.parent and span.parent.span_id == root.context.span_id
+        for span in iterations
+    )
     children = [span for span in spans if span.name in {"chat", "execute_tool"}]
     assert [span.name for span in children] == [
         "chat",
@@ -1184,7 +1396,10 @@ def test_opentelemetry_exporter_receives_agent_span_hierarchy():
         "chat",
         "execute_tool",
     ]
-    assert all(span.parent and span.parent.span_id == root.context.span_id for span in children)
+    iteration_ids = {span.context.span_id for span in iterations}
+    assert all(
+        span.parent and span.parent.span_id in iteration_ids for span in children
+    )
     assert root.attributes["gen_ai.agent.result"] == "finished"
 
 

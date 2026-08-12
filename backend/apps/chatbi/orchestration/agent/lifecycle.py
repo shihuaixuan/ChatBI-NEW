@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import orjson
@@ -23,6 +24,13 @@ from apps.conversation import (
     ChatRecordStatus,
 )
 from apps.event import EventPublisher, RenderEvent
+from apps.trace import (
+    AgentTraceRecorder,
+    TraceNodeHandle,
+    TraceNodeSpec,
+    TraceNodeStatus,
+    TraceNodeType,
+)
 
 
 class AgentLifecycle:
@@ -34,63 +42,87 @@ class AgentLifecycle:
         current_user_id: int | None,
         record_service: ChatRecordService,
         event_publisher: EventPublisher,
+        trace_recorder: AgentTraceRecorder,
     ) -> None:
         self._session = session
         self._current_user_id = current_user_id
         self._record_service = record_service
         self._event_publisher = event_publisher
+        self._trace_recorder = trace_recorder
 
     def start(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         """把新 Run 和 ChatRecord 一起置为运行态。"""
 
         run = state.run
         record = state.record
-        agent_run_repository.update_run(
-            self._session,
-            run,
-            status=AgentRunStatus.RUNNING.value,
-        )
-        self._record_service.transition(
-            record,
-            ChatRecordStatus.RUNNING,
-            execution_type=ChatRecordExecutionType.AGENT,
-        )
-        self._session.commit()
-        yield self._publish(
+        with self._transition_node(
             state,
-            "record-created",
-            {"record_id": record.id, "id": record.id, "run_id": run.id},
-        )
-        yield self._publish(
-            state,
-            "run-started",
-            {"record_id": record.id, "run_id": run.id},
-        )
+            "persist_run_started",
+            "持久化运行开始状态",
+            input_data={"run_status": run.status, "record_status": record.status},
+        ) as node:
+            agent_run_repository.update_run(
+                self._session,
+                run,
+                status=AgentRunStatus.RUNNING.value,
+            )
+            self._record_service.transition(
+                record,
+                ChatRecordStatus.RUNNING,
+                execution_type=ChatRecordExecutionType.AGENT,
+            )
+            self._session.commit()
+            node.set_output(
+                {"run_status": run.status, "record_status": record.status}
+            )
+            yield self._publish(
+                state,
+                "record-created",
+                {"record_id": record.id, "id": record.id, "run_id": run.id},
+            )
+            yield self._publish(
+                state,
+                "run-started",
+                {"record_id": record.id, "run_id": run.id},
+            )
 
     def resume(self, state: AgentRuntimeState) -> RenderEvent:
         """保存恢复后的上下文，并把 Run 和 ChatRecord 一起恢复为运行态。"""
 
         run = state.run
         record = state.record
-        agent_run_repository.update_run(
-            self._session,
-            run,
-            status=AgentRunStatus.RUNNING.value,
-            messages=state.serialized_messages(),
-            budget_snapshot=state.budget_snapshot(),
-            derived_state=state.persistable_context(),
-        )
-        self._record_service.transition(
-            record,
-            ChatRecordStatus.RUNNING,
-            execution_type=ChatRecordExecutionType.AGENT,
-        )
-        self._session.commit()
-        return self._publish(
+        with self._transition_node(
             state,
-            "clarification-accepted",
-            {"record_id": record.id, "run_id": run.id},
-        )
+            "persist_run_resumed",
+            "持久化澄清恢复状态",
+            input_data={"run_status": run.status, "record_status": record.status},
+        ) as node:
+            agent_run_repository.update_run(
+                self._session,
+                run,
+                status=AgentRunStatus.RUNNING.value,
+                messages=state.serialized_messages(),
+                budget_snapshot=state.budget_snapshot(),
+                derived_state=state.persistable_context(),
+            )
+            self._record_service.transition(
+                record,
+                ChatRecordStatus.RUNNING,
+                execution_type=ChatRecordExecutionType.AGENT,
+            )
+            self._session.commit()
+            node.set_output(
+                {
+                    "run_status": run.status,
+                    "record_status": record.status,
+                    "message_count": len(state.messages),
+                }
+            )
+            return self._publish(
+                state,
+                "clarification-accepted",
+                {"record_id": record.id, "run_id": run.id},
+            )
 
     def suspend(
         self,
@@ -113,43 +145,68 @@ class AgentLifecycle:
             content="skipped: run suspended for clarification before this tool executed",
             exclude_ids=exclude,
         )
-        clarification = agent_run_repository.create_clarification(
-            self._session,
-            run,
-            question=question,
-            options=options,
-            tool_call_id=call_id,
-            resume_kind=resume_kind.value,
-            resume_payload=resume_payload,
-            user_id=self._current_user_id,
-        )
-        self._record_service.transition(
-            record,
-            ChatRecordStatus.WAITING_USER,
-            execution_type=ChatRecordExecutionType.AGENT,
-        )
-        agent_run_repository.update_run(
-            self._session,
-            run,
-            status=AgentRunStatus.WAITING_USER.value,
-            messages=state.serialized_messages(),
-            budget_snapshot=state.budget_snapshot(),
-            derived_state=state.persistable_context(),
-        )
-        self._session.commit()
-        return self._publish(
+        with self._transition_node(
             state,
-            "clarification",
-            {
-                "record_id": record.id,
-                "clarification_id": clarification.id,
+            "persist_run_suspended",
+            "持久化澄清等待状态",
+            node_type=TraceNodeType.INTERACTION,
+            input_data={
+                "resume_kind": resume_kind.value,
                 "tool_call_id": call_id,
                 "step_id": step_id,
-                "question": clarification.question,
-                "options": clarification.options or [],
+                "option_count": len(options),
             },
-            step_id,
-        )
+            input_detail={
+                "question": question,
+                "options": options,
+                "resume_payload": resume_payload,
+            },
+        ) as node:
+            clarification = agent_run_repository.create_clarification(
+                self._session,
+                run,
+                question=question,
+                options=options,
+                tool_call_id=call_id,
+                resume_kind=resume_kind.value,
+                resume_payload=resume_payload,
+                user_id=self._current_user_id,
+            )
+            self._record_service.transition(
+                record,
+                ChatRecordStatus.WAITING_USER,
+                execution_type=ChatRecordExecutionType.AGENT,
+            )
+            agent_run_repository.update_run(
+                self._session,
+                run,
+                status=AgentRunStatus.WAITING_USER.value,
+                messages=state.serialized_messages(),
+                budget_snapshot=state.budget_snapshot(),
+                derived_state=state.persistable_context(),
+            )
+            self._session.commit()
+            node.set_status(TraceNodeStatus.WAITING)
+            node.set_output(
+                {
+                    "clarification_id": clarification.id,
+                    "run_status": run.status,
+                    "record_status": record.status,
+                }
+            )
+            return self._publish(
+                state,
+                "clarification",
+                {
+                    "record_id": record.id,
+                    "clarification_id": clarification.id,
+                    "tool_call_id": call_id,
+                    "step_id": step_id,
+                    "question": clarification.question,
+                    "options": clarification.options or [],
+                },
+                step_id,
+            )
 
     def finish(
         self,
@@ -167,70 +224,91 @@ class AgentLifecycle:
         run = state.run
         record = state.record
         close_unfinished_tool_calls(state.messages)
-        if execution is not None and isinstance(full_data, list):
-            budget_notice = answer.startswith("预算已达上限")
-            understanding = state.context.state.get("question_understanding")
-            intent = (
-                understanding.get("intent")
-                if isinstance(understanding, dict)
-                and isinstance(understanding.get("intent"), dict)
-                else {}
-            )
-            grounded = project_query_final_reply(
-                QueryFinalReplyProjectionData(
-                    answer_markdown=answer,
-                    execution=execution,
-                    rows=full_data,
-                    intent=intent,
+        with self._transition_node(
+            state,
+            "persist_run_finished",
+            "持久化最终回答",
+            input_data={
+                "step_id": step_id,
+                "has_execution": execution is not None,
+                "has_full_data": isinstance(full_data, list),
+            },
+            input_detail={"answer": answer, "chart": chart, "sql": sql},
+        ) as node:
+            if execution is not None and isinstance(full_data, list):
+                budget_notice = answer.startswith("预算已达上限")
+                understanding = state.context.state.get("question_understanding")
+                intent: dict[str, Any] = {}
+                if isinstance(understanding, dict):
+                    raw_intent = understanding.get("intent")
+                    if isinstance(raw_intent, dict):
+                        intent = raw_intent
+                grounded = project_query_final_reply(
+                    QueryFinalReplyProjectionData(
+                        answer_markdown=answer,
+                        execution=execution,
+                        rows=full_data,
+                        intent=intent,
+                    )
                 )
+                answer = (
+                    f"预算已达上限，以下仅展示已成功执行的查询结果。\n\n{grounded.answer}"
+                    if budget_notice
+                    else grounded.answer
+                )
+                sql = grounded.sql
+            record_data = None
+            if full_data is not None and execution:
+                record_payload = {
+                    "fields": execution.get("fields") or [],
+                    "data": full_data,
+                }
+                if execution.get("artifact_ref") is not None:
+                    record_payload["artifact_ref"] = execution["artifact_ref"]
+                record_data = orjson.dumps(record_payload).decode()
+            self._record_service.transition(
+                record,
+                ChatRecordStatus.SUCCEEDED,
+                execution_type=ChatRecordExecutionType.AGENT,
+                result=ChatRecordResultProjection(
+                    answer=answer,
+                    chart_answer=answer,
+                    sql=sql,
+                    chart=orjson.dumps(chart or {}).decode(),
+                    data=record_data,
+                ),
             )
-            answer = (
-                f"预算已达上限，以下仅展示已成功执行的查询结果。\n\n{grounded.answer}"
-                if budget_notice
-                else grounded.answer
+            agent_run_repository.update_run(
+                self._session,
+                run,
+                status=AgentRunStatus.FINISHED.value,
+                messages=state.serialized_messages(),
+                budget_snapshot=state.budget_snapshot(),
             )
-            sql = grounded.sql
-        record_data = None
-        if full_data is not None and execution:
-            record_payload = {
-                "fields": execution.get("fields") or [],
-                "data": full_data,
-            }
-            if execution.get("artifact_ref") is not None:
-                record_payload["artifact_ref"] = execution["artifact_ref"]
-            record_data = orjson.dumps(record_payload).decode()
-        self._record_service.transition(
-            record,
-            ChatRecordStatus.SUCCEEDED,
-            execution_type=ChatRecordExecutionType.AGENT,
-            result=ChatRecordResultProjection(
-                answer=answer,
-                chart_answer=answer,
-                sql=sql,
-                chart=orjson.dumps(chart or {}).decode(),
-                data=record_data,
-            ),
-        )
-        agent_run_repository.update_run(
-            self._session,
-            run,
-            status=AgentRunStatus.FINISHED.value,
-            messages=state.serialized_messages(),
-            budget_snapshot=state.budget_snapshot(),
-        )
-        self._session.commit()
-        yield self._publish(
-            state,
-            "answer",
-            {"record_id": record.id, "content": answer},
-            step_id,
-        )
-        yield self._publish(
-            state,
-            "run-finished",
-            {"record_id": record.id, "content": answer},
-            step_id,
-        )
+            self._session.commit()
+            node.set_output(
+                {
+                    "run_status": run.status,
+                    "record_status": record.status,
+                    "answer_length": len(answer),
+                    "has_sql": bool(sql),
+                }
+            )
+            node.set_output_detail(
+                {"final_answer": answer, "sql": sql, "execution": execution or {}}
+            )
+            yield self._publish(
+                state,
+                "answer",
+                {"record_id": record.id, "content": answer},
+                step_id,
+            )
+            yield self._publish(
+                state,
+                "run-finished",
+                {"record_id": record.id, "content": answer},
+                step_id,
+            )
 
     def fail(
         self,
@@ -242,35 +320,46 @@ class AgentLifecycle:
 
         run = state.run
         record = state.record
-        close_unfinished_tool_calls(
-            state.messages,
-            content="skipped: run failed before this tool executed",
-        )
-        self._record_service.transition(
-            record,
-            ChatRecordStatus.FAILED,
-            error=message,
-            execution_type=ChatRecordExecutionType.AGENT,
-        )
-        agent_run_repository.update_run(
-            self._session,
-            run,
-            status=AgentRunStatus.FAILED.value,
-            messages=state.serialized_messages(),
-            budget_snapshot=state.budget_snapshot(),
-            error_class=error_class,
-            error=message,
-        )
-        self._session.commit()
-        yield self._publish(
+        with self._transition_node(
             state,
-            "run-failed",
-            {
-                "record_id": record.id,
-                "content": message,
-                "error_class": error_class,
-            },
-        )
+            "persist_run_failed",
+            "持久化运行失败状态",
+            input_data={"error_class": error_class},
+            input_detail={"error": message},
+        ) as node:
+            close_unfinished_tool_calls(
+                state.messages,
+                content="skipped: run failed before this tool executed",
+            )
+            self._record_service.transition(
+                record,
+                ChatRecordStatus.FAILED,
+                error=message,
+                execution_type=ChatRecordExecutionType.AGENT,
+            )
+            agent_run_repository.update_run(
+                self._session,
+                run,
+                status=AgentRunStatus.FAILED.value,
+                messages=state.serialized_messages(),
+                budget_snapshot=state.budget_snapshot(),
+                error_class=error_class,
+                error=message,
+            )
+            self._session.commit()
+            node.set_error(error_class, "agent_run", message)
+            node.set_output(
+                {"run_status": run.status, "record_status": record.status}
+            )
+            yield self._publish(
+                state,
+                "run-failed",
+                {
+                    "record_id": record.id,
+                    "content": message,
+                    "error_class": error_class,
+                },
+            )
 
     def cancel(
         self,
@@ -281,30 +370,65 @@ class AgentLifecycle:
 
         run = state.run
         record = state.record
-        close_unfinished_tool_calls(
-            state.messages,
-            content="skipped: run cancelled before this tool executed",
-        )
-        self._record_service.transition(
-            record,
-            ChatRecordStatus.CANCELLED,
-            error=message,
-            execution_type=ChatRecordExecutionType.AGENT,
-        )
-        agent_run_repository.update_run(
-            self._session,
-            run,
-            status=AgentRunStatus.CANCELLED.value,
-            messages=state.serialized_messages(),
-            budget_snapshot=state.budget_snapshot(),
-            error=message,
-        )
-        self._session.commit()
-        yield self._publish(
+        with self._transition_node(
             state,
-            "run-cancelled",
-            {"record_id": record.id, "content": message},
-        )
+            "persist_run_cancelled",
+            "持久化运行取消状态",
+            input_detail={"reason": message},
+        ) as node:
+            close_unfinished_tool_calls(
+                state.messages,
+                content="skipped: run cancelled before this tool executed",
+            )
+            self._record_service.transition(
+                record,
+                ChatRecordStatus.CANCELLED,
+                error=message,
+                execution_type=ChatRecordExecutionType.AGENT,
+            )
+            agent_run_repository.update_run(
+                self._session,
+                run,
+                status=AgentRunStatus.CANCELLED.value,
+                messages=state.serialized_messages(),
+                budget_snapshot=state.budget_snapshot(),
+                error=message,
+            )
+            self._session.commit()
+            node.set_status(TraceNodeStatus.CANCELLED)
+            node.set_output(
+                {"run_status": run.status, "record_status": record.status}
+            )
+            yield self._publish(
+                state,
+                "run-cancelled",
+                {"record_id": record.id, "content": message},
+            )
+
+    @contextmanager
+    def _transition_node(
+        self,
+        state: AgentRuntimeState,
+        name: str,
+        display_name: str,
+        *,
+        node_type: TraceNodeType = TraceNodeType.PERSISTENCE,
+        input_data: dict[str, Any] | None = None,
+        input_detail: dict[str, Any] | None = None,
+    ) -> Iterator[TraceNodeHandle]:
+        """统一记录 Run 与问数记录的状态迁移。"""
+
+        with self._trace_recorder.node(
+            TraceNodeSpec(
+                run_id=state.require_run_id(),
+                node_type=node_type,
+                name=name,
+                display_name=display_name,
+            ),
+            input_data=input_data,
+            input_detail=input_detail,
+        ) as node:
+            yield node
 
     def _publish(
         self,

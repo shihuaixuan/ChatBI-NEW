@@ -67,47 +67,105 @@ class AgentReasoner:
         self._registry = registry
         self._recorder = recorder
 
-    def decide(self, state: AgentRuntimeState, mode: str) -> AgentDecision:
+    def decide(
+        self,
+        state: AgentRuntimeState,
+        mode: str,
+        *,
+        step_id: int | None = None,
+        step_index: int | None = None,
+    ) -> AgentDecision:
         """执行一轮 Reason，并把模型响应转换为结构化决策。"""
 
         if mode not in {"normal", "soft"}:
             raise ValueError(f"Unsupported reasoning mode: {mode}")
-        fold_tool_messages(state.messages, self._config.context_fold_chars)
-        available_tools = self.available_tool_names(state, mode)
-        invoke_messages = self._invoke_messages(state, mode, available_tools)
-        tool_definitions = self._registry.definitions(allowed=available_tools)
+        run_id = state.require_run_id()
         with self._recorder.node(
             TraceNodeSpec(
-                run_id=state.require_run_id(),
+                run_id=run_id,
+                node_key=f"reasoning_context:{step_index or 'unknown'}",
+                node_type=TraceNodeType.PHASE,
+                name="prepare_reasoning_context",
+                display_name="准备推理上下文",
+                metadata={"mode": mode, "step_id": step_id},
+            ),
+            input_data={
+                "message_count": len(state.messages),
+                "message_chars": sum(len(item.content) for item in state.messages),
+                "mode": mode,
+            },
+        ) as context_node:
+            fold_tool_messages(state.messages, self._config.context_fold_chars)
+            available_tools = self.available_tool_names(state, mode)
+            working_state = project_working_state(state, mode, available_tools)
+            invoke_messages = self._invoke_messages(
+                state,
+                mode,
+                available_tools,
+                working_state,
+            )
+            tool_definitions = self._registry.definitions(allowed=available_tools)
+            context_node.set_output(
+                {
+                    "message_count": len(invoke_messages),
+                    "available_tool_count": len(tool_definitions),
+                    "available_tools": available_tools,
+                }
+            )
+            context_node.set_output_detail(
+                {
+                    "working_state": working_state,
+                    "tool_definitions": [
+                        item.model_dump(mode="json") for item in tool_definitions
+                    ],
+                }
+            )
+        llm_attributes_data = llm_attributes(
+            model=self._model_client.__class__.__name__
+        )
+        if step_id is not None:
+            llm_attributes_data["app.step.id"] = step_id
+        with self._recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key=f"agent_reasoning:{step_index or 'unknown'}",
                 node_type=TraceNodeType.LLM,
                 name="chat",
                 display_name="Agent 推理模型",
-                attributes=llm_attributes(
-                    model=self._model_client.__class__.__name__
-                ),
-                metadata={"mode": mode},
+                attributes=llm_attributes_data,
+                metadata={"mode": mode, "step_id": step_id},
             ),
             input_data={
                 "message_count": len(invoke_messages),
                 "available_tool_count": len(tool_definitions),
                 "mode": mode,
             },
+            input_detail={
+                "messages": [
+                    item.model_dump(mode="json") for item in invoke_messages
+                ],
+                "tool_definitions": [
+                    item.model_dump(mode="json") for item in tool_definitions
+                ],
+            },
         ) as llm_node:
             model_decision = self._model_client.invoke(
                 invoke_messages, tool_definitions
             )
-            tool_calls = [
-                self._prepare_tool_call(state, call, available_tools)
-                for call in model_decision.tool_calls
-            ]
-            response = model_decision.message.model_copy(
-                update={"tool_calls": tool_calls}
-            )
             usage = model_decision.usage
             llm_node.set_output(
                 {
-                    "tool_call_count": len(tool_calls),
-                    "direct_answer": not tool_calls,
+                    "tool_call_count": len(model_decision.tool_calls),
+                    "direct_answer": not model_decision.tool_calls,
+                }
+            )
+            llm_node.set_output_detail(
+                {
+                    "response": model_decision.message.model_dump(mode="json"),
+                    "tool_calls": [
+                        _tool_call_payload(call)
+                        for call in model_decision.tool_calls
+                    ],
                 }
             )
             llm_node.set_token_usage(usage)
@@ -119,12 +177,55 @@ class AgentReasoner:
                 if usage.get(source) is not None:
                     llm_node.set_attribute(attribute, int(usage[source]))
 
+        with self._recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key=f"decision_projection:{step_index or 'unknown'}",
+                node_type=TraceNodeType.PROJECTION,
+                name="project_agent_decision",
+                display_name="校验并整理模型决策",
+                metadata={"mode": mode, "step_id": step_id},
+            ),
+            input_data={
+                "original_tool_call_count": len(model_decision.tool_calls),
+                "available_tools": available_tools,
+            },
+            input_detail={
+                "original_tool_calls": [
+                    _tool_call_payload(call) for call in model_decision.tool_calls
+                ]
+            },
+        ) as projection_node:
+            tool_calls = [
+                self._prepare_tool_call(state, call, available_tools)
+                for call in model_decision.tool_calls
+            ]
+            response = model_decision.message.model_copy(
+                update={"tool_calls": tool_calls}
+            )
+            adjustments = _record_tool_call_preparations(
+                state,
+                model_decision.tool_calls,
+                tool_calls,
+            )
+            projection_node.set_output(
+                {
+                    "tool_call_count": len(tool_calls),
+                    "direct_answer": not tool_calls,
+                    "adjustment_count": len(adjustments),
+                }
+            )
+            projection_node.set_output_detail(
+                {
+                    "prepared_tool_calls": [
+                        _tool_call_payload(call) for call in tool_calls
+                    ],
+                    "adjustments": adjustments,
+                    "response": response.model_dump(mode="json"),
+                }
+            )
+
         state.budget.record_llm_turn(usage)
-        _record_tool_call_preparations(
-            state,
-            model_decision.tool_calls,
-            tool_calls,
-        )
         state.messages.append(response)
         return AgentDecision(
             response=response,
@@ -138,11 +239,12 @@ class AgentReasoner:
         state: AgentRuntimeState,
         mode: str,
         available_tools: list[str],
+        working_state_payload: dict[str, Any],
     ) -> list[AgentMessage]:
         system = state.require_system()
         working_state = AgentMessage.user(
             "<agent-working-state>"
-            + orjson.dumps(project_working_state(state, mode, available_tools)).decode()
+            + orjson.dumps(working_state_payload).decode()
             + "</agent-working-state>\n"
             "该状态由服务端根据可信工具结果生成。请优先选择 recommended 动作；"
             "只有新动作能够补充缺失信息或修正上一错误时，才进行额外探索。"
@@ -220,26 +322,41 @@ def _record_tool_call_preparations(
     state: AgentRuntimeState,
     original_calls: list[ToolCall],
     prepared_calls: list[ToolCall],
-) -> None:
+) -> list[dict[str, Any]]:
     """记录模型参数被可信工具计划调整的事实，供运行审计与问题定位。"""
 
-    adjustments = [
-        {
+    adjustments = []
+    for original, prepared in zip(original_calls, prepared_calls, strict=True):
+        if original.name == prepared.name and original.args == prepared.args:
+            continue
+        adjustment = {
             "tool_call_id": original.call_id,
             "tool_name": original.name,
             "original_args": original.args,
             "prepared_args": prepared.args,
         }
-        for original, prepared in zip(original_calls, prepared_calls, strict=True)
-        if original.args != prepared.args
-    ]
+        if original.name != prepared.name:
+            adjustment.update(
+                {
+                    "original_tool_name": original.name,
+                    "prepared_tool_name": prepared.name,
+                }
+            )
+        adjustments.append(adjustment)
     if not adjustments:
-        return
+        return []
     history = state.context.state.setdefault("tool_call_preparations", [])
     if not isinstance(history, list):
         raise TypeError("AGENT_TOOL_CALL_PREPARATIONS_INVALID")
     history.extend(adjustments)
     del history[:-20]
+    return adjustments
+
+
+def _tool_call_payload(call: ToolCall) -> dict[str, Any]:
+    """把 ToolCall 转换为 Trace 可序列化结构。"""
+
+    return {"name": call.name, "args": call.args, "call_id": call.call_id}
 
 
 __all__ = ["AgentDecision", "AgentModelClient", "AgentReasoner"]

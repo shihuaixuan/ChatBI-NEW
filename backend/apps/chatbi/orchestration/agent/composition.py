@@ -118,6 +118,7 @@ def build_agent_loop(
         current_user.id,
         build_chat_record_service(session),
         resolved_publisher,
+        resolved_recorder,
     )
     resolved_query_service = query_service or build_query_service(
         session,

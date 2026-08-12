@@ -196,77 +196,180 @@ class AgentInputPreparer:
         """恢复持久化状态并合并用户答案；返回值表示是否可以继续主循环。"""
 
         run = state.run
-        state.budget.restore(run.budget_snapshot)
-        state.chatbi_budget.restore(run.budget_snapshot)
-        # 恢复挂起前的派生状态，避免重复检索已经获得的语义资产。
-        state.context.state.update(run.derived_state or {})
-        state.messages = restore_messages(run.messages)
+        run_id = state.require_run_id()
+        clarification_id = getattr(clarification, "id", None)
+        with self._trace_recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key=f"restore_checkpoint:{clarification_id or 'pending'}",
+                node_type=TraceNodeType.PHASE,
+                name="restore_agent_checkpoint",
+                display_name="恢复 Agent 挂起快照",
+                metadata={"clarification_id": clarification_id},
+            ),
+            input_data={
+                "saved_message_count": len(run.messages or []),
+                "saved_state_key_count": len(run.derived_state or {}),
+            },
+        ) as restore_node:
+            state.budget.restore(run.budget_snapshot)
+            state.chatbi_budget.restore(run.budget_snapshot)
+            # 恢复挂起前的派生状态，避免重复检索已经获得的语义资产。
+            state.context.state.update(run.derived_state or {})
+            state.messages = restore_messages(run.messages)
 
-        try:
-            resume_kind = AgentClarificationResumeKind(clarification.resume_kind)
-        except ValueError as exc:
-            raise QuestionUnderstandingError(
-                "CLARIFICATION_RESUME_KIND_INVALID"
-            ) from exc
+            try:
+                resume_kind = AgentClarificationResumeKind(clarification.resume_kind)
+            except ValueError as exc:
+                raise QuestionUnderstandingError(
+                    "CLARIFICATION_RESUME_KIND_INVALID"
+                ) from exc
+            restore_node.set_output(
+                {
+                    "resume_kind": resume_kind.value,
+                    "message_count": len(state.messages),
+                    "state_keys": sorted(state.context.state),
+                }
+            )
+            restore_node.set_output_detail(
+                {
+                    "budget_snapshot": state.budget_snapshot(),
+                    "derived_state": state.persistable_context(),
+                    "messages": state.serialized_messages(),
+                }
+            )
 
         previous_understanding = state.context.state.get("question_understanding")
         previous_understanding = (
             previous_understanding if isinstance(previous_understanding, dict) else {}
         )
         understanding_updated = False
-
-        if resume_kind == AgentClarificationResumeKind.AGENT_TOOL:
-            tool_call_id = clarification.tool_call_id or ""
-            if not tool_call_id:
-                raise QuestionUnderstandingError(
-                    "AGENT_TOOL_CLARIFICATION_CALL_ID_MISSING"
-                )
-            tool_answer = answer_text
-            if (clarification.resume_payload or {}).get("operation") == (
-                "resolve_semantic_bindings"
-            ):
-                tool_answer = self._apply_semantic_clarification(
-                    state,
-                    clarification,
-                    answer_text,
-                )
-            state.messages.append(AgentMessage.tool(tool_answer, tool_call_id))
-            understanding = previous_understanding
-        elif resume_kind == AgentClarificationResumeKind.QUESTION_UNDERSTANDING:
-            resume_payload = clarification.resume_payload or {}
-            if resume_payload.get("operation") == "resolve_temporal_plan":
-                resolved_outcome = (
-                    self._understanding_service.resolve_temporal_clarification(
+        before_projection = {
+            "message_count": len(state.messages),
+            "state_keys": sorted(state.context.state),
+            "state_revision": int(state.context.state.get("state_revision") or 0),
+        }
+        with self._trace_recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key=f"clarification_projection:{clarification_id or 'pending'}",
+                node_type=TraceNodeType.PROJECTION,
+                name="apply_clarification_answer",
+                display_name="校验并合并用户澄清答案",
+                metadata={
+                    "clarification_id": clarification_id,
+                    "resume_kind": resume_kind.value,
+                },
+            ),
+            input_data={
+                "resume_kind": resume_kind.value,
+                "operation": (clarification.resume_payload or {}).get("operation"),
+            },
+            input_detail={
+                "answer_text": answer_text,
+                "structured_answer": clarification.answer or {},
+                "resume_payload": clarification.resume_payload or {},
+            },
+        ) as projection_node:
+            if resume_kind == AgentClarificationResumeKind.AGENT_TOOL:
+                tool_call_id = clarification.tool_call_id or ""
+                if not tool_call_id:
+                    raise QuestionUnderstandingError(
+                        "AGENT_TOOL_CLARIFICATION_CALL_ID_MISSING"
+                    )
+                tool_answer = answer_text
+                if (clarification.resume_payload or {}).get("operation") == (
+                    "resolve_semantic_bindings"
+                ):
+                    tool_answer = self._apply_semantic_clarification(
+                        state,
+                        clarification,
+                        answer_text,
+                    )
+                state.messages.append(AgentMessage.tool(tool_answer, tool_call_id))
+                understanding = previous_understanding
+            elif resume_kind == AgentClarificationResumeKind.QUESTION_UNDERSTANDING:
+                resume_payload = clarification.resume_payload or {}
+                if resume_payload.get("operation") == "resolve_temporal_plan":
+                    resolved_outcome = (
+                        self._understanding_service.resolve_temporal_clarification(
+                            understanding=previous_understanding,
+                            answer=clarification.answer or {},
+                            temporal_context=state.temporal_context,
+                        )
+                    )
+                    state.budget.record_llm_usage(resolved_outcome.usage_metadata)
+                    updated_output = resolved_outcome.output
+                else:
+                    updated_output = apply_question_understanding_clarification(
                         understanding=previous_understanding,
+                        resume_payload=resume_payload,
                         answer=clarification.answer or {},
                         temporal_context=state.temporal_context,
                     )
+                understanding = updated_output.model_dump(mode="json")
+                state.context.state.update(
+                    {
+                        "question": updated_output.rewritten_question,
+                        "question_understanding": understanding,
+                    }
                 )
-                state.budget.record_llm_usage(resolved_outcome.usage_metadata)
-                updated_output = resolved_outcome.output
-            else:
-                updated_output = apply_question_understanding_clarification(
-                    understanding=previous_understanding,
-                    resume_payload=resume_payload,
-                    answer=clarification.answer or {},
-                    temporal_context=state.temporal_context,
+                understanding_updated = True
+            else:  # pragma: no cover - 枚举构造已经覆盖所有合法类型。
+                raise QuestionUnderstandingError(
+                    "CLARIFICATION_RESUME_KIND_UNSUPPORTED"
                 )
-            understanding = updated_output.model_dump(mode="json")
-            state.context.state.update(
+            after_projection = {
+                "message_count": len(state.messages),
+                "state_keys": sorted(state.context.state),
+                "state_revision": int(
+                    state.context.state.get("state_revision") or 0
+                ),
+            }
+            projection_node.set_output(
                 {
-                    "question": updated_output.rewritten_question,
-                    "question_understanding": understanding,
+                    "resume_kind": resume_kind.value,
+                    "understanding_updated": understanding_updated,
+                    "message_count": len(state.messages),
                 }
             )
-            understanding_updated = True
-        else:  # pragma: no cover - 枚举构造已经覆盖所有合法类型。
-            raise QuestionUnderstandingError("CLARIFICATION_RESUME_KIND_UNSUPPORTED")
+            projection_node.set_state_diff(before_projection, after_projection)
+            projection_node.set_output_detail(
+                {
+                    "question_understanding": understanding,
+                    "derived_state": state.persistable_context(),
+                }
+            )
 
-        state.system = self._build_system(
-            state,
-            conversation_context=self._load_conversation_context(state),
-            question_understanding=understanding,
-        )
+        with self._trace_recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key=f"rebuild_context:{clarification_id or 'pending'}",
+                node_type=TraceNodeType.PHASE,
+                name="rebuild_agent_context",
+                display_name="重建恢复后的 Agent 上下文",
+                metadata={"clarification_id": clarification_id},
+            ),
+            input_data={"understanding_updated": understanding_updated},
+        ) as rebuild_node:
+            conversation_context = self._load_conversation_context(state)
+            state.system = self._build_system(
+                state,
+                conversation_context=conversation_context,
+                question_understanding=understanding,
+            )
+            rebuild_node.set_output(
+                {
+                    "history_count": len(conversation_context.get("history") or []),
+                    "system_prompt_ready": state.system is not None,
+                }
+            )
+            rebuild_node.set_output_detail(
+                {
+                    "conversation_context": conversation_context,
+                    "system_message": state.system.model_dump(mode="json"),
+                }
+            )
         yield self._lifecycle.resume(state)
 
         if understanding_updated:

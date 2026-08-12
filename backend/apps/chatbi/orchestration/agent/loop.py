@@ -180,95 +180,322 @@ class AgentLoop:
         budget = state.budget
 
         while True:
-            if state.cancellation.is_cancelled():
-                yield from self.lifecycle.cancel(state)
-                return
-            mode = budget.planning_mode()
-            if mode == "exhausted":
-                yield from self._budget_exhausted(state)
-                return
-            if mode == "soft" and not self.reasoner.available_tool_names(
-                state,
-                mode,
-            ):
-                yield from self._budget_exhausted(state)
-                return
-
-            verdict = budget.check_before_step()
-            if not verdict.allowed:
-                yield from self._budget_exhausted(
-                    state,
-                    reason=verdict.reason,
-                    error_class=verdict.error_class,
-                )
-                return
-
             step_index = budget.steps + 1
-            step = agent_run_repository.start_step(self.session, run, step_index)
-            self.session.commit()
-            yield self._emit(
-                state,
-                "step-started",
-                {
-                    "record_id": record.id,
-                    "step_id": step.id,
+            state_before = _trace_runtime_snapshot(state)
+            with self.recorder.node(
+                TraceNodeSpec(
+                    run_id=state.require_run_id(),
+                    node_key=f"react_iteration:{step_index}",
+                    node_type=TraceNodeType.PHASE,
+                    name="react_iteration",
+                    display_name=f"ReAct 第 {step_index} 轮",
+                    metadata={"step_index": step_index},
+                ),
+                input_data={
                     "step_index": step_index,
+                    "budget_steps": budget.steps,
+                    "tokens_used": budget.tokens_used,
                 },
-                step.id,
-            )
+                input_detail={"runtime_state": state_before},
+            ) as iteration_node:
+                cancelled = state.cancellation.is_cancelled()
+                mode = "cancelled" if cancelled else budget.planning_mode()
+                guard_reason: str | None = None
+                guard_error_class: str | None = None
+                soft_tools_available = True
+                with self.recorder.node(
+                    TraceNodeSpec(
+                        run_id=state.require_run_id(),
+                        node_key=f"react_guard:{step_index}",
+                        node_type=TraceNodeType.VALIDATION,
+                        name="validate_react_iteration",
+                        display_name="检查取消、预算与可用动作",
+                        metadata={"step_index": step_index},
+                    ),
+                    input_data={"step_index": step_index},
+                    input_detail={"budget": state.budget_snapshot()},
+                ) as guard_node:
+                    if cancelled:
+                        guard_reason = "用户已请求取消运行"
+                        guard_node.set_status(TraceNodeStatus.CANCELLED)
+                    elif mode == "exhausted":
+                        guard_reason = "运行预算已耗尽"
+                        guard_error_class = AgentErrorClass.BUDGET.value
+                        guard_node.set_status(TraceNodeStatus.REJECTED)
+                    elif mode == "soft":
+                        soft_tools_available = bool(
+                            self.reasoner.available_tool_names(state, mode)
+                        )
+                        if not soft_tools_available:
+                            guard_reason = "软预算模式下没有可用收口动作"
+                            guard_error_class = AgentErrorClass.BUDGET.value
+                            guard_node.set_status(TraceNodeStatus.REJECTED)
+                    if guard_reason is None:
+                        verdict = budget.check_before_step()
+                        if not verdict.allowed:
+                            guard_reason = verdict.reason
+                            guard_error_class = verdict.error_class
+                            guard_node.set_status(TraceNodeStatus.REJECTED)
+                    guard_node.set_output(
+                        {
+                            "allowed": guard_reason is None,
+                            "cancelled": cancelled,
+                            "planning_mode": mode,
+                            "soft_tools_available": soft_tools_available,
+                            "reason": guard_reason,
+                            "error_class": guard_error_class,
+                        }
+                    )
 
-            decision = self.reasoner.decide(state, mode)
-            usage = decision.usage
-            text = decision.reasoning
-            if text:
-                yield self._emit(state, "thinking", {"record_id": record.id, "content": text}, step.id)
+                if cancelled:
+                    _set_iteration_result(
+                        iteration_node,
+                        state_before,
+                        state,
+                        "cancelled",
+                        TraceNodeStatus.CANCELLED,
+                    )
+                    yield from self.lifecycle.cancel(state)
+                    _set_iteration_result(
+                        iteration_node,
+                        state_before,
+                        state,
+                        "cancelled",
+                        TraceNodeStatus.CANCELLED,
+                    )
+                    return
+                if guard_reason is not None:
+                    has_execution = isinstance(
+                        ctx.state.get("last_execution"), dict
+                    ) and bool((ctx.state.get("last_execution") or {}).get("sql"))
+                    _set_iteration_result(
+                        iteration_node,
+                        state_before,
+                        state,
+                        "budget_finished" if has_execution else "budget_failed",
+                        (
+                            TraceNodeStatus.SUCCEEDED
+                            if has_execution
+                            else TraceNodeStatus.FAILED
+                        ),
+                        reason=guard_reason,
+                    )
+                    yield from self._budget_exhausted(
+                        state,
+                        reason=guard_reason,
+                        error_class=guard_error_class,
+                    )
+                    _set_iteration_result(
+                        iteration_node,
+                        state_before,
+                        state,
+                        "budget_finished" if has_execution else "budget_failed",
+                        (
+                            TraceNodeStatus.SUCCEEDED
+                            if has_execution
+                            else TraceNodeStatus.FAILED
+                        ),
+                        reason=guard_reason,
+                    )
+                    return
 
-            if state.cancellation.is_cancelled():
-                agent_run_repository.fail_step(
-                    self.session,
-                    step,
-                    "用户在模型规划期间请求取消",
+                with self.recorder.node(
+                    TraceNodeSpec(
+                        run_id=state.require_run_id(),
+                        node_key=f"persist_step_started:{step_index}",
+                        node_type=TraceNodeType.PERSISTENCE,
+                        name="persist_agent_step_started",
+                        display_name="创建 Agent 步骤记录",
+                        metadata={"step_index": step_index},
+                    ),
+                    input_data={"step_index": step_index, "planning_mode": mode},
+                ) as step_node:
+                    step = agent_run_repository.start_step(
+                        self.session,
+                        run,
+                        step_index,
+                    )
+                    self.session.commit()
+                    step_node.set_output({"step_id": step.id, "status": step.status})
+                    yield self._emit(
+                        state,
+                        "step-started",
+                        {
+                            "record_id": record.id,
+                            "step_id": step.id,
+                            "step_index": step_index,
+                        },
+                        step.id,
+                    )
+
+                decision = self.reasoner.decide(
+                    state,
+                    mode,
+                    step_id=step.id,
+                    step_index=step_index,
                 )
-                yield from self.lifecycle.cancel(state)
-                return
+                usage = decision.usage
+                text = decision.reasoning
+                if text:
+                    yield self._emit(
+                        state,
+                        "thinking",
+                        {"record_id": record.id, "content": text},
+                        step.id,
+                    )
 
-            if decision.is_direct_answer:
-                if not _allows_direct_answer(state):
-                    close_unfinished_tool_calls(messages)
+                cancelled_after_reasoning = state.cancellation.is_cancelled()
+                with self.recorder.node(
+                    TraceNodeSpec(
+                        run_id=state.require_run_id(),
+                        node_key=f"post_reasoning_guard:{step_index}",
+                        node_type=TraceNodeType.VALIDATION,
+                        name="validate_post_reasoning_state",
+                        display_name="检查模型返回后的取消状态",
+                        metadata={"step_id": step.id, "step_index": step_index},
+                    ),
+                    input_data={"cancelled": cancelled_after_reasoning},
+                ) as post_guard_node:
+                    post_guard_node.set_output(
+                        {"allowed": not cancelled_after_reasoning}
+                    )
+                    if cancelled_after_reasoning:
+                        post_guard_node.set_status(TraceNodeStatus.CANCELLED)
+
+                if cancelled_after_reasoning:
                     agent_run_repository.fail_step(
                         self.session,
                         step,
-                        "问数消息没有成功查询结果，禁止直接回答",
+                        "用户在模型规划期间请求取消",
                     )
-                    yield from self.lifecycle.fail(
+                    _set_iteration_result(
+                        iteration_node,
+                        state_before,
                         state,
-                        "问数消息必须成功执行查询后才能结束，禁止生成看似来自数据库的直接回答。",
-                        AgentErrorClass.SQL.value,
+                        "cancelled_after_reasoning",
+                        TraceNodeStatus.CANCELLED,
+                        step_id=step.id,
+                    )
+                    yield from self.lifecycle.cancel(state)
+                    _set_iteration_result(
+                        iteration_node,
+                        state_before,
+                        state,
+                        "cancelled_after_reasoning",
+                        TraceNodeStatus.CANCELLED,
+                        step_id=step.id,
                     )
                     return
-                close_unfinished_tool_calls(messages)
-                agent_run_repository.finish_step(self.session, step, {"mode": "direct_answer"}, usage)
-                yield from self.lifecycle.finish(
-                    state,
-                    answer=text or "（模型未给出回答）",
-                    chart={},
-                    sql=(ctx.state.get("last_execution") or {}).get("sql"),
-                    step_id=step.id,
-                    full_data=ctx.state.get("full_data"),
-                    execution=ctx.state.get("last_execution"),
-                )
-                return
 
-            requests = decision.tool_calls
-            tool_result = yield from self.tool_executor.execute(
-                state,
-                step,
-                requests,
-                usage,
-                mode,
-            )
-            if tool_result.terminal:
-                return
+                if decision.is_direct_answer:
+                    direct_answer_allowed = _allows_direct_answer(state)
+                    with self.recorder.node(
+                        TraceNodeSpec(
+                            run_id=state.require_run_id(),
+                            node_key=f"direct_answer_guard:{step_index}",
+                            node_type=TraceNodeType.VALIDATION,
+                            name="validate_direct_answer",
+                            display_name="校验直接回答条件",
+                            metadata={"step_id": step.id},
+                        ),
+                        input_data={
+                            "has_execution": bool(ctx.state.get("last_execution")),
+                            "answer_length": len(text),
+                        },
+                    ) as answer_guard_node:
+                        answer_guard_node.set_output(
+                            {"allowed": direct_answer_allowed}
+                        )
+                        if not direct_answer_allowed:
+                            answer_guard_node.set_status(TraceNodeStatus.REJECTED)
+                    if not direct_answer_allowed:
+                        close_unfinished_tool_calls(messages)
+                        agent_run_repository.fail_step(
+                            self.session,
+                            step,
+                            "问数消息没有成功查询结果，禁止直接回答",
+                        )
+                        _set_iteration_result(
+                            iteration_node,
+                            state_before,
+                            state,
+                            "direct_answer_rejected",
+                            TraceNodeStatus.FAILED,
+                            step_id=step.id,
+                        )
+                        yield from self.lifecycle.fail(
+                            state,
+                            "问数消息必须成功执行查询后才能结束，禁止生成看似来自数据库的直接回答。",
+                            AgentErrorClass.SQL.value,
+                        )
+                        _set_iteration_result(
+                            iteration_node,
+                            state_before,
+                            state,
+                            "direct_answer_rejected",
+                            TraceNodeStatus.FAILED,
+                            step_id=step.id,
+                        )
+                        return
+                    close_unfinished_tool_calls(messages)
+                    agent_run_repository.finish_step(
+                        self.session,
+                        step,
+                        {"mode": "direct_answer"},
+                        usage,
+                    )
+                    _set_iteration_result(
+                        iteration_node,
+                        state_before,
+                        state,
+                        "direct_answer_finished",
+                        TraceNodeStatus.SUCCEEDED,
+                        step_id=step.id,
+                    )
+                    yield from self.lifecycle.finish(
+                        state,
+                        answer=text or "（模型未给出回答）",
+                        chart={},
+                        sql=(ctx.state.get("last_execution") or {}).get("sql"),
+                        step_id=step.id,
+                        full_data=ctx.state.get("full_data"),
+                        execution=ctx.state.get("last_execution"),
+                    )
+                    _set_iteration_result(
+                        iteration_node,
+                        state_before,
+                        state,
+                        "direct_answer_finished",
+                        TraceNodeStatus.SUCCEEDED,
+                        step_id=step.id,
+                    )
+                    return
+
+                tool_result = yield from self.tool_executor.execute(
+                    state,
+                    step,
+                    decision.tool_calls,
+                    usage,
+                    mode,
+                )
+                status_by_result = {
+                    "continue": TraceNodeStatus.SUCCEEDED,
+                    "suspended": TraceNodeStatus.WAITING,
+                    "finished": TraceNodeStatus.SUCCEEDED,
+                    "failed": TraceNodeStatus.FAILED,
+                    "cancelled": TraceNodeStatus.CANCELLED,
+                }
+                _set_iteration_result(
+                    iteration_node,
+                    state_before,
+                    state,
+                    f"tools_{tool_result.status.value}",
+                    status_by_result[tool_result.status.value],
+                    step_id=step.id,
+                    tool_call_count=len(decision.tool_calls),
+                )
+                if tool_result.terminal:
+                    return
 
     def _budget_exhausted(
         self,
@@ -317,6 +544,41 @@ class AgentLoop:
         )
         self.session.commit()
         return event
+
+
+def _trace_runtime_snapshot(state: AgentRuntimeState) -> dict[str, Any]:
+    """提取足以判断循环进展、且不会复制大结果集的运行状态。"""
+
+    context = state.context.state
+    return {
+        "run_status": state.run.status,
+        "record_status": state.record.status,
+        "budget": state.budget_snapshot(),
+        "message_count": len(state.messages),
+        "state_revision": int(context.get("state_revision") or 0),
+        "state_keys": sorted(context),
+        "has_semantic_scope": isinstance(context.get("semantic_scope"), dict),
+        "has_compiled_sql": bool(context.get("compiled_sql")),
+        "has_validated_sql": bool(context.get("validated_sql")),
+        "has_execution": isinstance(context.get("last_execution"), dict),
+    }
+
+
+def _set_iteration_result(
+    node: TraceNodeHandle,
+    before: dict[str, Any],
+    state: AgentRuntimeState,
+    outcome: str,
+    status: TraceNodeStatus,
+    **summary: Any,
+) -> None:
+    """统一收口每轮 ReAct 的结果和状态变化摘要。"""
+
+    after = _trace_runtime_snapshot(state)
+    node.set_status(status)
+    node.set_output({"outcome": outcome, **summary})
+    node.set_state_diff(before, after)
+    node.set_output_detail({"runtime_state": after})
 
 
 def _allows_direct_answer(state: AgentRuntimeState) -> bool:
