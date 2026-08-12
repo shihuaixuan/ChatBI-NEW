@@ -2723,3 +2723,14 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
    规则下线门槛。
 6. 时间、问题理解、Agent、Graph、Retrieval、Tool 和 Semantic SQL 联合回归 299 项通过；
    第四阶段 13 个核心源文件严格 Mypy 与变更范围 Ruff 通过。
+
+## Agent Trace 执行详情第五阶段（2026-08-12）
+
+1. 新增按问数记录查询的 Trace 概览与调用树接口，以及按节点延迟读取详情的接口；所有入口
+   先校验记录归属，并联合校验 Run、节点、Artifact 类型及归属元数据。
+2. Result Artifact 补充统一 JSON 读取能力，沿用原有文件正文、数据库元数据与摘要校验，
+   Trace 展示不新增采集表或第二套执行事实源。
+3. 前端执行详情按记录的执行类型明确进入 Agent Trace 抽屉，提供概览卡片、父子调用树、
+   状态与耗时、Token、错误，以及节点输入、输出、状态变化和运行标识查看。
+4. Trace、Agent、Artifact 定向回归 145 项和架构守卫 124 项通过；前端 ESLint、Vue 类型
+   检查与生产构建通过，变更范围 Ruff 和严格 Mypy 通过。

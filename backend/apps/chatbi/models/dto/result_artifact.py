@@ -38,4 +38,34 @@ class ResultArtifactWriteData(BaseModel):
         return self
 
 
-__all__ = ["ChatBIResultArtifactRef", "ResultArtifactWriteData"]
+class ResultArtifactReadInput(BaseModel):
+    """按执行归属读取一个 JSON Artifact。"""
+
+    artifact_id: str = Field(min_length=1)
+    execution_id: str = Field(min_length=1, max_length=64)
+    execution_type: ChatRecordExecutionType
+    chat_id: int = Field(gt=0)
+    record_id: int = Field(gt=0)
+    kind: str = Field(min_length=1, max_length=64)
+    expected_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResultArtifactSnapshot(BaseModel):
+    """校验完整性后读取到的 Artifact 快照。"""
+
+    artifact_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    kind: str = Field(min_length=1)
+    content_type: str = Field(min_length=1)
+    size: int = Field(ge=0)
+    digest: str = Field(min_length=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any]
+
+
+__all__ = [
+    "ChatBIResultArtifactRef",
+    "ResultArtifactReadInput",
+    "ResultArtifactSnapshot",
+    "ResultArtifactWriteData",
+]

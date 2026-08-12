@@ -63,11 +63,70 @@ export interface AgentTimelineResponse {
   clarification?: AgentClarification
 }
 
+export interface AgentTraceOverview {
+  run_id: number
+  record_id: number
+  status: string
+  started_at?: string
+  finished_at?: string
+  duration_ms: number
+  total_tokens: number
+  input_tokens: number
+  output_tokens: number
+  node_count: number
+  failed_node_count: number
+  waiting_node_count: number
+  last_sequence: number
+  partial: boolean
+}
+
+export interface AgentTraceNode {
+  id: number
+  parent_id: number | null
+  node_key: string
+  node_type: string
+  name: string
+  display_name: string
+  status: string
+  sequence: number
+  started_at: string
+  finished_at?: string | null
+  latency_ms?: number | null
+  token_usage: Record<string, unknown>
+  error_code?: string | null
+  error_category?: string | null
+  error?: string | null
+  has_input_detail: boolean
+  has_output_detail: boolean
+  children: AgentTraceNode[]
+}
+
+export interface AgentTraceResponse {
+  overview: AgentTraceOverview
+  tree: AgentTraceNode[]
+}
+
+export interface AgentTraceNodeDetail {
+  node: AgentTraceNode
+  input_summary: Record<string, unknown>
+  output_summary: Record<string, unknown>
+  input_detail?: Record<string, unknown> | null
+  output_detail?: Record<string, unknown> | null
+  state_diff: Record<string, unknown>
+  metadata: Record<string, unknown>
+  trace_id?: string | null
+  span_id?: string | null
+}
+
 export const agentQuestionApi = {
   stream: (data: AgentStreamRequest, controller?: AbortController) =>
     request.fetchStream('/chat/agent/stream', data, controller),
   timeline: (recordId: number) =>
     request.get<AgentTimelineResponse>(`/chat/agent/record/${recordId}/timeline`),
+  trace: (recordId: number) =>
+    request.get<AgentTraceResponse>(`/chat/agent/record/${recordId}/trace`),
+  traceNode: (recordId: number, nodeId: number) =>
+    request.get<AgentTraceNodeDetail>(`/chat/agent/record/${recordId}/trace/nodes/${nodeId}`),
   events: (runId: number, afterSequence: number = 0) =>
     request.get(`/chat/agent/runs/${runId}/events?after_sequence=${afterSequence}`),
   cancel: (runId: number) => request.post(`/chat/agent/runs/${runId}/cancel`),

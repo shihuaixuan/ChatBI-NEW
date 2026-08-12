@@ -16,6 +16,8 @@ class ResultArtifactGateway(Protocol):
         metadata: dict[str, Any] | None = None,
     ) -> Any: ...
 
+    def get_json(self, artifact_id: str) -> Any: ...
+
     def schedule_cleanup(
         self,
         *,

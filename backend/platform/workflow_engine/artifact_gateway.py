@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+import orjson
 from sqlalchemy import delete, or_
 from sqlmodel import Session, col, select
 
@@ -53,6 +54,20 @@ class WorkflowArtifactGateway:
             payload=payload,
             metadata=metadata,
         )
+
+    def get_json(self, artifact_id: str) -> dict[str, Any]:
+        """读取并校验一个 JSON Artifact，正文完整性由 Store 统一保证。"""
+
+        artifact, content = self._store.get(artifact_id)
+        if artifact.content_type != "application/json":
+            raise ValueError("ARTIFACT_CONTENT_TYPE_INVALID")
+        payload = orjson.loads(content)
+        if not isinstance(payload, dict):
+            raise ValueError("ARTIFACT_JSON_OBJECT_REQUIRED")
+        return {
+            **artifact.model_dump(mode="json"),
+            "payload": payload,
+        }
 
     def schedule_cleanup(
         self,

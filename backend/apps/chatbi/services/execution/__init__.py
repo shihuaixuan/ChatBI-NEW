@@ -2,6 +2,7 @@
 from apps.chatbi.services.execution.result_artifacts import (
     ResultArtifactError,
     ResultArtifactGateway,
+    ResultArtifactReadError,
     ResultArtifactService,
     ResultArtifactWriteError,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "QueryResultProjectionService",
     "ResultArtifactError",
     "ResultArtifactGateway",
+    "ResultArtifactReadError",
     "ResultArtifactService",
     "ResultArtifactWriteError",
 ]

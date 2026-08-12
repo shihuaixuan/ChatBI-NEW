@@ -1,8 +1,11 @@
 import asyncio
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import orjson
+import pytest
+from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from apps.chatbi.api import interactions as api
@@ -14,10 +17,13 @@ from apps.chatbi.models import (
     AgentStartStreamRequest,
     ChatbiAgentClarification,
     ChatbiAgentRun,
+    ChatbiAgentTraceNode,
 )
 from apps.chatbi.orchestration.agent import service
+from apps.chatbi.services.trace_projection import project_agent_trace
 from apps.conversation.models import ChatRecord
 from apps.event import create_render_event
+from apps.trace import TraceNodeStatus, TraceNodeType
 
 
 class RecordingAccessTrace:
@@ -236,6 +242,230 @@ def test_timeline_returns_product_events(monkeypatch):
     timeline = asyncio.run(api.agent_timeline(session, user, 3))
 
     assert timeline == expected
+
+
+def test_trace_returns_owned_record_call_tree(monkeypatch):
+    user = SimpleNamespace(id=7, oid=1)
+    session = SimpleNamespace()
+    run = ChatbiAgentRun(
+        id=5,
+        oid=1,
+        chat_id=2,
+        record_id=3,
+        status=AgentRunStatus.FINISHED.value,
+        created_by=user.id,
+        created_at=datetime(2026, 8, 12, 12, 0, 0),
+    )
+    root = ChatbiAgentTraceNode(
+        id=10,
+        run_id=5,
+        parent_id=None,
+        node_key="run",
+        node_type="run",
+        name="agent_run",
+        display_name="Agent Run",
+        status="running",
+        sequence=1,
+        started_at=datetime(2026, 8, 12, 12, 0, 0),
+        finished_at=datetime(2026, 8, 12, 12, 0, 1),
+    )
+    owned_calls = []
+    record_service = SimpleNamespace(
+        get_owned=lambda user_id, record_id: owned_calls.append((user_id, record_id))
+    )
+    monkeypatch.setattr(api, "build_chat_record_service", lambda _session: record_service)
+    monkeypatch.setattr(
+        api.agent_run_repository,
+        "get_latest_run_by_record",
+        lambda _session, _record_id: run,
+    )
+    monkeypatch.setattr(
+        api.agent_trace_repository,
+        "list_run_nodes",
+        lambda _session, _run_id: [root],
+    )
+
+    result = asyncio.run(api.agent_trace(session, user, 3))
+
+    assert owned_calls == [(7, 3)]
+    assert result.overview.status == "succeeded"
+    assert result.tree[0].id == 10
+
+
+def test_trace_node_detail_reads_only_node_bound_artifact(monkeypatch):
+    user = SimpleNamespace(id=7, oid=1)
+    session = SimpleNamespace()
+    run = ChatbiAgentRun(
+        id=5,
+        oid=1,
+        chat_id=2,
+        record_id=3,
+        status=AgentRunStatus.FINISHED.value,
+        created_by=user.id,
+    )
+    node = ChatbiAgentTraceNode(
+        id=10,
+        run_id=5,
+        parent_id=1,
+        node_key="understanding:intent",
+        node_type="llm",
+        name="intent_recognition",
+        display_name="意图识别",
+        status="succeeded",
+        sequence=2,
+        started_at=datetime(2026, 8, 12, 12, 0, 0),
+        input_artifact_ref={"artifact_id": "artifact-input-10"},
+    )
+    read_calls = []
+
+    class FakeArtifactService:
+        def read(self, data):
+            read_calls.append(data)
+            return SimpleNamespace(payload={"prompt": "识别用户意图"})
+
+    monkeypatch.setattr(
+        api,
+        "build_chat_record_service",
+        lambda _session: SimpleNamespace(get_owned=lambda _user_id, _record_id: object()),
+    )
+    monkeypatch.setattr(
+        api.agent_run_repository,
+        "get_latest_run_by_record",
+        lambda _session, _record_id: run,
+    )
+    monkeypatch.setattr(
+        api.agent_trace_repository,
+        "get_run_node",
+        lambda _session, _run_id, _node_id: node,
+    )
+    monkeypatch.setattr(
+        api,
+        "build_result_artifact_service",
+        lambda _session: FakeArtifactService(),
+    )
+
+    result = asyncio.run(api.agent_trace_node_detail(session, user, 3, 10))
+
+    assert result.input_detail == {"prompt": "识别用户意图"}
+    assert result.output_detail is None
+    assert read_calls[0].artifact_id == "artifact-input-10"
+    assert read_calls[0].expected_metadata == {
+        "run_id": 5,
+        "node_id": 10,
+        "side": "input",
+    }
+
+
+def test_trace_hides_record_existence_when_ownership_check_fails(monkeypatch):
+    user = SimpleNamespace(id=7, oid=1)
+
+    def reject(_user_id, _record_id):
+        raise api.ChatRecordError("CHAT_RECORD_NOT_OWNED")
+
+    monkeypatch.setattr(
+        api,
+        "build_chat_record_service",
+        lambda _session: SimpleNamespace(get_owned=reject),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(api.agent_trace(SimpleNamespace(), user, 3))
+
+    assert exc_info.value.status_code == 404
+
+
+def _trace_node(
+    node_id: int,
+    *,
+    parent_id: int | None,
+    sequence: int,
+    node_type: TraceNodeType,
+    status: TraceNodeStatus = TraceNodeStatus.SUCCEEDED,
+) -> ChatbiAgentTraceNode:
+    started_at = datetime(2026, 8, 12, 12, 0, sequence)
+    return ChatbiAgentTraceNode(
+        id=node_id,
+        run_id=7,
+        parent_id=parent_id,
+        node_key=f"node:{node_id}",
+        node_type=node_type.value,
+        name=f"node_{node_id}",
+        display_name=f"节点 {node_id}",
+        status=status.value,
+        sequence=sequence,
+        started_at=started_at,
+        finished_at=started_at + timedelta(milliseconds=100),
+        latency_ms=100,
+    )
+
+
+def test_trace_projection_builds_nested_tree_and_sums_only_llm_tokens():
+    run = ChatbiAgentRun(
+        id=7,
+        oid=1,
+        chat_id=2,
+        record_id=3,
+        status=AgentRunStatus.FINISHED.value,
+        created_at=datetime(2026, 8, 12, 12, 0, 0),
+    )
+    root = _trace_node(
+        1,
+        parent_id=None,
+        sequence=1,
+        node_type=TraceNodeType.RUN,
+        status=TraceNodeStatus.RUNNING,
+    )
+    invocation = _trace_node(
+        2,
+        parent_id=1,
+        sequence=2,
+        node_type=TraceNodeType.INVOCATION,
+    )
+    llm = _trace_node(
+        3,
+        parent_id=2,
+        sequence=3,
+        node_type=TraceNodeType.LLM,
+    )
+    llm.token_usage = {
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "total_tokens": 150,
+    }
+    llm.input_artifact_ref = {"artifact_id": "input-3"}
+
+    result = project_agent_trace(run, [llm, root, invocation])
+
+    assert result.overview.status == TraceNodeStatus.SUCCEEDED.value
+    assert result.overview.total_tokens == 150
+    assert result.overview.node_count == 3
+    assert [item.id for item in result.tree] == [1]
+    assert result.tree[0].children[0].id == 2
+    assert result.tree[0].children[0].children[0].id == 3
+    assert result.tree[0].children[0].children[0].has_input_detail is True
+
+
+def test_trace_projection_preserves_partial_root_signal():
+    run = ChatbiAgentRun(
+        id=7,
+        oid=1,
+        chat_id=2,
+        record_id=3,
+        status=AgentRunStatus.FINISHED.value,
+    )
+    root = _trace_node(
+        1,
+        parent_id=None,
+        sequence=1,
+        node_type=TraceNodeType.RUN,
+        status=TraceNodeStatus.PARTIAL,
+    )
+    root.metadata_json = {"lost_nodes": 2}
+
+    result = project_agent_trace(run, [root])
+
+    assert result.overview.status == TraceNodeStatus.PARTIAL.value
+    assert result.overview.partial is True
 
 
 def test_running_agent_cancel_records_request_instead_of_claiming_cancelled(

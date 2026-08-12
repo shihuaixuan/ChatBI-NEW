@@ -2,24 +2,37 @@
 import { ref } from 'vue'
 import icon_logs_outlined from '@/assets/svg/icon_logs_outlined.svg'
 import ExecutionDetails from './ExecutionDetails.vue'
+import AgentTraceDetails from './AgentTraceDetails.vue'
+import type { ChatExecutionType } from '@/api/chat.ts'
 import { useChatConfigStore } from '@/stores/chatConfig.ts'
 const props = defineProps<{
   recordId?: number
   duration?: number | undefined
   totalTokens?: number | undefined
+  executionType?: ChatExecutionType
 }>()
 const chatConfig = useChatConfigStore()
 const showLogBtn = !chatConfig.getHideLog
 const executionDetailsRef = ref()
+const agentTraceDetailsRef = ref()
 function getLogList() {
+  if (props.executionType === 'agent' && props.recordId) {
+    agentTraceDetailsRef.value.open(props.recordId)
+    return
+  }
   executionDetailsRef.value.getLogList(props.recordId)
 }
 </script>
 
 <template>
-  <div v-if="recordId && (duration || totalTokens)" class="tool-container">
-    <span>{{ $t('parameter.tokens_required') }} {{ totalTokens }}</span>
-    <span style="margin-left: 12px">{{ $t('parameter.time_execution') }} {{ duration }} s</span>
+  <div
+    v-if="recordId && (duration || totalTokens || executionType === 'agent')"
+    class="tool-container"
+  >
+    <span>{{ $t('parameter.tokens_required') }} {{ totalTokens ?? '--' }}</span>
+    <span style="margin-left: 12px"
+      >{{ $t('parameter.time_execution') }} {{ duration ?? '--' }} s</span
+    >
 
     <div v-if="showLogBtn" class="detail" @click="getLogList">
       <el-icon style="margin-right: 4px" size="16">
@@ -29,6 +42,7 @@ function getLogList() {
     </div>
   </div>
   <ExecutionDetails ref="executionDetailsRef"></ExecutionDetails>
+  <AgentTraceDetails ref="agentTraceDetailsRef"></AgentTraceDetails>
 </template>
 
 <style scoped lang="less">

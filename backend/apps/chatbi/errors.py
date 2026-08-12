@@ -43,6 +43,13 @@ class ResultArtifactWriteError(ResultArtifactError):
     """完整结果正文或元数据写入失败。"""
 
 
+class ResultArtifactReadError(ResultArtifactError):
+    """完整结果正文读取失败或引用归属不匹配。"""
+
+    READ_FAILED = "RESULT_ARTIFACT_READ_FAILED"
+    OWNERSHIP_MISMATCH = "RESULT_ARTIFACT_OWNERSHIP_MISMATCH"
+
+
 # --- 生成（generation） ---
 
 
@@ -147,5 +154,6 @@ __all__ = [
     "QuestionModelOutputError",
     "QuestionUnderstandingError",
     "ResultArtifactError",
+    "ResultArtifactReadError",
     "ResultArtifactWriteError",
 ]

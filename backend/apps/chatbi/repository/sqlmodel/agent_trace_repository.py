@@ -121,6 +121,20 @@ def list_run_nodes(session: Session, run_id: int) -> list[ChatbiAgentTraceNode]:
     return list(session.exec(stmt).all())
 
 
+def get_run_node(
+    session: Session,
+    run_id: int,
+    node_id: int,
+) -> ChatbiAgentTraceNode | None:
+    """按 Run 与节点联合定位，避免跨 Run 读取节点详情。"""
+
+    stmt = select(ChatbiAgentTraceNode).where(
+        col(ChatbiAgentTraceNode.run_id) == run_id,
+        col(ChatbiAgentTraceNode.id) == node_id,
+    )
+    return session.exec(stmt).first()
+
+
 def delete_nodes_for_runs(session: Session, run_ids: list[int]) -> None:
     """删除一组 Run 的全部 Trace 节点。"""
 
@@ -209,6 +223,7 @@ __all__ = [
     "ensure_run_root",
     "finish_node",
     "get_run_root",
+    "get_run_node",
     "list_run_nodes",
     "mark_run_partial",
     "start_node",

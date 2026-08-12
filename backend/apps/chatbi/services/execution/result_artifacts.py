@@ -5,8 +5,17 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from apps.chatbi.errors import ResultArtifactError, ResultArtifactWriteError
-from apps.chatbi.models import ChatBIResultArtifactRef, ResultArtifactWriteData
+from apps.chatbi.errors import (
+    ResultArtifactError,
+    ResultArtifactReadError,
+    ResultArtifactWriteError,
+)
+from apps.chatbi.models import (
+    ChatBIResultArtifactRef,
+    ResultArtifactReadInput,
+    ResultArtifactSnapshot,
+    ResultArtifactWriteData,
+)
 from apps.chatbi.services.execution.ports import ResultArtifactGateway
 
 
@@ -54,6 +63,42 @@ class ResultArtifactService:
                 "RESULT_ARTIFACT_WRITE_FAILED"
             ) from exc
 
+    def read(self, data: ResultArtifactReadInput) -> ResultArtifactSnapshot:
+        """读取 Artifact，并在返回正文前验证执行与会话归属。"""
+
+        try:
+            snapshot = ResultArtifactSnapshot.model_validate(
+                _artifact_mapping(self._gateway.get_json(data.artifact_id))
+            )
+        except ResultArtifactReadError:
+            raise
+        except Exception as exc:
+            raise ResultArtifactReadError(
+                ResultArtifactReadError.READ_FAILED
+            ) from exc
+
+        expected_metadata = {
+            "execution_id": data.execution_id,
+            "execution_type": data.execution_type.value,
+            "chat_id": data.chat_id,
+            "record_id": data.record_id,
+            **data.expected_metadata,
+        }
+        ownership_matches = (
+            snapshot.artifact_id == data.artifact_id
+            and snapshot.run_id == data.execution_id
+            and snapshot.kind == data.kind
+            and all(
+                snapshot.metadata.get(key) == value
+                for key, value in expected_metadata.items()
+            )
+        )
+        if not ownership_matches:
+            raise ResultArtifactReadError(
+                ResultArtifactReadError.OWNERSHIP_MISMATCH
+            )
+        return snapshot
+
     def schedule_chat_cleanup(
         self,
         chat_id: int,
@@ -86,6 +131,7 @@ def _artifact_mapping(stored: Any) -> Mapping[str, Any]:
 __all__ = [
     "ResultArtifactError",
     "ResultArtifactGateway",
+    "ResultArtifactReadError",
     "ResultArtifactService",
     "ResultArtifactWriteError",
 ]

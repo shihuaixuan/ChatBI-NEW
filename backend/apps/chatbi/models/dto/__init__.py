@@ -6,6 +6,12 @@ from apps.chatbi.models.dto.agent import (
     AgentStartStreamRequest,
     AgentStreamRequest,
 )
+from apps.chatbi.models.dto.agent_trace import (
+    AgentTraceNodeDetailSnapshot,
+    AgentTraceNodeSnapshot,
+    AgentTraceOverviewSnapshot,
+    AgentTraceSnapshot,
+)
 from apps.chatbi.models.dto.analysis_prediction import (
     AnalysisPredictionGenerationData,
     AnalysisPredictionGenerationEvent,
@@ -110,6 +116,8 @@ from apps.chatbi.models.dto.recommended_question import (
 )
 from apps.chatbi.models.dto.result_artifact import (
     ChatBIResultArtifactRef,
+    ResultArtifactReadInput,
+    ResultArtifactSnapshot,
     ResultArtifactWriteData,
 )
 from apps.chatbi.models.dto.sql_generation import (
@@ -126,6 +134,10 @@ __all__ = [
     "AgentResumeStreamRequest",
     "AgentStartStreamRequest",
     "AgentStreamRequest",
+    "AgentTraceNodeDetailSnapshot",
+    "AgentTraceNodeSnapshot",
+    "AgentTraceOverviewSnapshot",
+    "AgentTraceSnapshot",
     "ModelMessage",
     "ModelStreamChunk",
     "AnswerGenerationData",
@@ -195,6 +207,8 @@ __all__ = [
     "QueryFinalReplyProjectionResult",
     "RecommendedQuestionGenerationData",
     "RecommendedQuestionGenerationEvent",
+    "ResultArtifactReadInput",
+    "ResultArtifactSnapshot",
     "ResultArtifactWriteData",
     "SQLGenerationData",
     "SQLGenerationEvent",
