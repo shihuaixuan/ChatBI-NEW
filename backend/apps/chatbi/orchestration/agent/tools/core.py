@@ -52,11 +52,21 @@ class FinishTool(AgentTool):
         ctx: AgentToolContext,
         args: FinishArgs,
     ) -> ToolResult[FinishResult]:
+        understanding = ctx.state.get("question_understanding")
+        intent = (
+            understanding.get("intent")
+            if isinstance(understanding, dict)
+            and isinstance(understanding.get("intent"), dict)
+            else {}
+        )
+        full_data = ctx.state.get("full_data")
         try:
             result = project_query_final_reply(
                 QueryFinalReplyProjectionData(
                     answer_markdown=args.answer_markdown,
                     execution=ctx.state.get("last_execution"),
+                    rows=full_data if isinstance(full_data, list) else None,
+                    intent=intent,
                     chart_type=args.chart_type,
                     x_field=args.x_field,
                     y_fields=args.y_fields,

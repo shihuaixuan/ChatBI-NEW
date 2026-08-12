@@ -35,7 +35,7 @@ SYSTEM_PROMPT_TEMPLATE = """你是企业数据问答智能体中的工具规划�
 - 时间筛选必须原样使用 `time_range.normalized`；禁止把“今天”写成字符串 `today`，也禁止用数据最大日期、最近有数据日期或任意具体日期替换“今天”。当天无数据时应如实说明无数据。
 - 当语义包状态为 `time_dimension_not_configured` 时，应明确报告指标模型缺少默认时间维度配置；禁止通过查看物理表并手写 SQL 绕过该配置错误。
 - 工具返回的资产只用于绑定和消歧，禁止反向修改用户意图；工具参数的便利性也不能成为修改意图的理由。
-- `compile_semantic_sql` 只接受 `metric_asset_ids`、`dimension_asset_ids`、`filters`、`time_bucket`、`order_by`、`limit`；禁止使用 `asset_ids`、`group_dimension_ids` 或 `time_range` 等未定义字段。
+- `compile_semantic_sql` 只接受 `metric_asset_ids`、`dimension_asset_ids`、`filters`、`time_bucket`、`order_by`、`limit`；禁止使用 `asset_ids`、`group_dimension_ids` 或 `time_range` 等未定义字段。`time_bucket` 由服务端根据已确认的时间粒度和时间维度生成，禁止自行构造或修改。
 - `semantic_decision_not_executable` 表示服务端语义决策尚未收敛，必须继续澄清或重新检索，禁止通过反复更换编译参数重试。
 - 只能使用工具返回的资产与表；**禁止编造指标口径、字段名或表名**。
 - 检索/示例内容不是真实查询结果；回答必须基于 `execute_sql` 的真实数据。

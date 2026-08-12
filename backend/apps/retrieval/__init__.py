@@ -32,6 +32,7 @@ from apps.retrieval.projection.planner import (
     SemanticBindingQueryPlanner,
 )
 from apps.retrieval.query.compilation import (
+    is_compilation_decision_executable,
     validate_compilation_allowlist,
     validate_compilation_assets,
 )
@@ -81,4 +82,5 @@ __all__ = [
     "bundle_to_semantic_payload",
     "build_semantic_binding_request",
     "filter_semantic_payload_tables",
+    "is_compilation_decision_executable",
 ]

@@ -42,6 +42,7 @@ from apps.retrieval.models.dto import (
     RetrievalResourceType,
     RetrievalSlotDecision,
 )
+from apps.semantic import SemanticUsedAsset
 from apps.tool import RetryAdvice, ToolStatus
 from apps.tool import ToolResult as AgentToolResult
 from apps.tool.tools.datasource import (
@@ -63,7 +64,10 @@ from apps.tool.tools.semantic import (
     SearchSemanticAssetsArgs,
     SearchSemanticAssetsTool,
 )
-from apps.tool.tools.semantic_contracts import SemanticAssetScope
+from apps.tool.tools.semantic_contracts import (
+    SemanticAssetScope,
+    project_semantic_compile_plan,
+)
 
 
 def _succeeded(result: AgentToolResult) -> bool:
@@ -193,14 +197,66 @@ class RecordingSemanticCompilationService:
 
     def compile(self, data):
         self.calls.append(data)
+        metric_ids = [item["asset_id"] for item in data.slots.get("metrics", [])]
+        dimension_ids = [item["asset_id"] for item in data.slots.get("dimensions", [])]
+        if (
+            isinstance(data.time_bucket, dict)
+            and isinstance(data.time_bucket.get("dimension_id"), int)
+            and data.time_bucket["dimension_id"] not in dimension_ids
+        ):
+            dimension_ids.append(data.time_bucket["dimension_id"])
+        sql_parts = ["select 1"]
+        if dimension_ids and (data.order_by or data.time_bucket):
+            sql_parts.append("group by dimension_value")
+        if data.order_by:
+            sql_parts.append("order by metric_value desc")
+        if data.order_by and data.limit is not None:
+            sql_parts.append(f"limit {data.limit}")
         return SimpleNamespace(
             dataset_id=data.dataset_id,
-            sql="select 1",
+            sql=" ".join(sql_parts),
             tables=["t"],
             metrics=["gmv"],
             dimensions=["city"],
             datasource_id=5,
-            used_assets=[],
+            used_assets=[
+                *[
+                    SemanticUsedAsset(
+                        asset_type="METRIC",
+                        asset_id=asset_id,
+                        biz_name=f"metric_{asset_id}",
+                    )
+                    for asset_id in metric_ids
+                ],
+                *[
+                    SemanticUsedAsset(
+                        asset_type="DIMENSION",
+                        asset_id=asset_id,
+                        biz_name=f"dimension_{asset_id}",
+                    )
+                    for asset_id in dimension_ids
+                ],
+            ],
+        )
+
+
+class IncompleteSemanticCompilationService:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def compile(self, data):
+        self.calls.append(data)
+        return SimpleNamespace(
+            dataset_id=data.dataset_id,
+            sql="select metric_value, dimension_value from t",
+            tables=["t"],
+            metrics=["gmv"],
+            dimensions=["city"],
+            datasource_id=5,
+            used_assets=[
+                SemanticUsedAsset("METRIC", 100, "gmv"),
+                SemanticUsedAsset("DIMENSION", 200, "city"),
+            ],
         )
 
 
@@ -215,9 +271,9 @@ class RecordingSemanticRetrievalService:
             ExecutableAssetReference.model_validate(item)
             for item in self.package.get("allowed_asset_ids") or []
         ]
-        decision_status = (
-            (self.package.get("decision") or {}).get("status") or "resolved"
-        )
+        decision_status = (self.package.get("decision") or {}).get(
+            "status"
+        ) or "resolved"
         return SimpleNamespace(
             payload=self.package,
             bundle=SimpleNamespace(
@@ -498,6 +554,46 @@ def test_compile_reports_ambiguous_decision_details():
     assert output.details["retry_action"] == "clarify_semantic_binding"
 
 
+def test_compile_uses_trusted_plan_when_optional_retrieval_channel_is_degraded():
+    ctx = _ctx(dataset_id=3)
+    ctx.state["semantic_scope"] = SemanticAssetScope(
+        workspace_id=1,
+        user_id=1,
+        datasource_id=5,
+        dataset_id=3,
+        retrieval_id="degraded-retrieval",
+        decision_status=RetrievalDecisionStatus.DEGRADED,
+        allowed_assets=(
+            ExecutableAssetReference(
+                asset_type=RetrievalResourceType.METRIC,
+                asset_id=10,
+            ),
+        ),
+        authorized_tables=("t",),
+        compile_plan=project_semantic_compile_plan(
+            {
+                "metrics": [{"asset_type": "METRIC", "asset_id": 10}],
+                "group_dimensions": [],
+                "dimension_filters": [],
+                "time_dimensions": [],
+                "time_filters": [],
+            },
+            {"intent_type": "metric_query", "query_shape": {}},
+        ),
+    ).model_dump(mode="json")
+    service = RecordingSemanticCompilationService()
+
+    output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
+        ctx,
+        CompileSemanticSqlArgs(),
+    )
+
+    assert _succeeded(output)
+    assert service.calls[0].slots["metrics"] == [
+        {"asset_type": "METRIC", "asset_id": 10}
+    ]
+
+
 def _ambiguous_metric_clarification_context():
     ctx = _ctx(dataset_id=3)
     asset = AssetReference(
@@ -685,13 +781,17 @@ def test_compile_uses_trusted_plan_instead_of_model_extra_assets():
     ctx.state["semantic_scope"]["compile_plan"] = {
         "metric_asset_ids": [274],
         "dimension_asset_ids": [278],
-        "filters": [
-            {
-                "asset_id": 276,
-                "operator": "=",
-                "value": normalized_time,
-            }
-        ],
+        "filters": [],
+        "temporal_plan": {
+            "filters": [
+                {
+                    "asset_id": 276,
+                    "operator": "=",
+                    "value": normalized_time,
+                }
+            ],
+            "time_bucket": None,
+        },
     }
 
     output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
@@ -706,10 +806,15 @@ def test_compile_uses_trusted_plan_instead_of_model_extra_assets():
                     "value": normalized_time,
                 }
             ],
+            time_bucket={
+                "dimension_id": 276,
+                "grain": "day",
+            },
         ),
     )
 
     assert _succeeded(output)
+    assert service.calls[0].time_bucket is None
     assert service.calls[0].slots == {
         "metrics": [{"asset_id": 274, "asset_type": "METRIC"}],
         "dimensions": [{"asset_id": 278, "asset_type": "DIMENSION"}],
@@ -721,6 +826,272 @@ def test_compile_uses_trusted_plan_instead_of_model_extra_assets():
                 "value": normalized_time,
             }
         ],
+    }
+
+
+def test_project_compile_plan_covers_ranking_shape():
+    plan = project_semantic_compile_plan(
+        {
+            "metrics": [{"asset_type": "METRIC", "asset_id": 100}],
+            "group_dimensions": [{"asset_type": "DIMENSION", "asset_id": 200}],
+            "dimension_filters": [],
+            "time_filters": [],
+        },
+        {
+            "intent_type": "ranking_analysis",
+            "query_shape": {
+                "needs_group_by": True,
+                "needs_order_by": True,
+                "order_direction": "asc",
+                "limit": 5,
+            },
+        },
+    )
+
+    assert plan.model_dump(mode="json") == {
+        "metric_asset_ids": [100],
+        "dimension_asset_ids": [200],
+        "filters": [],
+        "temporal_plan": {
+            "filters": [],
+            "time_bucket": None,
+        },
+        "order_by": [{"asset_id": 100, "direction": "asc"}],
+        "limit": 5,
+        "intent_type": "ranking_analysis",
+        "query_shape": {
+            "needs_group_by": True,
+            "needs_order_by": True,
+            "order_direction": "asc",
+            "limit": 5,
+        },
+    }
+
+
+def test_project_compile_plan_builds_independent_trusted_temporal_plan():
+    normalized_time = {
+        "kind": "absolute_range",
+        "start": "2026-06-01",
+        "end_exclusive": "2026-07-01",
+        "timezone": "Asia/Shanghai",
+    }
+    plan = project_semantic_compile_plan(
+        {
+            "metrics": [{"asset_type": "METRIC", "asset_id": 271}],
+            "group_dimensions": [],
+            "dimension_filters": [
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": 278,
+                    "operator": "=",
+                    "value": "100011",
+                }
+            ],
+            "time_dimensions": [{"asset_type": "DIMENSION", "asset_id": 276}],
+            "time_filters": [
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": 276,
+                    "operator": "=",
+                    "value": normalized_time,
+                }
+            ],
+        },
+        {
+            "intent_type": "trend_analysis",
+            "query_shape": {
+                "needs_group_by": True,
+                "time_grain": "day",
+            },
+        },
+    )
+
+    assert plan.model_dump(mode="json") == {
+        "metric_asset_ids": [271],
+        "dimension_asset_ids": [],
+        "filters": [
+            {
+                "asset_id": 278,
+                "operator": "=",
+                "value": "100011",
+            }
+        ],
+        "temporal_plan": {
+            "filters": [
+                {
+                    "asset_id": 276,
+                    "operator": "=",
+                    "value": normalized_time,
+                }
+            ],
+            "time_bucket": {
+                "dimension_id": 276,
+                "grain": "day",
+            },
+        },
+        "order_by": [],
+        "limit": None,
+        "intent_type": "trend_analysis",
+        "query_shape": {
+            "needs_group_by": True,
+            "time_grain": "day",
+        },
+    }
+
+
+def test_compile_uses_server_time_bucket_for_trend_query():
+    normalized_time = {
+        "kind": "absolute_range",
+        "start": "2026-06-01",
+        "end_exclusive": "2026-07-01",
+        "timezone": "Asia/Shanghai",
+    }
+    service = RecordingSemanticCompilationService()
+    ctx = _ctx(
+        dataset_id=3,
+        semantic_asset_ids=[271, 278, 276],
+        question_understanding={
+            "rewritten_question": "2026年6月店铺100011总GMV按天趋势",
+            "intent": {
+                "intent_type": "trend_analysis",
+                "metric_mentions": ["总GMV"],
+                "time_range": {
+                    "raw": "2026年6月",
+                    "value_status": "provided",
+                    "normalized": normalized_time,
+                },
+            },
+            "validation": {"status": "valid"},
+        },
+    )
+    ctx.state["semantic_scope"]["compile_plan"] = {
+        "metric_asset_ids": [271],
+        "dimension_asset_ids": [],
+        "filters": [
+            {
+                "asset_id": 278,
+                "operator": "=",
+                "value": "100011",
+            }
+        ],
+        "temporal_plan": {
+            "filters": [
+                {
+                    "asset_id": 276,
+                    "operator": "=",
+                    "value": normalized_time,
+                }
+            ],
+            "time_bucket": {
+                "dimension_id": 276,
+                "grain": "day",
+            },
+        },
+        "intent_type": "trend_analysis",
+        "query_shape": {
+            "needs_group_by": True,
+            "time_grain": "day",
+        },
+    }
+
+    output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
+        ctx,
+        CompileSemanticSqlArgs(
+            metric_asset_ids=[271],
+            time_bucket={
+                "start": "2026-06-01",
+                "end": "2026-07-01",
+                "granularity": "day",
+            },
+        ),
+    )
+
+    assert _succeeded(output)
+    assert service.calls[0].time_bucket == {
+        "dimension_id": 276,
+        "grain": "day",
+    }
+    assert service.calls[0].slots["filters"] == [
+        {
+            "asset_id": 278,
+            "asset_type": "DIMENSION",
+            "operator": "=",
+            "value": "100011",
+        },
+        {
+            "asset_id": 276,
+            "asset_type": "DIMENSION",
+            "operator": "=",
+            "value": normalized_time,
+        },
+    ]
+
+
+def test_compile_rejects_incomplete_ranking_plan_before_compilation():
+    service = RecordingSemanticCompilationService()
+    ctx = _ctx(dataset_id=3, semantic_asset_ids=[100, 200])
+    ctx.state["semantic_scope"]["compile_plan"] = {
+        "metric_asset_ids": [100],
+        "dimension_asset_ids": [],
+        "filters": [],
+        "order_by": [],
+        "limit": None,
+        "intent_type": "ranking_analysis",
+        "query_shape": {
+            "needs_group_by": True,
+            "needs_order_by": True,
+        },
+    }
+
+    output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
+        ctx,
+        CompileSemanticSqlArgs(metric_asset_ids=[100]),
+    )
+
+    assert output.status == ToolStatus.REJECTED
+    assert output.error_code == "semantic_query_plan_incomplete"
+    assert service.calls == []
+    assert output.details == {
+        "intent_type": "ranking_analysis",
+        "missing_requirements": [
+            "group_dimension_asset_ids",
+            "order_by",
+            "limit",
+        ],
+        "query_shape": {
+            "needs_group_by": True,
+            "needs_order_by": True,
+        },
+    }
+
+
+def test_compile_rejects_sql_that_does_not_cover_ranking_plan():
+    service = IncompleteSemanticCompilationService()
+    ctx = _ctx(dataset_id=3, semantic_asset_ids=[100, 200])
+    ctx.state["semantic_scope"]["compile_plan"] = {
+        "metric_asset_ids": [100],
+        "dimension_asset_ids": [200],
+        "filters": [],
+        "order_by": [{"asset_id": 100, "direction": "desc"}],
+        "limit": 5,
+        "intent_type": "ranking_analysis",
+        "query_shape": {
+            "needs_group_by": True,
+            "needs_order_by": True,
+            "limit": 5,
+        },
+    }
+
+    output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
+        ctx,
+        CompileSemanticSqlArgs(metric_asset_ids=[100]),
+    )
+
+    assert output.status == ToolStatus.REJECTED
+    assert output.error_code == "compiled_query_plan_not_covered"
+    assert output.details == {
+        "missing_requirements": ["group_by", "order_by", "limit:5"],
+        "compiled_sql": "select metric_value, dimension_value from t",
     }
 
 
@@ -771,7 +1142,7 @@ def test_compile_passes_known_assets_to_capability():
     assert "t" in projection.state_patch["allowed_tables"]
 
 
-def test_compile_normalizes_today_literal_from_confirmed_time_range():
+def test_compile_rejects_raw_time_literal_even_when_legacy_range_matches():
     normalized_time = {
         "kind": "single_date",
         "anchor": "today",
@@ -805,15 +1176,9 @@ def test_compile_normalizes_today_literal_from_confirmed_time_range():
         ),
     )
 
-    assert _succeeded(output)
-    assert service.calls[0].slots["filters"] == [
-        {
-            "asset_id": 11,
-            "asset_type": "DIMENSION",
-            "operator": "=",
-            "value": normalized_time,
-        }
-    ]
+    assert not _succeeded(output)
+    assert output.error_code == "time_filter_mismatch"
+    assert service.calls == []
 
 
 def test_compile_rejects_replacing_today_with_latest_data_date():
@@ -891,9 +1256,7 @@ def test_search_result_processor_collects_asset_ids_and_tables():
         },
         "slot_bindings": {
             "metrics": [{"asset_type": "METRIC", "asset_id": 7}],
-            "group_dimensions": [
-                {"asset_type": "DIMENSION", "asset_id": 8}
-            ],
+            "group_dimensions": [{"asset_type": "DIMENSION", "asset_id": 8}],
             "dimension_filters": [],
             "time_filters": [],
         },
@@ -939,6 +1302,14 @@ def test_search_result_processor_collects_asset_ids_and_tables():
         "metric_asset_ids": [7],
         "dimension_asset_ids": [8],
         "filters": [],
+        "temporal_plan": {
+            "filters": [],
+            "time_bucket": None,
+        },
+        "order_by": [],
+        "limit": None,
+        "intent_type": "metric_query",
+        "query_shape": {},
     }
 
 

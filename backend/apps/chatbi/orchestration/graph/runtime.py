@@ -47,6 +47,7 @@ from apps.semantic.composition import (
     build_semantic_schema_service,
     build_semantic_sql_compilation_service,
 )
+from common.core.config import settings
 from common.core.db import engine
 from sqlbot_platform.workflow_engine.composition import (
     build_persistent_runtime_services,
@@ -134,6 +135,7 @@ def build_real_chatbi_v1_runtime(
         question_adapter=QuestionAdapter(
             model_client=question_model_client,
             schema_provider=schema_provider,
+            temporal_authority_enabled=settings.TEMPORAL_MODEL_AUTHORITY_ENABLED,
         ),
         answer_adapter=AnswerAdapter(model_client=answer_model_client),
         knowledge_adapter=SemanticKnowledgeAdapter(

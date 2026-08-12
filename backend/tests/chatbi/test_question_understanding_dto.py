@@ -30,17 +30,77 @@ def test_agent_intent_output_keeps_strict_dimension_and_time_types():
                 }
             ],
             "time_range": {"raw": "本月", "value_status": "provided"},
+            "query_shape": {
+                "select_mode": "aggregate",
+                "needs_group_by": True,
+            },
         }
     )
 
     assert intent.dimension_slots[0].name == "城市"
     assert intent.time_range.raw == "本月"
+    comparison = IntentRecognitionOutput.model_validate(
+        {
+            "intent_type": "comparison_analysis",
+            "confidence": 0.95,
+            "metric_mentions": ["GMV"],
+            "dimension_mentions": ["店铺"],
+            "dimension_slots": [
+                {
+                    "name": "店铺",
+                    "role": "filter",
+                    "value": ["100011", "100012"],
+                    "value_status": "provided",
+                }
+            ],
+            "query_shape": {
+                "select_mode": "aggregate",
+                "needs_group_by": True,
+            },
+        }
+    )
+    assert comparison.dimension_slots[0].value == ["100011", "100012"]
     with pytest.raises(ValidationError):
         IntentRecognitionOutput.model_validate(
             {
                 "intent_type": "metric_query",
                 "confidence": 0.95,
                 "dimension_slots": [{"name": "城市", "role": "unsupported"}],
+                "query_shape": {"select_mode": "aggregate"},
+            }
+        )
+
+
+def test_agent_query_shape_rejects_unknown_fields_and_invalid_limit_type():
+    base = {
+        "intent_type": "ranking_analysis",
+        "confidence": 0.95,
+        "metric_mentions": ["销售额"],
+    }
+
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        IntentRecognitionOutput.model_validate(
+            {
+                **base,
+                "query_shape": {
+                    "select_mode": "aggregate",
+                    "needs_order_by": True,
+                    "order_direction": "desc",
+                    "limit": 5,
+                    "sql_order": "sales desc",
+                },
+            }
+        )
+    with pytest.raises(ValidationError, match="int_type"):
+        IntentRecognitionOutput.model_validate(
+            {
+                **base,
+                "query_shape": {
+                    "select_mode": "aggregate",
+                    "needs_order_by": True,
+                    "order_direction": "desc",
+                    "limit": "5",
+                },
             }
         )
 

@@ -14,6 +14,7 @@ from apps.chatbi.orchestration.agent.tools.base import (
     AgentToolContext,
     AgentToolContextServices,
 )
+from apps.temporal import TemporalContext
 from apps.tool import BudgetGuard, NeverCancelled
 from apps.tool.context import CancellationSignal
 
@@ -44,6 +45,12 @@ class AgentRuntimeState:
         if self.run.id is None:
             raise RuntimeError("AGENT_RUN_ID_MISSING")
         return self.run.id
+
+    @property
+    def temporal_context(self) -> TemporalContext:
+        """读取 Run 创建时固化的时间上下文，缺失或损坏时明确终止。"""
+
+        return TemporalContext.model_validate(self.run.temporal_context)
 
     def serialized_messages(self) -> list[dict[str, Any]]:
         """返回可写入 Run 快照的消息结构。"""

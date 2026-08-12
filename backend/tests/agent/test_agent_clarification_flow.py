@@ -20,6 +20,7 @@ from apps.chatbi.orchestration.agent.messages import (
     AgentMessageRole,
     fold_tool_messages,
 )
+from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
 from apps.chatbi.orchestration.agent.prompts import build_system_prompt
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.conversation.models import ChatRecord
@@ -43,6 +44,7 @@ from apps.retrieval.models.dto import (
 )
 from apps.retrieval.query.semantic_binding import SEMANTIC_BINDING_STRATEGY_VERSION
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
+from apps.temporal import build_temporal_context
 from apps.tool import ToolRegistry
 from tests.agent.test_agent_loop import (
     FakeSession,
@@ -64,7 +66,13 @@ def _registry_with_clarify():
 
 
 def _run_and_record():
-    run = ChatbiAgentRun(oid=1, chat_id=1, record_id=2, status=AgentRunStatus.CREATED.value)
+    run = ChatbiAgentRun(
+        oid=1,
+        chat_id=1,
+        record_id=2,
+        status=AgentRunStatus.CREATED.value,
+        temporal_context=build_temporal_context().model_dump(mode="json"),
+    )
     run.id = 100
     record = ChatRecord(chat_id=1, question="额度趋势", datasource=5)
     record.id = 2
@@ -92,6 +100,7 @@ def _ambiguous_store_understanding_state():
                         "value_status": "ambiguous",
                     }
                 ],
+                "query_shape": {"select_mode": "aggregate"},
                 "ambiguous_slots": ["店铺"],
             },
             "validation": {
@@ -130,10 +139,19 @@ def _loop(model, config=None):
 
 
 def test_clarify_suspends_run_and_persists_messages():
-    model = ScriptedModel([
-        _tool_message("probe", {"value": "warm"}),
-        _tool_message("clarify", {"question": "你要查哪种额度？", "options": [{"label": "授信额度", "value": "credit"}]}, "c2"),
-    ])
+    model = ScriptedModel(
+        [
+            _tool_message("probe", {"value": "warm"}),
+            _tool_message(
+                "clarify",
+                {
+                    "question": "你要查哪种额度？",
+                    "options": [{"label": "授信额度", "value": "credit"}],
+                },
+                "c2",
+            ),
+        ]
+    )
     run, record = _run_and_record()
     events = list(_loop(model).run(run, record))
     domains = _event_domains(events)
@@ -166,6 +184,7 @@ def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval()
             conversation_context=None,
             tenant_id=None,
             dataset_id=None,
+            temporal_context=None,
         ):
             outcome = super().understand(
                 question=question,
@@ -193,13 +212,18 @@ def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval()
                     "validation": outcome.output.validation.model_copy(
                         update={
                             "status": "clarification_required",
-                            "reason_codes": ["intent_ambiguous", "dimension_role_ambiguous"],
+                            "reason_codes": [
+                                "intent_ambiguous",
+                                "dimension_role_ambiguous",
+                            ],
                             "clarification_slots": ["dimension"],
                         }
                     ),
                 }
             )
-            return outcome.__class__(output=output, usage_metadata=outcome.usage_metadata)
+            return outcome.__class__(
+                output=output, usage_metadata=outcome.usage_metadata
+            )
 
     model = ScriptedModel([])
     run, record = _run_and_record()
@@ -237,9 +261,17 @@ def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval()
         "filter:店铺",
         "ignore:店铺",
     ]
-    clarification = next(item for item in session.added if isinstance(item, ChatbiAgentClarification))
-    assert clarification.resume_kind == AgentClarificationResumeKind.QUESTION_UNDERSTANDING.value
-    assert clarification.resume_payload == {"operation": "set_dimension_role", "slot_name": "店铺"}
+    clarification = next(
+        item for item in session.added if isinstance(item, ChatbiAgentClarification)
+    )
+    assert (
+        clarification.resume_kind
+        == AgentClarificationResumeKind.QUESTION_UNDERSTANDING.value
+    )
+    assert clarification.resume_payload == {
+        "operation": "set_dimension_role",
+        "slot_name": "店铺",
+    }
 
 
 def test_openai_payload_preserves_reasoning_content_for_tool_call_history():
@@ -270,7 +302,9 @@ def test_openai_payload_preserves_reasoning_content_for_tool_call_history():
 def test_openai_payload_does_not_add_reasoning_content_to_regular_message():
     model = BaseChatOpenAI(model="test-model", api_key="test-key")
 
-    payload = model._get_request_payload([HumanMessage(content="你好"), AIMessage(content="你好")])
+    payload = model._get_request_payload(
+        [HumanMessage(content="你好"), AIMessage(content="你好")]
+    )
 
     assert "reasoning_content" not in payload["messages"][1]
 
@@ -278,7 +312,11 @@ def test_openai_payload_does_not_add_reasoning_content_to_regular_message():
 def test_resume_restores_derived_state_into_tool_context():
     run, record = _run_and_record()
     run.messages = [AgentMessage.user("q").model_dump(mode="json")]
-    run.derived_state = {"semantic_asset_ids": [7, 8], "allowed_tables": ["t1"], "question": "q"}
+    run.derived_state = {
+        "semantic_asset_ids": [7, 8],
+        "allowed_tables": ["t1"],
+        "question": "q",
+    }
     captured = {}
 
     class StateProbeTool(ProbeTool):
@@ -292,10 +330,12 @@ def test_resume_restores_derived_state_into_tool_context():
     registry.register(StateProbeTool())
     registry.register(FinishProbeTool())
     registry.register(ClarifyTool())
-    model = ScriptedModel([
-        _tool_message("probe", {"value": "x"}),
-        _tool_message("finish", {"value": ""}, "c9"),
-    ])
+    model = ScriptedModel(
+        [
+            _tool_message("probe", {"value": "x"}),
+            _tool_message("finish", {"value": ""}, "c9"),
+        ]
+    )
     loop = build_agent_loop(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
@@ -402,10 +442,11 @@ def test_resume_applies_structured_semantic_clarification_to_trusted_scope():
                 "raw": "今天",
                 "value_status": "provided",
                 "normalized": {
-                    "kind": "single_date",
-                    "anchor": "today",
-                    "offset_days": 0,
+                    "kind": "absolute_range",
+                    "start": "2026-07-31",
+                    "end_exclusive": "2026-08-01",
                     "timezone": "Asia/Shanghai",
+                    "source_raw": "今天",
                 },
             },
         ),
@@ -614,9 +655,7 @@ def test_resume_applies_structured_semantic_clarification_to_trusted_scope():
             "options": [option],
         },
         answer={
-            "selections": [
-                {"label": option["label"], "value": option["value"]}
-            ],
+            "selections": [{"label": option["label"], "value": option["value"]}],
             "text": None,
         },
         question="请选择口径",
@@ -652,13 +691,21 @@ def test_resume_applies_structured_semantic_clarification_to_trusted_scope():
     assert captured["semantic_scope"]["compile_plan"] == {
         "metric_asset_ids": [274],
         "dimension_asset_ids": [280],
-        "filters": [
-            {
-                "asset_id": 281,
-                "operator": "=",
-                "value": request.intent.time_range["normalized"],
-            }
-        ],
+        "filters": [],
+        "temporal_plan": {
+            "filters": [
+                {
+                    "asset_id": 281,
+                    "operator": "=",
+                    "value": request.intent.time_range["normalized"],
+                }
+            ],
+            "time_bucket": None,
+        },
+        "order_by": [],
+        "limit": None,
+        "intent_type": "metric_query",
+        "query_shape": {"select_mode": "aggregate"},
     }
     first_call = model.calls[0]
     tool_messages = [m for m in first_call if m.role == AgentMessageRole.TOOL]
@@ -667,17 +714,23 @@ def test_resume_applies_structured_semantic_clarification_to_trusted_scope():
 
 
 def test_resume_continues_from_clarification_to_finish():
-    suspend_model = ScriptedModel([
-        _tool_message("clarify", {"question": "哪种额度？", "options": []}, "call_clarify"),
-    ])
+    suspend_model = ScriptedModel(
+        [
+            _tool_message(
+                "clarify", {"question": "哪种额度？", "options": []}, "call_clarify"
+            ),
+        ]
+    )
     run, record = _run_and_record()
     list(_loop(suspend_model).run(run, record))
     assert run.status == AgentRunStatus.WAITING_USER.value
 
-    resume_model = ScriptedModel([
-        _tool_message("probe", {"value": "x"}),
-        _tool_message("finish", {"value": ""}, "c9"),
-    ])
+    resume_model = ScriptedModel(
+        [
+            _tool_message("probe", {"value": "x"}),
+            _tool_message("finish", {"value": ""}, "c9"),
+        ]
+    )
     clarification = SimpleNamespace(
         tool_call_id="call_clarify",
         resume_kind=AgentClarificationResumeKind.AGENT_TOOL.value,
@@ -686,7 +739,9 @@ def test_resume_continues_from_clarification_to_finish():
         question="哪种额度？",
         options=[],
     )
-    events = list(_loop(resume_model).resume(run, record, clarification, "用户澄清回答：授信额度"))
+    events = list(
+        _loop(resume_model).resume(run, record, clarification, "用户澄清回答：授信额度")
+    )
     domains = _event_domains(events)
 
     assert domains[0] == "clarification.accepted"
@@ -715,6 +770,7 @@ def test_resume_emits_acceptance_without_reunderstanding():
             conversation_context=None,
             tenant_id=None,
             dataset_id=None,
+            temporal_context=None,
         ):
             self.called = True
             return super().understand(
@@ -740,7 +796,10 @@ def test_resume_emits_acceptance_without_reunderstanding():
         tool_call_id=None,
         resume_kind=AgentClarificationResumeKind.QUESTION_UNDERSTANDING.value,
         resume_payload={"operation": "set_dimension_role", "slot_name": "店铺"},
-        answer={"selections": [{"label": "按店铺分组", "value": "group_by:店铺"}], "text": None},
+        answer={
+            "selections": [{"label": "按店铺分组", "value": "group_by:店铺"}],
+            "text": None,
+        },
         question="请确认店铺用法",
         options=[],
     )
@@ -771,7 +830,10 @@ def test_filter_role_clarification_resumes_to_targeted_value_clarification():
         tool_call_id=None,
         resume_kind=AgentClarificationResumeKind.QUESTION_UNDERSTANDING.value,
         resume_payload={"operation": "set_dimension_role", "slot_name": "店铺"},
-        answer={"selections": [{"label": "筛选具体店铺", "value": "filter:店铺"}], "text": None},
+        answer={
+            "selections": [{"label": "筛选具体店铺", "value": "filter:店铺"}],
+            "text": None,
+        },
         question="请确认店铺用法",
         options=[],
     )
@@ -780,7 +842,9 @@ def test_filter_role_clarification_resumes_to_targeted_value_clarification():
 
     assert _event_domains(events)[-1] == "clarification.required"
     assert run.status == AgentRunStatus.WAITING_USER.value
-    updated_slot = run.derived_state["question_understanding"]["intent"]["dimension_slots"][0]
+    updated_slot = run.derived_state["question_understanding"]["intent"][
+        "dimension_slots"
+    ][0]
     assert updated_slot["role"] == "filter"
     assert updated_slot["value_status"] == "not_provided"
     next_clarification = [
@@ -816,6 +880,70 @@ def test_filter_role_clarification_resumes_to_targeted_value_clarification():
     assert confirmed["validation"]["status"] == "valid"
 
 
+def test_preflight_value_clarification_targets_the_filter_that_is_missing_value():
+    understanding = {
+        "validation": {
+            "status": "clarification_required",
+            "reason_codes": ["dimension_filter_value_missing"],
+        },
+        "intent": {
+            "dimension_slots": [
+                {
+                    "name": "档口ID",
+                    "role": "filter",
+                    "value": "100011",
+                    "value_status": "provided",
+                },
+                {
+                    "name": "客户ID",
+                    "role": "filter",
+                    "value": None,
+                    "value_status": "not_provided",
+                },
+            ]
+        },
+    }
+
+    clarification = AgentInputPreparer._preflight_clarification(understanding)
+
+    assert clarification is not None
+    assert clarification.question == "请补充需要筛选的具体客户ID。"
+    assert clarification.resume_payload == {
+        "operation": "set_dimension_filter_value",
+        "slot_name": "客户ID",
+    }
+
+
+def test_preflight_temporal_clarification_blocks_retrieval_until_confirmation():
+    understanding = {
+        "validation": {
+            "status": "clarification_required",
+            "reason_codes": ["temporal_clarification_required"],
+        },
+        "intent": {},
+        "temporal_interpretation": {
+            "plan": {
+                "status": "clarification_required",
+                "ambiguities": [
+                    {
+                        "code": "time_range_amount_missing",
+                        "raw": "最近",
+                    }
+                ],
+            }
+        },
+    }
+
+    clarification = AgentInputPreparer._preflight_clarification(understanding)
+
+    assert clarification is not None
+    assert clarification.question == "请提供明确的时间范围。"
+    assert clarification.options[0]["label"] == "最近 7 天"
+    assert clarification.options[0]["value"]["temporal_confirmation"] == "最近7天"
+    assert clarification.options[0]["value"]["temporal_plan"]["status"] == "resolved"
+    assert clarification.resume_payload == {"operation": "resolve_temporal_plan"}
+
+
 def test_clarify_over_budget_rejected_and_loop_continues():
     run, record = _run_and_record()
     # 快照造成澄清已达上限
@@ -831,10 +959,12 @@ def test_clarify_over_budget_rejected_and_loop_continues():
     run.messages = [
         AgentMessage.user("额度趋势").model_dump(mode="json"),
     ]
-    resume_model = ScriptedModel([
-        _tool_message("clarify", {"question": "再问一次？", "options": []}, "c2"),
-        AIMessage(content="好的，基于现有信息直接回答。"),
-    ])
+    resume_model = ScriptedModel(
+        [
+            _tool_message("clarify", {"question": "再问一次？", "options": []}, "c2"),
+            AIMessage(content="好的，基于现有信息直接回答。"),
+        ]
+    )
     events = list(_loop(resume_model).resume(run, record, clarification, "回答"))
     domains = _event_domains(events)
 
@@ -869,6 +999,7 @@ def test_resume_updates_target_slot_without_rewriting_or_reunderstanding():
             conversation_context=None,
             tenant_id=None,
             dataset_id=None,
+            temporal_context=None,
         ):
             self.called = True
             return super().understand(

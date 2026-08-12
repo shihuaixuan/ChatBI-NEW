@@ -103,7 +103,13 @@ def _time_filter_binding() -> dict:
         "display_name": "统计日期",
         "biz_name": "stat_date",
         "operator": "=",
-        "value": {"kind": "single_date", "anchor": "today", "offset_days": 0, "timezone": "Asia/Shanghai"},
+        "value": {
+            "kind": "absolute_range",
+            "start": "2026-07-31",
+            "end_exclusive": "2026-08-01",
+            "timezone": "Asia/Shanghai",
+            "source_raw": "今天",
+        },
     }
 
 

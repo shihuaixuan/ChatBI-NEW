@@ -32,8 +32,7 @@ from apps.chatbi.orchestration.graph.capabilities.interactions import (
     selected_metric_from_response,
 )
 from apps.chatbi.orchestration.graph.schemas.v1 import QueryPlanOutput
-
-_TIME_GRAINS = {"day", "week", "month", "quarter", "year"}
+from apps.temporal import derive_time_bucket as derive_trusted_time_bucket
 
 
 def slot_items(value: Any) -> list[dict[str, Any]]:
@@ -237,16 +236,14 @@ def derive_time_bucket(knowledge: dict[str, Any], intent: dict[str, Any]) -> dic
     """从意图时间粒度与已绑定时间维度推导分桶配置（A7）。"""
 
     query_shape = intent.get("query_shape") if isinstance(intent.get("query_shape"), dict) else {}
-    grain = str(query_shape.get("time_grain") or "").strip().lower()
-    if grain not in _TIME_GRAINS:
-        return {}
     slot_bindings = knowledge.get("slot_bindings") if isinstance(knowledge.get("slot_bindings"), dict) else {}
+    time_dimension_ids: list[int] = []
     for key in ("time_dimensions", "time_filters"):
         for item in slot_items(slot_bindings.get(key)):
             dimension_id = int_or_none(item.get("asset_id"))
-            if dimension_id is not None:
-                return {"dimension_id": dimension_id, "grain": grain}
-    return {}
+            if dimension_id is not None and dimension_id not in time_dimension_ids:
+                time_dimension_ids.append(dimension_id)
+    return derive_trusted_time_bucket(query_shape, time_dimension_ids) or {}
 
 
 def _share_sub_plans(

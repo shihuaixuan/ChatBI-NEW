@@ -20,6 +20,7 @@ from apps.chatbi.orchestration.graph.capabilities.interactions import (
     read_interaction_record,
     read_interaction_response,
 )
+from apps.temporal import TemporalContext
 
 
 def int_or_none(value: Any) -> int | None:
@@ -79,6 +80,12 @@ class ChatBIRunContext:
         """按原样读取请求字段。仅供需要保留原始值透传的场景（如权限载荷）。"""
 
         return self._request.get(key)
+
+    @property
+    def temporal_context(self) -> TemporalContext:
+        """读取 Run 创建时固定的时间解释上下文。"""
+
+        return TemporalContext.model_validate(self._request.get("temporal_context"))
 
     @property
     def conversation(self) -> dict[str, Any]:

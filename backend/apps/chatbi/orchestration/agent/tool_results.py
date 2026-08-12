@@ -50,6 +50,16 @@ class ChatBIToolResultProcessor:
         result: ToolResult[Any],
     ) -> ToolResultProjection:
         if result.status != ToolStatus.SUCCEEDED or result.data is None:
+            state_patch: dict[str, Any] = {}
+            if (
+                tool_name == "execute_sql"
+                and result.retry_advice == RetryAdvice.CORRECT_INPUT
+            ):
+                # SQL 内容需要修正时清除旧产物，让下一轮回到编译或校验，而不是重放同一 SQL。
+                if context.state.get("compiled_sql") is not None:
+                    state_patch["compiled_sql"] = None
+                if context.state.get("validated_sql") is not None:
+                    state_patch["validated_sql"] = None
             operation_state = {
                 key: result.metadata[key]
                 for key in (
@@ -61,6 +71,7 @@ class ChatBIToolResultProcessor:
             }
             return ToolResultProjection(
                 result=result,
+                state_patch=state_patch,
                 audit_summary={
                     "success": False,
                     "status": result.status.value,
@@ -84,7 +95,10 @@ class ChatBIToolResultProcessor:
             )
             return ToolResultProjection(
                 result=result,
-                state_patch={"allowed_tables": tables},
+                state_patch={
+                    "allowed_tables": tables,
+                    "physical_schema_loaded": True,
+                },
                 audit_summary={
                     **base_summary,
                     "table_count": payload.get("table_count"),
@@ -95,6 +109,7 @@ class ChatBIToolResultProcessor:
                 result=result,
                 state_patch={
                     "compiled_sql": payload.get("sql"),
+                    "validated_sql": None,
                     "allowed_tables": self._merge_tables(
                         context,
                         payload.get("tables") or [],
@@ -111,6 +126,7 @@ class ChatBIToolResultProcessor:
         if tool_name == "validate_sql":
             return ToolResultProjection(
                 result=result,
+                state_patch={"validated_sql": payload.get("sql")},
                 events=(
                     SuggestedDomainEvent(
                         "sql-validated",

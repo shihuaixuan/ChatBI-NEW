@@ -30,6 +30,7 @@ from apps.conversation import (
 )
 from apps.conversation.composition import build_conversation_service
 from apps.semantic.composition import build_semantic_dataset_catalog_service
+from apps.temporal import build_run_temporal_context
 from sqlbot_platform.workflow_engine.api.extension import (
     ChatQueryPreparation,
     WorkflowApiRequestError,
@@ -189,6 +190,17 @@ class ChatBIWorkflowApiExtension:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def build_run_request_context(
+        self,
+        request_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """在 Graph Run 创建前固定时间上下文，恢复时直接复用持久化请求。"""
+
+        return {
+            **request_context,
+            "temporal_context": build_run_temporal_context().model_dump(mode="json"),
+        }
 
     def resolve_dataset_id(
         self,

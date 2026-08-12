@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from apps.retrieval.errors import (
@@ -128,7 +130,19 @@ def _recall(*slots: SubQueryRecallResult) -> HybridRecallResult:
     )
 
 
-def _time_request() -> RetrievalRequest:
+def _time_request(*, include_normalized: bool = True) -> RetrievalRequest:
+    time_range: dict[str, Any] = {
+        "raw": "今天",
+        "value_status": "provided",
+    }
+    if include_normalized:
+        time_range["normalized"] = {
+            "kind": "absolute_range",
+            "start": "2026-07-31",
+            "end_exclusive": "2026-08-01",
+            "timezone": "Asia/Shanghai",
+            "source_raw": "今天",
+        }
     return RetrievalRequest(
         request_id="time-binding",
         tenant_id=1,
@@ -139,16 +153,7 @@ def _time_request() -> RetrievalRequest:
             intent_type="metric_query",
             metric_mentions=["销售额"],
             time_mentions=["今天"],
-            time_range={
-                "raw": "今天",
-                "value_status": "provided",
-                "normalized": {
-                    "kind": "single_date",
-                    "anchor": "today",
-                    "offset_days": 0,
-                    "timezone": "Asia/Shanghai",
-                },
-            },
+            time_range=time_range,
         ),
         scope=RetrievalScope(dataset_ids=[20]),
         profiles=[RetrievalProfileName.SEMANTIC_BINDING],
@@ -262,6 +267,28 @@ def test_time_range_binds_metric_model_default_time_dimension():
             "value": request.intent.time_range["normalized"],
         }
     ]
+
+
+def test_raw_time_range_does_not_trigger_retrieval_layer_parsing():
+    request = _time_request(include_normalized=False)
+    schema = _time_schema()
+    retrieval = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [_hit(100, "销售额", exact=1.0)],
+                fast_path=True,
+            )
+        )
+    )
+
+    bundle = bind_default_time_dimensions(request, retrieval.bundle, schema)
+    payload = bundle_to_semantic_payload(request, bundle, schema)
+
+    assert [item.asset_id for item in bundle.decision.allowed_asset_ids] == [100]
+    assert payload["selected_assets"]["time_dimensions"] == []
+    assert payload["slot_bindings"]["time_filters"] == []
 
 
 def test_multiple_default_time_dimensions_require_semantic_clarification():
@@ -889,6 +916,46 @@ def test_unavailable_dense_channel_is_degraded_even_when_lexical_candidate_resol
 
     assert result.bundle.decision.status == RetrievalDecisionStatus.DEGRADED
     assert result.bundle.diagnostics.degraded_reason == "EMBEDDING_PROVIDER_MISSING"
+    assert validate_compilation_assets(
+        result.bundle.decision,
+        metric_ids=[100],
+        dimension_ids=[],
+    )
+
+
+def test_channel_degradation_does_not_hide_semantic_ambiguity():
+    result = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [
+                    _hit(100, "客户数", exact=1.0),
+                    _hit(101, "客户数", exact=1.0),
+                ],
+                channels=[
+                    RetrievalChannelDiagnostic(
+                        channel=RetrievalChannel.EXACT,
+                        status=RetrievalChannelStatus.SUCCEEDED,
+                        candidate_count=2,
+                    ),
+                    RetrievalChannelDiagnostic(
+                        channel=RetrievalChannel.DENSE,
+                        status=RetrievalChannelStatus.UNAVAILABLE,
+                        error_code="EMBEDDING_PROVIDER_MISSING",
+                    ),
+                ],
+            )
+        )
+    )
+
+    assert result.bundle.decision.status == RetrievalDecisionStatus.AMBIGUOUS
+    with pytest.raises(RetrievalQueryError, match="DECISION_NOT_EXECUTABLE"):
+        validate_compilation_assets(
+            result.bundle.decision,
+            metric_ids=[100],
+            dimension_ids=[],
+        )
 
 
 def test_compiler_rejects_non_executable_decision_and_assets_outside_allowlist():

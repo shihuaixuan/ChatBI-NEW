@@ -314,15 +314,21 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
             EdgeDefinition(source="ask_intent_clarification", target="recognize_intent"),
             EdgeDefinition(
                 source="ask_slot_clarification",
+                target="recognize_intent",
+                condition="interaction.slot.temporal_answered",
+                priority=0,
+            ),
+            EdgeDefinition(
+                source="ask_slot_clarification",
                 target="retrieve_knowledge",
                 condition="interaction.slot.answered",
-                priority=0,
+                priority=1,
             ),
             EdgeDefinition(
                 source="ask_slot_clarification",
                 target="generate_question_answer",
                 condition="interaction.slot.skipped",
-                priority=1,
+                priority=2,
             ),
             EdgeDefinition(source="ask_slot_clarification", target="retrieve_knowledge"),
             EdgeDefinition(

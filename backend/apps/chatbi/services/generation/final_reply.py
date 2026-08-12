@@ -40,7 +40,13 @@ def project_query_final_reply(
         )
 
     non_standard = execution.get("sql_source") == "manual"
-    answer = data.answer_markdown
+    # 只要执行层提供了完整结果，最终文本就由结果确定性投影；
+    # 模型 Markdown 仅保留给没有结果行快照的兼容调用。
+    answer = (
+        _render_grounded_answer(data.rows, execution, data.intent)
+        if data.rows is not None
+        else data.answer_markdown
+    )
     if non_standard:
         answer += _NON_STANDARD_SQL_NOTE
 
@@ -59,6 +65,98 @@ def project_query_final_reply(
         sql=execution.get("sql"),
         non_standard=non_standard,
     )
+
+
+def _render_grounded_answer(
+    rows: list[dict[str, Any]],
+    execution: dict[str, Any],
+    intent: dict[str, Any],
+) -> str:
+    """从真实结果行生成回答，禁止模型重新抄写或改写查询数值。"""
+
+    normalized_rows = [dict(row) for row in rows if isinstance(row, dict)]
+    if not normalized_rows:
+        return "查询执行成功，但没有返回符合条件的数据。"
+
+    fields = [
+        str(field)
+        for field in execution.get("fields") or []
+        if str(field or "").strip()
+    ]
+    if not fields:
+        fields = list(
+            dict.fromkeys(
+                str(key)
+                for row in normalized_rows
+                for key in row
+            )
+        )
+
+    if str(intent.get("intent_type") or "") == "share_analysis":
+        normalized_rows, fields = _append_share_column(normalized_rows, fields)
+
+    if len(normalized_rows) == 1 and len(fields) == 1:
+        field = fields[0]
+        return f"查询结果：**{_escape_markdown(field)} = {_format_cell(normalized_rows[0].get(field))}**。"
+
+    header = "| " + " | ".join(_escape_markdown(field) for field in fields) + " |"
+    separator = "| " + " | ".join("---" for _ in fields) + " |"
+    body = [
+        "| "
+        + " | ".join(_format_cell(row.get(field)) for field in fields)
+        + " |"
+        for row in normalized_rows
+    ]
+    return "\n".join(["查询结果如下：", "", header, separator, *body])
+
+
+def _append_share_column(
+    rows: list[dict[str, Any]],
+    fields: list[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """占比查询以首个数值指标为分子，并用当前分组结果合计作为分母。"""
+
+    metric_field = next(
+        (
+            field
+            for field in reversed(fields)
+            if any(_numeric(row.get(field)) is not None for row in rows)
+        ),
+        None,
+    )
+    if metric_field is None:
+        return rows, fields
+    values = [_numeric(row.get(metric_field)) for row in rows]
+    total = sum(value for value in values if value is not None)
+    if total == 0:
+        return rows, fields
+    projected = []
+    for row, value in zip(rows, values, strict=True):
+        item = dict(row)
+        item["占比"] = None if value is None else f"{value / total:.2%}"
+        projected.append(item)
+    return projected, [*fields, "占比"]
+
+
+def _numeric(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_cell(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    return _escape_markdown(str(value))
+
+
+def _escape_markdown(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ")
 
 
 __all__ = [

@@ -19,7 +19,10 @@ def _schema() -> DatasetSchema:
             biz_name="business",
             type="DATASET",
         ),
-        models=[{"id": 10, "datasource_id": 5}],
+        models=[
+            {"id": 10, "datasource_id": 5},
+            {"id": 11, "datasource_id": 6},
+        ],
         metrics=[
             SchemaElement(
                 data_set_id=20,
@@ -29,7 +32,16 @@ def _schema() -> DatasetSchema:
                 name="销售额",
                 biz_name="gmv",
                 type="METRIC",
-            )
+            ),
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="经营分析",
+                model=11,
+                id=101,
+                name="另一模型销售额",
+                biz_name="gmv",
+                type="METRIC",
+            ),
         ],
         dimensions=[
             SchemaElement(
@@ -40,7 +52,16 @@ def _schema() -> DatasetSchema:
                 name="城市",
                 biz_name="city",
                 type="DIMENSION",
-            )
+            ),
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="经营分析",
+                model=11,
+                id=201,
+                name="另一模型城市",
+                biz_name="city",
+                type="DIMENSION",
+            ),
         ],
     )
 
@@ -65,6 +86,8 @@ class CapturingCompiler:
             tables=["orders"],
             metrics=["gmv"],
             dimensions=["city"],
+            metric_ids=[100],
+            dimension_ids=[200],
         )
 
 
@@ -95,4 +118,5 @@ def test_compilation_service_loads_schema_and_forwards_complete_plan():
     assert result.sql == "select 1"
     assert result.schema.data_set.id == 20
     assert result.datasource_id == 5
+    # 跨模型的 biz_name 可以重复，结果必须保留编译器实际选择的资产 ID。
     assert [asset.asset_id for asset in result.used_assets] == [100, 200]

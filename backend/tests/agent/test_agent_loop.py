@@ -1,12 +1,14 @@
 """AgentLoop 端到端行为测试：FakeSession + 脚本化模型客户端，不依赖真实 DB/LLM。"""
 
 from contextlib import contextmanager
+from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import orjson
 import pytest
 from langchain_core.messages import AIMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from apps.chatbi.errors import QuestionUnderstandingError
 from apps.chatbi.models import (
@@ -39,6 +41,7 @@ from apps.event import (
     encode_sse_event,
 )
 from apps.event import list_events_after as list_persisted_events_after
+from apps.temporal import build_temporal_context
 from apps.tool import (
     BudgetGuard,
     RetryAdvice,
@@ -248,6 +251,7 @@ class StaticUnderstandingService:
         conversation_context=None,
         tenant_id=None,
         dataset_id=None,
+        temporal_context=None,
     ):
         return QuestionUnderstandingOutcome(
             output=QuestionUnderstandingOutput(
@@ -261,6 +265,7 @@ class StaticUnderstandingService:
                     metric_mentions=["gmv"],
                     dimension_mentions=["城市"],
                     dimension_slots=[],
+                    query_shape={"select_mode": "aggregate"},
                 ),
                 validation=IntentValidationOutput(status="valid"),
             ),
@@ -307,7 +312,10 @@ def _valid_intent(**overrides):
         "time_range": {"raw": "上个月", "value_status": "provided"},
         "filter_mentions": [],
         "required_slot_types": ["metric", "dimension", "time_dimension"],
-        "query_shape": {"needs_group_by": True},
+        "query_shape": {
+            "select_mode": "aggregate",
+            "needs_group_by": True,
+        },
         "ambiguous_slots": [],
         "conflict_slots": [],
     }
@@ -343,6 +351,11 @@ class ExecuteSqlFailureArgs(BaseModel):
     sql: str
 
 
+class ValidateSqlProbeResult(BaseModel):
+    sql: str
+    tables: list[str] = Field(default_factory=list)
+
+
 class ProbeResult(BaseModel):
     value: str
 
@@ -352,6 +365,8 @@ class SearchSemanticAssetsProbeResult(BaseModel):
     metrics: list[str]
     dimensions: list[str]
     tables: list[str]
+    package: dict = Field(default_factory=dict)
+    scope: dict = Field(default_factory=dict)
 
 
 class FinishProbeResult(BaseModel):
@@ -423,6 +438,35 @@ class FailingExecuteSqlTool(AgentTool):
         )
 
 
+class PrepareSqlProbeTool(AgentTool):
+    """建立物理 SQL 路径的测试状态。"""
+
+    name = "prepare_sql"
+    description = "prepare sql"
+    args_model = ExecuteSqlFailureArgs
+    result_model = ProbeResult
+
+    def execute(self, ctx, args):
+        ctx.state["physical_schema_loaded"] = True
+        ctx.state["validated_sql"] = args.sql
+        return ToolResult.succeeded("prepared", ProbeResult(value=args.sql))
+
+
+class ValidateSqlProbeTool(AgentTool):
+    """模拟校验修正后的手写 SQL。"""
+
+    name = "validate_sql"
+    description = "validate sql"
+    args_model = ExecuteSqlFailureArgs
+    result_model = ValidateSqlProbeResult
+
+    def execute(self, ctx, args):
+        return ToolResult.succeeded(
+            "validated",
+            ValidateSqlProbeResult(sql=args.sql),
+        )
+
+
 class SearchSemanticAssetsProbeTool(AgentTool):
     """模拟从运行状态读取意图的无参语义检索工具。"""
 
@@ -439,8 +483,38 @@ class SearchSemanticAssetsProbeTool(AgentTool):
                 metrics=["gmv"],
                 dimensions=[],
                 tables=[],
+                package={
+                    "status": "resolved",
+                    "metrics": ["gmv"],
+                    "dimensions": [],
+                    "tables": [],
+                },
+                scope={
+                    "decision_status": "resolved",
+                    "allowed_assets": [{"asset_id": 1}],
+                    "compile_plan": {
+                        "metric_asset_ids": [1],
+                        "dimension_asset_ids": [],
+                        "filters": [],
+                    },
+                },
             ),
         )
+
+
+class CompileSemanticSqlProbeTool(AgentTool):
+    """验证规划阶段会把上一阶段工具纠正为唯一合法的编译动作。"""
+
+    name = "compile_semantic_sql"
+    description = "compile semantic sql"
+    args_model = ProbeArgs
+    result_model = ProbeResult
+
+    def prepare_args(self, ctx, args):
+        return {"value": "trusted-plan"}
+
+    def execute(self, ctx, args):
+        return ToolResult.succeeded("compiled", ProbeResult(value=args.value))
 
 
 class FinishProbeTool(AgentTool):
@@ -471,7 +545,13 @@ def _registry():
 
 
 def _run_and_record():
-    run = ChatbiAgentRun(oid=1, chat_id=1, record_id=2, status=AgentRunStatus.CREATED.value)
+    run = ChatbiAgentRun(
+        oid=1,
+        chat_id=1,
+        record_id=2,
+        status=AgentRunStatus.CREATED.value,
+        temporal_context=build_temporal_context().model_dump(mode="json"),
+    )
     run.id = 100
     record = ChatRecord(chat_id=1, question="按城市看 gmv", datasource=5)
     record.id = 2
@@ -532,6 +612,9 @@ def test_reasoner_returns_structured_function_call_and_records_usage():
     assert state.budget.tokens_used == 5
     assert state.messages[-1] is decision.response
     assert state.messages[-1].content == response.content
+    working_state_message = model.calls[0][1].content
+    assert "<agent-working-state>" in working_state_message
+    assert '"remaining_steps":5' in working_state_message
 
 
 def test_reasoner_prepares_tool_call_before_recording_message():
@@ -583,6 +666,80 @@ def test_reasoner_prepares_tool_call_before_recording_message():
             "prepared_args": {"value": "trusted"},
         }
     ]
+
+
+def test_reasoner_uses_existing_trusted_sql_for_execute_action():
+    response = _tool_message(
+        "execute_sql",
+        {"sql": "select untrusted"},
+        "call-execute",
+    )
+    model = ScriptedModel([response])
+    run, record = _run_and_record()
+    state = AgentRuntimeState(
+        run=run,
+        record=record,
+        context=AgentToolContext(session=None, oid=1, user_id=1, datasource_id=5),
+        messages=[AgentMessage.user("执行")],
+        budget=BudgetGuard(max_steps=5),
+        system=AgentMessage.system("系统提示词"),
+    )
+    state.context.state["compiled_sql"] = "select trusted"
+    reasoner = AgentReasoner(
+        AgentConfig(),
+        model,
+        _registry(),
+        DisabledAgentTracer(),
+    )
+
+    decision = reasoner.decide(state, "normal")
+
+    assert decision.tool_calls[0].args == {"sql": "select trusted"}
+    assert state.context.state["tool_call_preparations"] == [
+        {
+            "tool_call_id": "call-execute",
+            "tool_name": "execute_sql",
+            "original_args": {"sql": "select untrusted"},
+            "prepared_args": {"sql": "select trusted"},
+        }
+    ]
+
+
+def test_reasoner_corrects_stale_search_to_the_only_compile_action():
+    model = ScriptedModel(
+        [_tool_message("search_semantic_assets", {}, "stale-search")]
+    )
+    run, record = _run_and_record()
+    state = AgentRuntimeState(
+        run=run,
+        record=record,
+        context=AgentToolContext(session=None, oid=1, user_id=1, datasource_id=5),
+        messages=[AgentMessage.user("执行")],
+        budget=BudgetGuard(max_steps=5),
+        system=AgentMessage.system("系统提示词"),
+    )
+    state.context.state["semantic_scope"] = {
+        "decision_status": "resolved",
+        "compile_plan": {"metric_asset_ids": [1]},
+    }
+    state.context.state["question_understanding"] = {
+        "validation": {"status": "valid"}
+    }
+    registry = ToolRegistry()
+    registry.register(SearchSemanticAssetsProbeTool())
+    registry.register(CompileSemanticSqlProbeTool())
+    reasoner = AgentReasoner(
+        AgentConfig(),
+        model,
+        registry,
+        DisabledAgentTracer(),
+    )
+
+    decision = reasoner.decide(state, "normal")
+
+    assert decision.tool_calls[0].name == "compile_semantic_sql"
+    assert decision.tool_calls[0].args == {"value": "trusted-plan"}
+    assert state.messages[-1].tool_calls[0].name == "compile_semantic_sql"
 
 
 def test_reasoner_soft_mode_only_exposes_terminal_tools():
@@ -645,19 +802,40 @@ def test_tool_visibility_follows_chatbi_stage():
 
     assert visible_tool_names(state, "normal", registered) == registered[:4]
 
-    state.context.state["semantic_scope"] = {"allowed_assets": [{"asset_id": 1}]}
+    state.context.state["semantic_scope"] = {
+        "decision_status": "resolved",
+        "allowed_assets": [{"asset_id": 1}],
+        "compile_plan": {"metric_asset_ids": [1]},
+    }
     assert visible_tool_names(state, "normal", registered) == [
-        *registered[:4],
-        "compile_semantic_sql",
+        "compile_semantic_sql"
     ]
 
-    state.context.state["allowed_tables"] = ["orders"]
+    state.context.state["semantic_scope"]["decision_status"] = "degraded"
     assert visible_tool_names(state, "normal", registered) == [
-        *registered[:4],
-        "compile_semantic_sql",
-        "validate_sql",
+        "compile_semantic_sql"
+    ]
+
+    state.context.state["semantic_scope"]["decision_status"] = "cross_model"
+    assert visible_tool_names(state, "normal", registered) == [
+        "compile_semantic_sql"
+    ]
+
+    state.context.state["compiled_sql"] = "select 1"
+    assert visible_tool_names(state, "normal", registered) == [
         "execute_sql",
     ]
+    assert visible_tool_names(state, "soft", registered) == ["execute_sql"]
+
+    state.context.state["compiled_sql"] = None
+    state.context.state["semantic_scope"] = None
+    state.context.state["physical_schema_loaded"] = True
+    assert visible_tool_names(state, "normal", registered) == [
+        "validate_sql",
+        "get_sql_examples",
+        "get_dataset_schema",
+    ]
+    assert visible_tool_names(state, "soft", registered) == ["validate_sql"]
 
     state.context.state["semantic_package"] = {"status": "metric_ambiguous"}
     assert visible_tool_names(state, "normal", registered) == ["clarify"]
@@ -698,7 +876,7 @@ def test_happy_path_tool_then_finish():
     assert record.status == "succeeded"
     assert record.finish is True
     assert record.finish_time is not None
-    assert record.sql_answer == "最终答案"
+    assert record.sql_answer == "查询结果：**a = 1**。"
     assert record.sql == "select 1"
     assert orjson.loads(record.data) == {"fields": ["a"], "data": [{"a": 1}]}
     # 消息历史持久化：human + 2 轮 assistant + 2 条 tool 回写
@@ -862,17 +1040,22 @@ def test_execute_sql_retry_exhaustion_has_single_failed_terminal_event():
     """SQL 执行错误超过重试上限后必须明确失败，不能继续调用模型。"""
 
     registry = ToolRegistry()
+    registry.register(PrepareSqlProbeTool())
+    registry.register(ValidateSqlProbeTool())
     registry.register(FailingExecuteSqlTool())
     model = ScriptedModel([
-        _tool_message("execute_sql", {"sql": "select 1"}, "sql-1"),
-        _tool_message("execute_sql", {"sql": "select 2"}, "sql-2"),
-        _tool_message("execute_sql", {"sql": "select 3"}, "sql-3"),
+        _tool_message("prepare_sql", {"sql": "select 1"}, "prepare-1"),
+        _tool_message("execute_sql", {"sql": "ignored"}, "sql-1"),
+        _tool_message("validate_sql", {"sql": "select 2"}, "validate-2"),
+        _tool_message("execute_sql", {"sql": "ignored"}, "sql-2"),
+        _tool_message("validate_sql", {"sql": "select 3"}, "validate-3"),
+        _tool_message("execute_sql", {"sql": "ignored"}, "sql-3"),
     ])
     run, record = _run_and_record()
     loop = build_agent_loop(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
-        AgentConfig(max_steps=5, max_sql_retries=1),
+        AgentConfig(max_steps=10, max_sql_retries=1),
         model_client=model,
         registry=registry,
         understanding_service=StaticUnderstandingService(),
@@ -881,7 +1064,7 @@ def test_execute_sql_retry_exhaustion_has_single_failed_terminal_event():
     events = list(loop.run(run, record))
     domains = _event_domains(events)
 
-    assert len(model.calls) == 3
+    assert len(model.calls) == 6
     assert domains.count("tool.failed") == 3
     assert [domain for domain in domains if domain in {"run.finished", "run.failed"}] == [
         "run.failed"
@@ -1056,6 +1239,7 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
             conversation_context=None,
             tenant_id=None,
             dataset_id=None,
+            temporal_context=None,
         ):
             captured_context.update(conversation_context or {})
             return super().understand(
@@ -1111,6 +1295,42 @@ def test_search_semantic_assets_trace_records_effective_understanding_input():
     tool_event = next(item for item in events if item.domain == "tool.called")
     assert tool_event.content["args_summary"]["rewritten_question"] == "按城市看 gmv"
     assert tool_event.content["args_summary"]["intent"]["metric_mentions"] == ["gmv"]
+
+
+def test_resolved_semantics_rejects_repeated_retrieval_with_correction_observation():
+    """语义已经收敛后，重复检索应返回纠错信息而不再次执行工具。"""
+
+    model = ScriptedModel(
+        [
+            _tool_message("search_semantic_assets", {}, "search-1"),
+            _tool_message("search_semantic_assets", {}, "search-2"),
+            AIMessage(content="无法继续。"),
+        ]
+    )
+    run, record = _run_and_record()
+
+    events = list(_loop(model).run(run, record))
+
+    search_results = [
+        event
+        for event in events
+        if event.content.get("tool_name") == "search_semantic_assets"
+        and event.domain in {"tool.completed", "tool.failed"}
+    ]
+    assert [event.domain for event in search_results] == [
+        "tool.completed",
+        "tool.failed",
+    ]
+    assert search_results[1].content["error_code"] == "agent_action_not_available"
+    third_call_tool_messages = [
+        message
+        for message in model.calls[2]
+        if message.role.value == "tool"
+    ]
+    assert any(
+        '"recommended_actions":["compile_semantic_sql"]' in message.content
+        for message in third_call_tool_messages
+    )
 
 
 def test_data_question_direct_text_without_execution_is_rejected():
@@ -1205,14 +1425,25 @@ def test_understanding_rewrites_followup_before_recognizing_intent():
         question="那上个月呢",
         datasource_id=5,
         conversation_context={"last_rewritten_question": "按城市统计本月销售额"},
+        temporal_context=build_temporal_context(
+            reference_at=datetime(
+                2026,
+                7,
+                31,
+                12,
+                tzinfo=ZoneInfo("Asia/Shanghai"),
+            )
+        ),
     )
 
     assert outcome.output.rewritten_question == "按城市统计上个月销售额"
     assert outcome.output.intent.metric_mentions == ["销售额"]
     assert outcome.output.intent.time_range.normalized == {
-        "kind": "previous_period",
-        "unit": "month",
+        "kind": "absolute_range",
+        "start": "2026-06-01",
+        "end_exclusive": "2026-07-01",
         "timezone": "Asia/Shanghai",
+        "source_raw": "上个月",
     }
     assert outcome.output.validation.status == "valid"
     assert outcome.usage_metadata["total_tokens"] == 80
@@ -1242,7 +1473,7 @@ def test_understanding_normalizes_today_before_agent_planning():
                     time_mentions=["今天"],
                     time_range={"raw": "今天", "value_status": "provided"},
                     required_slot_types=["metric", "time_range"],
-                    query_shape={},
+                    query_shape={"select_mode": "aggregate"},
                 )
             ),
             _understanding_response(
@@ -1266,13 +1497,23 @@ def test_understanding_normalizes_today_before_agent_planning():
     outcome = QuestionUnderstandingService(model).understand(
         question="今天店铺的客户数",
         datasource_id=5,
+        temporal_context=build_temporal_context(
+            reference_at=datetime(
+                2026,
+                7,
+                31,
+                12,
+                tzinfo=ZoneInfo("Asia/Shanghai"),
+            )
+        ),
     )
 
     assert outcome.output.intent.time_range.normalized == {
-        "kind": "single_date",
-        "anchor": "today",
-        "offset_days": 0,
+        "kind": "absolute_range",
+        "start": "2026-07-31",
+        "end_exclusive": "2026-08-01",
         "timezone": "Asia/Shanghai",
+        "source_raw": "今天",
     }
     assert outcome.output.intent.dimension_mentions == ["店铺"]
     assert outcome.output.validation.status == "clarification_required"
@@ -1308,7 +1549,7 @@ def test_understanding_rejects_filter_dimension_without_concrete_value():
                     time_mentions=["今天"],
                     time_range={"raw": "今天", "value_status": "provided"},
                     required_slot_types=["filter"],
-                    query_shape={},
+                    query_shape={"select_mode": "aggregate"},
                 )
             ),
             _understanding_response(

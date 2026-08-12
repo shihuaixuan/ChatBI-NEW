@@ -167,6 +167,8 @@ def test_semantic_sql_compiler_builds_joined_metric_query_from_schema_assets():
     assert result.tables == ["stall_traffic_1d", "stall_info"]
     assert result.metrics == ["visit_uv"]
     assert result.dimensions == ["region"]
+    assert result.metric_ids == [100]
+    assert result.dimension_ids == [200]
     assert result.sql == (
         "select stall_info.region as region, sum(stall_traffic.visit_uv) as visit_uv "
         "from stall_traffic_1d stall_traffic "
@@ -274,6 +276,37 @@ def test_semantic_sql_compiler_applies_dimension_filter_slots_for_detail_query()
         "where customer_model.gender = '女'"
     )
 
+    multi_value_result = SemanticSQLCompiler().compile(
+        SemanticSQLCompileRequest(
+            schema=schema,
+            question="性别为女或男的用户名称",
+            slots={
+                "dimensions": [
+                    {
+                        "asset_type": "DIMENSION",
+                        "asset_id": 14,
+                        "display_name": "客户名称",
+                    }
+                ],
+                "filters": [
+                    {
+                        "asset_type": "DIMENSION",
+                        "asset_id": 15,
+                        "display_name": "性别",
+                        "operator": "in",
+                        "value": ["女", "男"],
+                    }
+                ],
+            },
+        )
+    )
+
+    assert multi_value_result.sql == (
+        "select customer_model.customer_name as customer_name "
+        "from customers customer_model "
+        "where customer_model.gender in ('女', '男')"
+    )
+
 
 def test_semantic_sql_compiler_renders_derived_metric_order_and_limit():
     schema = DatasetSchema(
@@ -342,6 +375,18 @@ def test_semantic_sql_compiler_renders_derived_metric_order_and_limit():
     assert "SUM(gmv_sale) / NULLIF(SUM(order_cnt_sale), 0) as aov_sale" in result.sql
     assert "group by stall_order.stall_id" in result.sql
     assert result.sql.endswith("order by aov_sale desc limit 5")
+
+    legacy_result = SemanticSQLCompiler().compile(
+        SemanticSQLCompileRequest(
+            schema=schema,
+            metric_ids=[100],
+            dimension_ids=[200],
+            order_by=[{"biz_name": "aov_sale", "direction": "asc"}],
+            limit=3,
+        )
+    )
+
+    assert legacy_result.sql.endswith("order by aov_sale asc limit 3")
 
 
 def test_semantic_sql_compiler_detail_mode_projects_metric_without_aggregation():

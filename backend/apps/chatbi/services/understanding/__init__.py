@@ -3,6 +3,7 @@
 模块导航：
 - understanding_service：Agent 直用的严格三阶段理解编排（Service）
 - model_invocation：结构化模型调用边界（StructuredModelService + QuestionModelClient 端口）
+- temporal_interpretation：独立模型时间任务、一次修复和旁路差异计算
 - validation：确定性校验规则（共享函数）
 - intent_projection：意图清洗/合并投影（共享函数）
 - intent_fallback：模型不可用时的规则降级（Service，规则密集）
@@ -44,6 +45,16 @@ from apps.chatbi.services.understanding.prompts import (
     DIMENSION_EXTRACTION_RULES,
     METRIC_TIME_EXTRACTION_RULES,
     QUESTION_REWRITE_BUSINESS_RULES,
+    TEMPORAL_INTERPRETATION_SYSTEM_PROMPT,
+)
+from apps.chatbi.services.understanding.temporal_interpretation import (
+    TemporalInterpretationOutcome,
+    TemporalInterpretationResult,
+    TemporalInterpretationService,
+    apply_temporal_interpretation_payload,
+    build_temporal_clarification_options,
+    compare_temporal_shadow,
+    summarize_temporal_shadow_observations,
 )
 from apps.chatbi.services.understanding.understanding_service import (
     DIMENSION_SYSTEM_PROMPT,
@@ -57,7 +68,7 @@ from apps.chatbi.services.understanding.understanding_service import (
 from apps.chatbi.services.understanding.validation import (
     validate_question_understanding,
 )
-from apps.semantic import (
+from apps.temporal import (
     is_time_expression,
     normalize_time_range,
     normalize_time_range_payload,
@@ -70,6 +81,7 @@ __all__ = [
     "INTENT_SYSTEM_PROMPT",
     "METRIC_TIME_EXTRACTION_RULES",
     "QUESTION_REWRITE_BUSINESS_RULES",
+    "TEMPORAL_INTERPRETATION_SYSTEM_PROMPT",
     "QuestionIntentFallbackService",
     "QuestionModelClient",
     "QuestionUnderstandingModelClient",
@@ -77,8 +89,14 @@ __all__ = [
     "QuestionUnderstandingService",
     "REWRITE_SYSTEM_PROMPT",
     "StructuredModelService",
+    "TemporalInterpretationOutcome",
+    "TemporalInterpretationResult",
+    "TemporalInterpretationService",
+    "apply_temporal_interpretation_payload",
     "apply_question_understanding_clarification",
+    "build_temporal_clarification_options",
     "classification_precondition",
+    "compare_temporal_shadow",
     "empty_rewrite",
     "fallback_rewrite",
     "intent_retry_feedback",
@@ -97,6 +115,7 @@ __all__ = [
     "project_question_intent",
     "project_rewrite",
     "time_range_from_mentions",
+    "summarize_temporal_shadow_observations",
     "unique_strings",
     "validate_intent",
     "validate_question_understanding",

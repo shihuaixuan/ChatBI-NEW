@@ -22,6 +22,12 @@ class DatasourceSelectionError(ChatBIError, ValueError):
     """数据源选择输入或模型结果不合法。"""
 
 
+class AgentActionError(ChatBIError, ValueError):
+    """Agent 提出的动作不满足当前可信进展。"""
+
+    ACTION_NOT_AVAILABLE = "agent_action_not_available"
+
+
 # --- 执行（execution） ---
 
 
@@ -71,6 +77,20 @@ class QuestionUnderstandingError(ChatBIError, RuntimeError):
     """问题理解阶段失败，调用方应明确终止当前问数流程。"""
 
 
+class TemporalInterpretationError(ChatBIError, RuntimeError):
+    """旁路时间理解失败；错误和已发生的模型用量必须显式保留。"""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        usage_metadata: dict[str, int] | None = None,
+    ) -> None:
+        self.code = code
+        self.usage_metadata = usage_metadata or {}
+        super().__init__(code)
+
+
 class QuestionModelError(ChatBIError, RuntimeError):
     """问题理解模型调用或输出错误。"""
 
@@ -110,6 +130,7 @@ class SemanticClarificationError(ChatBIError, RuntimeError):
 
 
 __all__ = [
+    "AgentActionError",
     "ChatBIError",
     "ChartGenerationError",
     "DatasourceSelectionError",
@@ -120,6 +141,7 @@ __all__ = [
     "QueryResultProjectionError",
     "SQLGenerationError",
     "SemanticClarificationError",
+    "TemporalInterpretationError",
     "QuestionModelCallError",
     "QuestionModelError",
     "QuestionModelOutputError",

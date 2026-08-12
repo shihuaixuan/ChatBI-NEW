@@ -62,40 +62,52 @@ class SemanticSQLCompilationService:
             metrics=result.metrics,
             dimensions=result.dimensions,
             schema=schema,
-            datasource_id=_datasource_id(result.metrics, result.dimensions, schema),
+            datasource_id=_datasource_id(
+                result.metric_ids,
+                result.dimension_ids,
+                schema,
+            ),
             used_assets=[
-                *_used_assets("METRIC", result.metrics, schema.metrics),
-                *_used_assets("DIMENSION", result.dimensions, schema.dimensions),
+                *_used_assets(
+                    "METRIC",
+                    result.metric_ids,
+                    schema.metrics,
+                ),
+                *_used_assets(
+                    "DIMENSION",
+                    result.dimension_ids,
+                    schema.dimensions,
+                ),
             ],
         )
 
 
 def _used_assets(
     asset_type: str,
-    biz_names: list[str],
+    asset_ids: list[int],
     elements: list[SchemaElement],
 ) -> list[SemanticUsedAsset]:
-    element_by_name = {element.biz_name: element for element in elements}
+    element_by_id = {element.id: element for element in elements}
     return [
         SemanticUsedAsset(
             asset_type=asset_type,
-            asset_id=element_by_name[biz_name].id,
-            biz_name=biz_name,
+            asset_id=asset_id,
+            biz_name=element_by_id[asset_id].biz_name,
         )
-        for biz_name in biz_names
-        if biz_name in element_by_name
+        for asset_id in asset_ids
+        if asset_id in element_by_id
     ]
 
 
 def _datasource_id(
-    metrics: list[str],
-    dimensions: list[str],
+    metric_ids: list[int],
+    dimension_ids: list[int],
     schema: DatasetSchema,
 ) -> int | None:
-    selected = {*metrics, *dimensions}
+    selected = {*metric_ids, *dimension_ids}
     model_by_id = {model.get("id"): model for model in schema.models}
     for element in [*schema.metrics, *schema.dimensions]:
-        if element.biz_name not in selected:
+        if element.id not in selected:
             continue
         model = model_by_id.get(element.model) or {}
         datasource_id = _positive_int(

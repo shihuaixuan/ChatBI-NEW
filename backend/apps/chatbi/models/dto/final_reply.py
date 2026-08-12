@@ -30,6 +30,8 @@ class QueryFinalReplyProjectionData:
 
     answer_markdown: str
     execution: dict[str, Any] | None
+    rows: list[dict[str, Any]] | None = None
+    intent: dict[str, Any] = field(default_factory=dict)
     chart_type: Literal["table", "bar", "line", "pie"] | None = None
     x_field: str | None = None
     y_fields: list[str] = field(default_factory=list)

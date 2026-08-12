@@ -16,6 +16,7 @@ from apps.chatbi.models.dto.question_understanding import (
 from apps.chatbi.services.understanding.validation import (
     validate_question_understanding,
 )
+from apps.temporal import TemporalPlan
 
 DEFAULT_MAX_INTENT_RETRY = 2
 
@@ -123,6 +124,7 @@ def validate_intent(
                 if isinstance(slot, dict)
             ),
             time_range=dict(intent.get("time_range") or {}),
+            query_shape=dict(intent.get("query_shape") or {}),
             ambiguous_slots=tuple(
                 str(item) for item in intent.get("ambiguous_slots") or [] if str(item)
             ),
@@ -130,6 +132,11 @@ def validate_intent(
                 str(item) for item in intent.get("conflict_slots") or [] if str(item)
             ),
             subject_domain=dict(intent.get("subject_domain") or {}),
+            temporal_plan=(
+                TemporalPlan.model_validate(intent["temporal_plan"])
+                if isinstance(intent.get("temporal_plan"), dict)
+                else None
+            ),
         )
     )
     repair_issues = [issue for issue in result.issues if issue.category == "repair"]
@@ -140,6 +147,7 @@ def validate_intent(
             "subject_domain_ambiguous",
             "dimension_role_ambiguous",
             "dimension_filter_value_missing",
+            "temporal_clarification_required",
         }
         slot_issues = [
             issue.details

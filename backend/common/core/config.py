@@ -5,6 +5,7 @@ from typing import Annotated, Any, Literal
 from pydantic import (
     AnyUrl,
     BeforeValidator,
+    Field,
     PostgresDsn,
     computed_field,
     field_validator,
@@ -132,6 +133,25 @@ class Settings(BaseSettings):
     CHAT_AGENT_MAX_CLARIFICATIONS: int = 2
     CHAT_AGENT_HISTORY_ROUNDS: int = 3
     CHAT_AGENT_CONTEXT_FOLD_CHARS: int = 30000
+    # 企业时间口径在 Run 创建时写入不可变 TemporalContext。
+    TEMPORAL_TIMEZONE: str = "Asia/Shanghai"
+    TEMPORAL_LOCALE: str = "zh-CN"
+    TEMPORAL_WEEK_START: Literal[
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    ] = "monday"
+    TEMPORAL_FISCAL_YEAR_START_MONTH: int = Field(default=1, ge=1, le=12)
+    TEMPORAL_FISCAL_YEAR_LABEL: Literal["start_year", "end_year"] = "start_year"
+    TEMPORAL_BUSINESS_CALENDAR_ID: str | None = None
+    # 默认关闭；开启后只记录模型时间计划与现有结果的差异。
+    TEMPORAL_MODEL_SHADOW_ENABLED: bool = False
+    # 默认关闭；开启后模型时间计划经过确定性解析并成为查询时间语义来源。
+    TEMPORAL_MODEL_AUTHORITY_ENABLED: bool = False
     # Agent 可观测性默认关闭；关闭或零采样时不加载 OpenTelemetry。
     AGENT_TRACING_ENABLED: bool = False
     AGENT_TRACING_SAMPLE_RATE: float = 0.0
@@ -176,6 +196,8 @@ class Settings(BaseSettings):
                      'RETRIEVAL_EMBEDDING_ALLOW_LEXICAL_FALLBACK',
                      'QUERY_UNDERSTANDING_ENABLED',
                      'QUERY_UNDERSTANDING_MODEL_ENABLED',
+                     'TEMPORAL_MODEL_SHADOW_ENABLED',
+                     'TEMPORAL_MODEL_AUTHORITY_ENABLED',
                      'EXACT_ALIAS_ACCEPT',
                      mode='before')
     @classmethod
@@ -190,4 +212,4 @@ class Settings(BaseSettings):
         return v
 
 
-settings = Settings()  # type: ignore
+settings = Settings()

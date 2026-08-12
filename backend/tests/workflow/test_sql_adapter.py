@@ -311,7 +311,13 @@ def test_sql_adapter_treats_filter_dimensions_as_where_conditions_only():
                                 "asset_id": 201,
                                 "display_name": "统计日期",
                                 "operator": "=",
-                                "value": {"kind": "relative_date", "value": "today"},
+                                "value": {
+                                    "kind": "absolute_range",
+                                    "start": "2026-07-31",
+                                    "end_exclusive": "2026-08-01",
+                                    "timezone": "Asia/Shanghai",
+                                    "source_raw": "今天",
+                                },
                             },
                         ],
                     },
@@ -330,7 +336,9 @@ def test_sql_adapter_treats_filter_dimensions_as_where_conditions_only():
     assert result["sql"] == (
         "select stall_traffic.visit_uv as visit_uv "
         "from stall_traffic_1d stall_traffic "
-        "where stall_traffic.stall_id = '1' and stall_traffic.stat_date = CURRENT_DATE limit 100"
+        "where stall_traffic.stall_id = '1' "
+        "and stall_traffic.stat_date >= '2026-07-31' "
+        "and stall_traffic.stat_date < '2026-08-01' limit 100"
     )
 
 
@@ -454,6 +462,8 @@ class UnsafeCompiler:
             tables=["stall_traffic_1d"],
             metrics=["visit_uv"],
             dimensions=[],
+            metric_ids=[100],
+            dimension_ids=[],
         )
 
 
@@ -469,6 +479,8 @@ class CapturingCompiler:
             tables=["stall_traffic_1d"],
             metrics=["visit_uv"],
             dimensions=[],
+            metric_ids=[100],
+            dimension_ids=[],
         )
 
 

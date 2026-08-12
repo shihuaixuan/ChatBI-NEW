@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from apps.ai_model.model_factory import LLMFactory, get_default_config
 from apps.chatbi.models import QuestionModelResponse
 from apps.chatbi.services.understanding import StructuredModelService
+from common.core.config import settings
 
 
 class LangChainQuestionModelClient:
@@ -32,9 +33,7 @@ class LangChainQuestionModelClient:
         )
         return QuestionModelResponse(
             content=_message_content_text(response),
-            usage_metadata=dict(
-                getattr(response, "usage_metadata", None) or {}
-            ),
+            usage_metadata=dict(getattr(response, "usage_metadata", None) or {}),
         )
 
     def _get_llm(self) -> BaseChatModel:
@@ -47,7 +46,19 @@ class LangChainQuestionModelClient:
                 raise RuntimeError(
                     "question model cannot be loaded inside a running event loop"
                 )
-            self._llm = LLMFactory.create_llm(config).llm
+            timeout_ms = settings.QUERY_UNDERSTANDING_TIMEOUT_MS
+            if timeout_ms <= 0:
+                raise ValueError("QUERY_UNDERSTANDING_TIMEOUT_MS_INVALID")
+            # 问题理解使用独立配置副本，避免修改 Agent 主模型或持久化模型配置。
+            question_config = config.model_copy(
+                update={
+                    "additional_params": {
+                        **config.additional_params,
+                        "timeout": timeout_ms / 1000,
+                    }
+                }
+            )
+            self._llm = LLMFactory.create_llm(question_config).llm
         return self._llm
 
 
@@ -63,9 +74,7 @@ def _message_content_text(message: Any) -> str:
         return content.strip()
     if isinstance(content, list):
         return "".join(
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict)
+            part.get("text", "") for part in content if isinstance(part, dict)
         ).strip()
     return ""
 

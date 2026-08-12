@@ -3,6 +3,7 @@ from apps.chatbi.orchestration.graph.conditions.core import (
     SlotClarificationNeededCondition,
     SqlExecutionFailedCondition,
     SqlExecutionSucceededCondition,
+    TemporalSlotAnsweredCondition,
 )
 from sqlbot_platform.workflow_engine.domain.context import WorkflowContext
 from sqlbot_platform.workflow_engine.domain.execution import (
@@ -13,7 +14,9 @@ from sqlbot_platform.workflow_engine.domain.execution import (
 
 def test_slot_clarification_needed_condition_handles_subject_domain():
     decision = SlotClarificationNeededCondition().evaluate(
-        WorkflowContext(variables={"intent": {"validation": {"clarification_required": True}}}),
+        WorkflowContext(
+            variables={"intent": {"validation": {"clarification_required": True}}}
+        ),
         NodeExecutionResult(status=NodeResultStatus.SUCCEEDED),
     )
 
@@ -27,7 +30,12 @@ def test_slot_clarification_needed_condition_ignores_raw_dimension_slots_without
             variables={
                 "intent": {
                     "dimension_slots": [
-                        {"name": "店铺", "role": "ambiguous", "value": None, "value_status": "not_provided"}
+                        {
+                            "name": "店铺",
+                            "role": "ambiguous",
+                            "value": None,
+                            "value_status": "not_provided",
+                        }
                     ]
                 }
             }
@@ -37,6 +45,31 @@ def test_slot_clarification_needed_condition_ignores_raw_dimension_slots_without
 
     assert decision.matched is False
     assert decision.reason_code == "SLOT_CLARIFICATION_NOT_NEEDED"
+
+
+def test_temporal_clarification_routes_answer_back_to_intent_recognition():
+    context = WorkflowContext(
+        variables={
+            "intent": {
+                "temporal_plan": {
+                    "status": "clarification_required",
+                    "ambiguities": [
+                        {
+                            "code": "time_range_amount_missing",
+                            "raw": "最近",
+                        }
+                    ],
+                }
+            },
+            "slot_response": {"temporal_confirmation": "最近7天"},
+        }
+    )
+    result = NodeExecutionResult(status=NodeResultStatus.SUCCEEDED)
+
+    decision = TemporalSlotAnsweredCondition().evaluate(context, result)
+
+    assert decision.matched is True
+    assert decision.reason_code == "TEMPORAL_SLOT_ANSWERED"
 
 
 def test_knowledge_cross_model_condition_routes_to_split_confirmation():

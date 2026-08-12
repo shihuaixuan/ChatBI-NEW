@@ -42,6 +42,11 @@ class WorkflowRunProjectionError(RuntimeError):
 class WorkflowApiExtension(Protocol):
     """由业务应用实现的 Workflow API 扩展能力。"""
 
+    def build_run_request_context(
+        self,
+        request_context: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
     def resolve_dataset_id(
         self,
         workspace_id: int,

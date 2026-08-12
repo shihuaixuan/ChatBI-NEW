@@ -55,13 +55,13 @@ class SemanticBindingQueryPlanner:
                 )
             )
 
-        seen_dimensions: set[tuple[str, str, str]] = set()
+        # 维度值是用户提供的查询字面值，不是需要召回的语义资产。
+        # 这里只检索维度字段；字段绑定后由 payload 投影保留原值并生成过滤条件。
+        seen_dimensions: set[tuple[str, str]] = set()
         dimension_index = 0
-        value_index = 0
         for slot in request.intent.dimension_slots:
             name = _clean_text(slot.name)
-            value = _clean_text(slot.value)
-            identity = (name.casefold(), slot.role, value.casefold())
+            identity = (name.casefold(), slot.role)
             if not name or identity in seen_dimensions:
                 continue
             seen_dimensions.add(identity)
@@ -76,21 +76,10 @@ class SemanticBindingQueryPlanner:
                     role=slot.role,
                 )
             )
-            if slot.value_status == "provided" and value:
-                value_index += 1
-                subqueries.append(
-                    self._subquery(
-                        request,
-                        subquery_id=f"value:{value_index}",
-                        purpose=RetrievalPurpose.VALUE,
-                        text=f"{name} {value}",
-                        resource_types=(RetrievalResourceType.VALUE,),
-                        role="filter",
-                        extra_filters={"dimension_name": name, "value_text": value},
-                    )
-                )
 
-        for index, term in enumerate(_subject_terms(request.intent.subject_domain), start=1):
+        for index, term in enumerate(
+            _subject_terms(request.intent.subject_domain), start=1
+        ):
             subqueries.append(
                 self._subquery(
                     request,

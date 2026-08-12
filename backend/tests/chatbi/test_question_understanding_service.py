@@ -52,6 +52,13 @@ class FakeSchemaProvider:
                     FakeDimension("统计日期", [], "date", is_time=True),
                     FakeDimension("档口ID", ["店铺", "档口", "门店"], "bigint"),
                     FakeDimension("商品ID", [], "varchar"),
+                    FakeDimension("客户ID", ["客户"], "varchar"),
+                    FakeDimension("客户名称", ["客户"], "varchar"),
+                    FakeDimension(
+                        "交易渠道，如线上或线下",
+                        ["渠道", "线上", "线下"],
+                        "varchar",
+                    ),
                 ]
             },
         )()
@@ -79,7 +86,7 @@ def _intent_payload(metric):
         "time_range": {"raw": "2026年6月30日", "value_status": "provided"},
         "filter_mentions": [],
         "required_slot_types": [],
-        "query_shape": {},
+        "query_shape": {"select_mode": "aggregate"},
         "ambiguous_slots": [],
         "conflict_slots": [],
     }
@@ -254,3 +261,387 @@ def test_agent_understanding_serializes_model_validator_error_for_repair():
             "msg": "Value error, dimension_mentions 与 dimension_slots 必须一一对应",
         }
     ]
+
+
+def test_agent_understanding_preserves_model_ranking_semantics():
+    question = "2026年6月30日当前库存件数最高的5个商品ID"
+    model = SequenceQuestionModel(
+        [
+            _rewrite_payload(question),
+            {
+                "intent_type": "ranking_analysis",
+                "confidence": 0.95,
+                "metric_mentions": ["当前库存件数"],
+                "dimension_mentions": [],
+                "dimension_slots": [],
+                "time_mentions": ["2026年6月30日", "当前"],
+                "time_range": {
+                    "raw": "2026年6月30日",
+                    "value_status": "provided",
+                },
+                "filter_mentions": [],
+                "required_slot_types": [],
+                "query_shape": {
+                    "select_mode": "aggregate",
+                    "needs_group_by": True,
+                    "needs_order_by": True,
+                    "order_direction": "desc",
+                    "limit": 5,
+                },
+                "ambiguous_slots": [],
+                "conflict_slots": ["time_range"],
+            },
+            {
+                "dimension_mentions": ["商品ID"],
+                "dimension_slots": [
+                    {
+                        "name": "商品ID",
+                        "role": "group_by",
+                        "value": None,
+                        "value_status": "not_provided",
+                        "value_confidence": 0.95,
+                    }
+                ],
+                "residual_filter_mentions": [],
+                "ambiguous_slots": [],
+                "conflict_slots": [],
+            },
+        ]
+    )
+
+    outcome = QuestionUnderstandingService(
+        model_client=model,
+        schema_provider=FakeSchemaProvider(),
+    ).understand(
+        question=question,
+        datasource_id=13,
+        tenant_id=1,
+        dataset_id=243,
+    )
+
+    intent = outcome.output.intent
+    assert intent.dimension_slots[0].role == "group_by"
+    assert intent.ambiguous_slots == []
+    assert intent.time_mentions == ["2026年6月30日"]
+    assert intent.conflict_slots == []
+    assert intent.required_slot_types == [
+        "metric",
+        "dimension",
+        "time_dimension",
+        "order",
+        "limit",
+    ]
+    assert intent.query_shape.model_dump(exclude_none=True) == {
+        "select_mode": "aggregate",
+        "needs_group_by": True,
+        "needs_order_by": True,
+        "order_direction": "desc",
+        "limit": 5,
+    }
+    assert outcome.output.validation.status == "valid"
+
+
+def test_agent_understanding_does_not_infer_ranking_semantics_from_question_text():
+    question = "当前库存件数最高的5个商品ID"
+    model = SequenceQuestionModel(
+        [
+            _rewrite_payload(question),
+            {
+                "intent_type": "ranking_analysis",
+                "confidence": 0.95,
+                "metric_mentions": ["当前库存件数"],
+                "dimension_mentions": [],
+                "dimension_slots": [],
+                "time_mentions": [],
+                "time_range": {"raw": None, "value_status": "not_provided"},
+                "filter_mentions": [],
+                "required_slot_types": [],
+                "query_shape": {"select_mode": "aggregate"},
+                "ambiguous_slots": [],
+                "conflict_slots": [],
+            },
+            {
+                "dimension_mentions": ["商品ID"],
+                "dimension_slots": [
+                    {
+                        "name": "商品ID",
+                        "role": "ambiguous",
+                        "value": None,
+                        "value_status": "not_provided",
+                        "value_confidence": 0.8,
+                    }
+                ],
+                "residual_filter_mentions": [],
+                "ambiguous_slots": ["商品ID"],
+                "conflict_slots": [],
+            },
+        ]
+    )
+
+    outcome = QuestionUnderstandingService(
+        model_client=model,
+        schema_provider=FakeSchemaProvider(),
+    ).understand(
+        question=question,
+        datasource_id=13,
+        tenant_id=1,
+        dataset_id=243,
+    )
+
+    intent = outcome.output.intent
+    assert intent.dimension_slots[0].role == "ambiguous"
+    assert intent.query_shape.model_dump(exclude_none=True) == {
+        "select_mode": "aggregate",
+        "needs_group_by": False,
+        "needs_order_by": False,
+    }
+    assert {
+        "dimension_role_ambiguous",
+        "ranking_dimension_missing",
+        "ranking_order_missing",
+        "ranking_limit_missing",
+    }.issubset(outcome.output.validation.reason_codes)
+
+
+def test_agent_understanding_marks_multi_value_comparison_for_grouping():
+    question = "比较店铺100011和100012的客户数"
+    model = SequenceQuestionModel(
+        [
+            _rewrite_payload(question),
+            {
+                "intent_type": "comparison_analysis",
+                "confidence": 0.95,
+                "metric_mentions": ["客户数"],
+                "dimension_mentions": [],
+                "dimension_slots": [],
+                "time_mentions": [],
+                "time_range": {"raw": None, "value_status": "not_provided"},
+                "filter_mentions": [],
+                "required_slot_types": [],
+                "query_shape": {
+                    "select_mode": "aggregate",
+                    "needs_group_by": True,
+                },
+                "ambiguous_slots": [],
+                "conflict_slots": [],
+            },
+            {
+                "dimension_mentions": ["店铺"],
+                "dimension_slots": [
+                    {
+                        "name": "店铺",
+                        "role": "filter",
+                        "value": ["100011", "100012"],
+                        "value_status": "provided",
+                        "value_confidence": 1.0,
+                    }
+                ],
+                "residual_filter_mentions": [],
+                "ambiguous_slots": [],
+                "conflict_slots": [],
+            },
+        ]
+    )
+
+    outcome = QuestionUnderstandingService(
+        model_client=model,
+        schema_provider=FakeSchemaProvider(),
+    ).understand(
+        question=question,
+        datasource_id=13,
+        tenant_id=1,
+        dataset_id=243,
+    )
+
+    intent = outcome.output.intent
+    assert intent.dimension_slots[0].value == ["100011", "100012"]
+    assert intent.required_slot_types == [
+        "metric",
+        "filter",
+        "comparison_target",
+        "dimension",
+    ]
+    assert intent.query_shape.model_dump(exclude_none=True) == {
+        "select_mode": "aggregate",
+        "needs_group_by": True,
+        "needs_order_by": False,
+    }
+    assert outcome.output.validation.status == "valid"
+
+
+def test_agent_understanding_normalizes_object_ambiguity_without_losing_id_filters():
+    question = "2026年6月30日店铺100011客户C1000101001的客户当日GMV是多少？"
+    model = SequenceQuestionModel(
+        [
+            _rewrite_payload(question),
+            _intent_payload("客户当日GMV"),
+            {
+                "dimension_mentions": ["店铺", "客户ID"],
+                "dimension_slots": [
+                    {
+                        "name": "店铺",
+                        "role": "filter",
+                        "value": "100011",
+                        "value_status": "provided",
+                        "value_confidence": 1.0,
+                    },
+                    {
+                        "name": "客户ID",
+                        "role": "filter",
+                        "value": "C1000101001",
+                        "value_status": "provided",
+                        "value_confidence": 1.0,
+                    },
+                ],
+                "residual_filter_mentions": [],
+                "ambiguous_slots": [
+                    {
+                        "name": "客户ID",
+                        "role": "filter",
+                        "value_status": "provided",
+                    }
+                ],
+                "conflict_slots": [],
+            },
+        ]
+    )
+
+    outcome = QuestionUnderstandingService(
+        model_client=model,
+        schema_provider=FakeSchemaProvider(),
+    ).understand(
+        question=question,
+        datasource_id=13,
+        tenant_id=1,
+        dataset_id=243,
+    )
+
+    assert [
+        (slot.name, slot.value)
+        for slot in outcome.output.intent.dimension_slots
+    ] == [
+        ("档口ID", "100011"),
+        ("客户ID", "C1000101001"),
+    ]
+    assert outcome.output.intent.ambiguous_slots == []
+    assert outcome.output.validation.status == "valid"
+    assert len(model.calls) == 3
+
+
+def test_agent_understanding_repairs_repeated_dimension_coverage_mismatch():
+    question = "2026年6月30日店铺100011商品P1000101001的当前库存件数是多少？"
+    invalid_dimensions = {
+        "dimension_mentions": ["店铺", "商品ID"],
+        "dimension_slots": [
+            {
+                "name": "店铺",
+                "role": "filter",
+                "value": "100011",
+                "value_status": "provided",
+                "value_confidence": 1.0,
+            }
+        ],
+        "residual_filter_mentions": [],
+        "ambiguous_slots": [],
+        "conflict_slots": [],
+    }
+    model = SequenceQuestionModel(
+        [
+            _rewrite_payload(question),
+            _intent_payload("当前库存件数"),
+            invalid_dimensions,
+            invalid_dimensions,
+        ]
+    )
+
+    outcome = QuestionUnderstandingService(
+        model_client=model,
+        schema_provider=FakeSchemaProvider(),
+    ).understand(
+        question=question,
+        datasource_id=13,
+        tenant_id=1,
+        dataset_id=243,
+    )
+
+    assert outcome.output.intent.dimension_mentions == ["档口ID", "商品ID"]
+    assert outcome.output.intent.dimension_slots[1].model_dump(mode="json") == {
+        "name": "商品ID",
+        "role": "ambiguous",
+        "value": None,
+        "value_status": "not_provided",
+        "value_confidence": 0.0,
+    }
+    assert outcome.output.validation.status == "clarification_required"
+    assert "dimension_role_ambiguous" in outcome.output.validation.reason_codes
+
+
+def test_agent_understanding_stabilizes_share_dimension_and_drops_metric_modifier():
+    question = "2026年6月店铺100011线上和线下客户当日GMV占比分别是多少？"
+    model = SequenceQuestionModel(
+        [
+            _rewrite_payload(question),
+            {
+                **_intent_payload("客户当日GMV"),
+                "intent_type": "share_analysis",
+                "time_range": {"raw": "2026年6月", "value_status": "provided"},
+                "query_shape": {
+                    "select_mode": "aggregate",
+                    "needs_group_by": True,
+                },
+            },
+            {
+                "dimension_mentions": [
+                    "店铺",
+                    "客户名称",
+                    "交易渠道",
+                ],
+                "dimension_slots": [
+                    {
+                        "name": "店铺",
+                        "role": "filter",
+                        "value": "100011",
+                        "value_status": "provided",
+                        "value_confidence": 1.0,
+                    },
+                    {
+                        "name": "客户名称",
+                        "role": "ambiguous",
+                        "value": None,
+                        "value_status": "not_provided",
+                        "value_confidence": 0.0,
+                    },
+                    {
+                        "name": "交易渠道",
+                        "role": "ambiguous",
+                        "value": None,
+                        "value_status": "not_provided",
+                        "value_confidence": 0.0,
+                    },
+                ],
+                "residual_filter_mentions": [],
+                "ambiguous_slots": [{"name": "客户名称"}],
+                "conflict_slots": [],
+            },
+        ]
+    )
+
+    outcome = QuestionUnderstandingService(
+        model_client=model,
+        schema_provider=FakeSchemaProvider(),
+    ).understand(
+        question=question,
+        datasource_id=13,
+        tenant_id=1,
+        dataset_id=243,
+    )
+
+    intent = outcome.output.intent
+    assert [slot.name for slot in intent.dimension_slots] == [
+        "档口ID",
+        "交易渠道，如线上或线下",
+    ]
+    assert intent.query_shape.needs_group_by is True
+    assert "dimension" in intent.required_slot_types
+    assert intent.ambiguous_slots == []
+    assert outcome.output.validation.status == "valid"

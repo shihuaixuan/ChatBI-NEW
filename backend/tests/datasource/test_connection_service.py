@@ -14,6 +14,7 @@ from apps.datasource.models.dto import (
     DatasourceConnection,
     TableSchema,
 )
+from apps.datasource.repository.connectors import database as database_connector
 from apps.datasource.repository.connectors.connection_gateway import (
     DatabaseDriverConnectionGateway,
 )
@@ -44,6 +45,7 @@ class RecordingConnectionGateway:
     def __init__(self) -> None:
         self.executed: tuple[DatasourceConnection, str, bool] | None = None
         self.calls: list[tuple[str, str]] = []
+        self.timeout_seconds: float | None = None
 
     def check_connection(self, datasource: DatasourceConnection) -> bool:
         self.calls.append(("check", datasource.type))
@@ -88,9 +90,11 @@ class RecordingConnectionGateway:
         sql: str,
         *,
         origin_column: bool = False,
+        timeout_seconds: float | None = None,
     ) -> dict:
         self.calls.append(("query", datasource.type))
         self.executed = (datasource, sql, origin_column)
+        self.timeout_seconds = timeout_seconds
         return {"fields": ["value"], "data": [{"value": 1}], "sql": ""}
 
 
@@ -138,6 +142,64 @@ def test_connection_service_rejects_missing_datasource_before_driver_call():
 
     with pytest.raises(DatasourceNotFoundError):
         service.list_tables(404)
+
+
+def test_connection_service_forwards_query_deadline_to_driver_gateway():
+    datasource = DatasourceConnection(
+        id=7,
+        type="mysql",
+        type_name="MySQL",
+        configuration="encrypted",
+    )
+    gateway = RecordingConnectionGateway()
+    service = DatasourceConnectionService(
+        FakeDatasourceConnectionRepository(datasource),
+        gateway,
+    )
+
+    service.execute_query(7, "select 1", timeout_seconds=7.25)
+
+    assert gateway.timeout_seconds == 7.25
+
+
+def test_mysql_engine_applies_deadline_to_connect_read_and_write(
+    monkeypatch,
+):
+    configuration = aes_encrypt(
+        json.dumps(
+            {
+                "host": "db.example.com",
+                "port": 3306,
+                "username": "sqlbot",
+                "password": "secret",
+                "database": "analytics",
+                "timeout": 30,
+            }
+        )
+    )
+    datasource = DatasourceConnection(
+        id=7,
+        type="mysql",
+        type_name="MySQL",
+        configuration=configuration,
+    )
+    captured: dict = {}
+
+    def fake_create_engine(uri, **kwargs):
+        captured["uri"] = uri
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(database_connector, "create_engine", fake_create_engine)
+
+    database_connector.get_engine(datasource, timeout=7)
+
+    assert captured["connect_args"] == {
+        "connect_timeout": 7,
+        "read_timeout": 7,
+        "write_timeout": 7,
+        "ssl": None,
+    }
 
 
 @pytest.mark.parametrize(

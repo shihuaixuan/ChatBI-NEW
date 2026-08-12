@@ -25,7 +25,6 @@ from apps.retrieval.models.dto import (
     RetrievalSlotDecision,
     RetrievalSourceType,
 )
-from apps.semantic import normalize_time_range_payload
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 _GROUP_TYPES = {
@@ -92,7 +91,8 @@ def semantic_payload_to_bundle(
             RetrievalChannelDiagnostic(
                 channel=RetrievalChannel.LEXICAL,
                 status=RetrievalChannelStatus.SUCCEEDED,
-                candidate_count=sum(len(items) for items in candidates.values()) - dense_candidate_count,
+                candidate_count=sum(len(items) for items in candidates.values())
+                - dense_candidate_count,
             ),
             RetrievalChannelDiagnostic(
                 channel=RetrievalChannel.DENSE,
@@ -105,7 +105,8 @@ def semantic_payload_to_bundle(
         total_latency_ms=latency_ms,
         degraded_reason=(
             dense_error_code
-            if dense_status in {RetrievalChannelStatus.UNAVAILABLE, RetrievalChannelStatus.FAILED}
+            if dense_status
+            in {RetrievalChannelStatus.UNAVAILABLE, RetrievalChannelStatus.FAILED}
             else None
         ),
     )
@@ -144,7 +145,11 @@ def bundle_to_semantic_payload(
         "terms": bundle.bindings.terms,
     }
     candidate_groups = {
-        group: [_hit_to_candidate(hit, elements) for hit in hits if hit.asset_ref is not None]
+        group: [
+            _hit_to_candidate(hit, elements)
+            for hit in hits
+            if hit.asset_ref is not None
+        ]
         for group, hits in group_hits.items()
     }
     candidates_by_key = {
@@ -174,7 +179,10 @@ def bundle_to_semantic_payload(
             )
             if candidate is None:
                 candidate = _asset_ref_to_candidate(asset, elements)
-            if not any(_candidate_key(item) == _candidate_key(candidate) for item in selected_assets[group]):
+            if not any(
+                _candidate_key(item) == _candidate_key(candidate)
+                for item in selected_assets[group]
+            ):
                 selected_assets[group].append(candidate)
 
     selected_with_dimensions = _selected_assets_with_dimension_groups(selected_assets)
@@ -480,17 +488,24 @@ def _slot_bindings(
     time_dimensions = [
         item for item in dimensions if _is_time_payload(item.get("payload") or {})
     ]
-    value_filters = [_asset_binding(item, "VALUE") for item in selected_assets.get("values", [])]
+    value_filters = [
+        _asset_binding(item, "VALUE") for item in selected_assets.get("values", [])
+    ]
     dimension_filters = _dimension_filter_bindings(selected_assets, intent)
     time_filter = _time_filter_binding(time_dimensions, intent)
     time_filters = [time_filter] if time_filter is not None else []
     return {
-        "metrics": [_asset_binding(item, "METRIC") for item in selected_assets.get("metrics", [])],
+        "metrics": [
+            _asset_binding(item, "METRIC")
+            for item in selected_assets.get("metrics", [])
+        ],
         "dimensions": [_asset_binding(item, "DIMENSION") for item in dimensions],
         "business_dimensions": [
             _asset_binding(item, "DIMENSION") for item in business_dimensions
         ],
-        "time_dimensions": [_asset_binding(item, "DIMENSION") for item in time_dimensions],
+        "time_dimensions": [
+            _asset_binding(item, "DIMENSION") for item in time_dimensions
+        ],
         "group_dimensions": _group_dimension_bindings(business_dimensions, intent),
         "value_filters": value_filters,
         "dimension_filters": dimension_filters,
@@ -516,10 +531,19 @@ def _group_dimension_bindings(
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     seen: set[int] = set()
+    intent_type = str(intent.get("intent_type") or "").lower()
     for slot in intent.get("dimension_slots") or []:
         if not isinstance(slot, dict):
             continue
-        if str(slot.get("role") or "").lower() not in {"group_by", "display"}:
+        role = str(slot.get("role") or "").lower()
+        value = slot.get("value")
+        is_multi_value_group_dimension = (
+            intent_type in {"comparison_analysis", "share_analysis"}
+            and role == "filter"
+            and isinstance(value, list)
+            and len(value) >= 2
+        )
+        if role not in {"group_by", "display"} and not is_multi_value_group_dimension:
             continue
         dimension = _match_dimension(str(slot.get("name") or ""), dimensions)
         if dimension is None or int(dimension["asset_id"]) in seen:
@@ -534,9 +558,7 @@ def _dimension_filter_bindings(
     intent: dict[str, Any],
 ) -> list[dict[str, Any]]:
     slots = [
-        item
-        for item in intent.get("dimension_slots") or []
-        if isinstance(item, dict)
+        item for item in intent.get("dimension_slots") or [] if isinstance(item, dict)
     ]
     for mention in intent.get("filter_mentions") or []:
         if not isinstance(mention, dict):
@@ -567,7 +589,15 @@ def _dimension_filter_bindings(
         )
         if value in (None, "") or dimension is None:
             continue
-        operator = str(slot.get("operator") or "=")
+        operator = str(slot.get("operator") or "=").strip().lower()
+        if isinstance(value, list):
+            if not value:
+                continue
+            # 多个字面值必须使用集合过滤，禁止生成 "字段 = 逗号拼接字符串"。
+            if operator in {"=", "=="}:
+                operator = "in"
+        elif operator in {"in", "not in"}:
+            value = [value]
         key = (int(dimension["asset_id"]), operator, str(value))
         if key in seen:
             continue
@@ -593,20 +623,28 @@ def _time_filter_binding(
         return None
     if str(time_range.get("value_status") or "").lower() != "provided":
         return None
-    normalized = normalize_time_range_payload(time_range).get("normalized")
-    if not isinstance(normalized, dict) or normalized.get("kind") == "unsupported":
+    normalized = time_range.get("normalized")
+    if not isinstance(normalized, dict) or normalized.get("kind") != "absolute_range":
         return None
     if not time_dimensions:
         return None
     dimension = sorted(
         time_dimensions,
         key=lambda item: (
-            -int(bool((item.get("payload") or {}).get("ext_info", {}).get("is_default_time"))),
+            -int(
+                bool(
+                    (item.get("payload") or {})
+                    .get("ext_info", {})
+                    .get("is_default_time")
+                )
+            ),
             int(item.get("asset_id") or 0),
         ),
     )[0]
     binding = _asset_binding(dimension, "DIMENSION")
-    binding.update({"operator": "=", "value": normalized, "source": "intent_time_range"})
+    binding.update(
+        {"operator": "=", "value": normalized, "source": "intent_time_range"}
+    )
     return binding
 
 
@@ -646,7 +684,10 @@ def _cross_model_query_plans(
                 "model_id": model_id,
                 "metric_ids": [int(item["asset_id"]) for item in metrics],
                 "dimension_ids": [int(item["asset_id"]) for item in dimensions],
-                "metrics": [str(item.get("name") or item.get("biz_name") or "") for item in metrics],
+                "metrics": [
+                    str(item.get("name") or item.get("biz_name") or "")
+                    for item in metrics
+                ],
                 "dimensions": [
                     str(item.get("name") or item.get("biz_name") or "")
                     for item in dimensions
@@ -753,7 +794,9 @@ def _public_candidate_groups(
 
 def _is_time_payload(payload: dict[str, Any]) -> bool:
     raw_ext_info = payload.get("ext_info")
-    ext_info = cast(dict[str, Any], raw_ext_info) if isinstance(raw_ext_info, dict) else {}
+    ext_info = (
+        cast(dict[str, Any], raw_ext_info) if isinstance(raw_ext_info, dict) else {}
+    )
     dimension_type = str(ext_info.get("dimension_type") or "").lower()
     semantic_type = str(ext_info.get("semantic_type") or "").lower()
     data_type = str(ext_info.get("dimension_data_type") or "").lower()
@@ -780,7 +823,8 @@ def _tables(
         dict.fromkeys(
             str(model.get("tableQuery") or "").strip()
             for model in schema.models
-            if model.get("id") in model_ids and str(model.get("tableQuery") or "").strip()
+            if model.get("id") in model_ids
+            and str(model.get("tableQuery") or "").strip()
         )
     )
 
@@ -807,7 +851,9 @@ def _normalize_text(value: Any) -> str:
     return "".join(str(value or "").strip().lower().split())
 
 
-def _candidate_groups_with_selected(raw: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+def _candidate_groups_with_selected(
+    raw: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
     candidate_groups = _dict_value(raw, "candidate_groups")
     selected_groups = _dict_value(raw, "selected_assets")
     result: dict[str, list[dict[str, Any]]] = {}
@@ -852,7 +898,11 @@ def _candidate_to_hit(
         raise ValueError("语义检索候选缺少有效 asset_id")
     model_id = _positive_int(item.get("model_id"))
     source = str(item.get("source") or "semantic_binding")
-    channel = RetrievalChannel.DENSE if _uses_dense_channel(item) else RetrievalChannel.LEXICAL
+    channel = (
+        RetrievalChannel.DENSE
+        if _uses_dense_channel(item)
+        else RetrievalChannel.LEXICAL
+    )
     title = str(
         item.get("name")
         or item.get("display_name")
@@ -922,7 +972,9 @@ def _slot_decisions(
         )
 
     if "time_dimension" in request.intent.required_slot_types:
-        time_candidates = [item for item in candidates["dimensions"] if _is_time_candidate(item)]
+        time_candidates = [
+            item for item in candidates["dimensions"] if _is_time_candidate(item)
+        ]
         time_selected = [
             item
             for item in _dict_items(selected_groups, "dimensions")
@@ -952,15 +1004,30 @@ def _slot_decision(
     global_status: RetrievalDecisionStatus,
     filter_by_mention: bool = True,
 ) -> RetrievalSlotDecision:
-    candidates = _filter_for_mention(candidate_items, mention) if filter_by_mention else candidate_items
-    selected = _filter_for_mention(selected_items, mention) if filter_by_mention else selected_items
+    candidates = (
+        _filter_for_mention(candidate_items, mention)
+        if filter_by_mention
+        else candidate_items
+    )
+    selected = (
+        _filter_for_mention(selected_items, mention)
+        if filter_by_mention
+        else selected_items
+    )
     if not candidates and candidate_items:
         candidates = candidate_items
     candidate_refs = [_asset_reference(item) for item in candidates]
     candidate_keys = {_asset_key(item) for item in candidate_refs}
-    selected_refs = [item for item in (_asset_reference(value) for value in selected) if _asset_key(item) in candidate_keys]
+    selected_refs = [
+        item
+        for item in (_asset_reference(value) for value in selected)
+        if _asset_key(item) in candidate_keys
+    ]
 
-    if global_status == RetrievalDecisionStatus.AMBIGUOUS and purpose == RetrievalPurpose.METRIC:
+    if (
+        global_status == RetrievalDecisionStatus.AMBIGUOUS
+        and purpose == RetrievalPurpose.METRIC
+    ):
         status = RetrievalDecisionStatus.AMBIGUOUS
         selected_refs = []
     elif selected_refs:
@@ -989,7 +1056,10 @@ def _allowed_assets(
     raw: dict[str, Any],
     status: RetrievalDecisionStatus,
 ) -> list[ExecutableAssetReference]:
-    if status not in {RetrievalDecisionStatus.RESOLVED, RetrievalDecisionStatus.CROSS_MODEL}:
+    if status not in {
+        RetrievalDecisionStatus.RESOLVED,
+        RetrievalDecisionStatus.CROSS_MODEL,
+    }:
         return []
     selected = _dict_value(raw, "selected_assets")
     result: list[ExecutableAssetReference] = []
@@ -1011,14 +1081,18 @@ def _allowed_assets(
     return result
 
 
-def _filter_for_mention(items: list[dict[str, Any]], mention: str) -> list[dict[str, Any]]:
+def _filter_for_mention(
+    items: list[dict[str, Any]], mention: str
+) -> list[dict[str, Any]]:
     normalized_mention = _normalize(mention)
     if not normalized_mention:
         return items
     primary_matches = []
     for item in items:
         payload = _dict_value(item, "payload")
-        aliases = item.get("alias") or payload.get("alias") or payload.get("aliases") or []
+        aliases = (
+            item.get("alias") or payload.get("alias") or payload.get("aliases") or []
+        )
         if isinstance(aliases, str):
             aliases = [aliases]
         texts = [
@@ -1028,7 +1102,8 @@ def _filter_for_mention(items: list[dict[str, Any]], mention: str) -> list[dict[
             *aliases,
         ]
         if any(
-            normalized and (normalized in normalized_mention or normalized_mention in normalized)
+            normalized
+            and (normalized in normalized_mention or normalized_mention in normalized)
             for normalized in (_normalize(value) for value in texts)
         ):
             primary_matches.append(item)
@@ -1037,7 +1112,11 @@ def _filter_for_mention(items: list[dict[str, Any]], mention: str) -> list[dict[
 
     # 旧候选的 matched_text 有时是完整问题；这里只接受槽位文本精确相等，
     # 避免整句同时包含多个指标时把所有选中资产归到同一个槽位。
-    return [item for item in items if _normalize(item.get("matched_text")) == normalized_mention]
+    return [
+        item
+        for item in items
+        if _normalize(item.get("matched_text")) == normalized_mention
+    ]
 
 
 def _asset_reference(item: dict[str, Any]) -> AssetReference:
@@ -1087,7 +1166,11 @@ def _is_time_candidate(item: dict[str, Any]) -> bool:
     text = _normalize(
         " ".join(
             str(value or "")
-            for value in (item.get("name"), item.get("display_name"), item.get("biz_name"))
+            for value in (
+                item.get("name"),
+                item.get("display_name"),
+                item.get("biz_name"),
+            )
         )
     )
     return any(token in text for token in ("日期", "时间", "date", "time"))
@@ -1117,7 +1200,9 @@ def _optional_text(value: Any) -> str | None:
     return text or None
 
 
-def _asset_key(asset: AssetReference | ExecutableAssetReference) -> tuple[str, int, int | None]:
+def _asset_key(
+    asset: AssetReference | ExecutableAssetReference,
+) -> tuple[str, int, int | None]:
     return (str(asset.asset_type.value), asset.asset_id, asset.model_id)
 
 

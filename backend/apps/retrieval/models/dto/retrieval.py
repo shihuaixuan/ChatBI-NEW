@@ -96,7 +96,7 @@ class RetrievalDimensionSlot(_StrictModel):
 
     name: str = Field(min_length=1)
     role: Literal["group_by", "filter", "ambiguous"]
-    value: str | int | float | bool | None = None
+    value: str | int | float | bool | list[str | int | float | bool] | None = None
     value_status: Literal["provided", "not_provided", "ambiguous"] = "not_provided"
 
 

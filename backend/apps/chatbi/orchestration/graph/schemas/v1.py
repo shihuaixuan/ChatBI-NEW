@@ -71,6 +71,16 @@ class IntentRecognitionOutput(
     time_range: dict[str, Any] = Field(default_factory=dict)
     subject_domain: dict[str, Any] = Field(default_factory=dict)
     validation: dict[str, Any] = Field(default_factory=dict)
+    temporal_plan: dict[str, Any] | None = None
+    resolved_temporal_plan: dict[str, Any] | None = None
+    temporal_interpretation_source: (
+        Literal[
+            "legacy_rule",
+            "model",
+            "user_confirmation",
+        ]
+        | None
+    ) = None
 
 
 class IntentValidationOutput(BaseModel):

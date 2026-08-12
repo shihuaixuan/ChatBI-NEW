@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
+from apps.chatbi.orchestration.agent.working_state import (
+    executable_sql,
+    has_critical_ambiguity,
+    has_resolved_semantics,
+)
 
 PREPARATION_TOOLS = (
     "search_semantic_assets",
@@ -27,15 +32,21 @@ def visible_tool_names(
     mode: str,
     registered: list[str],
 ) -> list[str]:
-    """工具可见性只表达流程阶段，领域服务仍负责最终安全校验。"""
+    """根据可信进展收缩候选工具，同时保留模型对当前分支的选择权。"""
 
     available = set(registered)
     context = state.context.state
     if mode == "soft":
         if context.get("last_execution"):
             return _available(("finish",), available)
-        if _has_critical_ambiguity(context):
+        if has_critical_ambiguity(context):
             return _available(("clarify",), available)
+        if executable_sql(context):
+            return _available(("execute_sql",), available)
+        if has_resolved_semantics(context):
+            return _available(("compile_semantic_sql",), available)
+        if context.get("physical_schema_loaded"):
+            return _available(("validate_sql",), available)
         return []
 
     understanding = context.get("question_understanding")
@@ -46,30 +57,23 @@ def visible_tool_names(
         return []
     if context.get("last_execution"):
         return _available(("finish",), available)
-    if _has_critical_ambiguity(context):
+    if has_critical_ambiguity(context):
         return _available(("clarify",), available)
 
-    names = list(PREPARATION_TOOLS)
-    if context.get("semantic_scope"):
-        names.append("compile_semantic_sql")
-    if context.get("allowed_tables"):
-        names.extend(("validate_sql", "execute_sql"))
+    if executable_sql(context):
+        names = ["execute_sql"]
+    elif has_resolved_semantics(context):
+        names = ["compile_semantic_sql"]
+    elif context.get("physical_schema_loaded"):
+        names = ["validate_sql", "get_sql_examples", "get_dataset_schema"]
+    elif context.get("semantic_scope"):
+        # 语义决策没有收敛时进入物理 SQL 兜底，不重复执行同一语义检索。
+        names = ["search_terminology", "get_sql_examples", "get_dataset_schema"]
+    else:
+        names = list(PREPARATION_TOOLS)
     # 显式注册的宿主扩展 Tool 不属于 ChatBI 九工具阶段表，正常模式保持可见。
     names.extend(name for name in registered if name not in STANDARD_TOOLS)
     return _available(tuple(names), available)
-
-
-def _has_critical_ambiguity(context: dict) -> bool:
-    package = context.get("semantic_package")
-    if not isinstance(package, dict):
-        return False
-    status = str(package.get("status") or "")
-    return status in {
-        "metric_ambiguous",
-        "dimension_ambiguous",
-        "semantic_ambiguous",
-        "time_dimension_not_configured",
-    }
 
 
 def _available(names: tuple[str, ...], available: set[str]) -> list[str]:

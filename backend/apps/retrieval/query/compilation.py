@@ -10,6 +10,28 @@ from apps.retrieval.models.dto import (
     RetrievalResourceType,
 )
 
+EXECUTABLE_DECISION_STATUSES = frozenset(
+    {
+        RetrievalDecisionStatus.RESOLVED,
+        RetrievalDecisionStatus.CROSS_MODEL,
+        RetrievalDecisionStatus.DEGRADED,
+    }
+)
+
+
+def is_compilation_decision_executable(
+    decision_status: RetrievalDecisionStatus | str | None,
+) -> bool:
+    """判断检索决策是否可以在资产白名单约束下进入 SQL 编译。"""
+
+    if decision_status is None:
+        return False
+    try:
+        normalized = RetrievalDecisionStatus(decision_status)
+    except ValueError:
+        return False
+    return normalized in EXECUTABLE_DECISION_STATUSES
+
 
 def validate_compilation_assets(
     decision: RetrievalDecision,
@@ -37,11 +59,7 @@ def validate_compilation_allowlist(
 ) -> tuple[ExecutableAssetReference, ...]:
     """校验服务端保存的检索决策状态和资产白名单。"""
 
-    executable_statuses = {
-        RetrievalDecisionStatus.RESOLVED,
-        RetrievalDecisionStatus.CROSS_MODEL,
-    }
-    if decision_status not in executable_statuses:
+    if not is_compilation_decision_executable(decision_status):
         raise RetrievalQueryError(
             "SEMANTIC_BINDING_DECISION_NOT_EXECUTABLE",
             details={
@@ -75,4 +93,9 @@ def validate_compilation_allowlist(
     )
 
 
-__all__ = ["validate_compilation_allowlist", "validate_compilation_assets"]
+__all__ = [
+    "EXECUTABLE_DECISION_STATUSES",
+    "is_compilation_decision_executable",
+    "validate_compilation_allowlist",
+    "validate_compilation_assets",
+]

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContext
+from apps.chatbi.services.understanding import build_temporal_clarification_options
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 
@@ -34,12 +35,17 @@ class ClarificationCardBuilder:
 
     @staticmethod
     def _response_schema(plan: ClarificationPlan) -> dict[str, Any]:
-        properties = {}
+        properties: dict[str, Any] = {}
         for slot in plan.slots:
             if slot == "domain_id":
                 properties[slot] = {"type": "integer"}
+            elif slot == "temporal_plan":
+                properties[slot] = {"type": "object"}
             elif slot == "dimension_values":
-                properties[slot] = {"type": "object", "additionalProperties": {"type": "string"}}
+                properties[slot] = {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                }
             else:
                 properties[slot] = {"type": "string"}
         properties["skipped"] = {"type": "boolean"}
@@ -52,7 +58,11 @@ class ClarificationCardBuilder:
                 "clarification_type": plan.clarification_type,
                 "input_type": plan.input_type,
                 "question_key": plan.question_key,
-                **({"dimension_value_fields": dimension_value_fields} if dimension_value_fields else {}),
+                **(
+                    {"dimension_value_fields": dimension_value_fields}
+                    if dimension_value_fields
+                    else {}
+                ),
             },
         }
 
@@ -147,6 +157,32 @@ class InteractionAdapter:
         slot_issues = self._slot_issues(intent)
         slot_issue_types = {str(issue.get("slot_type") or "") for issue in slot_issues}
         ambiguous_slots = [str(slot) for slot in intent.get("ambiguous_slots") or []]
+        if "time_range" in slot_issue_types:
+            raw_temporal_plan = intent.get("temporal_plan")
+            temporal_plan: dict[str, Any] = (
+                raw_temporal_plan if isinstance(raw_temporal_plan, dict) else {}
+            )
+            ambiguity_codes = {
+                str(item.get("code") or "")
+                for item in temporal_plan.get("ambiguities") or []
+                if isinstance(item, dict)
+            }
+            options = build_temporal_clarification_options(ambiguity_codes)
+            prompt = "请提供明确的时间范围。"
+            if "time_range_conflict" in ambiguity_codes:
+                prompt = "问题中存在多个时间范围，请确认本次查询使用哪个时间范围。"
+            elif "time_expression_unsupported" in ambiguity_codes:
+                prompt = "当前时间表达暂不支持，请提供明确的起止日期。"
+            return self._card_builder.build(
+                ClarificationPlan(
+                    clarification_type="time_range",
+                    prompt=prompt,
+                    slots=["temporal_confirmation", "temporal_plan"],
+                    options=options,
+                    allowed_update_path="variables.slot_response",
+                    question_key="time_range:" + ",".join(sorted(ambiguity_codes)),
+                )
+            )
         if "subject_domain" in slot_issue_types:
             return self._card_builder.build(
                 ClarificationPlan(
@@ -169,7 +205,10 @@ class InteractionAdapter:
                     options=[
                         {
                             "label": f"按{dimension_name}分组查看",
-                            "value": {"dimension": dimension_name, "dimension_usage": "group_by"},
+                            "value": {
+                                "dimension": dimension_name,
+                                "dimension_usage": "group_by",
+                            },
                         },
                         {
                             "label": f"筛选某个具体{dimension_name}",
@@ -181,7 +220,10 @@ class InteractionAdapter:
                         },
                         {
                             "label": f"不使用{dimension_name}维度",
-                            "value": {"dimension": dimension_name, "dimension_usage": "ignore"},
+                            "value": {
+                                "dimension": dimension_name,
+                                "dimension_usage": "ignore",
+                            },
                         },
                     ],
                     allowed_update_path="variables.slot_response",
@@ -196,15 +238,23 @@ class InteractionAdapter:
                 slots=list(slot_issue_types) or ambiguous_slots or ["value"],
                 options=[],
                 allowed_update_path="variables.slot_response",
-                question_key="slot:" + ",".join(list(slot_issue_types) or ambiguous_slots or ["value"]),
+                question_key="slot:"
+                + ",".join(list(slot_issue_types) or ambiguous_slots or ["value"]),
             )
         )
 
     @staticmethod
     def _slot_issues(intent: dict[str, Any]) -> list[dict[str, Any]]:
-        validation = intent.get("validation") if isinstance(intent.get("validation"), dict) else {}
+        raw_validation = intent.get("validation")
+        validation: dict[str, Any] = (
+            raw_validation if isinstance(raw_validation, dict) else {}
+        )
         issues = validation.get("slot_issues")
-        return [issue for issue in issues if isinstance(issue, dict)] if isinstance(issues, list) else []
+        return (
+            [issue for issue in issues if isinstance(issue, dict)]
+            if isinstance(issues, list)
+            else []
+        )
 
     def _rewrite_prompt(self, slots: list[str]) -> str:
         labels = [self._slot_label(slot) for slot in slots]
@@ -243,14 +293,24 @@ class InteractionAdapter:
             )
         return options
 
-    def _asset_options(self, ctx: ChatBIRunContext, group_name: str, slot_name: str) -> list[dict[str, Any]]:
+    def _asset_options(
+        self, ctx: ChatBIRunContext, group_name: str, slot_name: str
+    ) -> list[dict[str, Any]]:
         candidate_groups = (
             ctx.knowledge.get("candidate_groups")
             if isinstance(ctx.knowledge.get("candidate_groups"), dict)
             else {}
         )
-        candidates = candidate_groups.get(group_name) if isinstance(candidate_groups.get(group_name), list) else []
-        return [self._asset_option(candidate, slot_name) for candidate in candidates[:5] if isinstance(candidate, dict)]
+        candidates = (
+            candidate_groups.get(group_name)
+            if isinstance(candidate_groups.get(group_name), list)
+            else []
+        )
+        return [
+            self._asset_option(candidate, slot_name)
+            for candidate in candidates[:5]
+            if isinstance(candidate, dict)
+        ]
 
     @staticmethod
     def _asset_option(candidate: dict[str, Any], slot_name: str) -> dict[str, Any]:
@@ -275,7 +335,9 @@ class InteractionAdapter:
         if schema is None:
             return []
         elements = schema.metrics if group_name == "metrics" else schema.dimensions
-        return [self._schema_element_option(element, slot_name) for element in elements[:5]]
+        return [
+            self._schema_element_option(element, slot_name) for element in elements[:5]
+        ]
 
     def _load_schema(self, ctx: ChatBIRunContext) -> DatasetSchema | None:
         if self._schema_provider is None:
@@ -283,32 +345,55 @@ class InteractionAdapter:
         if ctx.dataset_id is None:
             return None
         try:
-            return self._schema_provider.build_dataset_schema(ctx.tenant_id, ctx.dataset_id)
+            return self._schema_provider.build_dataset_schema(
+                ctx.tenant_id, ctx.dataset_id
+            )
         except Exception:
             return None
 
     @staticmethod
-    def _schema_element_option(element: SchemaElement, slot_name: str) -> dict[str, Any]:
+    def _schema_element_option(
+        element: SchemaElement, slot_name: str
+    ) -> dict[str, Any]:
         label = element.name or element.biz_name
         return {"label": label, "value": {slot_name: label, "asset_id": element.id}}
 
-    def _subject_domain_options(self, ctx: ChatBIRunContext, intent: dict[str, Any]) -> list[dict[str, Any]]:
+    def _subject_domain_options(
+        self, ctx: ChatBIRunContext, intent: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         schema = self._load_schema(ctx)
         domains = getattr(schema, "subject_domains", []) if schema is not None else []
         candidates = [domain for domain in domains if isinstance(domain, dict)]
         candidate_ids = self._subject_domain_candidate_ids(intent)
         if candidate_ids:
-            candidates = [domain for domain in candidates if self._int_or_none(domain.get("domain_id")) in candidate_ids]
+            candidates = [
+                domain
+                for domain in candidates
+                if self._int_or_none(domain.get("domain_id")) in candidate_ids
+            ]
         if not candidates and candidate_ids:
             return [
-                {"label": f"主题域 {domain_id}", "value": {"subject_domain": str(domain_id), "domain_id": domain_id}}
+                {
+                    "label": f"主题域 {domain_id}",
+                    "value": {"subject_domain": str(domain_id), "domain_id": domain_id},
+                }
                 for domain_id in candidate_ids
             ]
         return [
             {
-                "label": str(domain.get("name") or domain.get("domain_name") or domain.get("biz_name") or ""),
+                "label": str(
+                    domain.get("name")
+                    or domain.get("domain_name")
+                    or domain.get("biz_name")
+                    or ""
+                ),
                 "value": {
-                    "subject_domain": str(domain.get("name") or domain.get("domain_name") or domain.get("biz_name") or ""),
+                    "subject_domain": str(
+                        domain.get("name")
+                        or domain.get("domain_name")
+                        or domain.get("biz_name")
+                        or ""
+                    ),
                     "domain_id": self._int_or_none(domain.get("domain_id")),
                 },
             }
@@ -325,7 +410,11 @@ class InteractionAdapter:
 
     @classmethod
     def _subject_domain_candidate_ids(cls, intent: dict[str, Any]) -> list[int]:
-        subject_domain = intent.get("subject_domain") if isinstance(intent.get("subject_domain"), dict) else {}
+        subject_domain = (
+            intent.get("subject_domain")
+            if isinstance(intent.get("subject_domain"), dict)
+            else {}
+        )
         raw_ids = subject_domain.get("candidate_domain_ids")
         if not isinstance(raw_ids, list):
             return []
@@ -354,21 +443,34 @@ class InteractionAdapter:
         return InteractionAdapter._dimension_names(intent, [])[0]
 
     @staticmethod
-    def _dimension_names(intent: dict[str, Any], slot_issues: list[dict[str, Any]]) -> list[str]:
+    def _dimension_names(
+        intent: dict[str, Any], slot_issues: list[dict[str, Any]]
+    ) -> list[str]:
         names: list[str] = []
         for issue in slot_issues:
-            if str(issue.get("slot_type") or "") not in {"dimension", "dimension_value"}:
+            if str(issue.get("slot_type") or "") not in {
+                "dimension",
+                "dimension_value",
+            }:
                 continue
             name = str(issue.get("dimension") or "").strip()
             if name and name not in names:
                 names.append(name)
-        dimension_slots = intent.get("dimension_slots") if isinstance(intent.get("dimension_slots"), list) else []
+        dimension_slots = (
+            intent.get("dimension_slots")
+            if isinstance(intent.get("dimension_slots"), list)
+            else []
+        )
         for slot in dimension_slots:
             if isinstance(slot, dict) and slot.get("name"):
                 name = str(slot["name"])
                 if name not in names:
                     names.append(name)
-        dimension_mentions = intent.get("dimension_mentions") if isinstance(intent.get("dimension_mentions"), list) else []
+        dimension_mentions = (
+            intent.get("dimension_mentions")
+            if isinstance(intent.get("dimension_mentions"), list)
+            else []
+        )
         for mention in dimension_mentions:
             name = str(mention)
             if name and name not in names:
@@ -409,7 +511,9 @@ class InteractionAdapter:
             {"label": "看明细", "value": {"intent": "detail_query"}},
         ]
 
-    def _metric_selection_options(self, request: dict[str, Any]) -> list[dict[str, Any]]:
+    def _metric_selection_options(
+        self, request: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         knowledge = ChatBIRunContext(request).knowledge
         for ambiguity in knowledge.get("ambiguities", []) or []:
             if ambiguity.get("type") != "metric":
@@ -418,9 +522,15 @@ class InteractionAdapter:
             if candidates:
                 return [self._metric_option(candidate) for candidate in candidates]
         candidate_groups = (
-            knowledge.get("candidate_groups") if isinstance(knowledge.get("candidate_groups"), dict) else {}
+            knowledge.get("candidate_groups")
+            if isinstance(knowledge.get("candidate_groups"), dict)
+            else {}
         )
-        metrics = candidate_groups.get("metrics") if isinstance(candidate_groups.get("metrics"), list) else []
+        metrics = (
+            candidate_groups.get("metrics")
+            if isinstance(candidate_groups.get("metrics"), list)
+            else []
+        )
         if metrics:
             return [self._metric_option(candidate) for candidate in metrics[:5]]
         return []

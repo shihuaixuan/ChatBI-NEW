@@ -22,7 +22,12 @@ class FakeDatasetSchemaProvider:
 
 def _v1_request(variables: dict) -> dict:
     return {
-        "request": {"question": "看一下情况", "tenant_id": 10, "user_id": 20, "dataset_id": 30},
+        "request": {
+            "question": "看一下情况",
+            "tenant_id": 10,
+            "user_id": 20,
+            "dataset_id": 30,
+        },
         "conversation": {},
         "variables": variables,
         "inputs": {},
@@ -71,15 +76,26 @@ def test_interaction_adapter_builds_cross_model_split_confirmation():
                 "knowledge": {
                     "status": "cross_model",
                     "multi_query_plans": [
-                        {"model_id": 10, "model_name": "档口订单", "metrics": ["总GMV"]},
-                        {"model_id": 11, "model_name": "商品库存", "metrics": ["库存量"]},
+                        {
+                            "model_id": 10,
+                            "model_name": "档口订单",
+                            "metrics": ["总GMV"],
+                        },
+                        {
+                            "model_id": 11,
+                            "model_name": "商品库存",
+                            "metrics": ["库存量"],
+                        },
                     ],
                 }
             }
         )
     )
 
-    assert result["prompt"] == "问题包含不同模型的指标，直接关联可能造成重复计算。是否拆分为独立查询？"
+    assert (
+        result["prompt"]
+        == "问题包含不同模型的指标，直接关联可能造成重复计算。是否拆分为独立查询？"
+    )
     assert result["options"] == [
         {"label": "拆分查询", "value": {"cross_model_action": "split"}},
         {"label": "取消查询", "value": {"cross_model_action": "cancel"}},
@@ -97,11 +113,23 @@ def test_interaction_adapter_prefers_knowledge_candidates_for_rewrite_options():
                 "knowledge": {
                     "candidate_groups": {
                         "metrics": [
-                            {"asset_id": 100, "display_name": "访问人数", "biz_name": "visit_uv"},
-                            {"asset_id": 101, "display_name": "访问次数", "biz_name": "visit_pv"},
+                            {
+                                "asset_id": 100,
+                                "display_name": "访问人数",
+                                "biz_name": "visit_uv",
+                            },
+                            {
+                                "asset_id": 101,
+                                "display_name": "访问次数",
+                                "biz_name": "visit_pv",
+                            },
                         ],
                         "dimensions": [
-                            {"asset_id": 200, "display_name": "统计日期", "biz_name": "stat_date"},
+                            {
+                                "asset_id": 200,
+                                "display_name": "统计日期",
+                                "biz_name": "stat_date",
+                            },
                         ],
                     }
                 },
@@ -233,7 +261,10 @@ def test_interaction_adapter_builds_dimension_slot_clarification_card():
 
     assert result["prompt"] == "请确认“店铺”这个维度的使用方式。"
     assert result["options"] == [
-        {"label": "按店铺分组查看", "value": {"dimension": "店铺", "dimension_usage": "group_by"}},
+        {
+            "label": "按店铺分组查看",
+            "value": {"dimension": "店铺", "dimension_usage": "group_by"},
+        },
         {
             "label": "筛选某个具体店铺",
             "value": {
@@ -242,13 +273,19 @@ def test_interaction_adapter_builds_dimension_slot_clarification_card():
                 "dimension_value_fields": ["店铺"],
             },
         },
-        {"label": "不使用店铺维度", "value": {"dimension": "店铺", "dimension_usage": "ignore"}},
+        {
+            "label": "不使用店铺维度",
+            "value": {"dimension": "店铺", "dimension_usage": "ignore"},
+        },
     ]
     assert result["allowed_update_paths"] == ["variables.slot_response"]
     assert result["response_schema"]["properties"] == {
         "dimension": {"type": "string"},
         "dimension_usage": {"type": "string"},
-        "dimension_values": {"type": "object", "additionalProperties": {"type": "string"}},
+        "dimension_values": {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+        },
         "skipped": {"type": "boolean"},
     }
     assert result["response_schema"]["x-card"] == {
@@ -258,6 +295,50 @@ def test_interaction_adapter_builds_dimension_slot_clarification_card():
         "question_key": "dimension_usage:店铺",
         "dimension_value_fields": ["店铺"],
     }
+
+
+def test_interaction_adapter_builds_temporal_clarification_card():
+    result = InteractionAdapter().ask_slot_clarification(
+        _v1_request(
+            {
+                "intent": {
+                    "validation": {
+                        "clarification_required": True,
+                        "slot_issues": [
+                            {
+                                "slot_type": "time_range",
+                                "reason": "时间范围缺少数量",
+                            }
+                        ],
+                    },
+                    "temporal_plan": {
+                        "status": "clarification_required",
+                        "ambiguities": [
+                            {
+                                "code": "time_range_amount_missing",
+                                "raw": "最近",
+                            }
+                        ],
+                    },
+                }
+            }
+        )
+    )
+
+    assert result["prompt"] == "请提供明确的时间范围。"
+    assert [option["label"] for option in result["options"]] == [
+        "最近 7 天",
+        "最近 30 天",
+        "本月",
+    ]
+    assert result["options"][0]["value"]["temporal_confirmation"] == "最近7天"
+    assert result["options"][0]["value"]["temporal_plan"]["status"] == ("resolved")
+    assert result["response_schema"]["properties"] == {
+        "temporal_confirmation": {"type": "string"},
+        "temporal_plan": {"type": "object"},
+        "skipped": {"type": "boolean"},
+    }
+    assert result["response_schema"]["x-card"]["clarification_type"] == ("time_range")
 
 
 def test_interaction_adapter_builds_subject_domain_slot_clarification_card():
@@ -271,8 +352,20 @@ def test_interaction_adapter_builds_subject_domain_slot_clarification_card():
             type="DATASET",
         ),
         subject_domains=[
-            {"domain_id": 1, "name": "店铺", "biz_name": "shop", "description": "店铺和档口主题", "model_ids": [10]},
-            {"domain_id": 2, "name": "商品", "biz_name": "product", "description": "商品经营主题", "model_ids": [11]},
+            {
+                "domain_id": 1,
+                "name": "店铺",
+                "biz_name": "shop",
+                "description": "店铺和档口主题",
+                "model_ids": [10],
+            },
+            {
+                "domain_id": 2,
+                "name": "商品",
+                "biz_name": "product",
+                "description": "商品经营主题",
+                "model_ids": [11],
+            },
         ],
     )
     schema_provider = FakeDatasetSchemaProvider(schema)
@@ -337,8 +430,16 @@ def test_interaction_adapter_builds_metric_selection_options_from_ambiguity():
                         {
                             "type": "metric",
                             "candidates": [
-                                {"asset_id": 100, "display_name": "访问人数", "biz_name": "visit_uv"},
-                                {"asset_id": 101, "display_name": "访问次数", "biz_name": "visit_pv"},
+                                {
+                                    "asset_id": 100,
+                                    "display_name": "访问人数",
+                                    "biz_name": "visit_uv",
+                                },
+                                {
+                                    "asset_id": 101,
+                                    "display_name": "访问次数",
+                                    "biz_name": "visit_pv",
+                                },
                             ],
                         }
                     ]
@@ -365,8 +466,16 @@ def test_interaction_adapter_falls_back_to_metric_candidate_group_for_metric_sel
                     "ambiguities": [{"type": "metric", "candidates": []}],
                     "candidate_groups": {
                         "metrics": [
-                            {"asset_id": 100, "display_name": "访问人数", "biz_name": "visit_uv"},
-                            {"asset_id": 101, "display_name": "访问次数", "biz_name": "visit_pv"},
+                            {
+                                "asset_id": 100,
+                                "display_name": "访问人数",
+                                "biz_name": "visit_uv",
+                            },
+                            {
+                                "asset_id": 101,
+                                "display_name": "访问次数",
+                                "biz_name": "visit_pv",
+                            },
                         ]
                     },
                 }
@@ -381,11 +490,21 @@ def test_interaction_adapter_falls_back_to_metric_candidate_group_for_metric_sel
 
 
 def test_real_gateway_routes_interaction_capabilities_to_real_adapter():
-    gateway = RealChatBICapabilityGateway(fallback_gateway=PlaceholderChatBICapabilityGateway())
+    gateway = RealChatBICapabilityGateway(
+        fallback_gateway=PlaceholderChatBICapabilityGateway()
+    )
 
     result = gateway.invoke(
         "interaction.ask_intent_clarification",
-        _v1_request({"intent": {"confidence": 0.3, "ambiguous_slots": ["intent_type"], "conflict_slots": []}}),
+        _v1_request(
+            {
+                "intent": {
+                    "confidence": 0.3,
+                    "ambiguous_slots": ["intent_type"],
+                    "conflict_slots": [],
+                }
+            }
+        ),
         "run:intent",
     )
 

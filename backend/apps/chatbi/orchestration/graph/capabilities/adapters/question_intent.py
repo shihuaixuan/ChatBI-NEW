@@ -69,7 +69,7 @@ def build_intent_recognition_prompt(
   - “档口的访问人数”这类没有明确“各/按/每个”且没有具体值的表达，role=ambiguous，value=null，value_status=not_provided。
 - 如果 user_payload.available_dimensions 非空，dimension_mentions 和 dimension_slots[].name 只能从 user_payload.available_dimensions 的 name 或 aliases 中选择；不在候选维度中的词不能输出为维度。
 - 线上/线下/新增/活跃/累计 等词如果没有出现在 available_dimensions 中，只能作为 metric_mentions 的一部分，不能进入 dimension_mentions 或 dimension_slots。
-- 普通维度槽位的 value 不得是时间表达；今天/昨天/本月/最近7天/近30天/去年同期/按天/按月 等只能进入 time_mentions、time_range 或 query_shape.time_grain。
+- 普通维度槽位的 value 不得是时间表达；今天/昨天/本月/最近7天/近30天/去年同期/本财年/上财季/2026财年第2季度/按天/按月 等只能进入 time_mentions、time_range 或 query_shape.time_grain。
 - 如果用户说“今天店铺销售额”，店铺是维度名但没有提供店铺值，必须输出 {"name":"店铺","role":"ambiguous","value":null,"value_status":"not_provided"}，并将“今天”放入 time_range。
 - time_mentions：用户原文或重写问题里出现的时间范围、时间粒度或时间表达，例如“最近 7 天”“按月”“今天”。
 - time_range：如果识别到时间范围，输出 {"raw":"今天","value_status":"provided"}；没有识别到时输出 {"raw":null,"value_status":"not_provided"}。

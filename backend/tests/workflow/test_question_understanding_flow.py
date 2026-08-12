@@ -6,12 +6,19 @@ from tests.workflow.run_question_understanding_flow import (
 def test_question_understanding_flow_runs_classify_rewrite_intent_without_branching():
     flow = run_question_understanding_flow("今日店铺流量", dataset_id=3, tenant_id=1, user_id=1)
 
-    assert flow["input"] == {
+    assert {
+        key: value
+        for key, value in flow["input"].items()
+        if key != "temporal_context"
+    } == {
         "question": "今日店铺流量",
         "dataset_id": 3,
         "tenant_id": 1,
         "user_id": 1,
     }
+    assert flow["input"]["temporal_context"]["reference_at"] == (
+        "2026-07-31T12:00:00+08:00"
+    )
     assert [node["node"] for node in flow["nodes"]] == [
         "classify_question",
         "rewrite_question",

@@ -203,7 +203,12 @@ def get_engine(ds: DatasourceTarget, timeout: int = 0) -> Engine:
         ssl_mode = {"require": True} if conf.ssl else None
         engine = create_engine(
             get_uri(ds),
-            connect_args={"connect_timeout": conf.timeout, "ssl": ssl_mode},
+            connect_args={
+                "connect_timeout": conf.timeout,
+                "read_timeout": conf.timeout,
+                "write_timeout": conf.timeout,
+                "ssl": ssl_mode,
+            },
             poolclass=NullPool,
         )
     elif equals_ignore_case(ds.type, "sqlite"):
@@ -578,6 +583,7 @@ def get_tables(ds: DatasourceTarget):
                     db=conf.database,
                     connect_timeout=conf.timeout,
                     read_timeout=conf.timeout,
+                    write_timeout=conf.timeout,
                     **extra_config_dict,
                     **ssl_args,
                 ) as conn,

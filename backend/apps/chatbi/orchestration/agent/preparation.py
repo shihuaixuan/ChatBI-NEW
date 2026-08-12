@@ -23,6 +23,7 @@ from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.understanding import (
     QuestionUnderstandingService,
     apply_question_understanding_clarification,
+    build_temporal_clarification_options,
 )
 from apps.event import EventPublisher, RenderEvent
 from apps.retrieval import (
@@ -37,7 +38,7 @@ from apps.retrieval import (
     bundle_to_semantic_payload,
 )
 from apps.semantic.services.schema_service import DatasetSchemaProvider
-from apps.tool.tools.semantic_contracts import build_semantic_compile_plan
+from apps.tool.tools.semantic_contracts import project_semantic_compile_plan
 
 
 class PreflightClarification(BaseModel):
@@ -81,6 +82,7 @@ class AgentInputPreparer:
             datasource_id=record.datasource,
             tenant_id=state.run.oid,
             dataset_id=record.dataset_id,
+            temporal_context=state.temporal_context,
             conversation_context={
                 "last_rewritten_question": conversation_context.get(
                     "last_rewritten_question"
@@ -96,6 +98,11 @@ class AgentInputPreparer:
                 "question_understanding": understanding,
             }
         )
+        if outcome.temporal_shadow is not None:
+            # 旁路结果只用于后续评估，不参与检索、计划或 SQL。
+            state.context.state["temporal_shadow_observation"] = (
+                outcome.temporal_shadow.model_dump(mode="json")
+            )
         state.messages = [AgentMessage.user(outcome.output.rewritten_question)]
         state.system = self._build_system(
             state,
@@ -129,13 +136,13 @@ class AgentInputPreparer:
         try:
             resume_kind = AgentClarificationResumeKind(clarification.resume_kind)
         except ValueError as exc:
-            raise QuestionUnderstandingError("CLARIFICATION_RESUME_KIND_INVALID") from exc
+            raise QuestionUnderstandingError(
+                "CLARIFICATION_RESUME_KIND_INVALID"
+            ) from exc
 
         previous_understanding = state.context.state.get("question_understanding")
         previous_understanding = (
-            previous_understanding
-            if isinstance(previous_understanding, dict)
-            else {}
+            previous_understanding if isinstance(previous_understanding, dict) else {}
         )
         understanding_updated = False
 
@@ -157,15 +164,28 @@ class AgentInputPreparer:
             state.messages.append(AgentMessage.tool(tool_answer, tool_call_id))
             understanding = previous_understanding
         elif resume_kind == AgentClarificationResumeKind.QUESTION_UNDERSTANDING:
-            outcome = apply_question_understanding_clarification(
-                understanding=previous_understanding,
-                resume_payload=clarification.resume_payload or {},
-                answer=clarification.answer or {},
-            )
-            understanding = outcome.model_dump(mode="json")
+            resume_payload = clarification.resume_payload or {}
+            if resume_payload.get("operation") == "resolve_temporal_plan":
+                resolved_outcome = (
+                    self._understanding_service.resolve_temporal_clarification(
+                        understanding=previous_understanding,
+                        answer=clarification.answer or {},
+                        temporal_context=state.temporal_context,
+                    )
+                )
+                state.budget.record_llm_usage(resolved_outcome.usage_metadata)
+                updated_output = resolved_outcome.output
+            else:
+                updated_output = apply_question_understanding_clarification(
+                    understanding=previous_understanding,
+                    resume_payload=resume_payload,
+                    answer=clarification.answer or {},
+                    temporal_context=state.temporal_context,
+                )
+            understanding = updated_output.model_dump(mode="json")
             state.context.state.update(
                 {
-                    "question": outcome.rewritten_question,
+                    "question": updated_output.rewritten_question,
                     "question_understanding": understanding,
                 }
             )
@@ -199,9 +219,7 @@ class AgentInputPreparer:
         resume_payload = clarification.resume_payload or {}
         scope = state.context.state.get("semantic_scope")
         if not isinstance(scope, dict):
-            raise SemanticClarificationError(
-                SemanticClarificationError.SCOPE_REQUIRED
-            )
+            raise SemanticClarificationError(SemanticClarificationError.SCOPE_REQUIRED)
         if resume_payload.get("retrieval_id") != scope.get("retrieval_id"):
             raise SemanticClarificationError(
                 SemanticClarificationError.RETRIEVAL_MISMATCH
@@ -304,8 +322,15 @@ class AgentInputPreparer:
             **scope,
             "decision_status": updated_bundle.decision.status.value,
             "allowed_assets": allowed_assets,
-            "compile_plan": build_semantic_compile_plan(
-                updated_payload.get("slot_bindings") or {}
+            "compile_plan": project_semantic_compile_plan(
+                updated_payload.get("slot_bindings") or {},
+                (
+                    state.context.state.get("question_understanding", {}).get("intent")
+                    if isinstance(
+                        state.context.state.get("question_understanding"), dict
+                    )
+                    else {}
+                ),
             ).model_dump(mode="json"),
         }
         state.context.state.update(
@@ -317,6 +342,11 @@ class AgentInputPreparer:
                 "semantic_asset_ids": sorted(
                     {int(item["asset_id"]) for item in allowed_assets}
                 ),
+                # 澄清改变语义绑定后，旧 SQL 和执行结果不再属于当前可信计划。
+                "compiled_sql": None,
+                "validated_sql": None,
+                "last_execution": None,
+                "full_data": None,
             }
         )
         metric_ids = [
@@ -409,14 +439,44 @@ class AgentInputPreparer:
         """自然语言层已发现的维度歧义必须在资产检索前澄清。"""
 
         validation = understanding.get("validation")
-        if not isinstance(validation, dict) or validation.get("status") != "clarification_required":
+        if (
+            not isinstance(validation, dict)
+            or validation.get("status") != "clarification_required"
+        ):
             return None
         reason_codes = set(validation.get("reason_codes") or [])
         intent = understanding.get("intent")
         intent = intent if isinstance(intent, dict) else {}
         dimension_slots = [
-            slot for slot in intent.get("dimension_slots") or [] if isinstance(slot, dict)
+            slot
+            for slot in intent.get("dimension_slots") or []
+            if isinstance(slot, dict)
         ]
+        temporal_interpretation = understanding.get("temporal_interpretation")
+        temporal_interpretation = (
+            temporal_interpretation if isinstance(temporal_interpretation, dict) else {}
+        )
+        temporal_plan = temporal_interpretation.get("plan")
+        temporal_plan = temporal_plan if isinstance(temporal_plan, dict) else {}
+        if "temporal_clarification_required" in reason_codes:
+            ambiguities = [
+                item
+                for item in temporal_plan.get("ambiguities") or []
+                if isinstance(item, dict)
+            ]
+            ambiguity_codes = {str(item.get("code") or "") for item in ambiguities}
+            options = build_temporal_clarification_options(ambiguity_codes)
+            question = "请提供明确的时间范围。"
+            if "time_range_conflict" in ambiguity_codes:
+                question = "问题中存在多个时间范围，请确认本次查询使用哪个时间范围。"
+            elif "time_expression_unsupported" in ambiguity_codes:
+                question = "当前时间表达暂不支持，请提供明确的起止日期。"
+            return PreflightClarification(
+                question=question,
+                options=options,
+                reason="时间计划尚未形成可执行的绝对范围，必须先确认后再检索语义资产。",
+                resume_payload={"operation": "resolve_temporal_plan"},
+            )
         if "dimension_role_ambiguous" in reason_codes:
             slot = next(
                 (
@@ -432,13 +492,13 @@ class AgentInputPreparer:
             return PreflightClarification(
                 question=f"请确认“{name}”在本次查询中的使用方式。",
                 options=[
-                        {"label": f"按{name}分组查看", "value": f"group_by:{name}"},
-                        {"label": f"筛选某个具体{name}", "value": f"filter:{name}"},
-                        {
-                            "label": f"不使用{name}维度，查看汇总结果",
-                            "value": f"ignore:{name}",
-                        },
-                    ],
+                    {"label": f"按{name}分组查看", "value": f"group_by:{name}"},
+                    {"label": f"筛选某个具体{name}", "value": f"filter:{name}"},
+                    {
+                        "label": f"不使用{name}维度，查看汇总结果",
+                        "value": f"ignore:{name}",
+                    },
+                ],
                 reason=f"“{name}”可能表示分组维度、筛选条件或业务对象，需要先确认后再检索指标口径。",
                 resume_payload={
                     "operation": "set_dimension_role",
@@ -451,6 +511,10 @@ class AgentInputPreparer:
                     item
                     for item in dimension_slots
                     if str(item.get("role") or "").lower() == "filter"
+                    and (
+                        str(item.get("value_status") or "").lower() != "provided"
+                        or item.get("value") in (None, "")
+                    )
                 ),
                 None,
             )

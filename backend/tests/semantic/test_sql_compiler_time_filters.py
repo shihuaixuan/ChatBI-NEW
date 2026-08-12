@@ -1,4 +1,5 @@
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -7,6 +8,7 @@ from apps.semantic.services.sql_compiler import (
     SemanticSQLCompiler,
     SemanticSQLCompileRequest,
 )
+from apps.temporal import build_temporal_context, resolve_time_range
 
 
 def _schema() -> DatasetSchema:
@@ -58,6 +60,12 @@ def _schema() -> DatasetSchema:
 
 
 def test_sql_compiler_renders_single_date_time_filter():
+    value = resolve_time_range(
+        "今天",
+        build_temporal_context(
+            reference_at=datetime(2026, 7, 4, 23, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+        ),
+    )
     result = SemanticSQLCompiler().compile(
         SemanticSQLCompileRequest(
             schema=_schema(),
@@ -68,22 +76,24 @@ def test_sql_compiler_renders_single_date_time_filter():
                         "asset_type": "DIMENSION",
                         "asset_id": 200,
                         "operator": "=",
-                        "value": {
-                            "kind": "single_date",
-                            "anchor": "today",
-                            "offset_days": 0,
-                            "timezone": "Asia/Shanghai",
-                        },
+                        "value": value,
                     }
                 ],
             },
         )
     )
 
-    assert "business_model.stat_date = CURRENT_DATE" in result.sql
+    assert "business_model.stat_date >= '2026-07-04'" in result.sql
+    assert "business_model.stat_date < '2026-07-05'" in result.sql
 
 
 def test_sql_compiler_renders_recent_days_time_filter_as_range():
+    value = resolve_time_range(
+        "最近7天",
+        build_temporal_context(
+            reference_at=datetime(2026, 7, 4, 23, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+        ),
+    )
     result = SemanticSQLCompiler().compile(
         SemanticSQLCompileRequest(
             schema=_schema(),
@@ -94,22 +104,15 @@ def test_sql_compiler_renders_recent_days_time_filter_as_range():
                         "asset_type": "DIMENSION",
                         "asset_id": 200,
                         "operator": "=",
-                        "value": {
-                            "kind": "relative_range",
-                            "unit": "day",
-                            "amount": 7,
-                            "anchor": "today",
-                            "include_current": True,
-                            "timezone": "Asia/Shanghai",
-                        },
+                        "value": value,
                     }
                 ],
             },
         )
     )
 
-    assert "business_model.stat_date >= DATE_SUB(CURRENT_DATE, INTERVAL 6 DAY)" in result.sql
-    assert "business_model.stat_date <= CURRENT_DATE" in result.sql
+    assert "business_model.stat_date >= '2026-06-28'" in result.sql
+    assert "business_model.stat_date < '2026-07-05'" in result.sql
 
 
 def test_sql_compiler_renders_absolute_month_as_left_closed_right_open_range():
@@ -139,8 +142,20 @@ def test_sql_compiler_renders_absolute_month_as_left_closed_right_open_range():
     assert "business_model.stat_date < '2026-07-01'" in result.sql
 
 
-def _compile_time_filter(value: dict, today: date = date(2026, 7, 4)) -> str:
-    result = SemanticSQLCompiler(today_provider=lambda timezone: today).compile(
+def _compile_time_filter(raw: str, today: date = date(2026, 7, 4)) -> str:
+    value = resolve_time_range(
+        raw,
+        build_temporal_context(
+            reference_at=datetime(
+                today.year,
+                today.month,
+                today.day,
+                12,
+                tzinfo=ZoneInfo("Asia/Shanghai"),
+            )
+        ),
+    )
+    result = SemanticSQLCompiler().compile(
         SemanticSQLCompileRequest(
             schema=_schema(),
             slots={
@@ -155,14 +170,14 @@ def _compile_time_filter(value: dict, today: date = date(2026, 7, 4)) -> str:
 
 
 def test_sql_compiler_renders_current_month_as_calendar_range():
-    sql = _compile_time_filter({"kind": "current_period", "unit": "month", "timezone": "Asia/Shanghai"})
+    sql = _compile_time_filter("本月")
 
     assert "business_model.stat_date >= '2026-07-01'" in sql
     assert "business_model.stat_date < '2026-08-01'" in sql
 
 
 def test_sql_compiler_renders_previous_month_as_calendar_range():
-    sql = _compile_time_filter({"kind": "previous_period", "unit": "month", "timezone": "Asia/Shanghai"})
+    sql = _compile_time_filter("上月")
 
     assert "business_model.stat_date >= '2026-06-01'" in sql
     assert "business_model.stat_date < '2026-07-01'" in sql
@@ -170,68 +185,71 @@ def test_sql_compiler_renders_previous_month_as_calendar_range():
 
 def test_sql_compiler_renders_current_week_from_monday():
     # 2026-07-04 是周六，本周从周一 2026-06-29 开始。
-    sql = _compile_time_filter({"kind": "current_period", "unit": "week", "timezone": "Asia/Shanghai"})
+    sql = _compile_time_filter("本周")
 
     assert "business_model.stat_date >= '2026-06-29'" in sql
     assert "business_model.stat_date < '2026-07-06'" in sql
 
 
 def test_sql_compiler_renders_previous_quarter_as_calendar_range():
-    sql = _compile_time_filter({"kind": "previous_period", "unit": "quarter", "timezone": "Asia/Shanghai"})
+    sql = _compile_time_filter("上季度")
 
     assert "business_model.stat_date >= '2026-04-01'" in sql
     assert "business_model.stat_date < '2026-07-01'" in sql
 
 
 def test_sql_compiler_renders_current_year_as_calendar_range():
-    sql = _compile_time_filter({"kind": "current_period", "unit": "year", "timezone": "Asia/Shanghai"})
+    sql = _compile_time_filter("今年")
 
     assert "business_model.stat_date >= '2026-01-01'" in sql
     assert "business_model.stat_date < '2027-01-01'" in sql
 
 
-def test_sql_compiler_renders_recent_months_as_rolling_window():
-    sql = _compile_time_filter(
-        {
-            "kind": "relative_range",
-            "unit": "month",
-            "amount": 3,
-            "anchor": "today",
-            "include_current": True,
-            "timezone": "Asia/Shanghai",
-        }
+def test_sql_compiler_renders_fiscal_quarter_as_absolute_range():
+    value = resolve_time_range(
+        "2026财年第2季度",
+        build_temporal_context(
+            reference_at=datetime(
+                2026,
+                7,
+                31,
+                tzinfo=ZoneInfo("Asia/Shanghai"),
+            ),
+            fiscal_year_start_month=4,
+        ),
     )
 
+    sql = _compile_raw_time_ast(value)
+
+    assert "business_model.stat_date >= '2026-07-01'" in sql
+    assert "business_model.stat_date < '2026-10-01'" in sql
+
+
+def test_sql_compiler_renders_recent_months_as_rolling_window():
+    sql = _compile_time_filter("最近3个月")
+
     assert "business_model.stat_date >= '2026-04-05'" in sql
-    assert "business_model.stat_date <= '2026-07-04'" in sql
+    assert "business_model.stat_date < '2026-07-05'" in sql
 
 
 def test_sql_compiler_renders_recent_months_with_month_end_clamp():
     # 月底日期做月份平移时需要按目标月天数收敛，不能溢出。
-    sql = _compile_time_filter(
-        {
-            "kind": "relative_range",
-            "unit": "month",
-            "amount": 1,
-            "anchor": "today",
-            "include_current": True,
-            "timezone": "Asia/Shanghai",
-        },
-        today=date(2026, 3, 31),
-    )
+    sql = _compile_time_filter("最近1个月", today=date(2026, 3, 31))
 
     assert "business_model.stat_date >= '2026-03-01'" in sql
-    assert "business_model.stat_date <= '2026-03-31'" in sql
+    assert "business_model.stat_date < '2026-04-01'" in sql
 
 
 def test_sql_compiler_rejects_unrenderable_time_ast_instead_of_stringifying():
     with pytest.raises(ValueError, match="SEMANTIC_SQL_TIME_RANGE_UNSUPPORTED"):
-        _compile_time_filter({"kind": "unsupported", "raw": "农历新年", "timezone": "Asia/Shanghai"})
+        _compile_raw_time_ast(
+            {"kind": "unsupported", "raw": "农历新年", "timezone": "Asia/Shanghai"}
+        )
 
 
 def test_sql_compiler_rejects_zero_amount_relative_range():
     with pytest.raises(ValueError, match="SEMANTIC_SQL_TIME_RANGE_UNSUPPORTED"):
-        _compile_time_filter(
+        _compile_raw_time_ast(
             {
                 "kind": "relative_range",
                 "unit": "month",
@@ -241,3 +259,24 @@ def test_sql_compiler_rejects_zero_amount_relative_range():
                 "timezone": "Asia/Shanghai",
             }
         )
+
+
+def _compile_raw_time_ast(value: dict) -> str:
+    """仅用于验证编译边界拒绝未绝对化时间结构。"""
+
+    return SemanticSQLCompiler().compile(
+        SemanticSQLCompileRequest(
+            schema=_schema(),
+            slots={
+                "metrics": [{"asset_type": "METRIC", "asset_id": 100}],
+                "filters": [
+                    {
+                        "asset_type": "DIMENSION",
+                        "asset_id": 200,
+                        "operator": "=",
+                        "value": value,
+                    }
+                ],
+            },
+        )
+    ).sql

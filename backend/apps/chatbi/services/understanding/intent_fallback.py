@@ -24,7 +24,12 @@ class QuestionIntentFallbackService:
             [],
         )
 
-    def infer(self, question: str) -> dict[str, Any]:
+    def infer(
+        self,
+        question: str,
+        *,
+        include_legacy_temporal: bool = True,
+    ) -> dict[str, Any]:
         """按既有关键词优先级推断常见分析意图。"""
 
         if any(
@@ -42,14 +47,14 @@ class QuestionIntentFallbackService:
 
         metric_mentions = self._extract_metric_mentions(question)
         dimension_mentions = self._extract_dimension_mentions(question)
-        time_mentions = self._extract_time_mentions(question)
+        time_mentions = (
+            self._extract_time_mentions(question) if include_legacy_temporal else []
+        )
         dimension_slots = self._dimension_slots_from_question(
             question,
             dimension_mentions,
         )
-        time_range = time_range_from_mentions(
-            time_mentions
-        )
+        time_range = time_range_from_mentions(time_mentions)
 
         if any(
             word in question
@@ -324,6 +329,20 @@ class QuestionIntentFallbackService:
             "上周",
             "本月",
             "上月",
+            "本财年",
+            "当前财年",
+            "本财政年度",
+            "上财年",
+            "上一财年",
+            "上个财年",
+            "上一财政年度",
+            "本财季",
+            "当前财季",
+            "本财政季度",
+            "上财季",
+            "上一财季",
+            "上个财季",
+            "上一财政季度",
             "最近 7 天",
             "最近7天",
             "近 30 天",
@@ -332,6 +351,15 @@ class QuestionIntentFallbackService:
         mentions = [keyword for keyword in keywords if keyword in question]
         absolute_months = re.findall(r"\d{4}\s*年\s*\d{1,2}\s*月", question)
         mentions.extend(month for month in absolute_months if month not in mentions)
+        fiscal_periods = re.findall(
+            (
+                r"(?:\d{4}\s*(?:财年|财政年度)|FY\s*\d{4})"
+                r"(?:\s*(?:第?\s*[1-4]\s*(?:季度|季)|Q\s*[1-4]))?"
+            ),
+            question,
+            flags=re.IGNORECASE,
+        )
+        mentions.extend(period for period in fiscal_periods if period not in mentions)
         for keyword in ("按天", "按周", "按月"):
             if keyword in question:
                 mentions.append(keyword)
@@ -399,8 +427,7 @@ def _intent_payload(
         "dimension_mentions": dimension_mentions or [],
         "dimension_slots": dimension_slots or [],
         "time_mentions": time_mentions or [],
-        "time_range": time_range
-        or {"raw": None, "value_status": "not_provided"},
+        "time_range": time_range or {"raw": None, "value_status": "not_provided"},
         "filter_mentions": filter_mentions or [],
         "required_slot_types": required_slot_types or [],
         "query_shape": query_shape or {},

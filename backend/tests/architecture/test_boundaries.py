@@ -1078,6 +1078,47 @@ def test_graph_layers_do_not_reimplement_dimension_time_rule():
     assert "_dimension_time_value_violations" not in graph_contracts_source
 
 
+def test_time_rules_are_owned_by_temporal_module():
+    temporal_dir = BACKEND_DIR__question_understanding / "apps/temporal"
+    temporal_imports = {
+        module
+        for path in temporal_dir.glob("*.py")
+        for module in _imports__question_understanding(
+            str(path.relative_to(BACKEND_DIR__question_understanding))
+        )
+    }
+    assert not any(module.startswith("apps.semantic") for module in temporal_imports)
+
+    semantic_time_source = (
+        BACKEND_DIR__question_understanding / "apps/semantic/time_range.py"
+    ).read_text(encoding="utf-8")
+    assert "def is_time_expression" not in semantic_time_source
+    assert "def normalize_time_range" not in semantic_time_source
+    assert "def derive_time_bucket" not in semantic_time_source
+
+    semantic_compiler_source = (
+        BACKEND_DIR__question_understanding
+        / "apps/semantic/services/sql_compiler.py"
+    ).read_text(encoding="utf-8")
+    assert "render_time_filter_condition" in semantic_compiler_source
+    assert "def _safe_iso_date" not in semantic_compiler_source
+
+    production_paths = (
+        "apps/retrieval/query/policy.py",
+        "apps/retrieval/projection/payload.py",
+        "apps/chatbi/orchestration/graph/capabilities/adapters/question.py",
+        "apps/chatbi/orchestration/graph/capabilities/planning.py",
+        f"{UNDERSTANDING__question_understanding}/intent_projection.py",
+        f"{UNDERSTANDING__question_understanding}/understanding_service.py",
+        f"{UNDERSTANDING__question_understanding}/validation.py",
+        "apps/tool/tools/semantic.py",
+        "apps/tool/tools/semantic_contracts.py",
+    )
+    for relative_path in production_paths:
+        imports = _imports__question_understanding(relative_path)
+        assert "apps.semantic.time_range" not in imports
+
+
 def test_question_validation_rules_have_no_executor_or_model_dependency():
     imports = _imports__question_understanding(f"{UNDERSTANDING__question_understanding}/validation.py")
 

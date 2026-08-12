@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import orjson
 
+from apps.chatbi.errors import AgentActionError
 from apps.chatbi.models import AgentClarificationResumeKind, AgentToolCallStatus
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
@@ -24,7 +25,16 @@ from apps.chatbi.orchestration.agent.tool_results import (
     ChatBIToolResultProcessor,
     ToolControlAction,
 )
+from apps.chatbi.orchestration.agent.tool_visibility import (
+    STANDARD_TOOLS,
+    visible_tool_names,
+)
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
+from apps.chatbi.orchestration.agent.working_state import (
+    progress_name,
+    project_tool_observation,
+    recommended_actions,
+)
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import (
@@ -41,6 +51,8 @@ from apps.tool import (
     execute_tool_batch,
 )
 from apps.trace import AgentTracer, tool_attributes
+
+_MISSING = object()
 
 
 class ToolExecutionStatus(StrEnum):
@@ -82,6 +94,68 @@ class AgentToolExecutor:
         self._lifecycle = lifecycle
         self._event_publisher = event_publisher
         self._result_processor = result_processor
+
+    def _check_action(
+        self,
+        state: AgentRuntimeState,
+        call: ToolCall,
+        mode: str,
+    ) -> ToolResult[Any] | None:
+        """阻止标准工具越过当前可信进展，并把纠错方向返回给模型。"""
+
+        # clarify 是模型发现新歧义时的主动中断能力，不按普通数据阶段拒绝。
+        if call.name == "clarify" or call.name not in STANDARD_TOOLS:
+            return None
+        allowed = visible_tool_names(state, mode, self._registry.names())
+        if call.name in allowed:
+            return None
+        progress = progress_name(state.context.state)
+        recommended = recommended_actions(state.context.state)
+        content = {
+            "status": "rejected",
+            "error_code": AgentActionError.ACTION_NOT_AVAILABLE,
+            "message": f"工具 {call.name} 不适用于当前进展 {progress}",
+            "current_progress": progress,
+            "recommended_actions": recommended,
+            "retry_same_tool": False,
+        }
+        return ToolResult.rejected(
+            orjson.dumps(content).decode(),
+            error_code=AgentActionError.ACTION_NOT_AVAILABLE,
+            error_category=ToolErrorCategory.BUSINESS_RULE,
+            details={
+                "current_progress": progress,
+                "available_tools": allowed,
+                "recommended_actions": recommended,
+            },
+        )
+
+    @staticmethod
+    def _record_observation(
+        context: AgentToolContext,
+        observation: dict[str, Any],
+    ) -> None:
+        """只保留近期结构化反馈，供模型纠错和恢复审计。"""
+
+        bounded = _bounded_summary(observation)
+        context.state["last_tool_observation"] = bounded
+        history = context.state.setdefault("tool_observation_history", [])
+        if not isinstance(history, list):
+            raise TypeError("AGENT_TOOL_OBSERVATION_HISTORY_INVALID")
+        history.append(bounded)
+        del history[:-20]
+
+    @staticmethod
+    def _model_observation_content(
+        model_content: str,
+        observation: dict[str, Any],
+    ) -> str:
+        """在原工具内容后追加统一纠错信息，避免模型自行猜测错误含义。"""
+
+        encoded = orjson.dumps(_bounded_summary(observation)).decode()
+        if not model_content:
+            return f"<tool-observation>{encoded}</tool-observation>"
+        return f"{model_content}\n<tool-observation>{encoded}</tool-observation>"
 
     def execute(
         self,
@@ -135,7 +209,40 @@ class AgentToolExecutor:
             )
 
         for batch in batches:
+            executable_batch: list[ToolCall] = []
             for call in batch:
+                action_rejection = self._check_action(state, call, mode)
+                if action_rejection is not None:
+                    observation = project_tool_observation(
+                        context.state,
+                        call.name,
+                        action_rejection,
+                        state_changed=False,
+                    )
+                    self._record_observation(context, observation)
+                    yield self._finish_tool_call_event(
+                        state,
+                        step,
+                        tool_call_rows.pop(call.call_id),
+                        action_rejection,
+                        {
+                            "success": False,
+                            "status": action_rejection.status.value,
+                            "error_code": action_rejection.error_code,
+                            "recommended_actions": observation["recommended_actions"],
+                        },
+                    )
+                    state.messages.append(
+                        AgentMessage.tool(
+                            self._model_observation_content(
+                                action_rejection.model_content,
+                                observation,
+                            ),
+                            call.call_id,
+                        )
+                    )
+                    failed_count += 1
+                    continue
                 fuse = budget.check_tool_call(call.name, call.args)
                 if not fuse.allowed:
                     result = ToolResult.rejected(
@@ -211,10 +318,14 @@ class AgentToolExecutor:
                             cast(str, sql_verdict.error_class),
                         )
                         return ToolExecutionResult(ToolExecutionStatus.FAILED)
+                executable_batch.append(call)
+
+            if not executable_batch:
+                continue
 
             try:
                 executed = execute_tool_batch(
-                    batch,
+                    executable_batch,
                     lambda call: self._execute_one(
                         context,
                         state,
@@ -292,7 +403,15 @@ class AgentToolExecutor:
                     result,
                 )
                 result = projection.result
+                state_changed = any(
+                    context.state.get(key, _MISSING) != value
+                    for key, value in projection.state_patch.items()
+                )
                 context.state.update(projection.state_patch)
+                if state_changed:
+                    context.state["state_revision"] = (
+                        int(context.state.get("state_revision") or 0) + 1
+                    )
                 result = maybe_offload_result(
                     result,
                     store=offload_store,
@@ -321,6 +440,14 @@ class AgentToolExecutor:
                             call.name,
                             result,
                         )
+
+                observation = project_tool_observation(
+                    context.state,
+                    call.name,
+                    result,
+                    state_changed=state_changed,
+                )
+                self._record_observation(context, observation)
 
                 result_summary = _bounded_summary(projection.audit_summary)
                 yield self._finish_tool_call_event(
@@ -401,7 +528,10 @@ class AgentToolExecutor:
                 state.messages.append(
                     AgentMessage.tool(
                         format_tool_message_content(
-                            result.model_content,
+                            self._model_observation_content(
+                                result.model_content,
+                                observation,
+                            ),
                             offload_ref=_offload_ref(result),
                         ),
                         call_id,
@@ -500,9 +630,7 @@ class AgentToolExecutor:
     ) -> ToolResult[Any]:
         started_at = perf_counter()
         tool = self._registry.get(call.name)
-        declared_timeout = (
-            tool.execution.timeout_seconds if tool is not None else None
-        )
+        declared_timeout = tool.execution.timeout_seconds if tool is not None else None
         timeout_seconds = effective_timeout_seconds(
             declared_timeout=declared_timeout,
             default_timeout=float(self._config.tool_default_timeout_seconds),
@@ -605,9 +733,7 @@ class AgentToolExecutor:
             error_code=result.error_code,
         )
         event_type = (
-            "tool-result"
-            if result.status == ToolStatus.SUCCEEDED
-            else "tool-failed"
+            "tool-result" if result.status == ToolStatus.SUCCEEDED else "tool-failed"
         )
         return self._publish(
             state,
@@ -731,8 +857,7 @@ def _agent_tool_resume_payload(
     """只为带确定性语义绑定的澄清保存恢复数据。"""
 
     if not any(
-        isinstance(option, dict) and option.get("bindings")
-        for option in options
+        isinstance(option, dict) and option.get("bindings") for option in options
     ):
         return {}
     scope = state.get("semantic_scope")

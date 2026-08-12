@@ -3,6 +3,7 @@
 import time
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from apps.datasource.models.dto import (
     DatasourceDeniedColumn,
@@ -14,7 +15,10 @@ from apps.datasource.models.dto import (
     DatasourceQuerySubject,
     DatasourceRowFilter,
 )
-from apps.datasource.services import DatasourceQueryService
+from apps.datasource.services import (
+    ConnectionDatasourceQueryExecutor,
+    DatasourceQueryService,
+)
 
 
 class StaticPolicyProvider:
@@ -369,3 +373,45 @@ def test_query_service_does_not_start_driver_after_deadline():
     assert result.status == DatasourceQueryStatus.FAILED
     assert result.error_code == "query_deadline_exceeded"
     assert executor.calls == []
+
+
+class FailingConnectionService:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def execute_query(self, *args, **kwargs):
+        raise self.error
+
+
+def test_query_executor_maps_wrapped_driver_timeout_to_timeout_result():
+    error = OperationalError(
+        "select 1",
+        {},
+        TimeoutError("read timed out"),
+        connection_invalidated=True,
+    )
+    executor = ConnectionDatasourceQueryExecutor(FailingConnectionService(error))
+
+    result = executor.execute(8, "select 1", timeout_seconds=3)
+
+    assert result.succeeded is False
+    assert result.error_code == "datasource_query_timeout"
+    assert result.transient is True
+    assert result.timed_out is True
+
+
+def test_query_executor_maps_mysql_connection_loss_to_transient_result():
+    error = OperationalError(
+        "select 1",
+        {},
+        RuntimeError(2013, "Lost connection to MySQL server"),
+        connection_invalidated=False,
+    )
+    executor = ConnectionDatasourceQueryExecutor(FailingConnectionService(error))
+
+    result = executor.execute(8, "select 1", timeout_seconds=3)
+
+    assert result.succeeded is False
+    assert result.error_code == "datasource_temporarily_unavailable"
+    assert result.transient is True
+    assert result.timed_out is False

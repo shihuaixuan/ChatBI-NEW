@@ -5,6 +5,8 @@ from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from apps.temporal import ResolvedTemporalPlan, TemporalPlan
+
 IntentType = Literal[
     "metric_query",
     "trend_analysis",
@@ -93,7 +95,7 @@ class DimensionSlot(BaseModel):
 
     name: str = Field(min_length=1)
     role: Literal["group_by", "filter", "ambiguous"]
-    value: str | int | float | bool | None = None
+    value: str | int | float | bool | list[str | int | float | bool] | None = None
     value_status: Literal["provided", "not_provided", "ambiguous"] = "not_provided"
     value_confidence: float = Field(default=0.0, ge=0, le=1)
 
@@ -106,6 +108,47 @@ class TimeRange(BaseModel):
     raw: str | None = None
     value_status: Literal["provided", "not_provided"] = "not_provided"
     normalized: dict[str, Any] | None = None
+    interpretation_source: (
+        Literal[
+            "legacy_rule",
+            "model",
+            "user_confirmation",
+        ]
+        | None
+    ) = None
+
+
+class QueryShape(BaseModel):
+    """模型识别出的查询组织方式，不包含资产、字段或 SQL。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    select_mode: Literal["aggregate", "detail"]
+    needs_group_by: bool = Field(default=False, strict=True)
+    needs_order_by: bool = Field(default=False, strict=True)
+    order_direction: Literal["asc", "desc"] | None = None
+    limit: int | None = Field(default=None, ge=1, le=1000, strict=True)
+    time_grain: Literal["day", "week", "month", "quarter", "year"] | None = None
+
+
+class TemporalInterpretationResult(BaseModel):
+    """模型时间计划经过服务端解析后的统一执行前结果。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    plan: TemporalPlan
+    resolved_plan: ResolvedTemporalPlan | None = None
+    time_range: TimeRange = Field(default_factory=TimeRange)
+    interpretation_source: Literal["model", "user_confirmation"] = "model"
+
+    @model_validator(mode="after")
+    def validate_resolution_state(self) -> TemporalInterpretationResult:
+        if self.plan.status in {"resolved", "no_time"}:
+            if self.resolved_plan is None:
+                raise ValueError("TEMPORAL_RESOLVED_PLAN_REQUIRED")
+        elif self.resolved_plan is not None:
+            raise ValueError("TEMPORAL_UNRESOLVED_PLAN_FORBIDDEN")
+        return self
 
 
 class IntentRecognitionOutput(
@@ -121,6 +164,7 @@ class IntentRecognitionOutput(
     model_config = ConfigDict(extra="forbid")
 
     time_range: TimeRange = Field(default_factory=TimeRange)
+    query_shape: QueryShape
 
 
 class DimensionRecognitionOutput(BaseModel):
@@ -156,6 +200,41 @@ class IntentValidationOutput(BaseModel):
     clarification_slots: list[str] = Field(default_factory=list)
 
 
+class TemporalShadowObservation(BaseModel):
+    """模型时间计划与当前权威时间结果的旁路对照记录。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal[
+        "matched",
+        "different",
+        "not_comparable",
+        "model_error",
+        "resolution_error",
+    ]
+    plan: TemporalPlan | None = None
+    resolved_plan: ResolvedTemporalPlan | None = None
+    legacy_time_range: TimeRange
+    difference_codes: tuple[str, ...] = ()
+    error_code: str | None = None
+
+
+class TemporalShadowStatistics(BaseModel):
+    """一批旁路观察的稳定汇总结构。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    observation_count: int = Field(ge=0)
+    status_counts: dict[str, int] = Field(default_factory=dict)
+    comparable_count: int = Field(ge=0)
+    matched_count: int = Field(ge=0)
+    match_rate: float | None = Field(default=None, ge=0, le=1)
+    difference_counts: dict[str, int] = Field(default_factory=dict)
+    error_counts: dict[str, int] = Field(default_factory=dict)
+    plan_status_counts: dict[str, int] = Field(default_factory=dict)
+    ambiguity_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class QuestionUnderstandingOutput(BaseModel):
     """问题理解统一输出，是后续 Agent 与工具共享的唯一事实源。"""
 
@@ -167,6 +246,7 @@ class QuestionUnderstandingOutput(BaseModel):
     inherited_context: dict[str, Any] = Field(default_factory=dict)
     intent: IntentRecognitionOutput
     validation: IntentValidationOutput
+    temporal_interpretation: TemporalInterpretationResult | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +255,7 @@ class QuestionUnderstandingOutcome:
 
     output: QuestionUnderstandingOutput
     usage_metadata: dict[str, int]
+    temporal_shadow: TemporalShadowObservation | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,9 +285,11 @@ class QuestionUnderstandingValidationData:
     metric_mentions: tuple[str, ...] = ()
     dimension_slots: tuple[dict[str, Any], ...] = ()
     time_range: dict[str, Any] = field(default_factory=dict)
+    query_shape: dict[str, Any] = field(default_factory=dict)
     ambiguous_slots: tuple[str, ...] = ()
     conflict_slots: tuple[str, ...] = ()
     subject_domain: dict[str, Any] = field(default_factory=dict)
+    temporal_plan: TemporalPlan | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,6 +334,7 @@ __all__ = [
     "QuestionRewriteOutput",
     "QuestionRewriteOutputBase",
     "QuestionRewriteProjectionOutput",
+    "QueryShape",
     "QuestionIntentProjectionData",
     "QuestionIntentProjectionResult",
     "QuestionUnderstandingOutcome",

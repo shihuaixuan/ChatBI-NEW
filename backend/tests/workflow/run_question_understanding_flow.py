@@ -4,12 +4,17 @@ import argparse
 import copy
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
+
+from apps.temporal import build_temporal_context  # noqa: E402
+
 
 class StableQuestionModelClient:
     def __call__(self, prompt):
@@ -83,6 +88,15 @@ def _base_request(question: str, dataset_id: int, tenant_id: int, user_id: int) 
             "dataset_id": dataset_id,
             "tenant_id": tenant_id,
             "user_id": user_id,
+            "temporal_context": build_temporal_context(
+                reference_at=datetime(
+                    2026,
+                    7,
+                    31,
+                    12,
+                    tzinfo=ZoneInfo("Asia/Shanghai"),
+                )
+            ).model_dump(mode="json"),
         },
         "conversation": {},
         "variables": {},

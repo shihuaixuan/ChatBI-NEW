@@ -4,23 +4,22 @@ from __future__ import annotations
 
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from apps.datasource import DatasourceQueryService, DatasourceQuerySubject
 from apps.retrieval import (
     ExecutableAssetReference,
-    RetrievalDecisionStatus,
     RetrievalPermissionError,
     RetrievalQueryError,
     RetrievalService,
     filter_semantic_payload_tables,
+    is_compilation_decision_executable,
     validate_compilation_allowlist,
 )
 from apps.semantic import (
     SemanticQueryCompileRequest,
     SemanticSQLCompilationService,
     SemanticUsedAsset,
-    normalize_time_range,
 )
 from apps.tool.base import Tool, ToolExecutionPolicy, json_summary
 from apps.tool.context import current_tool_call_context
@@ -29,7 +28,7 @@ from apps.tool.tools.context import TrustedToolContext
 from apps.tool.tools.semantic_contracts import (
     SemanticAssetScope,
     SemanticToolContext,
-    build_semantic_compile_plan,
+    project_semantic_compile_plan,
 )
 
 
@@ -266,7 +265,10 @@ class SearchSemanticAssetsTool(
             allowed_assets=allowed_assets,
             authorized_tables=tuple(retrieved_tables),
             normalized_time_range=normalized_time_range,
-            compile_plan=build_semantic_compile_plan(package.slot_bindings),
+            compile_plan=project_semantic_compile_plan(
+                package.slot_bindings,
+                request.intent.model_dump(mode="json"),
+            ),
             permission_version=request.scope.permission_version,
         )
         data = SearchSemanticAssetsResult(package=package, scope=scope)
@@ -293,16 +295,29 @@ class CompileFilter(BaseModel):
         default="=",
         description="过滤操作符，如 = / != / > / >= / < / <= / in / like",
     )
-    value: str | int | float | bool | dict[str, Any] = Field(
-        description="过滤值；时间筛选必须使用已确认的归一化时间范围"
-    )
+    value: (
+        str | int | float | bool | list[str | int | float | bool] | dict[str, Any]
+    ) = Field(description="过滤值；时间筛选必须使用已确认的归一化时间范围")
 
 
 class CompileOrderBy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    biz_name: str = Field(description="排序字段的 biz_name（指标或维度）")
+    asset_id: int | None = Field(
+        default=None,
+        description="排序指标或维度的 asset_id，优先使用可信查询计划提供的值",
+    )
+    biz_name: str | None = Field(
+        default=None,
+        description="兼容旧调用的排序字段 biz_name，只能匹配已选择资产",
+    )
     direction: Literal["asc", "desc"] = "desc"
+
+    @model_validator(mode="after")
+    def validate_target(self) -> CompileOrderBy:
+        if self.asset_id is None and not str(self.biz_name or "").strip():
+            raise ValueError("排序条件必须提供 asset_id 或 biz_name")
+        return self
 
 
 class CompileSemanticSqlArgs(BaseModel):
@@ -340,7 +355,8 @@ class CompileSemanticSqlTool(
     description = (
         "把结构化查询计划确定性编译为 SQL，口径由语义层保证。参数只允许 "
         "metric_asset_ids、dimension_asset_ids、filters、time_bucket、order_by、limit；"
-        "所有 asset_id 必须来自 search_semantic_assets 返回的编译白名单。"
+        "所有 asset_id 必须来自 search_semantic_assets 返回的编译白名单；"
+        "时间筛选和 time_bucket 由服务端可信时间计划覆盖。"
     )
     args_model = CompileSemanticSqlArgs
     result_model = CompileSemanticSqlResult
@@ -368,13 +384,33 @@ class CompileSemanticSqlTool(
         scope = ctx.semantic_asset_scope
         if (
             scope is None
-            or scope.decision_status != RetrievalDecisionStatus.RESOLVED
+            or not is_compilation_decision_executable(scope.decision_status)
             or scope.compile_plan is None
             or not scope.compile_plan.metric_asset_ids
         ):
             return dict(args)
         prepared = dict(args)
-        prepared.update(scope.compile_plan.model_dump(mode="json"))
+        trusted_plan = scope.compile_plan.model_dump(
+            mode="json",
+            include={
+                "metric_asset_ids",
+                "dimension_asset_ids",
+                "order_by",
+                "limit",
+            },
+        )
+        trusted_plan["filters"] = [
+            item.model_dump(mode="json")
+            for item in (
+                *scope.compile_plan.filters,
+                *scope.compile_plan.temporal_plan.filters,
+            )
+        ]
+        time_bucket = scope.compile_plan.temporal_plan.time_bucket
+        trusted_plan["time_bucket"] = (
+            time_bucket.model_dump(mode="json") if time_bucket is not None else None
+        )
+        prepared.update(trusted_plan)
         return prepared
 
     def execute(
@@ -391,6 +427,14 @@ class CompileSemanticSqlTool(
                 "尚未检索语义资产，请先调用 search_semantic_assets。",
                 error_code="semantic_package_required",
                 error_category=ToolErrorCategory.BUSINESS_RULE,
+            )
+        plan_error = _validate_compile_plan(scope.compile_plan)
+        if plan_error is not None:
+            return ToolResult.rejected(
+                "语义查询计划未覆盖已确认的分析形态，禁止生成不完整 SQL。",
+                error_code="semantic_query_plan_incomplete",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
+                details=plan_error,
             )
         if not _scope_matches_context(ctx, scope):
             return ToolResult.rejected(
@@ -425,8 +469,8 @@ class CompileSemanticSqlTool(
             *args.dimension_asset_ids,
             *(item.asset_id for item in args.filters),
         ]
-        if args.time_bucket and isinstance(args.time_bucket.get("asset_id"), int):
-            dimension_ids.append(args.time_bucket["asset_id"])
+        if args.time_bucket and isinstance(args.time_bucket.get("dimension_id"), int):
+            dimension_ids.append(args.time_bucket["dimension_id"])
         try:
             validate_compilation_allowlist(
                 scope.decision_status,
@@ -465,10 +509,7 @@ class CompileSemanticSqlTool(
             matched_time_filter = False
             for filter_item in filters:
                 value = filter_item["value"]
-                candidate = (
-                    normalize_time_range(value) if isinstance(value, str) else None
-                )
-                if value == normalized_time or candidate == normalized_time:
+                if value == normalized_time:
                     filter_item["value"] = normalized_time
                     matched_time_filter = True
             if not matched_time_filter:
@@ -526,6 +567,18 @@ class CompileSemanticSqlTool(
                 error_code="compiled_table_out_of_scope",
                 error_category=ToolErrorCategory.AUTHORIZATION,
             )
+        coverage_error = _validate_compiled_plan_coverage(
+            compiled.sql,
+            compiled.used_assets,
+            scope.compile_plan,
+        )
+        if coverage_error is not None:
+            return ToolResult.rejected(
+                "编译 SQL 未完整覆盖可信查询计划，禁止进入执行阶段。",
+                error_code="compiled_query_plan_not_covered",
+                error_category=ToolErrorCategory.SAFETY,
+                details=coverage_error,
+            )
         data = CompileSemanticSqlResult(
             sql=compiled.sql,
             tables=compiled.tables,
@@ -555,6 +608,79 @@ def _scope_matches_context(
         and scope.datasource_id == ctx.datasource_id
         and scope.dataset_id == ctx.dataset_id
     )
+
+
+def _validate_compile_plan(
+    plan: Any,
+) -> dict[str, Any] | None:
+    """在编译前检查比较、排名等查询形态必需的计划字段。"""
+
+    if plan is None:
+        return None
+    missing: list[str] = []
+    shape = plan.query_shape if isinstance(plan.query_shape, dict) else {}
+    time_bucket = plan.temporal_plan.time_bucket
+    if (
+        bool(shape.get("needs_group_by"))
+        and not plan.dimension_asset_ids
+        and time_bucket is None
+    ):
+        missing.append("group_dimension_asset_ids")
+    if str(shape.get("time_grain") or "").strip() and time_bucket is None:
+        missing.append("time_bucket")
+    if bool(shape.get("needs_order_by")) and not plan.order_by:
+        missing.append("order_by")
+    if plan.intent_type == "ranking_analysis" and plan.limit is None:
+        missing.append("limit")
+    if not missing:
+        return None
+    return {
+        "intent_type": plan.intent_type,
+        "missing_requirements": missing,
+        "query_shape": shape,
+    }
+
+
+def _validate_compiled_plan_coverage(
+    sql: str,
+    used_assets: list[SemanticUsedAsset],
+    plan: Any,
+) -> dict[str, Any] | None:
+    """检查编译产物是否包含计划要求的指标、分组、排序和 TopN。"""
+
+    if plan is None:
+        return None
+    used_metric_ids = {
+        item.asset_id for item in used_assets if item.asset_type.upper() == "METRIC"
+    }
+    used_dimension_ids = {
+        item.asset_id for item in used_assets if item.asset_type.upper() == "DIMENSION"
+    }
+    missing: list[str] = []
+    for asset_id in plan.metric_asset_ids:
+        if asset_id not in used_metric_ids:
+            missing.append(f"metric:{asset_id}")
+    for asset_id in plan.dimension_asset_ids:
+        if asset_id not in used_dimension_ids:
+            missing.append(f"group_dimension:{asset_id}")
+    time_bucket = plan.temporal_plan.time_bucket
+    if time_bucket is not None and time_bucket.dimension_id not in used_dimension_ids:
+        missing.append(f"time_bucket_dimension:{time_bucket.dimension_id}")
+
+    normalized_sql = " ".join(sql.lower().split()).rstrip(";")
+    shape = plan.query_shape if isinstance(plan.query_shape, dict) else {}
+    if bool(shape.get("needs_group_by")) and " group by " not in f" {normalized_sql} ":
+        missing.append("group_by")
+    if plan.order_by and " order by " not in f" {normalized_sql} ":
+        missing.append("order_by")
+    if plan.limit is not None and not normalized_sql.endswith(f"limit {plan.limit}"):
+        missing.append(f"limit:{plan.limit}")
+    if not missing:
+        return None
+    return {
+        "missing_requirements": missing,
+        "compiled_sql": sql,
+    }
 
 
 def _project_semantic_package(

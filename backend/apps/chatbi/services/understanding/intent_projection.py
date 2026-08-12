@@ -8,7 +8,7 @@ from apps.chatbi.models.dto.question_understanding import (
     QuestionIntentProjectionData,
     QuestionIntentProjectionResult,
 )
-from apps.semantic import normalize_time_range_payload
+from apps.temporal import normalize_time_range_payload
 
 _INTENT_TYPES = {
     "metric_query",
@@ -63,7 +63,11 @@ def normalize_shape(
     }
 
 
-def normalize_semantic(payload: dict[str, Any]) -> dict[str, Any]:
+def normalize_semantic(
+    payload: dict[str, Any],
+    *,
+    use_legacy_time_interpretation: bool = True,
+) -> dict[str, Any]:
     """清洗指标和时间子任务输出，并统一生成时间 AST。"""
 
     time_mentions = normalize_text_list(payload.get("time_mentions"))
@@ -73,7 +77,11 @@ def normalize_semantic(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "metric_mentions": normalize_text_list(payload.get("metric_mentions")),
         "time_mentions": time_mentions,
-        "time_range": normalize_time_range_payload(time_range),
+        "time_range": (
+            normalize_time_range_payload(time_range)
+            if use_legacy_time_interpretation
+            else time_range
+        ),
         "ambiguous_slots": normalize_text_list(payload.get("ambiguous_slots")),
         "conflict_slots": normalize_text_list(payload.get("conflict_slots")),
     }
@@ -150,8 +158,7 @@ def project_question_intent(
         ),
         "dimension_slots": dimension_slots,
         "time_mentions": normalize_text_list(semantic.get("time_mentions")),
-        "time_range": time_range
-        or {"raw": None, "value_status": "not_provided"},
+        "time_range": time_range or {"raw": None, "value_status": "not_provided"},
         "filter_mentions": (
             dimensions.get("residual_filter_mentions")
             if isinstance(dimensions.get("residual_filter_mentions"), list)
@@ -258,7 +265,11 @@ def _confirmed_intent_type(user_feedback: dict[str, Any]) -> str | None:
 
 
 def _without_intent_slots(value: Any) -> list[str]:
-    return [slot for slot in normalize_text_list(value) if slot not in _INTENT_FEEDBACK_SLOTS]
+    return [
+        slot
+        for slot in normalize_text_list(value)
+        if slot not in _INTENT_FEEDBACK_SLOTS
+    ]
 
 
 def _default_subject_domain() -> dict[str, Any]:

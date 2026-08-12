@@ -1,5 +1,6 @@
 from apps.chatbi.models import QuestionUnderstandingValidationData
 from apps.chatbi.services.understanding import validate_question_understanding
+from apps.temporal import TemporalPlan
 
 
 def test_validation_collects_rewrite_intent_metric_and_time_issues():
@@ -83,6 +84,44 @@ def test_validation_marks_time_expression_in_dimension_value_as_repair_issue():
     }
 
 
+def test_validation_uses_authoritative_plan_for_open_time_expression():
+    result = validate_question_understanding(
+        QuestionUnderstandingValidationData(
+            intent_type="metric_query",
+            metric_mentions=("销售额",),
+            dimension_slots=(
+                {
+                    "name": "店铺",
+                    "role": "filter",
+                    "value": "往前看两周",
+                    "value_status": "provided",
+                },
+            ),
+            temporal_plan=TemporalPlan.model_validate(
+                {
+                    "status": "resolved",
+                    "expressions": [
+                        {
+                            "kind": "rolling_range",
+                            "raw": "往前看两周",
+                            "source": "rewritten_question",
+                            "role": "query_filter",
+                            "direction": "past",
+                            "amount": 2,
+                            "unit": "week",
+                            "include_reference_date": True,
+                        }
+                    ],
+                    "ambiguities": [],
+                    "confidence": 0.98,
+                }
+            ),
+        )
+    )
+
+    assert "dimension_value_is_time_expression" in result.reason_codes
+
+
 def test_validation_exposes_subject_domain_as_graph_slot_issue():
     result = validate_question_understanding(
         QuestionUnderstandingValidationData(
@@ -95,5 +134,103 @@ def test_validation_exposes_subject_domain_as_graph_slot_issue():
         )
     )
 
-    issue = next(issue for issue in result.issues if issue.code == "subject_domain_ambiguous")
+    issue = next(
+        issue for issue in result.issues if issue.code == "subject_domain_ambiguous"
+    )
     assert issue.details["candidate_domain_ids"] == [1, 2]
+
+
+def test_validation_requires_clarification_for_unresolved_temporal_plan():
+    result = validate_question_understanding(
+        QuestionUnderstandingValidationData(
+            intent_type="metric_query",
+            metric_mentions=("销售额",),
+            temporal_plan=TemporalPlan.model_validate(
+                {
+                    "status": "clarification_required",
+                    "ambiguities": [
+                        {"code": "time_range_amount_missing", "raw": "最近"}
+                    ],
+                    "confidence": 0.6,
+                }
+            ),
+        )
+    )
+
+    assert result.reason_codes == ["temporal_clarification_required"]
+    assert result.clarification_slots == ["time_range"]
+    assert result.issues[0].details["ambiguity_codes"] == ["time_range_amount_missing"]
+
+
+def test_validation_accepts_consistent_ranking_shape():
+    result = validate_question_understanding(
+        QuestionUnderstandingValidationData(
+            intent_type="ranking_analysis",
+            metric_mentions=("销售额",),
+            dimension_slots=(
+                {
+                    "name": "门店",
+                    "role": "group_by",
+                    "value": None,
+                    "value_status": "not_provided",
+                },
+            ),
+            query_shape={
+                "select_mode": "aggregate",
+                "needs_group_by": True,
+                "needs_order_by": True,
+                "order_direction": "desc",
+                "limit": 5,
+                "time_grain": None,
+            },
+        )
+    )
+
+    assert result.reason_codes == []
+
+
+def test_validation_reports_incomplete_ranking_shape_without_filling_it():
+    result = validate_question_understanding(
+        QuestionUnderstandingValidationData(
+            intent_type="ranking_analysis",
+            metric_mentions=("销售额",),
+            query_shape={
+                "select_mode": "aggregate",
+                "needs_group_by": False,
+                "needs_order_by": False,
+                "order_direction": None,
+                "limit": None,
+                "time_grain": None,
+            },
+        )
+    )
+
+    assert result.reason_codes == [
+        "ranking_dimension_missing",
+        "ranking_order_missing",
+        "ranking_limit_missing",
+    ]
+    assert result.clarification_slots == ["dimension", "order", "limit"]
+
+
+def test_validation_reports_conflicting_query_shape_fields():
+    result = validate_question_understanding(
+        QuestionUnderstandingValidationData(
+            intent_type="metric_query",
+            metric_mentions=("销售额",),
+            query_shape={
+                "select_mode": "aggregate",
+                "needs_group_by": False,
+                "needs_order_by": False,
+                "order_direction": "desc",
+                "limit": 5,
+                "time_grain": "day",
+            },
+        )
+    )
+
+    assert result.reason_codes == [
+        "order_direction_unexpected",
+        "limit_without_order",
+        "time_grain_without_grouping",
+    ]

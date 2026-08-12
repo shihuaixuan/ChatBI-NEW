@@ -94,3 +94,46 @@ def test_query_final_reply_builds_chart_from_execution_fields():
     assert result.answer == "答案"
     assert result.chart == {"type": "bar", "x": "city", "y": ["gmv"]}
     assert result.non_standard is False
+
+
+def test_query_final_reply_uses_full_rows_instead_of_model_numbers():
+    result = project_query_final_reply(
+        QueryFinalReplyProjectionData(
+            answer_markdown="6月11日GMV为错误的30,408.72。",
+            execution={
+                "sql": "select stat_date, gmv_total from orders",
+                "fields": ["stat_date", "gmv_total"],
+                "sql_source": "compiled",
+            },
+            rows=[
+                {"stat_date": "2026-06-11", "gmv_total": 7132.4},
+                {"stat_date": "2026-06-12", "gmv_total": 21951.64},
+            ],
+        )
+    )
+
+    assert "30,408.72" not in result.answer
+    assert "2026-06-11 | 7132.4" in result.answer
+    assert "2026-06-12 | 21951.64" in result.answer
+
+
+def test_query_final_reply_calculates_share_from_grouped_rows():
+    result = project_query_final_reply(
+        QueryFinalReplyProjectionData(
+            answer_markdown="模型生成的占比",
+            execution={
+                "sql": "select channel_type, sum(gmv) from orders group by channel_type",
+                "fields": ["channel_type", "customer_gmv"],
+                "sql_source": "compiled",
+            },
+            rows=[
+                {"channel_type": "线上", "customer_gmv": 75},
+                {"channel_type": "线下", "customer_gmv": 25},
+            ],
+            intent={"intent_type": "share_analysis"},
+        )
+    )
+
+    assert "| channel_type | customer_gmv | 占比 |" in result.answer
+    assert "| 线上 | 75 | 75.00% |" in result.answer
+    assert "| 线下 | 25 | 25.00% |" in result.answer

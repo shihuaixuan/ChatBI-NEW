@@ -51,6 +51,8 @@ from apps.chatbi.orchestration.graph.schemas.v1 import IntentRecognitionOutput
 from apps.chatbi.services.understanding import (
     QuestionIntentFallbackService,
     StructuredModelService,
+    TemporalInterpretationService,
+    apply_temporal_interpretation_payload,
     graph_contracts,
     intent_projection,
 )
@@ -66,8 +68,8 @@ from apps.chatbi.services.understanding.dimension_candidates import (
 from apps.chatbi.services.understanding.dimension_candidates import (
     normalize_dimension_candidates as _normalize_dimension_candidates,
 )
-from apps.semantic import normalize_time_range_payload
 from apps.semantic.services.schema_service import DatasetSchemaProvider
+from apps.temporal import TemporalContext, normalize_time_range_payload
 
 __all__ = [
     "IntentSubtaskConfig",
@@ -118,8 +120,6 @@ class IntentSubtaskResult:
         return payload
 
 
-
-
 class QuestionAdapter:
     """ChatBI v1 问题节点真实能力适配器。"""
 
@@ -130,6 +130,8 @@ class QuestionAdapter:
         intent_subtask_config: IntentSubtaskConfig | None = None,
         question_model_service: StructuredModelService | None = None,
         intent_fallback_service: QuestionIntentFallbackService | None = None,
+        temporal_interpretation_service: TemporalInterpretationService | None = None,
+        temporal_authority_enabled: bool = False,
     ) -> None:
         if model_client is not None and question_model_service is not None:
             raise ValueError("QUESTION_MODEL_SOURCE_CONFLICT")
@@ -142,6 +144,18 @@ class QuestionAdapter:
         self._schema_provider = schema_provider
         self._intent_fallback_service = (
             intent_fallback_service or QuestionIntentFallbackService()
+        )
+        if (
+            temporal_interpretation_service is not None
+            and not temporal_authority_enabled
+        ):
+            raise ValueError("TEMPORAL_INTERPRETATION_SERVICE_DISABLED")
+        self._temporal_authority_enabled = temporal_authority_enabled
+        self._temporal_interpretation_service = (
+            temporal_interpretation_service
+            or TemporalInterpretationService(self._question_model_service)
+            if temporal_authority_enabled
+            else None
         )
         self._intent_subtask_config = intent_subtask_config or IntentSubtaskConfig()
         self._last_intent_subtask_trace: dict[str, Any] = {
@@ -156,10 +170,14 @@ class QuestionAdapter:
 
         return {
             "enabled": bool(self._last_intent_subtask_trace.get("enabled")),
-            "all_subtasks_fallback": bool(self._last_intent_subtask_trace.get("all_subtasks_fallback")),
+            "all_subtasks_fallback": bool(
+                self._last_intent_subtask_trace.get("all_subtasks_fallback")
+            ),
             "subtasks": {
                 name: dict(value)
-                for name, value in dict(self._last_intent_subtask_trace.get("subtasks") or {}).items()
+                for name, value in dict(
+                    self._last_intent_subtask_trace.get("subtasks") or {}
+                ).items()
                 if isinstance(value, dict)
             },
         }
@@ -226,6 +244,22 @@ class QuestionAdapter:
         ctx = ChatBIRunContext(request)
         rewritten_question = ctx.question
         user_feedback = ctx.intent_response
+        temporal_confirmation = _temporal_confirmation(ctx.slot_response)
+        if (
+            self._temporal_authority_enabled
+            and temporal_confirmation is not None
+            and _temporal_plan_unresolved(ctx.intent)
+        ):
+            # 时间澄清恢复只重跑时间任务，不重复问题形态、指标和维度识别。
+            return self._apply_authoritative_temporal(
+                dict(ctx.intent),
+                rewritten_question=rewritten_question,
+                temporal_context=ctx.temporal_context,
+                conversation_context=ctx.conversation,
+                user_feedback=user_feedback,
+                user_confirmation=temporal_confirmation,
+                confirmed_plan=_temporal_confirmed_plan(ctx.slot_response),
+            )
         schema = self._load_dataset_schema(ctx)
         subject_domains = self._subject_domains_from_schema(schema)
         available_dimensions = self._available_dimensions_from_schema(schema)
@@ -235,10 +269,13 @@ class QuestionAdapter:
                     **self._intent_fallback_service.empty_intent(),
                     "subject_domain": _default_subject_domain("not_required"),
                 }
-            ).model_dump(mode="json")
+            ).model_dump(mode="json", exclude_none=True)
 
         conversation_context = ctx.conversation
-        fallback = self._intent_fallback_service.infer(rewritten_question)
+        fallback = self._intent_fallback_service.infer(
+            rewritten_question,
+            include_legacy_temporal=not self._temporal_authority_enabled,
+        )
         fallback_payloads = self._intent_subtask_fallback_payloads(fallback)
         subtask_results = self._run_intent_subtasks(
             {
@@ -277,29 +314,125 @@ class QuestionAdapter:
                 user_feedback=user_feedback,
             )
         )
-        output = IntentRecognitionOutput.model_validate(projection.payload)
+        projected_payload = dict(projection.payload)
+        if self._temporal_authority_enabled:
+            return self._apply_authoritative_temporal(
+                projected_payload,
+                rewritten_question=rewritten_question,
+                temporal_context=ctx.temporal_context,
+                conversation_context=conversation_context,
+                user_feedback=user_feedback,
+            )
+        projected_payload["time_range"] = normalize_time_range_payload(
+            projected_payload.get("time_range")
+            or {"raw": None, "value_status": "not_provided"},
+            temporal_context=ctx.temporal_context,
+        )
+        if projected_payload["time_range"].get("value_status") == "provided":
+            projected_payload["temporal_interpretation_source"] = "legacy_rule"
+        output = IntentRecognitionOutput.model_validate(projected_payload)
         validation = graph_contracts.validate_intent(
             output.model_dump(mode="json"),
             retry_count=0,
         )
-        return output.model_copy(update={"validation": validation}).model_dump(mode="json")
+        return output.model_copy(update={"validation": validation}).model_dump(
+            mode="json",
+            exclude_none=True,
+        )
 
-    def _intent_subtask_fallback_payloads(self, fallback: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    def _apply_authoritative_temporal(
+        self,
+        intent_payload: dict[str, Any],
+        *,
+        rewritten_question: str,
+        temporal_context: TemporalContext,
+        conversation_context: dict[str, Any],
+        user_feedback: dict[str, Any],
+        user_confirmation: str | None = None,
+        confirmed_plan: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """调用共享时间任务并生成 Graph 权威意图；失败必须明确向上抛出。"""
+
+        temporal_service = self._temporal_interpretation_service
+        if temporal_service is None:
+            raise RuntimeError("TEMPORAL_AUTHORITY_SERVICE_REQUIRED")
+        metric_mentions = [
+            str(item) for item in intent_payload.get("metric_mentions") or []
+        ]
+        if confirmed_plan is not None:
+            if user_confirmation is None:
+                raise ValueError("TEMPORAL_CONFIRMATION_TEXT_REQUIRED")
+            temporal_interpretation = temporal_service.resolve_confirmed_plan(
+                plan=confirmed_plan,
+                rewritten_question=rewritten_question,
+                metric_mentions=metric_mentions,
+                temporal_context=temporal_context,
+                user_confirmation=user_confirmation,
+                allowed_ambiguity_codes=_temporal_ambiguity_codes(intent_payload),
+            )
+        else:
+            temporal_interpretation, _ = temporal_service.interpret_for_execution(
+                rewritten_question=rewritten_question,
+                metric_mentions=metric_mentions,
+                time_mentions=[
+                    str(item) for item in intent_payload.get("time_mentions") or []
+                ],
+                temporal_context=temporal_context,
+                conversation_context=conversation_context,
+                user_feedback=user_feedback,
+                user_confirmation=user_confirmation,
+            )
+        projected_payload = apply_temporal_interpretation_payload(
+            intent_payload,
+            temporal_interpretation,
+        )
+        projected_payload.update(
+            {
+                "temporal_plan": temporal_interpretation.plan.model_dump(mode="json"),
+                "resolved_temporal_plan": (
+                    temporal_interpretation.resolved_plan.model_dump(mode="json")
+                    if temporal_interpretation.resolved_plan is not None
+                    else None
+                ),
+                "temporal_interpretation_source": (
+                    temporal_interpretation.interpretation_source
+                ),
+            }
+        )
+        output = IntentRecognitionOutput.model_validate(projected_payload)
+        validation = graph_contracts.validate_intent(
+            output.model_dump(mode="json"),
+            retry_count=0,
+        )
+        return output.model_copy(update={"validation": validation}).model_dump(
+            mode="json",
+            exclude_none=True,
+        )
+
+    def _intent_subtask_fallback_payloads(
+        self, fallback: dict[str, Any]
+    ) -> dict[str, dict[str, Any]]:
         return {
             "shape": {
                 "intent_type": fallback.get("intent_type"),
                 "confidence": fallback.get("confidence", 0),
                 "required_slot_types": fallback.get("required_slot_types", []),
                 "query_shape": fallback.get("query_shape", {}),
-                "subject_domain": fallback.get("subject_domain") or _default_subject_domain("not_required"),
+                "subject_domain": fallback.get("subject_domain")
+                or _default_subject_domain("not_required"),
                 "ambiguous_slots": fallback.get("ambiguous_slots", []),
                 "conflict_slots": fallback.get("conflict_slots", []),
             },
             "semantic": {
                 "metric_mentions": fallback.get("metric_mentions", []),
                 "time_mentions": fallback.get("time_mentions", []),
-                "time_range": normalize_time_range_payload(
-                    fallback.get("time_range") or {"raw": None, "value_status": "not_provided"}
+                "time_range": (
+                    normalize_time_range_payload(
+                        fallback.get("time_range")
+                        or {"raw": None, "value_status": "not_provided"}
+                    )
+                    if not self._temporal_authority_enabled
+                    else {"raw": None, "value_status": "not_provided"}
                 ),
                 "ambiguous_slots": [],
                 "conflict_slots": [],
@@ -328,10 +461,14 @@ class QuestionAdapter:
             return results
 
         max_workers = max(1, min(self._intent_subtask_config.max_workers, len(tasks)))
-        executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="intent-subtask")
+        executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="intent-subtask"
+        )
         try:
             future_to_name: dict[Future[IntentSubtaskResult], str] = {
-                executor.submit(self._run_intent_subtask, name, task, fallback_payloads[name]): name
+                executor.submit(
+                    self._run_intent_subtask, name, task, fallback_payloads[name]
+                ): name
                 for name, task in tasks.items()
             }
             timeout_seconds = min(
@@ -385,7 +522,10 @@ class QuestionAdapter:
             status = "fallback"
             source = "exception_fallback"
             error_code = exc.__class__.__name__
-            logger.warning("intent subtask failed; using fallback", extra={"subtask": name, "error_code": error_code})
+            logger.warning(
+                "intent subtask failed; using fallback",
+                extra={"subtask": name, "error_code": error_code},
+            )
         return IntentSubtaskResult(
             name=name,
             payload=payload,
@@ -404,7 +544,9 @@ class QuestionAdapter:
         error_code: str,
         started_at: float | None,
     ) -> IntentSubtaskResult:
-        duration_ms = 0 if started_at is None else int((time.monotonic() - started_at) * 1000)
+        duration_ms = (
+            0 if started_at is None else int((time.monotonic() - started_at) * 1000)
+        )
         return IntentSubtaskResult(
             name=name,
             payload=dict(fallback_payload),
@@ -422,8 +564,12 @@ class QuestionAdapter:
     ) -> None:
         self._last_intent_subtask_trace = {
             "enabled": enabled,
-            "all_subtasks_fallback": all(result.status == "fallback" for result in results.values()),
-            "subtasks": {name: result.trace_payload() for name, result in results.items()},
+            "all_subtasks_fallback": all(
+                result.status == "fallback" for result in results.values()
+            ),
+            "subtasks": {
+                name: result.trace_payload() for name, result in results.items()
+            },
         }
 
     def _recognize_intent_shape(
@@ -448,7 +594,9 @@ class QuestionAdapter:
             prompt,
             {**user_feedback},
             fallback_payload,
-            lambda payload: self._validate_intent_shape_payload(payload, subject_domains),
+            lambda payload: self._validate_intent_shape_payload(
+                payload, subject_domains
+            ),
         )
 
     def _recognize_semantic_mentions(
@@ -492,13 +640,17 @@ class QuestionAdapter:
                 available_dimensions=available_dimensions,
             )
 
-        fallback_payload = self._intent_subtask_fallback_payloads(fallback)["dimensions"]
+        fallback_payload = self._intent_subtask_fallback_payloads(fallback)[
+            "dimensions"
+        ]
         return self._recognize_subtask(
             "dimension_slots",
             prompt,
             {**user_feedback},
             fallback_payload,
-            lambda payload: self._validate_dimension_slots_payload(payload, available_dimensions),
+            lambda payload: self._validate_dimension_slots_payload(
+                payload, available_dimensions
+            ),
         )
 
     def _recognize_subtask(
@@ -516,7 +668,11 @@ class QuestionAdapter:
             result = self._invoke_prompt(prompt, stage)
             validation = validator(result)
             result = validation["payload"]
-            if validation["status"] == "invalid" and validation["retryable"] and retry_count + 1 < graph_contracts.DEFAULT_MAX_INTENT_RETRY:
+            if (
+                validation["status"] == "invalid"
+                and validation["retryable"]
+                and retry_count + 1 < graph_contracts.DEFAULT_MAX_INTENT_RETRY
+            ):
                 retry_feedback = {
                     "reason_code": validation["reason_code"],
                     "feedback": validation["repair_hint"],
@@ -551,18 +707,37 @@ class QuestionAdapter:
                 subject_domains,
             ),
         )
-        return {"status": "valid", "retryable": False, "reason_code": "VALID", "repair_hint": None, "payload": normalized}
+        return {
+            "status": "valid",
+            "retryable": False,
+            "reason_code": "VALID",
+            "repair_hint": None,
+            "payload": normalized,
+        }
 
-    def _validate_semantic_mentions_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        normalized = intent_projection.normalize_semantic(payload)
-        return {"status": "valid", "retryable": False, "reason_code": "VALID", "repair_hint": None, "payload": normalized}
+    def _validate_semantic_mentions_payload(
+        self, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        normalized = intent_projection.normalize_semantic(
+            payload,
+            use_legacy_time_interpretation=not self._temporal_authority_enabled,
+        )
+        return {
+            "status": "valid",
+            "retryable": False,
+            "reason_code": "VALID",
+            "repair_hint": None,
+            "payload": normalized,
+        }
 
     def _validate_dimension_slots_payload(
         self,
         payload: dict[str, Any],
         available_dimensions: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        normalized = self._normalize_dimension_slots_payload(payload, available_dimensions)
+        normalized = self._normalize_dimension_slots_payload(
+            payload, available_dimensions
+        )
         shared_validation = graph_contracts.validate_intent(normalized)
         if shared_validation["status"] == "invalid":
             return {
@@ -572,9 +747,17 @@ class QuestionAdapter:
                 "repair_hint": shared_validation["repair_hint"],
                 "payload": normalized,
             }
-        violation = self._first_dimension_slot_violation(normalized, available_dimensions)
+        violation = self._first_dimension_slot_violation(
+            normalized, available_dimensions
+        )
         if violation is None:
-            return {"status": "valid", "retryable": False, "reason_code": "VALID", "repair_hint": None, "payload": normalized}
+            return {
+                "status": "valid",
+                "retryable": False,
+                "reason_code": "VALID",
+                "repair_hint": None,
+                "payload": normalized,
+            }
         return {
             "status": "invalid",
             "retryable": True,
@@ -589,8 +772,12 @@ class QuestionAdapter:
         available_dimensions: list[dict[str, Any]],
     ) -> dict[str, Any]:
         normalized_candidates = _normalize_dimension_candidates(available_dimensions)
-        candidate_by_text = _dimension_candidate_by_text(normalized_candidates, include_time=False)
-        candidate_by_text_with_time = _dimension_candidate_by_text(normalized_candidates, include_time=True)
+        candidate_by_text = _dimension_candidate_by_text(
+            normalized_candidates, include_time=False
+        )
+        candidate_by_text_with_time = _dimension_candidate_by_text(
+            normalized_candidates, include_time=True
+        )
         if not normalized_candidates:
             passthrough_slots = [
                 dict(slot)
@@ -613,7 +800,9 @@ class QuestionAdapter:
                 "dimension_mentions": passthrough_mentions,
                 "dimension_slots": passthrough_slots,
                 "residual_filter_mentions": [
-                    item for item in payload.get("residual_filter_mentions") or [] if isinstance(item, dict)
+                    item
+                    for item in payload.get("residual_filter_mentions") or []
+                    if isinstance(item, dict)
                 ],
                 "ambiguous_slots": intent_projection.normalize_text_list(
                     payload.get("ambiguous_slots")
@@ -627,7 +816,10 @@ class QuestionAdapter:
             payload.get("dimension_mentions")
         ):
             mention_key = _dimension_text_key(mention)
-            if mention_key in candidate_by_text_with_time and mention_key not in candidate_by_text:
+            if (
+                mention_key in candidate_by_text_with_time
+                and mention_key not in candidate_by_text
+            ):
                 continue
             candidate = candidate_by_text.get(mention_key)
             normalized_mention = candidate["name"] if candidate is not None else mention
@@ -642,7 +834,10 @@ class QuestionAdapter:
             if not raw_name:
                 continue
             raw_name_key = _dimension_text_key(raw_name)
-            if raw_name_key in candidate_by_text_with_time and raw_name_key not in candidate_by_text:
+            if (
+                raw_name_key in candidate_by_text_with_time
+                and raw_name_key not in candidate_by_text
+            ):
                 continue
             candidate = candidate_by_text.get(raw_name_key)
             slot_name = candidate["name"] if candidate is not None else raw_name
@@ -669,9 +864,7 @@ class QuestionAdapter:
                 continue
             normalized_slot = {
                 "name": slot_name,
-                "role": intent_projection.normalize_dimension_role(
-                    slot.get("role")
-                ),
+                "role": intent_projection.normalize_dimension_role(slot.get("role")),
                 "value": slot.get("value"),
                 "value_status": intent_projection.normalize_value_status(
                     slot.get("value_status"), slot.get("value")
@@ -679,9 +872,7 @@ class QuestionAdapter:
             }
             if "value_confidence" in slot:
                 normalized_slot["value_confidence"] = (
-                    intent_projection.normalize_confidence(
-                        slot.get("value_confidence")
-                    )
+                    intent_projection.normalize_confidence(slot.get("value_confidence"))
                 )
             slots.append(normalized_slot)
             if slot_name not in mentions:
@@ -691,7 +882,9 @@ class QuestionAdapter:
             "dimension_mentions": mentions,
             "dimension_slots": slots,
             "residual_filter_mentions": [
-                item for item in payload.get("residual_filter_mentions") or [] if isinstance(item, dict)
+                item
+                for item in payload.get("residual_filter_mentions") or []
+                if isinstance(item, dict)
             ],
             "ambiguous_slots": intent_projection.normalize_text_list(
                 payload.get("ambiguous_slots")
@@ -707,7 +900,10 @@ class QuestionAdapter:
         payload: dict[str, Any],
         available_dimensions: list[dict[str, Any]],
     ) -> dict[str, str] | None:
-        candidate_by_name = {item["name"]: item for item in _normalize_dimension_candidates(available_dimensions)}
+        candidate_by_name = {
+            item["name"]: item
+            for item in _normalize_dimension_candidates(available_dimensions)
+        }
         for slot in payload.get("dimension_slots") or []:
             if not isinstance(slot, dict):
                 continue
@@ -732,7 +928,10 @@ class QuestionAdapter:
         if not value_key:
             return False
         texts = [candidate.get("name"), *(candidate.get("aliases") or [])]
-        return any(_dimension_text_key(text) and _dimension_text_key(text) in value_key for text in texts)
+        return any(
+            _dimension_text_key(text) and _dimension_text_key(text) in value_key
+            for text in texts
+        )
 
     def _load_dataset_schema(self, ctx: ChatBIRunContext) -> Any | None:
         if self._schema_provider is None:
@@ -740,7 +939,9 @@ class QuestionAdapter:
         if ctx.dataset_id is None:
             return None
         try:
-            return self._schema_provider.build_dataset_schema(ctx.tenant_id, ctx.dataset_id)
+            return self._schema_provider.build_dataset_schema(
+                ctx.tenant_id, ctx.dataset_id
+            )
         except Exception:
             return None
 
@@ -748,7 +949,9 @@ class QuestionAdapter:
     def _subject_domains_from_schema(schema: Any | None) -> list[dict[str, Any]]:
         if schema is None:
             return []
-        return _normalize_subject_domain_candidates(getattr(schema, "subject_domains", []) or [])
+        return _normalize_subject_domain_candidates(
+            getattr(schema, "subject_domains", []) or []
+        )
 
     @staticmethod
     def _available_dimensions_from_schema(schema: Any | None) -> list[dict[str, Any]]:
@@ -772,10 +975,17 @@ class QuestionAdapter:
 
         if len(candidates) == 1:
             candidate = candidates[0]
-            return _subject_domain_payload(candidate, status="not_required", confidence=1.0, reason="只有一个候选主题域")
+            return _subject_domain_payload(
+                candidate,
+                status="not_required",
+                confidence=1.0,
+                reason="只有一个候选主题域",
+            )
 
         raw = raw_subject_domain if isinstance(raw_subject_domain, dict) else {}
-        candidate_by_id = {candidate["domain_id"]: candidate for candidate in candidates}
+        candidate_by_id = {
+            candidate["domain_id"]: candidate for candidate in candidates
+        }
         selected_domain_id = _int_or_none(raw.get("domain_id") or raw.get("id"))
         if (
             str(raw.get("status") or "").lower() == "selected"
@@ -788,17 +998,64 @@ class QuestionAdapter:
                 status="selected",
                 confidence=float(raw.get("confidence") or 0),
                 reason=str(raw.get("reason") or ""),
-                candidate_domain_ids=_valid_candidate_domain_ids(raw.get("candidate_domain_ids"), candidate_by_id)
+                candidate_domain_ids=_valid_candidate_domain_ids(
+                    raw.get("candidate_domain_ids"), candidate_by_id
+                )
                 or [selected_domain_id],
             )
 
-        candidate_ids = _valid_candidate_domain_ids(raw.get("candidate_domain_ids"), candidate_by_id)
+        candidate_ids = _valid_candidate_domain_ids(
+            raw.get("candidate_domain_ids"), candidate_by_id
+        )
         if not candidate_ids:
             candidate_ids = [candidate["domain_id"] for candidate in candidates]
-        status = "not_matched" if str(raw.get("status") or "").lower() == "not_matched" else "ambiguous"
+        status = (
+            "not_matched"
+            if str(raw.get("status") or "").lower() == "not_matched"
+            else "ambiguous"
+        )
         return {
             **_default_subject_domain(status),
             "confidence": float(raw.get("confidence") or 0),
             "reason": str(raw.get("reason") or "主题域未能唯一确定"),
             "candidate_domain_ids": candidate_ids,
         }
+
+
+def _temporal_confirmation(response: dict[str, Any]) -> str | None:
+    """读取时间澄清回答；没有回答时不向模型补充内容。"""
+
+    for key in ("temporal_confirmation", "time_range", "text"):
+        value = response.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _temporal_plan_unresolved(intent: dict[str, Any]) -> bool:
+    """仅未解析时间计划允许走澄清恢复快路径。"""
+
+    plan = intent.get("temporal_plan")
+    return bool(
+        isinstance(plan, dict)
+        and plan.get("status") in {"clarification_required", "unsupported"}
+    )
+
+
+def _temporal_confirmed_plan(response: dict[str, Any]) -> dict[str, Any] | None:
+    """读取服务端时间选项携带的计划；自由文本回答没有该字段。"""
+
+    plan = response.get("temporal_plan")
+    return dict(plan) if isinstance(plan, dict) else None
+
+
+def _temporal_ambiguity_codes(intent: dict[str, Any]) -> set[str]:
+    """读取当前挂起计划允许生成澄清选项的歧义代码。"""
+
+    plan = intent.get("temporal_plan")
+    ambiguities = plan.get("ambiguities") if isinstance(plan, dict) else []
+    return {
+        str(item.get("code") or "")
+        for item in ambiguities or []
+        if isinstance(item, dict) and item.get("code")
+    }

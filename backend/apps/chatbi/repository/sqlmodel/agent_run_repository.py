@@ -23,6 +23,7 @@ from apps.event import (
 from apps.event import (
     next_sequence as next_event_sequence,
 )
+from apps.temporal import TemporalContext, build_run_temporal_context
 
 
 def now() -> datetime:
@@ -37,16 +38,19 @@ def create_run(
     record_id: int,
     user_id: int,
     config: dict,
+    temporal_context: TemporalContext | None = None,
 ) -> ChatbiAgentRun:
     """创建 Agent 运行记录；事务提交由调用方统一控制。"""
 
     created_at = now()
+    fixed_temporal_context = temporal_context or build_run_temporal_context()
     run = ChatbiAgentRun(
         oid=oid,
         chat_id=chat_id,
         record_id=record_id,
         status=AgentRunStatus.CREATED.value,
         config=config,
+        temporal_context=fixed_temporal_context.model_dump(mode="json"),
         created_at=created_at,
         updated_at=created_at,
         created_by=user_id,

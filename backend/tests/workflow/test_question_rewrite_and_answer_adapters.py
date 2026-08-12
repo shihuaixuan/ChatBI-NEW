@@ -1,6 +1,10 @@
 import json
 import threading
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pytest
 
 from apps.chatbi.orchestration.graph.capabilities.adapters.answer import (
     AnswerAdapter,
@@ -25,7 +29,9 @@ from apps.chatbi.orchestration.graph.capabilities.real import (
     RealChatBICapabilityGateway,
 )
 from apps.chatbi.services.generation import build_answer_generation_prompt
+from apps.chatbi.services.understanding import build_temporal_clarification_options
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
+from apps.temporal import build_temporal_context
 
 
 class FakeModelClient:
@@ -52,7 +58,11 @@ class SequenceModelClient:
 
 
 class PromptAwareConcurrentModelClient:
-    def __init__(self, responses_by_marker: dict[str, str], delays_by_marker: dict[str, float] | None = None) -> None:
+    def __init__(
+        self,
+        responses_by_marker: dict[str, str],
+        delays_by_marker: dict[str, float] | None = None,
+    ) -> None:
         self.responses_by_marker = responses_by_marker
         self.delays_by_marker = delays_by_marker or {}
         self.prompts = []
@@ -78,7 +88,10 @@ class PromptAwareConcurrentModelClient:
     def _marker_for_prompt(prompt) -> str:
         if "分析形态识别器" in prompt.system_prompt:
             return "shape"
-        if "指标和时间线索识别器" in prompt.system_prompt or "指标线索和时间线索识别器" in prompt.system_prompt:
+        if (
+            "指标和时间线索识别器" in prompt.system_prompt
+            or "指标线索和时间线索识别器" in prompt.system_prompt
+        ):
             return "semantic"
         if "维度槽位识别器" in prompt.system_prompt:
             return "dimensions"
@@ -86,7 +99,9 @@ class PromptAwareConcurrentModelClient:
 
 
 class FailingPromptAwareModelClient(PromptAwareConcurrentModelClient):
-    def __init__(self, responses_by_marker: dict[str, str], failing_marker: str) -> None:
+    def __init__(
+        self, responses_by_marker: dict[str, str], failing_marker: str
+    ) -> None:
         super().__init__(responses_by_marker=responses_by_marker)
         self.failing_marker = failing_marker
 
@@ -146,9 +161,25 @@ DEFAULT_VALIDATION = {
 }
 
 
-def _v1_request(question: str, variables: dict | None = None, conversation: dict | None = None) -> dict:
+def _v1_request(
+    question: str, variables: dict | None = None, conversation: dict | None = None
+) -> dict:
     return {
-        "request": {"question": question, "tenant_id": 9501, "user_id": 501, "dataset_id": 7001},
+        "request": {
+            "question": question,
+            "tenant_id": 9501,
+            "user_id": 501,
+            "dataset_id": 7001,
+            "temporal_context": build_temporal_context(
+                reference_at=datetime(
+                    2026,
+                    7,
+                    31,
+                    12,
+                    tzinfo=ZoneInfo("Asia/Shanghai"),
+                )
+            ).model_dump(mode="json"),
+        },
         "conversation": conversation or {},
         "variables": variables or {},
         "inputs": {},
@@ -187,7 +218,10 @@ def test_question_rewrite_prompt_defines_chatbi_required_information():
     assert "dimension" in prompt.system_prompt
     assert "filter" in prompt.system_prompt
     assert "默认不要因为缺少时间范围而澄清" in prompt.system_prompt
-    assert "只有用户明确要求趋势、对比、环比、同比、排行、按维度拆解" in prompt.system_prompt
+    assert (
+        "只有用户明确要求趋势、对比、环比、同比、排行、按维度拆解"
+        in prompt.system_prompt
+    )
 
 
 def test_question_rewrite_prompt_preserves_semantic_boundaries_for_followup():
@@ -208,7 +242,9 @@ def test_question_rewrite_prompt_preserves_semantic_boundaries_for_followup():
     assert "语义保真规范化" in prompt.system_prompt
     assert "保持修饰关系、归属关系、并列关系和筛选关系" in prompt.system_prompt
     assert "只替换用户本轮明确提到的槽位" in prompt.system_prompt
-    assert "不新增用户没有表达的分组、筛选、比较、排序或明细意图" in prompt.system_prompt
+    assert (
+        "不新增用户没有表达的分组、筛选、比较、排序或明细意图" in prompt.system_prompt
+    )
     assert "不拆分或重组指标短语内部的业务修饰关系" in prompt.system_prompt
     assert "last_rewritten_question" in prompt.user_prompt
     assert "那订单数呢" in prompt.user_prompt
@@ -223,7 +259,9 @@ def test_dimension_prompt_keeps_metric_phrase_as_boundary_without_semantic_depen
         ],
     )
 
-    assert "不要为了命中维度候选而拆分指标短语内部的业务修饰关系" in prompt.system_prompt
+    assert (
+        "不要为了命中维度候选而拆分指标短语内部的业务修饰关系" in prompt.system_prompt
+    )
     assert "维度识别必须独立完成" in prompt.system_prompt
     assert "不要依赖指标线索识别子任务的输出" in prompt.system_prompt
 
@@ -236,7 +274,9 @@ def test_question_adapter_rewrites_question_with_model_json():
         )
     )
 
-    result = adapter.rewrite(_v1_request("那上个月呢", conversation={"last_question": "这个月销售额是多少"}))
+    result = adapter.rewrite(
+        _v1_request("那上个月呢", conversation={"last_question": "这个月销售额是多少"})
+    )
 
     assert result == {
         "rewritten_question": "上个月销售额是多少",
@@ -260,7 +300,9 @@ def test_question_adapter_rewrite_degrades_to_original_question_when_model_outpu
 
 
 def test_question_adapter_rewrite_fallback_can_still_request_clarification():
-    adapter = QuestionAdapter(model_client=FakeModelClient(RuntimeError("model unavailable")))
+    adapter = QuestionAdapter(
+        model_client=FakeModelClient(RuntimeError("model unavailable"))
+    )
 
     result = adapter.rewrite(_v1_request("需要澄清的问题"))
 
@@ -343,7 +385,13 @@ def test_intent_recognition_prompt_includes_available_dimension_candidates():
                 "value_kind": "numeric_id",
                 "is_time": False,
             },
-            {"name": "时间", "aliases": ["日期", "统计日期"], "data_type": "date", "value_kind": "date", "is_time": True},
+            {
+                "name": "时间",
+                "aliases": ["日期", "统计日期"],
+                "data_type": "date",
+                "value_kind": "date",
+                "is_time": True,
+            },
         ],
     )
 
@@ -360,16 +408,30 @@ def test_dimension_slots_prompt_separates_time_dimensions_from_plain_dimensions(
     prompt = build_dimension_slots_prompt(
         rewritten_question="今天店铺1的客户数",
         available_dimensions=[
-            {"name": "店铺ID", "aliases": ["店铺", "档口"], "value_kind": "numeric_id", "is_time": False},
-            {"name": "时间", "aliases": ["日期", "统计日期"], "value_kind": "date", "is_time": True},
+            {
+                "name": "店铺ID",
+                "aliases": ["店铺", "档口"],
+                "value_kind": "numeric_id",
+                "is_time": False,
+            },
+            {
+                "name": "时间",
+                "aliases": ["日期", "统计日期"],
+                "value_kind": "date",
+                "is_time": True,
+            },
         ],
     )
 
     assert "普通维度候选" in prompt.system_prompt
     assert "时间字段候选" in prompt.system_prompt
     assert "# 时间字段候选" in prompt.user_prompt
-    plain_section = prompt.user_prompt.split("# 可用维度", 1)[1].split("# 时间字段候选", 1)[0]
-    time_section = prompt.user_prompt.split("# 时间字段候选", 1)[1].split("# 会话上下文", 1)[0]
+    plain_section = prompt.user_prompt.split("# 可用维度", 1)[1].split(
+        "# 时间字段候选", 1
+    )[0]
+    time_section = prompt.user_prompt.split("# 时间字段候选", 1)[1].split(
+        "# 会话上下文", 1
+    )[0]
     assert "店铺ID" in plain_section
     assert "时间" not in plain_section
     assert "时间" in time_section
@@ -396,7 +458,9 @@ def test_split_intent_prompts_are_scoped_to_small_outputs():
     semantic_prompt = build_semantic_mentions_prompt("最近7天销售额趋势")
     dimension_prompt = build_dimension_slots_prompt(
         "店铺1销售额",
-        available_dimensions=[{"name": "店铺ID", "aliases": ["店铺"], "value_kind": "numeric_id"}],
+        available_dimensions=[
+            {"name": "店铺ID", "aliases": ["店铺"], "value_kind": "numeric_id"}
+        ],
     )
 
     assert "分析形态识别器" in shape_prompt.system_prompt
@@ -429,10 +493,15 @@ def test_question_adapter_recognizes_intent_with_split_subtasks_and_program_merg
     )
 
     result = adapter.recognize_intent(
-        _v1_request("近 30 天访问量趋势", variables={"rewrite": {"rewritten_question": "近 30 天访问量趋势"}})
+        _v1_request(
+            "近 30 天访问量趋势",
+            variables={"rewrite": {"rewritten_question": "近 30 天访问量趋势"}},
+        )
     )
 
-    assert [prompt.system_prompt.splitlines()[0] for prompt in adapter._model_client.prompts] == [
+    assert [
+        prompt.system_prompt.splitlines()[0] for prompt in adapter._model_client.prompts
+    ] == [
         "# 角色",
         "# 角色",
         "# 角色",
@@ -445,27 +514,39 @@ def test_question_adapter_recognizes_intent_with_split_subtasks_and_program_merg
         "confidence": 0.93,
         "metric_mentions": ["访问人数"],
         "dimension_mentions": ["档口"],
-        "dimension_slots": [{"name": "档口", "role": "group_by", "value": None, "value_status": "not_provided"}],
+        "dimension_slots": [
+            {
+                "name": "档口",
+                "role": "group_by",
+                "value": None,
+                "value_status": "not_provided",
+            }
+        ],
         "time_mentions": ["近 30 天"],
         "time_range": {
             "raw": "近 30 天",
             "value_status": "provided",
+            "interpretation_source": "legacy_rule",
             "normalized": {
-                "kind": "relative_range",
-                "unit": "day",
-                "amount": 30,
-                "anchor": "today",
-                "include_current": True,
+                "kind": "absolute_range",
+                "start": "2026-07-02",
+                "end_exclusive": "2026-08-01",
                 "timezone": "Asia/Shanghai",
+                "source_raw": "近 30 天",
             },
         },
         "filter_mentions": [],
         "required_slot_types": ["metric", "time_dimension"],
-        "query_shape": {"select_mode": "aggregate", "needs_group_by": True, "time_grain": "day"},
+        "query_shape": {
+            "select_mode": "aggregate",
+            "needs_group_by": True,
+            "time_grain": "day",
+        },
         "subject_domain": DEFAULT_SUBJECT_DOMAIN,
         "ambiguous_slots": [],
         "conflict_slots": [],
         "validation": DEFAULT_VALIDATION,
+        "temporal_interpretation_source": "legacy_rule",
     }
 
 
@@ -498,7 +579,12 @@ def test_question_adapter_parallel_intent_subtasks_merge_by_name_not_finish_orde
                 {
                     "dimension_mentions": ["店铺"],
                     "dimension_slots": [
-                        {"name": "店铺", "role": "group_by", "value": None, "value_status": "not_provided"}
+                        {
+                            "name": "店铺",
+                            "role": "group_by",
+                            "value": None,
+                            "value_status": "not_provided",
+                        }
                     ],
                     "residual_filter_mentions": [],
                     "ambiguous_slots": [],
@@ -512,7 +598,10 @@ def test_question_adapter_parallel_intent_subtasks_merge_by_name_not_finish_orde
     adapter = QuestionAdapter(model_client=model_client)
 
     result = adapter.recognize_intent(
-        _v1_request("最近 7 天按店铺看访问人数", variables={"rewrite": {"rewritten_question": "最近 7 天按店铺看访问人数"}})
+        _v1_request(
+            "最近 7 天按店铺看访问人数",
+            variables={"rewrite": {"rewritten_question": "最近 7 天按店铺看访问人数"}},
+        )
     )
 
     assert result["intent_type"] == "trend_analysis"
@@ -523,7 +612,11 @@ def test_question_adapter_parallel_intent_subtasks_merge_by_name_not_finish_orde
     assert model_client.finished_markers[0] == "dimensions"
     assert adapter.last_intent_subtask_trace["enabled"] is True
     assert adapter.last_intent_subtask_trace["all_subtasks_fallback"] is False
-    assert set(adapter.last_intent_subtask_trace["subtasks"]) == {"shape", "semantic", "dimensions"}
+    assert set(adapter.last_intent_subtask_trace["subtasks"]) == {
+        "shape",
+        "semantic",
+        "dimensions",
+    }
 
 
 def test_question_adapter_parallel_intent_subtask_failure_only_falls_back_that_subtask():
@@ -534,7 +627,11 @@ def test_question_adapter_parallel_intent_subtask_failure_only_falls_back_that_s
                     "intent_type": "ranking_analysis",
                     "confidence": 0.92,
                     "required_slot_types": ["metric", "dimension", "order", "limit"],
-                    "query_shape": {"select_mode": "aggregate", "needs_order_by": True, "order_direction": "desc"},
+                    "query_shape": {
+                        "select_mode": "aggregate",
+                        "needs_order_by": True,
+                        "order_direction": "desc",
+                    },
                     "subject_domain": {"status": "not_required"},
                     "ambiguous_slots": [],
                     "conflict_slots": [],
@@ -546,7 +643,12 @@ def test_question_adapter_parallel_intent_subtask_failure_only_falls_back_that_s
                 {
                     "dimension_mentions": ["商品"],
                     "dimension_slots": [
-                        {"name": "商品", "role": "group_by", "value": None, "value_status": "not_provided"}
+                        {
+                            "name": "商品",
+                            "role": "group_by",
+                            "value": None,
+                            "value_status": "not_provided",
+                        }
                     ],
                     "residual_filter_mentions": [],
                     "ambiguous_slots": [],
@@ -560,28 +662,50 @@ def test_question_adapter_parallel_intent_subtask_failure_only_falls_back_that_s
     adapter = QuestionAdapter(model_client=model_client)
 
     result = adapter.recognize_intent(
-        _v1_request("销售额最高的商品", variables={"rewrite": {"rewritten_question": "销售额最高的商品"}})
+        _v1_request(
+            "销售额最高的商品",
+            variables={"rewrite": {"rewritten_question": "销售额最高的商品"}},
+        )
     )
 
     assert result["intent_type"] == "ranking_analysis"
     assert result["metric_mentions"] == ["销售额"]
     assert result["dimension_mentions"] == ["商品"]
-    assert adapter.last_intent_subtask_trace["subtasks"]["semantic"]["status"] == "fallback"
-    assert adapter.last_intent_subtask_trace["subtasks"]["semantic"]["source"] == "exception_fallback"
-    assert adapter.last_intent_subtask_trace["subtasks"]["shape"]["status"] == "succeeded"
-    assert adapter.last_intent_subtask_trace["subtasks"]["dimensions"]["status"] == "succeeded"
+    assert (
+        adapter.last_intent_subtask_trace["subtasks"]["semantic"]["status"]
+        == "fallback"
+    )
+    assert (
+        adapter.last_intent_subtask_trace["subtasks"]["semantic"]["source"]
+        == "exception_fallback"
+    )
+    assert (
+        adapter.last_intent_subtask_trace["subtasks"]["shape"]["status"] == "succeeded"
+    )
+    assert (
+        adapter.last_intent_subtask_trace["subtasks"]["dimensions"]["status"]
+        == "succeeded"
+    )
 
 
 def test_question_adapter_parallel_intent_records_all_subtasks_fallback_when_model_unavailable():
-    adapter = QuestionAdapter(model_client=FakeModelClient(RuntimeError("model unavailable")))
+    adapter = QuestionAdapter(
+        model_client=FakeModelClient(RuntimeError("model unavailable"))
+    )
 
     result = adapter.recognize_intent(
-        _v1_request("看一下销售额", variables={"rewrite": {"rewritten_question": "看一下销售额"}})
+        _v1_request(
+            "看一下销售额",
+            variables={"rewrite": {"rewritten_question": "看一下销售额"}},
+        )
     )
 
     assert result["metric_mentions"] == ["销售额"]
     assert adapter.last_intent_subtask_trace["all_subtasks_fallback"] is True
-    assert {name: item["source"] for name, item in adapter.last_intent_subtask_trace["subtasks"].items()} == {
+    assert {
+        name: item["source"]
+        for name, item in adapter.last_intent_subtask_trace["subtasks"].items()
+    } == {
         "shape": "exception_fallback",
         "semantic": "exception_fallback",
         "dimensions": "exception_fallback",
@@ -630,11 +754,141 @@ def test_question_adapter_can_disable_parallel_intent_subtasks():
         intent_subtask_config=IntentSubtaskConfig(enabled=False),
     )
 
-    result = adapter.recognize_intent(_v1_request("访问人数", variables={"rewrite": {"rewritten_question": "访问人数"}}))
+    result = adapter.recognize_intent(
+        _v1_request(
+            "访问人数", variables={"rewrite": {"rewritten_question": "访问人数"}}
+        )
+    )
 
     assert result["metric_mentions"] == ["访问人数"]
     assert model_client.started_markers == ["shape", "semantic", "dimensions"]
     assert adapter.last_intent_subtask_trace["enabled"] is False
+
+
+def test_question_adapter_authority_uses_shared_temporal_plan(monkeypatch):
+    model_client = SequenceModelClient(
+        [
+            '{"intent_type":"metric_query","confidence":0.95,'
+            '"required_slot_types":["metric","time_dimension"],'
+            '"query_shape":{"select_mode":"aggregate","time_grain":"month"},'
+            '"subject_domain":{"status":"not_required"},'
+            '"ambiguous_slots":[],"conflict_slots":[]}',
+            '{"metric_mentions":["销售额"],"time_mentions":["往前看两周"],'
+            '"time_range":{"raw":"往前看两周","value_status":"provided"},'
+            '"ambiguous_slots":[],"conflict_slots":[]}',
+            '{"dimension_mentions":[],"dimension_slots":[],'
+            '"residual_filter_mentions":[],"ambiguous_slots":[],'
+            '"conflict_slots":[]}',
+            json.dumps(
+                {
+                    "schema_version": "1",
+                    "status": "resolved",
+                    "expressions": [
+                        {
+                            "kind": "rolling_range",
+                            "raw": "往前看两周",
+                            "source": "rewritten_question",
+                            "start_offset": 0,
+                            "end_offset": 5,
+                            "role": "query_filter",
+                            "direction": "past",
+                            "amount": 2,
+                            "unit": "week",
+                            "include_reference_date": True,
+                        }
+                    ],
+                    "grouping": None,
+                    "comparison": None,
+                    "ambiguities": [],
+                    "confidence": 0.98,
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    adapter = QuestionAdapter(
+        model_client=model_client,
+        intent_subtask_config=IntentSubtaskConfig(enabled=False),
+        temporal_authority_enabled=True,
+    )
+
+    def reject_legacy_parser(*_args, **_kwargs):
+        pytest.fail("权威路径不得调用旧时间原文解析")
+
+    monkeypatch.setattr(
+        "apps.chatbi.orchestration.graph.capabilities.adapters.question.normalize_time_range_payload",
+        reject_legacy_parser,
+    )
+    monkeypatch.setattr(
+        "apps.chatbi.services.understanding.intent_projection.normalize_time_range_payload",
+        reject_legacy_parser,
+    )
+
+    result = adapter.recognize_intent(
+        _v1_request(
+            "往前看两周销售额",
+            variables={"rewrite": {"rewritten_question": "往前看两周销售额"}},
+        )
+    )
+
+    assert result["time_range"]["normalized"] == {
+        "kind": "absolute_range",
+        "start": "2026-07-18",
+        "end_exclusive": "2026-08-01",
+        "timezone": "Asia/Shanghai",
+        "source_raw": "往前看两周",
+    }
+    assert result["time_range"]["interpretation_source"] == "model"
+    assert "time_grain" not in result["query_shape"]
+    assert result["temporal_plan"]["status"] == "resolved"
+    assert result["resolved_temporal_plan"]["filters"][0]["start"] == ("2026-07-18")
+    assert result["temporal_interpretation_source"] == "model"
+    assert result["validation"]["status"] == "valid"
+    assert len(model_client.prompts) == 4
+
+
+def test_question_adapter_temporal_resume_skips_unrelated_intent_subtasks():
+    model_client = SequenceModelClient([])
+    adapter = QuestionAdapter(
+        model_client=model_client,
+        temporal_authority_enabled=True,
+    )
+    previous_intent = {
+        "intent_type": "metric_query",
+        "confidence": 0.95,
+        "metric_mentions": ["销售额"],
+        "time_mentions": ["最近"],
+        "time_range": {"raw": None, "value_status": "not_provided"},
+        "temporal_plan": {
+            "schema_version": "1",
+            "status": "clarification_required",
+            "expressions": [],
+            "grouping": None,
+            "comparison": None,
+            "ambiguities": [{"code": "time_range_amount_missing", "raw": "最近"}],
+            "confidence": 0.6,
+        },
+    }
+    selected_value = build_temporal_clarification_options(
+        {"time_range_amount_missing"}
+    )[0]["value"]
+
+    result = adapter.recognize_intent(
+        _v1_request(
+            "最近销售额",
+            variables={
+                "rewrite": {"rewritten_question": "最近销售额"},
+                "intent": previous_intent,
+                "slot_response": selected_value,
+            },
+        )
+    )
+
+    assert result["temporal_plan"]["status"] == "resolved"
+    assert result["temporal_interpretation_source"] == "user_confirmation"
+    assert result["time_range"]["normalized"]["start"] == "2026-07-25"
+    assert result["validation"]["status"] == "valid"
+    assert model_client.prompts == []
 
 
 def test_question_adapter_parallel_intent_subtask_timeout_uses_fallback_payload():
@@ -685,10 +939,15 @@ def test_question_adapter_parallel_intent_subtask_timeout_uses_fallback_payload(
         ),
     )
 
-    result = adapter.recognize_intent(_v1_request("销售额", variables={"rewrite": {"rewritten_question": "销售额"}}))
+    result = adapter.recognize_intent(
+        _v1_request("销售额", variables={"rewrite": {"rewritten_question": "销售额"}})
+    )
 
     assert result["metric_mentions"] == ["销售额"]
-    assert adapter.last_intent_subtask_trace["subtasks"]["semantic"]["source"] == "timeout_fallback"
+    assert (
+        adapter.last_intent_subtask_trace["subtasks"]["semantic"]["source"]
+        == "timeout_fallback"
+    )
 
 
 def test_question_adapter_recognizes_subject_domain_from_dataset_schema():
@@ -702,8 +961,20 @@ def test_question_adapter_recognizes_subject_domain_from_dataset_schema():
             type="DATASET",
         ),
         subject_domains=[
-            {"domain_id": 1, "name": "店铺", "biz_name": "shop", "description": "店铺和档口主题", "model_ids": [10]},
-            {"domain_id": 2, "name": "商品", "biz_name": "product", "description": "商品经营主题", "model_ids": [11]},
+            {
+                "domain_id": 1,
+                "name": "店铺",
+                "biz_name": "shop",
+                "description": "店铺和档口主题",
+                "model_ids": [10],
+            },
+            {
+                "domain_id": 2,
+                "name": "商品",
+                "biz_name": "product",
+                "description": "商品经营主题",
+                "model_ids": [11],
+            },
         ],
     )
     schema_provider = FakeDatasetSchemaProvider(schema)
@@ -718,10 +989,15 @@ def test_question_adapter_recognizes_subject_domain_from_dataset_schema():
             '{"dimension_mentions":[],"dimension_slots":[],"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}',
         ]
     )
-    adapter = QuestionAdapter(model_client=model_client, schema_provider=schema_provider)
+    adapter = QuestionAdapter(
+        model_client=model_client, schema_provider=schema_provider
+    )
 
     result = adapter.recognize_intent(
-        _v1_request("今天商品访问人数", variables={"rewrite": {"rewritten_question": "今天商品访问人数"}})
+        _v1_request(
+            "今天商品访问人数",
+            variables={"rewrite": {"rewritten_question": "今天商品访问人数"}},
+        )
     )
 
     assert schema_provider.calls == [(9501, 7001)]
@@ -741,7 +1017,10 @@ def test_question_adapter_intent_falls_back_to_rules_when_model_output_is_invali
     adapter = QuestionAdapter(model_client=FakeModelClient("不是 JSON"))
 
     result = adapter.recognize_intent(
-        _v1_request("销售额最高的商品", variables={"rewrite": {"rewritten_question": "销售额最高的商品"}})
+        _v1_request(
+            "销售额最高的商品",
+            variables={"rewrite": {"rewritten_question": "销售额最高的商品"}},
+        )
     )
 
     assert result == {
@@ -749,7 +1028,14 @@ def test_question_adapter_intent_falls_back_to_rules_when_model_output_is_invali
         "confidence": 0.85,
         "metric_mentions": ["销售额"],
         "dimension_mentions": ["商品"],
-        "dimension_slots": [{"name": "商品", "role": "group_by", "value": None, "value_status": "not_provided"}],
+        "dimension_slots": [
+            {
+                "name": "商品",
+                "role": "group_by",
+                "value": None,
+                "value_status": "not_provided",
+            }
+        ],
         "time_mentions": [],
         "time_range": {"raw": None, "value_status": "not_provided"},
         "filter_mentions": [],
@@ -769,9 +1055,15 @@ def test_question_adapter_intent_falls_back_to_rules_when_model_output_is_invali
 
 
 def test_question_adapter_intent_marks_ambiguous_metric_when_question_is_too_vague():
-    adapter = QuestionAdapter(model_client=FakeModelClient(RuntimeError("model unavailable")))
+    adapter = QuestionAdapter(
+        model_client=FakeModelClient(RuntimeError("model unavailable"))
+    )
 
-    result = adapter.recognize_intent(_v1_request("看一下情况", variables={"rewrite": {"rewritten_question": "看一下情况"}}))
+    result = adapter.recognize_intent(
+        _v1_request(
+            "看一下情况", variables={"rewrite": {"rewritten_question": "看一下情况"}}
+        )
+    )
 
     assert result == {
         "intent_type": "unknown",
@@ -792,45 +1084,69 @@ def test_question_adapter_intent_marks_ambiguous_metric_when_question_is_too_vag
 
 
 def test_question_adapter_intent_fallback_extracts_dimension_slot_and_time_range():
-    adapter = QuestionAdapter(model_client=FakeModelClient(RuntimeError("model unavailable")))
+    adapter = QuestionAdapter(
+        model_client=FakeModelClient(RuntimeError("model unavailable"))
+    )
 
     result = adapter.recognize_intent(
-        _v1_request("今天档口的访问人数", variables={"rewrite": {"rewritten_question": "今天档口的访问人数"}})
+        _v1_request(
+            "今天档口的访问人数",
+            variables={"rewrite": {"rewritten_question": "今天档口的访问人数"}},
+        )
     )
 
     assert result["intent_type"] == "metric_query"
     assert result["metric_mentions"] == ["访问人数"]
     assert result["dimension_mentions"] == ["档口"]
     assert result["dimension_slots"] == [
-        {"name": "档口", "role": "ambiguous", "value": None, "value_status": "not_provided"}
+        {
+            "name": "档口",
+            "role": "ambiguous",
+            "value": None,
+            "value_status": "not_provided",
+        }
     ]
     assert result["time_mentions"] == ["今天"]
     assert result["time_range"] == {
         "raw": "今天",
         "value_status": "provided",
+        "interpretation_source": "legacy_rule",
         "normalized": {
-            "kind": "single_date",
-            "anchor": "today",
-            "offset_days": 0,
+            "kind": "absolute_range",
+            "start": "2026-07-31",
+            "end_exclusive": "2026-08-01",
             "timezone": "Asia/Shanghai",
+            "source_raw": "今天",
         },
     }
+    assert result["temporal_interpretation_source"] == "legacy_rule"
 
 
 def test_question_adapter_intent_fallback_extracts_explicit_month_and_topn():
-    adapter = QuestionAdapter(model_client=FakeModelClient(RuntimeError("model unavailable")))
+    adapter = QuestionAdapter(
+        model_client=FakeModelClient(RuntimeError("model unavailable"))
+    )
 
     result = adapter.recognize_intent(
         _v1_request(
             "2026 年 6 月销售 GMV 最高的 5 个档口是哪些？",
-            variables={"rewrite": {"rewritten_question": "2026 年 6 月销售 GMV 最高的 5 个档口是哪些？"}},
+            variables={
+                "rewrite": {
+                    "rewritten_question": "2026 年 6 月销售 GMV 最高的 5 个档口是哪些？"
+                }
+            },
         )
     )
 
     assert result["intent_type"] == "ranking_analysis"
     assert result["metric_mentions"] == ["GMV"]
     assert result["dimension_slots"] == [
-        {"name": "档口", "role": "group_by", "value": None, "value_status": "not_provided"}
+        {
+            "name": "档口",
+            "role": "group_by",
+            "value": None,
+            "value_status": "not_provided",
+        }
     ]
     assert result["time_mentions"] == ["2026 年 6 月"]
     assert result["time_range"]["normalized"] == {
@@ -844,12 +1160,18 @@ def test_question_adapter_intent_fallback_extracts_explicit_month_and_topn():
 
 
 def test_question_adapter_intent_fallback_keeps_multiple_explicit_metrics():
-    adapter = QuestionAdapter(model_client=FakeModelClient(RuntimeError("model unavailable")))
+    adapter = QuestionAdapter(
+        model_client=FakeModelClient(RuntimeError("model unavailable"))
+    )
 
     result = adapter.recognize_intent(
         _v1_request(
             "最近 30 天每天的总订单数和总 GMV 趋势如何？",
-            variables={"rewrite": {"rewritten_question": "最近 30 天每天的总订单数和总 GMV 趋势如何？"}},
+            variables={
+                "rewrite": {
+                    "rewritten_question": "最近 30 天每天的总订单数和总 GMV 趋势如何？"
+                }
+            },
         )
     )
 
@@ -905,13 +1227,21 @@ def test_question_adapter_retries_dimension_subtask_when_dimension_value_is_time
     adapter = QuestionAdapter(model_client=model_client)
 
     result = adapter.recognize_intent(
-        _v1_request("今天店铺的访问人数", variables={"rewrite": {"rewritten_question": "今天店铺的访问人数"}})
+        _v1_request(
+            "今天店铺的访问人数",
+            variables={"rewrite": {"rewritten_question": "今天店铺的访问人数"}},
+        )
     )
 
     assert len(model_client.prompts) == 4
     assert "普通维度值不能是时间表达" in model_client.prompts[3].user_prompt
     assert result["dimension_slots"] == [
-        {"name": "店铺", "role": "ambiguous", "value": None, "value_status": "not_provided"}
+        {
+            "name": "店铺",
+            "role": "ambiguous",
+            "value": None,
+            "value_status": "not_provided",
+        }
     ]
     assert result["validation"]["clarification_required"] is True
     assert result["validation"]["slot_issues"][0]["slot_type"] == "dimension_value"
@@ -935,10 +1265,15 @@ def test_question_adapter_uses_dimension_subtask_for_structured_filter_slots():
     )
 
     result = adapter.recognize_intent(
-        _v1_request("今天店铺1的线上客户数", variables={"rewrite": {"rewritten_question": "今天店铺1的线上客户数"}})
+        _v1_request(
+            "今天店铺1的线上客户数",
+            variables={"rewrite": {"rewritten_question": "今天店铺1的线上客户数"}},
+        )
     )
 
-    assert result["dimension_slots"] == [{"name": "店铺", "role": "filter", "value": "1", "value_status": "provided"}]
+    assert result["dimension_slots"] == [
+        {"name": "店铺", "role": "filter", "value": "1", "value_status": "provided"}
+    ]
     assert result["dimension_mentions"] == ["店铺"]
     assert result["filter_mentions"] == []
 
@@ -961,11 +1296,18 @@ def test_question_adapter_keeps_residual_filter_mentions_without_duplicate_dimen
     )
 
     result = adapter.recognize_intent(
-        _v1_request("店铺1的高价值客户销售额", variables={"rewrite": {"rewritten_question": "店铺1的高价值客户销售额"}})
+        _v1_request(
+            "店铺1的高价值客户销售额",
+            variables={"rewrite": {"rewritten_question": "店铺1的高价值客户销售额"}},
+        )
     )
 
-    assert result["dimension_slots"] == [{"name": "店铺", "role": "filter", "value": "1", "value_status": "provided"}]
-    assert result["filter_mentions"] == [{"name": "高价值客户", "value": "高价值客户", "status": "ungrounded"}]
+    assert result["dimension_slots"] == [
+        {"name": "店铺", "role": "filter", "value": "1", "value_status": "provided"}
+    ]
+    assert result["filter_mentions"] == [
+        {"name": "高价值客户", "value": "高价值客户", "status": "ungrounded"}
+    ]
 
 
 def test_question_adapter_preserves_unmatched_dimension_slots_and_normalizes_matched_aliases():
@@ -1014,22 +1356,35 @@ def test_question_adapter_preserves_unmatched_dimension_slots_and_normalizes_mat
             '"dimension_slots":['
             '{"name":"线上","role":"ambiguous","value":null,"value_status":"not_provided"},'
             '{"name":"店铺","role":"filter","value":"1","value_status":"provided"}'
-            '],'
+            "],"
             '"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}',
         ]
     )
-    adapter = QuestionAdapter(model_client=model_client, schema_provider=FakeDatasetSchemaProvider(schema))
+    adapter = QuestionAdapter(
+        model_client=model_client, schema_provider=FakeDatasetSchemaProvider(schema)
+    )
 
     result = adapter.recognize_intent(
-        _v1_request("今天店铺1的线上客户数", variables={"rewrite": {"rewritten_question": "今天店铺1的线上客户数"}})
+        _v1_request(
+            "今天店铺1的线上客户数",
+            variables={"rewrite": {"rewritten_question": "今天店铺1的线上客户数"}},
+        )
     )
 
     assert "# 可用维度" in model_client.prompts[2].user_prompt
     assert "线上" in result["dimension_mentions"]
-    assert {"name": "店铺ID", "role": "filter", "value": "1", "value_status": "provided"} in result["dimension_slots"]
-    assert {"name": "线上", "role": "ambiguous", "value": None, "value_status": "not_provided"} in result[
-        "dimension_slots"
-    ]
+    assert {
+        "name": "店铺ID",
+        "role": "filter",
+        "value": "1",
+        "value_status": "provided",
+    } in result["dimension_slots"]
+    assert {
+        "name": "线上",
+        "role": "ambiguous",
+        "value": None,
+        "value_status": "not_provided",
+    } in result["dimension_slots"]
     assert result["validation"]["clarification_required"] is True
 
 
@@ -1050,14 +1405,21 @@ def test_dimension_slots_normalization_preserves_unmatched_natural_language_ment
     payload = {
         "dimension_mentions": ["店铺"],
         "dimension_slots": [
-            {"name": "店铺", "role": "ambiguous", "value": None, "value_status": "not_provided"},
+            {
+                "name": "店铺",
+                "role": "ambiguous",
+                "value": None,
+                "value_status": "not_provided",
+            },
         ],
         "residual_filter_mentions": [],
         "ambiguous_slots": [],
         "conflict_slots": [],
     }
 
-    result = QuestionAdapter(model_client=FakeModelClient("{}"))._normalize_dimension_slots_payload(
+    result = QuestionAdapter(
+        model_client=FakeModelClient("{}")
+    )._normalize_dimension_slots_payload(
         payload,
         available_dimensions=[
             {"name": "档口ID", "aliases": []},
@@ -1067,7 +1429,12 @@ def test_dimension_slots_normalization_preserves_unmatched_natural_language_ment
 
     assert result["dimension_mentions"] == ["店铺"]
     assert result["dimension_slots"] == [
-        {"name": "店铺", "role": "ambiguous", "value": None, "value_status": "not_provided"}
+        {
+            "name": "店铺",
+            "role": "ambiguous",
+            "value": None,
+            "value_status": "not_provided",
+        }
     ]
 
 
@@ -1117,14 +1484,19 @@ def test_question_adapter_filters_time_dimensions_from_plain_dimension_slots():
             '"dimension_slots":['
             '{"name":"时间","role":"ambiguous","value":null,"value_status":"ambiguous"},'
             '{"name":"店铺","role":"filter","value":"1","value_status":"provided"}'
-            '],'
+            "],"
             '"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}',
         ]
     )
-    adapter = QuestionAdapter(model_client=model_client, schema_provider=FakeDatasetSchemaProvider(schema))
+    adapter = QuestionAdapter(
+        model_client=model_client, schema_provider=FakeDatasetSchemaProvider(schema)
+    )
 
     result = adapter.recognize_intent(
-        _v1_request("今天店铺1的档口客户数", variables={"rewrite": {"rewritten_question": "今天店铺1的档口客户数"}})
+        _v1_request(
+            "今天店铺1的档口客户数",
+            variables={"rewrite": {"rewritten_question": "今天店铺1的档口客户数"}},
+        )
     )
 
     assert result["time_range"]["raw"] == "今天"
@@ -1179,11 +1551,17 @@ def test_question_adapter_retries_dimension_subtask_when_value_contains_dimensio
     )
 
     result = adapter.recognize_intent(
-        _v1_request("店铺1的累积线上总客户数", variables={"rewrite": {"rewritten_question": "店铺1的累积线上总客户数"}})
+        _v1_request(
+            "店铺1的累积线上总客户数",
+            variables={"rewrite": {"rewritten_question": "店铺1的累积线上总客户数"}},
+        )
     )
 
     assert len(adapter._model_client.prompts) == 4
-    assert "维度值不能包含已命中的维度名或别名" in adapter._model_client.prompts[3].user_prompt
+    assert (
+        "维度值不能包含已命中的维度名或别名"
+        in adapter._model_client.prompts[3].user_prompt
+    )
     assert result["dimension_slots"] == [
         {"name": "店铺ID", "role": "filter", "value": "1", "value_status": "provided"}
     ]
@@ -1253,9 +1631,7 @@ def test_answer_projection_excludes_sql_candidates_and_full_result_rows():
     assert "selected_assets" not in serialized
     assert "slot_bindings" not in serialized
     assert "private-payload" not in serialized
-    assert projection["execution"]["results"][0]["sample_rows"] == [
-        {"value": 1}
-    ]
+    assert projection["execution"]["results"][0]["sample_rows"] == [{"value": 1}]
 
 
 def test_answer_projection_calculates_share_analysis_rows():
@@ -1359,7 +1735,9 @@ def test_answer_adapter_generates_answer_with_model_json():
         )
     )
 
-    result = adapter.generate(_v1_request("今日的访问量", variables={"sql_execution": {"row_count": 1}}))
+    result = adapter.generate(
+        _v1_request("今日的访问量", variables={"sql_execution": {"row_count": 1}})
+    )
 
     assert result == {
         "answer": "今日访问量为 1,234。",
@@ -1383,13 +1761,19 @@ def test_answer_adapter_degrades_when_model_output_is_invalid():
 
 
 def test_answer_adapter_composes_final_reply_locally():
-    adapter = AnswerAdapter(model_client=FakeModelClient(RuntimeError("should not call model")))
+    adapter = AnswerAdapter(
+        model_client=FakeModelClient(RuntimeError("should not call model"))
+    )
 
     result = adapter.compose(
         _v1_request(
             "今日的访问量",
             variables={
-                "answer": {"answer": "今日访问量为 1,234。", "warnings": [], "render_type": "text"},
+                "answer": {
+                    "answer": "今日访问量为 1,234。",
+                    "warnings": [],
+                    "render_type": "text",
+                },
                 "recommendations": {"questions": ["查看昨日访问量"]},
                 "image_profile": {"profile": "table", "chart_candidates": ["table"]},
             },
@@ -1413,8 +1797,12 @@ def test_recommendation_adapter_generates_contextual_questions_from_selected_ass
             variables={
                 "knowledge": {
                     "selected_assets": {
-                        "metrics": [{"display_name": "访问人数", "biz_name": "visit_uv"}],
-                        "dimensions": [{"display_name": "店铺", "biz_name": "stall_id"}],
+                        "metrics": [
+                            {"display_name": "访问人数", "biz_name": "visit_uv"}
+                        ],
+                        "dimensions": [
+                            {"display_name": "店铺", "biz_name": "stall_id"}
+                        ],
                     },
                     "metrics": ["visit_uv"],
                     "dimensions": ["stall_id"],
@@ -1459,9 +1847,7 @@ def test_real_gateway_routes_rewrite_and_answer_capabilities_to_real_adapters():
                 ),
             }[marker]
 
-    question_adapter = QuestionAdapter(
-        model_client=GatewayQuestionModelClient()
-    )
+    question_adapter = QuestionAdapter(model_client=GatewayQuestionModelClient())
     answer_adapter = AnswerAdapter(
         model_client=FakeModelClient(
             '{"answer":"今日访问量为 1,234。","warnings":[],"render_type":"text","citations":[]}'
@@ -1474,13 +1860,19 @@ def test_real_gateway_routes_rewrite_and_answer_capabilities_to_real_adapters():
         fallback_gateway=PlaceholderChatBICapabilityGateway(),
     )
 
-    rewrite = gateway.invoke("question.rewrite", _v1_request("今日的访问量"), "run:rewrite")
+    rewrite = gateway.invoke(
+        "question.rewrite", _v1_request("今日的访问量"), "run:rewrite"
+    )
     intent = gateway.invoke(
         "intent.recognize",
-        _v1_request("今日的访问量", variables={"rewrite": {"rewritten_question": "今日访问量"}}),
+        _v1_request(
+            "今日的访问量", variables={"rewrite": {"rewritten_question": "今日访问量"}}
+        ),
         "run:intent",
     )
-    answer = gateway.invoke("answer.generate", _v1_request("今日的访问量"), "run:answer")
+    answer = gateway.invoke(
+        "answer.generate", _v1_request("今日的访问量"), "run:answer"
+    )
     sql = gateway.invoke("sql.generate", _v1_request("今日的访问量"), "run:sql")
     recommendations = gateway.invoke(
         "question.recommend",
@@ -1488,7 +1880,11 @@ def test_real_gateway_routes_rewrite_and_answer_capabilities_to_real_adapters():
             "今日的访问量",
             variables={
                 "knowledge": {
-                    "selected_assets": {"metrics": [{"display_name": "访问人数", "biz_name": "visit_uv"}]},
+                    "selected_assets": {
+                        "metrics": [
+                            {"display_name": "访问人数", "biz_name": "visit_uv"}
+                        ]
+                    },
                     "metrics": ["visit_uv"],
                 }
             },

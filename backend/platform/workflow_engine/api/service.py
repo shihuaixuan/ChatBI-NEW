@@ -94,6 +94,7 @@ class GraphApiService:
         if request.definition_version == "minimal-v1":
             # minimal-v1 仍使用 datasource_id 字段；v1 主链路已切到 dataset_id。
             request_context["datasource_id"] = request.dataset_id
+        request_context = self._extension.build_run_request_context(request_context)
         runtime = self._build_runtime(request.definition_version, commit_events=commit_events)
         created = runtime.create_run(
             run_id=run_id,
@@ -143,6 +144,7 @@ class GraphApiService:
             "chat_id": chat_id,
             "record_id": prepared.record_id,
         }
+        request_context = self._extension.build_run_request_context(request_context)
         run_store = self._extension.build_run_store(RunRepository(self._session))
         runtime = self._build_runtime(
             request.definition_version,

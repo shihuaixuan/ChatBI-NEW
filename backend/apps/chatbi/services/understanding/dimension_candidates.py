@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -128,6 +129,14 @@ def infer_dimension_value_kind(
 def dimension_name_variants(name: str) -> list[str]:
     text = name.strip()
     variants: list[str] = []
+    descriptive_name = re.split(
+        r"[,，]\s*(?:例如|比如|如)",
+        text,
+        maxsplit=1,
+    )[0].strip()
+    if descriptive_name and descriptive_name != text:
+        # 语义层名称可能附带枚举示例，模型通常只返回示例前的业务名称。
+        variants.append(descriptive_name)
     for suffix in ("ID", "id", "编号", "名称", "维度"):
         if text.endswith(suffix) and len(text) > len(suffix):
             variants.append(text[: -len(suffix)].strip())

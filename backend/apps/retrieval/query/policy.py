@@ -41,7 +41,6 @@ from apps.retrieval.query.profiles import (
     SemanticBindingGateThreshold,
     get_retrieval_profile,
 )
-from apps.semantic import normalize_time_range_payload
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 
@@ -127,7 +126,9 @@ class SemanticBindingPolicy:
             )
             for slot in recall.slots
         ]
-        slot_results = _resolve_identity_dimensions_by_metric_compatibility(slot_results)
+        slot_results = _resolve_identity_dimensions_by_metric_compatibility(
+            slot_results
+        )
         decisions = [item.decision for item in slot_results]
         ambiguities = [
             item.ambiguity for item in slot_results if item.ambiguity is not None
@@ -303,8 +304,6 @@ class SemanticBindingPolicy:
         ]
         if required and len(resolved) == len(required) and _is_cross_model(resolved):
             return RetrievalDecisionStatus.CROSS_MODEL
-        if degraded_codes:
-            return RetrievalDecisionStatus.DEGRADED
         if any(
             item.decision.status == RetrievalDecisionStatus.AMBIGUOUS
             for item in required
@@ -314,6 +313,9 @@ class SemanticBindingPolicy:
             return RetrievalDecisionStatus.MISSED
         if len(resolved) != len(required):
             return RetrievalDecisionStatus.PARTIAL
+        if degraded_codes:
+            # 通道降级只描述已完整收敛决策的质量，不能覆盖歧义、缺失或部分命中。
+            return RetrievalDecisionStatus.DEGRADED
         return RetrievalDecisionStatus.RESOLVED
 
 
@@ -623,8 +625,8 @@ def bind_default_time_dimensions(
     time_range = request.intent.time_range
     if str(time_range.get("value_status") or "").lower() != "provided":
         return bundle
-    normalized = normalize_time_range_payload(time_range).get("normalized")
-    if not isinstance(normalized, dict) or normalized.get("kind") == "unsupported":
+    normalized = time_range.get("normalized")
+    if not isinstance(normalized, dict) or normalized.get("kind") != "absolute_range":
         return bundle
 
     metric_by_id = {metric.id: metric for metric in schema.metrics}
@@ -671,9 +673,7 @@ def bind_default_time_dimensions(
     has_ambiguity = False
     has_missing = False
     existing_binding_keys = {
-        _reference_key(hit.asset_ref)
-        for hit in dimensions
-        if hit.asset_ref is not None
+        _reference_key(hit.asset_ref) for hit in dimensions if hit.asset_ref is not None
     }
     existing_allowed_keys = {_reference_key(asset) for asset in allowed_assets}
 
@@ -696,7 +696,9 @@ def bind_default_time_dimensions(
         ):
             if _reference_key(reference) in existing_binding_keys:
                 continue
-            dimensions.append(_default_time_dimension_hit(schema, dimension, reference, rank))
+            dimensions.append(
+                _default_time_dimension_hit(schema, dimension, reference, rank)
+            )
             existing_binding_keys.add(_reference_key(reference))
 
         subquery_id = f"time_dimension:model:{model_id}"
@@ -833,7 +835,9 @@ def _default_time_dimension_hit(
             "is_default_time": True,
         },
         provenance={"binding": "metric_model_default_time"},
-        source_version=str(schema.data_set.ext_info.get("schema_version") or "headless-schema"),
+        source_version=str(
+            schema.data_set.ext_info.get("schema_version") or "headless-schema"
+        ),
         asset_ref=reference,
     )
 
@@ -848,7 +852,9 @@ def _default_time_candidates(
         (item for item in schema.models if item.get("id") == model_id),
         None,
     )
-    default_field = str((model or {}).get("default_time_field") or "").strip().casefold()
+    default_field = (
+        str((model or {}).get("default_time_field") or "").strip().casefold()
+    )
     model_dimensions = [
         dimension for dimension in schema.dimensions if dimension.model == model_id
     ]

@@ -481,7 +481,11 @@ def test_graph_query_creates_run_and_executes_placeholder_chatbi_graph():
         assert stored.user_id == 501
         assert stored.chat_id is None
         assert stored.record_id is None
-        assert stored.request == {
+        assert {
+            key: value
+            for key, value in stored.request.items()
+            if key != "temporal_context"
+        } == {
             "tenant_id": 9501,
             "user_id": 501,
             "question": "最近 7 天销售额",
@@ -490,6 +494,8 @@ def test_graph_query_creates_run_and_executes_placeholder_chatbi_graph():
             "datasource_id": 7001,
             "request_id": "api-request-1",
         }
+        assert stored.request["temporal_context"]["timezone"] == "Asia/Shanghai"
+        assert stored.request["temporal_context"]["reference_at"].endswith("+08:00")
         event_types = [event.event_type for event in events]
         assert event_types[0] == "run.created"
         assert "node.started" in event_types

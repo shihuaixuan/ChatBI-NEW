@@ -186,6 +186,8 @@ def build_question_understanding_service(
     return QuestionUnderstandingService(
         question_model_service=build_question_model_service(),
         schema_provider=schema_provider,
+        temporal_shadow_enabled=settings.TEMPORAL_MODEL_SHADOW_ENABLED,
+        temporal_authority_enabled=settings.TEMPORAL_MODEL_AUTHORITY_ENABLED,
     )
 
 
