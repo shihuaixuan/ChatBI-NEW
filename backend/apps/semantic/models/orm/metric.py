@@ -77,5 +77,18 @@ class SemanticMetric(SQLModel, table=True):
     quality_message: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     is_publish: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default=text("true")))
     is_tag: int = Field(default=0, nullable=False)
+    result_grain: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+    additivity: str | None = Field(default=None, max_length=32)
+    distinct_keys: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+    time_semantics: str | None = Field(default=None, max_length=32)
+    default_time_dimension_id: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
+    snapshot_aggregation: str | None = Field(default=None, max_length=32)
+    contract_version: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
     updated_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))

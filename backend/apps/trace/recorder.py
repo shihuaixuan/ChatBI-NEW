@@ -230,7 +230,18 @@ class AgentTraceRecorder:
                 handle.error = str(exc) or exc.__class__.__name__
                 raise
             finally:
-                _active_frame.reset(token)
+                try:
+                    _active_frame.reset(token)
+                except ValueError as exc:
+                    # Trace 上下文异常只能降低调用树完整性，不能中断业务或 SSE。
+                    _active_frame.set(parent_frame)
+                    self._record_trace_failure(
+                        spec.run_id,
+                        spec.name,
+                        TraceContractError(
+                            f"TRACE_CONTEXT_RESET_FAILED:{exc}"
+                        ),
+                    )
                 if node_ref is not None:
                     output_artifact_ref = self._write_detail(
                         node=node_ref,

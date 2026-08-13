@@ -2,6 +2,9 @@ from sqlmodel import SQLModel
 
 from apps.semantic.models import orm as semantic_orm
 from apps.semantic.models.orm import (
+    BusinessEntity,
+    LogicalDimension,
+    MetricDimensionCapability,
     SemanticDataset,
     SemanticDimension,
     SemanticDimensionValue,
@@ -29,6 +32,9 @@ def test_semantic_orm_package_exports_and_registers_all_tables():
         "SemanticModelMeasure",
         "SemanticModelRelation",
         "SemanticTerm",
+        "BusinessEntity",
+        "LogicalDimension",
+        "MetricDimensionCapability",
     }
     expected_tables = {
         "headless_asset_alias",
@@ -45,6 +51,9 @@ def test_semantic_orm_package_exports_and_registers_all_tables():
         "headless_model_measure",
         "headless_model_relation",
         "headless_term",
+        "headless_business_entity",
+        "headless_logical_dimension",
+        "headless_metric_dimension_capability",
     }
 
     exported_tables = {
@@ -55,6 +64,51 @@ def test_semantic_orm_package_exports_and_registers_all_tables():
     assert set(semantic_orm.__all__) == expected_exports
     assert exported_tables == expected_tables
     assert expected_tables <= set(SQLModel.metadata.tables)
+
+
+def test_semantic_contract_models_expose_isolated_defaults():
+    """新契约对象的 JSON 字段必须在实例之间保持隔离。"""
+
+    entity = BusinessEntity(
+        oid=1,
+        domain_id=2,
+        name="店铺",
+        biz_name="stall",
+        key_type="bigint",
+    )
+    dimension = LogicalDimension(
+        oid=1,
+        domain_id=2,
+        name="店铺ID",
+        biz_name="stall_id",
+        semantic_type="IDENTIFIER",
+        value_type="BIGINT",
+    )
+    capability = MetricDimensionCapability(
+        oid=1,
+        metric_id=10,
+        logical_dimension_id=20,
+        binding_strategy="SAME_MODEL",
+        target_model_id=30,
+        aggregation_safety="SAFE",
+        time_alignment_policy="NONE",
+    )
+
+    capability.usages.append("GROUP_BY")
+    another_capability = MetricDimensionCapability(
+        oid=1,
+        metric_id=11,
+        logical_dimension_id=20,
+        binding_strategy="SAME_MODEL",
+        target_model_id=30,
+        aggregation_safety="SAFE",
+        time_alignment_policy="NONE",
+    )
+
+    assert entity.version == 1
+    assert dimension.version == 1
+    assert capability.usages == ["GROUP_BY"]
+    assert another_capability.usages == []
 
 
 def test_semantic_models_expose_storage_fields():

@@ -1,12 +1,16 @@
 from typing import Any, Protocol
 
+from apps.semantic.errors import SemanticValidationError
 from apps.semantic.models.dto import (
     DatasetSchema,
     SchemaElement,
+    SemanticPlanStatus,
     SemanticQueryCompileRequest,
     SemanticQueryCompileResult,
+    SemanticQueryPlan,
     SemanticUsedAsset,
 )
+from apps.semantic.services.query.validation import SemanticQueryValidationService
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.semantic.services.sql_compiler import (
     SemanticSQLCompileRequest,
@@ -22,6 +26,12 @@ class SemanticSQLCompilerPort(Protocol):
         request: SemanticSQLCompileRequest,
     ) -> SemanticSQLCompileResult: ...
 
+    def compile_verified_plan(
+        self,
+        schema: DatasetSchema,
+        plan: SemanticQueryPlan,
+    ) -> SemanticSQLCompileResult: ...
+
 
 class SemanticSQLCompilationService:
     """统一加载数据集 Schema 并执行语义 SQL 编译。"""
@@ -33,6 +43,7 @@ class SemanticSQLCompilationService:
     ) -> None:
         self._schema_provider = schema_provider
         self._compiler = compiler
+        self._plan_validator = SemanticQueryValidationService()
 
     def compile(
         self,
@@ -78,6 +89,43 @@ class SemanticSQLCompilationService:
                     result.dimension_ids,
                     schema.dimensions,
                 ),
+            ],
+        )
+
+    def compile_verified_plan(
+        self,
+        workspace_id: int,
+        plan: SemanticQueryPlan,
+    ) -> SemanticQueryCompileResult:
+        """验证计划与最新 Schema 后，执行不可变资产编译。"""
+
+        schema = self._schema_provider.build_dataset_schema(
+            workspace_id,
+            plan.dataset_id,
+        )
+        report = self._plan_validator.validate(plan, schema)
+        if report.status != SemanticPlanStatus.PROVEN:
+            reason = report.reason_codes[0] if report.reason_codes else "SEMANTIC_QUERY_PLAN_INVALID"
+            raise SemanticValidationError(reason)
+        try:
+            result = self._compiler.compile_verified_plan(schema, plan)
+        except ValueError as error:
+            raise SemanticValidationError(str(error)) from error
+        return SemanticQueryCompileResult(
+            dataset_id=plan.dataset_id,
+            sql=result.sql,
+            tables=result.tables,
+            metrics=result.metrics,
+            dimensions=result.dimensions,
+            schema=schema,
+            datasource_id=_datasource_id(
+                result.metric_ids,
+                result.dimension_ids,
+                schema,
+            ),
+            used_assets=[
+                *_used_assets("METRIC", result.metric_ids, schema.metrics),
+                *_used_assets("DIMENSION", result.dimension_ids, schema.dimensions),
             ],
         )
 

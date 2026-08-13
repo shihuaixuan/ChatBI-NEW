@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from apps.semantic.api import (
+    contracts,
     dataset_indexes,
     dataset_schema,
     datasets,
@@ -24,3 +25,4 @@ router.include_router(dataset_indexes.router)
 router.include_router(terms.router)
 router.include_router(term_excel.router)
 router.include_router(dataset_schema.router)
+router.include_router(contracts.router)

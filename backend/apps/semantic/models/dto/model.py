@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -18,6 +18,17 @@ class ModelPayload(SemanticBaseDTO):
     depends: list[dict[str, Any]] = Field(default_factory=list)
     table_name: str | None = None
     sql_query: str | None = None
+    primary_key: list[str] = Field(default_factory=list)
+    model_grain: list[str] = Field(default_factory=list)
+    default_time_field: str | None = None
+    model_kind: Literal[
+        "ENTITY", "FACT", "DETAIL", "SNAPSHOT", "BRIDGE"
+    ] | None = None
+    row_description: str | None = None
+    event_time_field: str | None = None
+    snapshot_time_field: str | None = None
+    contract_status: Literal["DRAFT"] | None = None
+    contract_version: int | None = None
 
 
 class ModelRelationPayload(SemanticBaseDTO):
@@ -27,6 +38,18 @@ class ModelRelationPayload(SemanticBaseDTO):
     join_type: str = "left join"
     join_conditions: list[dict[str, Any]] = Field(default_factory=list)
     ext: dict[str, Any] = Field(default_factory=dict)
+    cardinality: Literal[
+        "ONE_TO_ONE", "ONE_TO_MANY", "MANY_TO_ONE", "MANY_TO_MANY"
+    ] | None = None
+    left_unique: bool | None = None
+    right_unique: bool | None = None
+    metric_propagation: Literal["LEFT_TO_RIGHT", "RIGHT_TO_LEFT", "BOTH", "NONE"] | None = None
+    aggregation_safety: Literal[
+        "SAFE", "PRE_AGGREGATE_REQUIRED", "FORBIDDEN"
+    ] | None = None
+    valid_time_condition: dict[str, Any] | None = None
+    contract_status: Literal["DRAFT"] | None = None
+    contract_version: int | None = None
 
 
 class SemanticTableMeta(SemanticBaseDTO):

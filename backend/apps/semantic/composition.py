@@ -2,6 +2,9 @@
 
 from sqlmodel import Session
 
+from apps.semantic.repository.datasource.metadata_repository import (
+    SqlModelDatasourceMetadataRepository,
+)
 from apps.semantic.repository.excel.term_workbook_repository import (
     ExcelTermWorkbookRepository,
 )
@@ -15,7 +18,14 @@ from apps.semantic.repository.sqlmodel.domain_repository import (
     SqlModelDomainRepository,
 )
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
+from apps.semantic.repository.sqlmodel.semantic_contract_repository import (
+    SqlModelSemanticContractRepository,
+)
 from apps.semantic.repository.sqlmodel.term_repository import SqlModelTermRepository
+from apps.semantic.services.contract_build_service import SemanticContractBuildService
+from apps.semantic.services.contract_publication_service import (
+    SemanticContractPublicationService,
+)
 from apps.semantic.services.dataset_binding_service import (
     SemanticDatasetBindingService,
 )
@@ -26,6 +36,7 @@ from apps.semantic.services.dataset_reference_service import (
     SemanticDatasetReferenceService,
 )
 from apps.semantic.services.schema_service import SemanticSchemaService
+from apps.semantic.services.semantic_contract_service import SemanticContractService
 from apps.semantic.services.sql_compilation_service import (
     SemanticSQLCompilationService,
 )
@@ -46,6 +57,38 @@ def build_semantic_term_query_service(
     return SemanticTermQueryService(
         SemanticSchemaService(SemanticSchemaLoader(session))
     )
+
+
+def build_semantic_contract_service(session: Session) -> SemanticContractService:
+    """装配完整语义契约的基础管理服务。"""
+
+    return SemanticContractService(
+        SqlModelSemanticContractRepository(session),
+        SqlModelDomainRepository(session),
+    )
+
+
+def build_semantic_contract_build_service(
+    session: Session,
+) -> SemanticContractBuildService:
+    """装配从物理元数据统一构建语义契约的服务。"""
+
+    return SemanticContractBuildService(
+        SqlModelSemanticContractRepository(session),
+        SqlModelDomainRepository(session),
+        SqlModelDatasourceMetadataRepository(session),
+    )
+
+
+def build_semantic_contract_publication_service(
+    session: Session | None = None,
+) -> SemanticContractPublicationService:
+    """装配契约报告和发布服务。"""
+
+    repository = (
+        SqlModelSemanticContractRepository(session) if session is not None else None
+    )
+    return SemanticContractPublicationService(repository)
 
 
 def build_semantic_schema_service(session: Session) -> SemanticSchemaService:
@@ -126,5 +169,8 @@ __all__ = [
     "build_semantic_sql_compilation_service",
     "build_legacy_terminology_compatibility_service",
     "build_semantic_term_query_service",
+    "build_semantic_contract_service",
+    "build_semantic_contract_build_service",
+    "build_semantic_contract_publication_service",
     "build_semantic_term_excel_service",
 ]

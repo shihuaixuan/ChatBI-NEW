@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -18,3 +18,7 @@ class DimensionPayload(SemanticBaseDTO):
     type_params: dict[str, Any] = Field(default_factory=dict)
     expr: str | None = None
     data_type: str | None = None
+    logical_dimension_id: int | None = None
+    binding_role: Literal["KEY", "ATTRIBUTE", "TIME"] | None = None
+    binding_priority: int | None = None
+    contract_version: int | None = None

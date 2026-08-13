@@ -4,6 +4,9 @@ from sqlmodel import Session, col, select
 
 from apps.datasource.composition import build_datasource_service
 from apps.semantic.models.orm import (
+    BusinessEntity,
+    LogicalDimension,
+    MetricDimensionCapability,
     SemanticDataset,
     SemanticDatasetAsset,
     SemanticDatasetModelConfig,
@@ -185,6 +188,38 @@ class SemanticSchemaLoader:
             if model_ids
             else []
         )
+        business_entities = all_results(
+            self._session.exec(
+                select(BusinessEntity).where(
+                    BusinessEntity.oid == oid,
+                    col(BusinessEntity.domain_id).in_(domain_ids),
+                    BusinessEntity.status == 1,
+                )
+            )
+        )
+        logical_dimensions = all_results(
+            self._session.exec(
+                select(LogicalDimension).where(
+                    LogicalDimension.oid == oid,
+                    col(LogicalDimension.domain_id).in_(domain_ids),
+                    LogicalDimension.status == 1,
+                )
+            )
+        )
+        metric_ids = [metric.id for metric in metrics if metric.id is not None]
+        metric_dimension_capabilities = (
+            all_results(
+                self._session.exec(
+                    select(MetricDimensionCapability).where(
+                        MetricDimensionCapability.oid == oid,
+                        col(MetricDimensionCapability.metric_id).in_(metric_ids),
+                        MetricDimensionCapability.status == 1,
+                    )
+                )
+            )
+            if metric_ids
+            else []
+        )
         return DatasetSchemaAssets(
             dataset=dataset,
             domain=domain,
@@ -200,6 +235,9 @@ class SemanticSchemaLoader:
             dataset_model_configs=dataset_model_configs,
             dataset_assets=dataset_assets,
             subject_domains=subject_domains,
+            business_entities=business_entities,
+            logical_dimensions=logical_dimensions,
+            metric_dimension_capabilities=metric_dimension_capabilities,
         )
 
     def _load_subject_domains(

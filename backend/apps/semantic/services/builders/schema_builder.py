@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Sequence
 from typing import Any
@@ -12,6 +13,9 @@ from apps.semantic.models.dto import (
     SchemaElement,
 )
 from apps.semantic.models.orm import (
+    BusinessEntity,
+    LogicalDimension,
+    MetricDimensionCapability,
     SemanticDataset,
     SemanticDatasetAsset,
     SemanticDatasetModelConfig,
@@ -64,6 +68,9 @@ class SemanticSchemaBuilder:
             dataset_model_configs=assets.dataset_model_configs,
             dataset_assets=assets.dataset_assets,
             subject_domains=assets.subject_domains,
+            business_entities=assets.business_entities,
+            logical_dimensions=assets.logical_dimensions,
+            metric_dimension_capabilities=assets.metric_dimension_capabilities,
         )
 
     def build_from_assets(
@@ -82,10 +89,16 @@ class SemanticSchemaBuilder:
         dataset_model_configs: list[SemanticDatasetModelConfig] | None = None,
         dataset_assets: list[SemanticDatasetAsset] | None = None,
         subject_domains: list[SemanticDomain] | None = None,
+        business_entities: list[BusinessEntity] | None = None,
+        logical_dimensions: list[LogicalDimension] | None = None,
+        metric_dimension_capabilities: list[MetricDimensionCapability] | None = None,
     ) -> DatasetSchema:
         configs = runtime_dataset_configs(dataset, dataset_model_configs)
         selected_model_ids = {config["id"] for config in configs}
         selected_models = [model for model in models if model.id in selected_model_ids and model.status == 1]
+        strict_mode = str((dataset.query_config or {}).get("semanticEnforcement") or "LEGACY").upper() == "STRICT"
+        if strict_mode:
+            selected_models = [model for model in selected_models if model.contract_status == "READY"]
         model_by_id = {model.id: model for model in selected_models}
         metric_ids_by_model, dimension_ids_by_model = _runtime_dataset_asset_ids(dataset, dataset_assets)
         includes_all_models = {config["id"] for config in configs if config["includes_all"]}
@@ -96,6 +109,7 @@ class SemanticSchemaBuilder:
             if metric.model_id in model_by_id
             and metric.status == 1
             and metric.quality_status != "INVALID"
+            and (not strict_mode or metric.contract_version is not None)
             and (metric.model_id in includes_all_models or metric.id in metric_ids_by_model.get(metric.model_id, set()))
         ]
         exposed_dimensions = [
@@ -103,6 +117,7 @@ class SemanticSchemaBuilder:
             for dimension in dimensions
             if dimension.model_id in model_by_id
             and dimension.status == 1
+            and (not strict_mode or dimension.logical_dimension_id is not None)
             and (
                 dimension.model_id in includes_all_models
                 or dimension.id in dimension_ids_by_model.get(dimension.model_id, set())
@@ -144,6 +159,25 @@ class SemanticSchemaBuilder:
                 if term.status == 1 and _term_applies_to_dataset(term, dataset)
             ],
             query_config=dataset.query_config or {},
+            business_entities=[_business_entity_runtime(item) for item in business_entities or []],
+            logical_dimensions=[_logical_dimension_runtime(item) for item in logical_dimensions or []],
+            metric_dimension_capabilities=[
+                _metric_dimension_capability_runtime(item)
+                for item in metric_dimension_capabilities or []
+            ],
+            model_contracts=[_model_contract_runtime(item) for item in selected_models],
+            relation_contracts=[_relation_contract_runtime(item) for item in model_relations or []],
+            metric_contracts=[_metric_contract_runtime(item) for item in exposed_metrics],
+            schema_version=dataset.schema_version,
+            contract_version=_dataset_contract_version(
+                selected_models,
+                exposed_metrics,
+                exposed_dimensions,
+                model_relations or [],
+                business_entities or [],
+                logical_dimensions or [],
+                metric_dimension_capabilities or [],
+            ),
         )
         schema.dimension_values = [
             self._dimension_value_element(
@@ -159,6 +193,16 @@ class SemanticSchemaBuilder:
         schema.dimensions.sort(key=lambda item: item.id)
         schema.dimension_values.sort(key=lambda item: item.id)
         schema.terms.sort(key=lambda item: item.id)
+        schema.asset_versions = _asset_versions(
+            selected_models,
+            exposed_metrics,
+            exposed_dimensions,
+            model_relations or [],
+            business_entities or [],
+            logical_dimensions or [],
+            metric_dimension_capabilities or [],
+        )
+        schema.schema_fingerprint = _schema_fingerprint(schema)
         return schema
 
     def _model_runtime(
@@ -241,6 +285,10 @@ class SemanticSchemaBuilder:
             ext_info["dimension_data_type"] = dimension.data_type
         elif model:
             ext_info["dimension_data_type"] = _model_field_type(model, dimension.biz_name)
+        if dimension.logical_dimension_id is not None:
+            ext_info["logical_dimension_id"] = dimension.logical_dimension_id
+        if dimension.contract_version is not None:
+            ext_info["contract_version"] = dimension.contract_version
         return SchemaElement(
             data_set_id=dataset.id or 0,
             data_set_name=dataset.name,
@@ -319,6 +367,145 @@ def _runtime_subject_domains(
             }
         )
     return result
+
+
+def _business_entity_runtime(entity: BusinessEntity) -> dict[str, Any]:
+    return {
+        "id": entity.id,
+        "domain_id": entity.domain_id,
+        "name": entity.name,
+        "biz_name": entity.biz_name,
+        "description": entity.description,
+        "key_type": entity.key_type,
+        "value_domain_key": entity.value_domain_key,
+        "version": entity.version,
+    }
+
+
+def _logical_dimension_runtime(dimension: LogicalDimension) -> dict[str, Any]:
+    return {
+        "id": dimension.id,
+        "domain_id": dimension.domain_id,
+        "entity_id": dimension.entity_id,
+        "name": dimension.name,
+        "biz_name": dimension.biz_name,
+        "description": dimension.description,
+        "semantic_type": dimension.semantic_type,
+        "value_type": dimension.value_type,
+        "value_domain_key": dimension.value_domain_key,
+        "version": dimension.version,
+    }
+
+
+def _metric_dimension_capability_runtime(
+    capability: MetricDimensionCapability,
+) -> dict[str, Any]:
+    return {
+        "id": capability.id,
+        "metric_id": capability.metric_id,
+        "logical_dimension_id": capability.logical_dimension_id,
+        "usages": capability.usages,
+        "binding_strategy": capability.binding_strategy,
+        "relation_path": capability.relation_path,
+        "target_model_id": capability.target_model_id,
+        "physical_dimension_id": capability.physical_dimension_id,
+        "aggregation_safety": capability.aggregation_safety,
+        "pre_aggregation_grain": capability.pre_aggregation_grain,
+        "time_alignment_policy": capability.time_alignment_policy,
+        "version": capability.version,
+    }
+
+
+def _model_contract_runtime(model: SemanticModel) -> dict[str, Any]:
+    return {
+        "model_id": model.id,
+        "model_kind": model.model_kind,
+        "row_description": model.row_description,
+        "model_grain": model.model_grain,
+        "primary_key": model.primary_key,
+        "event_time_field": model.event_time_field,
+        "snapshot_time_field": model.snapshot_time_field,
+        "contract_status": model.contract_status,
+        "contract_version": model.contract_version or 0,
+    }
+
+
+def _relation_contract_runtime(relation: SemanticModelRelation) -> dict[str, Any]:
+    return {
+        "relation_id": relation.id,
+        "left_model_id": relation.left_model_id,
+        "right_model_id": relation.right_model_id,
+        "cardinality": relation.cardinality,
+        "left_unique": relation.left_unique,
+        "right_unique": relation.right_unique,
+        "metric_propagation": relation.metric_propagation,
+        "aggregation_safety": relation.aggregation_safety,
+        "valid_time_condition": relation.valid_time_condition,
+        "contract_status": relation.contract_status,
+        "contract_version": relation.contract_version or 0,
+    }
+
+
+def _metric_contract_runtime(metric: SemanticMetric) -> dict[str, Any]:
+    return {
+        "metric_id": metric.id,
+        "model_id": metric.model_id,
+        "default_agg": metric.default_agg,
+        "result_grain": metric.result_grain,
+        "additivity": metric.additivity,
+        "distinct_keys": metric.distinct_keys,
+        "time_semantics": metric.time_semantics,
+        "default_time_dimension_id": metric.default_time_dimension_id,
+        "snapshot_aggregation": metric.snapshot_aggregation,
+        "contract_version": metric.contract_version or metric.version,
+    }
+
+
+def _dataset_contract_version(
+    models: list[SemanticModel],
+    metrics: list[SemanticMetric],
+    dimensions: list[SemanticDimension],
+    relations: list[SemanticModelRelation],
+    entities: list[BusinessEntity],
+    logical_dimensions: list[LogicalDimension],
+    capabilities: list[MetricDimensionCapability],
+) -> int:
+    versions = [
+        *(item.contract_version or 0 for item in models),
+        *(item.contract_version or item.version for item in metrics),
+        *(item.contract_version or 0 for item in dimensions),
+        *(item.contract_version or 0 for item in relations),
+        *(item.version for item in entities),
+        *(item.version for item in logical_dimensions),
+        *(item.version for item in capabilities),
+    ]
+    return max(versions, default=0)
+
+
+def _asset_versions(
+    models: list[SemanticModel],
+    metrics: list[SemanticMetric],
+    dimensions: list[SemanticDimension],
+    relations: list[SemanticModelRelation],
+    entities: list[BusinessEntity],
+    logical_dimensions: list[LogicalDimension],
+    capabilities: list[MetricDimensionCapability],
+) -> dict[str, int]:
+    return {
+        **{f"model:{item.id}": item.contract_version or 0 for item in models},
+        **{f"metric:{item.id}": item.contract_version or item.version for item in metrics},
+        **{f"dimension:{item.id}": item.contract_version or 0 for item in dimensions},
+        **{f"relation:{item.id}": item.contract_version or 0 for item in relations},
+        **{f"business_entity:{item.id}": item.version for item in entities},
+        **{f"logical_dimension:{item.id}": item.version for item in logical_dimensions},
+        **{f"capability:{item.id}": item.version for item in capabilities},
+    }
+
+
+def _schema_fingerprint(schema: DatasetSchema) -> str:
+    payload = schema.model_dump(mode="json", exclude={"schema_fingerprint"})
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _term_applies_to_dataset(

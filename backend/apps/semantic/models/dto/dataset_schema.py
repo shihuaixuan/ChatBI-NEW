@@ -57,6 +57,16 @@ class DatasetSchema(SemanticBaseDTO):
     dimension_values: list[SchemaElement] = Field(default_factory=list)
     terms: list[SchemaElement] = Field(default_factory=list)
     query_config: dict[str, Any] = Field(default_factory=dict)
+    business_entities: list[dict[str, Any]] = Field(default_factory=list)
+    logical_dimensions: list[dict[str, Any]] = Field(default_factory=list)
+    metric_dimension_capabilities: list[dict[str, Any]] = Field(default_factory=list)
+    model_contracts: list[dict[str, Any]] = Field(default_factory=list)
+    relation_contracts: list[dict[str, Any]] = Field(default_factory=list)
+    metric_contracts: list[dict[str, Any]] = Field(default_factory=list)
+    schema_version: int = 1
+    contract_version: int = 0
+    asset_versions: dict[str, int] = Field(default_factory=dict)
+    schema_fingerprint: str = ""
 
 
 class Ontology(SemanticBaseDTO):

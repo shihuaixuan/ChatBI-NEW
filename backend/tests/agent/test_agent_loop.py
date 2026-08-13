@@ -1236,8 +1236,8 @@ def test_stage4_trace_records_react_decision_tool_projection_and_final_state():
     events = []
     for event in loop.run(run, record):
         if event.domain == "run.finished":
-            # 前端收到终态事件时，调用节点与 Run 根节点必须已经完成持久化。
-            assert len(repository.finished_runs) == 1
+            # 业务终态立即交给 SSE，不能等待或依赖 Trace 根节点收口。
+            assert repository.finished_runs == []
         events.append(event)
 
     assert _event_domains(events)[-2:] == ["answer.completed", "run.finished"]

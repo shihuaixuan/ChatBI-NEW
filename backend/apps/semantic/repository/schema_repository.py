@@ -1,8 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from apps.datasource import DatasourceRecord
 from apps.semantic.models.orm import (
+    BusinessEntity,
+    LogicalDimension,
+    MetricDimensionCapability,
     SemanticDataset,
     SemanticDatasetAsset,
     SemanticDatasetModelConfig,
@@ -36,6 +39,9 @@ class DatasetSchemaAssets:
     dataset_model_configs: list[SemanticDatasetModelConfig]
     dataset_assets: list[SemanticDatasetAsset]
     subject_domains: list[SemanticDomain]
+    business_entities: list[BusinessEntity] = field(default_factory=list)
+    logical_dimensions: list[LogicalDimension] = field(default_factory=list)
+    metric_dimension_capabilities: list[MetricDimensionCapability] = field(default_factory=list)
 
 
 class SchemaRepository(Protocol):

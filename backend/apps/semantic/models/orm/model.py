@@ -69,6 +69,12 @@ class SemanticModel(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     )
+    model_kind: str | None = Field(default=None, max_length=32)
+    row_description: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    event_time_field: str | None = Field(default=None, max_length=128)
+    snapshot_time_field: str | None = Field(default=None, max_length=128)
+    contract_status: str | None = Field(default=None, max_length=32)
+    contract_version: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
     updated_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
 
@@ -95,6 +101,14 @@ class SemanticModelRelation(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     )
+    cardinality: str | None = Field(default=None, max_length=16)
+    left_unique: bool | None = Field(default=None, sa_column=Column(Boolean, nullable=True))
+    right_unique: bool | None = Field(default=None, sa_column=Column(Boolean, nullable=True))
+    metric_propagation: str | None = Field(default=None, max_length=32)
+    aggregation_safety: str | None = Field(default=None, max_length=32)
+    valid_time_condition: dict[str, Any] | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    contract_status: str | None = Field(default=None, max_length=32)
+    contract_version: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
     updated_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
 

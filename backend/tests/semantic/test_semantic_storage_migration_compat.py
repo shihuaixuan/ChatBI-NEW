@@ -8,6 +8,7 @@ from apps.semantic.models.orm import (
     SemanticModel,
     SemanticModelField,
     SemanticModelMeasure,
+    SemanticModelRelation,
 )
 from apps.semantic.repository.metric_repository import MetricDependencyFacts
 from apps.semantic.repository.sqlmodel.storage_consistency import (
@@ -16,6 +17,9 @@ from apps.semantic.repository.sqlmodel.storage_consistency import (
 from apps.semantic.repository.sqlmodel.storage_sync import (
     mark_domain_datasets_schema_changed,
     mark_model_schema_changed,
+)
+from apps.semantic.services.contract_backfill import (
+    plan_semantic_contract_backfill,
 )
 from apps.semantic.services.rules.metric_quality import (
     validate_metric_dependencies,
@@ -202,3 +206,72 @@ def test_shared_model_schema_change_updates_model_and_domain_datasets():
     assert model.schema_version == 4
     assert dataset.schema_version == 6
     assert session.added == [model, dataset]
+
+
+def test_contract_backfill_only_applies_deterministic_values_and_reports_reviews():
+    model = SemanticModel(
+        id=1,
+        oid=1,
+        domain_id=2,
+        datasource_id=3,
+        name="旧模型",
+        biz_name="legacy_model",
+        primary_key=["id"],
+    )
+    dimension = SemanticDimension(
+        id=2,
+        oid=1,
+        model_id=1,
+        name="主键",
+        biz_name="id",
+        is_primary_key=True,
+    )
+    metric = SemanticMetric(
+        id=3,
+        oid=1,
+        model_id=1,
+        name="金额",
+        biz_name="amount",
+        relate_dimensions=[{"id": 2}],
+    )
+    relation = SemanticModelRelation(
+        id=4,
+        oid=1,
+        domain_id=2,
+        left_model_id=1,
+        right_model_id=5,
+    )
+    dataset = SemanticDataset(
+        id=6,
+        oid=1,
+        domain_id=2,
+        name="旧数据集",
+        biz_name="legacy_dataset",
+    )
+
+    plan = plan_semantic_contract_backfill(
+        models=[model],
+        metrics=[metric],
+        dimensions=[dimension],
+        relations=[relation],
+        datasets=[dataset],
+        dataset_model_configs=[],
+        capabilities=[],
+    )
+
+    updates = {
+        (item.asset_type, item.asset_id): item.values for item in plan.updates
+    }
+    assert updates[("MODEL", 1)] == {"contract_status": "DRAFT"}
+    assert updates[("DIMENSION", 2)] == {
+        "binding_role": "KEY",
+        "binding_priority": 0,
+    }
+    assert updates[("RELATION", 4)] == {"contract_status": "DRAFT"}
+    assert {item.code for item in plan.reviews} >= {
+        "MODEL_KIND_REVIEW_REQUIRED",
+        "LOGICAL_DIMENSION_REVIEW_REQUIRED",
+        "METRIC_CONTRACT_REVIEW_REQUIRED",
+        "RELATION_CONTRACT_REVIEW_REQUIRED",
+    }
+    assert plan.coverage[0].dimension_binding_rate == 0.0

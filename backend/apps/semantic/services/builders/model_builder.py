@@ -145,6 +145,15 @@ def build_model_with_assets(
         depends=payload.depends,
         table_name=payload.table_name,
         sql_query=payload.sql,
+        primary_key=payload.primary_key,
+        model_grain=payload.model_grain,
+        default_time_field=payload.default_time_field,
+        model_kind=payload.model_kind,
+        row_description=payload.row_description,
+        event_time_field=payload.event_time_field,
+        snapshot_time_field=payload.snapshot_time_field,
+        contract_status=payload.contract_status,
+        contract_version=payload.contract_version,
     )
     normalize_model_source(model)
     dimensions = [
@@ -152,6 +161,12 @@ def build_model_with_assets(
         for item in model_detail.get("dimensions", [])
         if item.get("createDimension", True)
     ]
+    for dimension in dimensions:
+        dimension.is_default_time = bool(
+            payload.default_time_field
+            and payload.default_time_field
+            in {dimension.biz_name, dimension.field_name}
+        )
     return SemanticModelAssetBundle(model=model, dimensions=dimensions, metrics=[])
 
 

@@ -5,6 +5,10 @@ from apps.semantic.models.dto import (
     SemanticQueryCompileResult,
     SemanticUsedAsset,
 )
+from apps.semantic.services.query import (
+    SemanticQueryPlanningService,
+    SemanticQueryValidationService,
+)
 from apps.semantic.services.sql_compilation_service import (
     SemanticSQLCompilationService,
 )
@@ -19,6 +23,8 @@ __all__ = [
     "SemanticQueryCompileRequest",
     "SemanticQueryCompileResult",
     "SemanticSQLCompilationService",
+    "SemanticQueryPlanningService",
+    "SemanticQueryValidationService",
     "SemanticUsedAsset",
     "derive_time_bucket",
     "is_time_expression",

@@ -9,6 +9,7 @@ def test_semantic_router_exposes_schema_and_mapping_contracts():
     assert "/semantic/datasources/{datasource_id}/tables/{table_name}/columns" in paths
     assert "/semantic/models/build-schema" in paths
     assert "/semantic/models/create-with-assets" in paths
+    assert "/semantic/contracts/build-from-physical" in paths
     assert "/semantic/model-relations" in paths
     assert "/semantic/metrics/batch-create-from-measures" in paths
     assert "/semantic/datasets/{dataset_id}/schema" in paths

@@ -18,6 +18,11 @@ from apps.semantic.models.orm.model import (
     SemanticModelMeasure,
     SemanticModelRelation,
 )
+from apps.semantic.models.orm.semantic_contract import (
+    BusinessEntity,
+    LogicalDimension,
+    MetricDimensionCapability,
+)
 
 __all__ = [
     "SemanticAssetAlias",
@@ -34,4 +39,7 @@ __all__ = [
     "SemanticModelMeasure",
     "SemanticModelRelation",
     "SemanticTerm",
+    "BusinessEntity",
+    "LogicalDimension",
+    "MetricDimensionCapability",
 ]

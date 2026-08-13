@@ -63,6 +63,10 @@ class SemanticDimension(SQLModel, table=True):
     value_query_sql: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     expr: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     data_type: str | None = Field(default=None, max_length=64)
+    logical_dimension_id: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
+    binding_role: str | None = Field(default=None, max_length=32)
+    binding_priority: int | None = Field(default=None)
+    contract_version: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     is_tag: int = Field(default=0, nullable=False)
     ext: dict[str, Any] = Field(
         default_factory=dict,

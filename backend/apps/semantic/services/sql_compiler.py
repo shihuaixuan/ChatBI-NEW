@@ -7,7 +7,13 @@ from typing import Any
 import sqlglot
 from sqlglot import exp as sqlglot_exp
 
-from apps.semantic.models.dto import DatasetSchema, JoinRelation, SchemaElement
+from apps.semantic.models.dto import (
+    DatasetSchema,
+    JoinRelation,
+    SchemaElement,
+    SemanticPlanStatus,
+    SemanticQueryPlan,
+)
 from apps.semantic.services.builders.schema_builder import build_ontology_from_schema
 from apps.temporal import TemporalSQLRenderError, render_time_filter_condition
 
@@ -38,6 +44,60 @@ class SemanticSQLCompileResult:
 
 
 class SemanticSQLCompiler:
+    def compile_verified_plan(
+        self,
+        schema: DatasetSchema,
+        plan: SemanticQueryPlan,
+    ) -> SemanticSQLCompileResult:
+        """只按已验证计划编译，禁止重新匹配或替换语义资产。"""
+
+        if plan.validation_status != SemanticPlanStatus.PROVEN:
+            raise ValueError("SEMANTIC_QUERY_PLAN_NOT_PROVEN")
+        dimension_ids = [item.physical_dimension_id for item in plan.dimensions]
+        time_binding = plan.time_binding
+        if time_binding.dimension_id is not None and time_binding.grain:
+            time_bucket = {
+                "dimension_id": time_binding.dimension_id,
+                "grain": time_binding.grain,
+            }
+        else:
+            time_bucket = None
+        filters = [
+            {
+                "asset_type": "DIMENSION",
+                "asset_id": item.physical_dimension_id,
+                "operator": item.operator,
+                "value": item.value,
+            }
+            for item in plan.filters
+        ]
+        if time_binding.dimension_id is not None and time_binding.time_range is not None:
+            filters.append(
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": time_binding.dimension_id,
+                    "operator": "=",
+                    "value": time_binding.time_range,
+                }
+            )
+        result = self.compile(
+            SemanticSQLCompileRequest(
+                schema=schema,
+                metric_ids=[item.metric_id for item in plan.metrics],
+                dimension_ids=dimension_ids,
+                slots={"filters": filters},
+                time_bucket=time_bucket,
+                select_mode="aggregate",
+            )
+        )
+        expected_metric_ids = [item.metric_id for item in plan.metrics]
+        expected_dimension_ids = [*dimension_ids]
+        if time_binding.dimension_id is not None and time_binding.grain:
+            expected_dimension_ids = [time_binding.dimension_id, *expected_dimension_ids]
+        if result.metric_ids != expected_metric_ids or result.dimension_ids != expected_dimension_ids:
+            raise ValueError("SEMANTIC_QUERY_PLAN_ASSET_CHANGED")
+        return result
+
     def compile(self, request: SemanticSQLCompileRequest) -> SemanticSQLCompileResult:
         ontology = build_ontology_from_schema(request.schema)
         metrics = self._select_metrics(request)
