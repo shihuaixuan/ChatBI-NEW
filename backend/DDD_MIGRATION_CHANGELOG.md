@@ -2734,3 +2734,30 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
    状态与耗时、Token、错误，以及节点输入、输出、状态变化和运行标识查看。
 4. Trace、Agent、Artifact 定向回归 145 项和架构守卫 124 项通过；前端 ESLint、Vue 类型
    检查与生产构建通过，变更范围 Ruff 和严格 Mypy 通过。
+
+## Agent Trace 执行详情第六阶段（2026-08-12）
+
+1. Trace 摘要接口改为按 `sequence` 返回扁平节点，前端以 `parent_id` 构造调用树；父节点
+   缺失、重复节点和循环关系都会保留可见节点并显示数据异常，不再由后端递归结构掩盖问题。
+2. 执行详情补齐模型与工具调用概览、默认展开、失败祖先展开、并行标识、名称搜索、模型/工具
+   类型筛选、异常筛选、刷新和 JSON/Prompt/SQL 复制；运行中轮询，等待和所有终态停止轮询。
+3. Agent 记录统一由 `ExecutionDetails.vue` 路由到 Trace 抽屉；历史无 Trace 明确显示
+   `trace_unavailable`，无详情权限的账号只展示安全摘要且不会请求节点详情。
+4. 新增前端树投影与路由契约测试 7 项；Trace、Agent、Artifact 联合回归 144 项、架构守卫
+   124 项通过，后端 Ruff、严格 Mypy、前端 ESLint、Vue 类型检查和生产构建通过。
+
+## Agent Trace 执行详情第七阶段（2026-08-12）
+
+1. 审计确认 Agent 生产代码已不存在旧 `AgentTracer.span()` 入口；保留的 `.span()` 仅属于
+   Recorder 内部 OpenTelemetry 导出端口。新增架构守卫，禁止 Agent 业务代码直接创建
+   Span，并禁止 Trace 查询投影依赖 Timeline。
+2. 新增 Trace Run 根节点终态契约。等待澄清时只关闭当前 invocation，根节点继续接收恢复
+   子树；成功、失败和取消在 invocation 关闭后统一收口根节点；已有采集失败时保留
+   `partial` 并记录业务终态。
+3. 更新 Event、SSE、Timeline、持久化 Trace、OpenTelemetry 和 Agent Loop 技术文档，明确
+   持久化 Trace 是执行详情唯一数据源，Timeline 不参与执行详情拼树，OpenTelemetry 只导出
+   同一节点的低基数安全属性。
+4. Agent、Trace、Artifact 定向回归 147 项、架构守卫 125 项、前端 Trace 契约 7 项通过；
+   Alembic 确认位于 `100_chatbi_agent_trace_node (head)`，后端 Ruff、严格 Mypy、前端
+   ESLint、Vue 类型检查和生产构建通过。全后端测试 1444 项通过，另有 1 项既有 Graph
+   Workflow 条件清单断言未包含 `interaction.slot.temporal_answered`，与本阶段改动无关。

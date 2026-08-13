@@ -5,25 +5,14 @@ export type ChatFlowMode = 'graph' | 'agent'
 
 const STORAGE_KEY = 'numora_chat_flow_mode'
 const PREVIOUS_STORAGE_KEY = 'sqlbot_chat_flow_mode'
-const AVAILABLE_MODES: ChatFlowMode[] = ['graph', 'agent']
-
-const isAvailableMode = (value: string | null): value is ChatFlowMode =>
-  value !== null && AVAILABLE_MODES.includes(value as ChatFlowMode)
+const AGENT_MODE: ChatFlowMode = 'agent'
+const AVAILABLE_MODES: ChatFlowMode[] = [AGENT_MODE]
 
 const restoreMode = (): ChatFlowMode => {
-  const saved = localStorage.getItem(STORAGE_KEY) as ChatFlowMode | null
-  if (isAvailableMode(saved)) {
-    return saved
-  }
-
-  // 仅迁移旧存储中仍然有效的 graph/agent，其他值直接废弃。
-  const previousSaved = localStorage.getItem(PREVIOUS_STORAGE_KEY)
+  // 新问题统一走 Agent，旧版本保存的 Graph 选择不再参与请求路由。
   localStorage.removeItem(PREVIOUS_STORAGE_KEY)
-  if (isAvailableMode(previousSaved)) {
-    localStorage.setItem(STORAGE_KEY, previousSaved)
-    return previousSaved
-  }
-  return 'graph'
+  localStorage.setItem(STORAGE_KEY, AGENT_MODE)
+  return AGENT_MODE
 }
 
 interface ChatFlowState {
@@ -44,18 +33,18 @@ export const chatFlowStore = defineStore('chatFlowStore', {
     getAvailableModes(): ChatFlowMode[] {
       return AVAILABLE_MODES
     },
-    // 选择器可由部署配置隐藏，隐藏时固定使用已保存模式或 graph。
+    // Agent 单链路下不再向用户展示执行模式选择器。
     getSelectorEnabled(): boolean {
-      return import.meta.env.VITE_CHATBI_FLOW_SELECTOR_ENABLED === 'true'
+      return false
     },
   },
   actions: {
     setMode(mode: ChatFlowMode) {
-      if (!AVAILABLE_MODES.includes(mode)) {
+      if (mode !== AGENT_MODE) {
         return
       }
-      this.mode = mode
-      localStorage.setItem(STORAGE_KEY, mode)
+      this.mode = AGENT_MODE
+      localStorage.setItem(STORAGE_KEY, AGENT_MODE)
     },
   },
 })

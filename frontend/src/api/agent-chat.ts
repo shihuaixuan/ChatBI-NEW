@@ -74,10 +74,15 @@ export interface AgentTraceOverview {
   input_tokens: number
   output_tokens: number
   node_count: number
+  llm_call_count: number
+  tool_call_count: number
+  invocation_count: number
+  recovery_count: number
   failed_node_count: number
   waiting_node_count: number
   last_sequence: number
   partial: boolean
+  trace_complete: boolean
 }
 
 export interface AgentTraceNode {
@@ -93,17 +98,22 @@ export interface AgentTraceNode {
   finished_at?: string | null
   latency_ms?: number | null
   token_usage: Record<string, unknown>
+  input_summary: Record<string, unknown>
+  output_summary: Record<string, unknown>
+  metadata: Record<string, unknown>
   error_code?: string | null
   error_category?: string | null
   error?: string | null
   has_input_detail: boolean
   has_output_detail: boolean
-  children: AgentTraceNode[]
 }
 
 export interface AgentTraceResponse {
+  available: boolean
+  unavailable_reason?: string | null
+  detail_access: 'allowed' | 'summary_only'
   overview: AgentTraceOverview
-  tree: AgentTraceNode[]
+  nodes: AgentTraceNode[]
 }
 
 export interface AgentTraceNodeDetail {

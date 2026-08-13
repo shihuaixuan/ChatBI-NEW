@@ -289,11 +289,12 @@ def test_trace_returns_owned_record_call_tree(monkeypatch):
 
     assert owned_calls == [(7, 3)]
     assert result.overview.status == "succeeded"
-    assert result.tree[0].id == 10
+    assert result.detail_access == "summary_only"
+    assert result.nodes[0].id == 10
 
 
 def test_trace_node_detail_reads_only_node_bound_artifact(monkeypatch):
-    user = SimpleNamespace(id=7, oid=1)
+    user = SimpleNamespace(id=7, oid=1, isAdmin=False, weight=1)
     session = SimpleNamespace()
     run = ChatbiAgentRun(
         id=5,
@@ -356,6 +357,33 @@ def test_trace_node_detail_reads_only_node_bound_artifact(monkeypatch):
     }
 
 
+def test_trace_node_detail_rejects_user_without_detail_permission(monkeypatch):
+    user = SimpleNamespace(id=7, oid=1, isAdmin=False, weight=0)
+    run = ChatbiAgentRun(
+        id=5,
+        oid=1,
+        chat_id=2,
+        record_id=3,
+        status=AgentRunStatus.FINISHED.value,
+        created_by=user.id,
+    )
+    monkeypatch.setattr(
+        api,
+        "build_chat_record_service",
+        lambda _session: SimpleNamespace(get_owned=lambda _user_id, _record_id: object()),
+    )
+    monkeypatch.setattr(
+        api.agent_run_repository,
+        "get_latest_run_by_record",
+        lambda _session, _record_id: run,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(api.agent_trace_node_detail(SimpleNamespace(), user, 3, 10))
+
+    assert exc_info.value.status_code == 403
+
+
 def test_trace_hides_record_existence_when_ownership_check_fails(monkeypatch):
     user = SimpleNamespace(id=7, oid=1)
 
@@ -399,7 +427,7 @@ def _trace_node(
     )
 
 
-def test_trace_projection_builds_nested_tree_and_sums_only_llm_tokens():
+def test_trace_projection_returns_flat_nodes_and_sums_only_llm_tokens():
     run = ChatbiAgentRun(
         id=7,
         oid=1,
@@ -439,10 +467,13 @@ def test_trace_projection_builds_nested_tree_and_sums_only_llm_tokens():
     assert result.overview.status == TraceNodeStatus.SUCCEEDED.value
     assert result.overview.total_tokens == 150
     assert result.overview.node_count == 3
-    assert [item.id for item in result.tree] == [1]
-    assert result.tree[0].children[0].id == 2
-    assert result.tree[0].children[0].children[0].id == 3
-    assert result.tree[0].children[0].children[0].has_input_detail is True
+    assert result.overview.llm_call_count == 1
+    assert result.overview.invocation_count == 1
+    assert [item.id for item in result.nodes] == [1, 2, 3]
+    assert result.nodes[2].parent_id == 2
+    assert result.nodes[2].has_input_detail is True
+    assert result.available is True
+    assert result.overview.trace_complete is False
 
 
 def test_trace_projection_preserves_partial_root_signal():
@@ -466,6 +497,24 @@ def test_trace_projection_preserves_partial_root_signal():
 
     assert result.overview.status == TraceNodeStatus.PARTIAL.value
     assert result.overview.partial is True
+
+
+def test_trace_projection_marks_historical_run_without_nodes_unavailable():
+    run = ChatbiAgentRun(
+        id=7,
+        oid=1,
+        chat_id=2,
+        record_id=3,
+        status=AgentRunStatus.FINISHED.value,
+        created_at=datetime(2026, 8, 12, 12, 0, 0),
+    )
+
+    result = project_agent_trace(run, [])
+
+    assert result.available is False
+    assert result.unavailable_reason == "trace_unavailable"
+    assert result.nodes == []
+    assert result.overview.trace_complete is False
 
 
 def test_running_agent_cancel_records_request_instead_of_claiming_cancelled(

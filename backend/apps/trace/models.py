@@ -91,6 +91,19 @@ class TraceNodeFinishInput:
 
 
 @dataclass(frozen=True)
+class TraceRunFinishInput:
+    """Trace Store 收口 Run 根节点所需的数据。"""
+
+    run_id: int
+    status: TraceNodeStatus
+    finished_at: datetime
+    output_summary: dict[str, Any] = field(default_factory=dict)
+    error_code: str | None = None
+    error_category: str | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class TraceNodeRef:
     """Recorder 传播父子上下文使用的最小节点引用。"""
 
@@ -124,4 +137,5 @@ __all__ = [
     "TraceNodeStartInput",
     "TraceNodeStatus",
     "TraceNodeType",
+    "TraceRunFinishInput",
 ]

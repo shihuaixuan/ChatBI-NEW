@@ -2,7 +2,6 @@
 import { ref } from 'vue'
 import icon_logs_outlined from '@/assets/svg/icon_logs_outlined.svg'
 import ExecutionDetails from './ExecutionDetails.vue'
-import AgentTraceDetails from './AgentTraceDetails.vue'
 import type { ChatExecutionType } from '@/api/chat.ts'
 import { useChatConfigStore } from '@/stores/chatConfig.ts'
 const props = defineProps<{
@@ -13,14 +12,10 @@ const props = defineProps<{
 }>()
 const chatConfig = useChatConfigStore()
 const showLogBtn = !chatConfig.getHideLog
-const executionDetailsRef = ref()
-const agentTraceDetailsRef = ref()
+const executionDetailsRef = ref<InstanceType<typeof ExecutionDetails>>()
 function getLogList() {
-  if (props.executionType === 'agent' && props.recordId) {
-    agentTraceDetailsRef.value.open(props.recordId)
-    return
-  }
-  executionDetailsRef.value.getLogList(props.recordId)
+  if (!props.recordId) return
+  executionDetailsRef.value?.getLogList(props.recordId, props.executionType)
 }
 </script>
 
@@ -42,7 +37,6 @@ function getLogList() {
     </div>
   </div>
   <ExecutionDetails ref="executionDetailsRef"></ExecutionDetails>
-  <AgentTraceDetails ref="agentTraceDetailsRef"></AgentTraceDetails>
 </template>
 
 <style scoped lang="less">

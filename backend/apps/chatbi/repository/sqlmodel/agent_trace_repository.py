@@ -18,6 +18,7 @@ from apps.trace import (
     TraceNodeStartInput,
     TraceNodeStatus,
     TraceNodeType,
+    TraceRunFinishInput,
 )
 
 TRACE_SUMMARY_MAX_BYTES = 8 * 1024
@@ -85,6 +86,52 @@ def finish_node(session: Session, data: TraceNodeFinishInput) -> None:
     node.span_id = data.span_id
     node.metadata_json = {**node.metadata_json, **data.metadata}
     session.add(node)
+
+
+def finish_run_root(session: Session, data: TraceRunFinishInput) -> None:
+    """收口 Run 根节点；已经标记 partial 时保留不完整状态。"""
+
+    if data.status in {TraceNodeStatus.RUNNING, TraceNodeStatus.WAITING}:
+        raise TraceContractError("TRACE_RUN_TERMINAL_STATUS_REQUIRED")
+    _validate_json_size("output_summary", data.output_summary, TRACE_SUMMARY_MAX_BYTES)
+    _lock_run(session, data.run_id)
+    root = get_run_root(session, data.run_id)
+    if root is None:
+        raise TraceContractError("TRACE_ROOT_NOT_FOUND")
+    if root.status == TraceNodeStatus.PARTIAL.value:
+        root.finished_at = data.finished_at
+        root.latency_ms = max(
+            0,
+            int((data.finished_at - root.started_at).total_seconds() * 1000),
+        )
+        root.output_summary = data.output_summary
+        root.error_code = data.error_code
+        root.error_category = data.error_category
+        root.error = data.error
+        root.metadata_json = {
+            **root.metadata_json,
+            "business_terminal_status": data.status.value,
+        }
+        session.add(root)
+        return
+    if root.status == data.status.value:
+        return
+    if root.status != TraceNodeStatus.RUNNING.value:
+        raise TraceContractError("TRACE_ROOT_ALREADY_FINISHED")
+    if root.id is None:
+        raise TraceContractError("TRACE_ROOT_ID_REQUIRED")
+    finish_node(
+        session,
+        TraceNodeFinishInput(
+            node_id=root.id,
+            status=data.status,
+            finished_at=data.finished_at,
+            output_summary=data.output_summary,
+            error_code=data.error_code,
+            error_category=data.error_category,
+            error=data.error,
+        ),
+    )
 
 
 def mark_run_partial(session: Session, run_id: int, *, lost_nodes: int = 1) -> None:
@@ -222,6 +269,7 @@ __all__ = [
     "delete_nodes_for_runs",
     "ensure_run_root",
     "finish_node",
+    "finish_run_root",
     "get_run_root",
     "get_run_node",
     "list_run_nodes",

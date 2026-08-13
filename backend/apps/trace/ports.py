@@ -9,6 +9,7 @@ from apps.trace.models import (
     TraceNodeFinishInput,
     TraceNodeRef,
     TraceNodeStartInput,
+    TraceRunFinishInput,
 )
 
 
@@ -23,6 +24,8 @@ class TraceRepository(Protocol):
     def start_node(self, data: TraceNodeStartInput) -> TraceNodeRef: ...
 
     def finish_node(self, data: TraceNodeFinishInput) -> None: ...
+
+    def finish_run_root(self, data: TraceRunFinishInput) -> None: ...
 
     def mark_run_partial(self, run_id: int, *, lost_nodes: int = 1) -> None: ...
 

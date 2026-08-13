@@ -5,7 +5,7 @@ import gou_icon from '@/assets/svg/gou_icon.svg'
 import icon_error from '@/assets/svg/icon_error.svg'
 import icon_database_colorful from '@/assets/svg/icon_database_colorful.svg'
 import icon_alarm_clock_colorful from '@/assets/svg/icon_alarm-clock_colorful.svg'
-import { chatApi, type ChatLogHistory } from '@/api/chat.ts'
+import { chatApi, type ChatExecutionType, type ChatLogHistory } from '@/api/chat.ts'
 import { useI18n } from 'vue-i18n'
 import { isMobile } from '@/utils/utils'
 import { debounce } from 'lodash-es'
@@ -15,12 +15,14 @@ import LogDataQuery from './execution-component/LogDataQuery.vue'
 import LogChooseTable from './execution-component/LogChooseTable.vue'
 import LogGeneratePicture from './execution-component/LogGeneratePicture.vue'
 import LogWithAi from '@/views/chat/execution-component/LogWithAi.vue'
+import AgentTraceDetails from './AgentTraceDetails.vue'
 
 const { t } = useI18n()
 const logHistory = ref<ChatLogHistory>({})
 const dialogFormVisible = ref(false)
 const expandIds = ref<any>([])
 const drawerSize = ref('600px')
+const agentTraceDetailsRef = ref<InstanceType<typeof AgentTraceDetails>>()
 
 const handleExpand = (index: number) => {
   if (expandIds.value.includes(index)) {
@@ -30,7 +32,12 @@ const handleExpand = (index: number) => {
   }
 }
 
-function getLogList(recordId: any) {
+function getLogList(recordId: number, executionType?: ChatExecutionType) {
+  // Agent 记录统一进入 Trace 调用树，旧执行记录仍使用原日志详情。
+  if (executionType === 'agent') {
+    agentTraceDetailsRef.value?.open(recordId)
+    return
+  }
   setDrawerSize()
   chatApi.get_chart_log_history(recordId).then((res) => {
     logHistory.value = chatApi.toChatLogHistory(res) as ChatLogHistory
@@ -61,6 +68,7 @@ defineExpose({
 </script>
 
 <template>
+  <AgentTraceDetails ref="agentTraceDetailsRef" />
   <el-drawer
     v-model="dialogFormVisible"
     :title="t('parameter.execution_details')"

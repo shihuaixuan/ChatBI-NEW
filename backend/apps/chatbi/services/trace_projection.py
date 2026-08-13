@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from apps.chatbi.models import (
     AgentRunStatus,
@@ -33,6 +33,25 @@ _TERMINAL_RUN_STATUSES = {
     AgentRunStatus.FAILED.value,
     AgentRunStatus.CANCELLED.value,
 }
+_PUBLIC_METADATA_KEYS = frozenset(
+    {
+        "attempt",
+        "clarification_id",
+        "mode",
+        "model",
+        "parallel",
+        "parallel_group",
+        "stage",
+        "step_id",
+        "step_index",
+        "tool_call_id",
+        "tool_name",
+        "app.step.id",
+        "app.tool_call.id",
+        "gen_ai.request.model",
+        "gen_ai.tool.name",
+    }
+)
 
 
 def project_agent_trace(
@@ -40,8 +59,9 @@ def project_agent_trace(
     nodes: list[ChatbiAgentTraceNode],
     *,
     observed_at: datetime | None = None,
+    detail_access: Literal["allowed", "summary_only"] = "summary_only",
 ) -> AgentTraceSnapshot:
-    """生成调用树；Run 根节点状态以业务 Run 终态为准。"""
+    """生成扁平 Trace 响应；父子关系由前端按 parent_id 投影。"""
 
     if run.id is None:
         raise ValueError("AGENT_TRACE_RUN_ID_REQUIRED")
@@ -64,7 +84,6 @@ def project_agent_trace(
 
     input_tokens, output_tokens, total_tokens = _sum_llm_tokens(ordered_nodes)
     root_status = _project_root_status(run, root)
-    tree = _build_tree(ordered_nodes, root_status, finished_at)
     statuses = [
         root_status if item is root else item.status for item in ordered_nodes
     ]
@@ -74,6 +93,17 @@ def project_agent_trace(
             root.status == TraceNodeStatus.PARTIAL.value
             or int(root.metadata_json.get("lost_nodes") or 0) > 0
         )
+    )
+    root_unclosed = bool(
+        terminal
+        and root is not None
+        and root.status == TraceNodeStatus.RUNNING.value
+    )
+    trace_complete = root is not None and not partial and not root_unclosed
+    recovery_count = sum(
+        item.node_type == TraceNodeType.INVOCATION.value
+        and item.metadata_json.get("clarification_id") is not None
+        for item in ordered_nodes
     )
     overview = AgentTraceOverviewSnapshot(
         run_id=run.id,
@@ -86,12 +116,39 @@ def project_agent_trace(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         node_count=len(ordered_nodes),
+        llm_call_count=sum(
+            item.node_type == TraceNodeType.LLM.value for item in ordered_nodes
+        ),
+        tool_call_count=sum(
+            item.node_type == TraceNodeType.TOOL.value for item in ordered_nodes
+        ),
+        invocation_count=sum(
+            item.node_type == TraceNodeType.INVOCATION.value
+            for item in ordered_nodes
+        ),
+        recovery_count=recovery_count,
         failed_node_count=sum(status == TraceNodeStatus.FAILED.value for status in statuses),
         waiting_node_count=sum(status == TraceNodeStatus.WAITING.value for status in statuses),
         last_sequence=max((item.sequence for item in ordered_nodes), default=0),
-        partial=partial,
+        partial=partial or root_unclosed,
+        trace_complete=trace_complete,
     )
-    return AgentTraceSnapshot(overview=overview, tree=tree)
+    projected_nodes = [
+        _project_node(
+            item,
+            status=root_status if item is root else None,
+            finished_at=finished_at if item is root else None,
+        )
+        for item in ordered_nodes
+    ]
+    available = root is not None and bool(projected_nodes)
+    return AgentTraceSnapshot(
+        available=available,
+        unavailable_reason=None if available else "trace_unavailable",
+        detail_access=detail_access,
+        overview=overview,
+        nodes=projected_nodes,
+    )
 
 
 def project_agent_trace_node_detail(
@@ -161,35 +218,6 @@ def load_agent_trace_node_detail(
     )
 
 
-def _build_tree(
-    nodes: list[ChatbiAgentTraceNode],
-    root_status: str,
-    root_finished_at: datetime | None,
-) -> list[AgentTraceNodeSnapshot]:
-    projected: dict[int, AgentTraceNodeSnapshot] = {}
-    source_by_id: dict[int, ChatbiAgentTraceNode] = {}
-    for node in nodes:
-        if node.id is None:
-            continue
-        is_root = node.parent_id is None
-        projected[node.id] = _project_node(
-            node,
-            status=root_status if is_root else None,
-            finished_at=root_finished_at if is_root else None,
-        )
-        source_by_id[node.id] = node
-
-    roots: list[AgentTraceNodeSnapshot] = []
-    for node_id, item in projected.items():
-        source = source_by_id[node_id]
-        parent = projected.get(source.parent_id) if source.parent_id is not None else None
-        if parent is None:
-            roots.append(item)
-        else:
-            parent.children.append(item)
-    return roots
-
-
 def _project_node(
     node: ChatbiAgentTraceNode,
     *,
@@ -218,6 +246,13 @@ def _project_node(
         finished_at=effective_finished_at,
         latency_ms=effective_latency,
         token_usage=node.token_usage,
+        input_summary=node.input_summary,
+        output_summary=node.output_summary,
+        metadata={
+            key: value
+            for key, value in node.metadata_json.items()
+            if key in _PUBLIC_METADATA_KEYS
+        },
         error_code=node.error_code,
         error_category=node.error_category,
         error=node.error,

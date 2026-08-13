@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import type { AgentTraceNode } from '@/api/agent-chat'
+import { computed } from 'vue'
+import { traceNodeTypeText, traceStatusText, type AgentTraceTreeNode } from './agentTraceProjection'
 
 defineOptions({ name: 'AgentTraceTreeNode' })
 
 const props = defineProps<{
-  node: AgentTraceNode
+  node: AgentTraceTreeNode
   selectedId?: number
+  expandedIds: Set<number>
 }>()
 
 const emit = defineEmits<{
-  select: [node: AgentTraceNode]
+  select: [node: AgentTraceTreeNode]
+  toggle: [nodeId: number]
 }>()
 
-const expanded = ref(true)
+const expanded = computed(() => props.expandedIds.has(props.node.id))
 const hasChildren = computed(() => props.node.children.length > 0)
 const tokenTotal = computed(() => {
   const usage = props.node.token_usage
@@ -24,38 +26,6 @@ const tokenTotal = computed(() => {
     Number(usage.output_tokens || usage.completion_tokens || 0)
   )
 })
-
-function statusText(status: string) {
-  return (
-    {
-      running: '执行中',
-      succeeded: '成功',
-      failed: '失败',
-      rejected: '已拒绝',
-      interrupted: '已中断',
-      waiting: '等待用户',
-      cancelled: '已取消',
-      skipped: '已跳过',
-      partial: '部分缺失',
-    }[status] || status
-  )
-}
-
-function nodeTypeText(nodeType: string) {
-  return (
-    {
-      run: '流程',
-      invocation: '调用',
-      phase: '阶段',
-      llm: '模型',
-      tool: '工具',
-      validation: '校验',
-      projection: '整理',
-      persistence: '持久化',
-      interaction: '交互',
-    }[nodeType] || nodeType
-  )
-}
 
 function formatDuration(latency?: number | null) {
   if (latency === undefined || latency === null) return '--'
@@ -79,22 +49,27 @@ function formatDuration(latency?: number | null) {
         class="expand-button"
         :class="{ expanded, hidden: !hasChildren }"
         type="button"
-        @click.stop="expanded = !expanded"
+        :aria-label="expanded ? '收起节点' : '展开节点'"
+        @click.stop="emit('toggle', node.id)"
       >
         ›
       </button>
-      <span class="node-type-icon">{{ nodeTypeText(node.node_type).slice(0, 1) }}</span>
+      <span class="node-type-icon">{{ traceNodeTypeText(node.node_type).slice(0, 1) }}</span>
       <span class="node-main">
-        <span class="node-title">{{ node.display_name }}</span>
+        <span class="node-title">
+          {{ node.display_name }}
+          <span v-if="node.parallel" class="parallel-tag">并行</span>
+          <span v-if="node.integrity_error" class="integrity-tag">数据异常</span>
+        </span>
         <span class="node-subtitle">
-          <span>{{ nodeTypeText(node.node_type) }}</span>
+          <span>{{ traceNodeTypeText(node.node_type) }}</span>
           <span>#{{ node.sequence }}</span>
           <span>{{ formatDuration(node.latency_ms) }}</span>
           <span v-if="tokenTotal > 0">{{ tokenTotal }} Tokens</span>
         </span>
       </span>
       <span class="status-dot"></span>
-      <span class="status-label">{{ statusText(node.status) }}</span>
+      <span class="status-label">{{ traceStatusText(node.status) }}</span>
     </div>
 
     <div v-if="hasChildren && expanded" class="trace-node-children">
@@ -103,7 +78,9 @@ function formatDuration(latency?: number | null) {
         :key="child.id"
         :node="child"
         :selected-id="selectedId"
+        :expanded-ids="expandedIds"
         @select="emit('select', $event)"
+        @toggle="emit('toggle', $event)"
       />
     </div>
   </div>
@@ -219,6 +196,24 @@ function formatDuration(latency?: number | null) {
   line-height: 21px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.parallel-tag,
+.integrity-tag {
+  display: inline-flex;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: #5361cf;
+  background: #edf0ff;
+  font-size: 10px;
+  font-weight: 400;
+  vertical-align: 1px;
+}
+
+.integrity-tag {
+  color: #b65e26;
+  background: #fff0e5;
 }
 
 .node-subtitle {

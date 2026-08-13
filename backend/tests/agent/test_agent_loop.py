@@ -60,6 +60,7 @@ from apps.trace import (
     TraceNodeRef,
     TraceNodeStartInput,
     TraceNodeStatus,
+    TraceRunFinishInput,
 )
 from apps.trace.setup import (
     OpenTelemetryTraceExporter,
@@ -242,6 +243,7 @@ class RecordingTraceRepository:
     def __init__(self):
         self.started = []
         self.finished = []
+        self.finished_runs = []
         self.roots = {}
         self.next_id = 1
 
@@ -261,6 +263,9 @@ class RecordingTraceRepository:
 
     def finish_node(self, data: TraceNodeFinishInput):
         self.finished.append(data)
+
+    def finish_run_root(self, data: TraceRunFinishInput):
+        self.finished_runs.append(data)
 
     def mark_run_partial(self, run_id, *, lost_nodes=1):
         raise AssertionError(f"Trace 不应丢失节点: run_id={run_id}, lost={lost_nodes}")
@@ -1228,9 +1233,15 @@ def test_stage4_trace_records_react_decision_tool_projection_and_final_state():
         recorder=recorder,
     )
 
-    events = list(loop.run(run, record))
+    events = []
+    for event in loop.run(run, record):
+        if event.domain == "run.finished":
+            # 前端收到终态事件时，调用节点与 Run 根节点必须已经完成持久化。
+            assert len(repository.finished_runs) == 1
+        events.append(event)
 
     assert _event_domains(events)[-2:] == ["answer.completed", "run.finished"]
+    assert repository.finished_runs[0].status is TraceNodeStatus.SUCCEEDED
     indexed_nodes = list(enumerate(repository.started, start=1))
     ids_by_name = {}
     for node_id, item in indexed_nodes:

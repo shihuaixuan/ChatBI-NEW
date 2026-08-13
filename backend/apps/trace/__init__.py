@@ -11,6 +11,7 @@ from apps.trace.models import (
     TraceNodeStartInput,
     TraceNodeStatus,
     TraceNodeType,
+    TraceRunFinishInput,
 )
 from apps.trace.ports import (
     DisabledTraceExporter,
@@ -47,6 +48,7 @@ __all__ = [
     "TraceNodeStartInput",
     "TraceNodeStatus",
     "TraceNodeType",
+    "TraceRunFinishInput",
     "TraceRepository",
     "TraceWriteError",
     "agent_attributes",

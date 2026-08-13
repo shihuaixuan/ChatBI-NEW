@@ -18,6 +18,7 @@ from apps.trace import (
     TraceNodeFinishInput,
     TraceNodeRef,
     TraceNodeStartInput,
+    TraceRunFinishInput,
     TraceWriteError,
 )
 
@@ -70,6 +71,18 @@ class ChatBITraceRepository:
             except Exception as exc:
                 session.rollback()
                 raise TraceWriteError("TRACE_NODE_FINISH_FAILED") from exc
+
+    def finish_run_root(self, data: TraceRunFinishInput) -> None:
+        with self._session_factory() as session:
+            try:
+                agent_trace_repository.finish_run_root(session, data)
+                session.commit()
+            except TraceError:
+                session.rollback()
+                raise
+            except Exception as exc:
+                session.rollback()
+                raise TraceWriteError("TRACE_ROOT_FINISH_FAILED") from exc
 
     def mark_run_partial(self, run_id: int, *, lost_nodes: int = 1) -> None:
         with self._session_factory() as session:

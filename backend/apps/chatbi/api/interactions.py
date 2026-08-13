@@ -118,6 +118,15 @@ def _get_owned_agent_run(
     return run, run_id
 
 
+def _can_view_agent_trace_detail(current_user: CurrentUser) -> bool:
+    """首版调试详情仅对系统管理员和工作空间管理员开放。"""
+
+    return bool(
+        getattr(current_user, "isAdmin", False)
+        or int(getattr(current_user, "weight", 0) or 0) > 0
+    )
+
+
 @router.get(
     "/record/{record_id}/trace",
     response_model=AgentTraceSnapshot,
@@ -131,7 +140,15 @@ async def agent_trace(
 
     run, run_id = _get_owned_agent_run(session, current_user, record_id)
     nodes = agent_trace_repository.list_run_nodes(session, run_id)
-    return project_agent_trace(run, nodes)
+    return project_agent_trace(
+        run,
+        nodes,
+        detail_access=(
+            "allowed"
+            if _can_view_agent_trace_detail(current_user)
+            else "summary_only"
+        ),
+    )
 
 
 @router.get(
@@ -147,6 +164,8 @@ async def agent_trace_node_detail(
     """返回一个已授权节点的摘要和脱敏输入输出正文。"""
 
     run, run_id = _get_owned_agent_run(session, current_user, record_id)
+    if not _can_view_agent_trace_detail(current_user):
+        raise HTTPException(status_code=403, detail="Agent trace detail forbidden")
     node = agent_trace_repository.get_run_node(session, run_id, node_id)
     if node is None:
         raise HTTPException(status_code=404, detail="Agent trace node not found")

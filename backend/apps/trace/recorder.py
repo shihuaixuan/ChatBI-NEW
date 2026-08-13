@@ -22,6 +22,7 @@ from apps.trace.models import (
     TraceNodeStartInput,
     TraceNodeStatus,
     TraceNodeType,
+    TraceRunFinishInput,
 )
 from apps.trace.ports import (
     DisabledTraceExporter,
@@ -125,6 +126,35 @@ class AgentTraceRecorder:
 
         frame = _active_frame.get()
         return frame.node.run_id if frame is not None else None
+
+    def finish_run(
+        self,
+        run_id: int,
+        status: TraceNodeStatus,
+        *,
+        output_summary: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_category: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        """在所有调用节点关闭后，将 Run 根节点收敛到业务终态。"""
+
+        if status in {TraceNodeStatus.RUNNING, TraceNodeStatus.WAITING}:
+            raise TraceContractError("TRACE_RUN_TERMINAL_STATUS_REQUIRED")
+        try:
+            self._repository.finish_run_root(
+                TraceRunFinishInput(
+                    run_id=run_id,
+                    status=status,
+                    finished_at=datetime.now(),
+                    output_summary=redact_trace_mapping(output_summary),
+                    error_code=error_code,
+                    error_category=error_category,
+                    error=str(redact_trace_payload(error)) if error else None,
+                )
+            )
+        except TraceError as exc:
+            self._record_trace_failure(run_id, "agent_run", exc)
 
     @contextmanager
     def node(
@@ -398,6 +428,9 @@ class DisabledTraceRepository:
             return self._new_ref(data)
 
     def finish_node(self, data: TraceNodeFinishInput) -> None:
+        return None
+
+    def finish_run_root(self, data: TraceRunFinishInput) -> None:
         return None
 
     def mark_run_partial(self, run_id: int, *, lost_nodes: int = 1) -> None:

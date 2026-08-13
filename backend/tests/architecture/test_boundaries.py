@@ -878,6 +878,21 @@ def test_public_tools_do_not_read_chatbi_state_or_build_services_at_runtime():
         assert f"class {class_name}" not in interaction_source
 
 
+def test_agent_production_code_uses_recorder_without_legacy_trace_entry():
+    """Agent 业务代码只能记录节点，不能恢复旧 AgentTracer 或直接 Span 双写。"""
+
+    agent_directory = BACKEND_DIR__query / "apps/chatbi/orchestration/agent"
+    for path in agent_directory.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert "AgentTracer" not in source
+        assert ".span(" not in source
+
+    trace_details = (
+        BACKEND_DIR__query / "apps/chatbi/services/trace_projection.py"
+    ).read_text(encoding="utf-8")
+    assert "timeline" not in trace_details.lower()
+
+
 def test_graph_sql_adapter_does_not_maintain_second_execution_chain():
     path = BACKEND_DIR__query / "apps/chatbi/orchestration/graph/capabilities/adapters/sql.py"
     source = path.read_text(encoding="utf-8")

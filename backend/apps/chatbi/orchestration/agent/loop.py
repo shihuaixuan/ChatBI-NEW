@@ -8,7 +8,7 @@ LLM 没有：越出白名单、绕过守护、超出预算（BudgetGuard 硬/软
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from typing import Any
 
 from apps.chatbi.errors import QuestionUnderstandingError, SemanticClarificationError
@@ -67,6 +67,8 @@ class AgentLoop:
     def run(self, run: ChatbiAgentRun, record: Any) -> Iterator[RenderEvent]:
         """在完整生成器生命周期内记录一次 Agent 调用。"""
 
+        terminal_status: TraceNodeStatus | None = None
+        terminal_event: RenderEvent | None = None
         with self.recorder.node(
             TraceNodeSpec(
                 run_id=run.id or 0,
@@ -82,7 +84,24 @@ class AgentLoop:
             ),
             input_data={"record_id": record.id or 0, "chat_id": run.chat_id},
         ) as node:
-            yield from _trace_terminal_result(self._run(run, record), node)
+            terminal_status, terminal_event = yield from _trace_terminal_result(
+                self._run(run, record),
+                node,
+            )
+        if (
+            terminal_status is not None
+            and terminal_status is not TraceNodeStatus.WAITING
+        ):
+            self.recorder.finish_run(
+                run.id or 0,
+                terminal_status,
+                output_summary={"run_status": run.status},
+                error_code=run.error_class,
+                error_category="agent_run" if run.error else None,
+                error=run.error,
+            )
+        if terminal_event is not None:
+            yield terminal_event
 
     def _run(self, run: ChatbiAgentRun, record: Any) -> Iterator[RenderEvent]:
         state = self.state_factory.create(run, record)
@@ -114,6 +133,8 @@ class AgentLoop:
 
         clarification_id = getattr(clarification, "id", None)
         resume_key = clarification_id or clarification.tool_call_id or "pending"
+        terminal_status: TraceNodeStatus | None = None
+        terminal_event: RenderEvent | None = None
         with self.recorder.node(
             TraceNodeSpec(
                 run_id=run.id or 0,
@@ -130,10 +151,24 @@ class AgentLoop:
             ),
             input_data={"record_id": record.id or 0, "chat_id": run.chat_id},
         ) as node:
-            yield from _trace_terminal_result(
+            terminal_status, terminal_event = yield from _trace_terminal_result(
                 self._resume(run, record, clarification, answer_text),
                 node,
             )
+        if (
+            terminal_status is not None
+            and terminal_status is not TraceNodeStatus.WAITING
+        ):
+            self.recorder.finish_run(
+                run.id or 0,
+                terminal_status,
+                output_summary={"run_status": run.status},
+                error_code=run.error_class,
+                error_category="agent_run" if run.error else None,
+                error=run.error,
+            )
+        if terminal_event is not None:
+            yield terminal_event
 
     def _resume(
         self,
@@ -598,20 +633,37 @@ def _allows_direct_answer(state: AgentRuntimeState) -> bool:
 def _trace_terminal_result(
     events: Iterator[RenderEvent],
     node: TraceNodeHandle,
-) -> Iterator[RenderEvent]:
-    """依据产品终止事件标记调用节点，不让 Trace 反向控制事件流。"""
+) -> Generator[
+    RenderEvent,
+    None,
+    tuple[TraceNodeStatus | None, RenderEvent | None],
+]:
+    """暂存终止事件，保证调用节点和 Run 根节点先完成持久化。"""
 
+    terminal_status: TraceNodeStatus | None = None
+    terminal_event: RenderEvent | None = None
     for event in events:
+        is_terminal_event = True
         if event.domain == "run.failed":
             node.set_attribute("gen_ai.agent.result", "failed")
             node.set_status(TraceNodeStatus.FAILED)
+            terminal_status = TraceNodeStatus.FAILED
         elif event.domain == "run.finished":
             node.set_attribute("gen_ai.agent.result", "finished")
             node.set_status(TraceNodeStatus.SUCCEEDED)
+            terminal_status = TraceNodeStatus.SUCCEEDED
         elif event.domain == "run.cancelled":
             node.set_attribute("gen_ai.agent.result", "cancelled")
             node.set_status(TraceNodeStatus.CANCELLED)
+            terminal_status = TraceNodeStatus.CANCELLED
         elif event.domain == "clarification.required":
             node.set_attribute("gen_ai.agent.result", "waiting")
             node.set_status(TraceNodeStatus.WAITING)
+            terminal_status = TraceNodeStatus.WAITING
+        else:
+            is_terminal_event = False
+        if is_terminal_event:
+            terminal_event = event
+            continue
         yield event
+    return terminal_status, terminal_event
