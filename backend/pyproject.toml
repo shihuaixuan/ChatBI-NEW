@@ -54,7 +54,8 @@ dependencies = [
     "sqlglot>=28.6.0",
     "numpy==2.3.5",
     "pyhive[hive_pure_sasl]>=0.7.0",
-    "thrift-sasl"
+    "thrift-sasl",
+    "jionlp==1.5.29"
 ]
 
 [project.optional-dependencies]

@@ -75,7 +75,7 @@ class IntentRecognitionOutput(
     resolved_temporal_plan: dict[str, Any] | None = None
     temporal_interpretation_source: (
         Literal[
-            "legacy_rule",
+            "jionlp",
             "model",
             "user_confirmation",
         ]

@@ -526,7 +526,7 @@ def test_question_adapter_recognizes_intent_with_split_subtasks_and_program_merg
         "time_range": {
             "raw": "近 30 天",
             "value_status": "provided",
-            "interpretation_source": "legacy_rule",
+            "interpretation_source": "jionlp",
             "normalized": {
                 "kind": "absolute_range",
                 "start": "2026-07-02",
@@ -546,7 +546,7 @@ def test_question_adapter_recognizes_intent_with_split_subtasks_and_program_merg
         "ambiguous_slots": [],
         "conflict_slots": [],
         "validation": DEFAULT_VALIDATION,
-        "temporal_interpretation_source": "legacy_rule",
+        "temporal_interpretation_source": "jionlp",
     }
 
 
@@ -1110,7 +1110,7 @@ def test_question_adapter_intent_fallback_extracts_dimension_slot_and_time_range
     assert result["time_range"] == {
         "raw": "今天",
         "value_status": "provided",
-        "interpretation_source": "legacy_rule",
+            "interpretation_source": "jionlp",
         "normalized": {
             "kind": "absolute_range",
             "start": "2026-07-31",
@@ -1119,7 +1119,7 @@ def test_question_adapter_intent_fallback_extracts_dimension_slot_and_time_range
             "source_raw": "今天",
         },
     }
-    assert result["temporal_interpretation_source"] == "legacy_rule"
+    assert result["temporal_interpretation_source"] == "jionlp"
 
 
 def test_question_adapter_intent_fallback_extracts_explicit_month_and_topn():

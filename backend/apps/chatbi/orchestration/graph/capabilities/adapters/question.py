@@ -329,7 +329,7 @@ class QuestionAdapter:
             temporal_context=ctx.temporal_context,
         )
         if projected_payload["time_range"].get("value_status") == "provided":
-            projected_payload["temporal_interpretation_source"] = "legacy_rule"
+            projected_payload["temporal_interpretation_source"] = "jionlp"
         output = IntentRecognitionOutput.model_validate(projected_payload)
         validation = graph_contracts.validate_intent(
             output.model_dump(mode="json"),

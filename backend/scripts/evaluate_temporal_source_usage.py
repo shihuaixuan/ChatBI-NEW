@@ -15,7 +15,7 @@ from sqlmodel import Session, col, select
 from apps.chatbi.models.orm.agent_run import ChatbiAgentRun
 from common.core.db import engine
 
-_KNOWN_SOURCES = {"legacy_rule", "model", "user_confirmation"}
+_KNOWN_SOURCES = {"jionlp", "legacy_rule", "model", "user_confirmation"}
 
 
 def load_temporal_source_counts(
@@ -76,6 +76,7 @@ def build_temporal_source_report(
         for source in (*sorted(_KNOWN_SOURCES), "unrecorded", "invalid_source")
     )
     legacy_count = source_counts.get("legacy_rule", 0)
+    jionlp_count = source_counts.get("jionlp", 0)
     return {
         "generated_at": datetime.now().isoformat(),
         "tenant_id": tenant_id,
@@ -85,6 +86,9 @@ def build_temporal_source_report(
         "source_counts": source_counts,
         "legacy_rule_rate": (
             legacy_count / interpreted_count if interpreted_count else None
+        ),
+        "jionlp_rate": (
+            jionlp_count / interpreted_count if interpreted_count else None
         ),
     }
 

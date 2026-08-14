@@ -110,7 +110,7 @@ class TimeRange(BaseModel):
     normalized: dict[str, Any] | None = None
     interpretation_source: (
         Literal[
-            "legacy_rule",
+            "jionlp",
             "model",
             "user_confirmation",
         ]
