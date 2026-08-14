@@ -290,25 +290,11 @@ def test_metric_projector_snapshot_keeps_relationships_structured():
     }
     assert _unit_snapshot(metric) == [
         {
-            "unit_key": "definition",
-            "content_kind": "definition",
-            "title": "销售额定义",
-            "content": "指标定义：支付成功订单的含税金额",
-            "contextual_text": "数据集：经营分析",
-            "metadata": {
-                "asset_type": "METRIC",
-                "asset_id": 100,
-                "dataset_id": 20,
-                "biz_name": "sales_amount",
-                "model_id": 10,
-            },
-        },
-        {
-            "unit_key": "identity",
-            "content_kind": "identity",
-            "title": "销售额",
-            "content": "指标名称：销售额\n指标别名：GMV、成交额",
-            "contextual_text": "数据集：经营分析",
+            "unit_key": "aliases",
+            "content_kind": "aliases",
+            "title": "销售额别名",
+            "content": "GMV,成交额",
+            "contextual_text": "",
             "metadata": {
                 "asset_type": "METRIC",
                 "asset_id": 100,
@@ -319,19 +305,31 @@ def test_metric_projector_snapshot_keeps_relationships_structured():
             },
         },
         {
-            "unit_key": "usage",
-            "content_kind": "usage",
-            "title": "销售额用法",
-            "content": "默认聚合：SUM\n指标形态：MEASURE",
-            "contextual_text": "数据集：经营分析",
+            "unit_key": "biz_name",
+            "content_kind": "biz_name",
+            "title": "销售额业务名",
+            "content": "sales_amount",
+            "contextual_text": "",
             "metadata": {
                 "asset_type": "METRIC",
                 "asset_id": 100,
                 "dataset_id": 20,
                 "biz_name": "sales_amount",
                 "model_id": 10,
-                "default_agg": "SUM",
-                "related_dimension_ids": [200],
+            },
+        },
+        {
+            "unit_key": "name",
+            "content_kind": "name",
+            "title": "销售额",
+            "content": "销售额",
+            "contextual_text": "",
+            "metadata": {
+                "asset_type": "METRIC",
+                "asset_id": 100,
+                "dataset_id": 20,
+                "biz_name": "sales_amount",
+                "model_id": 10,
                 "same_model_dimension_ids": [201],
                 "joinable_model_ids": [11],
                 "compatible_dimension_ids": [200, 201],
@@ -345,6 +343,11 @@ def test_metric_projector_snapshot_keeps_relationships_structured():
                 ],
             },
         },
+    ]
+    assert [unit.embedding_text for unit in metric.units] == [
+        "GMV,成交额",
+        "sales_amount",
+        "销售额",
     ]
 
 
@@ -523,7 +526,7 @@ def test_schema_builder_exposes_sensitive_level_to_the_single_projection_gate():
     }
 
 
-def test_content_hash_is_deterministic_and_alias_change_only_rebuilds_identity_unit():
+def test_content_hash_is_deterministic_and_alias_change_only_rebuilds_alias_unit():
     before_schema = _schema()
     before = _by_type(_project(before_schema), RetrievalResourceType.METRIC)
     repeated = _by_type(_project(before_schema), RetrievalResourceType.METRIC)
@@ -536,17 +539,17 @@ def test_content_hash_is_deterministic_and_alias_change_only_rebuilds_identity_u
     delta = ProjectedResourceDelta.between(before, after)
 
     assert delta.resource_changed is True
-    assert delta.upsert_unit_keys == ("identity",)
-    assert delta.reembed_unit_keys == ("identity",)
+    assert delta.upsert_unit_keys == ("aliases",)
+    assert delta.reembed_unit_keys == ("aliases",)
     assert delta.delete_unit_keys == ()
-    assert delta.unchanged_unit_keys == ("definition", "usage")
+    assert delta.unchanged_unit_keys == ("biz_name", "name")
 
     version_only = _by_type(_project(before_schema, source_version="schema-8"), RetrievalResourceType.METRIC)
     version_delta = ProjectedResourceDelta.between(before, version_only)
     assert version_delta.resource_changed is True
     assert version_delta.upsert_unit_keys == ()
     assert version_delta.reembed_unit_keys == ()
-    assert version_delta.unchanged_unit_keys == ("definition", "identity", "usage")
+    assert version_delta.unchanged_unit_keys == ("aliases", "biz_name", "name")
 
 
 def test_relationship_metadata_change_updates_unit_without_reembedding_text():
@@ -558,9 +561,9 @@ def test_relationship_metadata_change_updates_unit_without_reembedding_text():
 
     delta = ProjectedResourceDelta.between(before, after)
 
-    assert delta.upsert_unit_keys == ("usage",)
+    assert delta.upsert_unit_keys == ("name",)
     assert delta.reembed_unit_keys == ()
-    assert delta.unchanged_unit_keys == ("definition", "identity")
+    assert delta.unchanged_unit_keys == ("aliases", "biz_name")
 
 
 def test_value_projection_requires_governance_common_flag_or_explicit_low_cardinality_policy():

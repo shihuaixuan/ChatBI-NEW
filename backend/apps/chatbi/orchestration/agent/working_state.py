@@ -14,6 +14,7 @@ CRITICAL_SEMANTIC_STATUSES = frozenset(
         "dimension_ambiguous",
         "semantic_ambiguous",
         "time_dimension_not_configured",
+        "CLARIFICATION_REQUIRED",
     }
 )
 
@@ -22,9 +23,13 @@ def semantic_status(context: dict[str, Any]) -> str | None:
     """从语义包和可信范围中读取统一的语义决策状态。"""
 
     package = context.get("semantic_package")
+    scope = context.get("semantic_scope")
+    if isinstance(scope, dict) and scope.get("semantic_enforcement") == "STRICT":
+        plan = scope.get("query_plan")
+        if isinstance(plan, dict) and plan.get("validation_status"):
+            return str(plan["validation_status"])
     if isinstance(package, dict) and package.get("status"):
         return str(package["status"])
-    scope = context.get("semantic_scope")
     if isinstance(scope, dict) and scope.get("decision_status"):
         return str(scope["decision_status"])
     return None
@@ -40,6 +45,16 @@ def has_resolved_semantics(context: dict[str, Any]) -> bool:
     """只有服务端明确标记为可执行的语义范围才允许进入编译。"""
 
     scope = context.get("semantic_scope")
+    if isinstance(scope, dict) and scope.get("semantic_enforcement") == "STRICT":
+        plan = scope.get("query_plan")
+        report = scope.get("validation_report")
+        return bool(
+            isinstance(plan, dict)
+            and plan.get("validation_status") == "PROVEN"
+            and plan.get("fingerprint")
+            and isinstance(report, dict)
+            and report.get("status") == "PROVEN"
+        )
     return bool(
         isinstance(scope, dict)
         and is_compilation_decision_executable(scope.get("decision_status"))
@@ -120,6 +135,8 @@ def project_working_state(
             "status": semantic_status(context),
             "resolved": has_resolved_semantics(context),
             "ambiguity_required": has_critical_ambiguity(context),
+            "plan_fingerprint": _semantic_plan_fingerprint(context),
+            "validation_reason_codes": _semantic_validation_reason_codes(context),
         },
         "artifacts": {
             "semantic_scope_ready": bool(context.get("semantic_scope")),
@@ -221,6 +238,20 @@ def _tool_progress(
     if tool_name in milestones:
         return milestones[tool_name]
     return "information_obtained" if state_changed else "observation_obtained"
+
+
+def _semantic_plan_fingerprint(context: dict[str, Any]) -> str | None:
+    scope = context.get("semantic_scope")
+    plan = scope.get("query_plan") if isinstance(scope, dict) else None
+    value = plan.get("fingerprint") if isinstance(plan, dict) else None
+    return str(value) if value else None
+
+
+def _semantic_validation_reason_codes(context: dict[str, Any]) -> list[str]:
+    scope = context.get("semantic_scope")
+    report = scope.get("validation_report") if isinstance(scope, dict) else None
+    codes = report.get("reason_codes") if isinstance(report, dict) else []
+    return [str(code) for code in codes] if isinstance(codes, list) else []
 
 
 __all__ = [

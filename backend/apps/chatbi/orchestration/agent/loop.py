@@ -587,6 +587,23 @@ def _trace_runtime_snapshot(state: AgentRuntimeState) -> dict[str, Any]:
         "state_revision": int(context.get("state_revision") or 0),
         "state_keys": sorted(context),
         "has_semantic_scope": isinstance(context.get("semantic_scope"), dict),
+        "semantic_enforcement": (
+            context.get("semantic_scope", {}).get("semantic_enforcement")
+            if isinstance(context.get("semantic_scope"), dict)
+            else None
+        ),
+        "semantic_plan_fingerprint": (
+            context.get("semantic_scope", {}).get("query_plan", {}).get("fingerprint")
+            if isinstance(context.get("semantic_scope"), dict)
+            and isinstance(context.get("semantic_scope", {}).get("query_plan"), dict)
+            else None
+        ),
+        "semantic_plan_status": (
+            context.get("semantic_scope", {}).get("query_plan", {}).get("validation_status")
+            if isinstance(context.get("semantic_scope"), dict)
+            and isinstance(context.get("semantic_scope", {}).get("query_plan"), dict)
+            else None
+        ),
         "has_compiled_sql": bool(context.get("compiled_sql")),
         "has_validated_sql": bool(context.get("validated_sql")),
         "has_execution": isinstance(context.get("last_execution"), dict),

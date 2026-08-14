@@ -15,6 +15,9 @@ from apps.chatbi.orchestration.agent.messages import (
 )
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tool_visibility import visible_tool_names
+from apps.chatbi.orchestration.agent.tools.interaction import (
+    prepare_semantic_clarification_args,
+)
 from apps.chatbi.orchestration.agent.working_state import (
     executable_sql,
     project_working_state,
@@ -249,18 +252,23 @@ class AgentReasoner:
             "该状态由服务端根据可信工具结果生成。请优先选择 recommended 动作；"
             "只有新动作能够补充缺失信息或修正上一错误时，才进行额外探索。"
         )
+        dynamic_messages = []
+        if state.runtime_context is not None:
+            dynamic_messages.append(state.runtime_context)
         if mode == "soft":
-            return [
-                system,
-                AgentMessage.user(
-                    "<system-reminder>预算接近上限。已有 SQL 时立即 execute_sql，"
-                    "已有执行结果时立即 finish；若关键歧义未消可 clarify；"
-                    "不要启动新的检索或 SQL 探索。</system-reminder>"
-                ),
-                working_state,
-                *state.messages,
-            ]
-        return [system, working_state, *state.messages]
+            dynamic_messages.extend(
+                [
+                    AgentMessage.user(
+                        "<system-reminder>预算接近上限。已有 SQL 时立即 execute_sql，"
+                        "已有执行结果时立即 finish；若关键歧义未消可 clarify；"
+                        "不要启动新的检索或 SQL 探索。</system-reminder>"
+                    ),
+                    working_state,
+                ]
+            )
+        else:
+            dynamic_messages.append(working_state)
+        return [system, *state.messages, *dynamic_messages]
 
     def available_tool_names(
         self,
@@ -303,7 +311,33 @@ class AgentReasoner:
                 args=corrected_args,
                 call_id=call.call_id,
             )
+        if call.name == "clarify":
+            clarification = prepare_semantic_clarification_args(
+                state.context.state
+            )
+            if clarification is not None:
+                # 语义歧义的槽位和候选只能来自服务端决策，模型只负责选择动作。
+                call = ToolCall(
+                    name=call.name,
+                    args=clarification.model_dump(mode="json"),
+                    call_id=call.call_id,
+                )
         prepared = self._registry.prepare_call(call, state.context)
+        if prepared.name == "compile_semantic_sql":
+            scope = state.context.state.get("semantic_scope")
+            query_plan = scope.get("query_plan") if isinstance(scope, dict) else None
+            if (
+                isinstance(scope, dict)
+                and scope.get("semantic_enforcement") == "STRICT"
+                and isinstance(query_plan, dict)
+                and query_plan.get("fingerprint")
+            ):
+                # 严格模式只把当前可信计划的指纹交给工具，模型参数不参与语义绑定。
+                return ToolCall(
+                    name=prepared.name,
+                    args={"plan_fingerprint": query_plan["fingerprint"]},
+                    call_id=prepared.call_id,
+                )
         sql = executable_sql(state.context.state)
         if prepared.name != "execute_sql" or sql is None:
             return prepared

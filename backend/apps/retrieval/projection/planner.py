@@ -55,8 +55,7 @@ class SemanticBindingQueryPlanner:
                 )
             )
 
-        # 维度值是用户提供的查询字面值，不是需要召回的语义资产。
-        # 这里只检索维度字段；字段绑定后由 payload 投影保留原值并生成过滤条件。
+        # 上游已经确定维度名称和维度值；这里检索具体维度资产，重复名称由指标模型关系消歧。
         seen_dimensions: set[tuple[str, str]] = set()
         dimension_index = 0
         for slot in request.intent.dimension_slots:

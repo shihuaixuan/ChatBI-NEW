@@ -19,7 +19,11 @@ from apps.chatbi.orchestration.agent.tools.core import (
     FinishArgs,
     FinishTool,
 )
-from apps.chatbi.orchestration.agent.tools.interaction import ClarifyArgs, ClarifyTool
+from apps.chatbi.orchestration.agent.tools.interaction import (
+    ClarifyArgs,
+    ClarifyTool,
+    prepare_semantic_clarification_args,
+)
 from apps.datasource import (
     DatasourceQueryData,
     DatasourceQueryErrorCategory,
@@ -675,6 +679,137 @@ def test_semantic_clarification_infers_binding_from_exact_candidate_name():
             "model_id": 246,
         }
     ]
+
+
+def test_semantic_clarification_args_come_from_authoritative_ambiguity():
+    ctx = _ambiguous_metric_clarification_context()
+
+    args = prepare_semantic_clarification_args(ctx.state)
+
+    assert args is not None
+    assert args.question == "“总下单客户数”存在多个可执行口径，请选择本次要查询的口径。"
+    assert [option.model_dump(mode="json") for option in args.options] == [
+        {
+            "label": "总下单客户数",
+            "value": "METRIC:274:246",
+            "asset_id": 274,
+            "bindings": [
+                {
+                    "subquery_id": "metric:1",
+                    "asset_type": "METRIC",
+                    "asset_id": 274,
+                    "model_id": 246,
+                }
+            ],
+        }
+    ]
+
+
+def test_semantic_clarification_combines_compatible_metric_and_dimension():
+    metric_10 = AssetReference(
+        asset_type=RetrievalResourceType.METRIC,
+        asset_id=100,
+        model_id=10,
+    )
+    metric_11 = AssetReference(
+        asset_type=RetrievalResourceType.METRIC,
+        asset_id=101,
+        model_id=11,
+    )
+    dimension_10 = AssetReference(
+        asset_type=RetrievalResourceType.DIMENSION,
+        asset_id=200,
+        model_id=10,
+    )
+    dimension_11 = AssetReference(
+        asset_type=RetrievalResourceType.DIMENSION,
+        asset_id=201,
+        model_id=11,
+    )
+    bundle = RetrievalBundle(
+        request_id="combined-clarification",
+        bindings=RetrievalBindings(),
+        decision=RetrievalDecision(
+            status=RetrievalDecisionStatus.AMBIGUOUS,
+            slot_decisions=[
+                RetrievalSlotDecision(
+                    subquery_id="metric:1",
+                    purpose=RetrievalPurpose.METRIC,
+                    status=RetrievalDecisionStatus.AMBIGUOUS,
+                    candidate_assets=[metric_10, metric_11],
+                ),
+                RetrievalSlotDecision(
+                    subquery_id="dimension:1",
+                    purpose=RetrievalPurpose.DIMENSION,
+                    status=RetrievalDecisionStatus.AMBIGUOUS,
+                    candidate_assets=[dimension_10, dimension_11],
+                ),
+            ],
+            ambiguities=[
+                RetrievalAmbiguity(
+                    subquery_id="metric:1",
+                    reason_code="TOP1_TOP2_GAP_BELOW_THRESHOLD",
+                    candidate_assets=[metric_10, metric_11],
+                ),
+                RetrievalAmbiguity(
+                    subquery_id="dimension:1",
+                    reason_code="MULTIPLE_IDENTITY_MATCHES",
+                    candidate_assets=[dimension_10, dimension_11],
+                ),
+            ],
+        ),
+        diagnostics=RetrievalDiagnostics(
+            strategy_version="semantic-binding",
+            index_generation="generation-1",
+        ),
+    )
+    state = {
+        "semantic_bundle": bundle.model_dump(mode="json"),
+        "semantic_payload": {
+            "candidate_groups": {
+                "metrics": [
+                    {
+                        "asset_type": "METRIC",
+                        "asset_id": 100,
+                        "model_id": 10,
+                        "display_name": "销售商品件数",
+                    },
+                    {
+                        "asset_type": "METRIC",
+                        "asset_id": 101,
+                        "model_id": 11,
+                        "display_name": "订单金额",
+                    },
+                ],
+                "dimensions": [
+                    {
+                        "asset_type": "DIMENSION",
+                        "asset_id": 200,
+                        "model_id": 10,
+                        "display_name": "档口ID",
+                    },
+                    {
+                        "asset_type": "DIMENSION",
+                        "asset_id": 201,
+                        "model_id": 11,
+                        "display_name": "档口ID",
+                    },
+                ],
+            }
+        },
+    }
+
+    args = prepare_semantic_clarification_args(state)
+
+    assert args is not None
+    assert [option.label for option in args.options] == [
+        "销售商品件数",
+        "订单金额",
+    ]
+    assert [
+        [(binding.asset_id, binding.model_id) for binding in option.bindings]
+        for option in args.options
+    ] == [[(100, 10), (200, 10)], [(101, 11), (201, 11)]]
 
 
 def test_semantic_clarification_rejects_unmapped_option():

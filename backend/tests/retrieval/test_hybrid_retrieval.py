@@ -121,6 +121,52 @@ def test_unique_approved_alias_uses_fast_path_without_dense_call():
     assert statuses[RetrievalChannel.DENSE] == RetrievalChannelStatus.SKIPPED
 
 
+class _QueryOnlyEmbeddingProvider:
+    provider = "test"
+    model = "query-only"
+    dimension = 1024
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def embed_query(self, text: str) -> list[float]:
+        self.queries.append(text)
+        return [1.0] + [0.0] * 1023
+
+
+class _DenseStore:
+    def __init__(self) -> None:
+        self.query_vectors: list[list[float]] = []
+
+    def search_exact(self, _request, _subquery, _limit):
+        return []
+
+    def search_alias(self, _request, _subquery, _limit):
+        return []
+
+    def search_lexical(self, _request, _subquery, _limit):
+        return []
+
+    def search_dense(self, _request, _subquery, vector, _limit):
+        self.query_vectors.append(vector)
+        return []
+
+
+def test_dense_query_only_embeds_question_and_searches_persisted_index():
+    provider = _QueryOnlyEmbeddingProvider()
+    store = _DenseStore()
+
+    SemanticBindingHybridRetriever(
+        session=object(),
+        embedding_provider=provider,
+        config=HybridRetrievalConfig(dense_enabled=True),
+        store=store,
+    ).retrieve(_request())
+
+    assert provider.queries == ["GMV"]
+    assert store.query_vectors == [[1.0] + [0.0] * 1023]
+
+
 def test_hybrid_retriever_rejects_legacy_strategy_version():
     request = _request().model_copy(update={"strategy_version": "semantic-binding-v1"})
 

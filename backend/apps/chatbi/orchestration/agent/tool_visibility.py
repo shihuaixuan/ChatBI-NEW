@@ -60,6 +60,15 @@ def visible_tool_names(
     if has_critical_ambiguity(context):
         return _available(("clarify",), available)
 
+    # 严格语义计划未证明时，不允许转入物理表兜底链路。
+    strict_scope = context.get("semantic_scope")
+    if (
+        isinstance(strict_scope, dict)
+        and strict_scope.get("semantic_enforcement") == "STRICT"
+        and not has_resolved_semantics(context)
+    ):
+        return []
+
     if executable_sql(context):
         names = ["execute_sql"]
     elif has_resolved_semantics(context):

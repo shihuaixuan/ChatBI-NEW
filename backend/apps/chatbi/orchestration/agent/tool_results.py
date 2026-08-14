@@ -201,6 +201,22 @@ class ChatBIToolResultProcessor:
                 "metrics": package.get("metrics"),
                 "dimensions": package.get("dimensions"),
                 "tables": package.get("tables"),
+                "semantic_enforcement": scope.get("semantic_enforcement"),
+                "plan_fingerprint": (
+                    (scope.get("query_plan") or {}).get("fingerprint")
+                    if isinstance(scope.get("query_plan"), dict)
+                    else None
+                ),
+                "plan_status": (
+                    (scope.get("query_plan") or {}).get("validation_status")
+                    if isinstance(scope.get("query_plan"), dict)
+                    else None
+                ),
+                "validation_reason_codes": (
+                    (scope.get("validation_report") or {}).get("reason_codes")
+                    if isinstance(scope.get("validation_report"), dict)
+                    else [],
+                ),
             },
         )
 

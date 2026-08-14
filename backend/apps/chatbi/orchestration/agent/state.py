@@ -31,6 +31,7 @@ class AgentRuntimeState:
     cancellation: CancellationSignal = field(default_factory=NeverCancelled)
     chatbi_budget: ChatBIBudgetPolicy = field(default_factory=ChatBIBudgetPolicy)
     system: AgentMessage | None = None
+    runtime_context: AgentMessage | None = None
 
     def require_system(self) -> AgentMessage:
         """进入规划循环前必须已经构造系统消息。"""

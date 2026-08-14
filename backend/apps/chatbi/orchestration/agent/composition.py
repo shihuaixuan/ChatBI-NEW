@@ -67,12 +67,17 @@ def build_agent_tool_registry(
     physical_schema_service: PhysicalSchemaService,
     term_query_service: SemanticTermQueryService,
     sql_example_query_service: SQLExampleQueryService,
+    semantic_schema_provider: DatasetSchemaProvider | None = None,
 ) -> ToolRegistry:
     """装配 Agent 默认工具集合及执行中间件。"""
 
     registry = ToolRegistry(middlewares=default_middlewares())
     registry.register(
-        SearchSemanticAssetsTool(semantic_retrieval_service, query_service)
+        SearchSemanticAssetsTool(
+            semantic_retrieval_service,
+            query_service,
+            semantic_schema_provider,
+        )
     )
     registry.register(CompileSemanticSqlTool(semantic_query_service, query_service))
     registry.register(FinishTool())
@@ -151,6 +156,7 @@ def build_agent_loop(
         physical_schema_service=resolved_physical_schema_service,
         term_query_service=resolved_term_query_service,
         sql_example_query_service=resolved_sql_example_query_service,
+        semantic_schema_provider=resolved_semantic_schema_provider,
     )
     resolved_reasoner = reasoner or AgentReasoner(
         resolved_config,

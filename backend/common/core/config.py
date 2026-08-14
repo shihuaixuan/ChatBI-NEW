@@ -120,6 +120,13 @@ class Settings(BaseSettings):
     RETRIEVAL_EMBEDDING_TOP_K: int = 20
     RETRIEVAL_EMBEDDING_ALLOW_LEXICAL_FALLBACK: bool = True
 
+    SILICONFLOW_API_KEY: str = ""
+    RETRIEVAL_RERANK_ENABLED: bool = True
+    RETRIEVAL_RERANK_API_BASE_URL: str = "https://api.siliconflow.cn/v1"
+    RETRIEVAL_RERANK_API_KEY: str = ""
+    RETRIEVAL_RERANK_MODEL: str = "BAAI/bge-reranker-v2-m3"
+    RETRIEVAL_RERANK_TIMEOUT_SECONDS: float = 30.0
+
     RETRIEVAL_QUERY_TIMEOUT_MS: int = 1500
 
     # Agent 问数链路（chatbi/orchestration/agent，LLM 自主规划）

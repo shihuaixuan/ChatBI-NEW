@@ -21,7 +21,7 @@ from apps.retrieval.models.orm import (
     RetrievalSourceModel,
     RetrievalUnitModel,
 )
-from apps.retrieval.projection.contracts import ProjectedResource
+from apps.retrieval.projection.contracts import ProjectedResource, unit_embedding_text
 
 
 class BatchEmbeddingProvider(Protocol):
@@ -1137,10 +1137,11 @@ def _required_id(value: int | None, entity: str) -> int:
 
 
 def _unit_embedding_text(unit: RetrievalUnitModel) -> str:
-    return "\n".join(
-        part
-        for part in [unit.title, unit.content, unit.contextual_text]
-        if part
+    return unit_embedding_text(
+        content_kind=unit.content_kind,
+        title=unit.title,
+        content=unit.content,
+        contextual_text=unit.contextual_text,
     )
 __all__ = [
     "BatchEmbeddingProvider",

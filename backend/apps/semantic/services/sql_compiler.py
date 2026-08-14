@@ -86,8 +86,10 @@ class SemanticSQLCompiler:
                 metric_ids=[item.metric_id for item in plan.metrics],
                 dimension_ids=dimension_ids,
                 slots={"filters": filters},
+                order_by=list(plan.order_by),
+                limit=plan.limit,
                 time_bucket=time_bucket,
-                select_mode="aggregate",
+                select_mode=str(plan.query_shape.get("select_mode") or "aggregate"),
             )
         )
         expected_metric_ids = [item.metric_id for item in plan.metrics]

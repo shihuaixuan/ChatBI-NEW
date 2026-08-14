@@ -244,50 +244,42 @@ class SemanticSourceProjector:
         relationship_metadata = relationships.for_model(metric.model, schema.dimensions)
         common_metadata = _asset_metadata(metric)
         resource_metadata = {**common_metadata, **relationship_metadata}
-        identity_metadata = {**common_metadata, "aliases": aliases}
-        identity = ProjectedUnit.create(
-            unit_key="identity",
-            content_kind="identity",
+        name = ProjectedUnit.create(
+            unit_key="name",
+            content_kind="name",
             title=metric.name,
-            content=_lines(
-                ("指标名称", metric.name),
-                ("指标别名", "、".join(aliases)),
-            ),
-            contextual_text=_dataset_context(schema),
-            metadata=identity_metadata,
+            content=metric.name,
+            metadata={**common_metadata, **relationship_metadata},
         )
-        definition = ProjectedUnit.create(
-            unit_key="definition",
-            content_kind="definition",
-            title=f"{metric.name}定义",
-            content=_lines(("指标定义", metric.description or metric.name)),
-            contextual_text=_dataset_context(schema),
-            metadata=common_metadata,
-        )
-        usage_metadata = {
-            **common_metadata,
-            "default_agg": metric.default_agg,
-            "related_dimension_ids": _related_asset_ids(metric, "DIMENSION"),
-            **relationship_metadata,
-        }
-        usage = ProjectedUnit.create(
-            unit_key="usage",
-            content_kind="usage",
-            title=f"{metric.name}用法",
-            content=_lines(
-                ("默认聚合", metric.default_agg or "未指定"),
-                ("指标形态", _metric_define_type(metric)),
-            ),
-            contextual_text=_dataset_context(schema),
-            metadata=usage_metadata,
-        )
+        units = [name]
+        if aliases:
+            alias_text = ",".join(aliases)
+            units.append(
+                ProjectedUnit.create(
+                    unit_key="aliases",
+                    content_kind="aliases",
+                    title=f"{metric.name}别名",
+                    content=alias_text,
+                    metadata={**common_metadata, "aliases": aliases},
+                )
+            )
+        if metric.biz_name and metric.biz_name != metric.name:
+            units.append(
+                ProjectedUnit.create(
+                    unit_key="biz_name",
+                    content_kind="biz_name",
+                    title=f"{metric.name}业务名",
+                    content=metric.biz_name,
+                    metadata=common_metadata,
+                )
+            )
         return _resource(
             context=context,
             resource_type=RetrievalResourceType.METRIC,
             element=metric,
             title=metric.name,
             metadata=resource_metadata,
-            units=(identity, definition, usage),
+            units=tuple(units),
         )
 
     def _project_dimension(

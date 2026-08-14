@@ -36,7 +36,8 @@ def validate_metric_dependencies(
 
     if metric.quality_status == "INVALID":
         return
-    if facts.known_fields and metric.fields:
+    # 派生指标的 fields 保存的是指标业务标识，不是物理字段；其有效性由 metric_refs 校验。
+    if metric.define_type != "METRIC" and facts.known_fields and metric.fields:
         missing_fields = [
             field for field in metric.fields if field not in facts.known_fields
         ]

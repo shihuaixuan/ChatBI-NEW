@@ -121,6 +121,9 @@ class SemanticQueryPlanningService:
                 },
             ),
             validation_status=SemanticPlanStatus.PROVEN,
+            query_shape=dict(request.query_shape),
+            order_by=tuple(request.order_by),
+            limit=request.limit,
             fingerprint="pending",
         )
         fingerprint = _plan_fingerprint(plan)

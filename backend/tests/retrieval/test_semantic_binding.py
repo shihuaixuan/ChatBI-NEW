@@ -2,9 +2,13 @@
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
-from apps.retrieval.errors import RetrievalConfigurationError
+from apps.retrieval.errors import (
+    RetrievalConfigurationError,
+    RetrievalProviderUnavailableError,
+)
 from apps.retrieval.models.dto import (
     RetrievalBindings,
     RetrievalBundle,
@@ -16,11 +20,16 @@ from apps.retrieval.models.dto import (
     RetrievalRequest,
     RetrievalScope,
 )
+from apps.retrieval.query.policy import RerankCandidate
 from apps.retrieval.query.semantic_binding import (
     SEMANTIC_BINDING_STRATEGY_VERSION,
     SemanticBindingRunner,
 )
-from apps.retrieval.query.semantic_runtime import RetrievalEmbeddingRuntimeConfig
+from apps.retrieval.query.semantic_runtime import (
+    RetrievalEmbeddingRuntimeConfig,
+    RetrievalRerankRuntimeConfig,
+)
+from apps.retrieval.reranking import SiliconFlowReranker
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 
@@ -189,3 +198,113 @@ def test_retrieval_embedding_config_reads_unified_setting_names():
         top_k=20,
         allow_lexical_fallback=False,
     )
+
+
+def test_retrieval_rerank_config_uses_shared_siliconflow_key():
+    runtime_settings = SimpleNamespace(
+        RETRIEVAL_RERANK_ENABLED=True,
+        RETRIEVAL_RERANK_API_BASE_URL="https://api.siliconflow.cn/v1",
+        RETRIEVAL_RERANK_API_KEY="",
+        SILICONFLOW_API_KEY="shared-key",
+        RETRIEVAL_EMBEDDING_API_KEY="embedding-key",
+        RETRIEVAL_RERANK_MODEL="BAAI/bge-reranker-v2-m3",
+        RETRIEVAL_RERANK_TIMEOUT_SECONDS=30.0,
+    )
+
+    config = RetrievalRerankRuntimeConfig.from_settings(runtime_settings)
+
+    assert config.api_key == "shared-key"
+    config.validate()
+
+
+def test_retrieval_rerank_config_requires_api_key_when_enabled():
+    config = RetrievalRerankRuntimeConfig(
+        enabled=True,
+        api_base_url="https://api.siliconflow.cn/v1",
+        api_key="",
+        model="BAAI/bge-reranker-v2-m3",
+        timeout_seconds=30.0,
+    )
+
+    with pytest.raises(RetrievalConfigurationError) as exc_info:
+        config.validate()
+
+    assert exc_info.value.details["reason_code"] == "RERANKER_API_KEY_MISSING"
+
+
+def test_siliconflow_reranker_maps_scores_back_to_candidate_ids(monkeypatch):
+    captured = {}
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "results": [
+                    {"index": 1, "relevance_score": 0.91},
+                    {"index": 0, "relevance_score": 0.42},
+                ]
+            }
+
+    def _post(url, *, headers, json, timeout):
+        captured.update(
+            {"url": url, "headers": headers, "json": json, "timeout": timeout}
+        )
+        return _Response()
+
+    monkeypatch.setattr(httpx, "post", _post)
+    provider = SiliconFlowReranker(
+        api_base_url="https://api.siliconflow.cn/v1/",
+        api_key="secret",
+        model="BAAI/bge-reranker-v2-m3",
+        timeout=3.0,
+    )
+
+    scores = provider.rerank(
+        "销售额",
+        (
+            RerankCandidate(candidate_id="metric-1", title="销售商品件数"),
+            RerankCandidate(candidate_id="metric-2", title="销售订单数"),
+        ),
+    )
+
+    assert [(item.candidate_id, item.score) for item in scores] == [
+        ("metric-2", 0.91),
+        ("metric-1", 0.42),
+    ]
+    assert captured["url"] == "https://api.siliconflow.cn/v1/rerank"
+    assert captured["json"] == {
+        "model": "BAAI/bge-reranker-v2-m3",
+        "query": "销售额",
+        "documents": ["销售商品件数", "销售订单数"],
+        "return_documents": False,
+        "top_n": 2,
+    }
+    assert captured["timeout"] == 3.0
+    assert captured["headers"]["Authorization"] == "Bearer secret"
+
+
+def test_siliconflow_reranker_rejects_incomplete_response(monkeypatch):
+    response = SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {"results": [{"index": 0, "relevance_score": 0.8}]},
+    )
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: response)
+    provider = SiliconFlowReranker(
+        api_base_url="https://api.siliconflow.cn/v1",
+        api_key="secret",
+        model="BAAI/bge-reranker-v2-m3",
+        timeout=3.0,
+    )
+
+    with pytest.raises(RetrievalProviderUnavailableError) as exc_info:
+        provider.rerank(
+            "销售额",
+            (
+                RerankCandidate(candidate_id="metric-1", title="销售商品件数"),
+                RerankCandidate(candidate_id="metric-2", title="销售订单数"),
+            ),
+        )
+
+    assert exc_info.value.details["reason_code"] == "RERANKER_RESPONSE_INVALID"

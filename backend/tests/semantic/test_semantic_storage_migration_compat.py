@@ -168,6 +168,29 @@ def test_metric_api_quality_validation_marks_missing_storage_fields():
     assert "依赖字段不存在" in metric.quality_message
 
 
+def test_metric_api_quality_validation_accepts_existing_metric_dependencies():
+    metric = SemanticMetric(
+        oid=1,
+        model_id=9,
+        name="转化率",
+        biz_name="conversion_rate",
+        define_type="METRIC",
+        expr="conversion_uv / visit_uv",
+        fields=["conversion_uv", "visit_uv"],
+        metric_refs=[11, 12],
+        quality_status="VALID",
+    )
+    facts = MetricDependencyFacts(
+        known_fields=frozenset({"event_id", "user_id"}),
+        existing_metric_ids=frozenset({11, 12}),
+    )
+
+    validate_metric_dependencies(metric, facts)
+
+    assert metric.quality_status == "VALID"
+    assert metric.quality_message is None
+
+
 def test_model_schema_change_marks_domain_datasets():
     dataset = SemanticDataset(
         id=3, oid=1, domain_id=2, name="数据集", biz_name="dataset", schema_version=5

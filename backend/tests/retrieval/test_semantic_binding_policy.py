@@ -380,6 +380,86 @@ def test_multiple_identity_matches_are_ambiguous_and_not_auto_bound():
     )
 
 
+def test_compatibility_filters_duplicate_dimensions_before_metric_clarification():
+    result = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [
+                    _hit(100, "销售商品件数", dense=0.80, model_id=10),
+                    _hit(101, "销售订单数", dense=0.75, model_id=10),
+                ],
+            ),
+            _slot(
+                "dimension:1",
+                RetrievalPurpose.DIMENSION,
+                [
+                    _hit(
+                        200,
+                        "档口ID",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        exact=1.0,
+                        model_id=10,
+                    ),
+                    _hit(
+                        201,
+                        "档口ID",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        exact=1.0,
+                        model_id=11,
+                    ),
+                ],
+            ),
+        )
+    )
+
+    assert result.bundle.decision.status == RetrievalDecisionStatus.AMBIGUOUS
+    assert [item.subquery_id for item in result.bundle.decision.ambiguities] == [
+        "metric:1"
+    ]
+    dimension_decision = next(
+        item
+        for item in result.bundle.decision.slot_decisions
+        if item.subquery_id == "dimension:1"
+    )
+    assert dimension_decision.status == RetrievalDecisionStatus.RESOLVED
+    assert [item.asset_id for item in dimension_decision.selected_assets] == [200]
+
+
+def test_incompatible_metric_and_dimension_candidates_return_explicit_error():
+    with pytest.raises(RetrievalQueryError) as exc_info:
+        SemanticBindingPolicy().apply(
+            _recall(
+                _slot(
+                    "metric:1",
+                    RetrievalPurpose.METRIC,
+                    [_hit(100, "销售额", exact=1.0, model_id=10)],
+                    fast_path=True,
+                ),
+                _slot(
+                    "dimension:1",
+                    RetrievalPurpose.DIMENSION,
+                    [
+                        _hit(
+                            201,
+                            "档口ID",
+                            resource_type=RetrievalResourceType.DIMENSION,
+                            exact=1.0,
+                            model_id=11,
+                        )
+                    ],
+                    fast_path=True,
+                ),
+            )
+        )
+
+    assert (
+        exc_info.value.details["reason_code"]
+        == "SEMANTIC_METRIC_DIMENSION_INCOMPATIBLE"
+    )
+
+
 def test_user_clarification_resolves_metric_and_dimension_together():
     result = SemanticBindingPolicy().apply(
         _recall(
@@ -834,6 +914,44 @@ def test_reranker_can_only_reorder_existing_candidates():
         if item.channel == RetrievalChannel.RERANK
     )
     assert rerank.status == RetrievalChannelStatus.SUCCEEDED
+
+
+class _ClarificationReranker:
+    provider = "test"
+    model = "clarification-test"
+
+    def rerank(
+        self,
+        _query: str,
+        candidates: tuple[RerankCandidate, ...],
+    ) -> list[RerankScore]:
+        return [
+            RerankScore(candidate_id=candidates[0].candidate_id, score=0.80),
+            RerankScore(candidate_id=candidates[1].candidate_id, score=0.75),
+            RerankScore(candidate_id=candidates[2].candidate_id, score=0.10),
+        ]
+
+
+def test_clarification_only_exposes_candidates_passing_rerank_threshold():
+    result = SemanticBindingPolicy(_ClarificationReranker()).apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [
+                    _hit(100, "销售商品件数", dense=0.90, final=0.03),
+                    _hit(101, "销售订单数", dense=0.89, final=0.02),
+                    _hit(102, "历史总销量", dense=0.88, final=0.01),
+                ],
+            )
+        )
+    )
+
+    assert result.bundle.decision.status == RetrievalDecisionStatus.AMBIGUOUS
+    assert [
+        item.asset_id
+        for item in result.bundle.decision.ambiguities[0].candidate_assets
+    ] == [100, 101]
 
 
 class _InvalidReranker:

@@ -34,7 +34,12 @@ class ProjectedUnit(_ProjectionModel):
     def embedding_text(self) -> str:
         """返回唯一允许送入 embedding provider 的文本。"""
 
-        return "\n".join(part for part in [self.title, self.content, self.contextual_text] if part)
+        return unit_embedding_text(
+            content_kind=self.content_kind,
+            title=self.title,
+            content=self.content,
+            contextual_text=self.contextual_text,
+        )
 
     @classmethod
     def create(
@@ -49,7 +54,12 @@ class ProjectedUnit(_ProjectionModel):
         metadata: dict[str, Any] | None = None,
     ) -> ProjectedUnit:
         unit_metadata = metadata or {}
-        embedding_text = "\n".join(part for part in [title, content, contextual_text] if part)
+        embedding_text = unit_embedding_text(
+            content_kind=content_kind,
+            title=title,
+            content=content,
+            contextual_text=contextual_text,
+        )
         return cls(
             unit_key=unit_key,
             content_kind=content_kind,
@@ -71,6 +81,20 @@ class ProjectedUnit(_ProjectionModel):
             ),
             embedding_text_hash=hashlib.sha256(embedding_text.encode("utf-8")).hexdigest(),
         )
+
+
+def unit_embedding_text(
+    *,
+    content_kind: str,
+    title: str,
+    content: str,
+    contextual_text: str,
+) -> str:
+    """名称类检索单元只向量化名称值，避免固定标签和数据集上下文稀释语义。"""
+
+    if content_kind in {"name", "aliases", "biz_name"}:
+        return content
+    return "\n".join(part for part in [title, content, contextual_text] if part)
 
 
 class ProjectedResource(_ProjectionModel):
@@ -181,4 +205,5 @@ __all__ = [
     "ProjectedResourceDelta",
     "ProjectedUnit",
     "projection_content_hash",
+    "unit_embedding_text",
 ]

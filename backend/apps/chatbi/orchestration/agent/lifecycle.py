@@ -318,6 +318,9 @@ class AgentLifecycle:
     ) -> Iterator[RenderEvent]:
         """保存错误，并把 Run 和 ChatRecord 一起置为失败。"""
 
+        # 前序数据库操作失败后 PostgreSQL 会拒绝当前事务内的所有后续语句；
+        # 先回滚，再用新事务持久化统一的失败终态。
+        self._session.rollback()
         run = state.run
         record = state.record
         with self._transition_node(

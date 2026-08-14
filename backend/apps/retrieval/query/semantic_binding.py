@@ -32,7 +32,9 @@ from apps.retrieval.query.profiles import get_retrieval_profile
 from apps.retrieval.query.semantic_runtime import (
     ObservedEmbeddingProvider,
     RetrievalEmbeddingRuntimeConfig,
+    RetrievalRerankRuntimeConfig,
 )
+from apps.retrieval.reranking import SiliconFlowReranker
 from apps.semantic.composition import build_semantic_schema_service
 from apps.semantic.services.schema_service import (
     DatasetSchemaProvider,
@@ -62,6 +64,7 @@ class SemanticBindingRunner:
         embedding_config: RetrievalEmbeddingRuntimeConfig | None = None,
         hybrid_config: HybridRetrievalConfig | None = None,
         policy: SemanticBindingPolicy | None = None,
+        rerank_config: RetrievalRerankRuntimeConfig | None = None,
         schema_provider: DatasetSchemaProvider | None = None,
     ) -> None:
         self._embedding_provider = embedding_provider
@@ -103,7 +106,10 @@ class SemanticBindingRunner:
                 hybrid_config,
                 dense_unavailable_error_code=dense_error_code,
             )
-        self._policy = policy or SemanticBindingPolicy()
+        self._policy = policy
+        self._rerank_config = rerank_config or RetrievalRerankRuntimeConfig.from_settings(
+            settings
+        )
         self._schema_provider = schema_provider
 
     def run(
@@ -131,7 +137,7 @@ class SemanticBindingRunner:
             embedding_provider=provider,
             config=self._hybrid_config,
         ).retrieve(strategy_request)
-        policy_result = self._policy.apply(recall)
+        policy_result = self._semantic_binding_policy(timeout_ms).apply(recall)
         schema_provider = self._schema_provider or build_semantic_schema_service(
             session
         )
@@ -163,6 +169,24 @@ class SemanticBindingRunner:
                     for item in recall.plan.subqueries
                 ],
             },
+        )
+
+    def _semantic_binding_policy(self, timeout_ms: int) -> SemanticBindingPolicy:
+        if self._policy is not None:
+            return self._policy
+        self._rerank_config.validate()
+        if not self._rerank_config.enabled:
+            return SemanticBindingPolicy()
+        return SemanticBindingPolicy(
+            SiliconFlowReranker(
+                api_base_url=self._rerank_config.api_base_url,
+                api_key=self._rerank_config.api_key,
+                model=self._rerank_config.model,
+                timeout=min(
+                    self._rerank_config.timeout_seconds,
+                    max(timeout_ms / 1000, 0.1),
+                ),
+            )
         )
 
     def _query_embedding_provider(

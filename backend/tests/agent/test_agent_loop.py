@@ -74,6 +74,8 @@ class FakeSession:
         self.trace_count = 0
         self.added = []
         self.commit_count = 0
+        self.rollback_count = 0
+        self.transaction_actions = []
         self.tool_event_commits = []
 
     def add(self, obj):
@@ -83,6 +85,7 @@ class FakeSession:
 
     def commit(self):
         self.commit_count += 1
+        self.transaction_actions.append("commit")
         if not self.added or not isinstance(self.added[-1], EventLog):
             return
         event = self.added[-1]
@@ -101,6 +104,10 @@ class FakeSession:
         self.tool_event_commits.append(
             (event.event_type, tool_call_id, getattr(row, "status", None))
         )
+
+    def rollback(self):
+        self.rollback_count += 1
+        self.transaction_actions.append("rollback")
 
     def flush(self):
         pass
@@ -341,6 +348,13 @@ class StaticUnderstandingService:
             ),
             usage_metadata={"total_tokens": 17},
         )
+
+
+class FailingUnderstandingService:
+    """模拟问题理解阶段在数据库事务中失败。"""
+
+    def understand(self, **kwargs):
+        raise QuestionUnderstandingError("QUESTION_UNDERSTANDING_SCHEMA_LOAD_FAILED")
 
 
 class ScriptedUnderstandingModel:
@@ -683,7 +697,11 @@ def test_reasoner_returns_structured_function_call_and_records_usage():
     assert state.budget.tokens_used == 5
     assert state.messages[-1] is decision.response
     assert state.messages[-1].content == response.content
-    working_state_message = model.calls[0][1].content
+    working_state_message = next(
+        message.content
+        for message in model.calls[0]
+        if "<agent-working-state>" in message.content
+    )
     assert "<agent-working-state>" in working_state_message
     assert '"remaining_steps":5' in working_state_message
 
@@ -840,7 +858,9 @@ def test_reasoner_soft_mode_only_exposes_terminal_tools():
     decision = reasoner.decide(state, "soft")
 
     assert decision.is_direct_answer is True
-    assert "预算接近上限" in str(model.calls[0][1].content)
+    assert any(
+        "预算接近上限" in message.content for message in model.calls[0]
+    )
     assert [item.name for item in model.tool_definition_calls[0]] == [
         "finish"
     ]
@@ -954,7 +974,31 @@ def test_happy_path_tool_then_finish():
     assert len(run.messages) == 5
     assert run.derived_state["question_understanding"]["intent"]["metric_mentions"] == ["gmv"]
     assert run.budget_snapshot["tokens_used"] == 17
-    assert "时间筛选必须原样使用 `time_range.normalized`" in model.calls[0][0].content
+    assert "时间条件必须使用 `time_range.normalized`" in model.calls[0][0].content
+
+
+def test_understanding_failure_rolls_back_before_persisting_terminal_state():
+    session = FakeSession()
+    run, record = _run_and_record()
+    loop = build_agent_loop(
+        session,
+        SimpleNamespace(id=1, oid=1),
+        AgentConfig(max_steps=5),
+        model_client=ScriptedModel([]),
+        registry=_registry(),
+        understanding_service=FailingUnderstandingService(),
+        recorder=DisabledAgentTraceRecorder(),
+    )
+
+    events = list(loop.run(run, record))
+
+    assert session.rollback_count == 1
+    rollback_index = session.transaction_actions.index("rollback")
+    assert "commit" in session.transaction_actions[rollback_index + 1 :]
+    assert _event_domains(events)[-1] == "run.failed"
+    assert run.status == AgentRunStatus.FAILED.value
+    assert record.status == "failed"
+    assert record.error == "QUESTION_UNDERSTANDING_SCHEMA_LOAD_FAILED"
 
 
 def test_success_events_have_strict_sequence_and_single_terminal_event():

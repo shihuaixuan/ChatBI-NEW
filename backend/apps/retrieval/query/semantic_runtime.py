@@ -81,6 +81,50 @@ class RetrievalEmbeddingRuntimeConfig:
         raise RetrievalConfigurationError(message, details={"reason_code": reason_code})
 
 
+@dataclass(frozen=True, slots=True)
+class RetrievalRerankRuntimeConfig:
+    """统一检索重排序的显式运行配置。"""
+
+    enabled: bool
+    api_base_url: str
+    api_key: str
+    model: str
+    timeout_seconds: float
+
+    @classmethod
+    def from_settings(cls, runtime_settings: Any) -> RetrievalRerankRuntimeConfig:
+        api_key = (
+            getattr(runtime_settings, "RETRIEVAL_RERANK_API_KEY", "")
+            or getattr(runtime_settings, "SILICONFLOW_API_KEY", "")
+            or getattr(runtime_settings, "RETRIEVAL_EMBEDDING_API_KEY", "")
+            or getattr(runtime_settings, "EMBEDDING_API_KEY", "")
+        )
+        return cls(
+            enabled=runtime_settings.RETRIEVAL_RERANK_ENABLED,
+            api_base_url=runtime_settings.RETRIEVAL_RERANK_API_BASE_URL,
+            api_key=api_key,
+            model=runtime_settings.RETRIEVAL_RERANK_MODEL,
+            timeout_seconds=runtime_settings.RETRIEVAL_RERANK_TIMEOUT_SECONDS,
+        )
+
+    def validate(self) -> None:
+        if not self.enabled:
+            return
+        parsed_url = urlparse(self.api_base_url.strip())
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            self._raise_configuration_error("RERANKER_API_URL_INVALID", "检索 reranker API URL 无效")
+        if not self.api_key.strip():
+            self._raise_configuration_error("RERANKER_API_KEY_MISSING", "检索 reranker API key 未配置")
+        if not self.model.strip():
+            self._raise_configuration_error("RERANKER_MODEL_MISSING", "检索 reranker model 未配置")
+        if self.timeout_seconds <= 0:
+            self._raise_configuration_error("RERANKER_TIMEOUT_INVALID", "检索 reranker 超时时间必须大于 0")
+
+    @staticmethod
+    def _raise_configuration_error(reason_code: str, message: str) -> None:
+        raise RetrievalConfigurationError(message, details={"reason_code": reason_code})
+
+
 @dataclass(slots=True)
 class DenseChannelTracker:
     """一次统一检索请求内的 dense 通道状态汇总。"""

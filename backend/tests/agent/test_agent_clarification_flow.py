@@ -21,7 +21,10 @@ from apps.chatbi.orchestration.agent.messages import (
     fold_tool_messages,
 )
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
-from apps.chatbi.orchestration.agent.prompts import build_system_prompt
+from apps.chatbi.orchestration.agent.prompts import (
+    build_runtime_context,
+    build_system_prompt,
+)
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.conversation.models import ChatRecord
 from apps.retrieval.models.dto import (
@@ -595,6 +598,7 @@ def test_resume_applies_structured_semantic_clarification_to_trusted_scope():
                 name="店铺名称",
                 biz_name="shop_name",
                 type="DIMENSION",
+                alias=["店铺"],
             ),
             SchemaElement(
                 data_set_id=3,
@@ -604,6 +608,7 @@ def test_resume_applies_structured_semantic_clarification_to_trusted_scope():
                 name="店铺名称",
                 biz_name="store_name",
                 type="DIMENSION",
+                alias=["店铺"],
             ),
             SchemaElement(
                 data_set_id=3,
@@ -1089,10 +1094,15 @@ def test_fold_messages_folds_old_tool_results_only():
     assert messages[0].content == "q"  # 非工具消息不折叠
 
 
-def test_system_prompt_injects_history_and_confirmed_understanding():
-    prompt = build_system_prompt(
-        datasource_id=5,
-        oid=1,
+def test_system_prompt_is_stable_and_runtime_context_has_dynamic_sections():
+    prompt = build_system_prompt()
+    assert "最近对话" not in prompt
+    assert "## 已确认的问题理解" not in prompt
+    assert "当前绑定" not in prompt
+    assert "数据源 id" not in prompt
+    assert "组织 oid" not in prompt
+
+    runtime_context = build_runtime_context(
         history_summary="- 问：上月 GMV\n  SQL：select 1\n  答（摘要）：100 万",
         question_understanding={
             "rewritten_question": "查询上月授信额度",
@@ -1100,14 +1110,13 @@ def test_system_prompt_injects_history_and_confirmed_understanding():
             "validation": {"status": "valid"},
         },
     )
-    assert "最近对话" in prompt
-    assert "上月 GMV" in prompt
-    assert "已确认的问题理解" in prompt
-    assert "查询上月授信额度" in prompt
-    assert "不得在工具规划阶段再次继承" in prompt
+    assert "最近对话" in runtime_context
+    assert "上月 GMV" in runtime_context
+    assert "已确认的问题理解" in runtime_context
+    assert "查询上月授信额度" in runtime_context
 
 
 def test_system_prompt_omits_optional_sections():
-    prompt = build_system_prompt(datasource_id=5, oid=1)
+    prompt = build_system_prompt()
     assert "最近对话" not in prompt
     assert "## 已确认的问题理解" not in prompt

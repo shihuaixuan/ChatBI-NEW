@@ -11,6 +11,14 @@ from apps.retrieval import (
     RetrievalDecisionStatus,
     RetrievalRequest,
 )
+from apps.semantic import (
+    DatasetSchema,
+    SemanticPlanValidationReport,
+    SemanticQueryPlan,
+    SemanticQueryPlanningInput,
+    SemanticQueryPlanningService,
+    SemanticQueryValidationService,
+)
 from apps.temporal import derive_time_bucket
 from apps.tool.tools.context import TrustedToolContext
 
@@ -84,6 +92,10 @@ class SemanticAssetScope(BaseModel):
     authorized_tables: tuple[str, ...] = ()
     normalized_time_range: dict[str, Any] | None = None
     compile_plan: SemanticCompilePlan | None = None
+    # 严格模式使用完整语义计划；compile_plan 仅为迁移期旧链路保留。
+    semantic_enforcement: Literal["STRICT", "LEGACY"] = "LEGACY"
+    query_plan: SemanticQueryPlan | None = None
+    validation_report: SemanticPlanValidationReport | None = None
     permission_version: str | None = None
 
 
@@ -152,6 +164,78 @@ def project_semantic_compile_plan(
         intent_type=str(intent_payload.get("intent_type") or "metric_query"),
         query_shape=query_shape,
     )
+
+
+def project_semantic_query_plan(
+    schema: DatasetSchema,
+    slot_bindings: dict[str, Any],
+    intent: dict[str, Any] | None = None,
+) -> tuple[SemanticQueryPlan, SemanticPlanValidationReport]:
+    """把检索结果转换为完整语义计划，并返回确定性验证报告。"""
+
+    metrics = _binding_asset_ids(slot_bindings.get("metrics") or [], "METRIC")
+    group_dimensions = slot_bindings.get("group_dimensions") or []
+    dimension_filters = slot_bindings.get("dimension_filters") or []
+    time_dimensions = slot_bindings.get("time_dimensions") or []
+    time_filters = slot_bindings.get("time_filters") or []
+    physical_by_id = {item.id: item for item in schema.dimensions}
+    logical_ids: list[int] = []
+    usages: dict[int, tuple[str, ...]] = {}
+
+    for item in [*group_dimensions, *dimension_filters]:
+        if not isinstance(item, dict):
+            raise ValueError("SEMANTIC_SLOT_BINDING_ITEM_INVALID")
+        physical_id = item.get("asset_id")
+        dimension = physical_by_id.get(physical_id)
+        logical_id = (
+            dimension.ext_info.get("logical_dimension_id")
+            if dimension is not None
+            else None
+        )
+        if not isinstance(logical_id, int) or logical_id <= 0:
+            raise ValueError("SEMANTIC_LOGICAL_DIMENSION_BINDING_REQUIRED")
+        if logical_id not in logical_ids:
+            logical_ids.append(logical_id)
+        usage = "GROUP_BY" if item in group_dimensions else "FILTER"
+        usages[logical_id] = (*usages.get(logical_id, ()), usage)
+
+    raw_intent = intent if isinstance(intent, dict) else {}
+    time_dimension_ids = _binding_asset_ids(time_dimensions, "DIMENSION")
+    if not time_dimension_ids:
+        time_dimension_ids = _binding_asset_ids(time_filters, "DIMENSION")
+    time_range = raw_intent.get("time_range")
+    normalized_time_range = (
+        time_range.get("normalized")
+        if isinstance(time_range, dict)
+        and isinstance(time_range.get("normalized"), dict)
+        else None
+    )
+    query_shape = raw_intent.get("query_shape")
+    query_shape = query_shape if isinstance(query_shape, dict) else {}
+    legacy_compile_plan = project_semantic_compile_plan(slot_bindings, raw_intent)
+    request = SemanticQueryPlanningInput(
+        dataset_id=schema.data_set.id,
+        schema_version=schema.schema_version,
+        contract_version=schema.contract_version,
+        metric_ids=metrics,
+        logical_dimension_ids=tuple(logical_ids),
+        dimension_usages=usages,
+        filters=tuple(
+            item for item in dimension_filters if isinstance(item, dict)
+        ),
+        time_range=normalized_time_range,
+        time_dimension_id=time_dimension_ids[0] if time_dimension_ids else None,
+        time_grain=(str(query_shape.get("time_grain")) if query_shape.get("time_grain") else None),
+        select_mode=str(query_shape.get("select_mode") or "aggregate"),
+        query_shape=query_shape,
+        order_by=tuple(
+            item.model_dump(mode="json") for item in legacy_compile_plan.order_by
+        ),
+        limit=legacy_compile_plan.limit,
+    )
+    plan = SemanticQueryPlanningService().plan(schema, request)
+    report = SemanticQueryValidationService().validate(plan, schema)
+    return plan, report
 
 
 def _compile_order_by(
@@ -234,4 +318,5 @@ __all__ = [
     "SemanticCompileTimeBucket",
     "SemanticToolContext",
     "project_semantic_compile_plan",
+    "project_semantic_query_plan",
 ]

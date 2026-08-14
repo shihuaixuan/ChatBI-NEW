@@ -17,9 +17,11 @@ from apps.retrieval import (
     validate_compilation_allowlist,
 )
 from apps.semantic import (
+    DatasetSchemaProvider,
     SemanticQueryCompileRequest,
     SemanticSQLCompilationService,
     SemanticUsedAsset,
+    SemanticValidationError,
 )
 from apps.tool.base import Tool, ToolExecutionPolicy, json_summary
 from apps.tool.context import current_tool_call_context
@@ -29,6 +31,7 @@ from apps.tool.tools.semantic_contracts import (
     SemanticAssetScope,
     SemanticToolContext,
     project_semantic_compile_plan,
+    project_semantic_query_plan,
 )
 
 
@@ -148,6 +151,7 @@ class SearchSemanticAssetsTool(
         self,
         retrieval_service: RetrievalService,
         query_service: DatasourceQueryService,
+        schema_provider: DatasetSchemaProvider | None = None,
     ) -> None:
         if retrieval_service is None:
             raise ValueError("SEMANTIC_RETRIEVAL_SERVICE_REQUIRED")
@@ -155,6 +159,7 @@ class SearchSemanticAssetsTool(
             raise ValueError("DATASOURCE_QUERY_SERVICE_REQUIRED")
         self._retrieval_service = retrieval_service
         self._query_service = query_service
+        self._schema_provider = schema_provider
 
     def execute(
         self,
@@ -269,8 +274,42 @@ class SearchSemanticAssetsTool(
                 package.slot_bindings,
                 request.intent.model_dump(mode="json"),
             ),
+            semantic_enforcement=_semantic_enforcement(
+                self._schema_provider,
+                ctx.workspace_id,
+                ctx.dataset_id,
+            ),
             permission_version=request.scope.permission_version,
         )
+        if scope.semantic_enforcement == "STRICT":
+            if self._schema_provider is None:
+                return ToolResult.rejected(
+                    "严格语义数据集缺少运行时 Schema，禁止进入 Agent 编译链路。",
+                    error_code="semantic_schema_provider_required",
+                    error_category=ToolErrorCategory.CONFIGURATION,
+                )
+            schema = self._schema_provider.build_dataset_schema(
+                ctx.workspace_id,
+                ctx.dataset_id,
+            )
+            try:
+                query_plan, validation_report = project_semantic_query_plan(
+                    schema,
+                    package.slot_bindings,
+                    request.intent.model_dump(mode="json"),
+                )
+            except (SemanticValidationError, ValueError) as exc:
+                return ToolResult.rejected(
+                    "严格语义资产未能形成完整查询计划，禁止回退到物理表查询。",
+                    error_code=str(exc),
+                    error_category=ToolErrorCategory.BUSINESS_RULE,
+                )
+            scope = scope.model_copy(
+                update={
+                    "query_plan": query_plan,
+                    "validation_report": validation_report,
+                }
+            )
         data = SearchSemanticAssetsResult(package=package, scope=scope)
         metadata = {
             "semantic_payload": retrieval.payload,
@@ -325,12 +364,26 @@ class CompileSemanticSqlArgs(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    metric_asset_ids: list[int] = Field(default_factory=list)
-    dimension_asset_ids: list[int] = Field(default_factory=list)
-    filters: list[CompileFilter] = Field(default_factory=list)
-    time_bucket: dict[str, Any] | None = None
-    order_by: list[CompileOrderBy] = Field(default_factory=list)
-    limit: int | None = None
+    plan_fingerprint: str | None = Field(
+        default=None,
+        description="已验证查询方案的内部编号，通常由系统自动填写，模型不需要自行生成",
+    )
+    # 迁移期 LEGACY 数据集仍使用旧参数；严格模式的工具 Schema 不暴露这些字段。
+    metric_asset_ids: list[int] | None = Field(default=None)
+    dimension_asset_ids: list[int] | None = Field(default=None)
+    filters: list[CompileFilter] | None = Field(default=None)
+    time_bucket: dict[str, Any] | None = Field(default=None)
+    order_by: list[CompileOrderBy] | None = Field(default=None)
+    limit: int | None = Field(default=None)
+
+    @classmethod
+    def model_json_schema(cls, by_alias: bool = True, **kwargs: Any) -> dict[str, Any]:
+        """对模型只公开严格模式的计划指纹参数。"""
+
+        schema = super().model_json_schema(by_alias=by_alias, **kwargs)
+        properties = schema.get("properties") or {}
+        schema["properties"] = {"plan_fingerprint": properties["plan_fingerprint"]}
+        return schema
 
 
 class CompileSemanticSqlResult(BaseModel):
@@ -353,10 +406,8 @@ class CompileSemanticSqlTool(
 ):
     name = "compile_semantic_sql"
     description = (
-        "把结构化查询计划确定性编译为 SQL，口径由语义层保证。参数只允许 "
-        "metric_asset_ids、dimension_asset_ids、filters、time_bucket、order_by、limit；"
-        "所有 asset_id 必须来自 search_semantic_assets 返回的编译白名单；"
-        "时间筛选和 time_bucket 由服务端可信时间计划覆盖。"
+        "编译已经确认并验证通过的查询方案。调用时不要自行填写指标、维度、过滤、时间和计算规则；"
+        "系统会自动使用已经确认的方案。"
     )
     args_model = CompileSemanticSqlArgs
     result_model = CompileSemanticSqlResult
@@ -379,39 +430,43 @@ class CompileSemanticSqlTool(
         ctx: SemanticToolContext,
         args: dict[str, Any],
     ) -> dict[str, Any]:
-        """用已收敛的服务端语义计划覆盖模型重复提交的资产绑定。"""
+        """强制使用当前运行中保存的计划指纹，禁止模型替换语义绑定。"""
 
         scope = ctx.semantic_asset_scope
-        if (
-            scope is None
-            or not is_compilation_decision_executable(scope.decision_status)
-            or scope.compile_plan is None
-            or not scope.compile_plan.metric_asset_ids
-        ):
-            return dict(args)
-        prepared = dict(args)
-        trusted_plan = scope.compile_plan.model_dump(
-            mode="json",
-            include={
-                "metric_asset_ids",
-                "dimension_asset_ids",
-                "order_by",
-                "limit",
-            },
-        )
-        trusted_plan["filters"] = [
-            item.model_dump(mode="json")
-            for item in (
-                *scope.compile_plan.filters,
-                *scope.compile_plan.temporal_plan.filters,
+        if scope is None or scope.query_plan is None:
+            if (
+                scope is None
+                or not is_compilation_decision_executable(scope.decision_status)
+                or scope.compile_plan is None
+                or not scope.compile_plan.metric_asset_ids
+            ):
+                return dict(args)
+            prepared = dict(args)
+            trusted_plan = scope.compile_plan.model_dump(
+                mode="json",
+                include={
+                    "metric_asset_ids",
+                    "dimension_asset_ids",
+                    "order_by",
+                    "limit",
+                },
             )
-        ]
-        time_bucket = scope.compile_plan.temporal_plan.time_bucket
-        trusted_plan["time_bucket"] = (
-            time_bucket.model_dump(mode="json") if time_bucket is not None else None
-        )
-        prepared.update(trusted_plan)
-        return prepared
+            trusted_plan["filters"] = [
+                item.model_dump(mode="json")
+                for item in (
+                    *scope.compile_plan.filters,
+                    *scope.compile_plan.temporal_plan.filters,
+                )
+            ]
+            time_bucket = scope.compile_plan.temporal_plan.time_bucket
+            trusted_plan["time_bucket"] = (
+                time_bucket.model_dump(mode="json")
+                if time_bucket is not None
+                else None
+            )
+            prepared.update(trusted_plan)
+            return prepared
+        return {"plan_fingerprint": scope.query_plan.fingerprint}
 
     def execute(
         self,
@@ -427,6 +482,20 @@ class CompileSemanticSqlTool(
                 "尚未检索语义资产，请先调用 search_semantic_assets。",
                 error_code="semantic_package_required",
                 error_category=ToolErrorCategory.BUSINESS_RULE,
+            )
+        if scope.semantic_enforcement == "STRICT":
+            return self._execute_strict(ctx, args, scope)
+        if (
+            not is_compilation_decision_executable(scope.decision_status)
+        ):
+            return ToolResult.rejected(
+                "语义决策尚未收敛，禁止生成 SQL。",
+                error_code="semantic_decision_not_executable",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
+                details={
+                    "decision_status": scope.decision_status.value,
+                    "retry_action": "clarify_semantic_binding",
+                },
             )
         plan_error = _validate_compile_plan(scope.compile_plan)
         if plan_error is not None:
@@ -466,8 +535,8 @@ class CompileSemanticSqlTool(
             )
 
         dimension_ids = [
-            *args.dimension_asset_ids,
-            *(item.asset_id for item in args.filters),
+            *(args.dimension_asset_ids or []),
+            *(item.asset_id for item in (args.filters or [])),
         ]
         if args.time_bucket and isinstance(args.time_bucket.get("dimension_id"), int):
             dimension_ids.append(args.time_bucket["dimension_id"])
@@ -475,7 +544,7 @@ class CompileSemanticSqlTool(
             validate_compilation_allowlist(
                 scope.decision_status,
                 scope.allowed_assets,
-                metric_ids=args.metric_asset_ids,
+                metric_ids=args.metric_asset_ids or [],
                 dimension_ids=dimension_ids,
             )
         except RetrievalPermissionError as exc:
@@ -497,7 +566,7 @@ class CompileSemanticSqlTool(
                 details=details,
             )
 
-        filters = [item.model_dump(mode="json") for item in args.filters]
+        filters = [item.model_dump(mode="json") for item in (args.filters or [])]
         if scope.normalized_time_range is not None:
             normalized_time = scope.normalized_time_range
             if normalized_time.get("kind") == "unsupported":
@@ -522,11 +591,11 @@ class CompileSemanticSqlTool(
         slots: dict[str, Any] = {
             "metrics": [
                 {"asset_id": asset_id, "asset_type": "METRIC"}
-                for asset_id in args.metric_asset_ids
+                for asset_id in (args.metric_asset_ids or [])
             ],
             "dimensions": [
                 {"asset_id": asset_id, "asset_type": "DIMENSION"}
-                for asset_id in args.dimension_asset_ids
+                for asset_id in (args.dimension_asset_ids or [])
             ],
             "filters": [
                 {**filter_item, "asset_type": "DIMENSION"} for filter_item in filters
@@ -543,12 +612,15 @@ class CompileSemanticSqlTool(
                         else ""
                     ),
                     slots=slots,
-                    order_by=[item.model_dump(mode="json") for item in args.order_by],
+                    order_by=[
+                        item.model_dump(mode="json")
+                        for item in (args.order_by or [])
+                    ],
                     limit=args.limit or ctx.semantic_default_limit,
                     time_bucket=args.time_bucket,
                 )
             )
-        except ValueError as exc:
+        except (SemanticValidationError, ValueError) as exc:
             return ToolResult.failed(
                 "语义资产不足，无法使用规则编译生成 SQL",
                 error_code=str(exc),
@@ -588,6 +660,116 @@ class CompileSemanticSqlTool(
             datasource_id=compiled.datasource_id,
             used_assets=compiled.used_assets,
             strategy="semantic_sql_compiler",
+        )
+        return ToolResult.succeeded(
+            json_summary(data.model_dump(mode="json"), ctx.summary_max_chars),
+            data,
+        )
+
+    def _execute_strict(
+        self,
+        ctx: SemanticToolContext,
+        args: CompileSemanticSqlArgs,
+        scope: SemanticAssetScope,
+    ) -> ToolResult[CompileSemanticSqlResult]:
+        """严格模式只消费验证通过且指纹一致的完整语义计划。"""
+
+        plan = scope.query_plan
+        if plan is None or scope.validation_report is None:
+            return ToolResult.rejected(
+                "严格语义范围缺少完整查询计划或验证报告。",
+                error_code="semantic_query_plan_required",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
+            )
+        if args.plan_fingerprint != plan.fingerprint:
+            return ToolResult.rejected(
+                "提交的计划指纹与当前 Agent Run 不一致。",
+                error_code="semantic_query_plan_fingerprint_mismatch",
+                error_category=ToolErrorCategory.SAFETY,
+            )
+        if plan.validation_status.value != "PROVEN" or scope.validation_report.status.value != "PROVEN":
+            return ToolResult.rejected(
+                "语义查询计划尚未通过确定性验证，禁止编译。",
+                error_code="semantic_query_plan_not_proven",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
+                details={
+                    "status": plan.validation_status.value,
+                    "reason_codes": list(scope.validation_report.reason_codes),
+                },
+            )
+        if not _scope_matches_context(ctx, scope):
+            return ToolResult.rejected(
+                "语义资产范围与当前可信身份、数据源或数据集不一致。",
+                error_code="semantic_scope_mismatch",
+                error_category=ToolErrorCategory.SAFETY,
+            )
+        assert ctx.user_id is not None
+        assert ctx.datasource_id is not None
+        policy = self._query_service.resolve_policy(
+            DatasourceQuerySubject(
+                user_id=ctx.user_id,
+                workspace_id=ctx.workspace_id,
+            ),
+            ctx.datasource_id,
+        )
+        if not policy.allowed or any(
+            table.lower() not in {item.lower() for item in policy.authorized_tables}
+            for table in scope.authorized_tables
+        ):
+            return ToolResult.rejected(
+                policy.reason or "语义计划所需的数据权限已经变化，请重新检索。",
+                error_code=policy.error_code or "semantic_scope_permission_changed",
+                error_category=ToolErrorCategory.AUTHORIZATION,
+            )
+        try:
+            compiled = self._compilation_service.compile_verified_plan(
+                ctx.workspace_id,
+                plan,
+            )
+        except (SemanticValidationError, ValueError) as exc:
+            # 严格入口不把编译错误转换为替换资产或改写计划的机会。
+            return ToolResult.failed(
+                "严格语义查询计划编译失败，未修改查询口径。",
+                error_code=str(exc),
+                error_category=ToolErrorCategory.DOMAIN,
+                retry_advice=RetryAdvice.NEVER,
+            )
+        current_tables = {table.lower() for table in policy.authorized_tables}
+        if any(table.lower() not in current_tables for table in compiled.tables):
+            return ToolResult.rejected(
+                "语义编译结果使用了当前权限之外的数据表。",
+                error_code="compiled_table_out_of_scope",
+                error_category=ToolErrorCategory.AUTHORIZATION,
+            )
+        expected_assets = {
+            ("METRIC", item.metric_id) for item in plan.metrics
+        } | {
+            ("DIMENSION", item.physical_dimension_id) for item in plan.dimensions
+        }
+        if plan.time_binding.dimension_id is not None:
+            expected_assets.add(("DIMENSION", plan.time_binding.dimension_id))
+        actual_assets = {
+            (item.asset_type.upper(), item.asset_id) for item in compiled.used_assets
+        }
+        if not expected_assets.issubset(actual_assets):
+            return ToolResult.rejected(
+                "编译产物未完整覆盖语义查询计划。",
+                error_code="compiled_query_plan_not_covered",
+                error_category=ToolErrorCategory.SAFETY,
+                details={
+                    "missing_assets": sorted(expected_assets - actual_assets),
+                    "plan_fingerprint": plan.fingerprint,
+                },
+            )
+        data = CompileSemanticSqlResult(
+            sql=compiled.sql,
+            tables=compiled.tables,
+            metrics=compiled.metrics,
+            dimensions=compiled.dimensions,
+            dataset_id=compiled.dataset_id,
+            datasource_id=compiled.datasource_id,
+            used_assets=compiled.used_assets,
+            strategy="verified_semantic_query_plan",
         )
         return ToolResult.succeeded(
             json_summary(data.model_dump(mode="json"), ctx.summary_max_chars),
@@ -773,3 +955,21 @@ __all__ = [
     "SemanticAssetPackage",
     "TermQueryService",
 ]
+
+
+def _semantic_enforcement(
+    schema_provider: DatasetSchemaProvider | None,
+    workspace_id: int,
+    dataset_id: int,
+) -> Literal["STRICT", "LEGACY"]:
+    """读取数据集执行策略；读取失败由调用方显式处理。"""
+
+    if schema_provider is None:
+        return "LEGACY"
+    schema = schema_provider.build_dataset_schema(workspace_id, dataset_id)
+    return (
+        "STRICT"
+        if str((schema.query_config or {}).get("semanticEnforcement") or "LEGACY").upper()
+        == "STRICT"
+        else "LEGACY"
+    )

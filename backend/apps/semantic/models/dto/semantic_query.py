@@ -27,6 +27,9 @@ class SemanticQueryPlanningInput(SemanticBaseDTO):
     time_dimension_id: int | None = Field(default=None, gt=0)
     time_grain: str | None = None
     select_mode: str = "aggregate"
+    query_shape: dict[str, Any] = Field(default_factory=dict)
+    order_by: tuple[dict[str, Any], ...] = ()
+    limit: int | None = Field(default=None, gt=0, le=1000)
 
 
 class SemanticMetricBinding(SemanticBaseDTO):
@@ -120,6 +123,9 @@ class SemanticQueryPlan(SemanticBaseDTO):
     aggregation_plan: SemanticAggregationPlan
     validation_status: SemanticPlanStatus
     validation_reason_codes: tuple[str, ...] = ()
+    query_shape: dict[str, Any] = Field(default_factory=dict)
+    order_by: tuple[dict[str, Any], ...] = ()
+    limit: int | None = Field(default=None, gt=0, le=1000)
     fingerprint: str = Field(min_length=1)
 
 

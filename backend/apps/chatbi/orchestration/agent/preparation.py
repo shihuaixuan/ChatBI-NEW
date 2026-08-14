@@ -17,7 +17,10 @@ from apps.chatbi.models import (
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.messages import AgentMessage, restore_messages
-from apps.chatbi.orchestration.agent.prompts import build_system_prompt
+from apps.chatbi.orchestration.agent.prompts import (
+    build_runtime_context,
+    build_system_prompt,
+)
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.understanding import (
@@ -38,7 +41,10 @@ from apps.retrieval import (
     bundle_to_semantic_payload,
 )
 from apps.semantic.services.schema_service import DatasetSchemaProvider
-from apps.tool.tools.semantic_contracts import project_semantic_compile_plan
+from apps.tool.tools.semantic_contracts import (
+    project_semantic_compile_plan,
+    project_semantic_query_plan,
+)
 from apps.trace import (
     AgentTraceRecorder,
     TraceNodeSpec,
@@ -505,6 +511,31 @@ class AgentInputPreparer:
                 ),
             ).model_dump(mode="json"),
         }
+        if scope.get("semantic_enforcement") == "STRICT":
+            schema = self._semantic_schema_provider.build_dataset_schema(
+                request.tenant_id,
+                request.scope.dataset_ids[0],
+            )
+            try:
+                query_plan, validation_report = project_semantic_query_plan(
+                    schema,
+                    updated_payload.get("slot_bindings") or {},
+                    (
+                        state.context.state.get("question_understanding", {}).get("intent")
+                        if isinstance(
+                            state.context.state.get("question_understanding"), dict
+                        )
+                        else {}
+                    ),
+                )
+            except ValueError as exc:
+                raise SemanticClarificationError(str(exc)) from exc
+            updated_scope.update(
+                {
+                    "query_plan": query_plan.model_dump(mode="json"),
+                    "validation_report": validation_report.model_dump(mode="json"),
+                }
+            )
         state.context.state.update(
             {
                 "semantic_bundle": updated_bundle.model_dump(mode="json"),
@@ -594,14 +625,14 @@ class AgentInputPreparer:
                 f"- 问：{item['question']}\n  SQL：{item['sql'] or '（无）'}\n  答（摘要）：{item['answer_brief']}"
                 for item in history
             )
-        return AgentMessage.system(
-            build_system_prompt(
-                datasource_id=state.record.datasource,
-                oid=state.run.oid,
-                max_clarifications=self._config.max_clarifications,
+        state.runtime_context = AgentMessage.user(
+            build_runtime_context(
                 history_summary=history_summary,
                 question_understanding=question_understanding,
             )
+        )
+        return AgentMessage.system(
+            build_system_prompt(max_clarifications=self._config.max_clarifications)
         )
 
     @staticmethod
