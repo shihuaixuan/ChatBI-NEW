@@ -29,6 +29,7 @@ from apps.chatbi.orchestration.agent.reasoning import AgentReasoner
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tool_visibility import visible_tool_names
 from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolContext
+from apps.chatbi.orchestration.agent.working_state import project_working_state
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.understanding import (
     QuestionUnderstandingModelResponse,
@@ -2056,3 +2057,55 @@ def test_understanding_rejects_fields_outside_contract():
 
     with pytest.raises(QuestionUnderstandingError, match="QUESTION_REWRITE_MODEL_OUTPUT_INVALID"):
         QuestionUnderstandingService(model).understand(question="本月销售额", datasource_id=5)
+
+
+def _working_state_for_projection(context: dict) -> SimpleNamespace:
+    return SimpleNamespace(
+        context=SimpleNamespace(state=context),
+        budget=SimpleNamespace(
+            snapshot=lambda: {
+                "max_steps": 10,
+                "steps": 2,
+                "token_budget": 1000,
+                "tokens_used": 100,
+            }
+        ),
+    )
+
+
+def test_working_state_does_not_duplicate_latest_observation():
+    observations = [{"tool": str(index)} for index in range(1, 7)]
+
+    payload = project_working_state(
+        _working_state_for_projection(
+            {
+                "tool_observation_history": observations,
+                "last_tool_observation": observations[-1],
+            }
+        ),
+        mode="normal",
+        available_tools=["execute_sql"],
+    )
+
+    assert payload["last_observation"] == observations[-1]
+    assert payload["recent_observations"] == observations[1:5]
+    assert observations[-1] not in payload["recent_observations"]
+
+
+def test_working_state_exposes_sql_readiness_without_sql_content():
+    payload = project_working_state(
+        _working_state_for_projection(
+            {
+                "compiled_sql": "SELECT amount FROM orders",
+                "validated_sql": "SELECT amount FROM orders LIMIT 100",
+            }
+        ),
+        mode="normal",
+        available_tools=["execute_sql"],
+    )
+
+    artifacts = payload["artifacts"]
+    assert artifacts["compiled_sql_ready"] is True
+    assert artifacts["validated_sql_ready"] is True
+    assert "compiled_sql" not in artifacts
+    assert "validated_sql" not in artifacts

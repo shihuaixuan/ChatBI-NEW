@@ -130,8 +130,13 @@ def project_working_state(
     minimum_completion_steps = _minimum_completion_steps(context)
     observation_history = context.get("tool_observation_history")
     recent_observations = (
-        list(observation_history[-5:]) if isinstance(observation_history, list) else []
+        # 最新观察已经单独放在 last_observation，避免在两个字段中重复发送。
+        list(observation_history[-5:-1])
+        if isinstance(observation_history, list)
+        else []
     )
+    compiled_sql = context.get("compiled_sql")
+    validated_sql = context.get("validated_sql")
     return {
         "progress": progress_name(context),
         "semantic": {
@@ -149,8 +154,13 @@ def project_working_state(
         "artifacts": {
             "semantic_scope_ready": bool(context.get("semantic_scope")),
             "physical_schema_ready": bool(context.get("physical_schema_loaded")),
-            "compiled_sql": context.get("compiled_sql"),
-            "validated_sql": context.get("validated_sql"),
+            # SQL 由服务端状态保存，模型只需要知道是否已经生成或校验完成。
+            "compiled_sql_ready": bool(
+                isinstance(compiled_sql, str) and compiled_sql.strip()
+            ),
+            "validated_sql_ready": bool(
+                isinstance(validated_sql, str) and validated_sql.strip()
+            ),
             "execution_ready": bool(context.get("last_execution")),
         },
         "last_observation": context.get("last_tool_observation"),
