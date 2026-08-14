@@ -38,7 +38,10 @@ def semantic_status(context: dict[str, Any]) -> str | None:
 def has_critical_ambiguity(context: dict[str, Any]) -> bool:
     """判断当前语义结果是否必须先询问用户。"""
 
-    return semantic_status(context) in CRITICAL_SEMANTIC_STATUSES
+    return (
+        context.get("time_parse_status") == "unsupported"
+        or semantic_status(context) in CRITICAL_SEMANTIC_STATUSES
+    )
 
 
 def has_resolved_semantics(context: dict[str, Any]) -> bool:
@@ -137,6 +140,11 @@ def project_working_state(
             "ambiguity_required": has_critical_ambiguity(context),
             "plan_fingerprint": _semantic_plan_fingerprint(context),
             "validation_reason_codes": _semantic_validation_reason_codes(context),
+        },
+        "time": {
+            "status": context.get("time_parse_status"),
+            "raw": context.get("time_parse_raw"),
+            "normalized": context.get("time_range"),
         },
         "artifacts": {
             "semantic_scope_ready": bool(context.get("semantic_scope")),

@@ -26,6 +26,7 @@ from apps.chatbi.orchestration.agent.tool_results import ChatBIToolResultProcess
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContextServices
 from apps.chatbi.orchestration.agent.tools.core import FinishTool
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
+from apps.chatbi.orchestration.agent.tools.temporal import ParseTimeRangeTool
 from apps.chatbi.services.execution import ResultArtifactService
 from apps.chatbi.services.planning import PhysicalSchemaService
 from apps.chatbi.services.understanding import QuestionUnderstandingService
@@ -82,6 +83,7 @@ def build_agent_tool_registry(
     registry.register(CompileSemanticSqlTool(semantic_query_service, query_service))
     registry.register(FinishTool())
     registry.register(ClarifyTool())
+    registry.register(ParseTimeRangeTool())
     registry.register(GetDatasetSchemaTool(physical_schema_service))
     registry.register(ValidateSqlTool(query_service))
     registry.register(ExecuteSqlTool(query_service))

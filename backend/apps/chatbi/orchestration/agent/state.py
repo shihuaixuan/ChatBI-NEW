@@ -64,7 +64,7 @@ class AgentRuntimeState:
         return {
             key: value
             for key, value in self.context.state.items()
-            if key not in {"full_data", "tool_offloads"}
+            if key not in {"full_data", "tool_offloads", "semantic_schema"}
         }
 
     def budget_snapshot(self) -> dict[str, Any]:
@@ -109,6 +109,7 @@ class AgentRuntimeStateFactory:
             dataset_id=record.dataset_id,
             result_artifact_service=self._tool_services.result_artifact_service,
             config=self._config,
+            temporal_context=TemporalContext.model_validate(run.temporal_context),
             state={"question": record.question or ""},
         )
         budget = BudgetGuard(

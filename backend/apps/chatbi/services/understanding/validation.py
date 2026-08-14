@@ -192,10 +192,9 @@ def validate_question_understanding(
             )
     elif str(data.time_range.get("value_status") or "").lower() == "provided":
         normalized_time = data.time_range.get("normalized")
-        if (
-            not isinstance(normalized_time, dict)
-            or normalized_time.get("kind") == "unsupported"
-        ):
+        # 未解析表示等待 ReAct 的时间工具处理；只有工具明确返回 unsupported
+        # 才能判定为不支持，不能在前置问题理解阶段提前拦截。
+        if isinstance(normalized_time, dict) and normalized_time.get("kind") == "unsupported":
             issues.append(
                 QuestionUnderstandingValidationIssue(
                     code="time_range_unsupported",

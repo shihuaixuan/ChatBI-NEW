@@ -23,7 +23,12 @@ from apps.semantic import (
     SemanticUsedAsset,
     SemanticValidationError,
 )
-from apps.tool.base import Tool, ToolExecutionPolicy, json_summary
+from apps.tool.base import (
+    Tool,
+    ToolConcurrency,
+    ToolExecutionPolicy,
+    json_summary,
+)
 from apps.tool.context import current_tool_call_context
 from apps.tool.result import RetryAdvice, ToolErrorCategory, ToolResult
 from apps.tool.tools.context import TrustedToolContext
@@ -145,7 +150,10 @@ class SearchSemanticAssetsTool(
     )
     args_model = SearchSemanticAssetsArgs
     result_model = SearchSemanticAssetsResult
-    execution = ToolExecutionPolicy(timeout_seconds=30)
+    execution = ToolExecutionPolicy(
+        concurrency=ToolConcurrency.PARALLEL_SAFE,
+        timeout_seconds=30,
+    )
 
     def __init__(
         self,
@@ -245,7 +253,7 @@ class SearchSemanticAssetsTool(
                 error_category=ToolErrorCategory.AUTHORIZATION,
             )
 
-        package = _project_semantic_package(retrieval.payload, authorized)
+        package = project_semantic_package(retrieval.payload, authorized)
         package_keys = {
             (item.asset_type, item.asset_id) for item in package.allowed_asset_ids
         }
@@ -281,17 +289,20 @@ class SearchSemanticAssetsTool(
             ),
             permission_version=request.scope.permission_version,
         )
+        schema = None
+        if self._schema_provider is not None:
+            # 并发时间解析完成后需要用同一份 Schema 重新绑定默认时间维度。
+            schema = self._schema_provider.build_dataset_schema(
+                ctx.workspace_id,
+                ctx.dataset_id,
+            )
         if scope.semantic_enforcement == "STRICT":
-            if self._schema_provider is None:
+            if schema is None:
                 return ToolResult.rejected(
                     "严格语义数据集缺少运行时 Schema，禁止进入 Agent 编译链路。",
                     error_code="semantic_schema_provider_required",
                     error_category=ToolErrorCategory.CONFIGURATION,
                 )
-            schema = self._schema_provider.build_dataset_schema(
-                ctx.workspace_id,
-                ctx.dataset_id,
-            )
             try:
                 query_plan, validation_report = project_semantic_query_plan(
                     schema,
@@ -319,6 +330,9 @@ class SearchSemanticAssetsTool(
         bundle_dump = getattr(retrieval.bundle, "model_dump", None)
         if callable(bundle_dump):
             metadata["semantic_bundle"] = bundle_dump(mode="json")
+        if schema is not None:
+            # 时间工具可能与语义检索并行；结果投影阶段用该快照重建含时间的计划。
+            metadata["semantic_schema"] = schema.model_dump(mode="json")
         return ToolResult.succeeded(
             json_summary(package.model_dump(mode="json"), ctx.summary_max_chars),
             data,
@@ -865,7 +879,7 @@ def _validate_compiled_plan_coverage(
     }
 
 
-def _project_semantic_package(
+def project_semantic_package(
     payload: dict[str, Any],
     authorized_tables: set[str],
 ) -> SemanticAssetPackage:
@@ -946,6 +960,7 @@ __all__ = [
     "CompileSemanticSqlArgs",
     "CompileSemanticSqlResult",
     "CompileSemanticSqlTool",
+    "project_semantic_package",
     "SearchSemanticAssetsArgs",
     "SearchSemanticAssetsResult",
     "SearchSemanticAssetsTool",

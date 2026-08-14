@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
 from apps.chatbi.models import ResultArtifactWriteData
+from apps.chatbi.orchestration.agent.semantic_projection import (
+    refresh_semantic_projection,
+)
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.services.execution import ResultArtifactWriteError
 from apps.conversation import ChatRecordExecutionType
@@ -84,6 +88,8 @@ class ChatBIToolResultProcessor:
         base_summary = {"success": True, "status": result.status.value}
         if tool_name == "search_semantic_assets":
             return self._semantic_assets(context, result, payload, base_summary)
+        if tool_name == "parse_time_range":
+            return self._time_range(context, result, payload, base_summary)
         if tool_name == "get_dataset_schema":
             tables = self._merge_tables(
                 context,
@@ -189,9 +195,19 @@ class ChatBIToolResultProcessor:
             "semantic_payload",
             "semantic_retrieval_request",
             "semantic_retrieval_filters",
+            "semantic_schema",
         ):
             if key in result.metadata:
                 state_patch[key] = result.metadata[key]
+        package, scope, snapshot_patch = refresh_semantic_projection(
+            {**context.state, **state_patch},
+            package,
+            scope,
+            schema_data=result.metadata.get("semantic_schema"),
+        )
+        state_patch.update(snapshot_patch)
+        state_patch["semantic_package"] = package
+        state_patch["semantic_scope"] = scope
         return ToolResultProjection(
             result=result,
             state_patch=state_patch,
@@ -219,6 +235,69 @@ class ChatBIToolResultProcessor:
                 ),
             },
         )
+
+    def _time_range(
+        self,
+        context: AgentToolContext,
+        result: ToolResult[Any],
+        payload: dict[str, Any],
+        base_summary: dict[str, Any],
+    ) -> ToolResultProjection:
+        """把时间工具结果写回问题理解，并刷新已完成检索的查询计划。"""
+
+        status = str(payload.get("status") or "")
+        state_patch: dict[str, Any] = {
+            "time_parse_status": status,
+            "time_parse_raw": payload.get("raw"),
+        }
+        if status == "resolved":
+            understanding = deepcopy(context.state.get("question_understanding"))
+            if isinstance(understanding, dict):
+                intent = understanding.get("intent")
+                if isinstance(intent, dict):
+                    time_range = dict(intent.get("time_range") or {})
+                    time_range.update(
+                        {
+                            "raw": payload.get("raw"),
+                            "value_status": "provided",
+                            "normalized": payload.get("normalized"),
+                            "interpretation_source": "jionlp",
+                        }
+                    )
+                    intent["time_range"] = time_range
+                    state_patch["question_understanding"] = understanding
+            state_patch["time_range"] = payload.get("normalized")
+            package = context.state.get("semantic_package")
+            scope = context.state.get("semantic_scope")
+            if isinstance(package, dict) and isinstance(scope, dict):
+                (
+                    refreshed_package,
+                    refreshed_scope,
+                    snapshot_patch,
+                ) = refresh_semantic_projection(
+                    {**context.state, **state_patch},
+                    package,
+                    scope,
+                    schema_data=context.state.get("semantic_schema"),
+                )
+                state_patch.update(
+                    {
+                        "semantic_package": refreshed_package,
+                        "semantic_scope": refreshed_scope,
+                        **snapshot_patch,
+                    }
+                )
+
+        return ToolResultProjection(
+            result=result,
+            state_patch=state_patch,
+            audit_summary={
+                **base_summary,
+                "time_status": status,
+                "normalized": payload.get("normalized"),
+            },
+        )
+
 
     def _execution(
         self,

@@ -1745,13 +1745,9 @@ def test_understanding_rewrites_followup_before_recognizing_intent():
 
     assert outcome.output.rewritten_question == "按城市统计上个月销售额"
     assert outcome.output.intent.metric_mentions == ["销售额"]
-    assert outcome.output.intent.time_range.normalized == {
-        "kind": "absolute_range",
-        "start": "2026-06-01",
-        "end_exclusive": "2026-07-01",
-        "timezone": "Asia/Shanghai",
-        "source_raw": "上个月",
-    }
+    # Agent 前置阶段只保留原始时间表达，实际解析由 ReAct 时间工具完成。
+    assert outcome.output.intent.time_range.normalized is None
+    assert outcome.output.intent.time_range.interpretation_source is None
     assert outcome.output.validation.status == "valid"
     assert outcome.usage_metadata["total_tokens"] == 80
     intent_request = orjson.loads(model.calls[1][1])
@@ -1759,7 +1755,7 @@ def test_understanding_rewrites_followup_before_recognizing_intent():
     assert "那上个月呢" not in model.calls[1][1]
 
 
-def test_understanding_normalizes_today_before_agent_planning():
+def test_understanding_keeps_today_for_agent_time_tool():
     model = ScriptedUnderstandingModel(
         [
             _understanding_response(
@@ -1815,13 +1811,8 @@ def test_understanding_normalizes_today_before_agent_planning():
         ),
     )
 
-    assert outcome.output.intent.time_range.normalized == {
-        "kind": "absolute_range",
-        "start": "2026-07-31",
-        "end_exclusive": "2026-08-01",
-        "timezone": "Asia/Shanghai",
-        "source_raw": "今天",
-    }
+    assert outcome.output.intent.time_range.raw == "今天"
+    assert outcome.output.intent.time_range.normalized is None
     assert outcome.output.intent.dimension_mentions == ["店铺"]
     assert outcome.output.validation.status == "clarification_required"
     assert "dimension_role_ambiguous" in outcome.output.validation.reason_codes
@@ -1943,7 +1934,7 @@ def test_understanding_does_not_treat_ambiguous_dimension_role_as_missing_filter
     assert "dimension_value_ambiguous" not in outcome.output.validation.reason_codes
 
 
-def test_understanding_requires_clarification_for_unsupported_time_range():
+def test_understanding_does_not_reject_time_before_agent_time_tool():
     model = ScriptedUnderstandingModel(
         [
             _understanding_response(
@@ -1973,14 +1964,10 @@ def test_understanding_requires_clarification_for_unsupported_time_range():
         datasource_id=5,
     )
 
-    assert outcome.output.intent.time_range.normalized == {
-        "kind": "unsupported",
-        "raw": "发薪日",
-        "timezone": "Asia/Shanghai",
-    }
+    assert outcome.output.intent.time_range.normalized is None
     assert outcome.output.validation.status == "clarification_required"
-    assert "time_range_unsupported" in outcome.output.validation.reason_codes
-    assert "time_range" in outcome.output.validation.clarification_slots
+    assert "time_range_unsupported" not in outcome.output.validation.reason_codes
+    assert "time_range" not in outcome.output.validation.clarification_slots
 
 
 def test_understanding_marks_missing_metric_for_clarification_without_guessing():

@@ -686,6 +686,13 @@ class AgentToolExecutor:
                     )
                     self._session.commit()
                     clarification_options = list(data.get("options") or [])
+                    resume_payload = _agent_tool_resume_payload(
+                        context.state,
+                        clarification_options,
+                    )
+                    queued_clarifications = data.get("pending_clarifications")
+                    if isinstance(queued_clarifications, list) and queued_clarifications:
+                        resume_payload["pending_clarifications"] = queued_clarifications
                     yield self._lifecycle.suspend(
                         state,
                         str(data["question"]),
@@ -693,10 +700,7 @@ class AgentToolExecutor:
                         call_id,
                         step.id,
                         resume_kind=AgentClarificationResumeKind.AGENT_TOOL,
-                        resume_payload=_agent_tool_resume_payload(
-                            context.state,
-                            clarification_options,
-                        ),
+                        resume_payload=resume_payload,
                     )
                     return ToolExecutionResult(ToolExecutionStatus.SUSPENDED)
 

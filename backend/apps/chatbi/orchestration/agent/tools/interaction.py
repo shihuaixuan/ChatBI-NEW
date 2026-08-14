@@ -54,6 +54,7 @@ class ClarifyResult(BaseModel):
 
     question: str
     options: list[dict[str, Any]] = Field(default_factory=list)
+    pending_clarifications: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def prepare_semantic_clarification_args(
@@ -298,11 +299,26 @@ class ClarifyTool(AgentTool):
                     )
         else:
             options = args.options
+        pending_clarifications: list[dict[str, Any]] = []
+        if ctx.state.get("time_parse_status") == "unsupported" and any(
+            option.bindings for option in options
+        ):
+            # 当前卡片先处理模型已识别的业务歧义，时间卡片在用户回答后继续展示。
+            pending_clarifications.append(
+                {
+                    "question": "当前时间表达暂不支持，请提供明确的起止日期。",
+                    "options": [],
+                    "tool_call_id": None,
+                    "resume_kind": "question_understanding",
+                    "resume_payload": {"operation": "resolve_time_range"},
+                }
+            )
         return ToolResult.succeeded(
             "clarify",
             ClarifyResult(
                 question=args.question,
                 options=[option.model_dump() for option in options],
+                pending_clarifications=pending_clarifications,
             ),
         )
 

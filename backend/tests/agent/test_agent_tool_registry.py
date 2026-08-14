@@ -11,6 +11,7 @@ from apps.chatbi.orchestration.agent.tools.core import (
     FinishTool,
 )
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
+from apps.chatbi.orchestration.agent.tools.temporal import ParseTimeRangeTool
 from apps.tool import ToolCall, ToolRegistry, ToolResult, ToolStatus
 from apps.tool.tools.datasource import (
     ExecuteSqlTool,
@@ -85,9 +86,10 @@ def test_all_production_tools_have_input_and_output_schema():
         ExecuteSqlTool(object()),  # type: ignore[arg-type]
         SearchTerminologyTool(object()),  # type: ignore[arg-type]
         GetSqlExamplesTool(object()),  # type: ignore[arg-type]
+        ParseTimeRangeTool(),
     ]
-    assert len(tools) == 9
-    assert len({tool.name for tool in tools}) == 9
+    assert len(tools) == 10
+    assert len({tool.name for tool in tools}) == 10
     for tool in tools:
         definition = tool.definition()
         assert definition.input_schema["type"] == "object"

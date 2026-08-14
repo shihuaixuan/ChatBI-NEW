@@ -21,6 +21,9 @@ from apps.chatbi.orchestration.agent.prompts import (
     build_runtime_context,
     build_system_prompt,
 )
+from apps.chatbi.orchestration.agent.semantic_projection import (
+    refresh_semantic_projection,
+)
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.understanding import (
@@ -41,6 +44,7 @@ from apps.retrieval import (
     bundle_to_semantic_payload,
 )
 from apps.semantic.services.schema_service import DatasetSchemaProvider
+from apps.temporal import resolve_time_range
 from apps.tool.tools.semantic_contracts import (
     project_semantic_compile_plan,
     project_semantic_query_plan,
@@ -296,31 +300,47 @@ class AgentInputPreparer:
                 understanding = previous_understanding
             elif resume_kind == AgentClarificationResumeKind.QUESTION_UNDERSTANDING:
                 resume_payload = clarification.resume_payload or {}
-                if resume_payload.get("operation") == "resolve_temporal_plan":
-                    resolved_outcome = (
-                        self._understanding_service.resolve_temporal_clarification(
+                if resume_payload.get("operation") == "resolve_time_range":
+                    understanding = self._apply_time_range_clarification(
+                        state,
+                        previous_understanding,
+                        clarification,
+                        answer_text,
+                    )
+                    state.context.state.update(
+                        {
+                            "question": understanding.get("rewritten_question"),
+                            "question_understanding": understanding,
+                            "time_parse_status": "resolved",
+                        }
+                    )
+                    understanding_updated = True
+                else:
+                    if resume_payload.get("operation") == "resolve_temporal_plan":
+                        resolved_outcome = (
+                            self._understanding_service.resolve_temporal_clarification(
+                                understanding=previous_understanding,
+                                answer=clarification.answer or {},
+                                temporal_context=state.temporal_context,
+                            )
+                        )
+                        state.budget.record_llm_usage(resolved_outcome.usage_metadata)
+                        updated_output = resolved_outcome.output
+                    else:
+                        updated_output = apply_question_understanding_clarification(
                             understanding=previous_understanding,
+                            resume_payload=resume_payload,
                             answer=clarification.answer or {},
                             temporal_context=state.temporal_context,
                         )
+                    understanding = updated_output.model_dump(mode="json")
+                    state.context.state.update(
+                        {
+                            "question": updated_output.rewritten_question,
+                            "question_understanding": understanding,
+                        }
                     )
-                    state.budget.record_llm_usage(resolved_outcome.usage_metadata)
-                    updated_output = resolved_outcome.output
-                else:
-                    updated_output = apply_question_understanding_clarification(
-                        understanding=previous_understanding,
-                        resume_payload=resume_payload,
-                        answer=clarification.answer or {},
-                        temporal_context=state.temporal_context,
-                    )
-                understanding = updated_output.model_dump(mode="json")
-                state.context.state.update(
-                    {
-                        "question": updated_output.rewritten_question,
-                        "question_understanding": understanding,
-                    }
-                )
-                understanding_updated = True
+                    understanding_updated = True
             else:  # pragma: no cover - 枚举构造已经覆盖所有合法类型。
                 raise QuestionUnderstandingError(
                     "CLARIFICATION_RESUME_KIND_UNSUPPORTED"
@@ -378,6 +398,45 @@ class AgentInputPreparer:
             )
         yield self._lifecycle.resume(state)
 
+        pending_clarifications = (clarification.resume_payload or {}).get(
+            "pending_clarifications"
+        )
+        if isinstance(pending_clarifications, list) and pending_clarifications:
+            # 当前回答已经写入状态，先切换回运行态，再创建队列中的下一张卡片。
+            next_card = pending_clarifications[0]
+            remaining_cards = pending_clarifications[1:]
+            if not isinstance(next_card, dict):
+                raise QuestionUnderstandingError("CLARIFICATION_QUEUE_ITEM_INVALID")
+            next_payload = next_card.get("resume_payload")
+            if not isinstance(next_payload, dict):
+                raise QuestionUnderstandingError("CLARIFICATION_QUEUE_PAYLOAD_INVALID")
+            next_payload = dict(next_payload)
+            if remaining_cards:
+                next_payload["pending_clarifications"] = remaining_cards
+            clarify_verdict = state.chatbi_budget.record_clarification()
+            if not clarify_verdict.allowed:
+                yield from self._lifecycle.fail(
+                    state,
+                    clarify_verdict.reason or "澄清次数已达上限",
+                    clarify_verdict.error_class or AgentErrorClass.BUDGET.value,
+                )
+                return
+            yield self._lifecycle.suspend(
+                state,
+                str(next_card.get("question") or "请补充必要信息。"),
+                list(next_card.get("options") or []),
+                next_card.get("tool_call_id"),
+                None,
+                resume_kind=AgentClarificationResumeKind(
+                    str(
+                        next_card.get("resume_kind")
+                        or AgentClarificationResumeKind.QUESTION_UNDERSTANDING.value
+                    )
+                ),
+                resume_payload=next_payload,
+            )
+            return False
+
         if understanding_updated:
             yield self._question_understood_event(state, understanding)
             preflight = self._preflight_clarification(understanding)
@@ -385,6 +444,67 @@ class AgentInputPreparer:
                 yield from self._suspend_for_preflight_clarification(state, preflight)
                 return False
         return True
+
+    def _apply_time_range_clarification(
+        self,
+        state: AgentRuntimeState,
+        previous_understanding: dict[str, Any],
+        clarification: ChatbiAgentClarification,
+        answer_text: str,
+    ) -> dict[str, Any]:
+        """解析用户补充的明确时间，并回填问题理解。"""
+
+        answer = clarification.answer or {}
+        raw = str(answer.get("text") or answer_text).strip()
+        normalized = resolve_time_range(raw, state.temporal_context)
+        if not isinstance(normalized, dict) or normalized.get("kind") == "unsupported":
+            raise QuestionUnderstandingError("TIME_RANGE_CLARIFICATION_UNSUPPORTED")
+        understanding = json.loads(json.dumps(previous_understanding, ensure_ascii=False))
+        intent = understanding.get("intent")
+        if not isinstance(intent, dict):
+            raise QuestionUnderstandingError("TIME_RANGE_CLARIFICATION_INTENT_MISSING")
+        time_range = dict(intent.get("time_range") or {})
+        time_range.update(
+            {
+                "raw": raw,
+                "value_status": "provided",
+                "normalized": normalized,
+                "interpretation_source": "user_confirmation",
+            }
+        )
+        intent["time_range"] = time_range
+        package = state.context.state.get("semantic_package")
+        scope = state.context.state.get("semantic_scope")
+        if isinstance(package, dict) and isinstance(scope, dict):
+            schema_data = state.context.state.get("semantic_schema")
+            if scope.get("semantic_enforcement") == "STRICT" and not isinstance(
+                schema_data, dict
+            ):
+                schema_data = self._semantic_schema_provider.build_dataset_schema(
+                    scope["workspace_id"],
+                    scope["dataset_id"],
+                ).model_dump(mode="json")
+            (
+                refreshed_package,
+                refreshed_scope,
+                snapshot_patch,
+            ) = refresh_semantic_projection(
+                {
+                    **state.context.state,
+                    "question_understanding": understanding,
+                },
+                package,
+                scope,
+                schema_data=schema_data,
+            )
+            state.context.state.update(
+                {
+                    "semantic_package": refreshed_package,
+                    "semantic_scope": refreshed_scope,
+                    **snapshot_patch,
+                }
+            )
+        return understanding
 
     def _apply_semantic_clarification(
         self,

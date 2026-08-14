@@ -10,6 +10,7 @@ from apps.chatbi.orchestration.agent.working_state import (
 )
 
 PREPARATION_TOOLS = (
+    "parse_time_range",
     "search_semantic_assets",
     "search_terminology",
     "get_sql_examples",

@@ -273,6 +273,7 @@ class QuestionUnderstandingService:
             raise ValueError("QUESTION_UNDERSTANDING_MODEL_SERVICE_REQUIRED")
         self._schema_provider = schema_provider
         self._trace_recorder = trace_recorder or DisabledAgentTraceRecorder()
+        self._temporal_shadow_enabled = temporal_shadow_enabled
         temporal_enabled = temporal_shadow_enabled or temporal_authority_enabled
         if temporal_interpretation_service is not None and not temporal_enabled:
             raise ValueError("TEMPORAL_INTERPRETATION_SERVICE_DISABLED")
@@ -416,7 +417,9 @@ class QuestionUnderstandingService:
                     }
                 ),
                 fixed_temporal_context,
-                use_legacy_time_interpretation=not self._temporal_authority_enabled,
+                # Agent 前置阶段只识别原始时间表达，实际解析交给 ReAct 的时间工具。
+                # 旁路评估需要保留一份旧解析基线，但它不参与默认 Agent 执行。
+                use_legacy_time_interpretation=self._temporal_shadow_enabled,
             )
             if merge_node is not None:
                 merge_node.set_output(
@@ -984,7 +987,8 @@ def apply_question_understanding_clarification(
             }
         ),
         temporal_context,
-        use_legacy_time_interpretation=(previous.temporal_interpretation is None),
+        # 恢复问题理解澄清时同样不在前置阶段解析时间，避免绕过 Agent 时间工具。
+        use_legacy_time_interpretation=False,
     )
     # 重写结果已经在挂起前确定；这里只重新执行无模型副作用的业务校验。
     rewrite = QuestionRewriteOutput(
@@ -1501,28 +1505,20 @@ def _stabilize_intent(
         if use_legacy_time_interpretation
         else intent.time_range
     )
-    metric_internal_time_mentions = (
-        {
-            mention
-            for mention in intent.time_mentions
-            if mention != time_range.raw
-            and any(
-                mention != metric and mention in metric
-                for metric in intent.metric_mentions
-            )
-        }
-        if use_legacy_time_interpretation
-        else set()
-    )
-    time_mentions = (
-        [
-            mention
-            for mention in intent.time_mentions
-            if mention not in metric_internal_time_mentions
-        ]
-        if use_legacy_time_interpretation
-        else list(intent.time_mentions)
-    )
+    metric_internal_time_mentions = {
+        mention
+        for mention in intent.time_mentions
+        if mention != time_range.raw
+        and any(
+            mention != metric and mention in metric
+            for metric in intent.metric_mentions
+        )
+    }
+    time_mentions = [
+        mention
+        for mention in intent.time_mentions
+        if mention not in metric_internal_time_mentions
+    ]
     if time_range.raw and time_range.raw not in time_mentions:
         time_mentions.append(time_range.raw)
 

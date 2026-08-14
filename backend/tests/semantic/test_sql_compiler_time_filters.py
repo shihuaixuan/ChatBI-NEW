@@ -205,7 +205,7 @@ def test_sql_compiler_renders_current_year_as_calendar_range():
     assert "business_model.stat_date < '2027-01-01'" in sql
 
 
-def test_sql_compiler_renders_fiscal_quarter_as_absolute_range():
+def test_sql_compiler_rejects_fiscal_quarter_without_fiscal_support():
     value = resolve_time_range(
         "2026财年第2季度",
         build_temporal_context(
@@ -219,16 +219,15 @@ def test_sql_compiler_renders_fiscal_quarter_as_absolute_range():
         ),
     )
 
-    sql = _compile_raw_time_ast(value)
-
-    assert "business_model.stat_date >= '2026-07-01'" in sql
-    assert "business_model.stat_date < '2026-10-01'" in sql
+    with pytest.raises(ValueError, match="SEMANTIC_SQL_TIME_RANGE_UNSUPPORTED"):
+        _compile_raw_time_ast(value)
 
 
 def test_sql_compiler_renders_recent_months_as_rolling_window():
     sql = _compile_time_filter("最近3个月")
 
-    assert "business_model.stat_date >= '2026-04-05'" in sql
+    # JioNLP 以当前日期为包含边界，适配层按日期转换为 4 月 4 日起。
+    assert "business_model.stat_date >= '2026-04-04'" in sql
     assert "business_model.stat_date < '2026-07-05'" in sql
 
 

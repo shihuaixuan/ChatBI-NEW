@@ -12,6 +12,7 @@ from apps.temporal.models import TemporalContext
 _DAY_START = time.min
 _DAY_END = time(23, 59, 59)
 _GRAIN_SUFFIXES = ("每天", "每日", "按天", "按日", "按周", "按月", "按季度", "按年")
+_UNSUPPORTED_FISCAL_MARKERS = ("财年", "财季")
 
 
 def parse_jionlp_time(
@@ -23,6 +24,8 @@ def parse_jionlp_time(
     text = _normalize_text(raw)
     if not text:
         return None
+    if any(marker in text for marker in _UNSUPPORTED_FISCAL_MARKERS):
+        return _unsupported(raw, temporal_context)
     parse_text = _strip_grain_suffix(text)
     try:
         parsed = jio.parse_time(
@@ -103,6 +106,9 @@ def _to_date_range(
     # JioNLP 对“最近 N 天”会返回相同的非零时刻，按日期查询时向上取整。
     if start.time() == end.time() and start.time() != _DAY_START:
         return start.date() + timedelta(days=1), end.date() + timedelta(days=1)
+    # JioNLP 对“最近 N 个月”会返回起点零点和基准时刻，按日期查询时包含基准日。
+    if start.time() == _DAY_START and end.time() != _DAY_END:
+        return start.date(), end.date() + timedelta(days=1)
     return None
 
 

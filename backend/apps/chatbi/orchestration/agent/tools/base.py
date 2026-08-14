@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from apps.retrieval import RetrievalRequest, build_semantic_binding_request
+from apps.temporal import TemporalContext
 from apps.tool import Tool
 from apps.tool.tools.semantic_contracts import SemanticAssetScope
 
@@ -50,6 +51,8 @@ class AgentToolContext:
     dataset_id: int | None = None
     result_artifact_service: ResultArtifactWriter | None = None
     config: Any = None
+    # Run 创建时固定的时间上下文，时间工具只能读取，不能重新生成。
+    temporal_context: TemporalContext | None = None
     # 循环内跨工具共享的运行时状态（语义包、执行结果标记等），由 loop 维护。
     state: dict[str, Any] = field(default_factory=dict)
 
