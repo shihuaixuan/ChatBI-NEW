@@ -42,24 +42,30 @@ class FakeDimension:
 
 
 class FakeSchemaProvider:
+    def __init__(self, *, include_overtime=False):
+        self._include_overtime = include_overtime
+
     def build_dataset_schema(self, oid, dataset_id):
         assert (oid, dataset_id) == (1, 243)
+        dimensions = [
+            FakeDimension("统计日期", [], "date", is_time=True),
+            FakeDimension("档口ID", ["店铺", "档口", "门店"], "bigint"),
+            FakeDimension("商品ID", [], "varchar"),
+            FakeDimension("客户ID", ["客户"], "varchar"),
+            FakeDimension("客户名称", ["客户"], "varchar"),
+            FakeDimension(
+                "交易渠道，如线上或线下",
+                ["渠道", "线上", "线下"],
+                "varchar",
+            ),
+        ]
+        if self._include_overtime:
+            dimensions.append(FakeDimension("是否超时", ["超时"], "boolean"))
         return type(
             "Schema",
             (),
             {
-                "dimensions": [
-                    FakeDimension("统计日期", [], "date", is_time=True),
-                    FakeDimension("档口ID", ["店铺", "档口", "门店"], "bigint"),
-                    FakeDimension("商品ID", [], "varchar"),
-                    FakeDimension("客户ID", ["客户"], "varchar"),
-                    FakeDimension("客户名称", ["客户"], "varchar"),
-                    FakeDimension(
-                        "交易渠道，如线上或线下",
-                        ["渠道", "线上", "线下"],
-                        "varchar",
-                    ),
-                ]
+                "dimensions": dimensions
             },
         )()
 
@@ -90,6 +96,82 @@ def _intent_payload(metric):
         "ambiguous_slots": [],
         "conflict_slots": [],
     }
+
+
+def test_detail_query_reclassifies_dimension_mentioned_as_metric():
+    question = (
+        "2026年6月30日店铺100011的未发订单号USO202606300001的"
+        "订单金额、未发件数和是否超时是多少？"
+    )
+    model = SequenceQuestionModel(
+        [
+            _rewrite_payload(question),
+            {
+                "intent_type": "detail_query",
+                "confidence": 0.95,
+                "metric_mentions": ["订单金额", "未发件数", "是否超时"],
+                "dimension_mentions": [],
+                "dimension_slots": [],
+                "time_mentions": ["2026年6月30日"],
+                "time_range": {
+                    "raw": "2026年6月30日",
+                    "value_status": "provided",
+                },
+                "filter_mentions": [],
+                "required_slot_types": [],
+                "query_shape": {
+                    "select_mode": "detail",
+                    "needs_group_by": False,
+                    "needs_order_by": False,
+                    "order_direction": None,
+                    "limit": None,
+                    "time_grain": None,
+                },
+                "ambiguous_slots": [],
+                "conflict_slots": [],
+            },
+            {
+                "dimension_mentions": ["店铺", "未发订单号"],
+                "dimension_slots": [
+                    {
+                        "name": "店铺",
+                        "role": "filter",
+                        "value": "100011",
+                        "value_status": "provided",
+                        "value_confidence": 1.0,
+                    },
+                    {
+                        "name": "未发订单号",
+                        "role": "filter",
+                        "value": "USO202606300001",
+                        "value_status": "provided",
+                        "value_confidence": 1.0,
+                    },
+                ],
+                "filter_mentions": [],
+                "ambiguous_slots": [],
+                "conflict_slots": [],
+            },
+        ]
+    )
+
+    outcome = QuestionUnderstandingService(
+        model_client=model,
+        schema_provider=FakeSchemaProvider(include_overtime=True),
+    ).understand(
+        question=question,
+        datasource_id=13,
+        tenant_id=1,
+        dataset_id=243,
+    )
+
+    intent = outcome.output.intent
+    assert intent.metric_mentions == ["订单金额", "未发件数"]
+    assert ("是否超时", "display") in [
+        (slot.name, slot.role) for slot in intent.dimension_slots
+    ]
+    assert "是否超时" in intent.dimension_mentions
+    assert outcome.output.validation.status == "valid"
 
 
 def test_agent_understanding_retries_invalid_filter_mentions_and_uses_schema_aliases():

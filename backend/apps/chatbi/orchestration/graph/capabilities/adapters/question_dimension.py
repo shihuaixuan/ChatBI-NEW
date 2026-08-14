@@ -46,7 +46,7 @@ def build_dimension_slots_prompt(
 {
   "dimension_mentions": [],
   "dimension_slots": [
-    {"name": "自然语言维度名", "role": "group_by | filter | ambiguous", "value": null, "value_status": "provided | not_provided | ambiguous", "value_confidence": 0.0}
+    {"name": "自然语言维度名", "role": "group_by | filter | display | ambiguous", "value": null, "value_status": "provided | not_provided | ambiguous", "value_confidence": 0.0}
   ],
   "residual_filter_mentions": [],
   "ambiguous_slots": [],

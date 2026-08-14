@@ -95,7 +95,7 @@ class RetrievalDimensionSlot(_StrictModel):
     """问题理解投影到检索边界的维度槽位。"""
 
     name: str = Field(min_length=1)
-    role: Literal["group_by", "filter", "ambiguous"]
+    role: Literal["group_by", "filter", "display", "ambiguous"]
     value: str | int | float | bool | list[str | int | float | bool] | None = None
     value_status: Literal["provided", "not_provided", "ambiguous"] = "not_provided"
 
@@ -166,7 +166,7 @@ class RetrievalSubQuery(_StrictModel):
     subquery_id: str = Field(min_length=1)
     purpose: RetrievalPurpose
     text: str = Field(min_length=1)
-    role: Literal["group_by", "filter", "ambiguous"] | None = None
+    role: Literal["group_by", "filter", "display", "ambiguous"] | None = None
     required: bool = True
     filters: dict[str, Any] = Field(default_factory=dict)
 

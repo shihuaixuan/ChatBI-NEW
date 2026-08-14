@@ -26,6 +26,7 @@ from apps.chatbi.models.dto.question_model import (
 )
 from apps.chatbi.models.dto.question_understanding import (
     DimensionRecognitionOutput,
+    DimensionSlot,
     IntentRecognitionOutput,
     IntentValidationOutput,
     QuestionRewriteOutput,
@@ -202,7 +203,7 @@ DIMENSION_SYSTEM_PROMPT = "\n\n".join(
 {
   "dimension_mentions": [],
   "dimension_slots": [
-    {"name": "自然语言维度名", "role": "group_by | filter | ambiguous", "value": null, "value_status": "provided | not_provided | ambiguous", "value_confidence": 0.0}
+    {"name": "自然语言维度名", "role": "group_by | filter | display | ambiguous", "value": null, "value_status": "provided | not_provided | ambiguous", "value_confidence": 0.0}
   ],
   "residual_filter_mentions": [
     {"name": "无法归属到可用维度的条件名", "value": "条件值", "operator": "="}
@@ -223,6 +224,7 @@ Agent 示例：
 - residual_filter_mentions 只保留无法归属到任何 available_dimensions 的剩余条件，每个元素必须是对象，不能输出字符串。
 - “最高的5个门店”“最低的3个商品”中的门店、商品是被排名对象，role=group_by。
 - “各渠道占比”中的渠道是构成维度，role=group_by。
+- 明细查询中“订单金额、状态和是否超时”等直接返回的字段，role=display。
 - “比较北京和上海的销售额”中承载北京、上海的维度是比较维度；有明确值时 role=filter 且 value 为值数组。
 - “今天门店的客户数”：门店 role=ambiguous。
 - “今天各门店的客户数”：门店 role=group_by。
@@ -402,19 +404,24 @@ class QuestionUnderstandingService:
                 "dimension_slot_count": len(dimensions.dimension_slots),
             },
         ) as merge_node:
+            merged_intent = intent.model_copy(
+                update={
+                    "dimension_mentions": dimensions.dimension_mentions,
+                    "dimension_slots": dimensions.dimension_slots,
+                    "filter_mentions": dimensions.residual_filter_mentions,
+                    "ambiguous_slots": _unique_strings(
+                        [*intent.ambiguous_slots, *dimensions.ambiguous_slots]
+                    ),
+                    "conflict_slots": _unique_strings(
+                        [*intent.conflict_slots, *dimensions.conflict_slots]
+                    ),
+                }
+            )
             intent = _stabilize_intent(
-                intent.model_copy(
-                    update={
-                        "dimension_mentions": dimensions.dimension_mentions,
-                        "dimension_slots": dimensions.dimension_slots,
-                        "filter_mentions": dimensions.residual_filter_mentions,
-                        "ambiguous_slots": _unique_strings(
-                            [*intent.ambiguous_slots, *dimensions.ambiguous_slots]
-                        ),
-                        "conflict_slots": _unique_strings(
-                            [*intent.conflict_slots, *dimensions.conflict_slots]
-                        ),
-                    }
+                _reconcile_detail_display_dimensions(
+                    merged_intent,
+                    available_dimensions,
+                    rewritten_question=rewrite.rewritten_question,
                 ),
                 fixed_temporal_context,
                 # Agent 前置阶段只识别原始时间表达，实际解析交给 ReAct 的时间工具。
@@ -1040,6 +1047,62 @@ def _validate_understanding(
     )
 
 
+def _reconcile_detail_display_dimensions(
+    intent: IntentRecognitionOutput,
+    available_dimensions: list[dict[str, Any]],
+    *,
+    rewritten_question: str,
+) -> IntentRecognitionOutput:
+    """把明细查询中误放入指标列表的维度字段纠正为展示维度。"""
+
+    if intent.intent_type != "detail_query":
+        return intent
+
+    candidates = normalize_dimension_candidates(available_dimensions)
+    candidate_by_text = dimension_candidate_by_text(candidates, include_time=False)
+    existing_names = {
+        dimension_text_key(slot.name) for slot in intent.dimension_slots
+    }
+    metric_mentions: list[str] = []
+    dimension_mentions = list(intent.dimension_mentions)
+    dimension_slots = list(intent.dimension_slots)
+    changed = False
+
+    for mention in intent.metric_mentions:
+        candidate = candidate_by_text.get(dimension_text_key(mention))
+        if (
+            candidate is None
+            or dimension_text_key(candidate["name"]) in existing_names
+            or _dimension_is_metric_modifier(candidate, rewritten_question, [mention])
+        ):
+            metric_mentions.append(mention)
+            continue
+
+        dimension_slots.append(
+            DimensionSlot(
+                name=candidate["name"],
+                role="display",
+                value=None,
+                value_status="not_provided",
+                value_confidence=1.0,
+            )
+        )
+        dimension_mentions.append(candidate["name"])
+        existing_names.add(dimension_text_key(candidate["name"]))
+        changed = True
+
+    if not changed:
+        return intent
+
+    return intent.model_copy(
+        update={
+            "metric_mentions": _unique_strings(metric_mentions),
+            "dimension_mentions": _unique_strings(dimension_mentions),
+            "dimension_slots": dimension_slots,
+        }
+    )
+
+
 def _single_clarification_selection(answer: dict[str, Any]) -> str:
     selections = answer.get("selections")
     values = [
@@ -1382,7 +1445,9 @@ def _dimension_is_metric_modifier(
         (
             dimension_text_key(name + metric) in compact_question
             or (
-                dimension_text_key(name) in dimension_text_key(metric)
+                dimension_text_key(candidate.get("name")) != dimension_text_key(metric)
+                and dimension_text_key(name) != dimension_text_key(metric)
+                and dimension_text_key(name) in dimension_text_key(metric)
                 and dimension_text_key(metric) in compact_question
             )
         )

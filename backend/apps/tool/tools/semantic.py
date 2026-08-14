@@ -238,6 +238,22 @@ class SearchSemanticAssetsTool(
                 error_category=ToolErrorCategory.TIMEOUT,
                 retry_advice=RetryAdvice.SAME_INPUT,
             )
+        except RetrievalQueryError as exc:
+            reason_code = str(exc.details.get("reason_code") or "")
+            error_code = {
+                "SEMANTIC_METRIC_DIMENSION_INCOMPATIBLE": (
+                    "semantic_metric_dimension_incompatible"
+                ),
+            }.get(reason_code, "semantic_retrieval_query_invalid")
+            return ToolResult.rejected(
+                "语义检索请求无法生成可执行的资产组合。",
+                error_code=error_code,
+                error_category=ToolErrorCategory.BUSINESS_RULE,
+                details={
+                    "retrieval_error_code": exc.code,
+                    **exc.details,
+                },
+            )
 
         authorized = {table.lower() for table in policy.authorized_tables}
         retrieved_tables = [

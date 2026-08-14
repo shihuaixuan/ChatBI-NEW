@@ -63,7 +63,7 @@ def build_intent_recognition_prompt(
 检索线索要求：
 - metric_mentions：用户原文或重写问题里疑似指标/事实/业务对象的自然语言短语，例如“销售额”“订单数”“访问人数”。不要输出 Semantic asset_id、biz_name 或数据库字段名。
 - dimension_mentions：用户原文或重写问题里疑似分组、排行、对比、明细展示维度的自然语言短语，例如“商品”“地区”“渠道”。不要输出 Semantic asset_id。
-- dimension_slots：对每个维度输出结构化槽位，格式为 {"name":"自然语言维度名","role":"group_by | filter | ambiguous","value":null,"value_status":"provided | not_provided | ambiguous"}。
+- dimension_slots：对每个维度输出结构化槽位，格式为 {"name":"自然语言维度名","role":"group_by | filter | display | ambiguous","value":null,"value_status":"provided | not_provided | ambiguous"}。
   - “各档口/按档口/每个档口”表示 role=group_by，value=null，value_status=not_provided。
   - “1号档口/档口 1”表示 role=filter，value="1"，value_status=provided。
   - “档口的访问人数”这类没有明确“各/按/每个”且没有具体值的表达，role=ambiguous，value=null，value_status=not_provided。

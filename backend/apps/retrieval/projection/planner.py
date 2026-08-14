@@ -112,7 +112,7 @@ class SemanticBindingQueryPlanner:
         purpose: RetrievalPurpose,
         text: str,
         resource_types: tuple[RetrievalResourceType, ...],
-        role: Literal["group_by", "filter", "ambiguous"] | None = None,
+        role: Literal["group_by", "filter", "display", "ambiguous"] | None = None,
         required: bool = True,
         extra_filters: dict[str, Any] | None = None,
     ) -> RetrievalSubQuery:

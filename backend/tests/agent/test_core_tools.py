@@ -34,6 +34,7 @@ from apps.datasource import (
 from apps.retrieval import (
     ExecutableAssetReference,
     RetrievalDecisionStatus,
+    RetrievalQueryError,
 )
 from apps.retrieval.models.dto import (
     AssetReference,
@@ -287,6 +288,17 @@ class RecordingSemanticRetrievalService:
                     allowed_asset_ids=allowed_assets,
                 ),
             ),
+        )
+
+
+class FailingSemanticRetrievalService:
+    def retrieve(self, request, *, timeout_ms=None):
+        raise RetrievalQueryError(
+            "检索到的指标与维度不存在可执行的语义模型组合",
+            details={
+                "reason_code": "SEMANTIC_METRIC_DIMENSION_INCOMPATIBLE",
+                "incompatible_subquery_ids": ["metric:3"],
+            },
         )
 
 
@@ -1536,3 +1548,17 @@ def test_search_rejects_missing_confirmed_understanding():
 
     assert not _succeeded(output)
     assert output.error_code == "semantic_retrieval_request_required"
+
+
+def test_search_maps_retrieval_query_error_to_structured_business_error():
+    output = SearchSemanticAssetsTool(
+        FailingSemanticRetrievalService(),
+        RecordingQueryService(),
+    ).execute(_ctx(dataset_id=3), SearchSemanticAssetsArgs())
+
+    assert output.status == ToolStatus.REJECTED
+    assert output.error_code == "semantic_metric_dimension_incompatible"
+    assert output.details["reason_code"] == (
+        "SEMANTIC_METRIC_DIMENSION_INCOMPATIBLE"
+    )
+    assert output.retry_advice == RetryAdvice.NEVER

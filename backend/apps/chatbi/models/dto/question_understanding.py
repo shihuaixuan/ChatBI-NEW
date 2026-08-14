@@ -94,7 +94,7 @@ class DimensionSlot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
-    role: Literal["group_by", "filter", "ambiguous"]
+    role: Literal["group_by", "filter", "display", "ambiguous"]
     value: str | int | float | bool | list[str | int | float | bool] | None = None
     value_status: Literal["provided", "not_provided", "ambiguous"] = "not_provided"
     value_confidence: float = Field(default=0.0, ge=0, le=1)

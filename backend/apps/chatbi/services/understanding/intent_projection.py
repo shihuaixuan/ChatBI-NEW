@@ -194,7 +194,7 @@ def normalize_required_slot_types(value: Any) -> list[str]:
 
 def normalize_dimension_role(value: Any) -> str:
     role = str(value or "").strip().lower()
-    return role if role in {"group_by", "filter", "ambiguous"} else "ambiguous"
+    return role if role in {"group_by", "filter", "display", "ambiguous"} else "ambiguous"
 
 
 def normalize_value_status(status: Any, value: Any) -> str:

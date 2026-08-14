@@ -118,3 +118,29 @@ def test_planner_deduplicates_same_dimension_role_regardless_of_literal_value():
     assert [(item.subquery_id, item.text, item.role) for item in dimension_queries] == [
         ("dimension:1", "店铺", "filter")
     ]
+
+
+def test_planner_preserves_detail_display_dimension_role():
+    request = _request().model_copy(
+        update={
+            "intent": _request().intent.model_copy(
+                update={
+                    "dimension_slots": [
+                        RetrievalDimensionSlot(
+                            name="是否超时",
+                            role="display",
+                        )
+                    ]
+                }
+            )
+        }
+    )
+
+    plan = SemanticBindingQueryPlanner().plan(request)
+
+    dimension_queries = [
+        item for item in plan.subqueries if item.purpose == RetrievalPurpose.DIMENSION
+    ]
+    assert [(item.text, item.role) for item in dimension_queries] == [
+        ("是否超时", "display")
+    ]

@@ -35,6 +35,7 @@ DIMENSION_EXTRACTION_RULES = """
 - 不从指标短语内部强拆“新增、支付、成交、累计”等指标修饰词作为维度。
 - “按/各/每个/分……统计”表示 role=group_by，value=null，value_status=not_provided。
 - 维度带有明确值时表示 role=filter；value 必须保留用户表达的值并设置 value_status=provided。
+- 明细查询中用户明确要求直接返回的状态、编号、名称或标记字段表示 role=display；value=null，value_status=not_provided。
 - 只出现业务对象或维度名，没有分组标记也没有具体筛选值时，role=ambiguous，value=null，value_status=not_provided，并加入 ambiguous_slots。
 - 时间表达不能作为普通维度或维度值。
 - 多个维度表达互相冲突时保留原文，并加入 conflict_slots。
