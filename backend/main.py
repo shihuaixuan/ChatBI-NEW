@@ -19,6 +19,7 @@ from apps.access_control.permission import RequestContextMiddleware
 from apps.ai_model.composition import migrate_ai_model_secrets
 from apps.api import api_router
 from apps.assistant.public import init_dynamic_cors
+from apps.retrieval.embedding import preload_retrieval_embedding_model
 from apps.retrieval.indexing.worker import submit_pending_index_jobs
 from common.audit.schemas.request_context import RequestContextMiddlewareCommon
 from common.core.config import settings
@@ -56,6 +57,8 @@ async def lifespan(app: FastAPI):
     init_workflow_artifact_cleanup()
     init_sqlbot_cache()
     init_dynamic_cors(app)
+    # 在应用启动阶段完成本地检索模型加载，避免首个问数请求等待模型冷启动。
+    preload_retrieval_embedding_model()
     submit_pending_index_jobs()
     SQLBotLogUtil.info("✅ Numora 初始化完成")
     await migrate_ai_model_secrets()  # 加密历史模型密钥并修正旧供应商编号

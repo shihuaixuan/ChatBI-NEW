@@ -120,7 +120,27 @@ def _sentence_transformer_model(model_name: str) -> Any:
         raise ImportError(
             "sentence_transformers provider 需要安装 sentence-transformers 依赖"
         ) from exc
-    return SentenceTransformer(model_name)
+    try:
+        return SentenceTransformer(
+            model_name,
+            local_files_only=settings.RETRIEVAL_EMBEDDING_LOCAL_FILES_ONLY,
+        )
+    except OSError as exc:
+        mode = "本地缓存" if settings.RETRIEVAL_EMBEDDING_LOCAL_FILES_ONLY else "模型目录"
+        raise RuntimeError(
+            f"检索 embedding 模型无法从{mode}加载: {model_name}。"
+            "请先准备模型文件，或关闭 RETRIEVAL_EMBEDDING_LOCAL_FILES_ONLY。"
+        ) from exc
+
+
+def preload_retrieval_embedding_model() -> None:
+    """应用启动时预加载本地检索模型，避免首个用户请求承担冷启动耗时。"""
+
+    if not settings.RETRIEVAL_EMBEDDING_ENABLED:
+        return
+    if settings.RETRIEVAL_EMBEDDING_PROVIDER != "sentence_transformers":
+        return
+    _sentence_transformer_model(settings.RETRIEVAL_EMBEDDING_MODEL)
 
 
 def default_retrieval_embedding_provider() -> EmbeddingProvider:
@@ -149,4 +169,5 @@ __all__ = [
     "SentenceTransformerEmbeddingProvider",
     "StaticEmbeddingProvider",
     "default_retrieval_embedding_provider",
+    "preload_retrieval_embedding_model",
 ]

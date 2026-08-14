@@ -95,3 +95,32 @@ def test_sentence_transformer_provider_uses_cached_model_batch_contract(monkeypa
             "batch_size": 2,
         }
     ]
+
+
+def test_preload_retrieval_embedding_model_loads_only_local_provider(monkeypatch):
+    loaded: list[str] = []
+
+    monkeypatch.setattr(
+        retrieval_embedding.settings,
+        "RETRIEVAL_EMBEDDING_ENABLED",
+        True,
+    )
+    monkeypatch.setattr(
+        retrieval_embedding.settings,
+        "RETRIEVAL_EMBEDDING_PROVIDER",
+        "sentence_transformers",
+    )
+    monkeypatch.setattr(
+        retrieval_embedding.settings,
+        "RETRIEVAL_EMBEDDING_MODEL",
+        "BAAI/bge-m3",
+    )
+    monkeypatch.setattr(
+        retrieval_embedding,
+        "_sentence_transformer_model",
+        lambda model_name: loaded.append(model_name),
+    )
+
+    retrieval_embedding.preload_retrieval_embedding_model()
+
+    assert loaded == ["BAAI/bge-m3"]
