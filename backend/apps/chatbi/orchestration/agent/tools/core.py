@@ -2,32 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
-from apps.chatbi.models import QueryFinalReplyProjectionData
+from apps.chatbi.errors import AgentFinalizationError
 from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolContext
-from apps.chatbi.services.generation import (
-    FinalReplyProjectionError,
-    project_query_final_reply,
+from apps.chatbi.services.generation.agent_finalization import (
+    AgentFinalizationInput,
+    AgentFinalizationService,
 )
 from apps.tool import ToolErrorCategory, ToolExecutionPolicy, ToolResult
 
 
 class FinishArgs(BaseModel):
     """结束作答。必须已存在成功的 execute_sql 结果。"""
-
-    answer_markdown: str = Field(
-        min_length=1,
-        description="面向用户的最终回答（markdown）",
-    )
-    chart_type: Literal["table", "bar", "line", "pie"] | None = Field(
-        default=None,
-        description="推荐图表类型",
-    )
-    x_field: str | None = Field(default=None, description="x 轴或类别字段名")
-    y_fields: list[str] = Field(default_factory=list, description="数值系列字段名")
 
 
 class FinishResult(BaseModel):
@@ -39,46 +28,68 @@ class FinishResult(BaseModel):
 
 class FinishTool(AgentTool):
     name = "finish"
-    description = (
-        "结束本次问数并给出最终回答与图表建议。只有在 execute_sql 成功拿到真实数据后才允许调用；"
-        "没有数据时应如实说明失败原因。"
-    )
+    description = "结束本次问数，由独立模型生成分析回复和图表配置。必须先成功执行 execute_sql。"
     args_model = FinishArgs
     result_model = FinishResult
-    execution = ToolExecutionPolicy(timeout_seconds=5)
+    # 最终收口包含两个结构化模型调用，需要独立于普通轻量工具保留足够时间。
+    execution = ToolExecutionPolicy(timeout_seconds=60)
+
+    def __init__(self, finalization_service: AgentFinalizationService | None = None) -> None:
+        self._finalization_service = finalization_service
 
     def execute(
         self,
         ctx: AgentToolContext,
         args: FinishArgs,
     ) -> ToolResult[FinishResult]:
+        execution = ctx.state.get("last_execution")
+        if not isinstance(execution, dict) or not execution:
+            return ToolResult.rejected(
+                "尚无成功的 execute_sql 结果，不能结束问数。",
+                error_code="execution_required_before_finish",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
+            )
+        if self._finalization_service is None:
+            return ToolResult.rejected(
+                "Agent 最终生成服务未配置。",
+                error_code="agent_finalization_service_required",
+                error_category=ToolErrorCategory.CONFIGURATION,
+            )
+
         understanding = ctx.state.get("question_understanding")
-        intent = (
-            understanding.get("intent")
-            if isinstance(understanding, dict)
-            and isinstance(understanding.get("intent"), dict)
-            else {}
-        )
+        intent = understanding.get("intent", {}) if isinstance(understanding, dict) else {}
         full_data = ctx.state.get("full_data")
         try:
-            result = project_query_final_reply(
-                QueryFinalReplyProjectionData(
-                    answer_markdown=args.answer_markdown,
-                    execution=ctx.state.get("last_execution"),
-                    rows=full_data if isinstance(full_data, list) else None,
-                    intent=intent,
-                    chart_type=args.chart_type,
-                    x_field=args.x_field,
-                    y_fields=args.y_fields,
+            result = self._finalization_service.generate(
+                AgentFinalizationInput(
+                    question=str(
+                        ctx.state.get("question")
+                        or ctx.state.get("original_question")
+                        or ""
+                    ),
+                    intent=intent if isinstance(intent, dict) else {},
+                    execution=execution,
+                    rows=full_data if isinstance(full_data, list) else [],
                 )
             )
-        except FinalReplyProjectionError as exc:
+        except AgentFinalizationError as exc:
             return ToolResult.rejected(
                 str(exc),
                 error_code=exc.error_code,
                 error_category=ToolErrorCategory.BUSINESS_RULE,
             )
-        data = FinishResult.model_validate(result.model_dump(mode="json"))
+        answer = result.answer
+        if execution.get("sql_source") == "manual":
+            answer += (
+                "\n\n> 注：本次 SQL 由 AI 直接生成（非标准指标口径），"
+                "结果口径可能与指标定义存在差异。"
+            )
+        data = FinishResult(
+            answer=answer,
+            chart=result.chart,
+            sql=execution.get("sql"),
+            non_standard=execution.get("sql_source") == "manual",
+        )
         return ToolResult.succeeded("finish", data)
 
 

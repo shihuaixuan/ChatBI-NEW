@@ -27,6 +27,7 @@ import AddViewDashboard from '@/views/dashboard/common/AddViewDashboard.vue'
 import html2canvas from 'html2canvas'
 import { chatApi } from '@/api/chat'
 import { useChatConfigStore } from '@/stores/chatConfig.ts'
+import { normalizeChartConfig, type ChartConfig } from '@/views/chat/component/chartConfig'
 
 const chatConfig = useChatConfigStore()
 const showSQLBtn = !chatConfig.getHideSQL
@@ -115,20 +116,11 @@ const data = computed(() => {
 
 const chartRef = ref()
 
-const chartObject = computed<{
-  type: ChartTypes
-  title: string
-  axis: {
-    x: { name: string; value: string }
-    y: { name: string; value: string }
-    series: { name: string; value: string }
-  }
-  columns: Array<{ name: string; value: string }>
-}>(() => {
+const chartObject = computed<ChartConfig>(() => {
   if (props.message?.record?.chart) {
-    return JSON.parse(props.message.record.chart)
+    return normalizeChartConfig(JSON.parse(props.message.record.chart))
   }
-  return {}
+  return normalizeChartConfig({})
 })
 
 const currentChartType = ref<ChartTypes | undefined>(

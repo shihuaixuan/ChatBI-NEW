@@ -64,6 +64,8 @@ const axis = computed(() => {
 let chartInstance: BaseChart | undefined
 
 function renderChart() {
+  // 重绘前销毁旧实例，避免数据刷新或切换图表类型后叠加多个画布。
+  destroyChart()
   chartInstance = getChartInstance(params.type, chartId.value)
   if (chartInstance) {
     chartInstance.showLabel = params.showLabel
@@ -75,8 +77,16 @@ function renderChart() {
 watch(
   () => params.showLabel,
   () => {
-    renderChart()
+    nextTick(renderChart)
   }
+)
+
+watch(
+  () => [params.type, params.data, params.columns, params.x, params.y, params.series],
+  () => {
+    nextTick(renderChart)
+  },
+  { deep: true }
 )
 
 function destroyChart() {

@@ -116,7 +116,7 @@ function stepSummary(step: AgentFlowStep) {
     case 'understanding_clarification':
       return step.args.question || '业务口径已确认'
     case 'finish':
-      return '回答与图表已生成'
+      return '分析回复与图表配置已生成'
     default:
       if (step.result.count !== undefined) return `找到 ${step.result.count} 条结果`
       return '处理完成'

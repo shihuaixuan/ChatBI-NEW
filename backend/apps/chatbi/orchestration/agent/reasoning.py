@@ -300,10 +300,14 @@ class AgentReasoner:
             corrected_args = {}
         elif call.name not in available_tools and available_tools == ["finish"]:
             finish_tool = self._registry.get("finish")
-            if (
+            if finish_tool is not None and not finish_tool.args_model.model_fields:
+                # 新版 finish 不接收模型生成内容，只需使用服务端查询结果收口。
+                corrected_args = {}
+            elif (
                 finish_tool is not None
                 and "answer_markdown" in finish_tool.args_model.model_fields
             ):
+                # 保留旧宿主工具的参数约定，避免测试工具或扩展工具被错误改写。
                 corrected_args = {"answer_markdown": "查询已执行完成。"}
         if corrected_args is not None:
             call = ToolCall(

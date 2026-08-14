@@ -17,6 +17,10 @@ from apps.chatbi.services.generation import (
     project_answer_context,
     project_final_reply,
 )
+from apps.chatbi.services.generation.agent_finalization import (
+    AgentFinalizationInput,
+    AgentFinalizationService,
+)
 from apps.chatbi.services.understanding import StructuredModelService
 
 
@@ -44,19 +48,26 @@ class AnswerAdapter:
         self,
         model_client: AnswerModelClient | None = None,
         answer_generation_service: AnswerGenerationService | None = None,
+        finalization_service: AgentFinalizationService | None = None,
     ) -> None:
         if model_client is not None and answer_generation_service is not None:
             raise ValueError("ANSWER_MODEL_SOURCE_CONFLICT")
+        model_service: StructuredModelService | None = None
         if answer_generation_service is not None:
             self._answer_generation_service = answer_generation_service
         elif model_client is not None:
+            model_service = StructuredModelService(CallableAnswerModelClient(model_client))
             self._answer_generation_service = AnswerGenerationService(
-                StructuredModelService(CallableAnswerModelClient(model_client))
+                model_service
             )
         else:
+            model_service = build_question_model_service()
             self._answer_generation_service = AnswerGenerationService(
-                build_question_model_service()
+                model_service
             )
+        self._finalization_service = finalization_service or AgentFinalizationService(
+            model_service or build_question_model_service()
+        )
 
     def reject(self, request: dict[str, Any]) -> dict[str, Any]:
         """生成拒绝回复，模型不可用时返回稳定安全文案。"""
@@ -71,6 +82,23 @@ class AnswerAdapter:
     def generate(self, request: dict[str, Any]) -> dict[str, Any]:
         """生成业务回答，模型不可用时返回稳定降级文案。"""
 
+        ctx = ChatBIRunContext(request)
+        if ctx.execution.get("status") == "succeeded":
+            result = self._finalization_service.generate(
+                AgentFinalizationInput(
+                    question=ctx.question,
+                    intent=ctx.intent,
+                    execution=ctx.execution,
+                    rows=_execution_rows(ctx.execution),
+                )
+            )
+            return {
+                "answer": result.answer,
+                "warnings": [],
+                "render_type": "text",
+                "citations": [],
+                "chart": result.chart,
+            }
         return self._generate("generate", request)
 
     def compose(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -81,7 +109,11 @@ class AnswerAdapter:
             FinalReplyProjectionData(
                 answer=ctx.answer,
                 recommendations=ctx.recommendations,
-                chart=ctx.image_profile,
+                chart=(
+                    ctx.answer["chart"]
+                    if "chart" in ctx.answer and isinstance(ctx.answer["chart"], dict)
+                    else ctx.image_profile
+                ),
             )
         ).model_dump(mode="json")
 
@@ -98,3 +130,19 @@ class AnswerAdapter:
                 projection=build_answer_projection(request),
             )
         ).model_dump(mode="json")
+
+
+def _execution_rows(execution: dict[str, Any]) -> list[dict[str, Any]]:
+    """读取 SQL 执行结果中的完整行，兼容旧结果仅保存 sample_rows 的结构。"""
+
+    rows = execution.get("rows")
+    if isinstance(rows, list):
+        return [row for row in rows if isinstance(row, dict)]
+    collected: list[dict[str, Any]] = []
+    for result in execution.get("results") or []:
+        if not isinstance(result, dict):
+            continue
+        candidate = result.get("rows") or result.get("sample_rows") or []
+        if isinstance(candidate, list):
+            collected.extend(row for row in candidate if isinstance(row, dict))
+    return collected

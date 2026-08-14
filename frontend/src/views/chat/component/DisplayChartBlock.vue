@@ -4,6 +4,7 @@ import type { ChatMessage } from '@/api/chat.ts'
 import { computed, nextTick, ref } from 'vue'
 import type { ChartTypes } from '@/views/chat/component/BaseChart.ts'
 import { useI18n } from 'vue-i18n'
+import { normalizeChartConfig, type ChartConfig } from './chartConfig'
 
 const props = defineProps<{
   id?: number | string
@@ -16,24 +17,11 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
-const chartObject = computed<{
-  type: ChartTypes
-  title: string
-  axis: {
-    x: { name: string; value: string }
-    y: { name: string; value: string } | Array<{ name: string; value: string }>
-    series: { name: string; value: string }
-    'multi-quota': {
-      name: string
-      value: Array<string>
-    }
-  }
-  columns: Array<{ name: string; value: string }>
-}>(() => {
+const chartObject = computed<ChartConfig>(() => {
   if (props.message?.record?.chart) {
-    return JSON.parse(props.message.record.chart)
+    return normalizeChartConfig(JSON.parse(props.message.record.chart))
   }
-  return {}
+  return normalizeChartConfig({})
 })
 
 const xAxis = computed(() => {

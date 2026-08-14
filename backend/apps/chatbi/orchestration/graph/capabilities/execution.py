@@ -55,6 +55,7 @@ class ExecutionResult(BaseModel):
     status: Literal["succeeded", "failed"]
     row_count: int = Field(default=0, ge=0)
     fields: list[str] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
     sample_rows: list[dict[str, Any]] = Field(default_factory=list)
     sampled_row_count: int = Field(default=0, ge=0)
     result_truncated: bool = False
@@ -99,7 +100,11 @@ def build_execution_output(
         "queries": [item.model_dump(mode="json") for item in queries],
         "results": [item.model_dump(mode="json") for item in results],
         # 以下顶层字段是旧消费端的迁移期兼容摘要。
-        "rows": single_result.sample_rows if single_result is not None else [],
+        "rows": (
+            (single_result.rows or single_result.sample_rows)
+            if single_result is not None
+            else []
+        ),
         "row_count": sum(item.row_count for item in results),
         "fields": fields,
         "execution_ms": sum(item.execution_ms for item in results),

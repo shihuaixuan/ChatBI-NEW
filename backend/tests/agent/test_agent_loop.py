@@ -968,7 +968,7 @@ def test_happy_path_tool_then_finish():
     assert record.status == "succeeded"
     assert record.finish is True
     assert record.finish_time is not None
-    assert record.sql_answer == "查询结果：**a = 1**。"
+    assert record.sql_answer == "最终答案"
     assert record.sql == "select 1"
     assert orjson.loads(record.data) == {"fields": ["a"], "data": [{"a": 1}]}
     # 消息历史持久化：human + 2 轮 assistant + 2 条 tool 回写

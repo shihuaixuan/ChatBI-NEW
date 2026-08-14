@@ -239,6 +239,7 @@ class SqlAdapter:
             status="succeeded",
             row_count=row_count,
             fields=fields,
+            rows=rows,
             sample_rows=sample_rows,
             sampled_row_count=len(sample_rows),
             result_truncated=row_count > len(sample_rows),

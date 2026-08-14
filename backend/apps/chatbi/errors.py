@@ -69,6 +69,14 @@ class ChartGenerationError(ChatBIError, ValueError):
     """图表生成输入或模型结果不合法。"""
 
 
+class AgentFinalizationError(ChatBIError, ValueError):
+    """Agent 最终分析回复或图表配置生成失败。"""
+
+    def __init__(self, error_code: str, message: str) -> None:
+        self.error_code = error_code
+        super().__init__(message)
+
+
 class FinalReplyProjectionError(ChatBIError, ValueError):
     """最终回复投影不满足业务前置条件。"""
 

@@ -29,6 +29,7 @@ from apps.chatbi.orchestration.graph.capabilities.real import (
     RealChatBICapabilityGateway,
 )
 from apps.chatbi.services.generation import build_answer_generation_prompt
+from apps.chatbi.services.generation.agent_finalization import AgentFinalizationResult
 from apps.chatbi.services.understanding import build_temporal_clarification_options
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.temporal import build_temporal_context
@@ -44,6 +45,23 @@ class FakeModelClient:
         if isinstance(self.response, Exception):
             raise self.response
         return self.response
+
+
+class FakeFinalizationService:
+    def __init__(self) -> None:
+        self.inputs = []
+
+    def generate(self, data):
+        self.inputs.append(data)
+        return AgentFinalizationResult(
+            answer="模型分析：两个店铺的客户数相同。",
+            chart={
+                "type": "bar",
+                "title": "店铺客户数对比",
+                "x": "stall_id",
+                "y": ["order_customer_cnt_total"],
+            },
+        )
 
 
 class SequenceModelClient:
@@ -1745,6 +1763,51 @@ def test_answer_adapter_generates_answer_with_model_json():
         "render_type": "text",
         "citations": [],
     }
+
+
+def test_answer_adapter_uses_query_result_finalization_for_successful_execution():
+    finalization = FakeFinalizationService()
+    adapter = AnswerAdapter(
+        model_client=FakeModelClient("不应调用旧回答模型"),
+        finalization_service=finalization,
+    )
+
+    result = adapter.generate(
+        _v1_request(
+            "对比各店铺总下单客户数",
+            variables={
+                "intent": {"intent_type": "comparison"},
+                "execution": {
+                    "status": "succeeded",
+                    "fields": ["stall_id", "order_customer_cnt_total"],
+                    "row_count": 2,
+                    "rows": [
+                        {"stall_id": 100011, "order_customer_cnt_total": 3},
+                        {"stall_id": 100012, "order_customer_cnt_total": 3},
+                    ],
+                },
+            },
+        )
+    )
+
+    assert result["answer"] == "模型分析：两个店铺的客户数相同。"
+    assert result["chart"]["type"] == "bar"
+    assert finalization.inputs[0].rows == [
+        {"stall_id": 100011, "order_customer_cnt_total": 3},
+        {"stall_id": 100012, "order_customer_cnt_total": 3},
+    ]
+
+    final_reply = adapter.compose(
+        _v1_request(
+            "对比各店铺总下单客户数",
+            variables={
+                "answer": result,
+                "recommendations": {},
+                "image_profile": {"profile": "旧图表配置"},
+            },
+        )
+    )
+    assert final_reply["chart"]["type"] == "bar"
 
 
 def test_answer_adapter_degrades_when_model_output_is_invalid():

@@ -247,20 +247,22 @@ def test_final_reply_contract_and_composition_are_owned_by_chatbi():
     assert "class FinalReplyOutput(FinalReplyProjectionResult)" in schema_source
 
 
-def test_agent_finish_uses_chatbi_final_reply_projection():
+def test_agent_finish_uses_chatbi_agent_finalization_service():
     agent_source = (BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/agent/tools/core.py").read_text(
         encoding="utf-8"
     )
     service_source = (
-        BACKEND_DIR__answer_generation / "apps/chatbi/services/generation/final_reply.py"
+        BACKEND_DIR__answer_generation
+        / "apps/chatbi/services/generation/agent_finalization.py"
     ).read_text(encoding="utf-8")
 
-    assert "project_query_final_reply(" in agent_source
-    assert "QueryFinalReplyProjectionData" in agent_source
-    assert "非标准指标口径" not in agent_source
-    assert "execution_required_before_finish" not in agent_source
-    assert "非标准指标口径" in service_source
-    assert "execution_required_before_finish" in service_source
+    assert "AgentFinalizationService" in agent_source
+    assert "AgentFinalizationInput" in agent_source
+    assert "project_query_final_reply(" not in agent_source
+    assert "AgentFinalizationService" in service_source
+    assert "agent_answer_generation" in service_source
+    assert "agent_chart_generation" in service_source
+    assert "execution_required_before_finish" in agent_source
 
 
 # ======================================================================

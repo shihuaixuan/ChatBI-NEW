@@ -24,6 +24,7 @@ class AnswerGenerateOutput(BaseModel):
 
     answer: str
     warnings: list[str] = Field(default_factory=list)
+    chart: dict[str, Any] | None = None
 
 
 class AnswerGenerateNode:

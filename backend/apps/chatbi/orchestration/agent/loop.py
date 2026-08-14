@@ -628,14 +628,14 @@ def _set_iteration_result(
 
 
 def _allows_direct_answer(state: AgentRuntimeState) -> bool:
-    """闲聊可直接回答；问数必须已经存在成功执行结果。"""
+    """只有闲聊允许直接回答，问数必须通过 finish 生成最终结果。"""
 
     understanding = state.context.state.get("question_understanding")
     is_chitchat = (
         isinstance(understanding, dict)
         and understanding.get("category") == "chitchat"
     )
-    return is_chitchat or bool(state.context.state.get("last_execution"))
+    return is_chitchat
 
 
 # ---- Trace 结果 ----

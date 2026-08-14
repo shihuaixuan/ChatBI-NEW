@@ -64,8 +64,9 @@ export function reduceAgentEvent(
       currentRecord.chart = JSON.stringify(event.chart || {})
       break
     case 'answer.completed':
-      currentRecord.sql_answer = event.content
-      currentRecord.chart_answer = event.content
+      currentRecord.sql_answer = event.answer ?? event.content
+      currentRecord.chart_answer = event.answer ?? event.content
+      if (event.chart) currentRecord.chart = JSON.stringify(event.chart)
       break
     case 'clarification.required':
       currentRecord.status = 'waiting_user'
@@ -91,8 +92,10 @@ export function reduceAgentEvent(
       const alreadyFinished = currentRecord.finish === true
       currentRecord.status = 'finished'
       currentRecord.finish = true
-      currentRecord.sql_answer = event.content
-      currentRecord.chart_answer = event.content
+      // run.finished 是最终一致性事件，同时携带回答和图表，避免只收到其中一部分。
+      currentRecord.sql_answer = event.answer ?? event.content
+      currentRecord.chart_answer = event.answer ?? event.content
+      if (event.chart) currentRecord.chart = JSON.stringify(event.chart)
       return alreadyFinished ? {} : { terminal: 'finished' }
     }
   }

@@ -24,6 +24,9 @@ from apps.chatbi.orchestration.agent.tools.interaction import (
     ClarifyTool,
     prepare_semantic_clarification_args,
 )
+from apps.chatbi.services.generation.agent_finalization import (
+    AgentFinalizationResult,
+)
 from apps.datasource import (
     DatasourceQueryData,
     DatasourceQueryErrorCategory,
@@ -82,6 +85,22 @@ def _succeeded(result: AgentToolResult) -> bool:
 def _data(result: AgentToolResult) -> dict:
     assert result.data is not None
     return result.data.model_dump(mode="json")
+
+
+class FakeFinalizationService:
+    def __init__(self) -> None:
+        self.inputs = []
+
+    def generate(self, data):
+        self.inputs.append(data)
+        return AgentFinalizationResult(
+            answer="模型分析结果",
+            chart={
+                "type": "bar",
+                "x": "city",
+                "y": ["gmv"],
+            },
+        )
 
 
 def _ctx(
@@ -347,7 +366,7 @@ class StaticSqlExampleQueryService:
 
 
 def test_finish_rejected_without_execution():
-    output = FinishTool().execute(_ctx(), FinishArgs(answer_markdown="答案"))
+    output = FinishTool().execute(_ctx(), FinishArgs())
     assert not _succeeded(output)
     assert output.error_code == "execution_required_before_finish"
 
@@ -416,6 +435,7 @@ def test_execute_sql_uses_chatbi_query_service_with_identity_scope():
 
 
 def test_finish_appends_non_standard_note_for_manual_sql():
+    finalization = FakeFinalizationService()
     ctx = _ctx(
         last_execution={
             "sql": "select 1",
@@ -424,13 +444,14 @@ def test_finish_appends_non_standard_note_for_manual_sql():
             "sql_source": "manual",
         }
     )
-    output = FinishTool().execute(ctx, FinishArgs(answer_markdown="答案"))
+    output = FinishTool(finalization).execute(ctx, FinishArgs())
     assert _succeeded(output)
     assert "非标准指标口径" in _data(output)["answer"]
     assert _data(output)["non_standard"] is True
 
 
 def test_finish_no_note_for_compiled_sql_and_builds_chart():
+    finalization = FakeFinalizationService()
     ctx = _ctx(
         last_execution={
             "sql": "select 1",
@@ -439,12 +460,7 @@ def test_finish_no_note_for_compiled_sql_and_builds_chart():
             "sql_source": "compiled",
         }
     )
-    output = FinishTool().execute(
-        ctx,
-        FinishArgs(
-            answer_markdown="答案", chart_type="bar", x_field="city", y_fields=["gmv"]
-        ),
-    )
+    output = FinishTool(finalization).execute(ctx, FinishArgs())
     assert _succeeded(output)
     assert "非标准" not in _data(output)["answer"]
     assert _data(output)["chart"] == {"type": "bar", "x": "city", "y": ["gmv"]}

@@ -11,12 +11,10 @@ import orjson
 from apps.chatbi.models import (
     AgentClarificationResumeKind,
     AgentRunStatus,
-    QueryFinalReplyProjectionData,
 )
 from apps.chatbi.orchestration.agent.messages import close_unfinished_tool_calls
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.repository.sqlmodel import agent_run_repository
-from apps.chatbi.services.generation.final_reply import project_query_final_reply
 from apps.conversation import (
     ChatRecordExecutionType,
     ChatRecordResultProjection,
@@ -235,28 +233,6 @@ class AgentLifecycle:
             },
             input_detail={"answer": answer, "chart": chart, "sql": sql},
         ) as node:
-            if execution is not None and isinstance(full_data, list):
-                budget_notice = answer.startswith("预算已达上限")
-                understanding = state.context.state.get("question_understanding")
-                intent: dict[str, Any] = {}
-                if isinstance(understanding, dict):
-                    raw_intent = understanding.get("intent")
-                    if isinstance(raw_intent, dict):
-                        intent = raw_intent
-                grounded = project_query_final_reply(
-                    QueryFinalReplyProjectionData(
-                        answer_markdown=answer,
-                        execution=execution,
-                        rows=full_data,
-                        intent=intent,
-                    )
-                )
-                answer = (
-                    f"预算已达上限，以下仅展示已成功执行的查询结果。\n\n{grounded.answer}"
-                    if budget_notice
-                    else grounded.answer
-                )
-                sql = grounded.sql
             record_data = None
             if full_data is not None and execution:
                 record_payload = {
@@ -306,7 +282,12 @@ class AgentLifecycle:
             yield self._publish(
                 state,
                 "run-finished",
-                {"record_id": record.id, "content": answer},
+                {
+                    "record_id": record.id,
+                    "content": answer,
+                    "answer": answer,
+                    "chart": chart,
+                },
                 step_id,
             )
 

@@ -5,6 +5,7 @@ import { agentQuestionApi, type AgentClarificationAnswer } from '@/api/agent-cha
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import ChartBlock from '@/views/chat/chat-block/ChartBlock.vue'
 import AgentTimeline from '@/views/chat/execution-component/AgentTimeline.vue'
+import MdComponent from '@/views/chat/component/MdComponent.vue'
 import JSONBig from 'json-bigint'
 import {
   latestAgentEventSequence,
@@ -67,6 +68,11 @@ const stopFlag = ref(false)
 const loadingData = ref(false)
 // 全局 loading 控制输入区，执行流运行态只属于当前这条消息，不能污染历史记录。
 const runtimeLoading = ref(false)
+
+// Agent 的最终回答与图表配置分开生成，答案文本直接使用后端持久化的 Markdown。
+const finalAnswer = computed(
+  () => props.message?.record?.sql_answer || props.message?.record?.chart_answer || ''
+)
 
 async function pushOptimisticClarificationAccepted(currentRecord: ChatRecord) {
   // 用户已提交澄清后，先让时间线退出等待态；真实后端事件随后会补齐持久化序号。
@@ -275,6 +281,9 @@ defineExpose({
       :record-id="message.record?.id"
       :runtime-loading="runtimeLoading"
     />
+    <section v-if="finalAnswer" class="final-answer">
+      <MdComponent :message="finalAnswer" />
+    </section>
     <ChartBlock
       style="margin-top: 6px"
       :message="message"
@@ -290,3 +299,12 @@ defineExpose({
     </template>
   </BaseAnswer>
 </template>
+
+<style scoped lang="less">
+.final-answer {
+  margin-top: 10px;
+  color: rgba(31, 35, 41, 1);
+  font-size: 15px;
+  line-height: 24px;
+}
+</style>
