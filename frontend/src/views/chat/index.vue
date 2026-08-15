@@ -447,10 +447,19 @@
           />
 
           <el-button
+            v-if="isTyping"
+            circle
+            type="primary"
+            class="input-icon stop-input-icon"
+            @click.stop="stopCurrentAnswer"
+          >
+            <span class="stop-input-mark" aria-hidden="true"></span>
+          </el-button>
+          <el-button
+            v-else
             circle
             type="primary"
             class="input-icon"
-            :disabled="isTyping"
             @click.stop="($event: any) => sendMessage(undefined, $event)"
           >
             <el-icon size="16">
@@ -833,6 +842,17 @@ function onChatStop() {
   loading.value = false
   isTyping.value = false
   console.debug('onChatStop')
+}
+
+function stopCurrentAnswer() {
+  const currentRecordIndex = currentChat.value.records.length - 1
+  const component = answerComponentAt(currentRecordIndex)
+  if (component?.stop) {
+    // 让当前回答组件发起服务端取消，同时中止当前 SSE 读取。
+    component.stop(true)
+    return
+  }
+  onChatStop()
 }
 
 // 子回答组件在澄清暂停/恢复时回传 loading，父级同步 isTyping 才能解锁输入区。
@@ -1439,6 +1459,19 @@ onMounted(() => {
         &.is-disabled {
           background: rgba(187, 191, 196, 1);
           border-color: unset;
+        }
+
+        &.stop-input-icon {
+          background: rgba(51, 112, 255, 1);
+          border-color: unset;
+
+          .stop-input-mark {
+            display: block;
+            width: 9px;
+            height: 9px;
+            border-radius: 2px;
+            background: #fff;
+          }
         }
       }
     }

@@ -36,6 +36,7 @@ from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
 from apps.knowledge.composition import build_sql_example_query_service
 from apps.knowledge.services.sql_example_query_service import SQLExampleQueryService
+from apps.memory import MemoryService, build_memory_service
 from apps.retrieval import RetrievalService
 from apps.retrieval.query.service import build_retrieval_service
 from apps.semantic import SemanticSQLCompilationService
@@ -118,18 +119,21 @@ def build_agent_loop(
     input_preparer: AgentInputPreparer | None = None,
     cancellation_signal_factory: Callable[[int], CancellationSignal] | None = None,
     finalization_service: AgentFinalizationService | None = None,
+    memory_service: MemoryService | None = None,
 ) -> AgentLoop:
     """构造依赖完整的 AgentLoop；生产入口和测试统一使用此函数。"""
 
     resolved_config = config or AgentConfig()
     resolved_publisher = event_publisher or build_agent_event_publisher(session)
     resolved_recorder = recorder or build_agent_trace_recorder()
+    resolved_memory_service = memory_service or build_memory_service(session)
     lifecycle = AgentLifecycle(
         session,
         current_user.id,
         build_chat_record_service(session),
         resolved_publisher,
         resolved_recorder,
+        resolved_memory_service,
     )
     resolved_query_service = query_service or build_query_service(
         session,
@@ -198,6 +202,7 @@ def build_agent_loop(
         lifecycle,
         resolved_publisher,
         resolved_recorder,
+        resolved_memory_service,
     )
     tool_services = AgentToolContextServices(
         result_artifact_service=(

@@ -355,7 +355,14 @@ class FailingUnderstandingService:
     """模拟问题理解阶段在数据库事务中失败。"""
 
     def understand(self, **kwargs):
-        raise QuestionUnderstandingError("QUESTION_UNDERSTANDING_SCHEMA_LOAD_FAILED")
+        raise QuestionUnderstandingError(
+            "QUESTION_UNDERSTANDING_SCHEMA_LOAD_FAILED",
+            details={
+                "stage": "intent_recognition",
+                "exception_type": "ProviderTimeoutError",
+                "elapsed_ms": 1200,
+            },
+        )
 
 
 class ScriptedUnderstandingModel:
@@ -997,6 +1004,11 @@ def test_understanding_failure_rolls_back_before_persisting_terminal_state():
     rollback_index = session.transaction_actions.index("rollback")
     assert "commit" in session.transaction_actions[rollback_index + 1 :]
     assert _event_domains(events)[-1] == "run.failed"
+    assert events[-1].content["error_details"] == {
+        "stage": "intent_recognition",
+        "exception_type": "ProviderTimeoutError",
+        "elapsed_ms": 1200,
+    }
     assert run.status == AgentRunStatus.FAILED.value
     assert record.status == "failed"
     assert record.error == "QUESTION_UNDERSTANDING_SCHEMA_LOAD_FAILED"

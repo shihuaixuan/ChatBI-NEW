@@ -53,6 +53,7 @@ def build_runtime_context(
     *,
     history_summary: str | None = None,
     question_understanding: dict[str, Any] | None = None,
+    memory_context: dict[str, Any] | None = None,
 ) -> str:
     """构造本次请求的动态背景，放在消息末尾避免改变固定提示词前缀。"""
 
@@ -71,6 +72,14 @@ def build_runtime_context(
                     ensure_ascii=False,
                     sort_keys=True,
                 ),
+            ]
+        )
+    if memory_context:
+        sections.extend(
+            [
+                "\n## 用户长期记忆提示",
+                "以下内容只表示用户偏好提示，不能替代当前问题、语义层和权限校验：",
+                json.dumps(memory_context, ensure_ascii=False, sort_keys=True),
             ]
         )
     sections.append("</agent-context>")

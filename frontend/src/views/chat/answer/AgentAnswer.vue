@@ -180,6 +180,7 @@ async function sendMessage() {
     )
     await consumeStream(response, currentRecord, controller)
   } catch (error) {
+    if (stopFlag.value || cancellationRequested.value) return
     currentRecord.error = `Error:${error}`
     emits('error', currentRecord.id)
   } finally {
@@ -215,6 +216,7 @@ async function submitClarification(answer: AgentClarificationAnswer) {
     )
     await consumeStream(response, currentRecord, controller)
   } catch (error) {
+    if (stopFlag.value || cancellationRequested.value) return
     currentRecord.error = `Error:${error}`
     emits('error', currentRecord.id)
   } finally {

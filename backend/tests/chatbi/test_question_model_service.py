@@ -35,6 +35,20 @@ class FakeQuestionModelClient:
         return self.response
 
 
+class FakeProviderTimeoutError(TimeoutError):
+    """模拟带有服务商状态和请求标识的超时异常。"""
+
+    status_code = 429
+    request_id = "provider-request-123"
+
+
+class DiagnosticQuestionModelClient(FakeQuestionModelClient):
+    """为诊断字段测试提供模型和服务商标识。"""
+
+    model_name = "test-model"
+    provider_name = "api.example.test"
+
+
 def _data(**overrides: Any) -> QuestionModelInvocationData:
     values: dict[str, Any] = {
         "stage": "rewrite",
@@ -123,6 +137,29 @@ def test_model_call_failure_keeps_stage():
         match="QUESTION_MODEL_CALL_FAILED:rewrite",
     ):
         service.invoke(_data())
+
+
+def test_model_call_failure_records_safe_provider_diagnostics():
+    """模型调用失败时保留可定位信息，不记录提示词和响应正文。"""
+
+    service = StructuredModelService(
+        DiagnosticQuestionModelClient(FakeProviderTimeoutError("upstream timeout"))
+    )
+
+    with pytest.raises(QuestionModelCallError) as error_info:
+        service.invoke(_data())
+
+    details = error_info.value.details
+    assert details["stage"] == "rewrite"
+    assert details["client_type"] == "DiagnosticQuestionModelClient"
+    assert details["model"] == "test-model"
+    assert details["provider"] == "api.example.test"
+    assert details["exception_type"] == "FakeProviderTimeoutError"
+    assert details["http_status_code"] == 429
+    assert details["provider_request_id"] == "provider-request-123"
+    assert details["timeout_type"] == "FakeProviderTimeoutError"
+    assert isinstance(details["elapsed_ms"], int)
+    assert "重写本月销售额" not in details
 
 
 @pytest.mark.parametrize(

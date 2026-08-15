@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from urllib.parse import urlparse
 
 from langchain.chat_models.base import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from apps.ai_model.model_factory import LLMFactory, get_default_config
+from apps.ai_model.models.dto import LLMConfig
 from apps.chatbi.models import QuestionModelResponse
 from apps.chatbi.services.understanding import StructuredModelService
 from common.core.config import settings
@@ -17,6 +19,21 @@ class LangChainQuestionModelClient:
 
     def __init__(self) -> None:
         self._llm: BaseChatModel | None = None
+        self._config: LLMConfig | None = None
+
+    @property
+    def model_name(self) -> str | None:
+        """返回当前问题理解模型名称，不触发模型加载。"""
+
+        return self._config.model_name if self._config is not None else None
+
+    @property
+    def provider_name(self) -> str | None:
+        """返回模型服务商主机名，不记录完整 API 地址。"""
+
+        if self._config is None or not self._config.api_base_url:
+            return None
+        return urlparse(self._config.api_base_url).hostname
 
     def invoke(
         self,
@@ -58,6 +75,7 @@ class LangChainQuestionModelClient:
                     }
                 }
             )
+            self._config = question_config
             self._llm = LLMFactory.create_llm(question_config).llm
         return self._llm
 

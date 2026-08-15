@@ -16,6 +16,7 @@ from apps.chatbi.orchestration.graph.api_extension import (
 from apps.dashboard.api import dashboard_api
 from apps.datasource.api import datasource, table_relation
 from apps.knowledge.api import recommended_problem, sql_example
+from apps.memory.api import router as memory_router
 from apps.platform_config.api import appearance
 from apps.platform_config.api import router as platform_config
 from apps.semantic.api import legacy_terms
@@ -56,6 +57,7 @@ api_router.include_router(access_api_key.router)
 api_router.include_router(access_data_permission.router)
 
 api_router.include_router(recommended_problem.router)
+api_router.include_router(memory_router)
 
 api_router.include_router(access_variable.router)
 api_router.include_router(legacy_terms.router)

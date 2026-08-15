@@ -23,6 +23,7 @@ from apps.conversation import (
     ChatRecordStatus,
 )
 from apps.event import EventPublisher, RenderEvent
+from apps.memory import MemoryService, SuccessfulQueryMemoryEvent
 from apps.trace import (
     AgentTraceRecorder,
     TraceNodeHandle,
@@ -42,12 +43,14 @@ class AgentLifecycle:
         record_service: ChatRecordService,
         event_publisher: EventPublisher,
         trace_recorder: AgentTraceRecorder,
+        memory_service: MemoryService | None = None,
     ) -> None:
         self._session = session
         self._current_user_id = current_user_id
         self._record_service = record_service
         self._event_publisher = event_publisher
         self._trace_recorder = trace_recorder
+        self._memory_service = memory_service
 
     def start(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         """把新 Run 和 ChatRecord 一起置为运行态。"""
@@ -217,6 +220,35 @@ class AgentLifecycle:
                 step_id,
             )
 
+    def _record_successful_query_memory(self, state: AgentRuntimeState) -> None:
+        """只把成功问数的结构化查询形态交给记忆模块。"""
+
+        if self._memory_service is None or state.context.user_id is None:
+            return
+        understanding = state.context.state.get("question_understanding")
+        if not isinstance(understanding, dict):
+            return
+        intent = understanding.get("intent")
+        if not isinstance(intent, dict):
+            return
+        intent_type = intent.get("intent_type")
+        query_shape = intent.get("query_shape")
+        if not isinstance(intent_type, str) or not isinstance(query_shape, dict):
+            return
+        run_id = state.run.id
+        if run_id is None:
+            return
+        self._memory_service.record_successful_query(
+            state.run.oid,
+            state.context.user_id,
+            SuccessfulQueryMemoryEvent(
+                session_id=str(state.run.chat_id),
+                run_id=str(run_id),
+                intent_type=intent_type,
+                query_shape=query_shape,
+            ),
+        )
+
     def finish(
         self,
         state: AgentRuntimeState,
@@ -273,6 +305,7 @@ class AgentLifecycle:
                 budget_snapshot=state.budget_snapshot(),
             )
             self._session.commit()
+            self._record_successful_query_memory(state)
             node.set_output(
                 {
                     "run_status": run.status,
@@ -307,6 +340,7 @@ class AgentLifecycle:
         state: AgentRuntimeState,
         message: str,
         error_class: str,
+        error_details: dict[str, Any] | None = None,
     ) -> Iterator[RenderEvent]:
         """保存错误，并把 Run 和 ChatRecord 一起置为失败。"""
 
@@ -320,7 +354,10 @@ class AgentLifecycle:
             "persist_run_failed",
             "持久化运行失败状态",
             input_data={"error_class": error_class},
-            input_detail={"error": message},
+            input_detail={
+                "error": message,
+                **({"error_details": error_details} if error_details else {}),
+            },
         ) as node:
             close_unfinished_tool_calls(
                 state.messages,
@@ -353,6 +390,7 @@ class AgentLifecycle:
                     "record_id": record.id,
                     "content": message,
                     "error_class": error_class,
+                    **({"error_details": error_details} if error_details else {}),
                 },
             )
 

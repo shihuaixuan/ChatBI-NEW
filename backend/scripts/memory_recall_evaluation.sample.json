@@ -1,0 +1,20 @@
+{
+  "samples": [
+    {
+      "case_id": "replace-with-real-case-001",
+      "recall_variant": "control",
+      "expected_memory_ids": [101],
+      "retrieved_memory_ids": [101],
+      "adopted_memory_ids": [],
+      "rejected_memory_ids": []
+    },
+    {
+      "case_id": "replace-with-real-case-002",
+      "recall_variant": "treatment",
+      "expected_memory_ids": [102],
+      "retrieved_memory_ids": [102, 103],
+      "adopted_memory_ids": [102],
+      "rejected_memory_ids": [103]
+    }
+  ]
+}

@@ -32,6 +32,7 @@ from apps.chatbi.services.understanding import (
     build_temporal_clarification_options,
 )
 from apps.event import EventPublisher, RenderEvent
+from apps.memory import ClarificationMemoryEvent, MemoryService
 from apps.retrieval import (
     RetrievalBundle,
     RetrievalQueryError,
@@ -78,6 +79,7 @@ class AgentInputPreparer:
         lifecycle: AgentLifecycle,
         event_publisher: EventPublisher,
         trace_recorder: AgentTraceRecorder,
+        memory_service: MemoryService | None = None,
     ) -> None:
         self._session = session
         self._config = config
@@ -86,6 +88,7 @@ class AgentInputPreparer:
         self._lifecycle = lifecycle
         self._event_publisher = event_publisher
         self._trace_recorder = trace_recorder
+        self._memory_service = memory_service
 
     def prepare_initial(
         self,
@@ -130,17 +133,22 @@ class AgentInputPreparer:
                 context_node.set_output_detail(
                     {"conversation_context": conversation_context}
                 )
+            understanding_context = {
+                "last_rewritten_question": conversation_context.get(
+                    "last_rewritten_question"
+                )
+            }
+            if conversation_context.get("memory_context"):
+                understanding_context["user_memory"] = conversation_context[
+                    "memory_context"
+                ]
             outcome = self._understanding_service.understand(
                 question=record.question or "",
                 datasource_id=record.datasource,
                 tenant_id=state.run.oid,
                 dataset_id=record.dataset_id,
                 temporal_context=state.temporal_context,
-                conversation_context={
-                    "last_rewritten_question": conversation_context.get(
-                        "last_rewritten_question"
-                    ),
-                },
+                conversation_context=understanding_context,
             )
             state.budget.record_llm_usage(outcome.usage_metadata)
             understanding = outcome.output.model_dump(mode="json")
@@ -366,6 +374,8 @@ class AgentInputPreparer:
                     "derived_state": state.persistable_context(),
                 }
             )
+
+        self._record_clarification_memory(state, clarification, answer_text)
 
         with self._trace_recorder.node(
             TraceNodeSpec(
@@ -729,7 +739,67 @@ class AgentInputPreparer:
         return {
             "history": history,
             "last_rewritten_question": previous_rewritten_question,
+            "memory_context": self._load_memory_context(state),
         }
+
+    def _load_memory_context(self, state: AgentRuntimeState) -> dict[str, Any]:
+        if self._memory_service is None:
+            return {}
+        record = state.record
+        run = state.run
+        user_id = getattr(record, "create_by", None) or run.created_by
+        if user_id is None:
+            return {}
+        resolved_user_id = int(user_id)
+        assignment = self._memory_service.assign_recall_variant(
+            run.oid,
+            resolved_user_id,
+        )
+        context = self._memory_service.build_context(
+            run.oid,
+            resolved_user_id,
+            query_text=str(record.question or ""),
+            recall_variant=assignment.recall_variant,
+        )
+        self._memory_service.record_usage(
+            run.oid,
+            resolved_user_id,
+            context,
+            stage="agent_context",
+            run_id=str(run.id) if run.id is not None else None,
+            session_id=str(run.chat_id),
+            recall_variant=assignment.recall_variant,
+        )
+        return context.model_dump(mode="json")
+
+    def _record_clarification_memory(
+        self,
+        state: AgentRuntimeState,
+        clarification: ChatbiAgentClarification,
+        answer_text: str,
+    ) -> None:
+        """只提交已经通过当前澄清校验的用户明确偏好。"""
+
+        if self._memory_service is None or state.context.user_id is None:
+            return
+        question = str(clarification.question or "").strip()
+        answer = answer_text.strip()
+        if not question or not answer:
+            return
+        self._memory_service.record_clarification(
+            state.run.oid,
+            state.context.user_id,
+            ClarificationMemoryEvent(
+                question=question,
+                answer_text=answer,
+                source_ref=(
+                    str(getattr(clarification, "id", None))
+                    if getattr(clarification, "id", None) is not None
+                    else None
+                ),
+                source_session_id=str(state.run.chat_id),
+            ),
+        )
 
     def _build_system(
         self,
@@ -749,6 +819,7 @@ class AgentInputPreparer:
             build_runtime_context(
                 history_summary=history_summary,
                 question_understanding=question_understanding,
+                memory_context=conversation_context.get("memory_context"),
             )
         )
         return AgentMessage.system(

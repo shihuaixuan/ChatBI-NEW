@@ -121,6 +121,15 @@ class Settings(BaseSettings):
     RETRIEVAL_EMBEDDING_LOCAL_FILES_ONLY: bool = True
     RETRIEVAL_EMBEDDING_ALLOW_LEXICAL_FALLBACK: bool = True
 
+    # 用户记忆向量索引独立于语义资产索引，默认关闭，需单独配置后启用。
+    CHATBI_MEMORY_EMBEDDING_ENABLED: bool = False
+    # 用户记忆召回灰度默认关闭，开启后按用户稳定分配 control/treatment。
+    CHATBI_MEMORY_RECALL_EXPERIMENT_ENABLED: bool = False
+    CHATBI_MEMORY_RECALL_TREATMENT_PERCENT: int = 0
+    CHATBI_MEMORY_RECALL_EXPERIMENT_SALT: str = "chatbi-memory-recall-v1"
+    CHATBI_MEMORY_RECALL_MIN_EVALUATED_PER_VARIANT: int = 100
+    CHATBI_MEMORY_RECALL_MAX_ADOPTION_DROP: float = 0.05
+
     SILICONFLOW_API_KEY: str = ""
     RETRIEVAL_RERANK_ENABLED: bool = True
     RETRIEVAL_RERANK_API_BASE_URL: str = "https://api.siliconflow.cn/v1"

@@ -125,6 +125,7 @@ class AgentLoop:
                 state,
                 str(exc),
                 AgentErrorClass.UNDERSTANDING.value,
+                error_details=exc.details,
             )
         except Exception as exc:  # 任意未预期异常收敛为失败事件，避免 SSE 静默中断。
             message = str(exc) or exc.__class__.__name__
@@ -205,6 +206,7 @@ class AgentLoop:
                 state,
                 str(exc),
                 AgentErrorClass.UNDERSTANDING.value,
+                error_details=exc.details,
             )
         except SemanticClarificationError as exc:
             yield from self.lifecycle.fail(

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class ChatBIError(Exception):
     """ChatBI 领域错误基类。"""
@@ -91,6 +93,15 @@ class FinalReplyProjectionError(ChatBIError, ValueError):
 class QuestionUnderstandingError(ChatBIError, RuntimeError):
     """问题理解阶段失败，调用方应明确终止当前问数流程。"""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.details = dict(details or {})
+        super().__init__(message)
+
 
 class TemporalInterpretationError(ChatBIError, RuntimeError):
     """旁路时间理解失败；错误和已发生的模型用量必须显式保留。"""
@@ -109,9 +120,16 @@ class TemporalInterpretationError(ChatBIError, RuntimeError):
 class QuestionModelError(ChatBIError, RuntimeError):
     """问题理解模型调用或输出错误。"""
 
-    def __init__(self, code: str, stage: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        stage: str,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         self.code = code
         self.stage = stage
+        self.details = dict(details or {})
         super().__init__(f"{code}:{stage}")
 
 

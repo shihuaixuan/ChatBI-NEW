@@ -1,6 +1,7 @@
 import orjson
 import pytest
 
+from apps.chatbi.errors import QuestionUnderstandingError
 from apps.chatbi.models import QuestionModelResponse
 from apps.chatbi.services.understanding.understanding_service import (
     QuestionUnderstandingService,
@@ -15,6 +16,20 @@ def test_question_understanding_service_requires_explicit_model_boundary():
         QuestionUnderstandingService()
 
 
+def test_understanding_preserves_repair_model_call_diagnostics():
+    model = InvalidThenFailQuestionModel()
+
+    with pytest.raises(QuestionUnderstandingError) as error_info:
+        QuestionUnderstandingService(model).understand(
+            question="本月销售额", datasource_id=5
+        )
+
+    assert "REWRITE_MODEL_OUTPUT_INVALID" in str(error_info.value)
+    assert error_info.value.details["stage"] == "QUESTION_REWRITE"
+    assert error_info.value.details["exception_type"] == "TimeoutError"
+    assert model.calls == 2
+
+
 class SequenceQuestionModel:
     def __init__(self, payloads):
         self._payloads = list(payloads)
@@ -27,6 +42,22 @@ class SequenceQuestionModel:
             content=orjson.dumps(payload).decode(),
             usage_metadata={"total_tokens": 10},
         )
+
+
+class InvalidThenFailQuestionModel:
+    """模拟首次结构错误、修复调用超时的模型客户端。"""
+
+    def __init__(self):
+        self.calls = 0
+
+    def invoke(self, system_prompt, user_prompt):
+        self.calls += 1
+        if self.calls == 1:
+            return QuestionModelResponse(
+                content=orjson.dumps({"invalid": True}).decode(),
+                usage_metadata={"total_tokens": 10},
+            )
+        raise TimeoutError("provider timeout")
 
 
 class FakeDimension:

@@ -101,23 +101,26 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
                 run_id=run_obj.id,
                 sequence=1,
             )
+            yield create_render_event(
+                "tool-called",
+                {
+                    "tool_call_id": "call-1",
+                    "tool_name": "execute_sql",
+                    "step_id": 8,
+                    "step_index": 1,
+                },
+                record_id=record_obj.id,
+                run_id=run_obj.id,
+                sequence=2,
+            )
 
     monkeypatch.setattr(service, "create_record_and_run", fake_create_record_and_run)
     monkeypatch.setattr(service, "build_agent_trace_recorder", lambda: recorder)
-    class FakeRunner:
-        def start_initial(self, *args):
-            pass
-
-        def stream(self, run_id):
-            yield create_render_event(
-                "run-started",
-                {},
-                record_id=record.id,
-                run_id=run_id,
-                sequence=1,
-            )
-
-    monkeypatch.setattr(service, "agent_runner", FakeRunner())
+    monkeypatch.setattr(
+        service,
+        "build_agent_loop",
+        lambda *args, **kwargs: FakeLoop(*args, **kwargs),
+    )
 
     response = asyncio.run(
         api.agent_stream(
@@ -134,13 +137,21 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
 
     assert response.media_type == "text/event-stream"
     assert captured["request"].question == "销售额"
-    payload = orjson.loads(body.removeprefix("data:").strip())
+    frames = [frame.strip() for frame in body.split("data:") if frame.strip()]
+    payload = orjson.loads(frames[0])
     assert payload["domain"] == "run.started"
     assert (payload["kind"], payload["phase"], payload["domain"]) == (
         "run",
         "start",
         "run.started",
     )
+    tool_payload = orjson.loads(frames[1])
+    assert tool_payload["content"] == {
+        "tool_call_id": "call-1",
+        "tool_name": "execute_sql",
+        "step_id": 8,
+        "step_index": 1,
+    }
     assert len(recorder.nodes) == 1
     access = recorder.nodes[0]
     assert access["spec"].name == "request_access"
@@ -202,20 +213,11 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
                 sequence=1,
             )
 
-    class FakeRunner:
-        def start_resume(self, *args):
-            captured["answer_text"] = args[-1]
-
-        def stream(self, run_id):
-            yield create_render_event(
-                "clarification-accepted",
-                {},
-                record_id=record.id,
-                run_id=run_id,
-                sequence=1,
-            )
-
-    monkeypatch.setattr(service, "agent_runner", FakeRunner())
+    monkeypatch.setattr(
+        service,
+        "build_agent_loop",
+        lambda *args, **kwargs: FakeLoop(*args, **kwargs),
+    )
 
     response = asyncio.run(
         api.agent_stream(

@@ -722,6 +722,7 @@ class QuestionUnderstandingService:
 
         usage_items: list[dict[str, Any]] = []
         validation_error: ValidationError | None = None
+        model_call_error_details: dict[str, Any] | None = None
         for attempt in range(2):
             current_payload = dict(user_payload)
             if validation_error is not None:
@@ -813,14 +814,29 @@ class QuestionUnderstandingService:
                                 }
                             )
                         return validated, _merge_usage(*usage_items)
-            except QuestionUnderstandingError:
+            except QuestionUnderstandingError as model_error:
                 # 修复调用失败时保留第一次精确的结构校验错误，避免错误原因被覆盖。
+                if model_error.details:
+                    model_call_error_details = model_error.details
+                if model_node is not None and model_error.details:
+                    model_node.set_output(
+                        {
+                            "stage": stage,
+                            "attempt": attempt + 1,
+                            "error_code": str(model_error),
+                            "error_details": model_error.details,
+                        }
+                    )
+                    model_node.set_output_detail(
+                        {"error_details": model_error.details}
+                    )
                 if validation_error is not None:
                     break
                 raise
         assert validation_error is not None
         raise QuestionUnderstandingError(
-            f"{stage}_MODEL_OUTPUT_INVALID: {validation_error}"
+            f"{stage}_MODEL_OUTPUT_INVALID: {validation_error}",
+            details=model_call_error_details,
         ) from validation_error
 
     def _invoke_model(
@@ -838,7 +854,10 @@ class QuestionUnderstandingService:
                 )
             )
         except QuestionModelCallError as exc:
-            raise QuestionUnderstandingError(f"{stage}_MODEL_CALL_FAILED") from exc
+            raise QuestionUnderstandingError(
+                f"{stage}_MODEL_CALL_FAILED",
+                details=exc.details,
+            ) from exc
         except QuestionModelOutputError as exc:
             if exc.code == "QUESTION_MODEL_EMPTY_RESPONSE":
                 raise QuestionUnderstandingError(
