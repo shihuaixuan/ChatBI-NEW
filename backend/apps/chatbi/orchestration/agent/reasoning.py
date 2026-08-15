@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from queue import Empty, Queue
+from threading import Event, Thread
 from typing import Any, Protocol
 
 import orjson
 
 from apps.chatbi.models.dto.agent import AgentConfig
+from apps.chatbi.orchestration.agent.cancellation import (
+    AgentCancellationRequested,
+    CancellationStage,
+)
+from apps.chatbi.orchestration.agent.cancellation_guard import CancellationGuard
 from apps.chatbi.orchestration.agent.messages import (
     AgentMessage,
     ModelDecision,
@@ -29,6 +37,8 @@ from apps.trace import (
     TraceNodeType,
     llm_attributes,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AgentModelClient(Protocol):
@@ -53,6 +63,12 @@ class AgentDecision:
     @property
     def is_direct_answer(self) -> bool:
         return not self.tool_calls
+
+
+@dataclass
+class _ModelInvocationResult:
+    decision: ModelDecision | None = None
+    error: Exception | None = None
 
 
 class AgentReasoner:
@@ -152,8 +168,11 @@ class AgentReasoner:
                 ],
             },
         ) as llm_node:
-            model_decision = self._model_client.invoke(
-                invoke_messages, tool_definitions
+            model_decision = _invoke_model_with_cancellation(
+                state,
+                self._model_client,
+                invoke_messages,
+                tool_definitions,
             )
             usage = model_decision.usage
             llm_node.set_output(
@@ -350,6 +369,51 @@ class AgentReasoner:
             args={"sql": sql},
             call_id=prepared.call_id,
         )
+
+
+def _invoke_model_with_cancellation(
+    state: AgentRuntimeState,
+    model_client: AgentModelClient,
+    messages: list[AgentMessage],
+    tool_definitions: list[ToolDefinition],
+) -> ModelDecision:
+    """在模型请求期间轮询取消，并在取消后丢弃模型结果。"""
+
+    guard = CancellationGuard(state.cancellation)
+    guard.require_not_requested(CancellationStage.BEFORE_LLM)
+    result_queue: Queue[_ModelInvocationResult] = Queue(maxsize=1)
+    detached = Event()
+
+    def invoke() -> None:
+        try:
+            decision = model_client.invoke(messages, tool_definitions)
+        except Exception as exc:
+            if detached.is_set():
+                logger.warning("LLM 请求在取消后返回异常，结果已丢弃", exc_info=True)
+            result_queue.put(_ModelInvocationResult(error=exc))
+            return
+        result_queue.put(_ModelInvocationResult(decision=decision))
+
+    Thread(
+        target=invoke,
+        name=f"agent-llm-{state.require_run_id()}",
+        daemon=True,
+    ).start()
+
+    while True:
+        try:
+            result = result_queue.get(timeout=0.05)
+        except Empty:
+            if guard.check(CancellationStage.DURING_LLM):
+                detached.set()
+                raise AgentCancellationRequested(CancellationStage.DURING_LLM)
+            continue
+        if result.error is not None:
+            raise result.error
+        if result.decision is None:
+            raise RuntimeError("AGENT_MODEL_RESULT_MISSING")
+        guard.require_not_requested(CancellationStage.AFTER_LLM)
+        return result.decision
 
 
 def _content_text(message: AgentMessage) -> str:

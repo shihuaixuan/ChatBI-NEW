@@ -31,6 +31,7 @@ class AgentStepStatus(str, Enum):
     RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class AgentToolCallStatus(str, Enum):
@@ -102,6 +103,21 @@ class ChatbiAgentRun(SQLModel, table=True):
     )
     error_class: str | None = Field(default=None, max_length=64, nullable=True)
     error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # 取消请求与最终取消时间分开保存，便于区分请求已到达和执行已收口。
+    cancel_requested_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=False), nullable=True),
+    )
+    cancelled_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=False), nullable=True),
+    )
+    cancel_reason: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+    )
+    cancel_stage: str | None = Field(default=None, max_length=32, nullable=True)
+    cancel_request_id: str | None = Field(default=None, max_length=128, nullable=True)
     created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
     updated_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
     created_by: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))

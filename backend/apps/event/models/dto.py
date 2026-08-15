@@ -46,6 +46,7 @@ class InteractionEvent(RenderEvent):
 _EVENT_CONTRACT: dict[str, tuple[type[RenderEvent], EventPhase, str]] = {
     "record-created": (RunEvent, "start", "run.created"),
     "run-started": (RunEvent, "start", "run.started"),
+    "run-cancel-requested": (RunEvent, "start", "run.cancel-requested"),
     "step-started": (RunEvent, "start", "step.started"),
     "run-finished": (RunEvent, "end", "run.finished"),
     "run-failed": (RunEvent, "error", "run.failed"),

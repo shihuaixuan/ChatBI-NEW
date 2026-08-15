@@ -11,6 +11,7 @@ import orjson
 from apps.chatbi.models import (
     AgentClarificationResumeKind,
     AgentRunStatus,
+    AgentToolCallStatus,
 )
 from apps.chatbi.orchestration.agent.messages import close_unfinished_tool_calls
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
@@ -53,6 +54,16 @@ class AgentLifecycle:
 
         run = state.run
         record = state.record
+        self._session.refresh(run)
+        if run.status == AgentRunStatus.CANCELLED.value:
+            return
+        if run.status == AgentRunStatus.CANCEL_REQUESTED.value:
+            yield from self.finalize_cancellation(
+                state,
+                "用户在 Agent 开始前请求取消运行",
+                stage="before_execution",
+            )
+            return
         with self._transition_node(
             state,
             "persist_run_started",
@@ -345,21 +356,63 @@ class AgentLifecycle:
                 },
             )
 
-    def cancel(
+    def finalize_cancellation(
         self,
         state: AgentRuntimeState,
         message: str = "用户已请求取消运行",
+        *,
+        stage: str | None = None,
     ) -> Iterator[RenderEvent]:
-        """在当前执行边界确认停止后，才把 Run 和问数记录置为已取消。"""
+        """统一收口 Run、Step、Tool Call、ChatRecord 和取消事件。"""
 
+        # 取消收口必须使用干净事务，避免前序工具异常阻塞后续状态写入。
+        self._session.rollback()
         run = state.run
         record = state.record
+        self._session.refresh(run)
+        if run.status == AgentRunStatus.CANCELLED.value:
+            return
+        if run.status in {
+            AgentRunStatus.FINISHED.value,
+            AgentRunStatus.FAILED.value,
+        }:
+            return
+        if run.status != AgentRunStatus.CANCEL_REQUESTED.value:
+            raise ValueError(f"AGENT_CANCEL_STATE_CONFLICT:{run.status}")
+        effective_stage = stage or run.cancel_stage or "unknown"
         with self._transition_node(
             state,
             "persist_run_cancelled",
             "持久化运行取消状态",
+            input_data={"stage": effective_stage},
             input_detail={"reason": message},
         ) as node:
+            running_step = agent_run_repository.get_running_step(
+                self._session,
+                state.require_run_id(),
+            )
+            if running_step is not None:
+                agent_run_repository.cancel_step(
+                    self._session,
+                    running_step,
+                    message,
+                )
+            for tool_call in agent_run_repository.list_running_tool_calls(
+                self._session,
+                state.require_run_id(),
+            ):
+                agent_run_repository.finish_tool_call(
+                    self._session,
+                    tool_call,
+                    status=AgentToolCallStatus.INTERRUPTED,
+                    result_summary={
+                        "success": False,
+                        "status": AgentToolCallStatus.INTERRUPTED.value,
+                        "error_code": "tool_call_interrupted",
+                        "cancel_stage": effective_stage,
+                    },
+                    error_code="tool_call_interrupted",
+                )
             close_unfinished_tool_calls(
                 state.messages,
                 content="skipped: run cancelled before this tool executed",
@@ -370,12 +423,18 @@ class AgentLifecycle:
                 error=message,
                 execution_type=ChatRecordExecutionType.AGENT,
             )
+            agent_run_repository.mark_cancelled(
+                self._session,
+                run,
+                stage=effective_stage,
+                reason=message,
+            )
             agent_run_repository.update_run(
                 self._session,
                 run,
-                status=AgentRunStatus.CANCELLED.value,
                 messages=state.serialized_messages(),
                 budget_snapshot=state.budget_snapshot(),
+                derived_state=state.persistable_context(),
                 error=message,
             )
             self._session.commit()
@@ -386,8 +445,31 @@ class AgentLifecycle:
             yield self._publish(
                 state,
                 "run-cancelled",
-                {"record_id": record.id, "content": message},
+                {
+                    "record_id": record.id,
+                    "content": message,
+                    "cancel_stage": effective_stage,
+                    "cancel_requested_at": (
+                        run.cancel_requested_at.isoformat()
+                        if run.cancel_requested_at is not None
+                        else None
+                    ),
+                    "cancelled_at": (
+                        run.cancelled_at.isoformat()
+                        if run.cancelled_at is not None
+                        else None
+                    ),
+                },
             )
+
+    def cancel(
+        self,
+        state: AgentRuntimeState,
+        message: str = "用户已请求取消运行",
+    ) -> Iterator[RenderEvent]:
+        """兼容旧调用方，统一转入取消终态收口。"""
+
+        yield from self.finalize_cancellation(state, message)
 
     @contextmanager
     def _transition_node(

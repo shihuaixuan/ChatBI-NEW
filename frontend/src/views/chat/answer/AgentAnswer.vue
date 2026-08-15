@@ -65,6 +65,8 @@ const _loading = computed({
 })
 
 const stopFlag = ref(false)
+const cancellationRequested = ref(false)
+const activeController = ref<AbortController>()
 const loadingData = ref(false)
 // 全局 loading 控制输入区，执行流运行态只属于当前这条消息，不能污染历史记录。
 const runtimeLoading = ref(false)
@@ -103,7 +105,7 @@ async function consumeStream(
   let tempResult = ''
 
   while (true) {
-    if (stopFlag.value) {
+    if (stopFlag.value && !cancellationRequested.value) {
       controller.abort()
       break
     }
@@ -131,11 +133,16 @@ async function consumeStream(
 
 function handleEvent(data: any, currentRecord: ChatRecord) {
   const effect = reduceAgentEvent(currentRecord, data)
-  if (effect.waitingUser || effect.terminal === 'failed') {
+  if (
+    effect.waitingUser ||
+    effect.terminal === 'failed' ||
+    effect.terminal === 'cancelled'
+  ) {
     runtimeLoading.value = false
     _loading.value = false
   }
   if (effect.terminal === 'failed') emits('error', currentRecord.id)
+  if (effect.terminal === 'cancelled') emits('stop')
   if (effect.terminal === 'finished') {
     getChatData(currentRecord.id)
     emits('finish', currentRecord.id)
@@ -144,6 +151,7 @@ function handleEvent(data: any, currentRecord: ChatRecord) {
 
 async function sendMessage() {
   stopFlag.value = false
+  cancellationRequested.value = false
   runtimeLoading.value = true
   _loading.value = true
   if (index.value < 0 || _currentChatId.value === undefined) {
@@ -159,6 +167,7 @@ async function sendMessage() {
   }
   currentRecord.execution_events = []
   const controller = new AbortController()
+  activeController.value = controller
   try {
     const response = await agentQuestionApi.stream(
       {
@@ -174,8 +183,11 @@ async function sendMessage() {
     currentRecord.error = `Error:${error}`
     emits('error', currentRecord.id)
   } finally {
-    runtimeLoading.value = false
-    _loading.value = false
+    if (!cancellationRequested.value) {
+      runtimeLoading.value = false
+      _loading.value = false
+    }
+    activeController.value = undefined
   }
 }
 
@@ -184,12 +196,14 @@ async function submitClarification(answer: AgentClarificationAnswer) {
   const currentRecord: ChatRecord = _currentChat.value.records[index.value]
   if (!currentRecord.id) return
   stopFlag.value = false
+  cancellationRequested.value = false
   runtimeLoading.value = true
   _loading.value = true
   currentRecord.status = 'running'
   currentRecord.clarification = undefined
   await pushOptimisticClarificationAccepted(currentRecord)
   const controller = new AbortController()
+  activeController.value = controller
   try {
     const response = await agentQuestionApi.stream(
       {
@@ -204,9 +218,49 @@ async function submitClarification(answer: AgentClarificationAnswer) {
     currentRecord.error = `Error:${error}`
     emits('error', currentRecord.id)
   } finally {
-    runtimeLoading.value = false
-    _loading.value = false
+    if (!cancellationRequested.value) {
+      runtimeLoading.value = false
+      _loading.value = false
+    }
+    activeController.value = undefined
   }
+}
+
+async function reconcileCancellation(currentRecord: ChatRecord) {
+  if (!currentRecord.id) return
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    if (!cancellationRequested.value) return
+    try {
+      const timeline = await agentQuestionApi.timeline(currentRecord.id)
+      for (const event of timeline.events || []) handleEvent(event, currentRecord)
+      if (['cancelled', 'finished', 'failed'].includes(currentRecord.status || '')) {
+        return
+      }
+    } catch {
+      // 取消补拉失败时保留取消中状态，避免把服务端仍在收口误报为失败。
+    }
+  }
+}
+
+async function requestCancellation(currentRecord: ChatRecord) {
+  const runId = Number(currentRecord.run_id)
+  if (
+    cancellationRequested.value ||
+    !runId ||
+    ['cancelled', 'finished', 'failed'].includes(currentRecord.status || '')
+  ) {
+    return
+  }
+  cancellationRequested.value = true
+  currentRecord.status = 'cancelling'
+  try {
+    const response = await agentQuestionApi.cancel(runId)
+    if (response.status === 'cancelled') currentRecord.status = 'cancelled'
+  } catch {
+    // 取消请求失败时由补拉继续读取服务端状态，不把本地状态改成失败。
+  }
+  void reconcileCancellation(currentRecord)
 }
 
 function cancelClarification() {
@@ -214,10 +268,7 @@ function cancelClarification() {
   if (index.value < 0) return
   const currentRecord: ChatRecord = _currentChat.value.records[index.value]
   currentRecord.clarification = undefined
-  const runId = Number(currentRecord.run_id)
-  if (runId) {
-    agentQuestionApi.cancel(runId).catch(() => {})
-  }
+  void requestCancellation(currentRecord)
   runtimeLoading.value = false
   _loading.value = false
   emits('stop')
@@ -249,14 +300,20 @@ function getChatData(recordId?: number) {
     })
 }
 
-function stop() {
+function stop(abortTransport = false) {
   stopFlag.value = true
-  runtimeLoading.value = false
-  _loading.value = false
+  const currentRecord = index.value >= 0 ? _currentChat.value.records[index.value] : undefined
+  if (currentRecord?.status === 'running' || currentRecord?.status === 'cancelling') {
+    void requestCancellation(currentRecord)
+  } else {
+    runtimeLoading.value = false
+    _loading.value = false
+  }
+  if (abortTransport) activeController.value?.abort()
   emits('stop')
 }
 
-onBeforeUnmount(stop)
+onBeforeUnmount(() => stop(true))
 
 onMounted(() => {
   if (props.message?.record?.id && props.message?.record?.finish) {

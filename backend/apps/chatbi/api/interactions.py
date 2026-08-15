@@ -1,4 +1,5 @@
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -32,7 +33,7 @@ from apps.chatbi.services.trace_projection import (
 )
 from apps.conversation import ChatRecordError, ChatRecordExecutionType, ChatRecordStatus
 from apps.conversation.composition import build_chat_record_service
-from apps.event import encode_sse_events, list_events_after
+from apps.event import EventPublisher, encode_sse_events, list_events_after
 from common.core.deps import CurrentUser, SessionDep
 
 router = APIRouter(tags=["Agent Data Q&A"], prefix="/chat/agent")
@@ -219,19 +220,25 @@ async def agent_cancel(
         AgentRunStatus.CANCEL_REQUESTED.value,
     }:
         return {"run_id": run_id, "status": run.status}
-    if run.status in {
-        AgentRunStatus.CREATED.value,
-        AgentRunStatus.WAITING_USER.value,
-    }:
-        target_status = AgentRunStatus.CANCELLED.value
-    else:
-        target_status = AgentRunStatus.CANCEL_REQUESTED.value
-    agent_run_repository.update_run(
+    previous_status = run.status
+    run = agent_run_repository.request_cancel(
         session,
-        run,
-        status=target_status,
+        run_id,
+        request_id=f"user-cancel-{uuid4().hex}",
+        user_id=current_user.id,
+        reason="用户点击取消",
     )
-    if target_status == AgentRunStatus.CANCELLED.value:
+    event_publisher = EventPublisher(session)
+    event_payload = {
+        "record_id": run.record_id,
+        "run_id": run.id,
+        "status": run.status,
+        "content": "用户已请求取消运行",
+        "cancel_stage": run.cancel_stage,
+    }
+    if previous_status != run.status:
+        event_publisher.publish(run_id, "run-cancel-requested", event_payload)
+    if run.status == AgentRunStatus.CANCELLED.value:
         record_service = build_chat_record_service(session)
         record = record_service.get_owned(current_user.id, run.record_id)
         record_service.transition(
@@ -239,5 +246,30 @@ async def agent_cancel(
             ChatRecordStatus.CANCELLED,
             execution_type=ChatRecordExecutionType.AGENT,
         )
+        event_publisher.publish(
+            run_id,
+            "run-cancelled",
+            {
+                **event_payload,
+                "status": AgentRunStatus.CANCELLED.value,
+                "cancelled_at": (
+                    run.cancelled_at.isoformat()
+                    if run.cancelled_at is not None
+                    else None
+                ),
+            },
+        )
     session.commit()
-    return {"run_id": run_id, "status": target_status}
+    return {
+        "run_id": run_id,
+        "status": run.status,
+        "cancel_requested_at": (
+            run.cancel_requested_at.isoformat()
+            if run.cancel_requested_at is not None
+            else None
+        ),
+        "cancelled_at": (
+            run.cancelled_at.isoformat() if run.cancelled_at is not None else None
+        ),
+        "cancel_stage": run.cancel_stage,
+    }

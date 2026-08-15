@@ -104,7 +104,20 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
 
     monkeypatch.setattr(service, "create_record_and_run", fake_create_record_and_run)
     monkeypatch.setattr(service, "build_agent_trace_recorder", lambda: recorder)
-    monkeypatch.setattr(service, "build_agent_loop", FakeLoop)
+    class FakeRunner:
+        def start_initial(self, *args):
+            pass
+
+        def stream(self, run_id):
+            yield create_render_event(
+                "run-started",
+                {},
+                record_id=record.id,
+                run_id=run_id,
+                sequence=1,
+            )
+
+    monkeypatch.setattr(service, "agent_runner", FakeRunner())
 
     response = asyncio.run(
         api.agent_stream(
@@ -189,7 +202,20 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
                 sequence=1,
             )
 
-    monkeypatch.setattr(service, "build_agent_loop", FakeLoop)
+    class FakeRunner:
+        def start_resume(self, *args):
+            captured["answer_text"] = args[-1]
+
+        def stream(self, run_id):
+            yield create_render_event(
+                "clarification-accepted",
+                {},
+                record_id=record.id,
+                run_id=run_id,
+                sequence=1,
+            )
+
+    monkeypatch.setattr(service, "agent_runner", FakeRunner())
 
     response = asyncio.run(
         api.agent_stream(
@@ -535,13 +561,22 @@ def test_running_agent_cancel_records_request_instead_of_claiming_cancelled(
         "get_run",
         lambda _session, _run_id: run,
     )
+    def request_cancel(_session, _run_id, **_kwargs):
+        run.status = AgentRunStatus.CANCEL_REQUESTED.value
+        run.cancel_stage = "request_received"
+        return run
+
+    monkeypatch.setattr(api.agent_run_repository, "request_cancel", request_cancel)
+    monkeypatch.setattr(
+        api,
+        "EventPublisher",
+        lambda _session: SimpleNamespace(publish=lambda *args, **kwargs: None),
+    )
 
     response = asyncio.run(api.agent_cancel(session, user, run.id))
 
-    assert response == {
-        "run_id": run.id,
-        "status": AgentRunStatus.CANCEL_REQUESTED.value,
-    }
+    assert response["run_id"] == run.id
+    assert response["status"] == AgentRunStatus.CANCEL_REQUESTED.value
     assert run.status == AgentRunStatus.CANCEL_REQUESTED.value
 
 
@@ -565,6 +600,17 @@ def test_waiting_agent_cancel_can_reach_cancelled_immediately(monkeypatch):
         api.agent_run_repository,
         "get_run",
         lambda _session, _run_id: run,
+    )
+    def request_cancel(_session, _run_id, **_kwargs):
+        run.status = AgentRunStatus.CANCELLED.value
+        run.cancel_stage = "before_execution"
+        return run
+
+    monkeypatch.setattr(api.agent_run_repository, "request_cancel", request_cancel)
+    monkeypatch.setattr(
+        api,
+        "EventPublisher",
+        lambda _session: SimpleNamespace(publish=lambda *args, **kwargs: None),
     )
     monkeypatch.setattr(
         api,

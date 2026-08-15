@@ -13,6 +13,8 @@ import orjson
 from apps.chatbi.errors import AgentActionError
 from apps.chatbi.models import AgentClarificationResumeKind, AgentToolCallStatus
 from apps.chatbi.models.dto.agent import AgentConfig
+from apps.chatbi.orchestration.agent.cancellation import CancellationStage
+from apps.chatbi.orchestration.agent.cancellation_guard import CancellationGuard
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.messages import (
     AgentMessage,
@@ -243,6 +245,26 @@ class AgentToolExecutor:
                 )
 
         for batch in batches:
+            cancellation_guard = CancellationGuard(state.cancellation)
+            if cancellation_guard.check(CancellationStage.BEFORE_TOOL):
+                yield from self._interrupt_open_tool_calls(
+                    state,
+                    step,
+                    calls,
+                    tool_call_rows,
+                    reason="用户已请求取消，工具未开始执行",
+                )
+                agent_run_repository.cancel_step(
+                    self._session,
+                    step,
+                    "用户在工具开始前请求取消运行",
+                )
+                self._session.commit()
+                yield from self._lifecycle.cancel(
+                    state,
+                    "用户在工具开始前请求取消运行",
+                )
+                return ToolExecutionResult(ToolExecutionStatus.CANCELLED)
             executable_batch: list[ToolCall] = []
             for call in batch:
                 with self._recorder.node(
@@ -453,6 +475,7 @@ class AgentToolExecutor:
                     max_workers=int(
                         getattr(self._config, "tool_parallel_workers", 4) or 4
                     ),
+                    cancellation=state.cancellation,
                 )
             except ToolBatchExecutionError as exc:
                 for call, outcome in exc.outcomes:
@@ -515,6 +538,10 @@ class AgentToolExecutor:
                 raise
 
             for call, result in executed:
+                if CancellationGuard(state.cancellation).check(
+                    CancellationStage.AFTER_TOOL
+                ):
+                    result = _cancelled_tool_result(result)
                 before_projection = {
                     "state_revision": int(context.state.get("state_revision") or 0),
                     "state_keys": sorted(context.state),
@@ -638,9 +665,6 @@ class AgentToolExecutor:
                     failed_count += 1
 
                 if result.error_category == ToolErrorCategory.CANCELLATION:
-                    state.messages.append(
-                        AgentMessage.tool(result.model_content, call_id)
-                    )
                     yield from self._interrupt_open_tool_calls(
                         state,
                         step,
@@ -648,14 +672,10 @@ class AgentToolExecutor:
                         tool_call_rows,
                         reason="当前运行已收到用户取消请求",
                     )
-                    agent_run_repository.finish_step(
+                    agent_run_repository.cancel_step(
                         self._session,
                         step,
-                        {
-                            "tool_call_count": completed_count + failed_count,
-                            "failed_tool_call_count": failed_count,
-                        },
-                        usage,
+                        result.model_content,
                     )
                     self._session.commit()
                     yield from self._lifecycle.cancel(
@@ -1180,6 +1200,22 @@ def _tool_result_detail(result: ToolResult[Any]) -> dict[str, Any]:
         "retry_advice": result.retry_advice.value,
         "details": result.details,
     }
+
+
+def _cancelled_tool_result(result: ToolResult[Any]) -> ToolResult[Any]:
+    """取消请求后禁止把已经返回的结果投影为 Agent 业务状态。"""
+
+    if result.status == ToolStatus.INTERRUPTED:
+        return result
+    return ToolResult.interrupted(
+        "用户取消请求已生效，工具结果不再用于本次运行。",
+        error_code="tool_cancelled_after_execution",
+        metadata={
+            "underlying_operation_started": True,
+            "underlying_operation_completed": True,
+            "original_status": result.status.value,
+        },
+    )
 
 
 def _offload_ref(result: ToolResult[Any]) -> str | None:

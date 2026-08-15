@@ -63,6 +63,14 @@ export interface AgentTimelineResponse {
   clarification?: AgentClarification
 }
 
+export interface AgentCancelResponse {
+  run_id: number
+  status: string
+  cancel_requested_at?: string
+  cancelled_at?: string
+  cancel_stage?: string
+}
+
 export interface AgentTraceOverview {
   run_id: number
   record_id: number
@@ -139,5 +147,6 @@ export const agentQuestionApi = {
     request.get<AgentTraceNodeDetail>(`/chat/agent/record/${recordId}/trace/nodes/${nodeId}`),
   events: (runId: number, afterSequence: number = 0) =>
     request.get(`/chat/agent/runs/${runId}/events?after_sequence=${afterSequence}`),
-  cancel: (runId: number) => request.post(`/chat/agent/runs/${runId}/cancel`),
+  cancel: (runId: number) =>
+    request.post<AgentCancelResponse>(`/chat/agent/runs/${runId}/cancel`),
 }

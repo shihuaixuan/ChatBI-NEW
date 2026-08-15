@@ -14,9 +14,15 @@ from typing import Any
 from apps.chatbi.errors import QuestionUnderstandingError, SemanticClarificationError
 from apps.chatbi.models import (
     AgentErrorClass,
+    AgentRunStatus,
     ChatbiAgentClarification,
     ChatbiAgentRun,
 )
+from apps.chatbi.orchestration.agent.cancellation import (
+    AgentCancellationRequested,
+    CancellationStage,
+)
+from apps.chatbi.orchestration.agent.cancellation_guard import CancellationGuard
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.messages import close_unfinished_tool_calls
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
@@ -103,6 +109,11 @@ class AgentLoop:
     def _run(self, run: ChatbiAgentRun, record: Any) -> Iterator[RenderEvent]:
         state = self.state_factory.create(run, record)
         yield from self.lifecycle.start(state)
+        if state.run.status in {
+            AgentRunStatus.CANCEL_REQUESTED.value,
+            AgentRunStatus.CANCELLED.value,
+        }:
+            return
 
         try:
             ready = yield from self.input_preparer.prepare_initial(state)
@@ -175,6 +186,12 @@ class AgentLoop:
 
         state = self.state_factory.create(run, record)
         try:
+            if state.cancellation.is_cancelled():
+                yield from self.lifecycle.cancel(
+                    state,
+                    "用户在 Agent 恢复前请求取消运行",
+                )
+                return
             ready = yield from self.input_preparer.prepare_resume(
                 state,
                 clarification,
@@ -357,23 +374,41 @@ class AgentLoop:
                         step.id,
                     )
 
-                decision = self.reasoner.decide(
-                    state,
-                    mode,
-                    step_id=step.id,
-                    step_index=step_index,
-                )
+                try:
+                    decision = self.reasoner.decide(
+                        state,
+                        mode,
+                        step_id=step.id,
+                        step_index=step_index,
+                    )
+                except AgentCancellationRequested as exc:
+                    reason = f"用户在 {exc.stage.value} 阶段请求取消运行"
+                    agent_run_repository.cancel_step(self.session, step, reason)
+                    self.session.commit()
+                    _set_iteration_result(
+                        iteration_node,
+                        state_before,
+                        state,
+                        "cancelled_during_llm",
+                        TraceNodeStatus.CANCELLED,
+                        step_id=step.id,
+                    )
+                    yield from self.lifecycle.cancel(state, message=reason)
+                    _set_iteration_result(
+                        iteration_node,
+                        state_before,
+                        state,
+                        "cancelled_during_llm",
+                        TraceNodeStatus.CANCELLED,
+                        step_id=step.id,
+                    )
+                    return
                 usage = decision.usage
                 text = decision.reasoning
-                if text:
-                    yield self._emit(
-                        state,
-                        "thinking",
-                        {"record_id": record.id, "content": text},
-                        step.id,
-                    )
 
-                cancelled_after_reasoning = state.cancellation.is_cancelled()
+                cancelled_after_reasoning = CancellationGuard(
+                    state.cancellation
+                ).check(CancellationStage.AFTER_LLM)
                 with self.recorder.node(
                     TraceNodeSpec(
                         run_id=state.require_run_id(),
@@ -392,11 +427,11 @@ class AgentLoop:
                         post_guard_node.set_status(TraceNodeStatus.CANCELLED)
 
                 if cancelled_after_reasoning:
-                    agent_run_repository.fail_step(
-                        self.session,
-                        step,
-                        "用户在模型规划期间请求取消",
-                    )
+                    if state.messages and state.messages[-1] is decision.response:
+                        state.messages.pop()
+                    reason = "用户在模型返回后请求取消运行"
+                    agent_run_repository.cancel_step(self.session, step, reason)
+                    self.session.commit()
                     _set_iteration_result(
                         iteration_node,
                         state_before,
@@ -405,7 +440,7 @@ class AgentLoop:
                         TraceNodeStatus.CANCELLED,
                         step_id=step.id,
                     )
-                    yield from self.lifecycle.cancel(state)
+                    yield from self.lifecycle.cancel(state, message=reason)
                     _set_iteration_result(
                         iteration_node,
                         state_before,
@@ -415,6 +450,14 @@ class AgentLoop:
                         step_id=step.id,
                     )
                     return
+
+                if text:
+                    yield self._emit(
+                        state,
+                        "thinking",
+                        {"record_id": record.id, "content": text},
+                        step.id,
+                    )
 
                 if decision.is_direct_answer:
                     direct_answer_allowed = _allows_direct_answer(state)

@@ -15,7 +15,7 @@ export interface AgentRenderEvent {
 }
 
 export interface AgentEventEffect {
-  terminal?: 'finished' | 'failed'
+  terminal?: 'finished' | 'failed' | 'cancelled'
   waitingUser?: boolean
 }
 
@@ -56,6 +56,9 @@ export function reduceAgentEvent(
     case 'run.started':
       currentRecord.status = 'running'
       break
+    case 'run.cancel-requested':
+      currentRecord.status = 'cancelling'
+      break
     case 'sql.generated':
     case 'sql.validated':
       currentRecord.sql = event.sql
@@ -86,7 +89,7 @@ export function reduceAgentEvent(
       const alreadyCancelled = currentRecord.status === 'cancelled'
       currentRecord.status = 'cancelled'
       currentRecord.error = event.content
-      return alreadyCancelled ? {} : { terminal: 'failed' }
+      return alreadyCancelled ? {} : { terminal: 'cancelled' }
     }
     case 'run.finished': {
       const alreadyFinished = currentRecord.finish === true
