@@ -37,7 +37,13 @@ from apps.memory.models import (
     MemoryVariantUsageMetrics,
     SuccessfulQueryMemoryEvent,
 )
-from apps.memory.services import MemoryEvaluationService, MemoryService
+from apps.memory.services import (
+    MemoryCandidateExtractor,
+    MemoryEvaluationService,
+    MemoryExtractionItem,
+    MemoryExtractionOutput,
+    MemoryService,
+)
 
 __all__ = [
     "ClarificationMemoryEvent",
@@ -50,11 +56,14 @@ __all__ = [
     "MemoryRecallComparisonDecision",
     "MemoryRecallVariant",
     "MemoryCandidateInput",
+    "MemoryCandidateExtractor",
     "MemoryCreateInput",
     "MemoryContextItem",
     "MemoryContextSnapshot",
     "MemoryError",
     "MemoryEvaluationService",
+    "MemoryExtractionItem",
+    "MemoryExtractionOutput",
     "MemoryEvidenceType",
     "MemoryLayer",
     "MemoryNotFoundError",

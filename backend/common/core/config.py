@@ -123,6 +123,8 @@ class Settings(BaseSettings):
 
     # 用户记忆向量索引独立于语义资产索引，默认关闭，需单独配置后启用。
     CHATBI_MEMORY_EMBEDDING_ENABLED: bool = False
+    # 用户隐含偏好提取默认关闭，启用后只处理明确澄清回答，不阻断问数主链路。
+    CHATBI_MEMORY_LLM_EXTRACTION_ENABLED: bool = False
     # 用户记忆召回灰度默认关闭，开启后按用户稳定分配 control/treatment。
     CHATBI_MEMORY_RECALL_EXPERIMENT_ENABLED: bool = False
     CHATBI_MEMORY_RECALL_TREATMENT_PERCENT: int = 0
@@ -215,6 +217,7 @@ class Settings(BaseSettings):
                      'QUERY_UNDERSTANDING_MODEL_ENABLED',
                      'TEMPORAL_MODEL_SHADOW_ENABLED',
                      'TEMPORAL_MODEL_AUTHORITY_ENABLED',
+                     'CHATBI_MEMORY_LLM_EXTRACTION_ENABLED',
                      'EXACT_ALIAS_ACCEPT',
                      mode='before')
     @classmethod

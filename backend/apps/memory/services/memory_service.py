@@ -32,6 +32,7 @@ from apps.memory.models.dto import (
     SuccessfulQueryMemoryEvent,
 )
 from apps.memory.repository.memory_repository import MemoryRepository
+from apps.memory.services.memory_extraction import MemoryCandidateExtractor
 from apps.memory.services.memory_rules import (
     evidence_strength,
     normalize_memory_key,
@@ -67,6 +68,7 @@ class MemoryService:
         recall_experiment_salt: str = "chatbi-memory-recall-v1",
         recall_min_evaluated_per_variant: int = 100,
         recall_max_adoption_drop: float = 0.05,
+        candidate_extractor: MemoryCandidateExtractor | None = None,
     ) -> None:
         if promotion_evidence_count <= 0 or promotion_session_count <= 0:
             raise ValueError("MEMORY_PROMOTION_THRESHOLD_INVALID")
@@ -91,6 +93,7 @@ class MemoryService:
         self._recall_experiment_salt = recall_experiment_salt
         self._recall_min_evaluated_per_variant = recall_min_evaluated_per_variant
         self._recall_max_adoption_drop = recall_max_adoption_drop
+        self._candidate_extractor = candidate_extractor
 
     def assign_recall_variant(self, oid: int, user_id: int) -> MemoryRecallAssignment:
         """按租户和用户稳定分配召回实验分组。"""
@@ -438,16 +441,28 @@ class MemoryService:
     ) -> MemoryRecord | None:
         """只从带有长期偏好表达的澄清回答中生成明确候选。"""
 
-        candidate = _clarification_candidate(event)
-        if candidate is None:
+        candidates: list[MemoryCandidateInput] = []
+        deterministic_candidate = _clarification_candidate(event)
+        if deterministic_candidate is not None:
+            candidates.append(deterministic_candidate)
+        if self._candidate_extractor is not None:
+            candidates.extend(self._candidate_extractor.extract(event))
+        if not candidates:
             return None
-        record = self.consolidate_candidate(oid, user_id, candidate)
-        if record.memory_type in {
-            MemoryType.PRESENTATION_PREFERENCE,
-            MemoryType.NEGATIVE_PREFERENCE,
-        }:
+        records = [
+            self.consolidate_candidate(oid, user_id, candidate)
+            for candidate in candidates
+        ]
+        if any(
+            record.memory_type
+            in {
+                MemoryType.PRESENTATION_PREFERENCE,
+                MemoryType.NEGATIVE_PREFERENCE,
+            }
+            for record in records
+        ):
             self.rebuild_profile(oid, user_id)
-        return record
+        return records[0]
 
     def rebuild_profile(self, oid: int, user_id: int) -> list[MemoryRecord]:
         """根据有效展示偏好生成确定性的 L3 用户画像。"""

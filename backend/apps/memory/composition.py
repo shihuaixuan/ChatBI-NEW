@@ -2,8 +2,10 @@
 
 from sqlmodel import Session
 
+from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.memory.repository.sqlmodel import SQLModelMemoryRepository
 from apps.memory.services import MemoryEvaluationService, MemoryService
+from apps.memory.services.memory_extraction import MemoryCandidateExtractor
 from apps.retrieval.embedding import default_retrieval_embedding_provider
 from common.core.config import settings
 
@@ -14,9 +16,13 @@ def build_memory_service(session: Session) -> MemoryService:
     embedding_provider = None
     if settings.CHATBI_MEMORY_EMBEDDING_ENABLED:
         embedding_provider = default_retrieval_embedding_provider()
+    candidate_extractor = None
+    if settings.CHATBI_MEMORY_LLM_EXTRACTION_ENABLED:
+        candidate_extractor = MemoryCandidateExtractor(build_question_model_service())
     return MemoryService(
         SQLModelMemoryRepository(session),
         embedding_provider=embedding_provider,
+        candidate_extractor=candidate_extractor,
         recall_experiment_enabled=settings.CHATBI_MEMORY_RECALL_EXPERIMENT_ENABLED,
         recall_experiment_treatment_percent=(
             settings.CHATBI_MEMORY_RECALL_TREATMENT_PERCENT
