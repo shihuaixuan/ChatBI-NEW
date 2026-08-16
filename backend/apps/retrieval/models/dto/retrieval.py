@@ -188,12 +188,17 @@ class ExecutableAssetReference(_StrictModel):
 
 
 class SemanticClarificationBinding(_StrictModel):
-    """用户澄清选项中由服务端验证的语义槽位绑定。"""
+    """用户澄清选项中由服务端验证的语义槽位绑定。
+
+    VALUE 绑定的 asset_id 指向维值所属维度，选中后由 payload 侧
+    还原 canonical 值并写回筛选条件。
+    """
 
     subquery_id: str = Field(min_length=1)
     asset_type: Literal[
         RetrievalResourceType.METRIC,
         RetrievalResourceType.DIMENSION,
+        RetrievalResourceType.VALUE,
     ]
     asset_id: int = Field(gt=0)
     model_id: int | None = Field(default=None, gt=0)

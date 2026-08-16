@@ -48,7 +48,9 @@ def _request() -> RetrievalRequest:
     )
 
 
-def test_planner_generates_asset_slots_without_retrieving_dimension_values():
+def test_planner_generates_asset_slots_and_value_lookups():
+    """P0-4 值归一：筛选值生成 VALUE 槽（非必需），未命中不阻断主链路。"""
+
     plan = SemanticBindingQueryPlanner().plan(_request())
 
     assert [
@@ -60,10 +62,13 @@ def test_planner_generates_asset_slots_without_retrieving_dimension_values():
         ("dimension:1", RetrievalPurpose.DIMENSION, "城市", "group_by", True),
         ("dimension:2", RetrievalPurpose.DIMENSION, "城市", "filter", True),
         ("term:1", RetrievalPurpose.TERM, "成交", None, False),
+        ("value:1", RetrievalPurpose.VALUE, "北京和上海", "filter", False),
     ]
     assert all(item.filters["tenant_id"] == 1 for item in plan.subqueries)
     assert all(item.filters["dataset_ids"] == [20] for item in plan.subqueries)
-    assert all(item.purpose != RetrievalPurpose.VALUE for item in plan.subqueries)
+    value_slots = [item for item in plan.subqueries if item.purpose == RetrievalPurpose.VALUE]
+    assert all(not item.required for item in value_slots)
+    assert value_slots[0].filters["dimension_name"] == "城市"
 
 
 def test_planner_fingerprint_is_stable_and_does_not_use_whole_question_as_metric_fallback():

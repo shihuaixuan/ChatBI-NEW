@@ -128,6 +128,13 @@ class SemanticBindingPolicy:
             )
             for slot in recall.slots
         ]
+        slot_results = [
+            _collapse_value_ambiguity_to_single_dimension(
+                item,
+                threshold=policy_config.thresholds[RetrievalResourceType.VALUE],
+            )
+            for item in slot_results
+        ]
         slot_results = _constrain_metric_dimension_candidates(slot_results)
         slot_results = _resolve_identity_dimensions_by_metric_compatibility(
             slot_results
@@ -326,10 +333,18 @@ class SemanticBindingPolicy:
         ]
         if required and len(resolved) == len(required) and _is_cross_model(resolved):
             return RetrievalDecisionStatus.CROSS_MODEL
-        if any(
-            item.decision.status == RetrievalDecisionStatus.AMBIGUOUS
-            for item in required
-        ):
+        # VALUE 槽是辅助值归一查询：未命中按数据集策略保留原值即可，
+        # 但多命中的取值歧义必须交给用户消解，不能静默取 Top1。
+        ambiguity_slots = [
+            item
+            for item in slot_results
+            if item.decision.status == RetrievalDecisionStatus.AMBIGUOUS
+            and (
+                item.slot.subquery.required
+                or item.slot.subquery.purpose == RetrievalPurpose.VALUE
+            )
+        ]
+        if ambiguity_slots:
             return RetrievalDecisionStatus.AMBIGUOUS
         if not required or not resolved:
             return RetrievalDecisionStatus.MISSED
@@ -339,6 +354,48 @@ class SemanticBindingPolicy:
             # 通道降级只描述已完整收敛决策的质量，不能覆盖歧义、缺失或部分命中。
             return RetrievalDecisionStatus.DEGRADED
         return RetrievalDecisionStatus.RESOLVED
+
+
+def _collapse_value_ambiguity_to_single_dimension(
+    item: _SlotPolicyResult,
+    *,
+    threshold: SemanticBindingGateThreshold,
+) -> _SlotPolicyResult:
+    """同维度的多值命中不是资产歧义：维度唯一即确定性收敛，canonical 不确定时保留原值。
+
+    VALUE 候选的 asset_id 指向所属维度；多个候选若同属一个维度，
+    澄清选项无法区分具体维值，只能按确定性顺序取 Top1 并标注收敛原因。
+    """
+
+    if (
+        item.slot.subquery.purpose != RetrievalPurpose.VALUE
+        or item.decision.status != RetrievalDecisionStatus.AMBIGUOUS
+    ):
+        return item
+    eligible = _unique_asset_refs(
+        tuple(
+            hit
+            for hit in item.hits
+            if hit.asset_ref is not None
+            and _candidate_evidence(hit, threshold) is not None
+        )
+    )
+    if len(eligible) != 1:
+        return item
+    return _SlotPolicyResult(
+        slot=item.slot,
+        hits=item.hits,
+        decision=RetrievalSlotDecision(
+            subquery_id=item.decision.subquery_id,
+            purpose=item.decision.purpose,
+            status=RetrievalDecisionStatus.RESOLVED,
+            candidate_assets=item.decision.candidate_assets,
+            selected_assets=eligible,
+            reason_codes=["VALUE_AMBIGUITY_COLLAPSED_TO_SINGLE_DIMENSION"],
+        ),
+        eligible_assets=item.eligible_assets,
+        rerank_diagnostic=item.rerank_diagnostic,
+    )
 
 
 def _validated_rerank_scores(

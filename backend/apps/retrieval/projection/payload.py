@@ -25,6 +25,7 @@ from apps.retrieval.models.dto import (
     RetrievalSlotDecision,
     RetrievalSourceType,
 )
+from apps.retrieval.projection.planner import value_lookup_slots
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 _GROUP_TYPES = {
@@ -187,7 +188,11 @@ def bundle_to_semantic_payload(
 
     selected_with_dimensions = _selected_assets_with_dimension_groups(selected_assets)
     intent = request.intent.model_dump(mode="json")
-    slot_bindings = _slot_bindings(selected_assets, intent)
+    slot_bindings = _slot_bindings(
+        selected_assets,
+        intent,
+        value_resolutions=_value_resolutions(request, bundle),
+    )
     multi_query_plans = (
         _cross_model_query_plans(selected_assets, intent, schema)
         if bundle.decision.status == RetrievalDecisionStatus.CROSS_MODEL
@@ -313,6 +318,7 @@ def apply_decision_to_semantic_payload(
             "slot_bindings": _slot_bindings(
                 selected_assets,
                 request.intent.model_dump(mode="json"),
+                value_resolutions=_value_resolutions(request, bundle),
             ),
             "decision": {
                 "status": bundle.decision.status.value,
@@ -394,6 +400,8 @@ def _hit_to_candidate(
             "score": float(score),
             "matched_text": hit.matched_text,
             "matched_field": hit.matched_field,
+            # VALUE 候选的检索单元标题就是维值本身，澄清选项需要直接展示它。
+            "retrieval_title": hit.title,
             "retrieval_scores": hit.scores.model_dump(mode="json"),
             "retrieval_ranks": {
                 channel.value: rank for channel, rank in hit.ranks_by_channel.items()
@@ -480,6 +488,7 @@ def _selected_assets_with_dimension_groups(
 def _slot_bindings(
     selected_assets: dict[str, list[dict[str, Any]]],
     intent: dict[str, Any],
+    value_resolutions: dict[tuple[int, str], dict[str, str]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     dimensions = selected_assets.get("dimensions", [])
     business_dimensions = [
@@ -491,7 +500,12 @@ def _slot_bindings(
     value_filters = [
         _asset_binding(item, "VALUE") for item in selected_assets.get("values", [])
     ]
-    dimension_filters = _dimension_filter_bindings(selected_assets, intent)
+    dimension_filters = _dimension_filter_bindings(
+        selected_assets,
+        intent,
+        value_resolutions=value_resolutions,
+    )
+    value_filters = _merge_value_resolutions(value_filters, value_resolutions)
     time_filter = _time_filter_binding(time_dimensions, intent)
     time_filters = [time_filter] if time_filter is not None else []
     return {
@@ -556,6 +570,8 @@ def _group_dimension_bindings(
 def _dimension_filter_bindings(
     selected_assets: dict[str, list[dict[str, Any]]],
     intent: dict[str, Any],
+    *,
+    value_resolutions: dict[tuple[int, str], dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     slots = [
         item for item in intent.get("dimension_slots") or [] if isinstance(item, dict)
@@ -575,6 +591,7 @@ def _dimension_filter_bindings(
                 "source": "intent_filter_mention",
             }
         )
+    resolutions = value_resolutions or {}
     result: list[dict[str, Any]] = []
     seen: set[tuple[int, str, str]] = set()
     for slot in slots:
@@ -610,8 +627,147 @@ def _dimension_filter_bindings(
                 "source": slot.get("source") or "intent_dimension_slot",
             }
         )
+        _apply_value_resolution(binding, int(dimension["asset_id"]), resolutions)
         result.append(binding)
     return result
+
+
+def _value_resolutions(
+    request: RetrievalRequest,
+    bundle: RetrievalBundle,
+) -> dict[tuple[int, str], dict[str, str]]:
+    """从已收敛的 VALUE 槽决策构建 (维度资产, 原值) → canonical 归一映射。
+
+    子查询编号与 planner.value_lookup_slots 的顺序一一对应，
+    这里用同一函数还原维度归属，保证替换只发生在确信命中的值上。
+    """
+
+    lookup_slots = value_lookup_slots(request.intent.model_dump(mode="json"))
+    if not lookup_slots:
+        return {}
+    decisions_by_id = {
+        decision.subquery_id: decision
+        for decision in bundle.decision.slot_decisions
+        if decision.purpose == RetrievalPurpose.VALUE
+    }
+    hits_by_dimension: dict[int, list[RetrievalHit]] = {}
+    for hit in bundle.bindings.values:
+        if hit.asset_ref is not None:
+            hits_by_dimension.setdefault(hit.asset_ref.asset_id, []).append(hit)
+    result: dict[tuple[int, str], dict[str, str]] = {}
+    for index, (dimension_name, term) in enumerate(lookup_slots, start=1):
+        decision = decisions_by_id.get(f"value:{index}")
+        if decision is None or decision.status != RetrievalDecisionStatus.RESOLVED:
+            continue
+        for asset in decision.selected_assets:
+            canonical = _canonical_value_for_term(
+                hits_by_dimension.get(asset.asset_id, []),
+                term,
+            )
+            if canonical is None:
+                continue
+            result[(asset.asset_id, term.casefold())] = {
+                "canonical_value": canonical,
+                "original_term": term,
+                "dimension_name": dimension_name,
+            }
+    return result
+
+
+def _canonical_value_for_term(
+    hits: list[RetrievalHit],
+    term: str,
+) -> str | None:
+    """按 matched_text/title/别名 顺序匹配原始值，返回受治理的 canonical 值。"""
+
+    key = term.casefold()
+    for hit in hits:
+        if (hit.matched_text or "").casefold() == key or hit.title.casefold() == key:
+            canonical = hit.metadata.get("canonical_value")
+            if canonical:
+                return str(canonical)
+    for hit in hits:
+        aliases = {
+            str(alias).casefold() for alias in hit.metadata.get("aliases") or []
+        }
+        if key in aliases:
+            canonical = hit.metadata.get("canonical_value")
+            if canonical:
+                return str(canonical)
+    return None
+
+
+def _apply_value_resolution(
+    binding: dict[str, Any],
+    dimension_asset_id: int,
+    resolutions: dict[tuple[int, str], dict[str, str]],
+) -> None:
+    """把用户原话筛选值替换为维值字典的 canonical 值，并保留原词映射。"""
+
+    value = binding.get("value")
+    items = value if isinstance(value, list) else [value]
+    normalized: list[Any] = []
+    original_terms: list[str] = []
+    changed = False
+    for item in items:
+        resolution = resolutions.get(
+            (dimension_asset_id, str(item).casefold())
+        )
+        if resolution is None:
+            normalized.append(item)
+            continue
+        normalized.append(resolution["canonical_value"])
+        original_terms.append(resolution["original_term"])
+        changed = True
+    if not changed:
+        return
+    binding["value"] = normalized if isinstance(value, list) else normalized[0]
+    binding["value_normalized"] = True
+    binding["original_terms"] = original_terms
+
+
+def _merge_value_resolutions(
+    value_filters: list[dict[str, Any]],
+    resolutions: dict[tuple[int, str], dict[str, str]] | None,
+) -> list[dict[str, Any]]:
+    """在 value_filters 上附加 (原值 → canonical) 归一映射，供口径卡片透出。"""
+
+    if not resolutions:
+        return value_filters
+    merged = [dict(item) for item in value_filters]
+    by_dimension: dict[str, list[dict[str, str]]] = {}
+    asset_id_by_dimension: dict[str, int] = {}
+    for (asset_id, _), resolution in resolutions.items():
+        name = resolution["dimension_name"]
+        by_dimension.setdefault(name, []).append(resolution)
+        asset_id_by_dimension.setdefault(name, asset_id)
+    for name, entries in by_dimension.items():
+        normalizations = [
+            {
+                "original_term": entry["original_term"],
+                "canonical_value": entry["canonical_value"],
+            }
+            for entry in entries
+        ]
+        attached = False
+        for item in merged:
+            if item.get("display_name") == name or item.get("biz_name") == name:
+                item["value_normalizations"] = normalizations
+                attached = True
+                break
+        if not attached:
+            merged.append(
+                {
+                    "asset_type": "VALUE",
+                    "asset_id": asset_id_by_dimension[name],
+                    "display_name": name,
+                    "biz_name": name,
+                    "confidence": 0.0,
+                    "source": "semantic_value_binding",
+                    "value_normalizations": normalizations,
+                }
+            )
+    return merged
 
 
 def _time_filter_binding(

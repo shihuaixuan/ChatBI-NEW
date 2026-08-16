@@ -692,6 +692,7 @@ class AgentInputPreparer:
                 "full_data": None,
             }
         )
+        self._apply_canonical_values_to_understanding(state, updated_payload)
         metric_ids = [
             item.asset_id
             for item in updated_bundle.decision.allowed_asset_ids
@@ -785,6 +786,78 @@ class AgentInputPreparer:
             recall_variant=assignment.recall_variant,
         )
         return context.model_dump(mode="json")
+
+    def _apply_canonical_values_to_understanding(
+        self,
+        state: AgentRuntimeState,
+        payload: dict[str, Any],
+    ) -> None:
+        """澄清选中维值后，把 canonical 值写回问题理解槽位，保持后续口径一致。"""
+
+        slot_bindings = payload.get("slot_bindings")
+        normalizations: list[dict[str, Any]] = []
+        for item in (
+            slot_bindings.get("value_filters") if isinstance(slot_bindings, dict) else None
+        ) or []:
+            if not isinstance(item, dict):
+                continue
+            dimension_names = {
+                str(item.get("display_name") or "").casefold(),
+                str(item.get("biz_name") or "").casefold(),
+            }
+            for entry in item.get("value_normalizations") or []:
+                if isinstance(entry, dict) and entry.get("original_term"):
+                    normalizations.append(
+                        {
+                            "dimension_names": {
+                                name for name in dimension_names if name
+                            },
+                            "original": str(entry["original_term"]),
+                            "canonical": str(entry.get("canonical_value") or ""),
+                        }
+                    )
+        if not normalizations:
+            return
+        understanding = state.context.state.get("question_understanding")
+        if not isinstance(understanding, dict):
+            return
+        intent = understanding.get("intent")
+        slots = intent.get("dimension_slots") if isinstance(intent, dict) else None
+        if not isinstance(slots, list):
+            return
+        changed = False
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+            if str(slot.get("role") or "").lower() != "filter":
+                continue
+            slot_name = str(slot.get("name") or "").casefold()
+            values = slot.get("value")
+            items = values if isinstance(values, list) else [values]
+            replaced: list[Any] = []
+            slot_changed = False
+            for item in items:
+                matched = next(
+                    (
+                        normalization
+                        for normalization in normalizations
+                        if slot_name in normalization["dimension_names"]
+                        and isinstance(item, str)
+                        and item.casefold() == normalization["original"].casefold()
+                        and normalization["canonical"]
+                    ),
+                    None,
+                )
+                if matched is not None:
+                    replaced.append(matched["canonical"])
+                    slot_changed = True
+                else:
+                    replaced.append(item)
+            if slot_changed:
+                slot["value"] = replaced if isinstance(values, list) else replaced[0]
+                changed = True
+        if changed:
+            state.context.state["value_normalization_applied"] = True
 
     def _record_clarification_memory(
         self,

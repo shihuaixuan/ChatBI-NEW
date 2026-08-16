@@ -512,10 +512,16 @@ def _candidate_display_name(
     asset: AssetReference,
 ) -> str:
     details = candidate_details.get(_asset_key(asset), {})
+    if str(details.get("asset_type") or "") == "VALUE":
+        # 维值澄清选项直接展示维值本身，而不是所属维度名。
+        value_name = str(details.get("retrieval_title") or "").strip()
+        if value_name:
+            return value_name
     return str(
         details.get("display_name")
         or details.get("name")
         or details.get("biz_name")
+        or details.get("retrieval_title")
         or f"业务口径 {asset.asset_id}"
     )
 
@@ -526,11 +532,18 @@ def _asset_key(asset: AssetReference) -> tuple[str, int, int | None]:
 
 def _executable_asset_type(
     asset: AssetReference,
-) -> Literal[RetrievalResourceType.METRIC, RetrievalResourceType.DIMENSION]:
+) -> Literal[
+    RetrievalResourceType.METRIC,
+    RetrievalResourceType.DIMENSION,
+    RetrievalResourceType.VALUE,
+]:
     if asset.asset_type == RetrievalResourceType.METRIC:
         return RetrievalResourceType.METRIC
     if asset.asset_type == RetrievalResourceType.DIMENSION:
         return RetrievalResourceType.DIMENSION
+    if asset.asset_type == RetrievalResourceType.VALUE:
+        # VALUE 候选的 asset_id 指向维值所属维度；选中后由 payload 还原 canonical 值。
+        return RetrievalResourceType.VALUE
     raise RetrievalQueryError(
         "语义澄清候选不是可执行资产",
         details={

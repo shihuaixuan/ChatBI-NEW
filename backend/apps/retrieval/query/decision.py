@@ -390,15 +390,15 @@ def _decision_status(
     *,
     required_subquery_ids: set[str] | None,
 ) -> RetrievalDecisionStatus:
-    required = [
-        item
-        for item in slots
-        if (
-            item.subquery_id in required_subquery_ids
-            if required_subquery_ids is not None
-            else item.purpose != RetrievalPurpose.TERM
-        )
-    ]
+    if required_subquery_ids is not None:
+        required = [item for item in slots if item.subquery_id in required_subquery_ids]
+    else:
+        # VALUE 槽是辅助值归一查询：缺失不降级整体决策，只跟随歧义浮出。
+        required = [
+            item
+            for item in slots
+            if item.purpose not in {RetrievalPurpose.TERM, RetrievalPurpose.VALUE}
+        ]
     resolved = [
         item for item in required if item.status == RetrievalDecisionStatus.RESOLVED
     ]
@@ -415,7 +415,18 @@ def _decision_status(
         for item in bundle.diagnostics.channels
     ):
         return RetrievalDecisionStatus.DEGRADED
-    if any(item.status == RetrievalDecisionStatus.AMBIGUOUS for item in required):
+    if any(
+        item.status == RetrievalDecisionStatus.AMBIGUOUS
+        for item in [
+            *required,
+            *(
+                slot
+                for slot in slots
+                if slot.purpose == RetrievalPurpose.VALUE
+                and slot.status == RetrievalDecisionStatus.AMBIGUOUS
+            ),
+        ]
+    ):
         return RetrievalDecisionStatus.AMBIGUOUS
     if not required or not resolved:
         return RetrievalDecisionStatus.MISSED

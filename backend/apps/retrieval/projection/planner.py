@@ -15,6 +15,7 @@ from apps.retrieval.models.dto import (
     RetrievalResourceType,
     RetrievalSubQuery,
 )
+from common.core.config import settings
 
 
 class RetrievalQueryPlan(BaseModel):
@@ -90,6 +91,25 @@ class SemanticBindingQueryPlanner:
                 )
             )
 
+        # 筛选值归一：把用户原话中的筛选值送去维值字典检索；未命中不阻断主链路。
+        if settings.CHATBI_VALUE_BINDING_ENABLED:
+            for index, (dimension_name, value_text) in enumerate(
+                value_lookup_slots(request.intent.model_dump(mode="json")),
+                start=1,
+            ):
+                subqueries.append(
+                    self._subquery(
+                        request,
+                        subquery_id=f"value:{index}",
+                        purpose=RetrievalPurpose.VALUE,
+                        text=value_text,
+                        resource_types=(RetrievalResourceType.VALUE,),
+                        role="filter",
+                        required=False,
+                        extra_filters={"dimension_name": dimension_name},
+                    )
+                )
+
         fingerprint_payload = [item.model_dump(mode="json") for item in subqueries]
         encoded = json.dumps(
             fingerprint_payload,
@@ -137,6 +157,51 @@ class SemanticBindingQueryPlanner:
         )
 
 
+def value_lookup_slots(intent: dict[str, Any]) -> list[tuple[str, str]]:
+    """推导需要维值归一的 (维度名, 原始筛选值) 列表。
+
+    只检索业务语义值（中文/字母短语）；纯数字或标识符样式的值
+    不在维值字典治理范围内，直接透传保留原值。
+    子查询编号与该列表顺序一一对应（value:N → 第 N 项），
+    payload 侧依赖同一函数还原维度归属。
+    """
+
+    result: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for slot in intent.get("dimension_slots") or []:
+        if not isinstance(slot, dict):
+            continue
+        if str(slot.get("role") or "").lower() != "filter":
+            continue
+        if str(slot.get("value_status") or "").lower() != "provided":
+            continue
+        dimension_name = _clean_text(slot.get("name"))
+        values = slot.get("value")
+        for value in values if isinstance(values, list) else [values]:
+            text = _clean_text(value)
+            key = (dimension_name.casefold(), text.casefold())
+            if not dimension_name or not text or key in seen:
+                continue
+            if not _is_lookup_worthy_value(text):
+                continue
+            seen.add(key)
+            result.append((dimension_name, text))
+    return result
+
+
+def _is_lookup_worthy_value(text: str) -> bool:
+    """标识符样式的值（长数字/字母数字混合 ID）不进入维值检索。"""
+
+    if not any(character.isalpha() or "\u4e00" <= character <= "\u9fff" for character in text):
+        return False
+    digit_ratio = sum(1 for character in text if character.isdigit()) / max(
+        len(text), 1
+    )
+    if len(text) >= 8 and digit_ratio >= 0.3:
+        return False
+    return True
+
+
 def _subject_terms(subject_domain: dict[str, Any]) -> list[str]:
     terms = subject_domain.get("terms") or []
     if not isinstance(terms, list):
@@ -163,4 +228,8 @@ def _clean_text(value: Any) -> str:
     return " ".join(str(value).split())
 
 
-__all__ = ["RetrievalQueryPlan", "SemanticBindingQueryPlanner"]
+__all__ = [
+    "RetrievalQueryPlan",
+    "SemanticBindingQueryPlanner",
+    "value_lookup_slots",
+]
