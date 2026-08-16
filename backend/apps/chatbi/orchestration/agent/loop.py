@@ -34,6 +34,7 @@ from apps.chatbi.orchestration.agent.state import (
 from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
 from apps.chatbi.orchestration.pipeline.fast import FastPipeline, FastPipelineError
 from apps.chatbi.orchestration.pipeline.mode_router import ModeRouteInput, ModeRouter
+from apps.chatbi.orchestration.pipeline.plan_mode import PlanPipeline, PlanPipelineError
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.generation.agent_finalization import (
     build_partial_finalization,
@@ -65,6 +66,7 @@ class AgentLoop:
         input_preparer: AgentInputPreparer,
         state_factory: AgentRuntimeStateFactory,
         fast_pipeline: FastPipeline | None = None,
+        plan_pipeline: PlanPipeline | None = None,
         mode_router: ModeRouter | None = None,
     ) -> None:
         self.session = session
@@ -76,6 +78,7 @@ class AgentLoop:
         self.input_preparer = input_preparer
         self.state_factory = state_factory
         self.fast_pipeline = fast_pipeline
+        self.plan_pipeline = plan_pipeline
         self.mode_router = mode_router or ModeRouter()
 
     # ---- 入口 ----
@@ -161,12 +164,23 @@ class AgentLoop:
                     execution_mode=selected_mode,
                 )
                 self.session.commit()
-                yield from self.lifecycle.fail(
-                    state,
-                    f"{selected_mode.upper()} 模式尚未实现。",
-                    AgentErrorClass.PLAN_INVALID.value,
-                    error_details={"code": f"{selected_mode.upper()}_MODE_NOT_READY"},
-                )
+                if selected_mode == "plan" and self.plan_pipeline is not None:
+                    try:
+                        yield from self.plan_pipeline.run(state)
+                    except PlanPipelineError as exc:
+                        yield from self.lifecycle.fail(
+                            state,
+                            str(exc),
+                            AgentErrorClass.PLAN_INVALID.value,
+                            error_details={"code": exc.code},
+                        )
+                else:
+                    yield from self.lifecycle.fail(
+                        state,
+                        f"{selected_mode.upper()} 模式尚未实现。",
+                        AgentErrorClass.PLAN_INVALID.value,
+                        error_details={"code": f"{selected_mode.upper()}_MODE_NOT_READY"},
+                    )
                 return
             yield from self._loop(state)
         except QuestionUnderstandingError as exc:
@@ -286,6 +300,23 @@ class AgentLoop:
                 try:
                     yield from self.fast_pipeline.run(state)
                 except FastPipelineError as exc:
+                    yield from self.lifecycle.fail(
+                        state,
+                        str(exc),
+                        AgentErrorClass.PLAN_INVALID.value,
+                        error_details={"code": exc.code},
+                    )
+                return
+            if selected_mode == "plan" and self.plan_pipeline is not None:
+                agent_run_repository.update_run(
+                    self.session,
+                    state.run,
+                    execution_mode=selected_mode,
+                )
+                self.session.commit()
+                try:
+                    yield from self.plan_pipeline.run(state)
+                except PlanPipelineError as exc:
                     yield from self.lifecycle.fail(
                         state,
                         str(exc),

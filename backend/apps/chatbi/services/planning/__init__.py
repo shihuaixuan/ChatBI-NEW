@@ -4,6 +4,7 @@ from apps.chatbi.services.generation.ports import (
     DatasourceSelectionPromptBuilder,
     GenerationModelClient,
 )
+from apps.chatbi.services.planning.analysis_planner import AnalysisPlanner
 from apps.chatbi.services.planning.datasource_candidates import (
     DatasourceSelectionCandidateRanker,
     DatasourceSelectionCandidateService,
@@ -20,6 +21,11 @@ from apps.chatbi.services.planning.physical_schema import (
     PhysicalSchemaAccessDeniedError,
     PhysicalSchemaService,
 )
+from apps.chatbi.services.planning.plan_validation import (
+    AnalysisPlanValidator,
+    PlanValidationError,
+    validate_analysis_plan,
+)
 
 __all__ = [
     "DatasourceSelectionCandidateRanker",
@@ -32,4 +38,8 @@ __all__ = [
     "PhysicalSchemaService",
     "PhysicalSchemaAccessDeniedError",
     "resolve_execution_binding",
+    "AnalysisPlanner",
+    "AnalysisPlanValidator",
+    "PlanValidationError",
+    "validate_analysis_plan",
 ]

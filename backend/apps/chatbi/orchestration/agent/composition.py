@@ -32,6 +32,10 @@ from apps.chatbi.orchestration.pipeline.fast import (
     FastPipeline,
     FastPipelineDependencies,
 )
+from apps.chatbi.orchestration.pipeline.plan_mode import (
+    PlanPipeline,
+    PlanPipelineDependencies,
+)
 from apps.chatbi.services.execution import ResultArtifactService, ResultStore
 from apps.chatbi.services.generation.agent_finalization import AgentFinalizationService
 from apps.chatbi.services.planning import PhysicalSchemaService
@@ -239,6 +243,17 @@ def build_agent_loop(
                 lifecycle=lifecycle,
                 event_publisher=resolved_publisher,
                 session=session,
+            )
+        ),
+        plan_pipeline=PlanPipeline(
+            PlanPipelineDependencies(
+                registry=resolved_registry,
+                result_processor=ChatBIToolResultProcessor(),
+                finalization_service=resolved_finalization_service,
+                lifecycle=lifecycle,
+                event_publisher=resolved_publisher,
+                session=session,
+                max_query_tasks=resolved_config.plan_max_query_tasks,
             )
         ),
     )

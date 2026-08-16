@@ -157,7 +157,7 @@ class Settings(BaseSettings):
     CHAT_AGENT_MAX_CLARIFICATIONS: int = 2
     CHAT_AGENT_HISTORY_ROUNDS: int = 3
     CHAT_AGENT_CONTEXT_FOLD_CHARS: int = 30000
-    # P1-2 灰度开关；默认只保留旧链路，避免未完成模式改变线上行为。
+    # P1-2/P1-3 灰度开关；默认只保留旧链路，避免新模式未经验证改变线上行为。
     CHAT_AGENT_EXECUTION_MODES: str = "react_legacy"
     CHATBI_PLAN_MAX_QUERY_TASKS: int = 5
     CHATBI_PLANNER_TIMEOUT_MS: int = 60000

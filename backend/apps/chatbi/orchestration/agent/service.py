@@ -121,7 +121,8 @@ def get_agent_config() -> AgentConfig:
             item.strip().lower()
             for item in (settings.CHAT_AGENT_EXECUTION_MODES or "react_legacy").split(",")
             if item.strip()
-        )
+        ),
+        plan_max_query_tasks=settings.CHATBI_PLAN_MAX_QUERY_TASKS,
     )
 
 
