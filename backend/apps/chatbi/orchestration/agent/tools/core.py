@@ -13,6 +13,10 @@ from apps.chatbi.services.generation.agent_finalization import (
     AgentFinalizationService,
     build_partial_finalization,
 )
+from apps.chatbi.services.generation.answer_composer import (
+    AnswerComposer,
+    AnswerComposerInput,
+)
 from apps.tool import ToolErrorCategory, ToolExecutionPolicy, ToolResult
 
 
@@ -25,6 +29,9 @@ class FinishResult(BaseModel):
     chart: dict[str, Any] = Field(default_factory=dict)
     sql: str | None = None
     non_standard: bool = False
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+    caliber_card: dict[str, Any] = Field(default_factory=dict)
+    chart_spec: dict[str, Any] = Field(default_factory=dict)
 
 
 class FinishTool(AgentTool):
@@ -35,8 +42,13 @@ class FinishTool(AgentTool):
     # 最终收口包含两个结构化模型调用，需要独立于普通轻量工具保留足够时间。
     execution = ToolExecutionPolicy(timeout_seconds=60)
 
-    def __init__(self, finalization_service: AgentFinalizationService | None = None) -> None:
+    def __init__(
+        self,
+        finalization_service: AgentFinalizationService | None = None,
+        answer_composer: AnswerComposer | None = None,
+    ) -> None:
         self._finalization_service = finalization_service
+        self._answer_composer = answer_composer
 
     def execute(
         self,
@@ -50,7 +62,7 @@ class FinishTool(AgentTool):
                 error_code="execution_required_before_finish",
                 error_category=ToolErrorCategory.BUSINESS_RULE,
             )
-        if self._finalization_service is None:
+        if self._finalization_service is None and self._answer_composer is None:
             return ToolResult.rejected(
                 "Agent 最终生成服务未配置。",
                 error_code="agent_finalization_service_required",
@@ -63,21 +75,41 @@ class FinishTool(AgentTool):
         question = str(
             ctx.state.get("question") or ctx.state.get("original_question") or ""
         )
+        rows = full_data if isinstance(full_data, list) else []
         try:
-            result = self._finalization_service.generate(
-                AgentFinalizationInput(
-                    question=question,
-                    intent=intent if isinstance(intent, dict) else {},
-                    execution=execution,
-                    rows=full_data if isinstance(full_data, list) else [],
-                )
+            # legacy ReAct 保持原双模型收口；Composer 只对显式新模式或直接注入测试生效。
+            use_composer = self._answer_composer is not None and (
+                "execution_mode" not in ctx.state
+                or ctx.state.get("execution_mode") in {"fast", "plan", "research"}
             )
+            if use_composer:
+                composed = self._answer_composer.compose(
+                    AnswerComposerInput(
+                        question=question,
+                        intent=intent if isinstance(intent, dict) else {},
+                        execution=execution,
+                        rows=rows,
+                        semantic_context=ctx.state.get("semantic_scope") if isinstance(ctx.state.get("semantic_scope"), dict) else {},
+                        plan=ctx.state.get("analysis_plan") if isinstance(ctx.state.get("analysis_plan"), dict) else {},
+                        mode="react_legacy",
+                    )
+                )
+                result = composed
+            else:
+                result = self._finalization_service.generate(
+                    AgentFinalizationInput(
+                        question=question,
+                        intent=intent if isinstance(intent, dict) else {},
+                        execution=execution,
+                        rows=rows,
+                    )
+                )
         except AgentFinalizationError as exc:
             # 查询已成功执行时收口失败必须降级为部分作答（表格直出），
             # 不能以 rejected 观察返回让模型重复调用 finish 形成死循环。
             result = build_partial_finalization(
                 execution=execution,
-                rows=full_data if isinstance(full_data, list) else [],
+                rows=rows,
                 failed_stage=exc.error_code,
             )
         answer = result.answer
@@ -91,6 +123,9 @@ class FinishTool(AgentTool):
             chart=result.chart,
             sql=execution.get("sql"),
             non_standard=execution.get("sql_source") == "manual",
+            claims=list(getattr(result, "claims", []) or []),
+            caliber_card=dict(getattr(result, "caliber_card", {}) or {}),
+            chart_spec=dict(getattr(result, "chart_spec", {}) or {}),
         )
         return ToolResult.succeeded("finish", data)
 

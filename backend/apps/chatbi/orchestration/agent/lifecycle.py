@@ -259,6 +259,9 @@ class AgentLifecycle:
         step_id: int | None = None,
         full_data: Any = None,
         execution: dict[str, Any] | None = None,
+        claims: list[dict[str, Any]] | None = None,
+        caliber_card: dict[str, Any] | None = None,
+        chart_spec: dict[str, Any] | None = None,
     ) -> Iterator[RenderEvent]:
         """保存最终结果，并把 Run 和 ChatRecord 一起置为成功。"""
 
@@ -320,7 +323,13 @@ class AgentLifecycle:
             yield self._publish(
                 state,
                 "answer",
-                {"record_id": record.id, "content": answer},
+                {
+                    "record_id": record.id,
+                    "content": answer,
+                    "claims": list(claims or []),
+                    "caliber_card": dict(caliber_card or {}),
+                    "chart_spec": dict(chart_spec or chart or {}),
+                },
                 step_id,
             )
             yield self._publish(
@@ -331,6 +340,9 @@ class AgentLifecycle:
                     "content": answer,
                     "answer": answer,
                     "chart": chart,
+                    "claims": list(claims or []),
+                    "caliber_card": dict(caliber_card or {}),
+                    "chart_spec": dict(chart_spec or chart or {}),
                 },
                 step_id,
             )

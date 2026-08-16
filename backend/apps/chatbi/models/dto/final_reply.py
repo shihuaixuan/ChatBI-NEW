@@ -13,6 +13,9 @@ class FinalReplyProjectionData:
     answer: dict[str, Any] = field(default_factory=dict)
     recommendations: dict[str, Any] = field(default_factory=dict)
     chart: dict[str, Any] = field(default_factory=dict)
+    claims: list[dict[str, Any]] = field(default_factory=list)
+    caliber_card: dict[str, Any] = field(default_factory=dict)
+    chart_spec: dict[str, Any] = field(default_factory=dict)
 
 
 class FinalReplyProjectionResult(BaseModel):
@@ -21,6 +24,21 @@ class FinalReplyProjectionResult(BaseModel):
     final_answer: str
     recommendations: list[str] = Field(default_factory=list)
     chart: dict[str, Any] = Field(default_factory=dict)
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+    caliber_card: dict[str, Any] = Field(default_factory=dict)
+    chart_spec: dict[str, Any] = Field(default_factory=dict)
+
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """空的新字段不写入 legacy 响应，非空时才扩展契约。"""
+
+        payload = super().model_dump(*args, **kwargs)
+        if not self.claims:
+            payload.pop("claims", None)
+        if not self.caliber_card:
+            payload.pop("caliber_card", None)
+        if not self.chart_spec:
+            payload.pop("chart_spec", None)
+        return payload
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -35,6 +53,9 @@ class QueryFinalReplyProjectionData:
     chart_type: Literal["table", "bar", "line", "pie"] | None = None
     x_field: str | None = None
     y_fields: list[str] = field(default_factory=list)
+    claims: list[dict[str, Any]] = field(default_factory=list)
+    caliber_card: dict[str, Any] = field(default_factory=dict)
+    chart_spec: dict[str, Any] = field(default_factory=dict)
 
 
 class QueryFinalReplyProjectionResult(BaseModel):
@@ -44,6 +65,21 @@ class QueryFinalReplyProjectionResult(BaseModel):
     chart: dict[str, Any] = Field(default_factory=dict)
     sql: str | None = None
     non_standard: bool = False
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+    caliber_card: dict[str, Any] = Field(default_factory=dict)
+    chart_spec: dict[str, Any] = Field(default_factory=dict)
+
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """空的新字段不改变旧查询投影的 JSON 结构。"""
+
+        payload = super().model_dump(*args, **kwargs)
+        if not self.claims:
+            payload.pop("claims", None)
+        if not self.caliber_card:
+            payload.pop("caliber_card", None)
+        if not self.chart_spec:
+            payload.pop("chart_spec", None)
+        return payload
 
 
 __all__ = [

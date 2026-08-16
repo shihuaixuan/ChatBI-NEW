@@ -23,6 +23,9 @@ def project_final_reply(data: FinalReplyProjectionData) -> FinalReplyProjectionR
         final_answer=str(data.answer.get("answer") or _DEFAULT_FINAL_ANSWER),
         recommendations=list(data.recommendations.get("questions") or []),
         chart=dict(data.chart),
+        claims=list(data.claims or data.answer.get("claims") or []),
+        caliber_card=dict(data.caliber_card or data.answer.get("caliber_card") or {}),
+        chart_spec=dict(data.chart_spec or data.answer.get("chart_spec") or {}),
         metadata={"source": "real_chatbi_v1"},
     )
 
@@ -64,6 +67,9 @@ def project_query_final_reply(
         chart=chart,
         sql=execution.get("sql"),
         non_standard=non_standard,
+        claims=list(data.claims),
+        caliber_card=dict(data.caliber_card),
+        chart_spec=dict(data.chart_spec),
     )
 
 

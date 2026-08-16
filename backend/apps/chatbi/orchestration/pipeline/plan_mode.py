@@ -25,6 +25,10 @@ from apps.chatbi.services.generation.agent_finalization import (
     AgentFinalizationInput,
     AgentFinalizationService,
 )
+from apps.chatbi.services.generation.answer_composer import (
+    AnswerComposer,
+    AnswerComposerInput,
+)
 from apps.chatbi.services.planning.analysis_planner import AnalysisPlanner
 from apps.chatbi.services.planning.plan_validation import validate_analysis_plan
 from apps.conversation import ChatRecordExecutionType
@@ -51,6 +55,7 @@ class PlanPipelineDependencies:
     max_query_tasks: int = 5
     compute_engine: ComputeEngine | None = None
     compute_enabled: bool = True
+    answer_composer: AnswerComposer | None = None
 
 
 class PlanPipeline:
@@ -67,6 +72,7 @@ class PlanPipeline:
         self._max_query_tasks = dependencies.max_query_tasks
         self._compute_engine = dependencies.compute_engine
         self._compute_enabled = dependencies.compute_enabled
+        self._answer_composer = dependencies.answer_composer
 
     def run(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         run_id = state.require_run_id()
@@ -244,16 +250,30 @@ class PlanPipeline:
         state.context.state["last_execution"] = primary_execution
         state.context.state["full_data"] = primary_full_data
         intent = understanding.get("intent")
-        final = self._finalization_service.generate(
-            AgentFinalizationInput(
-                question=str(
-                    state.context.state.get("question") or state.record.question or ""
-                ),
-                intent=intent if isinstance(intent, dict) else {},
-                execution=primary_execution,
-                rows=primary_rows,
-            )
+        question = str(
+            state.context.state.get("question") or state.record.question or ""
         )
+        if self._answer_composer is not None:
+            final = self._answer_composer.compose(
+                AnswerComposerInput(
+                    question=question,
+                    intent=intent if isinstance(intent, dict) else {},
+                    execution=primary_execution,
+                    rows=primary_full_data,
+                    plan=state.context.state.get("analysis_plan") if isinstance(state.context.state.get("analysis_plan"), dict) else {},
+                    semantic_context=state.context.state.get("semantic_scope") if isinstance(state.context.state.get("semantic_scope"), dict) else {},
+                    mode="plan",
+                )
+            )
+        else:
+            final = self._finalization_service.generate(
+                AgentFinalizationInput(
+                    question=question,
+                    intent=intent if isinstance(intent, dict) else {},
+                    execution=primary_execution,
+                    rows=primary_rows,
+                )
+            )
         yield from self._lifecycle.finish(
             state,
             answer=final.answer,
@@ -261,6 +281,9 @@ class PlanPipeline:
             sql=primary_execution.get("sql"),
             full_data=primary_full_data,
             execution=primary_execution,
+            claims=list(getattr(final, "claims", []) or []),
+            caliber_card=dict(getattr(final, "caliber_card", {}) or {}),
+            chart_spec=dict(getattr(final, "chart_spec", {}) or {}),
         )
 
     def _compile_task(self, state: AgentRuntimeState, task: QueryTask) -> CompiledQuery:

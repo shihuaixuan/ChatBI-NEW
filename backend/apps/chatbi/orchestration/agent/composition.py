@@ -39,6 +39,7 @@ from apps.chatbi.orchestration.pipeline.plan_mode import (
 from apps.chatbi.services.computation import ComputeEngine
 from apps.chatbi.services.execution import ResultArtifactService, ResultStore
 from apps.chatbi.services.generation.agent_finalization import AgentFinalizationService
+from apps.chatbi.services.generation.answer_composer import AnswerComposer
 from apps.chatbi.services.planning import PhysicalSchemaService
 from apps.chatbi.services.understanding import QuestionUnderstandingService
 from apps.datasource.services import DatasourceQueryService
@@ -82,6 +83,7 @@ def build_agent_tool_registry(
     sql_example_query_service: SQLExampleQueryService,
     semantic_schema_provider: DatasetSchemaProvider | None = None,
     finalization_service: AgentFinalizationService | None = None,
+    answer_composer: AnswerComposer | None = None,
 ) -> ToolRegistry:
     """装配 Agent 默认工具集合及执行中间件。"""
 
@@ -94,7 +96,7 @@ def build_agent_tool_registry(
         )
     )
     registry.register(CompileSemanticSqlTool(semantic_query_service, query_service))
-    registry.register(FinishTool(finalization_service))
+    registry.register(FinishTool(finalization_service, answer_composer))
     registry.register(ClarifyTool())
     registry.register(ParseTimeRangeTool())
     registry.register(GetDatasetSchemaTool(physical_schema_service))
@@ -128,6 +130,7 @@ def build_agent_loop(
     input_preparer: AgentInputPreparer | None = None,
     cancellation_signal_factory: Callable[[int], CancellationSignal] | None = None,
     finalization_service: AgentFinalizationService | None = None,
+    answer_composer: AnswerComposer | None = None,
     memory_service: MemoryService | None = None,
 ) -> AgentLoop:
     """构造依赖完整的 AgentLoop；生产入口和测试统一使用此函数。"""
@@ -168,9 +171,17 @@ def build_agent_loop(
     resolved_sql_example_query_service = (
         sql_example_query_service or build_sql_example_query_service(session)
     )
-    resolved_finalization_service = finalization_service or AgentFinalizationService(
-        build_question_model_service()
-    )
+    # 新模式共享同一个结构化模型服务；legacy 仍使用原来的双模型收口。
+    if finalization_service is None:
+        model_service = build_question_model_service()
+        resolved_finalization_service = AgentFinalizationService(model_service)
+        resolved_answer_composer = answer_composer or AnswerComposer(
+            model_service,
+            citation_enforced=resolved_config.answer_citation_enforced,
+        )
+    else:
+        resolved_finalization_service = finalization_service
+        resolved_answer_composer = answer_composer
     resolved_registry = registry or build_agent_tool_registry(
         query_service=resolved_query_service,
         semantic_query_service=resolved_semantic_query_service,
@@ -180,6 +191,7 @@ def build_agent_loop(
         sql_example_query_service=resolved_sql_example_query_service,
         semantic_schema_provider=resolved_semantic_schema_provider,
         finalization_service=resolved_finalization_service,
+        answer_composer=resolved_answer_composer,
     )
     resolved_reasoner = reasoner or AgentReasoner(
         resolved_config,
@@ -244,6 +256,7 @@ def build_agent_loop(
                 lifecycle=lifecycle,
                 event_publisher=resolved_publisher,
                 session=session,
+                answer_composer=resolved_answer_composer,
             )
         ),
         plan_pipeline=PlanPipeline(
@@ -257,6 +270,7 @@ def build_agent_loop(
                 max_query_tasks=resolved_config.plan_max_query_tasks,
                 compute_engine=ComputeEngine(),
                 compute_enabled=resolved_config.compute_enabled,
+                answer_composer=resolved_answer_composer,
             )
         ),
     )

@@ -111,7 +111,10 @@ class AgentRuntimeStateFactory:
             result_store=self._tool_services.result_store,
             config=self._config,
             temporal_context=TemporalContext.model_validate(run.temporal_context),
-            state={"question": record.question or ""},
+            state={
+                "question": record.question or "",
+                "execution_mode": run.execution_mode or "react_legacy",
+            },
         )
         budget = BudgetGuard(
             max_steps=self._config.max_steps,

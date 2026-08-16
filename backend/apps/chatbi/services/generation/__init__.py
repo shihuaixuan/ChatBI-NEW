@@ -6,6 +6,18 @@
 from apps.chatbi.services.generation.analysis_prediction import (
     AnalysisPredictionService,
 )
+from apps.chatbi.services.generation.answer_composer import (
+    AnswerComposer,
+    AnswerComposerInput,
+    AnswerComposerResult,
+    CaliberCard,
+    ChartSpec,
+    Claim,
+    ClaimBindingError,
+    build_caliber_card,
+    derive_chart_spec,
+    validate_claim_bindings,
+)
 from apps.chatbi.services.generation.answer_generation import (
     AnswerGenerationService,
     AnswerModelClient,
@@ -70,11 +82,18 @@ __all__ = [
     "AnalysisPredictionPromptBuilder",
     "AnalysisPredictionService",
     "AnswerGenerationService",
+    "AnswerComposer",
+    "AnswerComposerInput",
+    "AnswerComposerResult",
     "AnswerModelClient",
     "CallableAnswerModelClient",
     "ChartGenerationError",
     "ChartGenerationPromptBuilder",
     "ChartGenerationService",
+    "ChartSpec",
+    "Claim",
+    "ClaimBindingError",
+    "CaliberCard",
     "DYNAMIC_DATASOURCE_ASSISTANT_TYPES",
     "DynamicSQLGenerationError",
     "DynamicSQLGenerationPromptBuilder",
@@ -98,6 +117,8 @@ __all__ = [
     "ensure_prompt_messages",
     "stream_generation",
     "build_answer_generation_prompt",
+    "build_caliber_card",
+    "derive_chart_spec",
     "parse_sql_generation_result",
     "project_answer_context",
     "project_final_reply",
@@ -105,4 +126,5 @@ __all__ = [
     "project_query_final_reply",
     "resolve_generation_scope",
     "resolve_runtime_settings",
+    "validate_claim_bindings",
 ]

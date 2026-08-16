@@ -19,6 +19,18 @@ class StageResult(Generic[T]):
     metadata: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class AnswerStageResult:
+    """AnswerComposer 对编排层暴露的稳定阶段结果。"""
+
+    answer: str
+    chart: dict[str, Any]
+    claims: list[dict[str, Any]]
+    caliber_card: dict[str, Any]
+    degraded: bool = False
+    warnings: list[str] | None = None
+
+
 StageCallable = Callable[..., Any]
 
 
@@ -69,4 +81,4 @@ class PipelineStages:
         return handler(*args, **kwargs)
 
 
-__all__ = ["PipelineStageError", "PipelineStages", "StageResult"]
+__all__ = ["AnswerStageResult", "PipelineStageError", "PipelineStages", "StageResult"]

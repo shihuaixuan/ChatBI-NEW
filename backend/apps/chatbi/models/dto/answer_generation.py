@@ -32,6 +32,27 @@ class AnswerGenerationResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     render_type: str = "text"
     citations: list[dict[str, Any]] = Field(default_factory=list)
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+    caliber_card: dict[str, Any] = Field(default_factory=dict)
+    chart: dict[str, Any] = Field(default_factory=dict)
+    chart_spec: dict[str, Any] = Field(default_factory=dict)
+    degraded: bool = False
+
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """空的新字段不改变旧回答 JSON，Composer 产出时保留扩展字段。"""
+
+        payload = super().model_dump(*args, **kwargs)
+        if not self.claims:
+            payload.pop("claims", None)
+        if not self.caliber_card:
+            payload.pop("caliber_card", None)
+        if not self.chart:
+            payload.pop("chart", None)
+        if not self.chart_spec:
+            payload.pop("chart_spec", None)
+        if not self.degraded:
+            payload.pop("degraded", None)
+        return payload
 
 
 __all__ = [

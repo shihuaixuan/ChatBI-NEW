@@ -124,6 +124,7 @@ def get_agent_config() -> AgentConfig:
         ),
         plan_max_query_tasks=settings.CHATBI_PLAN_MAX_QUERY_TASKS,
         compute_enabled=settings.CHATBI_COMPUTE_ENABLED,
+        answer_citation_enforced=settings.CHATBI_ANSWER_CITATION_ENFORCED,
     )
 
 

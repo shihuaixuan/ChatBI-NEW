@@ -28,6 +28,10 @@ from apps.chatbi.services.generation.agent_finalization import (
     AgentFinalizationInput,
     AgentFinalizationService,
 )
+from apps.chatbi.services.generation.answer_composer import (
+    AnswerComposer,
+    AnswerComposerInput,
+)
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import ToolCall, ToolCallContext, ToolRegistry, ToolResult, ToolStatus
 
@@ -48,6 +52,7 @@ class FastPipelineDependencies:
     lifecycle: AgentLifecycle
     event_publisher: EventPublisher
     session: Any
+    answer_composer: AnswerComposer | None = None
 
 
 class FastPipeline:
@@ -60,6 +65,7 @@ class FastPipeline:
         self._lifecycle = dependencies.lifecycle
         self._events = PipelineEvents(dependencies.event_publisher)
         self._session = dependencies.session
+        self._answer_composer = dependencies.answer_composer
 
     def run(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         """执行 bind→plan→validate→execute→answer 固定阶段。"""
@@ -162,14 +168,28 @@ class FastPipeline:
             rows = []
         understanding = state.context.state.get("question_understanding")
         intent = understanding.get("intent") if isinstance(understanding, dict) else {}
-        final = self._finalization_service.generate(
-            AgentFinalizationInput(
-                question=str(state.context.state.get("question") or state.record.question or ""),
-                intent=intent if isinstance(intent, dict) else {},
-                execution=execution if isinstance(execution, dict) else {"status": "succeeded"},
-                rows=rows,
+        question = str(state.context.state.get("question") or state.record.question or "")
+        if self._answer_composer is not None:
+            final = self._answer_composer.compose(
+                AnswerComposerInput(
+                    question=question,
+                    intent=intent if isinstance(intent, dict) else {},
+                    execution=execution if isinstance(execution, dict) else {"status": "succeeded"},
+                    rows=rows,
+                    plan=state.context.state.get("analysis_plan") if isinstance(state.context.state.get("analysis_plan"), dict) else {},
+                    semantic_context=state.context.state.get("semantic_scope") if isinstance(state.context.state.get("semantic_scope"), dict) else {},
+                    mode="fast",
+                )
             )
-        )
+        else:
+            final = self._finalization_service.generate(
+                AgentFinalizationInput(
+                    question=question,
+                    intent=intent if isinstance(intent, dict) else {},
+                    execution=execution if isinstance(execution, dict) else {"status": "succeeded"},
+                    rows=rows,
+                )
+            )
         yield from self._lifecycle.finish(
             state,
             answer=final.answer,
@@ -177,6 +197,9 @@ class FastPipeline:
             sql=str(compiled_payload["sql"]),
             full_data=state.context.state.get("full_data"),
             execution=execution if isinstance(execution, dict) else None,
+            claims=list(getattr(final, "claims", []) or []),
+            caliber_card=dict(getattr(final, "caliber_card", {}) or {}),
+            chart_spec=dict(getattr(final, "chart_spec", {}) or {}),
         )
 
     def _call_tool(
