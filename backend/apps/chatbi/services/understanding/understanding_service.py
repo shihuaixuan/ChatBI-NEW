@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from contextvars import copy_context
 from typing import Any, Protocol, TypeVar
 
 import orjson
@@ -25,7 +23,6 @@ from apps.chatbi.models.dto.question_model import (
     QuestionModelResult,
 )
 from apps.chatbi.models.dto.question_understanding import (
-    DimensionRecognitionOutput,
     DimensionSlot,
     IntentRecognitionOutput,
     IntentValidationOutput,
@@ -109,7 +106,10 @@ REWRITE_SYSTEM_PROMPT = "\n\n".join(
 Agent 上下文规则：
 - 当前输入本身构成完整问题时，message_type=new_question。
 - conversation_context.last_rewritten_question 只表示最近一次成功执行后的完整问题。
+- conversation_context.previous_understanding 只表示最近一次成功执行后的结构化问题理解结果。
 - “那上个月呢”“换成订单数”等依赖上文的表达属于 followup，只从 last_rewritten_question 继承本轮缺失的语义。
+- 当本轮出现新的筛选值、但省略了维度名称时，检查 previous_understanding.intent.dimension_slots；如果其中只有一个与这些值类型相容的筛选维度，继承该维度名称和用途，只替换筛选值；不得继承上一轮的旧值、指标或时间。
+- 如果 previous_understanding.intent.dimension_slots 中存在多个可能的筛选维度，不能猜测，必须返回 need_user_input=true 并列出缺失维度。
 - 当前输入明显在回答挂起澄清时，message_type=clarification_reply。
 
 典型示例：
@@ -125,6 +125,10 @@ Agent 上下文规则：
 示例 3：无法确定引用对象
 输入：{"question":"那另一个呢？","conversation_context":{}}
 输出：{"message_type":"followup","rewritten_question":"那另一个呢？","inherited_context":{},"need_user_input":true,"missing_slots":["context"],"confidence":0.3}
+
+示例 4：继承上一轮唯一筛选维度但替换新值
+输入：{"question":"2026-06-30 对比100022和100023总商品件数","conversation_context":{"last_rewritten_question":"2026-06-10 店铺100013销售、订货、总订单数","previous_understanding":{"rewritten_question":"2026-06-10 店铺100013销售、订货、总订单数","intent":{"dimension_slots":[{"name":"档口ID","role":"filter","value":"100013","value_status":"provided"}]}}}}
+输出：{"message_type":"new_question","rewritten_question":"2026年6月30日，对比店铺100022和100023的总商品件数。","inherited_context":{"inherited_dimension":"档口ID"},"need_user_input":false,"missing_slots":[],"confidence":0.95}
 """.strip(),
     ]
 )
@@ -250,8 +254,67 @@ Agent 示例：
 )
 
 
+QUESTION_UNDERSTANDING_SYSTEM_PROMPT = "\n\n".join(
+    [
+        """
+你是 ChatBI 的统一问题理解器。你只把问题转换为完整的分析语义结构，不回答问题，不生成 SQL，不选择工具。
+
+问题重写完成后，本任务一次性识别：指标、时间、维度及其用途、筛选条件、查询形态和排名结构。
+指标、排名对象和排名数量必须放在同一个语义结果中判断，不能把维度识别成与意图无关的独立任务。
+
+只输出以下 JSON 对象，不要输出 Markdown 或解释：
+{
+  "intent_type": "metric_query | trend_analysis | ranking_analysis | comparison_analysis | detail_query | share_analysis | anomaly_analysis | unknown",
+  "confidence": 0.0,
+  "metric_mentions": [],
+  "time_mentions": [],
+  "time_range": {"raw": null, "value_status": "provided | not_provided"},
+  "dimension_mentions": [],
+  "dimension_slots": [
+    {"name": "候选中的标准维度名", "role": "group_by | filter | display | ambiguous", "value": null, "value_status": "provided | not_provided | ambiguous", "value_confidence": 0.0}
+  ],
+  "ranking": null,
+  "query_shape": {"select_mode": "aggregate | detail", "needs_group_by": false, "needs_order_by": false, "order_direction": null, "limit": null, "time_grain": null},
+  "ambiguous_slots": [],
+  "conflict_slots": []
+}
+""".strip(),
+        METRIC_TIME_EXTRACTION_RULES,
+        DIMENSION_EXTRACTION_RULES,
+        """
+统一语义规则：
+- dimension_slots 必须覆盖问题中承担业务对象、分组、筛选或展示作用的维度；不要因为意图判断不确定而省略维度。
+- 命中候选名称或别名时，name 必须使用候选的标准 name；值只保留值本身，不包含维度名和连接词。
+- 所有筛选值必须放入 dimension_slots；不要输出 filter_mentions。一个维度有多个筛选值时，value 必须是数组，不能拼成逗号分隔字符串。
+- 非排名问题的 ranking 必须为 null；只有 intent_type=ranking_analysis 时才输出完整 ranking 对象。
+- ranking_analysis 中，ranking.target 是被比较的对象维度，必须同时在 dimension_slots 中以 group_by 表示。
+- 排名对象由句法中的“被比较对象”决定，不依赖固定词表：按日期比较就使用时间维度，按订单比较就使用订单维度，按商品比较就使用商品维度。
+- “哪天的总GMV最高”表示按统计日期分组、降序、只取一条；“最高3天”表示按统计日期分组、降序、取3条。
+- “超时天数最多的订单”表示按订单分组、以超时天数降序、只取一条；“库存最多的商品”表示按商品分组、以库存指标降序、只取一条。
+- 排名没有明确数字但语义是单个最高/最低对象时，selection=single、limit=1；不要把这种语义当成缺失，也不要要求用户重复确认。
+- 排名明确表达前N、后N或最高/最低N条时，selection 使用 top_n 或 bottom_n，limit 使用用户表达的数字。
+- ranking.metric 应与 metric_mentions 中的指标保持一致；direction 必须与 query_shape.order_direction 一致。
+- ranking_analysis 必须 needs_group_by=true、needs_order_by=true；query_shape.limit 与 ranking.limit 一致。
+- 普通分组、趋势、比较和占比也必须把分组维度写入 dimension_slots；只有确实无法判断用途时才使用 ambiguous。
+- 未出现明确指标时 metric_mentions 为空；不要猜测业务口径。无法唯一确定排名对象或筛选用途时，保留候选并加入 ambiguous_slots 或 conflict_slots。
+- 不要从问题文本中自行补造候选维度；只能使用 available_dimensions 和 time_dimensions。
+
+典型示例：
+
+示例 1：自然表达的日期排名
+输入：{"rewritten_question":"2026年6月8日至14日，店铺100021哪一天的总GMV最高？","available_dimensions":[{"name":"档口ID","aliases":["店铺"]}],"time_dimensions":[{"name":"统计日期","aliases":[]}]}
+输出：{"intent_type":"ranking_analysis","confidence":0.99,"metric_mentions":["总GMV"],"time_mentions":["2026年6月8日至14日"],"time_range":{"raw":"2026年6月8日至14日","value_status":"provided"},"dimension_mentions":["档口ID","统计日期"],"dimension_slots":[{"name":"档口ID","role":"filter","value":"100021","value_status":"provided","value_confidence":1.0},{"name":"统计日期","role":"group_by","value":null,"value_status":"not_provided","value_confidence":1.0}],"ranking":{"target":"统计日期","metric":"总GMV","direction":"desc","selection":"single","limit":1},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":true,"order_direction":"desc","limit":1,"time_grain":"day"},"ambiguous_slots":[],"conflict_slots":[]}
+
+示例 2：排名对象和数量在名词短语中
+输入：{"rewritten_question":"库存最多的商品","available_dimensions":[{"name":"商品ID","aliases":["商品"]}],"time_dimensions":[]}
+输出：{"intent_type":"ranking_analysis","confidence":0.98,"metric_mentions":["库存"],"time_mentions":[],"time_range":{"raw":null,"value_status":"not_provided"},"dimension_mentions":["商品ID"],"dimension_slots":[{"name":"商品ID","role":"group_by","value":null,"value_status":"not_provided","value_confidence":1.0}],"ranking":{"target":"商品ID","metric":"库存","direction":"desc","selection":"single","limit":1},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":true,"order_direction":"desc","limit":1,"time_grain":null},"ambiguous_slots":[],"conflict_slots":[]}
+""".strip(),
+    ]
+)
+
+
 class QuestionUnderstandingService:
-    """严格执行重写、意图识别和确定性校验，不提供静默降级。"""
+    """严格执行重写、统一问题理解和确定性校验，不提供静默降级。"""
 
     def __init__(
         self,
@@ -335,11 +398,7 @@ class QuestionUnderstandingService:
             trace_run_id=trace_run_id,
         )
 
-        intent_payload = {
-            "rewritten_question": rewrite.rewritten_question,
-            "inherited_context": rewrite.inherited_context,
-        }
-        dimension_payload = {
+        understanding_payload = {
             "rewritten_question": rewrite.rewritten_question,
             "inherited_context": rewrite.inherited_context,
             "available_dimensions": [
@@ -349,97 +408,51 @@ class QuestionUnderstandingService:
                 item for item in available_dimensions if item.get("is_time")
             ],
         }
-        # 两个任务只依赖重写结果，并行执行可避免意图错误污染维度模型输入。
+        # 意图、排名对象和维度用途必须由同一次模型调用共同判断，避免并行结果互相缺少上下文。
         with self._trace_node(
             trace_run_id,
             TraceNodeType.PHASE,
-            "parallel_understanding",
-            "并行意图与维度识别",
+            "question_understanding",
+            "统一问题理解",
             input_data={"rewritten_question": rewrite.rewritten_question},
-        ) as parallel_node:
-            intent_context = copy_context()
-            dimension_context = copy_context()
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                intent_future = executor.submit(
-                    intent_context.run,
-                    self._invoke_validated_model,
-                    "INTENT_RECOGNITION",
-                    INTENT_SYSTEM_PROMPT,
-                    intent_payload,
-                    IntentRecognitionOutput,
-                    trace_run_id=trace_run_id,
-                )
-                dimension_future = executor.submit(
-                    dimension_context.run,
-                    self._invoke_validated_model,
-                    "DIMENSION_RECOGNITION",
-                    DIMENSION_SYSTEM_PROMPT,
-                    dimension_payload,
-                    DimensionRecognitionOutput,
-                    normalizer=lambda payload: _normalize_dimension_payload(
-                        payload,
-                        available_dimensions,
-                        rewritten_question=rewrite.rewritten_question,
-                        metric_mentions=[],
-                    ),
-                    validation_fallback=_repair_dimension_coverage,
-                    trace_run_id=trace_run_id,
-                )
-                intent, intent_usage = intent_future.result()
-                dimensions, dimension_usage = dimension_future.result()
-            if parallel_node is not None:
-                parallel_node.set_output(
-                    {
-                        "intent_type": intent.intent_type,
-                        "dimension_slot_count": len(dimensions.dimension_slots),
-                    }
-                )
-        with self._trace_node(
-            trace_run_id,
-            TraceNodeType.PROJECTION,
-            "merge_understanding_results",
-            "合并问题理解结果",
-            input_data={
-                "intent_type": intent.intent_type,
-                "dimension_slot_count": len(dimensions.dimension_slots),
-            },
-        ) as merge_node:
-            merged_intent = intent.model_copy(
-                update={
-                    "dimension_mentions": dimensions.dimension_mentions,
-                    "dimension_slots": dimensions.dimension_slots,
-                    "filter_mentions": dimensions.residual_filter_mentions,
-                    "ambiguous_slots": _unique_strings(
-                        [*intent.ambiguous_slots, *dimensions.ambiguous_slots]
-                    ),
-                    "conflict_slots": _unique_strings(
-                        [*intent.conflict_slots, *dimensions.conflict_slots]
-                    ),
-                }
-            )
-            intent = _stabilize_intent(
-                _reconcile_detail_display_dimensions(
-                    merged_intent,
+        ) as understanding_node:
+            intent, intent_usage = self._invoke_validated_model(
+                "QUESTION_UNDERSTANDING",
+                QUESTION_UNDERSTANDING_SYSTEM_PROMPT,
+                understanding_payload,
+                IntentRecognitionOutput,
+                normalizer=lambda payload: _normalize_unified_payload(
+                    payload,
                     available_dimensions,
                     rewritten_question=rewrite.rewritten_question,
                 ),
-                fixed_temporal_context,
-                # Agent 前置阶段只识别原始时间表达，实际解析交给 ReAct 的时间工具。
-                # 旁路评估需要保留一份旧解析基线，但它不参与默认 Agent 执行。
-                use_legacy_time_interpretation=self._temporal_shadow_enabled,
+                trace_run_id=trace_run_id,
             )
-            if merge_node is not None:
-                merge_node.set_output(
+            if understanding_node is not None:
+                understanding_node.set_output(
                     {
                         "intent_type": intent.intent_type,
                         "metric_count": len(intent.metric_mentions),
                         "dimension_slot_count": len(intent.dimension_slots),
-                        "ambiguous_slot_count": len(intent.ambiguous_slots),
+                        "ranking_target": (
+                            intent.ranking.target if intent.ranking is not None else None
+                        ),
                     }
                 )
-                merge_node.set_output_detail(
-                    {"merged_intent": intent.model_dump(mode="json")}
+                understanding_node.set_output_detail(
+                    {"understanding": intent.model_dump(mode="json")}
                 )
+        intent = _stabilize_intent(
+            _reconcile_detail_display_dimensions(
+                intent,
+                available_dimensions,
+                rewritten_question=rewrite.rewritten_question,
+            ),
+            fixed_temporal_context,
+            # Agent 前置阶段只识别原始时间表达，实际解析交给 ReAct 的时间工具。
+            # 旁路评估需要保留一份旧解析基线，但它不参与默认 Agent 执行。
+            use_legacy_time_interpretation=self._temporal_shadow_enabled,
+        )
         temporal_interpretation = None
         temporal_shadow = None
         with self._trace_node(
@@ -526,7 +539,6 @@ class QuestionUnderstandingService:
             usage_metadata=_merge_usage(
                 rewrite_usage,
                 intent_usage,
-                dimension_usage,
                 temporal_usage,
             ),
             temporal_shadow=temporal_shadow,
@@ -1050,6 +1062,11 @@ def _validate_understanding(
             ),
             time_range=intent.time_range.model_dump(mode="json"),
             query_shape=intent.query_shape.model_dump(mode="json"),
+            ranking=(
+                intent.ranking.model_dump(mode="json")
+                if intent.ranking is not None
+                else {}
+            ),
             ambiguous_slots=tuple(intent.ambiguous_slots),
             conflict_slots=tuple(intent.conflict_slots),
             temporal_plan=(
@@ -1174,6 +1191,7 @@ def _stage_display_name(stage: str, attempt: int) -> str:
         "QUESTION_REWRITE": "问题重写模型",
         "INTENT_RECOGNITION": "意图识别模型",
         "DIMENSION_RECOGNITION": "维度识别模型",
+        "QUESTION_UNDERSTANDING": "统一问题理解模型",
     }
     base = names.get(stage, stage)
     return base if attempt == 0 else f"{base}（格式修复 {attempt}）"
@@ -1203,6 +1221,8 @@ def _normalize_dimension_payload(
     *,
     rewritten_question: str,
     metric_mentions: list[str],
+    infer_from_question: bool = False,
+    allow_time_dimensions: bool = False,
 ) -> dict[str, Any]:
     """统一维度候选、槽位和歧义结构，让业务不变量只在这里表达。"""
 
@@ -1229,6 +1249,7 @@ def _normalize_dimension_payload(
         if (
             name_key in candidate_by_text_with_time
             and name_key not in candidate_by_text
+            and not allow_time_dimensions
         ):
             continue
         candidate = _resolve_dimension_candidate(
@@ -1251,9 +1272,10 @@ def _normalize_dimension_payload(
             slot["name"] = candidate["name"]
             slot.pop("dimension", None)
             slot["value"] = _normalize_dimension_value(slot.get("value"), candidate)
-            matched_values = _candidate_values_in_question(
-                candidate,
-                rewritten_question,
+            matched_values = (
+                _candidate_values_in_question(candidate, rewritten_question)
+                if infer_from_question
+                else []
             )
             if slot.get("value") in (None, "") and matched_values:
                 # 已知枚举值在问题中明确出现时，直接补到同一个规范槽位，
@@ -1275,24 +1297,30 @@ def _normalize_dimension_payload(
     existing_slot_names = {
         str(slot.get("name") or "").strip() for slot in slots if isinstance(slot, dict)
     }
-    for candidate in candidates:
-        if candidate.get("is_time") or candidate["name"] in existing_slot_names:
-            continue
-        matched_values = _candidate_values_in_question(candidate, rewritten_question)
-        if not matched_values:
-            continue
-        slots.append(
-            {
-                "name": candidate["name"],
-                "role": "filter",
-                "value": (
-                    matched_values[0] if len(matched_values) == 1 else matched_values
-                ),
-                "value_status": "provided",
-                "value_confidence": 1.0,
-            }
-        )
-        existing_slot_names.add(candidate["name"])
+    if infer_from_question:
+        for candidate in candidates:
+            if candidate.get("is_time") or candidate["name"] in existing_slot_names:
+                continue
+            matched_values = _candidate_values_in_question(
+                candidate,
+                rewritten_question,
+            )
+            if not matched_values:
+                continue
+            slots.append(
+                {
+                    "name": candidate["name"],
+                    "role": "filter",
+                    "value": (
+                        matched_values[0]
+                        if len(matched_values) == 1
+                        else matched_values
+                    ),
+                    "value_status": "provided",
+                    "value_confidence": 1.0,
+                }
+            )
+            existing_slot_names.add(candidate["name"])
 
     raw_resolved_mentions: list[str] = []
     raw_mentions = normalized.get("dimension_mentions")
@@ -1303,6 +1331,7 @@ def _normalize_dimension_payload(
             if (
                 mention_key in candidate_by_text_with_time
                 and mention_key not in candidate_by_text
+                and not allow_time_dimensions
             ):
                 continue
             candidate = _resolve_dimension_candidate(mention, None, candidates)
@@ -1374,6 +1403,61 @@ def _normalize_dimension_payload(
             continue
         residual_filters.append(filter_item)
     normalized["residual_filter_mentions"] = residual_filters
+    return normalized
+
+
+def _normalize_unified_payload(
+    payload: dict[str, Any],
+    available_dimensions: list[dict[str, Any]],
+    *,
+    rewritten_question: str,
+) -> dict[str, Any]:
+    """只做统一输出的字段规范化，不从原问题补造缺失语义。"""
+
+    metrics = [
+        str(item).strip()
+        for item in payload.get("metric_mentions") or []
+        if str(item).strip()
+    ]
+    normalized = _normalize_dimension_payload(
+        payload,
+        available_dimensions,
+        rewritten_question=rewritten_question,
+        metric_mentions=metrics,
+        infer_from_question=False,
+        allow_time_dimensions=True,
+    )
+    residual_filters = normalized.pop("residual_filter_mentions", None)
+    if "filter_mentions" not in normalized and residual_filters is not None:
+        normalized["filter_mentions"] = residual_filters
+
+    ranking = normalized.get("ranking")
+    if isinstance(ranking, dict):
+        # ranking 是统一模型的主结构，query_shape 仅保留给现有下游兼容。
+        target = ranking.get("target")
+        if target:
+            candidate = _resolve_dimension_candidate(
+                str(target),
+                None,
+                normalize_dimension_candidates(available_dimensions),
+            )
+            if candidate is not None:
+                ranking["target"] = candidate["name"]
+        query_shape = dict(normalized.get("query_shape") or {})
+        if ranking.get("direction") in {"asc", "desc"}:
+            query_shape["order_direction"] = ranking["direction"]
+            query_shape["needs_order_by"] = True
+        if ranking.get("limit") is not None:
+            query_shape["limit"] = ranking["limit"]
+        if ranking.get("target"):
+            query_shape["needs_group_by"] = True
+        if str(normalized.get("intent_type") or "") == "ranking_analysis":
+            query_shape.setdefault("select_mode", "aggregate")
+            query_shape["needs_group_by"] = True
+            query_shape["needs_order_by"] = True
+        normalized["query_shape"] = query_shape
+
+    normalized.pop("repair_feedback", None)
     return normalized
 
 
@@ -1741,6 +1825,7 @@ def _unique_strings(items: list[str]) -> list[str]:
 __all__ = [
     "DIMENSION_SYSTEM_PROMPT",
     "INTENT_SYSTEM_PROMPT",
+    "QUESTION_UNDERSTANDING_SYSTEM_PROMPT",
     "QuestionUnderstandingError",
     "QuestionUnderstandingModelClient",
     "QuestionUnderstandingModelResponse",

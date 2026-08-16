@@ -157,6 +157,16 @@ QUESTIONS = (
     ),
 )
 
+# N20 在本轮不同 Run 中出现过两套首层候选，目录取本轮观测并集。
+N20_OBSERVED_ROOT_OPTIONS = (
+    {"label": "销售下单客户数", "value": "METRIC:272:246|DIMENSION:278:246"},
+    {"label": "档口ID（stall_id）", "value": "DIMENSION:278:246"},
+    {"label": "档口ID（stall_id）", "value": "DIMENSION:283:247"},
+    {"label": "档口ID（stall_id）", "value": "DIMENSION:296:248"},
+    {"label": "档口ID（stall_id）", "value": "DIMENSION:306:249"},
+    {"label": "档口ID（stall_id）", "value": "DIMENSION:315:250"},
+)
+
 
 def _unwrap(payload: Any) -> Any:
     """移除统一响应包装。"""
@@ -209,6 +219,9 @@ def _options(event: dict[str, Any]) -> list[dict[str, Any]]:
 def _option_key(option: dict[str, Any]) -> str:
     """生成澄清路径中的稳定候选标识。"""
 
+    value = option.get("value")
+    if value is not None:
+        return str(value)
     return json.dumps(option, ensure_ascii=False, sort_keys=True)
 
 
@@ -357,6 +370,7 @@ def _run_path(
     pending = events
     rounds: list[dict[str, Any]] = []
     api_errors: list[str] = []
+    path_mismatch = False
     for depth in range(2):
         required = next(
             (event for event in pending if event.get("domain") == "clarification.required"),
@@ -367,7 +381,15 @@ def _run_path(
         required = _persisted_clarification(client, events, required)
         options = _options(required)
         explicit = depth < len(choice_path)
-        selected = choice_path[depth] if explicit else (options[0] if options else None)
+        selected = options[0] if options else None
+        if explicit:
+            expected_key = _option_key(choice_path[depth])
+            selected = next(
+                (option for option in options if _option_key(option) == expected_key),
+                None,
+            )
+            if selected is None:
+                path_mismatch = True
         rounds.append(
             {
                 "depth": depth + 1,
@@ -376,8 +398,11 @@ def _run_path(
                 "options": options,
                 "selected": selected,
                 "selection_explicit": explicit,
+                "expected_selection": choice_path[depth] if explicit else None,
             }
         )
+        if path_mismatch:
+            break
         record_id = int(required.get("record_id") or 0)
         if not record_id:
             break
@@ -429,6 +454,8 @@ def _run_path(
         "question": case.question,
         "coverage": case.coverage,
         "choice_path": list(choice_path),
+        "choice_path_matched": not path_mismatch
+        and len(rounds) >= len(choice_path),
         "chat_id": chat_id,
         "record_id": record_id,
         "run_id": run_id,
@@ -478,8 +505,16 @@ def _run_all_clarifications(
     rounds = primary.get("clarification_rounds") or []
     if not rounds:
         return []
+    root_options = list(rounds[0].get("options") or [])
+    if case.case_id == "N20":
+        known_keys = {_option_key(option) for option in root_options}
+        root_options.extend(
+            option
+            for option in N20_OBSERVED_ROOT_OPTIONS
+            if _option_key(option) not in known_keys
+        )
     queue: deque[tuple[dict[str, Any], ...]] = deque(
-        [(option,) for option in rounds[0].get("options") or []]
+        [(option,) for option in root_options]
     )
     seen: set[tuple[str, ...]] = set()
     branches: list[dict[str, Any]] = []
@@ -489,7 +524,24 @@ def _run_all_clarifications(
         if key in seen:
             continue
         seen.add(key)
-        branch = _run_path(client, case, dataset_id, path)
+        mismatched_attempts: list[dict[str, Any]] = []
+        branch: dict[str, Any] | None = None
+        for _ in range(5):
+            candidate = _run_path(client, case, dataset_id, path)
+            if candidate.get("choice_path_matched"):
+                branch = candidate
+                break
+            mismatched_attempts.append(
+                {
+                    "run_id": candidate.get("run_id"),
+                    "record_id": candidate.get("record_id"),
+                    "status": candidate.get("status"),
+                    "clarification_rounds": candidate.get("clarification_rounds"),
+                }
+            )
+            branch = candidate
+        assert branch is not None
+        branch["path_mismatch_attempts"] = mismatched_attempts
         branch["branch_label"] = " → ".join(
             str(option.get("label") or option.get("value") or "") for option in path
         )
@@ -587,6 +639,11 @@ def main() -> None:
             "true",
             "yes",
         }
+        force_cases = {
+            item.strip()
+            for item in os.getenv("AGENT_FORCE_CASES", "").split(",")
+            if item.strip()
+        }
         if retry_failed and json_path.exists():
             previous = json.loads(json_path.read_text(encoding="utf-8"))
             previous_cases = {item["case_id"]: item for item in previous["cases"]}
@@ -605,7 +662,7 @@ def main() -> None:
                 if isinstance(previous_failure, dict)
                 else None
             )
-            should_retry = (
+            should_retry = case.case_id in force_cases or (
                 retry_failed
                 and isinstance(previous_details, dict)
                 and previous_details.get("exception_type") == "APIConnectionError"

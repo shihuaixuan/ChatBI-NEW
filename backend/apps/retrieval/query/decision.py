@@ -222,9 +222,80 @@ def compatible_dimension_selections(
             and _dimension_is_compatible_with_metrics(hit, metric_hits)
         ]
         unique_assets = _unique_hit_assets(compatible_hits)
+        unique_assets = prefer_dimension_assets(
+            hit_list,
+            [hit.asset_ref for hit in metric_hits if hit.asset_ref is not None],
+            unique_assets,
+        )
         if len(unique_assets) == 1:
             result[decision.subquery_id] = unique_assets[0]
     return result
+
+
+def prefer_dimension_assets(
+    hits: Iterable[RetrievalHit],
+    metric_assets: Iterable[AssetReference],
+    dimension_assets: Iterable[AssetReference],
+) -> list[AssetReference]:
+    """在兼容候选中优先选择与指标同模型的维度。"""
+
+    hit_list = list(hits)
+    metric_list = list(metric_assets)
+    unique_dimensions = _unique_assets(dimension_assets)
+    if not metric_list:
+        return unique_dimensions
+
+    metric_hits = {
+        _asset_key(hit.asset_ref): hit
+        for hit in hit_list
+        if hit.asset_ref is not None
+        and hit.resource_type == RetrievalResourceType.METRIC
+    }
+    selected_metric_hits = [
+        metric_hits[_asset_key(metric)]
+        for metric in metric_list
+        if _asset_key(metric) in metric_hits
+    ]
+    if len(selected_metric_hits) != len(metric_list):
+        return []
+
+    dimension_hits = {
+        _asset_key(hit.asset_ref): hit
+        for hit in hit_list
+        if hit.asset_ref is not None
+        and hit.resource_type == RetrievalResourceType.DIMENSION
+    }
+    compatible_dimensions = [
+        dimension
+        for dimension in unique_dimensions
+        if (dimension_hit := dimension_hits.get(_asset_key(dimension))) is not None
+        and _dimension_is_compatible_with_metrics(
+            dimension_hit, selected_metric_hits
+        )
+    ]
+    if not compatible_dimensions:
+        return []
+
+    # 只有存在同模型候选时才收窄，关联模型在没有同模型候选时继续保留。
+    same_model_counts = [
+        sum(
+            1
+            for metric in metric_list
+            if metric.model_id is not None
+            and metric.model_id == dimension.model_id
+        )
+        for dimension in compatible_dimensions
+    ]
+    max_same_model_count = max(same_model_counts)
+    if max_same_model_count == 0:
+        return compatible_dimensions
+    return [
+        dimension
+        for dimension, same_model_count in zip(
+            compatible_dimensions, same_model_counts, strict=True
+        )
+        if same_model_count == max_same_model_count
+    ]
 
 
 def _selected_candidate(
@@ -298,6 +369,18 @@ def _unique_hit_assets(hits: list[RetrievalHit]) -> list[AssetReference]:
             continue
         seen.add(key)
         result.append(hit.asset_ref)
+    return result
+
+
+def _unique_assets(assets: Iterable[AssetReference]) -> list[AssetReference]:
+    result: list[AssetReference] = []
+    seen: set[tuple[str, int, int | None]] = set()
+    for asset in assets:
+        key = _asset_key(asset)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(asset)
     return result
 
 
@@ -379,5 +462,6 @@ def _asset_key(asset: AssetReference) -> tuple[str, int, int | None]:
 __all__ = [
     "apply_semantic_clarification",
     "compatible_dimension_selections",
+    "prefer_dimension_assets",
     "selection_requires_cross_model",
 ]

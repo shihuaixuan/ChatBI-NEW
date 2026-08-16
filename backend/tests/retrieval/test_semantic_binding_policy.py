@@ -729,6 +729,98 @@ def test_dimension_identity_matches_use_selected_metric_model_to_resolve():
     ]
 
 
+def test_resolved_dimension_is_reselected_to_metric_model_before_execution():
+    """维度初始 top1 在其他模型时，仍按指标模型重新筛选。"""
+
+    result = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [
+                    _hit(
+                        100,
+                        "总GMV",
+                        exact=1.0,
+                        model_id=10,
+                        metadata={
+                            "model_id": 10,
+                            "compatible_dimension_ids": [200, 201],
+                        },
+                    )
+                ],
+            ),
+            _slot(
+                "dimension:1",
+                RetrievalPurpose.DIMENSION,
+                [
+                    _hit(
+                        201,
+                        "店铺",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        exact=1.0,
+                        model_id=11,
+                        final=0.04,
+                    ),
+                    _hit(
+                        200,
+                        "店铺",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        alias=1.0,
+                        model_id=10,
+                        final=0.03,
+                    ),
+                ],
+            ),
+        )
+    )
+
+    dimension_decision = result.bundle.decision.slot_decisions[1]
+    assert result.bundle.decision.status == RetrievalDecisionStatus.RESOLVED
+    assert [item.asset_id for item in dimension_decision.selected_assets] == [200]
+
+
+def test_related_model_dimension_is_used_when_same_model_dimension_is_missing():
+    result = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [
+                    _hit(
+                        100,
+                        "总GMV",
+                        exact=1.0,
+                        model_id=10,
+                        metadata={
+                            "model_id": 10,
+                            "compatible_dimension_ids": [201],
+                        },
+                    )
+                ],
+            ),
+            _slot(
+                "dimension:1",
+                RetrievalPurpose.DIMENSION,
+                [
+                    _hit(
+                        201,
+                        "店铺",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        alias=1.0,
+                        model_id=11,
+                    )
+                ],
+            ),
+        )
+    )
+
+    assert result.bundle.decision.status == RetrievalDecisionStatus.RESOLVED
+    assert [
+        item.asset_id for item in result.bundle.decision.slot_decisions[1].selected_assets
+    ] == [201]
+
+
 def test_model_compatibility_does_not_resolve_lexical_only_ambiguity():
     result = SemanticBindingPolicy().apply(
         _recall(

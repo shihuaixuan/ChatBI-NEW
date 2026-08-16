@@ -34,6 +34,7 @@ from apps.retrieval.models.dto import (
 )
 from apps.retrieval.query.decision import (
     compatible_dimension_selections,
+    prefer_dimension_assets,
     selection_requires_cross_model,
 )
 from apps.retrieval.query.hybrid import HybridRecallResult, SubQueryRecallResult
@@ -95,6 +96,7 @@ class _SlotPolicyResult(BaseModel):
     hits: tuple[RetrievalHit, ...]
     decision: RetrievalSlotDecision
     ambiguity: RetrievalAmbiguity | None = None
+    eligible_assets: list[AssetReference] = Field(default_factory=list)
     rerank_diagnostic: RetrievalChannelDiagnostic
 
 
@@ -169,6 +171,13 @@ class SemanticBindingPolicy:
         hits, rerank_diagnostic = self._rerank(slot)
         candidate_assets = _unique_asset_refs(hits)
         referenced_hits = [hit for hit in hits if hit.asset_ref is not None]
+        eligible_assets = _unique_asset_refs(
+            tuple(
+                hit
+                for hit in referenced_hits
+                if _candidate_evidence(hit, threshold) is not None
+            )
+        )
         if not referenced_hits:
             reason = (
                 "NO_CANDIDATE_ABOVE_HARD_FILTERS"
@@ -185,6 +194,7 @@ class SemanticBindingPolicy:
                     candidate_assets=candidate_assets,
                     reason_codes=[reason],
                 ),
+                eligible_assets=eligible_assets,
                 rerank_diagnostic=rerank_diagnostic,
             )
 
@@ -201,6 +211,7 @@ class SemanticBindingPolicy:
                     candidate_assets=candidate_assets,
                     reason_codes=["TOP1_BELOW_ABSOLUTE_THRESHOLD"],
                 ),
+                eligible_assets=eligible_assets,
                 rerank_diagnostic=rerank_diagnostic,
             )
 
@@ -230,6 +241,7 @@ class SemanticBindingPolicy:
                     reason_code=ambiguity_reason,
                     candidate_assets=clarification_assets,
                 ),
+                eligible_assets=eligible_assets,
                 rerank_diagnostic=rerank_diagnostic,
             )
 
@@ -245,6 +257,7 @@ class SemanticBindingPolicy:
                 selected_assets=[top.asset_ref],
                 reason_codes=[f"TOP1_ACCEPTED_BY_{top_evidence.kind.upper()}"],
             ),
+            eligible_assets=eligible_assets,
             rerank_diagnostic=rerank_diagnostic,
         )
 
@@ -541,14 +554,15 @@ def _constrain_metric_dimension_candidates(
         for hit in item.hits
         if hit.asset_ref is not None
     }
-    active: dict[str, list[AssetReference]] = {
-        item.decision.subquery_id: list(
-            item.decision.selected_assets
-            if item.decision.status == RetrievalDecisionStatus.RESOLVED
-            else item.decision.candidate_assets
-        )
-        for item in [*metric_results, *dimension_results]
-    }
+    active: dict[str, list[AssetReference]] = {}
+    for item in [*metric_results, *dimension_results]:
+        if item.decision.purpose == RetrievalPurpose.DIMENSION:
+            candidates = item.eligible_assets or item.decision.candidate_assets
+        elif item.decision.status == RetrievalDecisionStatus.RESOLVED:
+            candidates = item.decision.selected_assets
+        else:
+            candidates = item.eligible_assets or item.decision.candidate_assets
+        active[item.decision.subquery_id] = list(candidates)
 
     changed = True
     while changed:
@@ -607,16 +621,42 @@ def _constrain_metric_dimension_candidates(
             },
         )
 
+    metric_scope_assets = _metric_scope_assets(metric_results, active)
+    all_hits = tuple(hit for item in slot_results for hit in item.hits)
     constrained: list[_SlotPolicyResult] = []
     for item in slot_results:
         candidates = active.get(item.decision.subquery_id)
         if candidates is None:
             constrained.append(item)
             continue
-        if item.decision.status == RetrievalDecisionStatus.RESOLVED:
-            constrained.append(item)
-            continue
-        if len(candidates) == 1:
+        was_resolved = item.decision.status == RetrievalDecisionStatus.RESOLVED
+        if item.decision.purpose == RetrievalPurpose.DIMENSION:
+            candidates = prefer_dimension_assets(
+                all_hits,
+                metric_scope_assets,
+                candidates,
+            )
+            if not candidates:
+                raise RetrievalQueryError(
+                    "检索到的指标与维度不存在可执行的语义模型组合",
+                    details={
+                        "reason_code": "SEMANTIC_METRIC_DIMENSION_INCOMPATIBLE",
+                        "incompatible_subquery_ids": [
+                            item.decision.subquery_id
+                        ],
+                    },
+                )
+        if len(candidates) == 1 or was_resolved:
+            selected = candidates[0]
+            if was_resolved and item.decision.selected_assets:
+                selected = next(
+                    (
+                        asset
+                        for asset in item.decision.selected_assets
+                        if asset in candidates
+                    ),
+                    selected,
+                )
             reason_code = (
                 "IDENTITY_DISAMBIGUATED_BY_METRIC_MODEL_COMPATIBILITY"
                 if item.decision.purpose == RetrievalPurpose.DIMENSION
@@ -627,9 +667,9 @@ def _constrain_metric_dimension_candidates(
                     update={
                         "decision": item.decision.model_copy(
                             update={
-                                "status": RetrievalDecisionStatus.RESOLVED,
                                 "candidate_assets": candidates,
-                                "selected_assets": candidates,
+                                "status": RetrievalDecisionStatus.RESOLVED,
+                                "selected_assets": [selected],
                                 "reason_codes": [reason_code],
                             }
                         ),
@@ -638,21 +678,62 @@ def _constrain_metric_dimension_candidates(
                 )
             )
             continue
+        ambiguity = item.ambiguity
+        if ambiguity is None and item.decision.purpose == RetrievalPurpose.DIMENSION:
+            ambiguity = RetrievalAmbiguity(
+                subquery_id=item.decision.subquery_id,
+                reason_code="MULTIPLE_COMPATIBLE_DIMENSIONS",
+                candidate_assets=candidates,
+            )
         constrained.append(
             item.model_copy(
                 update={
                     "decision": item.decision.model_copy(
-                        update={"candidate_assets": candidates}
+                        update={
+                            "status": RetrievalDecisionStatus.AMBIGUOUS,
+                            "candidate_assets": candidates,
+                            "selected_assets": [],
+                        }
                     ),
-                    "ambiguity": item.ambiguity.model_copy(
+                    "ambiguity": ambiguity.model_copy(
                         update={"candidate_assets": candidates}
                     )
-                    if item.ambiguity is not None
+                    if ambiguity is not None
                     else None,
                 }
             )
         )
     return constrained
+
+
+def _metric_scope_assets(
+    metric_results: list[_SlotPolicyResult],
+    active: dict[str, list[AssetReference]],
+) -> list[AssetReference]:
+    """返回可以作为维度模型优先级依据的指标资产。"""
+
+    active_metrics = [
+        asset
+        for item in metric_results
+        for asset in active[item.decision.subquery_id]
+    ]
+    model_ids = {
+        asset.model_id for asset in active_metrics if asset.model_id is not None
+    }
+    if len(model_ids) <= 1:
+        return active_metrics
+
+    # 多个指标仍有歧义时，不能凭一个候选模型替其他指标做决定。
+    if any(
+        item.decision.status != RetrievalDecisionStatus.RESOLVED
+        for item in metric_results
+    ):
+        return []
+    return [
+        asset
+        for item in metric_results
+        for asset in item.decision.selected_assets
+    ]
 
 
 def _metric_dimension_assets_compatible(

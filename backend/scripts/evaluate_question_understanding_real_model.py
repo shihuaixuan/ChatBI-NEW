@@ -210,6 +210,8 @@ class RecordingQuestionModelClient:
 def _stage_from_prompt(system_prompt: str) -> str:
     if "重写器" in system_prompt:
         return "QUESTION_REWRITE"
+    if "统一问题理解器" in system_prompt:
+        return "QUESTION_UNDERSTANDING"
     if "意图识别器" in system_prompt:
         return "INTENT_RECOGNITION"
     if "维度槽位识别器" in system_prompt:

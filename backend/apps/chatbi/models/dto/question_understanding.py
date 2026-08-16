@@ -131,6 +131,18 @@ class QueryShape(BaseModel):
     time_grain: Literal["day", "week", "month", "quarter", "year"] | None = None
 
 
+class RankingSpec(BaseModel):
+    """统一问题理解中的排序语义。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target: str | None = None
+    metric: str | None = None
+    direction: Literal["asc", "desc"] | None = None
+    selection: Literal["single", "top_n", "bottom_n"] = "single"
+    limit: int | None = Field(default=None, ge=1, le=1000, strict=True)
+
+
 class TemporalInterpretationResult(BaseModel):
     """模型时间计划经过服务端解析后的统一执行前结果。"""
 
@@ -164,7 +176,10 @@ class IntentRecognitionOutput(
     model_config = ConfigDict(extra="forbid")
 
     time_range: TimeRange = Field(default_factory=TimeRange)
-    query_shape: QueryShape
+    query_shape: QueryShape = Field(
+        default_factory=lambda: QueryShape(select_mode="aggregate")
+    )
+    ranking: RankingSpec | None = None
 
 
 class DimensionRecognitionOutput(BaseModel):
@@ -286,6 +301,7 @@ class QuestionUnderstandingValidationData:
     dimension_slots: tuple[dict[str, Any], ...] = ()
     time_range: dict[str, Any] = field(default_factory=dict)
     query_shape: dict[str, Any] = field(default_factory=dict)
+    ranking: dict[str, Any] = field(default_factory=dict)
     ambiguous_slots: tuple[str, ...] = ()
     conflict_slots: tuple[str, ...] = ()
     subject_domain: dict[str, Any] = field(default_factory=dict)
@@ -335,6 +351,7 @@ __all__ = [
     "QuestionRewriteOutputBase",
     "QuestionRewriteProjectionOutput",
     "QueryShape",
+    "RankingSpec",
     "QuestionIntentProjectionData",
     "QuestionIntentProjectionResult",
     "QuestionUnderstandingOutcome",

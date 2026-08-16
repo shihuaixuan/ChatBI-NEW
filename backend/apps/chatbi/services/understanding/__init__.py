@@ -59,6 +59,7 @@ from apps.chatbi.services.understanding.temporal_interpretation import (
 from apps.chatbi.services.understanding.understanding_service import (
     DIMENSION_SYSTEM_PROMPT,
     INTENT_SYSTEM_PROMPT,
+    QUESTION_UNDERSTANDING_SYSTEM_PROMPT,
     REWRITE_SYSTEM_PROMPT,
     QuestionUnderstandingModelClient,
     QuestionUnderstandingModelResponse,
@@ -79,6 +80,7 @@ __all__ = [
     "DIMENSION_EXTRACTION_RULES",
     "DIMENSION_SYSTEM_PROMPT",
     "INTENT_SYSTEM_PROMPT",
+    "QUESTION_UNDERSTANDING_SYSTEM_PROMPT",
     "METRIC_TIME_EXTRACTION_RULES",
     "QUESTION_REWRITE_BUSINESS_RULES",
     "TEMPORAL_INTERPRETATION_SYSTEM_PROMPT",

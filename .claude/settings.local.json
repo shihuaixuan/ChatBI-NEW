@@ -38,7 +38,12 @@
       "Bash(sed -i '' 's|apps/chatbi/services/chat_record_service.py|apps/chatbi/services/conversation/chat_record_service.py|g' tests/architecture/test_chatbi_record_boundary.py)",
       "Bash(.venv/bin/ruff check *)",
       "Bash(sed -n '/from apps.chat.curd.chat import/,/\\)/p' apps/chat/api/chat.py)",
-      "Bash(sed -n '/from apps.chat.curd.chat import/,/\\)/p' apps/chat/task/llm.py)"
+      "Bash(sed -n '/from apps.chat.curd.chat import/,/\\)/p' apps/chat/task/llm.py)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.databricks.com)",
+      "Bash(curl -s -L --max-time 30 \"https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst/semantic-model-spec\" -H \"User-Agent: Mozilla/5.0 \\(Macintosh; Intel Mac OS X 10_15_7\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/120.0 Safari/537.36\")",
+      "Bash(curl -sL --max-time 30 https://raw.githubusercontent.com/tencentmusic/supersonic/master/README.md)"
     ]
   }
 }

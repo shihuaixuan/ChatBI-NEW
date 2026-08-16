@@ -128,6 +128,9 @@ class AgentInputPreparer:
                         "has_last_rewritten_question": bool(
                             conversation_context.get("last_rewritten_question")
                         ),
+                        "has_previous_understanding": bool(
+                            conversation_context.get("previous_understanding")
+                        ),
                     }
                 )
                 context_node.set_output_detail(
@@ -136,7 +139,10 @@ class AgentInputPreparer:
             understanding_context = {
                 "last_rewritten_question": conversation_context.get(
                     "last_rewritten_question"
-                )
+                ),
+                "previous_understanding": conversation_context.get(
+                    "previous_understanding"
+                ),
             }
             if conversation_context.get("memory_context"):
                 understanding_context["user_memory"] = conversation_context[
@@ -728,17 +734,21 @@ class AgentInputPreparer:
             record.id,
             limit=self._config.history_rounds,
         )
+        previous_understanding = agent_run_repository.latest_successful_question_understanding(
+            self._session,
+            chat_id=run.chat_id,
+            exclude_record_id=record.id,
+            datasource_id=record.datasource,
+        )
         previous_rewritten_question = (
-            agent_run_repository.latest_successful_rewritten_question(
-                self._session,
-                chat_id=run.chat_id,
-                exclude_record_id=record.id,
-                datasource_id=record.datasource,
-            )
+            previous_understanding.get("rewritten_question")
+            if previous_understanding
+            else None
         )
         return {
             "history": history,
             "last_rewritten_question": previous_rewritten_question,
+            "previous_understanding": previous_understanding,
             "memory_context": self._load_memory_context(state),
         }
 

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from typing import Any
 
 from sqlalchemy import and_, delete, desc, select
 from sqlmodel import col
@@ -375,6 +376,25 @@ def latest_successful_rewritten_question(
 ) -> str | None:
     """读取同会话、同数据源最近一次成功执行后的完整重写问题。"""
 
+    understanding = latest_successful_question_understanding(
+        session,
+        chat_id=chat_id,
+        exclude_record_id=exclude_record_id,
+        datasource_id=datasource_id,
+    )
+    rewritten_question = understanding.get("rewritten_question") if understanding else None
+    return rewritten_question.strip() if isinstance(rewritten_question, str) and rewritten_question.strip() else None
+
+
+def latest_successful_question_understanding(
+    session,
+    *,
+    chat_id: int,
+    exclude_record_id: int,
+    datasource_id: int | None,
+) -> dict[str, Any] | None:
+    """读取最近一次成功执行后的完整结构化问题理解结果。"""
+
     conditions = [
         ChatbiAgentRun.chat_id == chat_id,
         ChatbiAgentRun.record_id != exclude_record_id,
@@ -399,7 +419,7 @@ def latest_successful_rewritten_question(
             continue
         rewritten_question = understanding.get("rewritten_question")
         if isinstance(rewritten_question, str) and rewritten_question.strip():
-            return rewritten_question.strip()
+            return dict(understanding)
     return None
 
 

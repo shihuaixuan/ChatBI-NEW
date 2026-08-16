@@ -136,6 +136,7 @@ def validate_question_understanding(
                 )
             )
         if data.intent_type == "ranking_analysis":
+            ranking = data.ranking
             if not group_by_slots:
                 issues.append(
                     QuestionUnderstandingValidationIssue(
@@ -158,6 +159,16 @@ def validate_question_understanding(
                         code="ranking_limit_missing",
                         category="intent",
                         clarification_slots=("limit",),
+                    )
+                )
+            elif ranking.get("target") and str(ranking["target"]) not in {
+                str(slot.get("name") or "") for slot in group_by_slots
+            }:
+                issues.append(
+                    QuestionUnderstandingValidationIssue(
+                        code="ranking_target_conflict",
+                        category="repair",
+                        clarification_slots=("dimension",),
                     )
                 )
         if data.intent_type == "trend_analysis" and not (
