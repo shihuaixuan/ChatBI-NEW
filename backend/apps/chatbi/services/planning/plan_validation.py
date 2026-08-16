@@ -6,6 +6,7 @@ from apps.chatbi.models.dto.analysis_plan import (
     AnalysisPlan,
     AnalysisPlanStatus,
     ComputeTask,
+    ComputeOperation,
     PlanValidation,
     QueryTask,
 )
@@ -95,7 +96,17 @@ class AnalysisPlanValidator:
         reasons: list[str] = []
         for task in plan.tasks:
             if isinstance(task, ComputeTask):
-                if len(task.inputs) < 2:
+                if len(task.inputs) != len(set(task.inputs)):
+                    reasons.append("COMPUTE_TASK_INPUTS_DUPLICATED")
+                minimum_inputs = (
+                    2
+                    if task.operation in {
+                        ComputeOperation.COMPARE,
+                        ComputeOperation.GROWTH,
+                    }
+                    else 1
+                )
+                if len(task.inputs) < minimum_inputs:
                     reasons.append("COMPUTE_TASK_INPUTS_INSUFFICIENT")
                 if any(item not in known for item in task.inputs):
                     reasons.append("COMPUTE_TASK_INPUT_UNKNOWN")

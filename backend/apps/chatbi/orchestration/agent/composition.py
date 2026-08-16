@@ -36,6 +36,7 @@ from apps.chatbi.orchestration.pipeline.plan_mode import (
     PlanPipeline,
     PlanPipelineDependencies,
 )
+from apps.chatbi.services.computation import ComputeEngine
 from apps.chatbi.services.execution import ResultArtifactService, ResultStore
 from apps.chatbi.services.generation.agent_finalization import AgentFinalizationService
 from apps.chatbi.services.planning import PhysicalSchemaService
@@ -254,6 +255,8 @@ def build_agent_loop(
                 event_publisher=resolved_publisher,
                 session=session,
                 max_query_tasks=resolved_config.plan_max_query_tasks,
+                compute_engine=ComputeEngine(),
+                compute_enabled=resolved_config.compute_enabled,
             )
         ),
     )

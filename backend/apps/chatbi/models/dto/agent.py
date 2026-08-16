@@ -61,6 +61,7 @@ class AgentConfig(BaseModel):
     context_fold_chars: int = 30000
     execution_modes: tuple[str, ...] = ("react_legacy",)
     plan_max_query_tasks: int = 5
+    compute_enabled: bool = True
     tool_timeout_seconds: float = 60.0
     tool_default_timeout_seconds: float = 30.0
     query_transient_retries: int = 1
