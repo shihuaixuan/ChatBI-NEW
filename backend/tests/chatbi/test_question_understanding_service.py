@@ -210,8 +210,9 @@ def test_agent_understanding_retries_invalid_filter_mentions_and_uses_schema_ali
     model = SequenceQuestionModel(
         [
             _rewrite_payload(question),
-            _intent_payload("客户数"),
+            # 旧字段名且元素是字符串：违反 filter_mentions 契约，必须走修复重试。
             {
+                **_intent_payload("客户数"),
                 "dimension_mentions": ["店铺"],
                 "dimension_slots": [
                     {
@@ -223,10 +224,9 @@ def test_agent_understanding_retries_invalid_filter_mentions_and_uses_schema_ali
                     }
                 ],
                 "filter_mentions": ["店铺100011"],
-                "ambiguous_slots": [],
-                "conflict_slots": [],
             },
             {
+                **_intent_payload("客户数"),
                 "dimension_mentions": ["店铺"],
                 "dimension_slots": [
                     {
@@ -239,8 +239,6 @@ def test_agent_understanding_retries_invalid_filter_mentions_and_uses_schema_ali
                 ],
                 # 兼容模型仍使用旧字段名；归一化后与槽位重复的条件会被去除。
                 "filter_mentions": [{"name": "店铺", "value": "100011"}],
-                "ambiguous_slots": [],
-                "conflict_slots": [],
             },
         ]
     )
@@ -265,18 +263,13 @@ def test_agent_understanding_retries_invalid_filter_mentions_and_uses_schema_ali
         "time_dimension",
     ]
     assert outcome.output.validation.status == "valid"
-    assert len(model.calls) == 4
-    dimension_calls = [
-        call for call in model.calls if "维度槽位识别器" in call[0]
-    ]
-    first_dimension_input = orjson.loads(dimension_calls[0][1])
-    assert first_dimension_input["available_dimensions"][0]["name"] == "档口ID"
-    assert "店铺" in first_dimension_input["available_dimensions"][0]["aliases"]
-    assert "metric_mentions" not in first_dimension_input
-    assert "time_mentions" not in first_dimension_input
-    retry_input = orjson.loads(model.calls[3][1])
+    assert len(model.calls) == 3
+    understanding_input = orjson.loads(model.calls[1][1])
+    assert understanding_input["available_dimensions"][0]["name"] == "档口ID"
+    assert "店铺" in understanding_input["available_dimensions"][0]["aliases"]
+    retry_input = orjson.loads(model.calls[2][1])
     assert retry_input["repair_feedback"]["reason_code"] == (
-        "DIMENSION_RECOGNITION_MODEL_OUTPUT_INVALID"
+        "QUESTION_UNDERSTANDING_MODEL_OUTPUT_INVALID"
     )
 
 
@@ -285,8 +278,8 @@ def test_agent_understanding_normalizes_alphanumeric_id_value():
     model = SequenceQuestionModel(
         [
             _rewrite_payload(question),
-            _intent_payload("当前库存件数"),
             {
+                **_intent_payload("当前库存件数"),
                 "dimension_mentions": ["档口", "商品ID"],
                 "dimension_slots": [
                     {
@@ -304,9 +297,6 @@ def test_agent_understanding_normalizes_alphanumeric_id_value():
                         "value_confidence": 1.0,
                     },
                 ],
-                "residual_filter_mentions": [],
-                "ambiguous_slots": [],
-                "conflict_slots": [],
             },
         ]
     )
@@ -334,15 +324,19 @@ def test_agent_understanding_serializes_model_validator_error_for_repair():
     model = SequenceQuestionModel(
         [
             _rewrite_payload(question),
-            _intent_payload("客户数"),
+            # limit 类型非法：结构校验失败并携带可序列化错误信息进入修复重试。
             {
+                **_intent_payload("客户数"),
                 "dimension_mentions": ["店铺"],
                 "dimension_slots": [],
-                "residual_filter_mentions": [],
-                "ambiguous_slots": [],
-                "conflict_slots": [],
+                "query_shape": {
+                    "select_mode": "aggregate",
+                    "needs_order_by": True,
+                    "limit": "five",
+                },
             },
             {
+                **_intent_payload("客户数"),
                 "dimension_mentions": ["店铺"],
                 "dimension_slots": [
                     {
@@ -353,9 +347,6 @@ def test_agent_understanding_serializes_model_validator_error_for_repair():
                         "value_confidence": 1.0,
                     }
                 ],
-                "residual_filter_mentions": [],
-                "ambiguous_slots": [],
-                "conflict_slots": [],
             },
         ]
     )
@@ -371,14 +362,18 @@ def test_agent_understanding_serializes_model_validator_error_for_repair():
     )
 
     assert outcome.output.intent.dimension_slots[0].value == "100011"
-    repair_feedback = orjson.loads(model.calls[3][1])["repair_feedback"]
-    assert repair_feedback["validation_errors"] == [
-        {
-            "type": "value_error",
-            "loc": [],
-            "msg": "Value error, dimension_mentions 与 dimension_slots 必须一一对应",
-        }
-    ]
+    repair_feedback = orjson.loads(model.calls[2][1])["repair_feedback"]
+    assert repair_feedback["reason_code"] == (
+        "QUESTION_UNDERSTANDING_MODEL_OUTPUT_INVALID"
+    )
+    serialized_errors = repair_feedback["validation_errors"]
+    assert isinstance(serialized_errors, list) and serialized_errors
+    assert all(
+        set(error) == {"type", "loc", "msg"} for error in serialized_errors
+    )
+    assert any(
+        error["loc"][-1] == "limit" for error in serialized_errors
+    )
 
 
 def test_agent_understanding_preserves_model_ranking_semantics():
@@ -390,8 +385,16 @@ def test_agent_understanding_preserves_model_ranking_semantics():
                 "intent_type": "ranking_analysis",
                 "confidence": 0.95,
                 "metric_mentions": ["当前库存件数"],
-                "dimension_mentions": [],
-                "dimension_slots": [],
+                "dimension_mentions": ["商品ID"],
+                "dimension_slots": [
+                    {
+                        "name": "商品ID",
+                        "role": "group_by",
+                        "value": None,
+                        "value_status": "not_provided",
+                        "value_confidence": 0.95,
+                    }
+                ],
                 "time_mentions": ["2026年6月30日", "当前"],
                 "time_range": {
                     "raw": "2026年6月30日",
@@ -408,21 +411,6 @@ def test_agent_understanding_preserves_model_ranking_semantics():
                 },
                 "ambiguous_slots": [],
                 "conflict_slots": ["time_range"],
-            },
-            {
-                "dimension_mentions": ["商品ID"],
-                "dimension_slots": [
-                    {
-                        "name": "商品ID",
-                        "role": "group_by",
-                        "value": None,
-                        "value_status": "not_provided",
-                        "value_confidence": 0.95,
-                    }
-                ],
-                "residual_filter_mentions": [],
-                "ambiguous_slots": [],
-                "conflict_slots": [],
             },
         ]
     )
@@ -468,17 +456,6 @@ def test_agent_understanding_does_not_infer_ranking_semantics_from_question_text
                 "intent_type": "ranking_analysis",
                 "confidence": 0.95,
                 "metric_mentions": ["当前库存件数"],
-                "dimension_mentions": [],
-                "dimension_slots": [],
-                "time_mentions": [],
-                "time_range": {"raw": None, "value_status": "not_provided"},
-                "filter_mentions": [],
-                "required_slot_types": [],
-                "query_shape": {"select_mode": "aggregate"},
-                "ambiguous_slots": [],
-                "conflict_slots": [],
-            },
-            {
                 "dimension_mentions": ["商品ID"],
                 "dimension_slots": [
                     {
@@ -489,7 +466,11 @@ def test_agent_understanding_does_not_infer_ranking_semantics_from_question_text
                         "value_confidence": 0.8,
                     }
                 ],
-                "residual_filter_mentions": [],
+                "time_mentions": [],
+                "time_range": {"raw": None, "value_status": "not_provided"},
+                "filter_mentions": [],
+                "required_slot_types": [],
+                "query_shape": {"select_mode": "aggregate"},
                 "ambiguous_slots": ["商品ID"],
                 "conflict_slots": [],
             },
@@ -530,20 +511,6 @@ def test_agent_understanding_marks_multi_value_comparison_for_grouping():
                 "intent_type": "comparison_analysis",
                 "confidence": 0.95,
                 "metric_mentions": ["客户数"],
-                "dimension_mentions": [],
-                "dimension_slots": [],
-                "time_mentions": [],
-                "time_range": {"raw": None, "value_status": "not_provided"},
-                "filter_mentions": [],
-                "required_slot_types": [],
-                "query_shape": {
-                    "select_mode": "aggregate",
-                    "needs_group_by": True,
-                },
-                "ambiguous_slots": [],
-                "conflict_slots": [],
-            },
-            {
                 "dimension_mentions": ["店铺"],
                 "dimension_slots": [
                     {
@@ -554,7 +521,14 @@ def test_agent_understanding_marks_multi_value_comparison_for_grouping():
                         "value_confidence": 1.0,
                     }
                 ],
-                "residual_filter_mentions": [],
+                "time_mentions": [],
+                "time_range": {"raw": None, "value_status": "not_provided"},
+                "filter_mentions": [],
+                "required_slot_types": [],
+                "query_shape": {
+                    "select_mode": "aggregate",
+                    "needs_group_by": True,
+                },
                 "ambiguous_slots": [],
                 "conflict_slots": [],
             },
@@ -592,8 +566,8 @@ def test_agent_understanding_normalizes_object_ambiguity_without_losing_id_filte
     model = SequenceQuestionModel(
         [
             _rewrite_payload(question),
-            _intent_payload("客户当日GMV"),
             {
+                **_intent_payload("客户当日GMV"),
                 "dimension_mentions": ["店铺", "客户ID"],
                 "dimension_slots": [
                     {
@@ -611,7 +585,6 @@ def test_agent_understanding_normalizes_object_ambiguity_without_losing_id_filte
                         "value_confidence": 1.0,
                     },
                 ],
-                "residual_filter_mentions": [],
                 "ambiguous_slots": [
                     {
                         "name": "客户ID",
@@ -619,7 +592,6 @@ def test_agent_understanding_normalizes_object_ambiguity_without_losing_id_filte
                         "value_status": "provided",
                     }
                 ],
-                "conflict_slots": [],
             },
         ]
     )
@@ -643,32 +615,29 @@ def test_agent_understanding_normalizes_object_ambiguity_without_losing_id_filte
     ]
     assert outcome.output.intent.ambiguous_slots == []
     assert outcome.output.validation.status == "valid"
-    assert len(model.calls) == 3
+    assert len(model.calls) == 2
 
 
-def test_agent_understanding_repairs_repeated_dimension_coverage_mismatch():
+def test_agent_understanding_keeps_uncovered_dimension_mentions():
+    """统一契约下 mentions 与 slots 不再强制一一对应：未覆盖的 mention 不丢失。"""
+
     question = "2026年6月30日店铺100011商品P1000101001的当前库存件数是多少？"
-    invalid_dimensions = {
-        "dimension_mentions": ["店铺", "商品ID"],
-        "dimension_slots": [
-            {
-                "name": "店铺",
-                "role": "filter",
-                "value": "100011",
-                "value_status": "provided",
-                "value_confidence": 1.0,
-            }
-        ],
-        "residual_filter_mentions": [],
-        "ambiguous_slots": [],
-        "conflict_slots": [],
-    }
     model = SequenceQuestionModel(
         [
             _rewrite_payload(question),
-            _intent_payload("当前库存件数"),
-            invalid_dimensions,
-            invalid_dimensions,
+            {
+                **_intent_payload("当前库存件数"),
+                "dimension_mentions": ["店铺", "商品ID"],
+                "dimension_slots": [
+                    {
+                        "name": "店铺",
+                        "role": "filter",
+                        "value": "100011",
+                        "value_status": "provided",
+                        "value_confidence": 1.0,
+                    }
+                ],
+            },
         ]
     )
 
@@ -683,32 +652,24 @@ def test_agent_understanding_repairs_repeated_dimension_coverage_mismatch():
     )
 
     assert outcome.output.intent.dimension_mentions == ["档口ID", "商品ID"]
-    assert outcome.output.intent.dimension_slots[1].model_dump(mode="json") == {
-        "name": "商品ID",
-        "role": "ambiguous",
-        "value": None,
-        "value_status": "not_provided",
-        "value_confidence": 0.0,
-    }
-    assert outcome.output.validation.status == "clarification_required"
-    assert "dimension_role_ambiguous" in outcome.output.validation.reason_codes
+    assert [
+        (slot.name, slot.role) for slot in outcome.output.intent.dimension_slots
+    ] == [("档口ID", "filter")]
 
 
 def test_agent_understanding_does_not_silently_drop_independent_dimension_result():
-    question = "2026年6月店铺100011线上和线下客户当日GMV占比分别是多少？"
+    question = "2026年6月店铺100011按交易渠道和客户名称分组的销售件数占比分别是多少？"
     model = SequenceQuestionModel(
         [
             _rewrite_payload(question),
             {
-                **_intent_payload("客户当日GMV"),
+                **_intent_payload("销售件数"),
                 "intent_type": "share_analysis",
                 "time_range": {"raw": "2026年6月", "value_status": "provided"},
                 "query_shape": {
                     "select_mode": "aggregate",
                     "needs_group_by": True,
                 },
-            },
-            {
                 "dimension_mentions": [
                     "店铺",
                     "客户名称",
@@ -737,9 +698,7 @@ def test_agent_understanding_does_not_silently_drop_independent_dimension_result
                         "value_confidence": 0.0,
                     },
                 ],
-                "residual_filter_mentions": [],
                 "ambiguous_slots": [{"name": "客户名称"}],
-                "conflict_slots": [],
             },
         ]
     )
@@ -761,7 +720,6 @@ def test_agent_understanding_does_not_silently_drop_independent_dimension_result
         "交易渠道，如线上或线下",
     ]
     assert intent.query_shape.needs_group_by is True
-    assert "dimension" in intent.required_slot_types
     assert intent.ambiguous_slots == []
     assert outcome.output.validation.status == "clarification_required"
     assert "dimension_role_ambiguous" in outcome.output.validation.reason_codes
