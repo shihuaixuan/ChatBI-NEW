@@ -243,6 +243,9 @@ class SemanticSchemaBuilder:
         normalize_metric_storage_fields(metric)
         # 检索投影必须在统一入口识别敏感资产，不能依赖下游猜测。
         ext_info = {**(metric.ext or {}), "sensitive_level": metric.sensitive_level}
+        # 指标级过滤口径随运行时 schema 下发，编译器据此合并进 WHERE。
+        if metric.filter_sql:
+            ext_info["filter_sql"] = metric.filter_sql
         return SchemaElement(
             data_set_id=dataset.id or 0,
             data_set_name=dataset.name,

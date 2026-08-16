@@ -61,7 +61,13 @@ class SQLExampleIndexCoordinator:
                     "embedding_profile": self._profile.name,
                     "revision": revision,
                 },
-                acl_policy={},
+                # P0-7：显式写入租户级 ACL 结构；角色授权字段由 P2-4 资产级授权填充。
+                acl_policy={
+                    "visibility": "tenant",
+                    "actor_ids": [],
+                    "roles": [],
+                    "role_ids": [],
+                },
                 source_version=snapshot.source_version,
                 status="active",
             )

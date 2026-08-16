@@ -164,34 +164,9 @@ PROFILE_REGISTRY: dict[RetrievalProfileName, RetrievalProfileDefinition] = {
         requires_slot_decision=False,
         allows_executable_assets=False,
     ),
-    RetrievalProfileName.KNOWLEDGE_EVIDENCE: RetrievalProfileDefinition(
-        name=RetrievalProfileName.KNOWLEDGE_EVIDENCE,
-        version="knowledge-evidence",
-        allowed_sources=(RetrievalSourceType.KNOWLEDGE_BASE,),
-        allowed_resource_types=(RetrievalResourceType.KNOWLEDGE_CHUNK,),
-        channels=(RetrievalChannel.LEXICAL, RetrievalChannel.DENSE),
-        recall_limits={RetrievalChannel.LEXICAL: 40, RetrievalChannel.DENSE: 40},
-        fusion="rrf",
-        rrf_k=60,
-        rerank_limit=20,
-        result_limit=10,
-        requires_slot_decision=False,
-        allows_executable_assets=False,
-    ),
-    RetrievalProfileName.SCHEMA_FALLBACK: RetrievalProfileDefinition(
-        name=RetrievalProfileName.SCHEMA_FALLBACK,
-        version="schema-fallback",
-        allowed_sources=(RetrievalSourceType.SCHEMA,),
-        allowed_resource_types=(RetrievalResourceType.TABLE, RetrievalResourceType.FIELD),
-        channels=(RetrievalChannel.EXACT, RetrievalChannel.LEXICAL),
-        recall_limits={RetrievalChannel.EXACT: 20, RetrievalChannel.LEXICAL: 20},
-        fusion="rrf",
-        rrf_k=60,
-        rerank_limit=0,
-        result_limit=10,
-        requires_slot_decision=False,
-        allows_executable_assets=False,
-    ),
+    # KNOWLEDGE_EVIDENCE / SCHEMA_FALLBACK 注册已按 P0-7 移除：
+    # 两类检索器从未实现，保留注册只会伪装能力（诚实性）。
+    # P2-5 落地知识文档与 schema 召回时连同 RetrievalProfileName 枚举一起加回。
 }
 
 

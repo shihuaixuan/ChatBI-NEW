@@ -15,12 +15,14 @@ class _StrictModel(BaseModel):
 
 
 class RetrievalProfileName(str, Enum):
-    """检索目标决定召回通道、排序策略和安全门控。"""
+    """检索目标决定召回通道、排序策略和安全门控。
+
+    KNOWLEDGE_EVIDENCE / SCHEMA_FALLBACK 注册已随 P0-7 移除（检索器未实现，
+    不伪装能力）；P2-5 落地知识文档与 schema 召回时恢复。
+    """
 
     SEMANTIC_BINDING = "semantic_binding"
     SQL_EXEMPLAR = "sql_exemplar"
-    KNOWLEDGE_EVIDENCE = "knowledge_evidence"
-    SCHEMA_FALLBACK = "schema_fallback"
 
 
 class RetrievalPurpose(str, Enum):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from apps.semantic.models.dto import (
     DatasetSchema,
+    SchemaElement,
     SemanticPlanStatus,
     SemanticPlanValidationReport,
     SemanticQueryPlan,
@@ -145,7 +146,42 @@ class SemanticQueryValidationService:
                         SemanticValidationReasonCode.SEMANTIC_CONTRACT_INCOMPLETE,
                     )
                 )
+        checks.extend(self._validate_metric_filter_consistency(plan, metrics))
         return checks
+
+    @staticmethod
+    def _validate_metric_filter_consistency(
+        plan: SemanticQueryPlan,
+        metrics: dict[int, SchemaElement],
+    ) -> list[SemanticValidationCheck]:
+        """多个指标声明了不同过滤口径时，单条 SQL 无法同时满足，必须在计划层报错。"""
+
+        filters_by_metric: dict[int, str] = {}
+        for binding in plan.metrics:
+            metric = metrics.get(binding.metric_id)
+            if metric is None:
+                continue
+            filter_sql = str(
+                (metric.ext_info or {}).get("filter_sql") or ""
+            ).strip()
+            if filter_sql:
+                filters_by_metric[binding.metric_id] = filter_sql
+        if len(set(filters_by_metric.values())) <= 1:
+            return []
+        return [
+            SemanticValidationCheck(
+                check_type="METRIC_FILTER",
+                status="FAIL",
+                subject_refs=[
+                    f"metric:{metric_id}" for metric_id in sorted(filters_by_metric)
+                ],
+                reason_code=SemanticValidationReasonCode.METRIC_FILTER_CONFLICT.value,
+                message=(
+                    "多个指标声明了不同的过滤口径，单条 SQL 无法同时满足；"
+                    "请拆分查询或统一指标口径"
+                ),
+            )
+        ]
 
     def _validate_dimensions(
         self,

@@ -192,12 +192,16 @@ def test_contracts_reject_unknown_fields():
         RetrievalBundle.model_validate(payload)
 
 
-def test_profile_registry_separates_executable_and_evidence_profiles():
+def test_profile_registry_only_contains_implemented_profiles():
+    """P0-7：未实现的检索 profile 不注册，避免伪装能力。"""
+
     semantic = get_retrieval_profile(RetrievalProfileName.SEMANTIC_BINDING)
-    knowledge = get_retrieval_profile(RetrievalProfileName.KNOWLEDGE_EVIDENCE)
+    exemplar = get_retrieval_profile(RetrievalProfileName.SQL_EXEMPLAR)
 
     assert semantic.allows_executable_assets is True
     assert semantic.requires_slot_decision is True
-    assert knowledge.allows_executable_assets is False
-    assert RetrievalSourceType.KNOWLEDGE_BASE in knowledge.allowed_sources
-    assert set(PROFILE_REGISTRY) == set(RetrievalProfileName)
+    assert exemplar.allows_executable_assets is False
+    assert set(PROFILE_REGISTRY) == {
+        RetrievalProfileName.SEMANTIC_BINDING,
+        RetrievalProfileName.SQL_EXEMPLAR,
+    }

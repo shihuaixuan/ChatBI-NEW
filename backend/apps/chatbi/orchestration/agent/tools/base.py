@@ -53,6 +53,11 @@ class AgentToolContext:
     config: Any = None
     # Run 创建时固定的时间上下文，时间工具只能读取，不能重新生成。
     temporal_context: TemporalContext | None = None
+    # 检索 ACL 请求侧身份（P0-7）：角色解析在 P2-4 资产级授权落地前由调用方注入，
+    # 检索 SQL 端的可见性谓词始终生效，字段缺失只表示无额外授权。
+    principal_roles: list[str] = field(default_factory=list)
+    principal_role_ids: list[int] = field(default_factory=list)
+    permission_version: str | None = None
     # 循环内跨工具共享的运行时状态（语义包、执行结果标记等），由 loop 维护。
     state: dict[str, Any] = field(default_factory=dict)
 
@@ -110,6 +115,9 @@ class AgentToolContext:
             ),
             rewritten_question=rewritten_question,
             intent=intent,
+            principal_roles=self.principal_roles or None,
+            principal_role_ids=self.principal_role_ids or None,
+            permission_version=self.permission_version,
         )
 
     @property

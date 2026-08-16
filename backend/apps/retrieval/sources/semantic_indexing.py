@@ -79,7 +79,13 @@ class SemanticIndexCoordinator:
                     "configured_value_dimension_ids": [],
                     "max_configured_values_per_dimension": 200,
                 },
-                acl_policy={},
+                # P0-7：显式写入租户级 ACL 结构；角色授权字段由 P2-4 资产级授权填充。
+                acl_policy={
+                    "visibility": "tenant",
+                    "actor_ids": [],
+                    "roles": [],
+                    "role_ids": [],
+                },
                 source_version=source_version,
                 status="active",
             )
@@ -87,6 +93,12 @@ class SemanticIndexCoordinator:
             self._session.flush()
         if source.id is None:
             raise ValueError("RETRIEVAL_SOURCE_NOT_PERSISTED")
+
+        acl_visibility = str(
+            (source.acl_policy or {}).get("visibility") or "tenant"
+        )
+        if acl_visibility not in {"private", "tenant", "public"}:
+            raise ValueError("RETRIEVAL_SOURCE_VISIBILITY_INVALID")
 
         configured_dimension_ids = source.source_config.get("configured_value_dimension_ids") or []
         if not isinstance(configured_dimension_ids, list) or any(
@@ -108,7 +120,7 @@ class SemanticIndexCoordinator:
             namespace=namespace,
             source_version=source_version,
             acl=source.acl_policy,
-            visibility="tenant",
+            visibility=acl_visibility,  # type: ignore[arg-type]
         )
         generation_value = f"dataset-{dataset_id}-index-{version.index_version}"
         generation = RetrievalIndexingService(

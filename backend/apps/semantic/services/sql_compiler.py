@@ -41,6 +41,8 @@ class SemanticSQLCompileResult:
     dimensions: list[str]
     metric_ids: list[int]
     dimension_ids: list[int]
+    # 指标级过滤口径的来源标注（metric_id/biz_name/filter_sql），供口径卡片与审计透出。
+    metric_filters: list[dict[str, Any]] = field(default_factory=list)
 
 
 class SemanticSQLCompiler:
@@ -167,9 +169,15 @@ class SemanticSQLCompiler:
                 for metric in metrics
             ]
         select_parts.extend(f"{metric_expr} as {metric.biz_name}" for metric, metric_expr, _ in metric_selects)
+        metric_filter_conditions, metric_filter_sources = self._metric_filters(
+            metrics,
+            model_by_name,
+            model_name_by_id,
+        )
         where_parts = [
             *self._model_filters(ordered_model_names, model_by_name),
             *self._slot_filter_conditions(filters, model_by_name, model_name_by_id),
+            *metric_filter_conditions,
         ]
         group_parts = [self._qualified_dimension_expr(dimension, model_by_name, model_name_by_id) for dimension in dimensions]
         if bucket_dimension is not None:
@@ -208,6 +216,7 @@ class SemanticSQLCompiler:
             dimension_ids=[
                 dimension.id for dimension in [*bucket_dimensions, *dimensions]
             ],
+            metric_filters=metric_filter_sources,
         )
 
     _SQLGLOT_DIALECTS = {
@@ -619,6 +628,47 @@ class SemanticSQLCompiler:
             if filter_sql:
                 filters.append(SemanticSQLCompiler._qualify_filter(filter_sql, model_name))
         return filters
+
+    @classmethod
+    def _metric_filters(
+        cls,
+        metrics: list[SchemaElement],
+        model_by_name: dict[str, dict[str, Any]],
+        model_name_by_id: dict[int | None, str],
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        """把指标级 filter_sql 合并进 WHERE，并返回来源标注。
+
+        多个指标声明了不同过滤口径时，单条 SQL 无法同时满足，
+        必须在编译边界显式失败（完整 FILTER(WHERE) 方言支持在 P1 补齐）。
+        """
+
+        conditions: list[str] = []
+        sources: list[dict[str, Any]] = []
+        seen_condition: set[str] = set()
+        distinct_filters: set[str] = set()
+        for metric in metrics:
+            filter_sql = str((metric.ext_info or {}).get("filter_sql") or "").strip()
+            if not filter_sql:
+                continue
+            distinct_filters.add(filter_sql)
+            model_name = model_name_by_id.get(metric.model)
+            if not model_name:
+                raise ValueError("SEMANTIC_SQL_METRIC_MODEL_REQUIRED")
+            condition = cls._qualify_filter(filter_sql, model_name)
+            if condition not in seen_condition:
+                seen_condition.add(condition)
+                conditions.append(condition)
+            sources.append(
+                {
+                    "metric_id": metric.id,
+                    "biz_name": metric.biz_name,
+                    "model": model_name,
+                    "filter_sql": filter_sql,
+                }
+            )
+        if len(distinct_filters) > 1:
+            raise ValueError("SEMANTIC_SQL_METRIC_FILTER_CONFLICT")
+        return conditions, sources
 
     def _slot_filter_conditions(
         self,

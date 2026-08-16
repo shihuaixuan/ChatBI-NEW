@@ -856,7 +856,9 @@ def test_public_tools_do_not_read_chatbi_state_or_build_services_at_runtime():
         source = (BACKEND_DIR__query / relative_path).read_text(encoding="utf-8")
         assert "ctx.state" not in source
         assert "ctx.session" not in source
-        assert "build_" not in source
+        # build_dataset_schema 是注入的 schema provider 声明式加载方法，
+        # 不属于运行时构建服务；其余 build_ 前缀仍禁止。
+        assert "build_" not in source.replace("build_dataset_schema", "")
         assert "result_artifact" not in source
         assert "EventPublisher" not in source
         assert "AgentTracer" not in source

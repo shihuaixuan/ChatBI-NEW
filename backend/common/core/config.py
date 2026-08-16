@@ -173,9 +173,9 @@ class Settings(BaseSettings):
     TEMPORAL_MODEL_SHADOW_ENABLED: bool = False
     # 默认关闭；开启后模型时间计划经过确定性解析并成为查询时间语义来源。
     TEMPORAL_MODEL_AUTHORITY_ENABLED: bool = False
-    # Agent 可观测性默认关闭；关闭或零采样时不加载 OpenTelemetry。
-    AGENT_TRACING_ENABLED: bool = False
-    AGENT_TRACING_SAMPLE_RATE: float = 0.0
+    # P0-9：Agent 观测默认开启，按 10% 采样；关闭或零采样时不加载 OpenTelemetry。
+    AGENT_TRACING_ENABLED: bool = True
+    AGENT_TRACING_SAMPLE_RATE: float = 0.1
     AGENT_TRACING_SERVICE_NAME: str = "numora-agent"
     OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: str = ""
     QUERY_UNDERSTANDING_ENABLED: bool = True
