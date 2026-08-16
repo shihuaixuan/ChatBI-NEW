@@ -17,6 +17,9 @@ from apps.semantic.repository.sqlmodel.dataset_catalog_repository import (
 from apps.semantic.repository.sqlmodel.domain_repository import (
     SqlModelDomainRepository,
 )
+from apps.semantic.repository.sqlmodel.instruction_repository import (
+    SqlModelInstructionRepository,
+)
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
 from apps.semantic.repository.sqlmodel.semantic_contract_repository import (
     SqlModelSemanticContractRepository,
@@ -35,6 +38,7 @@ from apps.semantic.services.dataset_catalog_service import (
 from apps.semantic.services.dataset_reference_service import (
     SemanticDatasetReferenceService,
 )
+from apps.semantic.services.instruction_service import SemanticInstructionService
 from apps.semantic.services.schema_service import SemanticSchemaService
 from apps.semantic.services.semantic_contract_service import SemanticContractService
 from apps.semantic.services.sql_compilation_service import (
@@ -95,6 +99,12 @@ def build_semantic_schema_service(session: Session) -> SemanticSchemaService:
     """装配供跨领域调用方读取语义数据集 Schema 的公开服务。"""
 
     return SemanticSchemaService(SemanticSchemaLoader(session))
+
+
+def build_semantic_instruction_service(session: Session) -> SemanticInstructionService:
+    """装配数据集 instructions 管理服务。"""
+
+    return SemanticInstructionService(SqlModelInstructionRepository(session))
 
 
 def build_semantic_dataset_binding_service(

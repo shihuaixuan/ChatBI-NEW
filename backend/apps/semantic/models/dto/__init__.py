@@ -24,6 +24,11 @@ from apps.semantic.models.dto.dataset_schema import (
 )
 from apps.semantic.models.dto.dimension import DimensionPayload
 from apps.semantic.models.dto.domain import DomainPayload
+from apps.semantic.models.dto.instruction import (
+    InstructionModule,
+    InstructionPayload,
+    InstructionRecord,
+)
 from apps.semantic.models.dto.metric import (
     MetricBatchCreateFromMeasuresPayload,
     MetricPayload,
@@ -90,6 +95,9 @@ __all__ = [
     "DatasetIndexVersion",
     "DatasetSchema",
     "DimensionPayload",
+    "InstructionPayload",
+    "InstructionRecord",
+    "InstructionModule",
     "DomainPayload",
     "JoinRelation",
     "LegacyTerminologyDTO",

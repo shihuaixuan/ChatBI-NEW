@@ -9,6 +9,7 @@ from apps.semantic.models.orm import (
     MetricDimensionCapability,
     SemanticDataset,
     SemanticDatasetAsset,
+    SemanticDatasetInstruction,
     SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticDimensionValue,
@@ -46,6 +47,15 @@ class SemanticSchemaLoader:
                     SemanticDatasetModelConfig.oid == oid,
                     SemanticDatasetModelConfig.dataset_id == dataset_id,
                     SemanticDatasetModelConfig.status == 1,
+                )
+            )
+        )
+        instructions = all_results(
+            self._session.exec(
+                select(SemanticDatasetInstruction).where(
+                    SemanticDatasetInstruction.oid == oid,
+                    SemanticDatasetInstruction.dataset_id == dataset_id,
+                    SemanticDatasetInstruction.enabled.is_(True),
                 )
             )
         )
@@ -238,6 +248,7 @@ class SemanticSchemaLoader:
             business_entities=business_entities,
             logical_dimensions=logical_dimensions,
             metric_dimension_capabilities=metric_dimension_capabilities,
+            instructions=instructions,
         )
 
     def _load_subject_domains(

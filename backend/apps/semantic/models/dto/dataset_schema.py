@@ -57,6 +57,7 @@ class DatasetSchema(SemanticBaseDTO):
     dimension_values: list[SchemaElement] = Field(default_factory=list)
     terms: list[SchemaElement] = Field(default_factory=list)
     query_config: dict[str, Any] = Field(default_factory=dict)
+    instructions: dict[str, list[str]] = Field(default_factory=dict)
     business_entities: list[dict[str, Any]] = Field(default_factory=list)
     logical_dimensions: list[dict[str, Any]] = Field(default_factory=list)
     metric_dimension_capabilities: list[dict[str, Any]] = Field(default_factory=list)

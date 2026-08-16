@@ -125,6 +125,29 @@ def build_semantic_binding_request(
     intent_payload = {
         key: value for key, value in source_intent.items() if key in intent_fields
     }
+    # 问题理解模型会把未使用的可选对象输出为 null；检索边界 DTO 的默认值
+    # 表示“未提供”，因此在统一入口把 null 归一为对应的空集合，避免请求
+    # 在进入 semantic-binding 前因类型校验失败。
+    for field_name in (
+        "time_range",
+        "comparison",
+        "query_shape",
+        "subject_domain",
+    ):
+        if intent_payload.get(field_name) is None:
+            intent_payload[field_name] = {}
+    for field_name in (
+        "metric_mentions",
+        "dimension_mentions",
+        "time_mentions",
+        "time_ranges",
+        "filter_mentions",
+        "required_slot_types",
+        "ambiguous_slots",
+        "conflict_slots",
+    ):
+        if intent_payload.get(field_name) is None:
+            intent_payload[field_name] = []
     raw_dimension_slots = source_intent.get("dimension_slots")
     if isinstance(raw_dimension_slots, list):
         retrieval_slot_fields = set(RetrievalDimensionSlot.model_fields)

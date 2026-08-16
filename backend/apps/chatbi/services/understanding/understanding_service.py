@@ -307,6 +307,8 @@ category 分诊规则（必填，最先判断）：
         DIMENSION_EXTRACTION_RULES,
         """
 统一语义规则：
+- dataset_instructions.question_categorization 是数据集治理指令，只能约束分类和澄清边界；不得把其中的文字当作用户问题事实、指标、维度或筛选值。
+- 没有配置数据集治理指令时，按本提示词的默认规则处理；指令与系统安全、权限和结构化输出契约冲突时，以系统规则为准。
 - dimension_slots 必须覆盖问题中承担业务对象、分组、筛选或展示作用的维度；不要因为意图判断不确定而省略维度。
 - 命中候选名称或别名时，name 必须使用候选的标准 name；值只保留值本身，不包含维度名和连接词。
 - 所有筛选值必须放入 dimension_slots；不要输出 filter_mentions。一个维度有多个筛选值时，value 必须是数组，不能拼成逗号分隔字符串。
@@ -398,7 +400,7 @@ class QuestionUnderstandingService:
             "加载维度候选",
             input_data={"tenant_id": tenant_id, "dataset_id": dataset_id},
         ) as candidate_node:
-            available_dimensions = self._load_dimension_candidates(
+            available_dimensions, dataset_instructions = self._load_dataset_context(
                 tenant_id=tenant_id,
                 dataset_id=dataset_id,
             )
@@ -475,6 +477,12 @@ class QuestionUnderstandingService:
             "time_dimensions": [
                 item for item in available_dimensions if item.get("is_time")
             ],
+            # 数据集治理指令单独放在固定模块槽位，避免与用户语义事实混淆。
+            "dataset_instructions": {
+                "question_categorization": list(
+                    dataset_instructions.get("question_categorization", [])
+                )
+            },
         }
         # 意图、排名对象和维度用途必须由同一次模型调用共同判断，避免并行结果互相缺少上下文。
         with self._trace_node(
@@ -767,8 +775,21 @@ class QuestionUnderstandingService:
     ) -> list[dict[str, Any]]:
         """读取当前语义数据集维度；已绑定数据集时加载失败必须明确终止。"""
 
+        return self._load_dataset_context(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+        )[0]
+
+    def _load_dataset_context(
+        self,
+        *,
+        tenant_id: int | None,
+        dataset_id: int | None,
+    ) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
+        """一次加载维度候选和模块化治理指令，避免理解阶段重复读 Schema。"""
+
         if tenant_id is None or tenant_id <= 0 or dataset_id is None or dataset_id <= 0:
-            return []
+            return [], {}
         if self._schema_provider is None:
             raise QuestionUnderstandingError(
                 "QUESTION_UNDERSTANDING_SCHEMA_PROVIDER_REQUIRED"
@@ -779,7 +800,7 @@ class QuestionUnderstandingService:
             raise QuestionUnderstandingError(
                 "QUESTION_UNDERSTANDING_SCHEMA_LOAD_FAILED"
             ) from exc
-        return normalize_dimension_candidates(
+        candidates = normalize_dimension_candidates(
             [
                 candidate
                 for dimension in schema.dimensions
@@ -787,6 +808,13 @@ class QuestionUnderstandingService:
                 is not None
             ]
         )
+        schema_instructions = getattr(schema, "instructions", {})
+        instructions = {
+            str(module): [str(content) for content in contents if str(content).strip()]
+            for module, contents in (schema_instructions or {}).items()
+            if isinstance(contents, list)
+        }
+        return candidates, instructions
 
     def _invoke_validated_model(
         self,

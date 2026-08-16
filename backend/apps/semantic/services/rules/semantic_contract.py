@@ -117,9 +117,12 @@ def _validate_models(
             checks.append(_check("MODEL_ROW_DESCRIPTION", subject, "模型必须声明一行数据的业务含义", "SEMANTIC_CONTRACT_INCOMPLETE"))
         known_fields = field_names_by_model.get(model.id, set())
         if known_fields:
+            # 存量数据库可能把 JSON 数组保存为 NULL；校验时按空集合处理并继续报告契约缺失。
+            primary_key = model.primary_key or ()
+            model_grain = model.model_grain or ()
             referenced_fields = [
-                *model.primary_key,
-                *model.model_grain,
+                *primary_key,
+                *model_grain,
                 model.default_time_field,
                 model.event_time_field,
                 model.snapshot_time_field,
@@ -207,7 +210,7 @@ def _validate_metrics(
         known_fields = field_names_by_model.get(metric.model_id, set())
         if known_fields and any(
             field_name not in known_fields
-            for field_name in [*metric.fields, *metric.distinct_keys]
+            for field_name in [*(metric.fields or ()), *(metric.distinct_keys or ())]
         ):
             checks.append(
                 _check(

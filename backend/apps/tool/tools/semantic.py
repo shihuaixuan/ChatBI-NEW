@@ -22,8 +22,11 @@ from apps.retrieval import (
     validate_compilation_allowlist,
 )
 from apps.semantic import (
+    DatasetSchema,
     DatasetSchemaProvider,
+    SemanticPlanValidationReport,
     SemanticQueryCompileRequest,
+    SemanticQueryPlan,
     SemanticSQLCompilationService,
     SemanticUsedAsset,
     SemanticValidationError,
@@ -41,7 +44,7 @@ from apps.tool.tools.semantic_contracts import (
     SemanticAssetScope,
     SemanticToolContext,
     project_semantic_compile_plan,
-    project_semantic_query_plan,
+    project_semantic_query_plans,
 )
 
 
@@ -327,10 +330,11 @@ class SearchSemanticAssetsTool(
                     error_category=ToolErrorCategory.CONFIGURATION,
                 )
             try:
-                query_plan, validation_report = project_semantic_query_plan(
+                intent_payload = request.intent.model_dump(mode="json")
+                query_plans = _project_strict_query_plans(
                     schema,
-                    package.slot_bindings,
-                    request.intent.model_dump(mode="json"),
+                    package,
+                    intent_payload,
                 )
             except (SemanticValidationError, ValueError) as exc:
                 return ToolResult.rejected(
@@ -340,8 +344,10 @@ class SearchSemanticAssetsTool(
                 )
             scope = scope.model_copy(
                 update={
-                    "query_plan": query_plan,
-                    "validation_report": validation_report,
+                    "query_plan": query_plans[0][0],
+                    "query_plans": tuple(item[0] for item in query_plans),
+                    "validation_report": query_plans[0][1],
+                    "validation_reports": tuple(item[1] for item in query_plans),
                 }
             )
         data = SearchSemanticAssetsResult(package=package, scope=scope)
@@ -361,6 +367,23 @@ class SearchSemanticAssetsTool(
             data,
             metadata=metadata,
         )
+
+
+def _project_strict_query_plans(
+    schema: DatasetSchema,
+    package: SemanticAssetPackage,
+    intent: dict[str, Any],
+) -> list[tuple[SemanticQueryPlan, SemanticPlanValidationReport]]:
+    """为严格模式的单查询或 CROSS_MODEL 子查询分别生成验证计划。"""
+
+    return list(
+        project_semantic_query_plans(
+            schema,
+            package.slot_bindings,
+            intent,
+            package.multi_query_plans,
+        )
+    )
 
 
 class CompileFilter(BaseModel):
@@ -732,7 +755,8 @@ class CompileSemanticSqlTool(
         """严格模式只消费验证通过且指纹一致的完整语义计划。"""
 
         plan = scope.query_plan
-        if plan is None or scope.validation_report is None:
+        report = _validation_report_for_plan(scope, plan)
+        if plan is None or report is None:
             return ToolResult.rejected(
                 "严格语义范围缺少完整查询计划或验证报告。",
                 error_code="semantic_query_plan_required",
@@ -744,14 +768,14 @@ class CompileSemanticSqlTool(
                 error_code="semantic_query_plan_fingerprint_mismatch",
                 error_category=ToolErrorCategory.SAFETY,
             )
-        if plan.validation_status.value != "PROVEN" or scope.validation_report.status.value != "PROVEN":
+        if plan.validation_status.value != "PROVEN" or report.status.value != "PROVEN":
             return ToolResult.rejected(
                 "语义查询计划尚未通过确定性验证，禁止编译。",
                 error_code="semantic_query_plan_not_proven",
                 error_category=ToolErrorCategory.BUSINESS_RULE,
                 details={
                     "status": plan.validation_status.value,
-                    "reason_codes": list(scope.validation_report.reason_codes),
+                    "reason_codes": list(report.reason_codes),
                 },
             )
         if not _scope_matches_context(ctx, scope):
@@ -832,6 +856,26 @@ class CompileSemanticSqlTool(
             json_summary(data.model_dump(mode="json"), ctx.summary_max_chars),
             data,
         )
+
+
+def _validation_report_for_plan(
+    scope: SemanticAssetScope,
+    plan: SemanticQueryPlan | None,
+) -> SemanticPlanValidationReport | None:
+    """按计划指纹选择对应报告，避免多查询误用首个子计划报告。"""
+
+    if plan is None:
+        return None
+    for report in scope.validation_reports:
+        if report.evidence.get("plan_fingerprint") == plan.fingerprint:
+            return report
+    report = scope.validation_report
+    if report is not None and (
+        not report.evidence
+        or report.evidence.get("plan_fingerprint") == plan.fingerprint
+    ):
+        return report
+    return None
 
 
 def _scope_matches_context(

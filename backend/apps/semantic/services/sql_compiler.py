@@ -55,6 +55,12 @@ class SemanticSQLCompileResult:
     metric_filters: list[dict[str, Any]] = field(default_factory=list)
 
 
+def _same_asset_ids(actual: list[int], expected: list[int]) -> bool:
+    """比较资产集合并保留重复项检查，避免顺序差异造成误拒绝。"""
+
+    return len(actual) == len(expected) and sorted(actual) == sorted(expected)
+
+
 class SemanticSQLCompiler:
     def compile_verified_plan(
         self,
@@ -109,9 +115,32 @@ class SemanticSQLCompiler:
         )
         expected_metric_ids = [item.metric_id for item in plan.metrics]
         expected_dimension_ids = [*dimension_ids]
-        if time_binding.dimension_id is not None and time_binding.grain:
-            expected_dimension_ids = [time_binding.dimension_id, *expected_dimension_ids]
-        if result.metric_ids != expected_metric_ids or result.dimension_ids != expected_dimension_ids:
+        if time_binding.dimension_id is not None:
+            # 时间维度即使只用于过滤、没有分桶，也属于计划绑定的物理资产；
+            # 需要透出到 used_assets，供严格入口完成完整性校验。
+            if time_binding.dimension_id not in result.dimension_ids:
+                result.dimension_ids = [time_binding.dimension_id, *result.dimension_ids]
+                time_dimension = next(
+                    (
+                        item
+                        for item in schema.dimensions
+                        if item.id == time_binding.dimension_id
+                    ),
+                    None,
+                )
+                if time_dimension is not None:
+                    result.dimensions = [time_dimension.biz_name, *result.dimensions]
+            if time_binding.dimension_id not in expected_dimension_ids:
+                expected_dimension_ids = [
+                    time_binding.dimension_id,
+                    *expected_dimension_ids,
+                ]
+        # 编译器按 Schema 的稳定顺序输出资产，计划则按用户槽位顺序保存；
+        # 严格校验只关心资产集合完全一致，不应把合法的顺序差异误判为资产被替换。
+        if not _same_asset_ids(result.metric_ids, expected_metric_ids) or not _same_asset_ids(
+            result.dimension_ids,
+            expected_dimension_ids,
+        ):
             raise ValueError("SEMANTIC_QUERY_PLAN_ASSET_CHANGED")
         return result
 

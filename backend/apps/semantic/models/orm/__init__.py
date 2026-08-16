@@ -7,6 +7,7 @@ from apps.semantic.models.orm.dataset import (
 )
 from apps.semantic.models.orm.dimension import SemanticDimension, SemanticDimensionValue
 from apps.semantic.models.orm.domain import SemanticDomain, SemanticTerm
+from apps.semantic.models.orm.instruction import SemanticDatasetInstruction
 from apps.semantic.models.orm.knowledge import (
     SemanticAssetAlias,
     SemanticAssetRelation,
@@ -42,4 +43,5 @@ __all__ = [
     "BusinessEntity",
     "LogicalDimension",
     "MetricDimensionCapability",
+    "SemanticDatasetInstruction",
 ]

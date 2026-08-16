@@ -8,6 +8,7 @@ from apps.semantic.models.orm import (
     MetricDimensionCapability,
     SemanticDataset,
     SemanticDatasetAsset,
+    SemanticDatasetInstruction,
     SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticDimensionValue,
@@ -42,6 +43,7 @@ class DatasetSchemaAssets:
     business_entities: list[BusinessEntity] = field(default_factory=list)
     logical_dimensions: list[LogicalDimension] = field(default_factory=list)
     metric_dimension_capabilities: list[MetricDimensionCapability] = field(default_factory=list)
+    instructions: list[SemanticDatasetInstruction] = field(default_factory=list)
 
 
 class SchemaRepository(Protocol):

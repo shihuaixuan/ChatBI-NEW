@@ -231,7 +231,9 @@ class SemanticQueryPlanningService:
         result: list[SemanticFilterBinding] = []
         for item in request.filters:
             logical_id = item.get("logical_dimension_id")
-            physical_id = item.get("physical_dimension_id")
+            # 检索槽位使用 asset_id 表示已绑定的物理维度；内部计划 DTO
+            # 使用 physical_dimension_id。两种入口都必须落到同一物理资产。
+            physical_id = item.get("physical_dimension_id") or item.get("asset_id")
             if physical_id is None and isinstance(logical_id, int):
                 physical_id = physical_by_logical.get(logical_id)
             if not isinstance(physical_id, int) or physical_id <= 0:

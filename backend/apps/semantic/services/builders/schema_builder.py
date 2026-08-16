@@ -18,6 +18,7 @@ from apps.semantic.models.orm import (
     MetricDimensionCapability,
     SemanticDataset,
     SemanticDatasetAsset,
+    SemanticDatasetInstruction,
     SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticDimensionValue,
@@ -71,6 +72,7 @@ class SemanticSchemaBuilder:
             business_entities=assets.business_entities,
             logical_dimensions=assets.logical_dimensions,
             metric_dimension_capabilities=assets.metric_dimension_capabilities,
+            instructions=assets.instructions,
         )
 
     def build_from_assets(
@@ -92,6 +94,7 @@ class SemanticSchemaBuilder:
         business_entities: list[BusinessEntity] | None = None,
         logical_dimensions: list[LogicalDimension] | None = None,
         metric_dimension_capabilities: list[MetricDimensionCapability] | None = None,
+        instructions: list[SemanticDatasetInstruction] | None = None,
     ) -> DatasetSchema:
         configs = runtime_dataset_configs(dataset, dataset_model_configs)
         selected_model_ids = {config["id"] for config in configs}
@@ -168,6 +171,7 @@ class SemanticSchemaBuilder:
             model_contracts=[_model_contract_runtime(item) for item in selected_models],
             relation_contracts=[_relation_contract_runtime(item) for item in model_relations or []],
             metric_contracts=[_metric_contract_runtime(item) for item in exposed_metrics],
+            instructions=_instruction_runtime(instructions or []),
             schema_version=dataset.schema_version,
             contract_version=_dataset_contract_version(
                 selected_models,
@@ -464,6 +468,22 @@ def _metric_contract_runtime(metric: SemanticMetric) -> dict[str, Any]:
         "default_time_dimension_id": metric.default_time_dimension_id,
         "snapshot_aggregation": metric.snapshot_aggregation,
         "contract_version": metric.contract_version or metric.version,
+    }
+
+
+def _instruction_runtime(
+    instructions: list[SemanticDatasetInstruction],
+) -> dict[str, list[str]]:
+    """按模块投影启用指令，并按版本升序保持稳定顺序。"""
+
+    grouped: dict[str, list[SemanticDatasetInstruction]] = {}
+    for instruction in instructions:
+        if not instruction.enabled:
+            continue
+        grouped.setdefault(instruction.module, []).append(instruction)
+    return {
+        module: [item.content for item in sorted(items, key=lambda value: value.version)]
+        for module, items in grouped.items()
     }
 
 

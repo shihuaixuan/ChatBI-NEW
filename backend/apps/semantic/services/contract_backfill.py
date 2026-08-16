@@ -275,7 +275,11 @@ def _dataset_coverage(
     for dataset in datasets:
         if dataset.status != 1 or dataset.id is None:
             continue
-        model_ids = set(configured_model_ids(dataset, configs))
+        # 配置表同时承载多个数据集；覆盖率必须只读取当前数据集的模型配置。
+        dataset_configs = [
+            item for item in configs if item.dataset_id == dataset.id
+        ]
+        model_ids = set(configured_model_ids(dataset, dataset_configs))
         if not model_ids:
             model_ids = {
                 _asset_id(item)

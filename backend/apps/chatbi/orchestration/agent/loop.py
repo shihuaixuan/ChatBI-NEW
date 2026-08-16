@@ -246,6 +246,10 @@ class AgentLoop:
         intent = understanding.get("intent") if isinstance(understanding, dict) else {}
         query_shape = intent.get("query_shape") if isinstance(intent, dict) else {}
         query_shape = query_shape if isinstance(query_shape, dict) else {}
+        metric_mentions = intent.get("metric_mentions") if isinstance(intent, dict) else []
+        # 多指标问题可能尚未被理解模型显式标记为 multi_query；在指标数量
+        # 超过一个时提前进入 PLAN，避免严格 CROSS_MODEL 只编译首个子计划。
+        multiple_metrics = isinstance(metric_mentions, list) and len(metric_mentions) > 1
         requested = (
             state.run.execution_mode
             if state.run.execution_mode != "react_legacy"
@@ -259,7 +263,7 @@ class AgentLoop:
                 else "data_query",
                 query_shape=query_shape,
                 requested_mode=requested,
-                multi_query=bool(query_shape.get("multi_query")),
+                multi_query=bool(query_shape.get("multi_query")) or multiple_metrics,
                 cross_model=bool(query_shape.get("cross_model")),
             )
         )

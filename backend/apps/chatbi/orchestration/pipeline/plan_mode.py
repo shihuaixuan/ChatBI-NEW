@@ -121,11 +121,14 @@ class PlanPipeline:
         query_tasks = [task for task in plan.tasks if isinstance(task, QueryTask)]
         if not query_tasks:
             raise PlanPipelineError("PLAN_QUERY_TASK_REQUIRED")
+        scope = state.context.semantic_asset_scope
+        if scope is not None and scope.semantic_enforcement == "STRICT":
+            self._ensure_strict_query_plans_ready(scope, len(query_tasks))
 
         execution_records: dict[str, dict[str, Any]] = {}
         full_data_records: dict[str, list[dict[str, Any]]] = {}
         completed_tasks: dict[str, QueryTask] = {}
-        for task in query_tasks:
+        for query_index, task in enumerate(query_tasks):
             yield self._events.task_started(
                 run_id,
                 {
@@ -136,7 +139,7 @@ class PlanPipeline:
                     "status": "running",
                 },
             )
-            compiled = self._compile_task(state, task)
+            compiled = self._compile_task(state, task, strict_query_index=query_index)
             completed_tasks[task.id] = task.model_copy(update={"compiled": compiled})
             self._save_plan(
                 state,
@@ -301,10 +304,41 @@ class PlanPipeline:
             chart_spec=dict(getattr(final, "chart_spec", {}) or {}),
         )
 
-    def _compile_task(self, state: AgentRuntimeState, task: QueryTask) -> CompiledQuery:
+    def _compile_task(
+        self,
+        state: AgentRuntimeState,
+        task: QueryTask,
+        *,
+        strict_query_index: int = 0,
+    ) -> CompiledQuery:
         scope = state.context.semantic_asset_scope
-        if scope is None or scope.semantic_enforcement == "STRICT" or scope.query_plan is not None:
+        if scope is None:
             raise PlanPipelineError("PLAN_STRICT_MULTI_QUERY_NOT_READY")
+        if scope.semantic_enforcement == "STRICT":
+            query_plans = scope.query_plans or ((scope.query_plan,) if scope.query_plan else ())
+            if strict_query_index < 0 or strict_query_index >= len(query_plans):
+                raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
+            selected_plan = query_plans[strict_query_index]
+            if selected_plan is None:
+                raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
+            state.context.state["semantic_scope"] = scope.model_copy(
+                update={"query_plan": selected_plan}
+            ).model_dump(mode="json")
+            try:
+                result = self._call_tool(state, "compile_semantic_sql", {})
+            finally:
+                state.context.state["semantic_scope"] = scope.model_dump(mode="json")
+            data = result.data
+            if data is None:
+                raise PlanPipelineError("PLAN_COMPILE_RESULT_MISSING")
+            payload = data.model_dump(mode="json")
+            return CompiledQuery(
+                plan_fingerprint=f"{selected_plan.fingerprint}:{task.id}",
+                sql=str(payload["sql"]),
+                tables=tuple(str(item) for item in payload.get("tables") or []),
+            )
+        if scope.query_plan is not None:
+            raise PlanPipelineError("PLAN_QUERY_PLAN_UNEXPECTED")
         compile_plan = scope.compile_plan
         if compile_plan is None:
             raise PlanPipelineError("PLAN_COMPILE_PLAN_REQUIRED")
@@ -333,6 +367,24 @@ class PlanPipeline:
             sql=str(payload["sql"]),
             tables=tuple(str(item) for item in payload.get("tables") or []),
         )
+
+    @staticmethod
+    def _ensure_strict_query_plans_ready(
+        scope: Any,
+        query_task_count: int,
+    ) -> None:
+        """执行前统一检查每个 QueryTask 都有独立且已证明的严格计划。"""
+
+        strict_query_plans = scope.query_plans or (
+            (scope.query_plan,) if scope.query_plan is not None else ()
+        )
+        if len(strict_query_plans) < query_task_count:
+            raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
+        if any(
+            plan.validation_status.value != "PROVEN"
+            for plan in strict_query_plans[:query_task_count]
+        ):
+            raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_NOT_PROVEN")
 
     def _execute_compute_task(
         self,

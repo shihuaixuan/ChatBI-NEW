@@ -15,7 +15,7 @@ from apps.semantic import DatasetSchema
 from apps.tool.tools.semantic import project_semantic_package
 from apps.tool.tools.semantic_contracts import (
     project_semantic_compile_plan,
-    project_semantic_query_plan,
+    project_semantic_query_plans,
 )
 
 
@@ -132,13 +132,23 @@ def refresh_semantic_projection(
 
     if scope.get("semantic_enforcement") == "STRICT" and isinstance(schema_data, dict):
         schema = DatasetSchema.model_validate(schema_data)
-        query_plan, validation_report = project_semantic_query_plan(
+        query_plans = project_semantic_query_plans(
             schema,
             slot_bindings,
             intent if isinstance(intent, dict) else {},
+            package.get("multi_query_plans")
+            if isinstance(package.get("multi_query_plans"), list)
+            else None,
         )
-        scope["query_plan"] = query_plan.model_dump(mode="json")
-        scope["validation_report"] = validation_report.model_dump(mode="json")
+        scope["query_plan"] = query_plans[0][0].model_dump(mode="json")
+        scope["query_plans"] = [
+            query_plan.model_dump(mode="json") for query_plan, _ in query_plans
+        ]
+        scope["validation_report"] = query_plans[0][1].model_dump(mode="json")
+        scope["validation_reports"] = [
+            validation_report.model_dump(mode="json")
+            for _, validation_report in query_plans
+        ]
     return package, scope, snapshot_patch
 
 

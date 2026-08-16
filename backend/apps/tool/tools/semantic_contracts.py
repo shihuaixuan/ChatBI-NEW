@@ -103,7 +103,11 @@ class SemanticAssetScope(BaseModel):
     # 严格模式使用完整语义计划；compile_plan 仅为迁移期旧链路保留。
     semantic_enforcement: Literal["STRICT", "ASSISTED", "LEGACY"] = "LEGACY"
     query_plan: SemanticQueryPlan | None = None
+    # CROSS_MODEL 严格查询按子查询分别验证；query_plan 保留首个计划供单查询兼容。
+    query_plans: tuple[SemanticQueryPlan, ...] = ()
     validation_report: SemanticPlanValidationReport | None = None
+    # 多查询保留每个子计划的验证报告，供执行和审计按指纹精确选择。
+    validation_reports: tuple[SemanticPlanValidationReport, ...] = ()
     permission_version: str | None = None
 
 
@@ -266,6 +270,27 @@ def project_semantic_query_plan(
     return plan, report
 
 
+def project_semantic_query_plans(
+    schema: DatasetSchema,
+    slot_bindings: dict[str, Any],
+    intent: dict[str, Any] | None = None,
+    subplans: list[dict[str, Any]] | None = None,
+) -> tuple[tuple[SemanticQueryPlan, SemanticPlanValidationReport], ...]:
+    """按单查询或 CROSS_MODEL 子计划分别生成严格查询计划。"""
+
+    if subplans:
+        bindings: list[dict[str, Any]] = []
+        for item in subplans:
+            if not isinstance(item, dict) or not isinstance(item.get("slots"), dict):
+                raise ValueError("SEMANTIC_SUBPLAN_SLOTS_REQUIRED")
+            bindings.append(item["slots"])
+    else:
+        bindings = [slot_bindings]
+    return tuple(
+        project_semantic_query_plan(schema, item, intent) for item in bindings
+    )
+
+
 def _compile_order_by(
     metric_asset_ids: tuple[int, ...],
     dimension_asset_ids: tuple[int, ...],
@@ -347,4 +372,5 @@ __all__ = [
     "SemanticToolContext",
     "project_semantic_compile_plan",
     "project_semantic_query_plan",
+    "project_semantic_query_plans",
 ]

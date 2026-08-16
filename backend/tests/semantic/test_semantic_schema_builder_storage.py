@@ -2,6 +2,7 @@ from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetAsset,
     SemanticDatasetModelConfig,
+    SemanticDatasetInstruction,
     SemanticDimension,
     SemanticDomain,
     SemanticMetric,
@@ -94,6 +95,24 @@ def test_schema_builder_prefers_storage_dataset_assets_and_model_fields():
             SemanticDatasetAsset(oid=1, dataset_id=40, model_id=9, asset_type="METRIC", asset_id=100),
             SemanticDatasetAsset(oid=1, dataset_id=40, model_id=9, asset_type="DIMENSION", asset_id=200),
         ],
+        instructions=[
+            SemanticDatasetInstruction(
+                oid=1,
+                dataset_id=40,
+                module="sql_generation",
+                content="统一按元输出",
+                version=2,
+                enabled=True,
+            ),
+            SemanticDatasetInstruction(
+                oid=1,
+                dataset_id=40,
+                module="sql_generation",
+                content="旧规则",
+                version=1,
+                enabled=False,
+            ),
+        ],
     )
 
     assert schema.data_set.description == "客户资产"
@@ -103,3 +122,4 @@ def test_schema_builder_prefers_storage_dataset_assets_and_model_fields():
     assert schema.models[0]["fields"][0]["fieldName"] == "customer_id"
     assert schema.models[0]["measures"][0]["id"] == 2
     assert schema.metrics[0].fields == ["customer_id"]
+    assert schema.instructions == {"sql_generation": ["统一按元输出"]}

@@ -128,6 +128,28 @@ def test_request_factory_projects_question_understanding_dimension_slot():
     }
 
 
+def test_request_factory_normalizes_nullable_understanding_fields():
+    request = build_semantic_binding_request(
+        request_id="request-nullable-understanding",
+        tenant_id=1,
+        actor_id=2,
+        dataset_id=20,
+        original_question="比较 GMV",
+        rewritten_question="比较 GMV",
+        intent={
+            "intent_type": "metric_query",
+            "metric_mentions": ["GMV"],
+            "comparison": None,
+            "query_shape": None,
+            "filter_mentions": None,
+        },
+    )
+
+    assert request.intent.comparison == {}
+    assert request.intent.query_shape == {}
+    assert request.intent.filter_mentions == []
+
+
 def test_request_factory_rejects_unknown_dimension_slot_fields():
     with pytest.raises(RetrievalQueryError) as exc_info:
         build_semantic_binding_request(
