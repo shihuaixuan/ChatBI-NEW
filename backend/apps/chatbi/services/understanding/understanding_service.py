@@ -173,7 +173,7 @@ Agent 输出约束：
 - 不输出 dimension_mentions、dimension_slots、filter_mentions 和 required_slot_types；维度与筛选由并行的独立维度任务识别，必需槽位由服务端派生。
 - metric_mentions 只提供后续语义检索所需的指标候选，不要求本阶段确定完整指标口径。
 - query_shape 必须完整输出全部字段，只表示用户问题中的查询组织语义，不得绑定资产或生成 SQL。
-- detail_query 的 select_mode=detail，其他意图的 select_mode=aggregate。
+- detail_query 的 select_mode=detail；ranking_analysis 如果是对明细行排序也可以是 detail，其他情况为 aggregate。
 - 只有用户表达分组、趋势分桶、排名、比较或占比时，needs_group_by 才能为 true。
 - 只有用户表达排序或排名时，needs_order_by 才能为 true；否则 order_direction 必须为 null。
 - “最高、最多、最大、前N、TopN”对应 order_direction=desc；“最低、最少、最小、后N”对应 asc。
@@ -746,6 +746,7 @@ class QuestionUnderstandingService:
 
         usage_items: list[dict[str, Any]] = []
         validation_error: ValidationError | None = None
+        format_error_code: str | None = None
         model_call_error_details: dict[str, Any] | None = None
         for attempt in range(2):
             current_payload = dict(user_payload)
@@ -757,6 +758,11 @@ class QuestionUnderstandingService:
                     ),
                     "instruction": "只修复字段结构和类型，保持原问题语义不变。",
                 }
+            elif format_error_code is not None:
+                current_payload["repair_feedback"] = {
+                    "reason_code": format_error_code,
+                    "instruction": "上一次输出不是合法 JSON 对象。只输出符合原契约的 JSON，保持原问题语义不变。",
+                }
             user_prompt = orjson.dumps(current_payload).decode()
             try:
                 with self._trace_node(
@@ -767,7 +773,8 @@ class QuestionUnderstandingService:
                     input_data={
                         "stage": stage,
                         "attempt": attempt + 1,
-                        "repair": validation_error is not None,
+                        "repair": validation_error is not None
+                        or format_error_code is not None,
                     },
                     input_detail={
                         "system_prompt": system_prompt,
@@ -856,8 +863,20 @@ class QuestionUnderstandingService:
                     )
                 if validation_error is not None:
                     break
+                error_code = str(model_error)
+                repairable_format_errors = {
+                    f"{stage}_MODEL_OUTPUT_NOT_JSON",
+                    f"{stage}_MODEL_OUTPUT_NOT_OBJECT",
+                }
+                if error_code in repairable_format_errors and attempt == 0:
+                    format_error_code = error_code
+                    continue
                 raise
-        assert validation_error is not None
+        if validation_error is None:
+            raise QuestionUnderstandingError(
+                format_error_code or f"{stage}_MODEL_OUTPUT_INVALID",
+                details=model_call_error_details,
+            )
         raise QuestionUnderstandingError(
             f"{stage}_MODEL_OUTPUT_INVALID: {validation_error}",
             details=model_call_error_details,
@@ -1129,7 +1148,15 @@ def _apply_intent_type_selection(
     )
     if intent_type not in _CLARIFIABLE_INTENT_TYPES:
         raise QuestionUnderstandingError("CLARIFICATION_INTENT_TYPE_INVALID")
-    select_mode = "detail" if intent_type == "detail_query" else "aggregate"
+    select_mode = (
+        "detail"
+        if intent_type == "detail_query"
+        or (
+            intent_type == "ranking_analysis"
+            and intent.query_shape.select_mode == "detail"
+        )
+        else "aggregate"
+    )
     query_shape = intent.query_shape.model_copy(update={"select_mode": select_mode})
     conflict_slots = [
         slot

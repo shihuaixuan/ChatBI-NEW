@@ -269,6 +269,47 @@ def test_time_range_binds_metric_model_default_time_dimension():
     ]
 
 
+def test_time_range_binds_single_detail_model_default_time_dimension():
+    request = _time_request().model_copy(
+        update={
+            "intent": _time_request().intent.model_copy(
+                update={
+                    "intent_type": "ranking_analysis",
+                    "metric_mentions": [],
+                    "dimension_mentions": ["订单号"],
+                    "query_shape": {"select_mode": "detail"},
+                }
+            )
+        }
+    )
+    schema = _time_schema()
+    retrieval = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "dimension:1",
+                RetrievalPurpose.DIMENSION,
+                [
+                    _hit(
+                        300,
+                        "订单号",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        exact=1.0,
+                    )
+                ],
+                fast_path=True,
+            )
+        )
+    )
+
+    bundle = bind_default_time_dimensions(request, retrieval.bundle, schema)
+
+    assert bundle.decision.status == RetrievalDecisionStatus.RESOLVED
+    assert [item.asset_id for item in bundle.decision.allowed_asset_ids] == [300, 200]
+    assert bundle.decision.slot_decisions[-1].reason_codes == [
+        "DEFAULT_TIME_DIMENSION_BOUND_BY_DETAIL_MODEL"
+    ]
+
+
 def test_raw_time_range_does_not_trigger_retrieval_layer_parsing():
     request = _time_request(include_normalized=False)
     schema = _time_schema()

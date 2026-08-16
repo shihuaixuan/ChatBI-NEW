@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import (
+    DEFAULT_REF_TEMPLATE,
+    GenerateJsonSchema,
+    JsonSchemaMode,
+)
 
 from apps.datasource import DatasourceQueryService, DatasourceQuerySubject
 from apps.retrieval import (
@@ -122,6 +127,8 @@ class SemanticAssetPackage(BaseModel):
     metrics: list[str] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
     terms: list[str] = Field(default_factory=list)
+    # verified query 只提供问题与语义计划摘要，不向模型暴露裸 SQL。
+    examples: list[dict[str, Any]] = Field(default_factory=list)
     candidate_groups: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     selected_assets: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     slot_bindings: dict[str, Any] = Field(default_factory=dict)
@@ -407,10 +414,24 @@ class CompileSemanticSqlArgs(BaseModel):
     limit: int | None = Field(default=None)
 
     @classmethod
-    def model_json_schema(cls, by_alias: bool = True, **kwargs: Any) -> dict[str, Any]:
+    def model_json_schema(
+        cls,
+        by_alias: bool = True,
+        ref_template: str = DEFAULT_REF_TEMPLATE,
+        schema_generator: type[GenerateJsonSchema] = GenerateJsonSchema,
+        mode: JsonSchemaMode = "validation",
+        *,
+        union_format: Literal["any_of", "primitive_type_array"] = "any_of",
+    ) -> dict[str, Any]:
         """对模型只公开严格模式的计划指纹参数。"""
 
-        schema = super().model_json_schema(by_alias=by_alias, **kwargs)
+        schema = super().model_json_schema(
+            by_alias=by_alias,
+            ref_template=ref_template,
+            schema_generator=schema_generator,
+            mode=mode,
+            union_format=union_format,
+        )
         properties = schema.get("properties") or {}
         schema["properties"] = {"plan_fingerprint": properties["plan_fingerprint"]}
         return schema

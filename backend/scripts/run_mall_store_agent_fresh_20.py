@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from sqlmodel import Session
@@ -33,6 +33,9 @@ class FreshQuestion:
     question: str
     coverage: str
     expected_text: tuple[str, ...] = ()
+    dataset_name: str = "商城店铺数据集"
+    expected_points: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
 
 
 # 问题使用当前源数据中的新对象和新分析组合，不复用历史测试问题。
@@ -156,6 +159,59 @@ QUESTIONS = (
         "客户口径歧义、指标澄清",
     ),
 )
+
+
+def _load_questions() -> tuple[FreshQuestion, ...]:
+    """从 AGENT_GOLDEN_CASES_FILE 读取 JSONL；未配置时保持原 20 题。"""
+
+    configured = os.getenv("AGENT_GOLDEN_CASES_FILE", "").strip()
+    if not configured:
+        return QUESTIONS
+    path = Path(configured).expanduser().resolve()
+    if not path.is_file():
+        raise RuntimeError(f"黄金题集文件不存在：{path}")
+    cases: list[FreshQuestion] = []
+    seen_ids: set[str] = set()
+    for line_number, raw_line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"黄金题集第 {line_number} 行不是合法 JSON") from exc
+        case_id = str(payload.get("case_id") or "").strip()
+        question = str(payload.get("question") or "").strip()
+        dataset_name = str(payload.get("dataset") or "").strip()
+        if not case_id or not question or not dataset_name:
+            raise RuntimeError(
+                f"黄金题集第 {line_number} 行缺少 case_id/question/dataset"
+            )
+        if case_id in seen_ids:
+            raise RuntimeError(f"黄金题集 case_id 重复：{case_id}")
+        seen_ids.add(case_id)
+        tags = tuple(str(item) for item in payload.get("tags") or [] if str(item))
+        cases.append(
+            FreshQuestion(
+                case_id=case_id,
+                question=question,
+                coverage=str(payload.get("coverage") or "、".join(tags)),
+                expected_text=tuple(
+                    str(item) for item in payload.get("expected_text") or []
+                ),
+                dataset_name=dataset_name,
+                expected_points=tuple(
+                    str(item) for item in payload.get("expected_points") or []
+                ),
+                tags=tags,
+            )
+        )
+    if not cases:
+        raise RuntimeError(f"黄金题集没有可执行题目：{path}")
+    return tuple(cases)
 
 # N20 在本轮不同 Run 中出现过两套首层候选，目录取本轮观测并集。
 N20_OBSERVED_ROOT_OPTIONS = (
@@ -294,12 +350,12 @@ class AgentHttpClient:
             raise RuntimeError("登录接口未返回访问令牌")
         self.headers["X-SQLBOT-TOKEN"] = f"Bearer {token}"
 
-    def find_dataset(self) -> dict[str, Any]:
+    def find_dataset(self, dataset_name: str = "商城店铺数据集") -> dict[str, Any]:
         datasets = self.request("GET", "/semantic/datasets")
-        matches = [item for item in datasets if item.get("name") == "商城店铺数据集"]
+        matches = [item for item in datasets if item.get("name") == dataset_name]
         if len(matches) != 1:
-            raise RuntimeError(f"商城店铺数据集未唯一匹配：{matches!r}")
-        return matches[0]
+            raise RuntimeError(f"数据集 {dataset_name!r} 未唯一匹配：{matches!r}")
+        return cast(dict[str, Any], matches[0])
 
     def create_chat(self, dataset_id: int) -> int:
         payload = self.request(
@@ -320,14 +376,23 @@ class AgentHttpClient:
             return _sse_events(response)
 
     def timeline(self, record_id: int) -> dict[str, Any]:
-        return self.request("GET", f"/chat/agent/record/{record_id}/timeline")
+        return cast(
+            dict[str, Any], self.request("GET", f"/chat/agent/record/{record_id}/timeline")
+        )
 
     def trace(self, record_id: int) -> dict[str, Any]:
-        return self.request("GET", f"/chat/agent/record/{record_id}/trace")
+        return cast(
+            dict[str, Any], self.request("GET", f"/chat/agent/record/{record_id}/trace")
+        )
 
     def replay(self, run_id: int) -> dict[str, Any]:
-        return self.request(
-            "GET", f"/chat/agent/runs/{run_id}/events", params={"after_sequence": 0}
+        return cast(
+            dict[str, Any],
+            self.request(
+                "GET",
+                f"/chat/agent/runs/{run_id}/events",
+                params={"after_sequence": 0},
+            ),
         )
 
 
@@ -361,7 +426,7 @@ def _run_path(
     dataset_id: int,
     choice_path: tuple[dict[str, Any], ...],
 ) -> dict[str, Any]:
-    """执行一条澄清路径；未显式指定的下一轮暂取首项以发现后续候选。"""
+    """执行一条澄清路径；未显式指定答案时保持等待用户。"""
 
     started_at = time.monotonic()
     chat_id = client.create_chat(dataset_id)
@@ -381,7 +446,7 @@ def _run_path(
         required = _persisted_clarification(client, events, required)
         options = _options(required)
         explicit = depth < len(choice_path)
-        selected = options[0] if options else None
+        selected = None
         if explicit:
             expected_key = _option_key(choice_path[depth])
             selected = next(
@@ -402,6 +467,10 @@ def _run_path(
             }
         )
         if path_mismatch:
+            break
+        # 主路径只验证澄清能否正常挂起；候选分支由
+        # _run_all_clarifications 显式传入，不代替用户选第一项。
+        if not explicit:
             break
         record_id = int(required.get("record_id") or 0)
         if not record_id:
@@ -453,6 +522,9 @@ def _run_path(
         "case_id": case.case_id,
         "question": case.question,
         "coverage": case.coverage,
+        "dataset_name": case.dataset_name,
+        "expected_points": list(case.expected_points),
+        "tags": list(case.tags),
         "choice_path": list(choice_path),
         "choice_path_matched": not path_mismatch
         and len(rounds) >= len(choice_path),
@@ -566,7 +638,7 @@ def _write_outputs(summary: dict[str, Any], output_dir: Path) -> None:
         "# 商城店铺 Agent 新 20 题运行概览",
         "",
         f"- 生成时间：{summary['generated_at']}",
-        f"- 数据集：{summary['dataset_name']}（ID {summary['dataset_id']}）",
+        f"- 数据集：{summary['dataset_summary']}",
         f"- 主问题：{len(cases)}",
         f"- 澄清分支：{sum(len(item['clarification_branches']) for item in cases)}",
         f"- 实际 Run：{len(all_runs)}",
@@ -619,13 +691,13 @@ def _write_outputs(summary: dict[str, Any], output_dir: Path) -> None:
 
 
 def main() -> None:
-    """执行 20 个主问题及其全部澄清路径。"""
+    """执行默认 20 题或外部黄金题集，并覆盖其全部澄清路径。"""
 
+    questions = _load_questions()
     client = AgentHttpClient()
     try:
         client.login()
-        dataset = client.find_dataset()
-        dataset_id = int(dataset["id"])
+        datasets: dict[str, dict[str, Any]] = {}
         output_dir = Path(
             os.getenv(
                 "AGENT_TEST_OUTPUT_DIR",
@@ -644,12 +716,20 @@ def main() -> None:
             for item in os.getenv("AGENT_FORCE_CASES", "").split(",")
             if item.strip()
         }
+        expand_clarifications = os.getenv(
+            "AGENT_EXPAND_CLARIFICATIONS", "1"
+        ).lower() in {"1", "true", "yes"}
         if retry_failed and json_path.exists():
             previous = json.loads(json_path.read_text(encoding="utf-8"))
             previous_cases = {item["case_id"]: item for item in previous["cases"]}
         case_results: list[dict[str, Any]] = []
         all_runs: list[dict[str, Any]] = []
-        for index, case in enumerate(QUESTIONS, start=1):
+        for index, case in enumerate(questions, start=1):
+            dataset = datasets.get(case.dataset_name)
+            if dataset is None:
+                dataset = client.find_dataset(case.dataset_name)
+                datasets[case.dataset_name] = dataset
+            dataset_id = int(dataset["id"])
             previous_case = previous_cases.get(case.case_id)
             previous_primary = previous_case.get("primary") if previous_case else None
             previous_failure = (
@@ -676,13 +756,17 @@ def main() -> None:
                     ]
                 )
                 print(
-                    f"[{index:02d}/{len(QUESTIONS)}] {case.case_id} 保留首轮结果",
+                    f"[{index:02d}/{len(questions)}] {case.case_id} 保留首轮结果",
                     flush=True,
                 )
                 continue
-            print(f"[{index:02d}/{len(QUESTIONS)}] {case.case_id} {case.question}", flush=True)
+            print(f"[{index:02d}/{len(questions)}] {case.case_id} {case.question}", flush=True)
             primary = _run_path(client, case, dataset_id, ())
-            branches = _run_all_clarifications(client, case, dataset_id, primary)
+            branches = (
+                _run_all_clarifications(client, case, dataset_id, primary)
+                if expand_clarifications
+                else []
+            )
             case_result = {
                 "case_id": case.case_id,
                 "question": case.question,
@@ -691,6 +775,7 @@ def main() -> None:
                 "clarification_branches": branches,
             }
             if previous_primary is not None:
+                assert previous_case is not None
                 history = list(previous_case.get("retry_history") or [])
                 history.append(
                     {
@@ -707,9 +792,14 @@ def main() -> None:
             all_runs.extend([primary, *branches])
         summary = {
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "dataset_name": dataset["name"],
-            "dataset_id": dataset_id,
-            "question_source": "本轮基于当前语义资产和源数据从零设计",
+            "dataset_summary": "、".join(
+                f"{item['name']}（ID {item['id']}）" for item in datasets.values()
+            ),
+            "datasets": list(datasets.values()),
+            "question_source": (
+                os.getenv("AGENT_GOLDEN_CASES_FILE", "").strip()
+                or "脚本内置 fresh_20"
+            ),
             "cases": case_results,
             "all_runs": all_runs,
         }

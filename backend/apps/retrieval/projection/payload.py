@@ -211,7 +211,15 @@ def bundle_to_semantic_payload(
         "metrics": [item.get("biz_name") for item in selected_assets["metrics"]],
         "dimensions": [item.get("biz_name") for item in selected_assets["dimensions"]],
         "terms": [item.get("biz_name") for item in selected_assets["terms"]],
-        "examples": [],
+        "examples": [
+            {
+                "question": hit.title,
+                "semantic_plan": hit.metadata.get("semantic_plan_summary"),
+                "plan_fingerprint": hit.metadata.get("plan_fingerprint"),
+                "score": hit.scores.final,
+            }
+            for hit in bundle.exemplars
+        ],
         "candidate_groups": public_candidates,
         "selected_assets": selected_with_dimensions,
         "slot_bindings": slot_bindings,

@@ -737,6 +737,35 @@ class AgentToolExecutor:
                     )
                 )
 
+                if projection.control == ToolControlAction.REFUSE:
+                    yield from self._interrupt_open_tool_calls(
+                        state,
+                        step,
+                        calls,
+                        tool_call_rows,
+                        reason="当前问题无法在可执行语义范围内安全完成",
+                    )
+                    close_unfinished_tool_calls(state.messages)
+                    agent_run_repository.finish_step(
+                        self._session,
+                        step,
+                        {
+                            "tool_call_count": completed_count + failed_count,
+                            "failed_tool_call_count": failed_count,
+                            "terminal_refusal": True,
+                        },
+                        usage,
+                    )
+                    self._session.commit()
+                    yield from self._lifecycle.finish(
+                        state,
+                        answer=str(projection.control_data.get("answer") or ""),
+                        chart={},
+                        sql=None,
+                        step_id=step.id,
+                    )
+                    return ToolExecutionResult(ToolExecutionStatus.FINISHED)
+
                 if (
                     projection.control == ToolControlAction.FINISH
                     and result.status == ToolStatus.SUCCEEDED

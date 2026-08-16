@@ -189,6 +189,33 @@ def test_validation_accepts_consistent_ranking_shape():
     assert result.reason_codes == []
 
 
+def test_validation_accepts_ranking_over_detail_rows():
+    result = validate_question_understanding(
+        QuestionUnderstandingValidationData(
+            intent_type="ranking_analysis",
+            metric_mentions=("超时天数",),
+            dimension_slots=(
+                {
+                    "name": "订单号",
+                    "role": "display",
+                    "value": None,
+                    "value_status": "not_provided",
+                },
+            ),
+            query_shape={
+                "select_mode": "detail",
+                "needs_group_by": False,
+                "needs_order_by": True,
+                "order_direction": "desc",
+                "limit": 1,
+                "time_grain": None,
+            },
+        )
+    )
+
+    assert "select_mode_conflict" not in result.reason_codes
+
+
 def test_validation_reports_incomplete_ranking_shape_without_filling_it():
     result = validate_question_understanding(
         QuestionUnderstandingValidationData(

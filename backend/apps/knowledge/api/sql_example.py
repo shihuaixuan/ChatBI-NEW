@@ -22,12 +22,12 @@ from apps.knowledge.models.dto import (
     SQLExampleInput,
     SQLExamplePage,
 )
-from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.audit.models.log_model import OperationModules, OperationType
 from common.audit.schemas.logger_decorator import LogConfig, system_log
 from common.core.config import settings
 from common.core.db import engine
 from common.core.deps import CurrentUser, SessionDep, Trans
+from common.interfaces.i18n import PLACEHOLDER_PREFIX
 from common.utils.excel import get_excel_column_count
 
 router = APIRouter(tags=["SQL Examples"], prefix="/system/data-training")
@@ -122,6 +122,55 @@ async def enable_sql_example(
             current_user.oid,
             id,
             enabled,
+        )
+    except SQLExampleError as exc:
+        raise HTTPException(status_code=404, detail=_localize_error(trans, exc)) from exc
+
+
+@router.get("/{id}/verify", summary=f"{PLACEHOLDER_PREFIX}verify_dt")
+@system_log(
+    LogConfig(
+        operation_type=OperationType.UPDATE,
+        module=OperationModules.DATA_TRAINING,
+        resource_id_expr="id",
+    )
+)
+@require_permissions(permission=SqlbotPermission(role=["ws_admin"]))
+async def verify_sql_example(
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: int,
+    trans: Trans,
+) -> None:
+    try:
+        build_sql_example_service(session).verify_example(
+            current_user.oid,
+            id,
+            current_user.id,
+        )
+    except SQLExampleError as exc:
+        raise HTTPException(status_code=404, detail=_localize_error(trans, exc)) from exc
+
+
+@router.get("/{id}/deprecate", summary=f"{PLACEHOLDER_PREFIX}deprecate_dt")
+@system_log(
+    LogConfig(
+        operation_type=OperationType.UPDATE,
+        module=OperationModules.DATA_TRAINING,
+        resource_id_expr="id",
+    )
+)
+@require_permissions(permission=SqlbotPermission(role=["ws_admin"]))
+async def deprecate_sql_example(
+    session: SessionDep,
+    current_user: CurrentUser,
+    id: int,
+    trans: Trans,
+) -> None:
+    try:
+        build_sql_example_service(session).deprecate_example(
+            current_user.oid,
+            id,
         )
     except SQLExampleError as exc:
         raise HTTPException(status_code=404, detail=_localize_error(trans, exc)) from exc

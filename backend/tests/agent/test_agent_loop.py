@@ -2041,13 +2041,49 @@ def test_understanding_marks_missing_metric_for_clarification_without_guessing()
     assert "metric" in outcome.output.validation.clarification_slots
 
 
-def test_understanding_rejects_non_json_without_silent_fallback():
-    model = ScriptedUnderstandingModel([_understanding_response("不是 JSON")])
+def test_understanding_repairs_non_json_once_without_semantic_fallback():
+    model = ScriptedUnderstandingModel(
+        [
+            _understanding_response("不是 JSON"),
+            _understanding_response(
+                {
+                    "message_type": "new_question",
+                    "rewritten_question": "本月销售额",
+                    "inherited_context": {},
+                    "need_user_input": False,
+                    "missing_slots": [],
+                    "confidence": 0.98,
+                }
+            ),
+            _understanding_response(_valid_intent()),
+        ]
+    )
 
-    with pytest.raises(QuestionUnderstandingError, match="QUESTION_REWRITE_MODEL_OUTPUT_NOT_JSON"):
-        QuestionUnderstandingService(model).understand(question="本月销售额", datasource_id=5)
+    outcome = QuestionUnderstandingService(model).understand(
+        question="本月销售额",
+        datasource_id=5,
+    )
 
-    assert len(model.calls) == 1
+    assert outcome.output.rewritten_question == "本月销售额"
+    assert len(model.calls) == 3
+    assert "QUESTION_REWRITE_MODEL_OUTPUT_NOT_JSON" in model.calls[1][1]
+
+
+def test_understanding_rejects_repeated_non_json_after_one_repair():
+    model = ScriptedUnderstandingModel(
+        [_understanding_response("不是 JSON"), _understanding_response("仍不是 JSON")]
+    )
+
+    with pytest.raises(
+        QuestionUnderstandingError,
+        match="QUESTION_REWRITE_MODEL_OUTPUT_NOT_JSON",
+    ):
+        QuestionUnderstandingService(model).understand(
+            question="本月销售额",
+            datasource_id=5,
+        )
+
+    assert len(model.calls) == 2
 
 
 def test_understanding_rejects_fields_outside_contract():

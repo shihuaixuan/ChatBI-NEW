@@ -945,7 +945,7 @@ def bind_default_time_dimensions(
     bundle: RetrievalBundle,
     schema: DatasetSchema,
 ) -> RetrievalBundle:
-    """为已选指标确定性绑定同模型默认时间维度。"""
+    """为已解析的单模型查询确定性绑定默认时间维度。"""
 
     time_range = request.intent.time_range
     if str(time_range.get("value_status") or "").lower() != "provided":
@@ -973,15 +973,40 @@ def bind_default_time_dimensions(
             is not None
         }
     )
-    if not metric_model_ids:
-        return bundle
-
     selected_dimension_ids = {
         asset.asset_id
         for decision in bundle.decision.slot_decisions
         for asset in decision.selected_assets
         if asset.asset_type == RetrievalResourceType.DIMENSION
     }
+    selected_dimension_model_ids = sorted(
+        {
+            model_id
+            for decision in bundle.decision.slot_decisions
+            for asset in decision.selected_assets
+            if asset.asset_type == RetrievalResourceType.DIMENSION
+            and (
+                model_id := asset.model_id
+                or getattr(dimension_by_id.get(asset.asset_id), "model", None)
+            )
+            is not None
+        }
+    )
+    target_model_ids = metric_model_ids
+    binding_reason = "DEFAULT_TIME_DIMENSION_BOUND_BY_METRIC_MODEL"
+    missing_reason = "TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL"
+    ambiguity_reason = "MULTIPLE_DEFAULT_TIME_DIMENSIONS_FOR_METRIC_MODEL"
+    if not target_model_ids:
+        select_mode = str(request.intent.query_shape.get("select_mode") or "").lower()
+        # 明细查询可以只选维度。只有所有已选维度唯一指向同一模型时才自动绑定，
+        # 避免在跨模型或尚有歧义时猜测时间字段。
+        if select_mode != "detail" or len(selected_dimension_model_ids) != 1:
+            return bundle
+        target_model_ids = selected_dimension_model_ids
+        binding_reason = "DEFAULT_TIME_DIMENSION_BOUND_BY_DETAIL_MODEL"
+        missing_reason = "TIME_DIMENSION_NOT_CONFIGURED_FOR_DETAIL_MODEL"
+        ambiguity_reason = "MULTIPLE_DEFAULT_TIME_DIMENSIONS_FOR_DETAIL_MODEL"
+
     bound_time_models = {
         dimension.model
         for dimension_id in selected_dimension_ids
@@ -1002,7 +1027,7 @@ def bind_default_time_dimensions(
     }
     existing_allowed_keys = {_reference_key(asset) for asset in allowed_assets}
 
-    for model_id in metric_model_ids:
+    for model_id in target_model_ids:
         if model_id in bound_time_models:
             continue
         candidates = _default_time_candidates(schema, model_id)
@@ -1036,7 +1061,7 @@ def bind_default_time_dimensions(
                     status=RetrievalDecisionStatus.RESOLVED,
                     candidate_assets=references,
                     selected_assets=references,
-                    reason_codes=["DEFAULT_TIME_DIMENSION_BOUND_BY_METRIC_MODEL"],
+                    reason_codes=[binding_reason],
                 )
             )
             executable = ExecutableAssetReference(
@@ -1047,7 +1072,7 @@ def bind_default_time_dimensions(
             if _reference_key(executable) not in existing_allowed_keys:
                 allowed_assets.append(executable)
                 existing_allowed_keys.add(_reference_key(executable))
-            reason_codes.append("DEFAULT_TIME_DIMENSION_BOUND_BY_METRIC_MODEL")
+            reason_codes.append(binding_reason)
         elif len(references) > 1:
             has_ambiguity = True
             decisions.append(
@@ -1056,17 +1081,17 @@ def bind_default_time_dimensions(
                     purpose=RetrievalPurpose.DIMENSION,
                     status=RetrievalDecisionStatus.AMBIGUOUS,
                     candidate_assets=references,
-                    reason_codes=["MULTIPLE_DEFAULT_TIME_DIMENSIONS_FOR_METRIC_MODEL"],
+                    reason_codes=[ambiguity_reason],
                 )
             )
             ambiguities.append(
                 RetrievalAmbiguity(
                     subquery_id=subquery_id,
-                    reason_code="MULTIPLE_DEFAULT_TIME_DIMENSIONS_FOR_METRIC_MODEL",
+                    reason_code=ambiguity_reason,
                     candidate_assets=references,
                 )
             )
-            reason_codes.append("MULTIPLE_DEFAULT_TIME_DIMENSIONS_FOR_METRIC_MODEL")
+            reason_codes.append(ambiguity_reason)
         else:
             has_missing = True
             decisions.append(
@@ -1074,10 +1099,10 @@ def bind_default_time_dimensions(
                     subquery_id=subquery_id,
                     purpose=RetrievalPurpose.DIMENSION,
                     status=RetrievalDecisionStatus.MISSED,
-                    reason_codes=["TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL"],
+                    reason_codes=[missing_reason],
                 )
             )
-            reason_codes.append("TIME_DIMENSION_NOT_CONFIGURED_FOR_METRIC_MODEL")
+            reason_codes.append(missing_reason)
 
     if not reason_codes:
         return bundle

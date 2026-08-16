@@ -20,6 +20,7 @@ from apps.retrieval.models.dto import (
     RetrievalRequest,
     RetrievalScope,
 )
+from apps.retrieval.projection.payload import bundle_to_semantic_payload
 from apps.retrieval.query.policy import RerankCandidate
 from apps.retrieval.query.semantic_binding import (
     SEMANTIC_BINDING_STRATEGY_VERSION,
@@ -29,6 +30,7 @@ from apps.retrieval.query.semantic_runtime import (
     RetrievalEmbeddingRuntimeConfig,
     RetrievalRerankRuntimeConfig,
 )
+from apps.retrieval.query.sql_example_query import SQLExemplarHitPayload
 from apps.retrieval.reranking import SiliconFlowReranker
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
@@ -115,7 +117,11 @@ def test_semantic_binding_connects_recall_policy_schema_and_payload_projection(m
         dimension=1024,
         top_k=20,
     )
-    runner = SemanticBindingRunner(embedding_config=config, policy=_Policy())
+    runner = SemanticBindingRunner(
+        embedding_config=config,
+        policy=_Policy(),
+        exemplar_context_enabled=False,
+    )
     session = object()
 
     result = runner.run(
@@ -136,6 +142,92 @@ def test_semantic_binding_connects_recall_policy_schema_and_payload_projection(m
         "schema_session": session,
         "schema_scope": (1, 20),
     }
+
+
+def test_verified_exemplar_enters_bundle_and_semantic_payload_without_raw_sql(monkeypatch):
+    request = _request()
+    bundle = RetrievalBundle(
+        request_id=request.request_id,
+        bindings=RetrievalBindings(),
+        decision=RetrievalDecision(status=RetrievalDecisionStatus.MISSED),
+        diagnostics=RetrievalDiagnostics(
+            strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
+            index_generation="generation-2",
+        ),
+    )
+
+    class _ExemplarStore:
+        def __init__(self, session):
+            assert session is not None
+
+        def search_exemplar_hits_by_dataset(self, *args, **kwargs):
+            _ = args, kwargs
+            return [
+                SQLExemplarHitPayload(
+                    example_id=88,
+                    question="本月销售额",
+                    metadata={
+                        "dataset_id": 20,
+                        "verification_status": "VERIFIED",
+                        "plan_fingerprint": "plan-88",
+                        "semantic_plan_summary": {
+                            "metric_ids": [100],
+                            "dimension_ids": [],
+                        },
+                        "sql": "SELECT secret FROM physical_table",
+                    },
+                    score=0.91,
+                    index_generation="generation-example",
+                )
+            ]
+
+    monkeypatch.setattr(
+        "apps.retrieval.query.semantic_binding.SQLExampleSearchStore",
+        _ExemplarStore,
+    )
+    runner = SemanticBindingRunner(exemplar_context_enabled=True)
+
+    attached = runner._attach_verified_exemplars(object(), request, bundle)
+    payload = bundle_to_semantic_payload(request, attached, _schema())
+
+    assert len(attached.exemplars) == 1
+    assert attached.exemplars[0].snippet == ""
+    assert payload["examples"] == [
+        {
+            "question": "本月销售额",
+            "semantic_plan": {"metric_ids": [100], "dimension_ids": []},
+            "plan_fingerprint": "plan-88",
+            "score": 0.91,
+        }
+    ]
+    assert "sql" not in payload["examples"][0]
+
+
+def test_exemplar_context_switch_skips_store(monkeypatch):
+    class _UnexpectedStore:
+        def __init__(self, session):
+            raise AssertionError(f"关闭开关后不应访问 exemplar store: {session}")
+
+    monkeypatch.setattr(
+        "apps.retrieval.query.semantic_binding.SQLExampleSearchStore",
+        _UnexpectedStore,
+    )
+    request = _request()
+    bundle = RetrievalBundle(
+        request_id=request.request_id,
+        bindings=RetrievalBindings(),
+        decision=RetrievalDecision(status=RetrievalDecisionStatus.MISSED),
+        diagnostics=RetrievalDiagnostics(
+            strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
+            index_generation="generation-2",
+        ),
+    )
+
+    attached = SemanticBindingRunner(
+        exemplar_context_enabled=False
+    )._attach_verified_exemplars(object(), request, bundle)
+
+    assert attached is bundle
 
 
 def test_semantic_binding_rejects_invalid_embedding_config_when_fallback_is_disabled():

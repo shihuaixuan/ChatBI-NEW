@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Protocol
 
 from apps.knowledge.models.dto import (
@@ -6,6 +7,7 @@ from apps.knowledge.models.dto import (
     SQLExampleMatch,
     SQLExampleRecord,
     SQLExampleSourceSnapshot,
+    SQLExampleVerificationStatus,
 )
 
 
@@ -47,6 +49,16 @@ class SQLExampleRepository(Protocol):
         example_id: int,
         enabled: bool,
     ) -> bool: ...
+
+    def set_verification_status(
+        self,
+        workspace_id: int,
+        example_id: int,
+        status: SQLExampleVerificationStatus,
+        *,
+        verified_by: int | None,
+        verified_at: datetime | None,
+    ) -> SQLExampleRecord | None: ...
 
     def commit(self) -> None: ...
 

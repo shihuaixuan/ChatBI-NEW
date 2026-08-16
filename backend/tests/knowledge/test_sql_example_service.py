@@ -92,6 +92,28 @@ class RecordingSQLExampleRepository:
         self.records[example_id] = record.model_copy(update={"enabled": enabled})
         return True
 
+    def set_verification_status(
+        self,
+        workspace_id: int,
+        example_id: int,
+        status: SQLExampleVerificationStatus,
+        *,
+        verified_by: int | None,
+        verified_at: datetime | None,
+    ) -> SQLExampleRecord | None:
+        record = self.get(workspace_id, example_id)
+        if record is None:
+            return None
+        updated = record.model_copy(
+            update={
+                "verification_status": status,
+                "verified_by": verified_by,
+                "verified_at": verified_at,
+            }
+        )
+        self.records[example_id] = updated
+        return updated
+
     def commit(self) -> None:
         self.commit_count += 1
 
@@ -250,6 +272,24 @@ def test_create_normalizes_and_validates_dataset_linked_assets():
     ]
 
 
+def test_create_rejects_mismatched_semantic_plan_fingerprint():
+    repository = RecordingSQLExampleRepository()
+
+    with pytest.raises(SQLExampleError) as exc_info:
+        _service(repository).create(
+            3,
+            SQLExampleInput(
+                question="本月销售额",
+                description="SELECT 1",
+                datasource=8,
+                semantic_plan={"fingerprint": "plan-a"},
+                plan_fingerprint="plan-b",
+            ),
+        )
+
+    assert exc_info.value.message_key == "SQL_EXAMPLE_PLAN_FINGERPRINT_MISMATCH"
+
+
 @pytest.mark.parametrize(
     ("payload", "message_key"),
     [
@@ -394,6 +434,71 @@ def test_update_cannot_modify_another_workspace_record():
                 datasource=8,
             ),
         )
+
+
+def test_update_preserves_verified_query_lifecycle_and_plan_by_default():
+    repository = RecordingSQLExampleRepository()
+    verified_at = datetime(2026, 8, 16, 10, 0, 0)
+    repository.records[10] = SQLExampleRecord(
+        id=10,
+        oid=3,
+        datasource=8,
+        question="本月销售额",
+        description="SELECT 1",
+        verification_status=SQLExampleVerificationStatus.DEPRECATED,
+        verified_by=7,
+        verified_at=verified_at,
+        semantic_plan={"fingerprint": "plan-1"},
+        plan_fingerprint="plan-1",
+        use_as_onboarding=True,
+    )
+
+    _service(repository).update(
+        3,
+        SQLExampleInput(
+            id=10,
+            question="本月销售额（已调整）",
+            description="SELECT 2",
+            datasource=8,
+        ),
+    )
+
+    updated = repository.records[10]
+    assert updated.verification_status == SQLExampleVerificationStatus.DEPRECATED
+    assert updated.verified_by == 7
+    assert updated.verified_at == verified_at
+    assert updated.semantic_plan == {"fingerprint": "plan-1"}
+    assert updated.plan_fingerprint == "plan-1"
+    assert updated.use_as_onboarding is True
+
+
+def test_verify_and_deprecate_rebuild_index_without_losing_audit_facts():
+    repository = RecordingSQLExampleRepository()
+    repository.records[10] = SQLExampleRecord(
+        id=10,
+        oid=3,
+        datasource=8,
+        question="本月销售额",
+        description="SELECT 1",
+        verification_status=SQLExampleVerificationStatus.UNVERIFIED,
+    )
+    index_gateway = RecordingIndexGateway()
+    service = _service(repository, index_gateway)
+
+    service.verify_example(3, 10, verified_by=7)
+    verified = repository.records[10]
+    assert verified.verification_status == SQLExampleVerificationStatus.VERIFIED
+    assert verified.verified_by == 7
+    assert verified.verified_at is not None
+    assert [item.id for item in index_gateway.snapshots[-1].examples] == [10]
+
+    service.deprecate_example(3, 10)
+    deprecated = repository.records[10]
+    assert deprecated.verification_status == SQLExampleVerificationStatus.DEPRECATED
+    assert deprecated.verified_by == 7
+    assert deprecated.verified_at == verified.verified_at
+    assert index_gateway.snapshots[-1].examples == ()
+    assert repository.commit_count == 2
 
 
 def test_disabling_example_removes_it_from_complete_index_snapshot():

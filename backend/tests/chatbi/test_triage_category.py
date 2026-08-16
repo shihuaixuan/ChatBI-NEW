@@ -63,11 +63,24 @@ def test_category_defaults_to_data_query_for_old_snapshots():
     assert restored.category == "data_query"
 
 
-def test_direct_answer_only_allowed_for_chitchat():
+def test_direct_answer_only_allowed_for_chitchat(monkeypatch):
+    monkeypatch.setattr(
+        "apps.chatbi.orchestration.agent.loop.settings.CHATBI_TRIAGE_ENABLED",
+        True,
+    )
     assert _allows_direct_answer(_state_with_category("chitchat")) is True
     assert _allows_direct_answer(_state_with_category("data_query")) is False
     assert _allows_direct_answer(_state_with_category("meta_query")) is False
     assert _allows_direct_answer(_state_with_category("out_of_scope")) is False
+
+
+def test_triage_switch_can_restore_legacy_behavior(monkeypatch):
+    monkeypatch.setattr(
+        "apps.chatbi.orchestration.agent.loop.settings.CHATBI_TRIAGE_ENABLED",
+        False,
+    )
+
+    assert _allows_direct_answer(_state_with_category("chitchat")) is False
 
 
 def test_category_normalized_from_model_aliases():

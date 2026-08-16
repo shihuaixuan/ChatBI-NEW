@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import delete, func, or_, text
 from sqlmodel import Session, col, select
 
@@ -124,11 +126,43 @@ class SQLModelSQLExampleRepository:
             "enabled",
             "verification_status",
             "advanced_application",
+            "source",
+            "verified_by",
+            "verified_at",
+            "semantic_plan",
+            "plan_fingerprint",
+            "use_as_onboarding",
         ):
             setattr(row, field, getattr(example, field))
         self._session.add(row)
         self._session.flush()
         return example.id
+
+    def set_verification_status(
+        self,
+        workspace_id: int,
+        example_id: int,
+        status: SQLExampleVerificationStatus,
+        *,
+        verified_by: int | None,
+        verified_at: datetime | None,
+    ) -> SQLExampleRecord | None:
+        """verified query 生命周期流转（verify/deprecate），只改状态与审计列。"""
+
+        row = self._session.exec(
+            select(SQLExampleModel).where(
+                col(SQLExampleModel.id) == example_id,
+                col(SQLExampleModel.oid) == workspace_id,
+            )
+        ).first()
+        if row is None:
+            return None
+        row.verification_status = status.value
+        row.verified_by = verified_by
+        row.verified_at = verified_at
+        self._session.add(row)
+        self._session.flush()
+        return SQLExampleRecord.model_validate(row)
 
     def delete(self, workspace_id: int, example_ids: list[int]) -> None:
         if not example_ids:

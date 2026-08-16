@@ -8,10 +8,22 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 class SQLExampleVerificationStatus(str, Enum):
-    """SQL 示例内容与引用关系的独立验证状态。"""
+    """verified query 生命周期状态（P0-5）。
+
+    UNVERIFIED 对应候选（candidate）：可检索但不参与认证命中；
+    VERIFIED 为人工认证口径；DEPRECATED 为已废弃，索引与检索同时排除。
+    """
 
     UNVERIFIED = "UNVERIFIED"
     VERIFIED = "VERIFIED"
+    DEPRECATED = "DEPRECATED"
+
+
+class SQLExampleSource(str, Enum):
+    """verified query 的来源渠道。"""
+
+    MANUAL = "manual"
+    PROMOTED_FROM_RUN = "promoted_from_run"
 
 
 class SQLExampleLinkedAsset(BaseModel):
@@ -64,6 +76,9 @@ class SQLExampleInput(BaseModel):
     enabled: bool | None = True
     advanced_application: int | None = Field(default=None, gt=0)
     advanced_application_name: str | None = None
+    semantic_plan: dict[str, Any] | None = None
+    plan_fingerprint: str | None = Field(default=None, max_length=128)
+    use_as_onboarding: bool | None = None
 
 
 class SQLExampleRecord(BaseModel):
@@ -86,6 +101,12 @@ class SQLExampleRecord(BaseModel):
     verification_status: SQLExampleVerificationStatus = (
         SQLExampleVerificationStatus.UNVERIFIED
     )
+    source: SQLExampleSource = SQLExampleSource.MANUAL
+    verified_by: int | None = None
+    verified_at: datetime | None = None
+    semantic_plan: dict[str, Any] | None = None
+    plan_fingerprint: str | None = Field(default=None, max_length=128)
+    use_as_onboarding: bool = False
 
 
 class SQLExampleSnapshot(BaseModel):
@@ -102,6 +123,11 @@ class SQLExampleSnapshot(BaseModel):
     dataset_id: int | None = Field(default=None, gt=0)
     datasource_id: int | None = Field(default=None, gt=0)
     assistant_id: int | None = Field(default=None, gt=0)
+    verification_status: SQLExampleVerificationStatus = (
+        SQLExampleVerificationStatus.VERIFIED
+    )
+    semantic_plan: dict[str, Any] | None = None
+    plan_fingerprint: str | None = None
 
     @classmethod
     def from_record(cls, record: SQLExampleRecord) -> "SQLExampleSnapshot":
@@ -124,6 +150,9 @@ class SQLExampleSnapshot(BaseModel):
             dataset_id=record.dataset_id,
             datasource_id=record.datasource,
             assistant_id=record.advanced_application,
+            verification_status=record.verification_status,
+            semantic_plan=record.semantic_plan,
+            plan_fingerprint=record.plan_fingerprint,
         )
 
 
@@ -196,6 +225,12 @@ class SQLExampleResult(BaseModel):
     verification_status: SQLExampleVerificationStatus = (
         SQLExampleVerificationStatus.UNVERIFIED
     )
+    source: SQLExampleSource = SQLExampleSource.MANUAL
+    verified_by: int | None = None
+    verified_at: datetime | None = None
+    semantic_plan: dict[str, Any] | None = None
+    plan_fingerprint: str | None = None
+    use_as_onboarding: bool = False
     advanced_application: str | None = None
     advanced_application_name: str | None = None
 

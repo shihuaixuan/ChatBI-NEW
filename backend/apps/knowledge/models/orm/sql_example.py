@@ -75,3 +75,36 @@ class SQLExampleModel(SQLModel, table=True):
         default=None,
         sa_column=Column(BigInteger, nullable=True),
     )
+    # ---- verified query 资产化（P0-5，迁移 110）----
+    source: str = Field(
+        default="manual",
+        sa_column=Column(
+            String(32),
+            nullable=False,
+            server_default=text("'manual'"),
+        ),
+    )
+    verified_by: int | None = Field(
+        default=None,
+        sa_column=Column(BigInteger, nullable=True),
+    )
+    verified_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=False), nullable=True),
+    )
+    semantic_plan: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+    )
+    plan_fingerprint: str | None = Field(
+        default=None,
+        max_length=128,
+    )
+    use_as_onboarding: bool = Field(
+        default=False,
+        sa_column=Column(
+            Boolean,
+            nullable=False,
+            server_default=text("false"),
+        ),
+    )

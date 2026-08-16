@@ -16,8 +16,12 @@ from apps.retrieval.embedding import (
 from apps.retrieval.errors import RetrievalConfigurationError
 from apps.retrieval.models.dto import (
     RetrievalBundle,
+    RetrievalHit,
     RetrievalProfileName,
     RetrievalRequest,
+    RetrievalResourceType,
+    RetrievalScores,
+    RetrievalSourceType,
 )
 from apps.retrieval.projection.payload import bundle_to_semantic_payload
 from apps.retrieval.query.hybrid import (
@@ -33,6 +37,10 @@ from apps.retrieval.query.semantic_runtime import (
     ObservedEmbeddingProvider,
     RetrievalEmbeddingRuntimeConfig,
     RetrievalRerankRuntimeConfig,
+)
+from apps.retrieval.query.sql_example_query import (
+    EXEMPLAR_SOURCE_KEY_TEMPLATE,
+    SQLExampleSearchStore,
 )
 from apps.retrieval.reranking import SiliconFlowReranker
 from apps.semantic.composition import build_semantic_schema_service
@@ -66,6 +74,7 @@ class SemanticBindingRunner:
         policy: SemanticBindingPolicy | None = None,
         rerank_config: RetrievalRerankRuntimeConfig | None = None,
         schema_provider: DatasetSchemaProvider | None = None,
+        exemplar_context_enabled: bool | None = None,
     ) -> None:
         self._embedding_provider = embedding_provider
         self._embedding_config = embedding_config or RetrievalEmbeddingRuntimeConfig.from_settings(
@@ -111,6 +120,11 @@ class SemanticBindingRunner:
             settings
         )
         self._schema_provider = schema_provider
+        self._exemplar_context_enabled = (
+            settings.CHATBI_EXEMPLAR_CONTEXT_ENABLED
+            if exemplar_context_enabled is None
+            else exemplar_context_enabled
+        )
 
     def run(
         self,
@@ -150,6 +164,7 @@ class SemanticBindingRunner:
             policy_result.bundle,
             schema,
         )
+        bundle = self._attach_verified_exemplars(session, strategy_request, bundle)
         payload = bundle_to_semantic_payload(
             strategy_request,
             bundle,
@@ -170,6 +185,58 @@ class SemanticBindingRunner:
                 ],
             },
         )
+
+    def _attach_verified_exemplars(
+        self,
+        session: Any,
+        request: RetrievalRequest,
+        bundle: RetrievalBundle,
+    ) -> RetrievalBundle:
+        """相似 verified SQL 示例进语义包上下文；关闭开关时明确跳过。"""
+
+        if not self._exemplar_context_enabled:
+            return bundle
+        exemplar_profile = get_retrieval_profile(RetrievalProfileName.SQL_EXEMPLAR)
+        payloads = SQLExampleSearchStore(session).search_exemplar_hits_by_dataset(
+            request.tenant_id,
+            request.rewritten_question,
+            dataset_id=request.scope.dataset_ids[0],
+            limit=exemplar_profile.result_limit,
+        )
+        if not payloads:
+            return bundle
+        source_key = EXEMPLAR_SOURCE_KEY_TEMPLATE.format(
+            workspace_id=request.tenant_id
+        )
+        hits = [
+            RetrievalHit(
+                resource_id=f"sql_example:{payload.example_id}",
+                resource_type=RetrievalResourceType.SQL_EXEMPLAR,
+                source_type=RetrievalSourceType.SQL_EXEMPLAR,
+                source_id=source_key,
+                source_resource_id=str(payload.example_id),
+                unit_id=f"sql-example:{payload.example_id}",
+                content_kind="sql_exemplar",
+                title=payload.question,
+                # SQL 示例正文可能包含裸 SQL；标准语义包只暴露问题和计划摘要。
+                snippet="",
+                scores=RetrievalScores(final=payload.score),
+                metadata={
+                    "verification_status": payload.metadata.get(
+                        "verification_status", "VERIFIED"
+                    ),
+                    "semantic_plan_summary": payload.metadata.get(
+                        "semantic_plan_summary"
+                    ),
+                    "plan_fingerprint": payload.metadata.get("plan_fingerprint"),
+                    "dataset_id": payload.metadata.get("dataset_id"),
+                },
+                provenance={"index_generation": payload.index_generation},
+                source_version=payload.index_generation,
+            )
+            for payload in payloads
+        ]
+        return bundle.model_copy(update={"exemplars": hits})
 
     def _semantic_binding_policy(self, timeout_ms: int) -> SemanticBindingPolicy:
         if self._policy is not None:

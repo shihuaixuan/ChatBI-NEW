@@ -93,6 +93,31 @@ class SQLExampleService:
             example_id=request.id,
             create_time=current.create_time,
         )
+        # 编辑内容不改变 verified query 生命周期；语义计划只在请求明确提供时更新。
+        example = example.model_copy(
+            update={
+                "verification_status": current.verification_status,
+                "source": current.source,
+                "verified_by": current.verified_by,
+                "verified_at": current.verified_at,
+                "semantic_plan": (
+                    request.semantic_plan
+                    if request.semantic_plan is not None
+                    else current.semantic_plan
+                ),
+                "plan_fingerprint": (
+                    request.plan_fingerprint
+                    if request.plan_fingerprint is not None
+                    else current.plan_fingerprint
+                ),
+                "use_as_onboarding": (
+                    request.use_as_onboarding
+                    if request.use_as_onboarding is not None
+                    else current.use_as_onboarding
+                ),
+            }
+        )
+        self._validate_plan_reference(example.semantic_plan, example.plan_fingerprint)
         self._ensure_not_duplicate(example, exclude_id=request.id)
         example_id = self._repository.update(example)
         self._commit_index_change(workspace_id)
@@ -112,6 +137,41 @@ class SQLExampleService:
         enabled: bool,
     ) -> None:
         if not self._repository.set_enabled(workspace_id, example_id, enabled):
+            raise SQLExampleNotFoundError()
+        self._commit_index_change(workspace_id)
+
+    def verify_example(
+        self,
+        workspace_id: int,
+        example_id: int,
+        verified_by: int,
+    ) -> None:
+        """人工认证 verified query；成功后立即重建检索索引使其参与认证命中。"""
+
+        if self._repository.set_verification_status(
+            workspace_id,
+            example_id,
+            SQLExampleVerificationStatus.VERIFIED,
+            verified_by=verified_by,
+            verified_at=datetime.now(),
+        ) is None:
+            raise SQLExampleNotFoundError()
+        self._commit_index_change(workspace_id)
+
+    def deprecate_example(self, workspace_id: int, example_id: int) -> None:
+        """废弃的 verified query 从索引与检索同时排除。"""
+
+        current = self._repository.get(workspace_id, example_id)
+        if current is None:
+            raise SQLExampleNotFoundError()
+        if self._repository.set_verification_status(
+            workspace_id,
+            example_id,
+            SQLExampleVerificationStatus.DEPRECATED,
+            # 废弃不抹除原认证人和认证时间，保留审计事实。
+            verified_by=current.verified_by,
+            verified_at=current.verified_at,
+        ) is None:
             raise SQLExampleNotFoundError()
         self._commit_index_change(workspace_id)
 
@@ -207,6 +267,7 @@ class SQLExampleService:
         ):
             raise SQLExampleError("i18n_data_training.reference_cannot_be_none")
         linked_assets = self._validated_references(workspace_id, request)
+        self._validate_plan_reference(request.semantic_plan, request.plan_fingerprint)
         return SQLExampleRecord(
             id=example_id,
             oid=workspace_id,
@@ -221,7 +282,24 @@ class SQLExampleService:
             enabled=request.enabled if request.enabled is not None else True,
             advanced_application=request.advanced_application,
             verification_status=SQLExampleVerificationStatus.VERIFIED,
+            verified_at=datetime.now(),
+            semantic_plan=request.semantic_plan,
+            plan_fingerprint=request.plan_fingerprint,
+            use_as_onboarding=bool(request.use_as_onboarding),
         )
+
+    @staticmethod
+    def _validate_plan_reference(
+        semantic_plan: dict[str, Any] | None,
+        plan_fingerprint: str | None,
+    ) -> None:
+        """语义计划自带的指纹与资产指纹必须一致，避免认证错误计划。"""
+
+        if not semantic_plan or not plan_fingerprint:
+            return
+        embedded = semantic_plan.get("fingerprint")
+        if embedded is not None and str(embedded) != plan_fingerprint:
+            raise SQLExampleError("SQL_EXAMPLE_PLAN_FINGERPRINT_MISMATCH")
 
     def _validated_references(
         self,
@@ -352,6 +430,12 @@ class SQLExampleService:
                 dataset_id=item.dataset_id,
                 enabled=item.enabled,
                 verification_status=item.verification_status,
+                source=item.source,
+                verified_by=item.verified_by,
+                verified_at=item.verified_at,
+                semantic_plan=item.semantic_plan,
+                plan_fingerprint=item.plan_fingerprint,
+                use_as_onboarding=item.use_as_onboarding,
                 advanced_application=(
                     str(item.advanced_application)
                     if item.advanced_application is not None

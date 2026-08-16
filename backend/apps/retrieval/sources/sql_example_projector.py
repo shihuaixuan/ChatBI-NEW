@@ -49,6 +49,10 @@ class SQLExampleSourceProjector:
             "datasource_id": example.datasource_id,
             "assistant_id": example.assistant_id,
             "dataset_id": example.dataset_id,
+            # P0-5：认证状态与语义计划指纹随索引下发，供命中优先级与口径卡片使用。
+            "verification_status": example.verification_status.value,
+            "semantic_plan_summary": _semantic_plan_summary(example.semantic_plan),
+            "plan_fingerprint": example.plan_fingerprint,
             "linked_assets": [
                 asset.model_dump(mode="json") for asset in example.linked_assets
             ],
@@ -95,6 +99,49 @@ class SQLExampleSourceProjector:
             content_hash=content_hash,
             units=(unit,),
         )
+
+
+def _semantic_plan_summary(plan: dict[str, Any] | None) -> dict[str, Any] | None:
+    """提取可进入规划上下文的语义要点，明确排除 SQL 与物理表信息。"""
+
+    if not plan:
+        return None
+    metrics = [
+        item.get("metric_id")
+        for item in plan.get("metrics") or []
+        if isinstance(item, dict) and item.get("metric_id") is not None
+    ]
+    dimensions = [
+        item.get("logical_dimension_id") or item.get("physical_dimension_id")
+        for item in plan.get("dimensions") or []
+        if isinstance(item, dict)
+        and (
+            item.get("logical_dimension_id") is not None
+            or item.get("physical_dimension_id") is not None
+        )
+    ]
+    time_binding = plan.get("time_binding")
+    return {
+        "metric_ids": metrics,
+        "dimension_ids": dimensions,
+        "filters": [
+            {
+                key: item[key]
+                for key in ("physical_dimension_id", "operator", "value")
+                if key in item
+            }
+            for item in plan.get("filters") or []
+            if isinstance(item, dict)
+        ],
+        "time_range": (
+            time_binding.get("time_range")
+            if isinstance(time_binding, dict)
+            else None
+        ),
+        "query_shape": plan.get("query_shape") or {},
+        "order_by": plan.get("order_by") or [],
+        "limit": plan.get("limit"),
+    }
 
 
 __all__ = ["SQLExampleSourceProjector"]

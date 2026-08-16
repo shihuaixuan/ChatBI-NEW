@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 
 from apps.retrieval.embedding import (
@@ -98,6 +98,51 @@ class SQLExampleSearchStore:
             },
         )
 
+    def search_exemplar_hits_by_dataset(
+        self,
+        workspace_id: int,
+        question: str,
+        *,
+        dataset_id: int,
+        limit: int,
+    ) -> list[SQLExemplarHitPayload]:
+        """按数据集检索 verified SQL 示例，返回构造 exemplars 所需的完整载荷。"""
+
+        normalized = question.strip()
+        if workspace_id <= 0 or dataset_id <= 0 or limit <= 0 or not normalized:
+            return []
+        rows = self._session.execute(
+            _SQL_EXEMPLAR_BY_DATASET_SQL,
+            {
+                "tenant_id": workspace_id,
+                "source_key": EXEMPLAR_SOURCE_KEY_TEMPLATE.format(
+                    workspace_id=workspace_id
+                ),
+                "dataset_id": dataset_id,
+                "query_text": normalized,
+                "normalized_query": _normalize_text(normalized),
+                "lexical_threshold": EXEMPLAR_LEXICAL_THRESHOLD,
+                "limit": limit,
+            },
+        ).mappings().all()
+        payloads: list[SQLExemplarHitPayload] = []
+        for row in rows:
+            try:
+                example_id = int(str(row["source_resource_id"]))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("SQL_EXEMPLAR_SOURCE_RESOURCE_ID_INVALID") from exc
+            metadata = dict(row["resource_metadata"] or {})
+            payloads.append(
+                SQLExemplarHitPayload(
+                    example_id=example_id,
+                    question=str(row["resource_title"] or ""),
+                    metadata=metadata,
+                    score=float(row["score"]),
+                    index_generation=str(row["index_generation"]),
+                )
+            )
+        return payloads
+
     def _search(
         self,
         statement: Any,
@@ -140,6 +185,11 @@ class SQLExampleSearchStore:
                 )
             )
         return candidates
+
+
+# 语义绑定按 dataset 检索 verified exemplar 使用的源键与词法阈值。
+EXEMPLAR_SOURCE_KEY_TEMPLATE = "workspace:{workspace_id}:sql-examples"
+EXEMPLAR_LEXICAL_THRESHOLD = 0.3
 
 
 class SQLExampleRetriever:
@@ -436,6 +486,84 @@ ORDER BY score DESC, source_resource_id
 LIMIT :limit
 """
 )
+
+
+_SQL_EXEMPLAR_BY_DATASET_SQL = text(
+    """
+WITH scoped AS (
+    SELECT
+        s.active_generation AS index_generation,
+        r.source_resource_id,
+        r.title AS resource_title,
+        r.metadata AS resource_metadata,
+        u.id AS unit_id,
+        u.title AS unit_title,
+        u.content,
+        u.contextual_text,
+        (r.title || ' ' || u.title || ' ' || u.content || ' ' || u.contextual_text)
+            AS lexical_document
+    FROM retrieval_source AS s
+    JOIN retrieval_index_generation AS g
+      ON g.tenant_id = s.tenant_id
+     AND g.source_id = s.id
+     AND g.generation = s.active_generation
+     AND g.status = 'active'
+    JOIN retrieval_resource AS r
+      ON r.tenant_id = s.tenant_id
+     AND r.source_id = s.id
+     AND r.status = 'active'
+     AND r.resource_type = 'SQL_EXEMPLAR'
+    JOIN retrieval_unit AS u
+      ON u.tenant_id = r.tenant_id
+     AND u.resource_id = r.id
+     AND u.index_generation = s.active_generation
+     AND u.status = 'active'
+    WHERE s.tenant_id = :tenant_id
+      AND s.source_type = 'sql_exemplar'
+      AND s.source_key = :source_key
+      AND s.status = 'active'
+      AND r.metadata ->> 'dataset_id' = CAST(:dataset_id AS text)
+      AND r.metadata ->> 'verification_status' = 'VERIFIED'
+), ranked AS (
+    SELECT scoped.*,
+           GREATEST(
+               similarity(resource_title, :query_text),
+               similarity(lexical_document, :query_text),
+               CASE WHEN position(:normalized_query IN lower(lexical_document)) > 0
+                    THEN 0.99 ELSE 0 END
+           )::double precision AS score
+    FROM scoped
+    WHERE position(:normalized_query IN lower(lexical_document)) > 0
+       OR (
+           (resource_title % :query_text OR lexical_document % :query_text)
+           AND GREATEST(
+               similarity(resource_title, :query_text),
+               similarity(lexical_document, :query_text)
+           ) >= :lexical_threshold
+       )
+), collapsed AS (
+    SELECT DISTINCT ON (source_resource_id) *
+    FROM ranked
+    ORDER BY source_resource_id, score DESC, unit_id
+)
+SELECT source_resource_id, resource_title, resource_metadata, index_generation, score
+FROM collapsed
+ORDER BY score DESC, source_resource_id
+LIMIT :limit
+"""
+)
+
+
+class SQLExemplarHitPayload(BaseModel):
+    """按数据集检索到的 verified 示例命中载荷，供语义绑定构造 exemplars。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    example_id: int
+    question: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    score: float
+    index_generation: str
 
 
 _SQL_EXAMPLE_DENSE_SQL = text(

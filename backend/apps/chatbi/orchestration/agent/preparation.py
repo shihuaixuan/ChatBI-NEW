@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Generator, Iterator
-from typing import Any
+from typing import Any, cast
 
 from apps.chatbi.errors import QuestionUnderstandingError, SemanticClarificationError
 from apps.chatbi.models import (
@@ -57,6 +57,7 @@ from apps.trace import (
     TraceNodeStatus,
     TraceNodeType,
 )
+from common.core.config import settings
 
 
 class AgentInputPreparer:
@@ -437,7 +438,7 @@ class AgentInputPreparer:
                     clarify_verdict.reason or "澄清次数已达上限",
                     clarify_verdict.error_class or AgentErrorClass.BUDGET.value,
                 )
-                return
+                return False
             yield self._lifecycle.suspend(
                 state,
                 str(next_card.get("question") or "请补充必要信息。"),
@@ -479,7 +480,10 @@ class AgentInputPreparer:
         normalized = resolve_time_range(raw, state.temporal_context)
         if not isinstance(normalized, dict) or normalized.get("kind") == "unsupported":
             raise QuestionUnderstandingError("TIME_RANGE_CLARIFICATION_UNSUPPORTED")
-        understanding = json.loads(json.dumps(previous_understanding, ensure_ascii=False))
+        understanding = cast(
+            dict[str, Any],
+            json.loads(json.dumps(previous_understanding, ensure_ascii=False)),
+        )
         intent = understanding.get("intent")
         if not isinstance(intent, dict):
             raise QuestionUnderstandingError("TIME_RANGE_CLARIFICATION_INTENT_MISSING")
@@ -920,6 +924,8 @@ class AgentInputPreparer:
     ) -> Iterator[RenderEvent] | None:
         """非问数分诊的确定性收口：meta 走资产目录、越界拒答；闲聊交给主循环直答。"""
 
+        if not settings.CHATBI_TRIAGE_ENABLED:
+            return None
         category = _category_of(understanding)
         if category == "meta_query":
             answer = self._capability_answer(state)
@@ -949,14 +955,10 @@ class AgentInputPreparer:
         record = state.record
         schema = None
         if record.dataset_id:
-            try:
-                schema = self._semantic_schema_provider.build_dataset_schema(
-                    state.run.oid,
-                    record.dataset_id,
-                )
-            except Exception:
-                # 资产目录加载失败时退化为能力说明，不阻断 meta 问题收口。
-                schema = None
+            schema = self._semantic_schema_provider.build_dataset_schema(
+                state.run.oid,
+                record.dataset_id,
+            )
         return build_capability_answer(schema)
 
     def _refuse_question(
@@ -993,8 +995,8 @@ class AgentInputPreparer:
                 node_type=TraceNodeType.PHASE,
                 name=name,
                 display_name=display_name,
-                input_data={"category": category},
             ),
+            input_data={"category": category},
             input_detail={"answer": answer},
         ) as node:
             yield from self._lifecycle.finish(state, answer=answer, chart={}, sql=None)

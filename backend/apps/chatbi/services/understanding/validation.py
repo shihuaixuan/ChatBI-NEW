@@ -73,7 +73,13 @@ def validate_question_understanding(
             and len(slot["value"]) >= 2
         ]
 
-        if (data.intent_type == "detail_query") != (select_mode == "detail"):
+        detail_mode_invalid = (
+            data.intent_type == "detail_query" and select_mode != "detail"
+        ) or (
+            select_mode == "detail"
+            and data.intent_type not in {"detail_query", "ranking_analysis"}
+        )
+        if detail_mode_invalid:
             issues.append(
                 QuestionUnderstandingValidationIssue(
                     code="select_mode_conflict",

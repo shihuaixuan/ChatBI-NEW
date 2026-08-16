@@ -78,6 +78,7 @@ def _example(
     *,
     description: str = "SELECT SUM(amount) FROM orders",
     enabled: bool = True,
+    semantic_plan: dict | None = None,
 ) -> SQLExampleRecord:
     return SQLExampleRecord(
         id=example_id,
@@ -91,6 +92,8 @@ def _example(
         dataset_id=20,
         enabled=enabled,
         verification_status=SQLExampleVerificationStatus.VERIFIED,
+        semantic_plan=semantic_plan,
+        plan_fingerprint="plan-fingerprint" if semantic_plan else None,
     )
 
 
@@ -129,8 +132,44 @@ def test_projector_only_reads_public_snapshot_and_preserves_scope_metadata():
     assert resource.metadata["linked_assets"] == [
         {"asset_type": "METRIC", "asset_id": 100}
     ]
+    assert resource.metadata["verification_status"] == "VERIFIED"
     assert resource.units[0].content == "SELECT SUM(amount) FROM orders"
     assert "WHERE paid = true" in resource.units[0].contextual_text
+
+
+def test_projector_exposes_plan_summary_without_sql_or_physical_tables():
+    snapshot = _snapshot(
+        _example(
+            102,
+            semantic_plan={
+                "metrics": [{"metric_id": 100, "aggregation": "SUM"}],
+                "dimensions": [{"logical_dimension_id": 200}],
+                "filters": [
+                    {
+                        "physical_dimension_id": 201,
+                        "operator": "=",
+                        "value": "EAST",
+                    }
+                ],
+                "time_binding": {"time_range": {"start": "2026-08-01"}},
+                "query_shape": {"needs_group_by": True},
+                "sql": "SELECT secret FROM physical_table",
+                "physical_table": "physical_table",
+            },
+        )
+    )
+
+    resource = SQLExampleSourceProjector().project(
+        snapshot,
+        namespace=f"knowledge:workspace:{TENANT_ID}:sql-examples",
+    )[0]
+    summary = resource.metadata["semantic_plan_summary"]
+
+    assert summary["metric_ids"] == [100]
+    assert summary["dimension_ids"] == [200]
+    assert summary["filters"][0]["value"] == "EAST"
+    assert "sql" not in summary
+    assert "physical_table" not in summary
 
 
 def test_source_version_is_stable_for_same_enabled_snapshot():

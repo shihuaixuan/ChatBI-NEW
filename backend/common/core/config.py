@@ -143,8 +143,11 @@ class Settings(BaseSettings):
 
     # Agent 问数链路（chatbi/orchestration/agent，LLM 自主规划）
     CHAT_AGENT_ENABLED: bool = False
+    # P0 分诊与 verified query 上下文均可独立回退。
+    CHATBI_TRIAGE_ENABLED: bool = True
     # 筛选值归一：把理解产出的筛选值生成 VALUE 检索槽，命中维值字典后替换 canonical 值。
     CHATBI_VALUE_BINDING_ENABLED: bool = True
+    CHATBI_EXEMPLAR_CONTEXT_ENABLED: bool = True
     CHAT_AGENT_DATASOURCE_ALLOWLIST: str = ""
     CHAT_AGENT_MAX_STEPS: int = 12
     CHAT_AGENT_MAX_SQL_RETRIES: int = 2

@@ -9,6 +9,7 @@ node_modules/
 components.d.ts
 extra
 .env
+# docs are part of the implementation plan and must be versioned.
 docs
 backend/data/workflow_artifacts/
 backend/tests

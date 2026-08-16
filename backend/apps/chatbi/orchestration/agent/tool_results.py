@@ -26,6 +26,7 @@ class ToolControlAction(StrEnum):
     NONE = "none"
     CLARIFY = "clarify"
     FINISH = "finish"
+    REFUSE = "refuse"
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,9 +74,18 @@ class ChatBIToolResultProcessor:
                 )
                 if key in result.metadata
             }
+            refusal_answer = _terminal_refusal_answer(result)
             return ToolResultProjection(
                 result=result,
                 state_patch=state_patch,
+                control=(
+                    ToolControlAction.REFUSE
+                    if refusal_answer is not None
+                    else ToolControlAction.NONE
+                ),
+                control_data=(
+                    {"answer": refusal_answer} if refusal_answer is not None else {}
+                ),
                 audit_summary={
                     "success": False,
                     "status": result.status.value,
@@ -414,6 +424,18 @@ class ChatBIToolResultProcessor:
     @staticmethod
     def _normalize_sql(sql: str) -> str:
         return " ".join(sql.lower().split()).rstrip(";")
+
+
+def _terminal_refusal_answer(result: ToolResult[Any]) -> str | None:
+    """把不可重试的语义组合冲突收口为正常拒答。"""
+
+    if result.error_code != "semantic_metric_dimension_incompatible":
+        return None
+    return (
+        "当前问题中的指标和维度不属于同一个可执行语义模型，"
+        "P0 阶段不能安全合并为一条查询。请改用同一业务模型内的指标和维度，"
+        "或将问题拆分后分别查询。"
+    )
 
 
 __all__ = [
