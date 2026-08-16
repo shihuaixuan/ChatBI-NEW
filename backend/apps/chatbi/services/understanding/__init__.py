@@ -5,12 +5,19 @@
 - model_invocation：结构化模型调用边界（StructuredModelService + QuestionModelClient 端口）
 - temporal_interpretation：独立模型时间任务、一次修复和旁路差异计算
 - validation：确定性校验规则（共享函数）
+- clarification_catalog：reason_code → 澄清卡片/拒答建议注册表（共享函数）
 - intent_projection：意图清洗/合并投影（共享函数）
 - intent_fallback：模型不可用时的规则降级（Service，规则密集）
 - graph_contracts：Graph 专用契约投影函数
 - prompts / time_range：共享提示词规则与时间表达规则
 """
 
+from apps.chatbi.services.understanding.clarification_catalog import (
+    ClarificationCard,
+    ClarificationOutcome,
+    ClarificationRefusal,
+    evaluate_clarification,
+)
 from apps.chatbi.services.understanding.graph_contracts import (
     DEFAULT_MAX_INTENT_RETRY,
     classification_precondition,
@@ -84,6 +91,9 @@ __all__ = [
     "METRIC_TIME_EXTRACTION_RULES",
     "QUESTION_REWRITE_BUSINESS_RULES",
     "TEMPORAL_INTERPRETATION_SYSTEM_PROMPT",
+    "ClarificationCard",
+    "ClarificationOutcome",
+    "ClarificationRefusal",
     "QuestionIntentFallbackService",
     "QuestionModelClient",
     "QuestionUnderstandingModelClient",
@@ -100,6 +110,7 @@ __all__ = [
     "classification_precondition",
     "compare_temporal_shadow",
     "empty_rewrite",
+    "evaluate_clarification",
     "fallback_rewrite",
     "intent_retry_feedback",
     "is_time_expression",

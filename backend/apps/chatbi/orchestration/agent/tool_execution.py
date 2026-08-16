@@ -1109,14 +1109,43 @@ def _args_summary(args: dict[str, Any]) -> dict[str, Any]:
     return _bounded_summary(args)
 
 
+_MAX_SUMMARY_CHARS = 2000
+
+
 def _bounded_summary(value: dict[str, Any]) -> dict[str, Any]:
-    """递归脱敏并限制摘要长度，避免事件和事实表保存敏感或大体积内容。"""
+    """递归脱敏并限制摘要长度；超限时按结构裁剪而不是截断成不可解析内容。"""
 
     sanitized = _redact_sensitive(value)
     encoded = orjson.dumps(sanitized).decode()
-    if len(encoded) > 2000:
-        return {"_truncated": encoded[:2000]}
-    return cast(dict[str, Any], sanitized)
+    if len(encoded) <= _MAX_SUMMARY_CHARS:
+        return cast(dict[str, Any], sanitized)
+    # 逐级收紧（保留的列表项数 / 单个字符串上限），保持 schema、统计和前 N 行可读。
+    for list_keep, string_cap in ((6, 240), (3, 120), (1, 60), (0, 30)):
+        pruned = _prune_summary(sanitized, list_keep=list_keep, string_cap=string_cap)
+        pruned["_truncated"] = True
+        if len(orjson.dumps(pruned).decode()) <= _MAX_SUMMARY_CHARS:
+            return pruned
+    # 结构裁剪仍超限（键名过多等）时保留最小可诊断信息。
+    return {"_truncated": True, "keys": sorted(str(key) for key in sanitized)}
+
+
+def _prune_summary(value: Any, *, list_keep: int, string_cap: int) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _prune_summary(item, list_keep=list_keep, string_cap=string_cap)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        pruned_items = [
+            _prune_summary(item, list_keep=list_keep, string_cap=string_cap)
+            for item in value[:list_keep]
+        ]
+        if len(value) > list_keep:
+            pruned_items.append({"_truncated_count": len(value) - list_keep})
+        return pruned_items
+    if isinstance(value, str) and len(value) > string_cap:
+        return value[:string_cap]
+    return value
 
 
 def _redact_sensitive(value: Any, key: str = "") -> Any:

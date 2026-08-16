@@ -11,6 +11,7 @@ from apps.chatbi.orchestration.agent.tools.base import AgentTool, AgentToolConte
 from apps.chatbi.services.generation.agent_finalization import (
     AgentFinalizationInput,
     AgentFinalizationService,
+    build_partial_finalization,
 )
 from apps.tool import ToolErrorCategory, ToolExecutionPolicy, ToolResult
 
@@ -59,24 +60,25 @@ class FinishTool(AgentTool):
         understanding = ctx.state.get("question_understanding")
         intent = understanding.get("intent", {}) if isinstance(understanding, dict) else {}
         full_data = ctx.state.get("full_data")
+        question = str(
+            ctx.state.get("question") or ctx.state.get("original_question") or ""
+        )
         try:
             result = self._finalization_service.generate(
                 AgentFinalizationInput(
-                    question=str(
-                        ctx.state.get("question")
-                        or ctx.state.get("original_question")
-                        or ""
-                    ),
+                    question=question,
                     intent=intent if isinstance(intent, dict) else {},
                     execution=execution,
                     rows=full_data if isinstance(full_data, list) else [],
                 )
             )
         except AgentFinalizationError as exc:
-            return ToolResult.rejected(
-                str(exc),
-                error_code=exc.error_code,
-                error_category=ToolErrorCategory.BUSINESS_RULE,
+            # 查询已成功执行时收口失败必须降级为部分作答（表格直出），
+            # 不能以 rejected 观察返回让模型重复调用 finish 形成死循环。
+            result = build_partial_finalization(
+                execution=execution,
+                rows=full_data if isinstance(full_data, list) else [],
+                failed_stage=exc.error_code,
             )
         answer = result.answer
         if execution.get("sql_source") == "manual":

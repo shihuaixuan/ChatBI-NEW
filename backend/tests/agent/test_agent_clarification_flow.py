@@ -20,12 +20,12 @@ from apps.chatbi.orchestration.agent.messages import (
     AgentMessageRole,
     fold_tool_messages,
 )
-from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
 from apps.chatbi.orchestration.agent.prompts import (
     build_runtime_context,
     build_system_prompt,
 )
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
+from apps.chatbi.services.understanding import evaluate_clarification
 from apps.conversation.models import ChatRecord
 from apps.retrieval.models.dto import (
     AssetReference,
@@ -917,7 +917,7 @@ def test_preflight_value_clarification_targets_the_filter_that_is_missing_value(
         },
     }
 
-    clarification = AgentInputPreparer._preflight_clarification(understanding)
+    clarification = evaluate_clarification(understanding)
 
     assert clarification is not None
     assert clarification.question == "请补充需要筛选的具体客户ID。"
@@ -947,7 +947,7 @@ def test_preflight_temporal_clarification_blocks_retrieval_until_confirmation():
         },
     }
 
-    clarification = AgentInputPreparer._preflight_clarification(understanding)
+    clarification = evaluate_clarification(understanding)
 
     assert clarification is not None
     assert clarification.question == "请提供明确的时间范围。"

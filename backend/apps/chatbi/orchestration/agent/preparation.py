@@ -6,8 +6,6 @@ import json
 from collections.abc import Generator, Iterator
 from typing import Any
 
-from pydantic import BaseModel, Field
-
 from apps.chatbi.errors import QuestionUnderstandingError, SemanticClarificationError
 from apps.chatbi.models import (
     AgentClarificationResumeKind,
@@ -26,10 +24,13 @@ from apps.chatbi.orchestration.agent.semantic_projection import (
 )
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.repository.sqlmodel import agent_run_repository
+from apps.chatbi.services.generation.capability_answer import build_capability_answer
 from apps.chatbi.services.understanding import (
+    ClarificationCard,
+    ClarificationRefusal,
     QuestionUnderstandingService,
     apply_question_understanding_clarification,
-    build_temporal_clarification_options,
+    evaluate_clarification,
 )
 from apps.event import EventPublisher, RenderEvent
 from apps.memory import ClarificationMemoryEvent, MemoryService
@@ -56,15 +57,6 @@ from apps.trace import (
     TraceNodeStatus,
     TraceNodeType,
 )
-
-
-class PreflightClarification(BaseModel):
-    """问题理解阶段产生的确定性澄清请求。"""
-
-    question: str
-    options: list[dict[str, Any]] = Field(default_factory=list)
-    reason: str
-    resume_payload: dict[str, Any]
 
 
 class AgentInputPreparer:
@@ -204,10 +196,19 @@ class AgentInputPreparer:
                 )
             yield self._question_understood_event(state, understanding)
 
-            preflight = self._preflight_clarification(understanding)
-            if preflight is not None:
+            triage = self._triage_without_query(state, understanding)
+            if triage is not None:
+                understanding_node.set_output({"category": _category_of(understanding)})
+                yield from triage
+                return False
+
+            preflight = evaluate_clarification(understanding)
+            if isinstance(preflight, ClarificationCard):
                 understanding_node.set_status(TraceNodeStatus.WAITING)
                 yield from self._suspend_for_preflight_clarification(state, preflight)
+                return False
+            if isinstance(preflight, ClarificationRefusal):
+                yield from self._refuse_question(state, preflight)
                 return False
             return True
 
@@ -455,9 +456,12 @@ class AgentInputPreparer:
 
         if understanding_updated:
             yield self._question_understood_event(state, understanding)
-            preflight = self._preflight_clarification(understanding)
-            if preflight is not None:
+            preflight = evaluate_clarification(understanding)
+            if isinstance(preflight, ClarificationCard):
                 yield from self._suspend_for_preflight_clarification(state, preflight)
+                return False
+            if isinstance(preflight, ClarificationRefusal):
+                yield from self._refuse_question(state, preflight)
                 return False
         return True
 
@@ -836,110 +840,97 @@ class AgentInputPreparer:
             build_system_prompt(max_clarifications=self._config.max_clarifications)
         )
 
-    @staticmethod
-    def _preflight_clarification(
+    def _triage_without_query(
+        self,
+        state: AgentRuntimeState,
         understanding: dict[str, Any],
-    ) -> PreflightClarification | None:
-        """自然语言层已发现的维度歧义必须在资产检索前澄清。"""
+    ) -> Iterator[RenderEvent] | None:
+        """非问数分诊的确定性收口：meta 走资产目录、越界拒答；闲聊交给主循环直答。"""
 
-        validation = understanding.get("validation")
-        if (
-            not isinstance(validation, dict)
-            or validation.get("status") != "clarification_required"
-        ):
-            return None
-        reason_codes = set(validation.get("reason_codes") or [])
-        intent = understanding.get("intent")
-        intent = intent if isinstance(intent, dict) else {}
-        dimension_slots = [
-            slot
-            for slot in intent.get("dimension_slots") or []
-            if isinstance(slot, dict)
-        ]
-        temporal_interpretation = understanding.get("temporal_interpretation")
-        temporal_interpretation = (
-            temporal_interpretation if isinstance(temporal_interpretation, dict) else {}
-        )
-        temporal_plan = temporal_interpretation.get("plan")
-        temporal_plan = temporal_plan if isinstance(temporal_plan, dict) else {}
-        if "temporal_clarification_required" in reason_codes:
-            ambiguities = [
-                item
-                for item in temporal_plan.get("ambiguities") or []
-                if isinstance(item, dict)
-            ]
-            ambiguity_codes = {str(item.get("code") or "") for item in ambiguities}
-            options = build_temporal_clarification_options(ambiguity_codes)
-            question = "请提供明确的时间范围。"
-            if "time_range_conflict" in ambiguity_codes:
-                question = "问题中存在多个时间范围，请确认本次查询使用哪个时间范围。"
-            elif "time_expression_unsupported" in ambiguity_codes:
-                question = "当前时间表达暂不支持，请提供明确的起止日期。"
-            return PreflightClarification(
-                question=question,
-                options=options,
-                reason="时间计划尚未形成可执行的绝对范围，必须先确认后再检索语义资产。",
-                resume_payload={"operation": "resolve_temporal_plan"},
+        category = _category_of(understanding)
+        if category == "meta_query":
+            answer = self._capability_answer(state)
+            return self._finish_without_query(
+                state,
+                answer=answer,
+                name="answer_meta_query",
+                display_name="资产目录作答",
+                category=category,
             )
-        if "dimension_role_ambiguous" in reason_codes:
-            slot = next(
-                (
-                    item
-                    for item in dimension_slots
-                    if str(item.get("role") or "").lower() == "ambiguous"
-                ),
-                None,
+        if category == "out_of_scope":
+            answer = (
+                "当前问题超出我可以回答的范围：我只在管理员配置的数据集内做取数与分析，"
+                "不支持预测推演、修改数据或数据集之外的自由问答。"
+                "可以试试：“本月的总销售额是多少？”这类问数问题。"
             )
-            if slot is None:
-                return None
-            name = str(slot.get("name") or "维度").strip() or "维度"
-            return PreflightClarification(
-                question=f"请确认“{name}”在本次查询中的使用方式。",
-                options=[
-                    {"label": f"按{name}分组查看", "value": f"group_by:{name}"},
-                    {"label": f"筛选某个具体{name}", "value": f"filter:{name}"},
-                    {
-                        "label": f"不使用{name}维度，查看汇总结果",
-                        "value": f"ignore:{name}",
-                    },
-                ],
-                reason=f"“{name}”可能表示分组维度、筛选条件或业务对象，需要先确认后再检索指标口径。",
-                resume_payload={
-                    "operation": "set_dimension_role",
-                    "slot_name": name,
-                },
-            )
-        if "dimension_filter_value_missing" in reason_codes:
-            slot = next(
-                (
-                    item
-                    for item in dimension_slots
-                    if str(item.get("role") or "").lower() == "filter"
-                    and (
-                        str(item.get("value_status") or "").lower() != "provided"
-                        or item.get("value") in (None, "")
-                    )
-                ),
-                None,
-            )
-            if slot is None:
-                return None
-            name = str(slot.get("name") or "维度").strip() or "维度"
-            return PreflightClarification(
-                question=f"请补充需要筛选的具体{name}。",
-                options=[],
-                reason=f"已确认{name}用于筛选，但还缺少具体筛选值。",
-                resume_payload={
-                    "operation": "set_dimension_filter_value",
-                    "slot_name": name,
-                },
+            return self._finish_without_query(
+                state,
+                answer=answer,
+                name="refuse_out_of_scope",
+                display_name="越界拒答",
+                category=category,
             )
         return None
+
+    def _capability_answer(self, state: AgentRuntimeState) -> str:
+        record = state.record
+        schema = None
+        if record.dataset_id:
+            try:
+                schema = self._semantic_schema_provider.build_dataset_schema(
+                    state.run.oid,
+                    record.dataset_id,
+                )
+            except Exception:
+                # 资产目录加载失败时退化为能力说明，不阻断 meta 问题收口。
+                schema = None
+        return build_capability_answer(schema)
+
+    def _refuse_question(
+        self,
+        state: AgentRuntimeState,
+        refusal: ClarificationRefusal,
+    ) -> Iterator[RenderEvent]:
+        """理解校验无法澄清时的拒答收口：给出原因与建议问法，正常成功结束。"""
+
+        yield from self._finish_without_query(
+            state,
+            answer=refusal.answer,
+            name="refuse_unclear_question",
+            display_name="拒答并给出建议",
+            category="data_query",
+        )
+
+    def _finish_without_query(
+        self,
+        state: AgentRuntimeState,
+        *,
+        answer: str,
+        name: str,
+        display_name: str,
+        category: str,
+    ) -> Iterator[RenderEvent]:
+        """不产出 SQL/图表的终端回答收口（直答/拒答共用）。"""
+
+        run_id = state.require_run_id()
+        with self._trace_recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key=f"phase:{name}",
+                node_type=TraceNodeType.PHASE,
+                name=name,
+                display_name=display_name,
+                input_data={"category": category},
+            ),
+            input_detail={"answer": answer},
+        ) as node:
+            yield from self._lifecycle.finish(state, answer=answer, chart={}, sql=None)
+            node.set_output({"run_status": state.run.status})
 
     def _suspend_for_preflight_clarification(
         self,
         state: AgentRuntimeState,
-        output: PreflightClarification,
+        output: ClarificationCard,
     ) -> Iterator[RenderEvent]:
         """把问题理解产生的确定性澄清记录成完整步骤。"""
 
@@ -1051,6 +1042,13 @@ class AgentInputPreparer:
         )
         self._session.commit()
         return event
+
+
+def _category_of(understanding: dict[str, Any]) -> str:
+    """读取分诊类别；旧快照缺失该字段时按 data_query 处理。"""
+
+    category = str(understanding.get("category") or "data_query")
+    return category if category in {"chitchat", "data_query", "meta_query", "out_of_scope"} else "data_query"
 
 
 def _required_subquery_ids(raw_filters: Any) -> set[str] | None:

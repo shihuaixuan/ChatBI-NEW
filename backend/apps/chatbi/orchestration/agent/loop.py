@@ -33,6 +33,9 @@ from apps.chatbi.orchestration.agent.state import (
 )
 from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
 from apps.chatbi.repository.sqlmodel import agent_run_repository
+from apps.chatbi.services.generation.agent_finalization import (
+    build_partial_finalization,
+)
 from apps.event import EventPublisher, RenderEvent
 from apps.trace import (
     AgentTraceRecorder,
@@ -584,14 +587,22 @@ class AgentLoop:
         execution = ctx.state.get("last_execution")
         if isinstance(execution, dict) and execution.get("sql"):
             close_unfinished_tool_calls(state.messages)
-            answer = (
-                "预算已达上限，以下基于已成功执行的查询结果作答。"
-                f" 行数={execution.get('row_count')}，字段={execution.get('fields')}。"
+            partial = build_partial_finalization(
+                execution=execution,
+                rows=(
+                    ctx.state.get("full_data")
+                    if isinstance(ctx.state.get("full_data"), list)
+                    else []
+                ),
+                reason=(
+                    f"预算已达上限（{reason or '运行步数耗尽'}），"
+                    "以下基于已成功执行的查询结果直接作答。"
+                ),
             )
             yield from self.lifecycle.finish(
                 state,
-                answer=answer,
-                chart={},
+                answer=partial.answer,
+                chart=partial.chart,
                 sql=execution.get("sql"),
                 full_data=ctx.state.get("full_data"),
                 execution=execution,
@@ -673,7 +684,7 @@ def _set_iteration_result(
 
 
 def _allows_direct_answer(state: AgentRuntimeState) -> bool:
-    """只有闲聊允许直接回答，问数必须通过 finish 生成最终结果。"""
+    """只有分诊为闲聊的问题允许直接回答，问数必须通过 finish 生成最终结果。"""
 
     understanding = state.context.state.get("question_understanding")
     is_chitchat = (

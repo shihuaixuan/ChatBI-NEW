@@ -44,8 +44,11 @@ class AgentToolCallStatus(str, Enum):
 
 class AgentErrorClass(str, Enum):
     UNDERSTANDING = "understanding_failed"
+    BINDING_AMBIGUOUS = "binding_ambiguous"
     RETRIEVAL = "retrieval_missed"
+    PLAN_INVALID = "plan_invalid"
     SQL = "sql_failed"
+    FINALIZE = "finalize_failed"
     BUDGET = "budget_exhausted"
     UNEXPECTED = "unexpected_error"
 

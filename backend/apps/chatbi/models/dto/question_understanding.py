@@ -17,6 +17,9 @@ IntentType = Literal[
     "anomaly_analysis",
     "unknown",
 ]
+# 问题第一层分诊：chitchat 闲聊直答退出、meta_query 资产目录作答、
+# out_of_scope 拒答带理由，data_query 才进入取数主链路。
+QuestionCategory = Literal["chitchat", "data_query", "meta_query", "out_of_scope"]
 RequiredSlotType = Literal[
     "metric",
     "dimension",
@@ -180,6 +183,8 @@ class IntentRecognitionOutput(
         default_factory=lambda: QueryShape(select_mode="aggregate")
     )
     ranking: RankingSpec | None = None
+    # 分诊与意图在同一次模型调用中判断；默认 data_query 保证旧快照兼容。
+    category: QuestionCategory = "data_query"
 
 
 class DimensionRecognitionOutput(BaseModel):
@@ -262,6 +267,7 @@ class QuestionUnderstandingOutput(BaseModel):
     intent: IntentRecognitionOutput
     validation: IntentValidationOutput
     temporal_interpretation: TemporalInterpretationResult | None = None
+    category: QuestionCategory = "data_query"
 
 
 @dataclass(frozen=True)
@@ -346,6 +352,7 @@ __all__ = [
     "IntentType",
     "IntentValidationOutput",
     "NaturalLanguageIntentOutputBase",
+    "QuestionCategory",
     "QuestionClassificationOutputBase",
     "QuestionRewriteOutput",
     "QuestionRewriteOutputBase",

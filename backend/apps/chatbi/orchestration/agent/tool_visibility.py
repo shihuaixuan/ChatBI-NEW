@@ -55,20 +55,22 @@ def visible_tool_names(
         return []
     validation = understanding.get("validation")
     if not isinstance(validation, dict) or validation.get("status") != "valid":
-        return []
+        # 校验未通过的问题应在进入循环前由 preflight 澄清或拒答收口；
+        # 到达这里属于漏网状态，兜底只允许澄清，绝不出现零工具死局。
+        return _available(("clarify",), available)
     if context.get("last_execution"):
         return _available(("finish",), available)
     if has_critical_ambiguity(context):
         return _available(("clarify",), available)
 
-    # 严格语义计划未证明时，不允许转入物理表兜底链路。
+    # 严格语义计划未证明时转入语义歧义澄清，而不是零工具等待预算耗尽。
     strict_scope = context.get("semantic_scope")
     if (
         isinstance(strict_scope, dict)
         and strict_scope.get("semantic_enforcement") == "STRICT"
         and not has_resolved_semantics(context)
     ):
-        return []
+        return _available(("clarify",), available)
 
     if executable_sql(context):
         names = ["execute_sql"]
@@ -79,6 +81,9 @@ def visible_tool_names(
     elif context.get("semantic_scope"):
         # 语义决策没有收敛时进入物理 SQL 兜底，不重复执行同一语义检索。
         names = ["search_terminology", "get_sql_examples", "get_dataset_schema"]
+        if not context.get("time_range"):
+            # 计划仍缺可执行时间范围时允许重新解析时间，避免卡死在语义检索阶段。
+            names.insert(0, "parse_time_range")
     else:
         names = list(PREPARATION_TOOLS)
     # 显式注册的宿主扩展 Tool 不属于 ChatBI 九工具阶段表，正常模式保持可见。

@@ -1578,8 +1578,11 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
         ],
     )
     monkeypatch.setattr(
-        "apps.chatbi.orchestration.agent.preparation.agent_run_repository.latest_successful_rewritten_question",
-        lambda session, **kwargs: "今天按店铺分组的销售下单客户数",
+        "apps.chatbi.orchestration.agent.preparation.agent_run_repository.latest_successful_question_understanding",
+        lambda session, **kwargs: {
+            "rewritten_question": "今天按店铺分组的销售下单客户数",
+            "intent": {"intent_type": "metric_query"},
+        },
     )
 
     model = ScriptedModel([AIMessage(content="完成")])
@@ -1597,7 +1600,11 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
     list(loop.run(run, record))
 
     assert captured_context == {
-        "last_rewritten_question": "今天按店铺分组的销售下单客户数"
+        "last_rewritten_question": "今天按店铺分组的销售下单客户数",
+        "previous_understanding": {
+            "rewritten_question": "今天按店铺分组的销售下单客户数",
+            "intent": {"intent_type": "metric_query"},
+        },
     }
 
 
@@ -1737,7 +1744,6 @@ def test_understanding_rewrites_followup_before_recognizing_intent():
                 total_tokens=30,
             ),
             _understanding_response(_valid_intent(), total_tokens=40),
-            _understanding_response(_valid_dimensions(), total_tokens=10),
         ]
     )
 
@@ -1762,7 +1768,7 @@ def test_understanding_rewrites_followup_before_recognizing_intent():
     assert outcome.output.intent.time_range.normalized is None
     assert outcome.output.intent.time_range.interpretation_source is None
     assert outcome.output.validation.status == "valid"
-    assert outcome.usage_metadata["total_tokens"] == 80
+    assert outcome.usage_metadata["total_tokens"] == 70
     intent_request = orjson.loads(model.calls[1][1])
     assert intent_request["rewritten_question"] == "按城市统计上个月销售额"
     assert "那上个月呢" not in model.calls[1][1]
@@ -1784,16 +1790,6 @@ def test_understanding_keeps_today_for_agent_time_tool():
             _understanding_response(
                 _valid_intent(
                     metric_mentions=["客户数"],
-                    dimension_mentions=[],
-                    dimension_slots=[],
-                    time_mentions=["今天"],
-                    time_range={"raw": "今天", "value_status": "provided"},
-                    required_slot_types=["metric", "time_range"],
-                    query_shape={"select_mode": "aggregate"},
-                )
-            ),
-            _understanding_response(
-                _valid_dimensions(
                     dimension_mentions=["店铺"],
                     dimension_slots=[
                         {
@@ -1805,6 +1801,10 @@ def test_understanding_keeps_today_for_agent_time_tool():
                         }
                     ],
                     ambiguous_slots=["店铺"],
+                    time_mentions=["今天"],
+                    time_range={"raw": "今天", "value_status": "provided"},
+                    required_slot_types=["metric", "time_range"],
+                    query_shape={"select_mode": "aggregate"},
                 )
             ),
         ]
@@ -1962,12 +1962,12 @@ def test_understanding_does_not_reject_time_before_agent_time_tool():
             ),
             _understanding_response(
                 _valid_intent(
+                    dimension_mentions=[],
+                    dimension_slots=[],
+                    required_slot_types=[],
                     time_mentions=["发薪日"],
                     time_range={"raw": "发薪日", "value_status": "provided"},
                 )
-            ),
-            _understanding_response(
-                _valid_dimensions(dimension_mentions=[], dimension_slots=[])
             ),
         ]
     )

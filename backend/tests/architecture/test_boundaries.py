@@ -1286,7 +1286,10 @@ def test_agent_input_preparation_owns_understanding_and_preflight_clarification(
     assert "self.input_preparer.prepare_resume" in loop_source
     assert "self.understanding_service.understand" not in loop_source
     assert "apply_question_understanding_clarification" not in loop_source
-    assert "def _preflight_clarification" in preparation_source
+    # 澄清归宿注册表在 understanding 域，preparation 只负责挂起、分诊与收口编排。
+    assert "evaluate_clarification" in preparation_source
+    assert "def _suspend_for_preflight_clarification" in preparation_source
+    assert "def _triage_without_query" in preparation_source
     assert "build_system_prompt" in preparation_source
 
 

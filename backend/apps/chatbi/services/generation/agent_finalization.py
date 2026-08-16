@@ -212,8 +212,50 @@ def _build_context(data: AgentFinalizationInput) -> dict[str, Any]:
     }
 
 
+def build_partial_finalization(
+    *,
+    execution: dict[str, Any],
+    rows: list[dict[str, Any]],
+    failed_stage: str | None = None,
+    reason: str | None = None,
+) -> AgentFinalizationResult:
+    """图表或分析模型失败时的确定性部分作答：表格直出、注明失败环节。
+
+    只使用执行结果中的真实数据（字段、行数、前几行），不引入任何模型输出，
+    因此无论哪个生成环节失败都能安全收口。
+    """
+
+    fields = [str(field) for field in execution.get("fields") or []]
+    row_count = execution.get("row_count")
+    if not isinstance(row_count, int):
+        row_count = len(rows)
+    if reason is None:
+        stage_note = f"（失败环节：{failed_stage}）" if failed_stage else ""
+        reason = f"查询已成功执行，但分析回复生成失败{stage_note}，以下直接展示查询结果。"
+    lines = [reason, f"- 行数：{row_count}"]
+    if fields:
+        lines.append(f"- 字段：{'、'.join(fields)}")
+    preview_rows = [row for row in rows if isinstance(row, dict)][:3]
+    if preview_rows:
+        lines.append("- 结果预览：")
+        for row in preview_rows:
+            compact = "，".join(
+                f"{key}={_preview_value(value)}" for key, value in list(row.items())[:6]
+            )
+            lines.append(f"  - {compact}")
+    return AgentFinalizationResult(answer="\n".join(lines), chart={})
+
+
+def _preview_value(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.4g}"
+    text = str(value)
+    return text if len(text) <= 40 else f"{text[:37]}..."
+
+
 __all__ = [
     "AgentFinalizationInput",
     "AgentFinalizationResult",
     "AgentFinalizationService",
+    "build_partial_finalization",
 ]

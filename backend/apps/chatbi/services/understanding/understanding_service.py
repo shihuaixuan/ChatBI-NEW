@@ -264,6 +264,7 @@ QUESTION_UNDERSTANDING_SYSTEM_PROMPT = "\n\n".join(
 
 只输出以下 JSON 对象，不要输出 Markdown 或解释：
 {
+  "category": "chitchat | data_query | meta_query | out_of_scope",
   "intent_type": "metric_query | trend_analysis | ranking_analysis | comparison_analysis | detail_query | share_analysis | anomaly_analysis | unknown",
   "confidence": 0.0,
   "metric_mentions": [],
@@ -278,6 +279,12 @@ QUESTION_UNDERSTANDING_SYSTEM_PROMPT = "\n\n".join(
   "ambiguous_slots": [],
   "conflict_slots": []
 }
+
+category 分诊规则（必填，最先判断）：
+- chitchat：问候、寒暄或与数据查询无关的闲聊（“你好”“你是谁”“谢谢”）。
+- meta_query：询问当前数据集自身能力或资产的问题（“你能查什么”“有哪些指标”“销售额是怎么定义的”“有哪些维度”），不要求真的取数。
+- out_of_scope：预测推演、写操作、修改数据，或明显与数据分析无关的问题。
+- data_query：其余一切需要查询数据回答的问题；无法确定时一律使用 data_query，不要把拿不准的问数问题归入其他类。
 """.strip(),
         METRIC_TIME_EXTRACTION_RULES,
         DIMENSION_EXTRACTION_RULES,
@@ -303,11 +310,15 @@ QUESTION_UNDERSTANDING_SYSTEM_PROMPT = "\n\n".join(
 
 示例 1：自然表达的日期排名
 输入：{"rewritten_question":"2026年6月8日至14日，店铺100021哪一天的总GMV最高？","available_dimensions":[{"name":"档口ID","aliases":["店铺"]}],"time_dimensions":[{"name":"统计日期","aliases":[]}]}
-输出：{"intent_type":"ranking_analysis","confidence":0.99,"metric_mentions":["总GMV"],"time_mentions":["2026年6月8日至14日"],"time_range":{"raw":"2026年6月8日至14日","value_status":"provided"},"dimension_mentions":["档口ID","统计日期"],"dimension_slots":[{"name":"档口ID","role":"filter","value":"100021","value_status":"provided","value_confidence":1.0},{"name":"统计日期","role":"group_by","value":null,"value_status":"not_provided","value_confidence":1.0}],"ranking":{"target":"统计日期","metric":"总GMV","direction":"desc","selection":"single","limit":1},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":true,"order_direction":"desc","limit":1,"time_grain":"day"},"ambiguous_slots":[],"conflict_slots":[]}
+输出：{"category":"data_query","intent_type":"ranking_analysis","confidence":0.99,"metric_mentions":["总GMV"],"time_mentions":["2026年6月8日至14日"],"time_range":{"raw":"2026年6月8日至14日","value_status":"provided"},"dimension_mentions":["档口ID","统计日期"],"dimension_slots":[{"name":"档口ID","role":"filter","value":"100021","value_status":"provided","value_confidence":1.0},{"name":"统计日期","role":"group_by","value":null,"value_status":"not_provided","value_confidence":1.0}],"ranking":{"target":"统计日期","metric":"总GMV","direction":"desc","selection":"single","limit":1},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":true,"order_direction":"desc","limit":1,"time_grain":"day"},"ambiguous_slots":[],"conflict_slots":[]}
 
 示例 2：排名对象和数量在名词短语中
 输入：{"rewritten_question":"库存最多的商品","available_dimensions":[{"name":"商品ID","aliases":["商品"]}],"time_dimensions":[]}
-输出：{"intent_type":"ranking_analysis","confidence":0.98,"metric_mentions":["库存"],"time_mentions":[],"time_range":{"raw":null,"value_status":"not_provided"},"dimension_mentions":["商品ID"],"dimension_slots":[{"name":"商品ID","role":"group_by","value":null,"value_status":"not_provided","value_confidence":1.0}],"ranking":{"target":"商品ID","metric":"库存","direction":"desc","selection":"single","limit":1},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":true,"order_direction":"desc","limit":1,"time_grain":null},"ambiguous_slots":[],"conflict_slots":[]}
+输出：{"category":"data_query","intent_type":"ranking_analysis","confidence":0.98,"metric_mentions":["库存"],"time_mentions":[],"time_range":{"raw":null,"value_status":"not_provided"},"dimension_mentions":["商品ID"],"dimension_slots":[{"name":"商品ID","role":"group_by","value":null,"value_status":"not_provided","value_confidence":1.0}],"ranking":{"target":"商品ID","metric":"库存","direction":"desc","selection":"single","limit":1},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":true,"order_direction":"desc","limit":1,"time_grain":null},"ambiguous_slots":[],"conflict_slots":[]}
+
+示例 3：能力询问（元问题）
+输入：{"rewritten_question":"你都能查哪些指标？","available_dimensions":[],"time_dimensions":[]}
+输出：{"category":"meta_query","intent_type":"unknown","confidence":0.9,"metric_mentions":[],"time_mentions":[],"time_range":{"raw":null,"value_status":"not_provided"},"dimension_mentions":[],"dimension_slots":[],"ranking":null,"query_shape":{"select_mode":"aggregate","needs_group_by":false,"needs_order_by":false,"order_direction":null,"limit":null,"time_grain":null},"ambiguous_slots":[],"conflict_slots":[]}
 """.strip(),
     ]
 )
@@ -533,6 +544,7 @@ class QuestionUnderstandingService:
             intent=intent,
             validation=validation,
             temporal_interpretation=temporal_interpretation,
+            category=intent.category,
         )
         return QuestionUnderstandingOutcome(
             output=output,
@@ -933,97 +945,35 @@ def apply_question_understanding_clarification(
         ) from exc
 
     operation = str(resume_payload.get("operation") or "")
-    slot_name = str(resume_payload.get("slot_name") or "").strip()
-    if (
-        operation not in {"set_dimension_role", "set_dimension_filter_value"}
-        or not slot_name
-    ):
+    if operation not in _CLARIFICATION_OPERATIONS:
         raise QuestionUnderstandingError("CLARIFICATION_RESUME_TARGET_INVALID")
 
     intent = previous.intent
-    slots = list(intent.dimension_slots)
-    matching_indexes = [
-        index for index, slot in enumerate(slots) if slot.name == slot_name
-    ]
-    if len(matching_indexes) != 1:
-        raise QuestionUnderstandingError("CLARIFICATION_DIMENSION_SLOT_NOT_FOUND")
-    slot_index = matching_indexes[0]
-    slot = slots[slot_index]
-    ambiguous_slots = [
-        item
-        for item in intent.ambiguous_slots
-        if item not in {slot_name, "dimension", "filter_value"}
-    ]
-
     if operation == "set_dimension_role":
-        selected_value = _single_clarification_selection(answer)
-        expected_values = {
-            f"group_by:{slot_name}": "group_by",
-            f"filter:{slot_name}": "filter",
-            f"ignore:{slot_name}": "ignore",
-        }
-        selected_role = expected_values.get(selected_value)
-        if selected_role is None:
-            raise QuestionUnderstandingError("CLARIFICATION_DIMENSION_ROLE_INVALID")
-        if selected_role == "ignore":
-            slots.pop(slot_index)
-            dimension_mentions = [
-                item for item in intent.dimension_mentions if item != slot_name
-            ]
-        else:
-            slots[slot_index] = slot.model_copy(
-                update={
-                    "role": selected_role,
-                    "value": None,
-                    "value_status": "not_provided",
-                    "value_confidence": 0.0,
-                }
-            )
-            dimension_mentions = intent.dimension_mentions
-    else:
-        filter_value = _clarification_answer_value(answer)
-        slots[slot_index] = slot.model_copy(
-            update={
-                "role": "filter",
-                "value": filter_value,
-                "value_status": "provided",
-                "value_confidence": 1.0,
-            }
-        )
-        dimension_mentions = intent.dimension_mentions
-
-    query_shape = intent.query_shape
-    if operation == "set_dimension_role":
-        # 这里不重新解释自然语言，只把用户已经确认的维度角色同步到查询组织方式。
-        has_group_by_slot = any(item.role == "group_by" for item in slots)
-        has_comparison_values = (
-            intent.intent_type in {"comparison_analysis", "share_analysis"}
-            and any(
-                item.role == "filter"
-                and isinstance(item.value, list)
-                and len(item.value) >= 2
-                for item in slots
-            )
-        )
-        query_shape = query_shape.model_copy(
-            update={
-                "needs_group_by": bool(
-                    has_group_by_slot
-                    or has_comparison_values
-                    or query_shape.time_grain is not None
-                )
-            }
-        )
+        slot_name = str(resume_payload.get("slot_name") or "").strip()
+        if not slot_name:
+            raise QuestionUnderstandingError("CLARIFICATION_RESUME_TARGET_INVALID")
+        intent = _apply_dimension_role_selection(intent, slot_name, answer)
+    elif operation == "set_dimension_filter_value":
+        slot_name = str(resume_payload.get("slot_name") or "").strip()
+        if not slot_name:
+            raise QuestionUnderstandingError("CLARIFICATION_RESUME_TARGET_INVALID")
+        intent = _apply_dimension_filter_value(intent, slot_name, answer)
+    elif operation == "set_intent_type":
+        intent = _apply_intent_type_selection(intent, answer)
+    elif operation == "set_order_direction":
+        intent = _apply_order_direction_selection(intent, answer)
+    elif operation == "set_ranking_limit":
+        intent = _apply_ranking_limit_selection(intent, answer)
+    elif operation == "set_grouping":
+        intent = _apply_grouping_selection(intent, answer)
+    elif operation == "set_time_range_raw":
+        intent = _apply_time_range_raw_input(intent, answer)
+    else:  # pragma: no cover - 操作集合已在上方校验。
+        raise QuestionUnderstandingError("CLARIFICATION_RESUME_TARGET_INVALID")
 
     updated_intent = _stabilize_intent(
-        intent.model_copy(
-            update={
-                "dimension_mentions": dimension_mentions,
-                "dimension_slots": slots,
-                "ambiguous_slots": ambiguous_slots,
-                "query_shape": query_shape,
-            }
-        ),
+        intent,
         temporal_context,
         # 恢复问题理解澄清时同样不在前置阶段解析时间，避免绕过 Agent 时间工具。
         use_legacy_time_interpretation=False,
@@ -1043,6 +993,278 @@ def apply_question_understanding_clarification(
     return previous.model_copy(
         update={"intent": updated_intent, "validation": validation}
     )
+
+
+_CLARIFICATION_OPERATIONS = frozenset(
+    {
+        "set_dimension_role",
+        "set_dimension_filter_value",
+        "set_intent_type",
+        "set_order_direction",
+        "set_ranking_limit",
+        "set_grouping",
+        "set_time_range_raw",
+    }
+)
+
+_CLARIFIABLE_INTENT_TYPES = frozenset(
+    {
+        "metric_query",
+        "trend_analysis",
+        "ranking_analysis",
+        "comparison_analysis",
+        "detail_query",
+        "share_analysis",
+    }
+)
+
+
+def _apply_dimension_role_selection(
+    intent: IntentRecognitionOutput,
+    slot_name: str,
+    answer: dict[str, Any],
+) -> IntentRecognitionOutput:
+    slots = list(intent.dimension_slots)
+    matching_indexes = [
+        index for index, slot in enumerate(slots) if slot.name == slot_name
+    ]
+    if len(matching_indexes) != 1:
+        raise QuestionUnderstandingError("CLARIFICATION_DIMENSION_SLOT_NOT_FOUND")
+    slot_index = matching_indexes[0]
+    slot = slots[slot_index]
+    ambiguous_slots = [
+        item
+        for item in intent.ambiguous_slots
+        if item not in {slot_name, "dimension", "filter_value"}
+    ]
+
+    selected_value = _single_clarification_selection(answer)
+    expected_values = {
+        f"group_by:{slot_name}": "group_by",
+        f"filter:{slot_name}": "filter",
+        f"ignore:{slot_name}": "ignore",
+    }
+    selected_role = expected_values.get(selected_value)
+    if selected_role is None:
+        raise QuestionUnderstandingError("CLARIFICATION_DIMENSION_ROLE_INVALID")
+    if selected_role == "ignore":
+        slots.pop(slot_index)
+        dimension_mentions = [
+            item for item in intent.dimension_mentions if item != slot_name
+        ]
+    else:
+        slots[slot_index] = slot.model_copy(
+            update={
+                "role": selected_role,
+                "value": None,
+                "value_status": "not_provided",
+                "value_confidence": 0.0,
+            }
+        )
+        dimension_mentions = intent.dimension_mentions
+
+    query_shape = intent.query_shape
+    # 这里不重新解释自然语言，只把用户已经确认的维度角色同步到查询组织方式。
+    has_group_by_slot = any(item.role == "group_by" for item in slots)
+    has_comparison_values = (
+        intent.intent_type in {"comparison_analysis", "share_analysis"}
+        and any(
+            item.role == "filter"
+            and isinstance(item.value, list)
+            and len(item.value) >= 2
+            for item in slots
+        )
+    )
+    query_shape = query_shape.model_copy(
+        update={
+            "needs_group_by": bool(
+                has_group_by_slot
+                or has_comparison_values
+                or query_shape.time_grain is not None
+            )
+        }
+    )
+    return intent.model_copy(
+        update={
+            "dimension_mentions": dimension_mentions,
+            "dimension_slots": slots,
+            "ambiguous_slots": ambiguous_slots,
+            "query_shape": query_shape,
+        }
+    )
+
+
+def _apply_dimension_filter_value(
+    intent: IntentRecognitionOutput,
+    slot_name: str,
+    answer: dict[str, Any],
+) -> IntentRecognitionOutput:
+    slots = list(intent.dimension_slots)
+    matching_indexes = [
+        index for index, slot in enumerate(slots) if slot.name == slot_name
+    ]
+    if len(matching_indexes) != 1:
+        raise QuestionUnderstandingError("CLARIFICATION_DIMENSION_SLOT_NOT_FOUND")
+    filter_value = _clarification_answer_value(answer)
+    slots[matching_indexes[0]] = slots[matching_indexes[0]].model_copy(
+        update={
+            "role": "filter",
+            "value": filter_value,
+            "value_status": "provided",
+            "value_confidence": 1.0,
+        }
+    )
+    return intent.model_copy(update={"dimension_slots": slots})
+
+
+def _apply_intent_type_selection(
+    intent: IntentRecognitionOutput,
+    answer: dict[str, Any],
+) -> IntentRecognitionOutput:
+    selected_value = _single_clarification_selection(answer)
+    intent_type = (
+        selected_value.split(":", 1)[1].strip()
+        if ":" in selected_value
+        else selected_value.strip()
+    )
+    if intent_type not in _CLARIFIABLE_INTENT_TYPES:
+        raise QuestionUnderstandingError("CLARIFICATION_INTENT_TYPE_INVALID")
+    select_mode = "detail" if intent_type == "detail_query" else "aggregate"
+    query_shape = intent.query_shape.model_copy(update={"select_mode": select_mode})
+    conflict_slots = [
+        slot
+        for slot in intent.conflict_slots
+        if slot not in {"intent", "select_mode", "意图"}
+    ]
+    return intent.model_copy(
+        update={
+            "intent_type": intent_type,
+            "query_shape": query_shape,
+            "conflict_slots": conflict_slots,
+        }
+    )
+
+
+def _apply_order_direction_selection(
+    intent: IntentRecognitionOutput,
+    answer: dict[str, Any],
+) -> IntentRecognitionOutput:
+    selected_value = _single_clarification_selection(answer)
+    direction = (
+        selected_value.split(":", 1)[1].strip()
+        if ":" in selected_value
+        else selected_value.strip()
+    )
+    if direction not in {"asc", "desc", "none"}:
+        raise QuestionUnderstandingError("CLARIFICATION_ORDER_DIRECTION_INVALID")
+    ranking = intent.ranking
+    if direction == "none":
+        query_shape = intent.query_shape.model_copy(
+            update={
+                "order_direction": None,
+                "needs_order_by": False,
+                "limit": None,
+            }
+        )
+        return intent.model_copy(update={"query_shape": query_shape})
+    query_shape = intent.query_shape.model_copy(
+        update={"order_direction": direction, "needs_order_by": True}
+    )
+    if ranking is not None:
+        ranking = ranking.model_copy(update={"direction": direction})
+    return intent.model_copy(update={"query_shape": query_shape, "ranking": ranking})
+
+
+def _apply_ranking_limit_selection(
+    intent: IntentRecognitionOutput,
+    answer: dict[str, Any],
+) -> IntentRecognitionOutput:
+    selected_value = _single_clarification_selection(answer)
+    raw_limit = (
+        selected_value.split(":", 1)[1].strip()
+        if ":" in selected_value
+        else selected_value.strip()
+    )
+    try:
+        limit = int(raw_limit)
+    except ValueError as exc:
+        raise QuestionUnderstandingError("CLARIFICATION_RANKING_LIMIT_INVALID") from exc
+    if not 1 <= limit <= 1000:
+        raise QuestionUnderstandingError("CLARIFICATION_RANKING_LIMIT_INVALID")
+    query_shape = intent.query_shape.model_copy(update={"limit": limit})
+    ranking = intent.ranking
+    if ranking is not None:
+        ranking = ranking.model_copy(update={"limit": limit})
+    return intent.model_copy(update={"query_shape": query_shape, "ranking": ranking})
+
+
+def _apply_grouping_selection(
+    intent: IntentRecognitionOutput,
+    answer: dict[str, Any],
+) -> IntentRecognitionOutput:
+    selected_value = _single_clarification_selection(answer)
+    selection = (
+        selected_value.split(":", 1)[1].strip()
+        if ":" in selected_value
+        else selected_value.strip()
+    )
+    if selection not in {"enable", "disable"}:
+        raise QuestionUnderstandingError("CLARIFICATION_GROUPING_SELECTION_INVALID")
+    if selection == "enable":
+        query_shape = intent.query_shape.model_copy(update={"needs_group_by": True})
+        return intent.model_copy(update={"query_shape": query_shape})
+    # 用户明确不需要分组时，同步降级分组槽位和粒度，避免校验继续报冲突。
+    slots = [
+        (
+            slot.model_copy(update={"role": "display"})
+            if slot.role == "group_by"
+            else slot
+        )
+        for slot in intent.dimension_slots
+    ]
+    query_shape = intent.query_shape.model_copy(
+        update={"needs_group_by": False, "time_grain": None}
+    )
+    return intent.model_copy(
+        update={"dimension_slots": slots, "query_shape": query_shape}
+    )
+
+
+def _apply_time_range_raw_input(
+    intent: IntentRecognitionOutput,
+    answer: dict[str, Any],
+) -> IntentRecognitionOutput:
+    raw_time = _clarification_answer_value(answer)
+    if not raw_time:
+        raise QuestionUnderstandingError("CLARIFICATION_TIME_RANGE_REQUIRED")
+    time_range = TimeRange(raw=raw_time, value_status="provided")
+    time_mentions = list(intent.time_mentions)
+    if raw_time not in time_mentions:
+        time_mentions.append(raw_time)
+    return intent.model_copy(
+        update={"time_range": time_range, "time_mentions": time_mentions}
+    )
+
+
+def _normalize_question_category(value: Any) -> str:
+    """分诊值宽松归一；不可识别时保守回落为 data_query，不阻断主链路。"""
+
+    aliases = {
+        "chat": "chitchat",
+        "smalltalk": "chitchat",
+        "small_talk": "chitchat",
+        "greeting": "chitchat",
+        "data": "data_query",
+        "query": "data_query",
+        "meta": "meta_query",
+        "meta_query": "meta_query",
+        "capability": "meta_query",
+        "out_of_scope": "out_of_scope",
+        "outscope": "out_of_scope",
+        "forbidden": "out_of_scope",
+    }
+    key = "".join(str(value or "").strip().lower().split())
+    return aliases.get(key, "data_query")
 
 
 def _validate_understanding(
@@ -1427,6 +1649,7 @@ def _normalize_unified_payload(
         infer_from_question=False,
         allow_time_dimensions=True,
     )
+    normalized["category"] = _normalize_question_category(payload.get("category"))
     residual_filters = normalized.pop("residual_filter_mentions", None)
     if "filter_mentions" not in normalized and residual_filters is not None:
         normalized["filter_mentions"] = residual_filters
