@@ -32,6 +32,7 @@ TemporalGroupingGrain: TypeAlias = Literal[
 ]
 TemporalRollingUnit: TypeAlias = Literal["day", "week", "month", "year"]
 TemporalPeriodUnit: TypeAlias = Literal["week", "month", "quarter", "year"]
+TemporalComparisonMethod: TypeAlias = Literal["yoy", "mom", "custom"]
 
 
 class TemporalExpressionBase(BaseModel):
@@ -139,6 +140,26 @@ class TemporalGrouping(BaseModel):
     grain: TemporalGroupingGrain
 
 
+class TemporalComparison(BaseModel):
+    """时间比较计划；具体区间仍由 expressions 提供。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    method: TemporalComparisonMethod
+    base: str | None = None
+    compare: tuple[str, ...] = ()
+
+
+class ResolvedTemporalComparison(BaseModel):
+    """已解析比较区间在 filters 中的稳定位置。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    method: TemporalComparisonMethod
+    base_index: int = Field(default=0, ge=0)
+    compare_indexes: tuple[int, ...] = ()
+
+
 class TemporalAmbiguity(BaseModel):
     """模型识别出的业务歧义，展示文案由服务端生成。"""
 
@@ -162,7 +183,7 @@ class TemporalPlan(BaseModel):
     ]
     expressions: tuple[TemporalExpression, ...] = ()
     grouping: TemporalGrouping | None = None
-    comparison: None = None
+    comparison: TemporalComparison | None = None
     ambiguities: tuple[TemporalAmbiguity, ...] = ()
     confidence: float = Field(ge=0, le=1)
 
@@ -171,7 +192,12 @@ class TemporalPlan(BaseModel):
         """状态必须和计划内容一致，禁止空计划伪装成可执行结果。"""
 
         if self.status == "no_time":
-            if self.expressions or self.grouping is not None or self.ambiguities:
+            if (
+                self.expressions
+                or self.grouping is not None
+                or self.comparison is not None
+                or self.ambiguities
+            ):
                 raise ValueError("TEMPORAL_NO_TIME_PAYLOAD_CONFLICT")
         elif self.status == "resolved":
             if not self.expressions and self.grouping is None:
@@ -232,11 +258,19 @@ class ResolvedTemporalPlan(BaseModel):
     status: Literal["no_time", "resolved"]
     filters: tuple[ResolvedTemporalRange, ...] = ()
     grouping: TemporalGrouping | None = None
+    comparison: ResolvedTemporalComparison | None = None
 
     @model_validator(mode="after")
     def validate_resolved_payload(self) -> ResolvedTemporalPlan:
-        if self.status == "no_time" and (self.filters or self.grouping is not None):
+        if self.status == "no_time" and (
+            self.filters or self.grouping is not None or self.comparison is not None
+        ):
             raise ValueError("TEMPORAL_RESOLVED_NO_TIME_PAYLOAD_CONFLICT")
+        if self.comparison is not None:
+            if not self.filters:
+                raise ValueError("TEMPORAL_COMPARISON_FILTERS_REQUIRED")
+            if any(index >= len(self.filters) for index in self.comparison.compare_indexes):
+                raise ValueError("TEMPORAL_COMPARISON_INDEX_INVALID")
         return self
 
 
@@ -308,7 +342,12 @@ def validate_temporal_plan(
         for expression in plan.expressions
         if expression.role == "query_filter"
     ]
-    if plan.status == "resolved" and len(query_filters) > 1:
+    if plan.comparison is not None:
+        if plan.status != "resolved" or not query_filters:
+            raise TemporalPlanValidationError("TEMPORAL_COMPARISON_QUERY_FILTER_REQUIRED")
+        if plan.comparison.method == "custom" and not plan.comparison.compare:
+            raise TemporalPlanValidationError("TEMPORAL_CUSTOM_COMPARISON_RANGES_REQUIRED")
+    if plan.status == "resolved" and len(query_filters) > 1 and plan.comparison is None:
         raise TemporalPlanValidationError("TEMPORAL_PLAN_QUERY_FILTER_CONFLICT")
     return plan
 
@@ -320,12 +359,15 @@ __all__ = [
     "FiscalPeriodExpression",
     "RelativeDateExpression",
     "ResolvedTemporalPlan",
+    "ResolvedTemporalComparison",
     "ResolvedTemporalRange",
     "RollingRangeExpression",
     "TemporalAmbiguity",
     "TemporalAmbiguityCode",
     "TemporalExpression",
     "TemporalGrouping",
+    "TemporalComparison",
+    "TemporalComparisonMethod",
     "TemporalPlan",
     "validate_temporal_plan",
 ]

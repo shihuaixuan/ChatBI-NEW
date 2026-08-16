@@ -14,6 +14,8 @@ IntentType = Literal[
     "comparison_analysis",
     "detail_query",
     "share_analysis",
+    "composition",
+    "multi_step",
     "anomaly_analysis",
     "unknown",
 ]
@@ -121,6 +123,34 @@ class TimeRange(BaseModel):
     ) = None
 
 
+class ComparisonSpec(BaseModel):
+    """多时段比较语义；base/compare 保留用户原始时间表达。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base: str | TimeRange
+    compare: list[str | TimeRange] = Field(default_factory=list)
+    method: Literal["yoy", "mom", "custom"]
+
+
+class CompositionSpec(BaseModel):
+    """占比/构成意图的可选约束。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    numerator: str | None = None
+    denominator: str | None = None
+    dimension: str | None = None
+
+
+class MultiStepSpec(BaseModel):
+    """下钻或归因意图的步骤描述。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class QueryShape(BaseModel):
     """模型识别出的查询组织方式，不包含资产、字段或 SQL。"""
 
@@ -132,6 +162,7 @@ class QueryShape(BaseModel):
     order_direction: Literal["asc", "desc"] | None = None
     limit: int | None = Field(default=None, ge=1, le=1000, strict=True)
     time_grain: Literal["day", "week", "month", "quarter", "year"] | None = None
+    comparison_type: Literal["yoy", "mom", "custom"] | None = None
 
 
 class RankingSpec(BaseModel):
@@ -154,10 +185,15 @@ class TemporalInterpretationResult(BaseModel):
     plan: TemporalPlan
     resolved_plan: ResolvedTemporalPlan | None = None
     time_range: TimeRange = Field(default_factory=TimeRange)
+    time_ranges: list[TimeRange] = Field(default_factory=list)
     interpretation_source: Literal["model", "user_confirmation"] = "model"
 
     @model_validator(mode="after")
     def validate_resolution_state(self) -> TemporalInterpretationResult:
+        if not self.time_ranges and self.time_range.value_status == "provided":
+            object.__setattr__(self, "time_ranges", [self.time_range])
+        elif self.time_ranges and self.time_range.value_status != "provided":
+            object.__setattr__(self, "time_range", self.time_ranges[0])
         if self.plan.status in {"resolved", "no_time"}:
             if self.resolved_plan is None:
                 raise ValueError("TEMPORAL_RESOLVED_PLAN_REQUIRED")
@@ -179,12 +215,26 @@ class IntentRecognitionOutput(
     model_config = ConfigDict(extra="forbid")
 
     time_range: TimeRange = Field(default_factory=TimeRange)
+    time_ranges: list[TimeRange] = Field(default_factory=list)
     query_shape: QueryShape = Field(
         default_factory=lambda: QueryShape(select_mode="aggregate")
     )
     ranking: RankingSpec | None = None
+    comparison: ComparisonSpec | None = None
+    composition: CompositionSpec | None = None
+    multi_step: MultiStepSpec | None = None
     # 分诊与意图在同一次模型调用中判断；默认 data_query 保证旧快照兼容。
     category: QuestionCategory = "data_query"
+
+    @model_validator(mode="after")
+    def synchronize_time_ranges(self) -> IntentRecognitionOutput:
+        """保留旧单区间字段，同时让多区间字段成为新的规范表示。"""
+
+        if not self.time_ranges and self.time_range.value_status == "provided":
+            self.time_ranges = [self.time_range]
+        elif self.time_ranges and self.time_range.value_status != "provided":
+            self.time_range = self.time_ranges[0]
+        return self
 
 
 class DimensionRecognitionOutput(BaseModel):
@@ -306,6 +356,10 @@ class QuestionUnderstandingValidationData:
     metric_mentions: tuple[str, ...] = ()
     dimension_slots: tuple[dict[str, Any], ...] = ()
     time_range: dict[str, Any] = field(default_factory=dict)
+    time_ranges: tuple[dict[str, Any], ...] = ()
+    comparison: dict[str, Any] = field(default_factory=dict)
+    composition: dict[str, Any] = field(default_factory=dict)
+    multi_step: dict[str, Any] = field(default_factory=dict)
     query_shape: dict[str, Any] = field(default_factory=dict)
     ranking: dict[str, Any] = field(default_factory=dict)
     ambiguous_slots: tuple[str, ...] = ()
@@ -348,8 +402,11 @@ def _unique_strings(values: list[str]) -> list[str]:
 __all__ = [
     "DimensionRecognitionOutput",
     "DimensionSlot",
+    "ComparisonSpec",
+    "CompositionSpec",
     "IntentRecognitionOutput",
     "IntentType",
+    "MultiStepSpec",
     "IntentValidationOutput",
     "NaturalLanguageIntentOutputBase",
     "QuestionCategory",

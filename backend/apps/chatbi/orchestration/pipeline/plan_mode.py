@@ -275,6 +275,8 @@ class PlanPipeline:
                 "metric_asset_ids": task.spec.metric_ids,
                 "dimension_asset_ids": task.spec.dimension_ids,
                 "limit": task.spec.limit or compile_plan.limit,
+                "having": task.spec.having or compile_plan.having,
+                "time_offset": task.spec.time_offset or compile_plan.time_offset,
             }
         )
         state.context.state["semantic_scope"] = scope.model_copy(

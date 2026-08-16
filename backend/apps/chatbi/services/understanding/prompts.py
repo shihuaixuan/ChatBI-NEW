@@ -88,7 +88,7 @@ expressions 中每个元素都必须包含：
 - “最近 N 天”“近 N 天”“过去 N 天”和“往前看 N 天”按第一版业务口径都包含 reference_at
   对应日期，include_reference_date=true，不得为该字段要求澄清。
 - 相对时间不能自行计算成绝对日期；reference_at 只用于理解“当前”的业务上下文。
-- 第一版不能表达的截止周期、同比环比、相对星期或多个时间字段必须返回 unsupported。
+- 同比、环比和自定义基期使用 comparison={"method":"yoy|mom|custom","base":"基期原文","compare":["对比期原文"]}，并为每个可执行区间输出一个 query_filter expression；无法确定区间时返回 unsupported。
 - status=no_time 时 expressions、grouping 和 ambiguities 必须为空。
 - status=resolved 时至少有一个 expression 或 grouping，且 ambiguities 必须为空。
 - status=clarification_required 或 unsupported 时 ambiguities 至少包含

@@ -58,6 +58,7 @@ class SemanticQueryPlanningService:
                 ),
                 additivity=(metric_contracts.get(metric_id) or {}).get("additivity"),
                 time_semantics=(metric_contracts.get(metric_id) or {}).get("time_semantics"),
+                metric_refs=_metric_refs(metric_elements[metric_id]),
             )
             for metric_id in request.metric_ids
         )
@@ -122,6 +123,9 @@ class SemanticQueryPlanningService:
             ),
             validation_status=SemanticPlanStatus.PROVEN,
             query_shape=dict(request.query_shape),
+            having=request.having,
+            time_offset=request.time_offset,
+            subplans=request.subplans,
             order_by=tuple(request.order_by),
             limit=request.limit,
             fingerprint="pending",
@@ -300,6 +304,21 @@ def _common_result_grain(metrics: tuple[SemanticMetricBinding, ...]) -> tuple[st
     if not metrics:
         return ()
     return metrics[0].result_grain
+
+
+def _metric_refs(metric) -> tuple[int, ...]:
+    """从运行时指标契约提取派生指标引用。"""
+
+    params = metric.type_params or {}
+    metric_params = params.get("metricDefineByMetricParams") or {}
+    references = metric_params.get("metrics") if isinstance(metric_params, dict) else []
+    return tuple(
+        item.get("id")
+        for item in references or []
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), int)
+        and item["id"] > 0
+    )
 
 
 def _plan_fingerprint(plan: SemanticQueryPlan) -> str:

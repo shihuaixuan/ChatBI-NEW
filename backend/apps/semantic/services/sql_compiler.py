@@ -15,6 +15,13 @@ from apps.semantic.models.dto import (
     SemanticQueryPlan,
 )
 from apps.semantic.services.builders.schema_builder import build_ontology_from_schema
+from apps.semantic.services.compilation import (
+    build_ratio_expression,
+    decide_time_offset,
+    render_preaggregation_subquery,
+    render_snapshot_aggregation,
+    render_time_offset_expression,
+)
 from apps.temporal import TemporalSQLRenderError, render_time_filter_condition
 
 
@@ -31,6 +38,9 @@ class SemanticSQLCompileRequest:
     time_bucket: dict[str, Any] | None = None
     select_mode: str = "aggregate"
     having: list[dict[str, Any]] = field(default_factory=list)
+    time_offset: dict[str, Any] | None = None
+    pre_aggregation: dict[str, Any] | None = None
+    subplans: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -92,6 +102,9 @@ class SemanticSQLCompiler:
                 limit=plan.limit,
                 time_bucket=time_bucket,
                 select_mode=str(plan.query_shape.get("select_mode") or "aggregate"),
+                having=list(plan.having),
+                time_offset=plan.time_offset,
+                subplans=list(plan.subplans),
             )
         )
         expected_metric_ids = [item.metric_id for item in plan.metrics]
@@ -104,6 +117,7 @@ class SemanticSQLCompiler:
 
     def compile(self, request: SemanticSQLCompileRequest) -> SemanticSQLCompileResult:
         ontology = build_ontology_from_schema(request.schema)
+        relations = self._validated_relations(request.schema, ontology.join_relations)
         metrics = self._select_metrics(request)
         dimensions = self._select_dimensions(request)
         filters = self._select_filters(request)
@@ -149,10 +163,22 @@ class SemanticSQLCompiler:
             raise ValueError("SEMANTIC_SQL_MODEL_REQUIRED")
 
         base_model_name = self._base_model_name(metrics, [*dimensions, *bucket_dimensions], model_name_by_id)
-        ordered_model_names = self._order_models(base_model_name, selected_model_names, ontology.join_relations)
+        ordered_model_names = self._order_models(base_model_name, selected_model_names, relations)
         model_sql = {name: self._model_source(model_by_name[name], alias=name) for name in ordered_model_names}
 
-        from_sql = self._build_from_sql(ordered_model_names, model_sql, ontology.join_relations)
+        from_sql = self._build_from_sql(ordered_model_names, model_sql, relations)
+        if request.pre_aggregation:
+            source_sql = str(request.pre_aggregation.get("source_sql") or from_sql)
+            select_expressions = request.pre_aggregation.get("select_expressions")
+            group_expressions = request.pre_aggregation.get("group_expressions")
+            if not isinstance(select_expressions, list) or not isinstance(group_expressions, list):
+                raise ValueError("SEMANTIC_SQL_PRE_AGGREGATION_PLAN_REQUIRED")
+            from_sql = render_preaggregation_subquery(
+                source_sql,
+                select_expressions=[str(item) for item in select_expressions],
+                group_expressions=[str(item) for item in group_expressions],
+                alias=str(request.pre_aggregation.get("alias") or "preagg"),
+            )
         detail_mode = str(request.select_mode or "").strip().lower() == "detail"
         select_parts = [
             f"{self._qualified_dimension_expr(dimension, model_by_name, model_name_by_id)} as {dimension.biz_name}"
@@ -165,10 +191,17 @@ class SemanticSQLCompiler:
             ]
         else:
             metric_selects = [
-                (metric, *self._metric_select_expr(metric, model_by_name, model_name_by_id))
+                (
+                    metric,
+                    *self._metric_select_expr(
+                        metric,
+                        model_by_name,
+                        model_name_by_id,
+                        metric_by_id={item.id: item for item in request.schema.metrics},
+                    ),
+                )
                 for metric in metrics
             ]
-        select_parts.extend(f"{metric_expr} as {metric.biz_name}" for metric, metric_expr, _ in metric_selects)
         metric_filter_conditions, metric_filter_sources = self._metric_filters(
             metrics,
             model_by_name,
@@ -188,6 +221,19 @@ class SemanticSQLCompiler:
             )
             select_parts.insert(0, f"{bucket_expr} as {bucket_dimension.biz_name}")
             group_parts.insert(0, bucket_expr)
+
+        metric_selects = self._apply_snapshot_metric_selects(
+            metric_selects,
+            bucket_expr if bucket_dimension is not None else None,
+        )
+        select_parts.extend(f"{metric_expr} as {metric.biz_name}" for metric, metric_expr, _ in metric_selects)
+        self._append_time_offset_selects(
+            select_parts,
+            metric_selects,
+            request,
+            bucket_dimension,
+            bucket_grain,
+        )
 
         sql = f"select {', '.join(select_parts)} from {from_sql}"
         if where_parts:
@@ -430,6 +476,40 @@ class SemanticSQLCompiler:
         return ordered
 
     @staticmethod
+    def _validated_relations(
+        schema: DatasetSchema,
+        relations: list[JoinRelation],
+    ) -> list[JoinRelation]:
+        """优先消费关系契约，拒绝会造成指标传播风险的 join。"""
+
+        contracts = [item for item in schema.relation_contracts if isinstance(item, dict)]
+        if not contracts:
+            return relations
+        model_names = {
+            int(item.get("id")): str(item.get("biz_name") or item.get("name") or "")
+            for item in schema.models
+            if item.get("id") is not None
+        }
+        by_pair = {
+            frozenset({model_names.get(int(item.get("left_model_id") or 0), ""), model_names.get(int(item.get("right_model_id") or 0), "")}): item
+            for item in contracts
+            if item.get("left_model_id") is not None and item.get("right_model_id") is not None
+        }
+        for relation in relations:
+            contract = by_pair.get(frozenset({relation.left, relation.right}))
+            if contract is None:
+                raise ValueError("SEMANTIC_SQL_RELATION_CONTRACT_REQUIRED")
+            if contract.get("contract_status") not in {None, "READY"}:
+                raise ValueError("SEMANTIC_SQL_RELATION_CONTRACT_NOT_READY")
+            if contract.get("cardinality") == "MANY_TO_MANY":
+                raise ValueError("SEMANTIC_SQL_MANY_TO_MANY_JOIN_FORBIDDEN")
+            if contract.get("aggregation_safety") == "FORBIDDEN":
+                raise ValueError("SEMANTIC_SQL_JOIN_AGGREGATION_FORBIDDEN")
+            if str(contract.get("metric_propagation") or "").upper() == "NONE":
+                raise ValueError("SEMANTIC_SQL_METRIC_PROPAGATION_FORBIDDEN")
+        return relations
+
+    @staticmethod
     def _find_relation(existing_models: list[str], candidate: str, relations: list[JoinRelation]) -> JoinRelation | None:
         for relation in relations:
             if relation.left in existing_models and relation.right == candidate:
@@ -502,16 +582,135 @@ class SemanticSQLCompiler:
         metric: SchemaElement,
         model_by_name: dict[str, dict[str, Any]],
         model_name_by_id: dict[int | None, str],
+        *,
+        metric_by_id: dict[int, SchemaElement] | None = None,
+        stack: tuple[int, ...] = (),
     ) -> tuple[str, bool]:
         model_name = model_name_by_id.get(metric.model)
         if not model_name:
             raise ValueError("SEMANTIC_SQL_METRIC_MODEL_REQUIRED")
+        refs = self._metric_reference_ids(metric)
+        if refs:
+            if metric.id in stack:
+                raise ValueError("SEMANTIC_SQL_METRIC_REFERENCE_CYCLE")
+            if metric_by_id is None or any(ref not in metric_by_id for ref in refs):
+                raise ValueError("SEMANTIC_SQL_METRIC_REFERENCE_NOT_FOUND")
+            rendered_refs = {
+                ref: self._metric_select_expr(
+                    metric_by_id[ref],
+                    model_by_name,
+                    model_name_by_id,
+                    metric_by_id=metric_by_id,
+                    stack=(*stack, metric.id),
+                )[0]
+                for ref in refs
+            }
+            expression = self._derived_metric_expression(metric, refs, rendered_refs, metric_by_id)
+            return expression, True
         expr, agg = self._metric_measure_expr(metric, model_by_name[model_name])
         qualified = self._qualify_expr(expr, model_name)
         if self._contains_aggregate(expr):
             return qualified, True
         resolved_agg = self._resolve_metric_agg(metric, agg)
         return self._aggregate_expr(resolved_agg, qualified), self._is_aggregate_agg(resolved_agg)
+
+    @staticmethod
+    def _metric_reference_ids(metric: SchemaElement) -> tuple[int, ...]:
+        params = metric.type_params or {}
+        metric_params = params.get("metricDefineByMetricParams") or {}
+        references = metric_params.get("metrics") if isinstance(metric_params, dict) else []
+        ids = [item.get("id") for item in references or [] if isinstance(item, dict)]
+        if not ids and str(params.get("metricDefineType") or "").upper() == "METRIC":
+            ids = metric.ext_info.get("metric_refs") if isinstance(metric.ext_info, dict) else []
+        return tuple(item for item in ids if isinstance(item, int) and item > 0)
+
+    def _derived_metric_expression(
+        self,
+        metric: SchemaElement,
+        refs: tuple[int, ...],
+        rendered_refs: dict[int, str],
+        metric_by_id: dict[int, SchemaElement],
+    ) -> str:
+        params = metric.type_params or {}
+        metric_params = params.get("metricDefineByMetricParams") or {}
+        expression = str(metric_params.get("expr") or metric.ext_info.get("expr") or "").strip()
+        if not expression:
+            if len(refs) != 2:
+                raise ValueError("SEMANTIC_SQL_DERIVED_METRIC_EXPRESSION_REQUIRED")
+            return build_ratio_expression(rendered_refs[refs[0]], rendered_refs[refs[1]])
+        for ref in sorted(refs, key=lambda item: len(str(item)), reverse=True):
+            target = metric_by_id[ref]
+            names = {
+                str(target.biz_name),
+                str(target.name),
+                f"metric_{ref}",
+            }
+            for name in sorted(names, key=len, reverse=True):
+                expression = re.sub(
+                    rf"\b{re.escape(name)}\b",
+                    f"({rendered_refs[ref]})",
+                    expression,
+                )
+        if any(
+            token in expression.lower()
+            for token in (";", "--", "/*", "*/", "select ", " from ")
+        ):
+            raise ValueError("SEMANTIC_SQL_DERIVED_METRIC_EXPRESSION_UNSAFE")
+        if len(refs) == 2 and "/" in expression and "nullif" not in expression.lower():
+            return build_ratio_expression(rendered_refs[refs[0]], rendered_refs[refs[1]])
+        return expression
+
+    def _append_time_offset_selects(
+        self,
+        select_parts: list[str],
+        metric_selects: list[tuple[SchemaElement, str, bool]],
+        request: SemanticSQLCompileRequest,
+        bucket_dimension: SchemaElement | None,
+        bucket_grain: str,
+    ) -> None:
+        if not request.time_offset:
+            return
+        method = str(request.time_offset.get("method") or "").strip().lower()
+        grain = str(request.time_offset.get("grain") or bucket_grain or "").strip().lower()
+        decision = decide_time_offset(
+            method=method,
+            grain=grain,
+            range_count=int(request.time_offset.get("range_count") or 1),
+        )
+        if decision.mode != "single_sql":
+            raise ValueError("SEMANTIC_SQL_TIME_OFFSET_REQUIRES_DUAL_QUERY")
+        time_alias = str(
+            request.time_offset.get("time_alias")
+            or (bucket_dimension.biz_name if bucket_dimension is not None else "")
+        ).strip()
+        if not time_alias:
+            raise ValueError("SEMANTIC_SQL_TIME_OFFSET_TIME_DIMENSION_REQUIRED")
+        for metric, expression, _ in metric_selects:
+            previous = render_time_offset_expression(
+                expression,
+                time_alias=time_alias,
+                periods=decision.periods,
+            )
+            select_parts.append(f"{previous} as {metric.biz_name}_previous")
+
+    @staticmethod
+    def _apply_snapshot_metric_selects(
+        metric_selects: list[tuple[SchemaElement, str, bool]],
+        time_expression: str | None,
+    ) -> list[tuple[SchemaElement, str, bool]]:
+        """有时间分桶时把快照策略渲染为窗口/聚合表达式。"""
+
+        if not time_expression:
+            return metric_selects
+        result: list[tuple[SchemaElement, str, bool]] = []
+        for metric, expression, is_aggregate in metric_selects:
+            strategy = str((metric.ext_info or {}).get("snapshot_aggregation") or "").strip()
+            if not strategy:
+                result.append((metric, expression, is_aggregate))
+                continue
+            rendered = render_snapshot_aggregation(expression, time_expression, strategy)
+            result.append((metric, rendered, True))
+        return result
 
     def _metric_detail_expr(
         self,

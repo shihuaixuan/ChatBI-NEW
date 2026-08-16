@@ -115,6 +115,40 @@ def _time_range_unsupported_card(
     )
 
 
+def _comparison_period_card(
+    _understanding: dict[str, Any],
+) -> ClarificationCard:
+    """比较时段缺失时给出可恢复的固定选项。"""
+
+    return ClarificationCard(
+        question="请确认比较方式和对比时段。",
+        options=[
+            {"label": "同比", "value": "comparison:yoy"},
+            {"label": "环比", "value": "comparison:mom"},
+            {"label": "自定义对比期", "value": "comparison:custom"},
+        ],
+        reason="比较分析需要明确基期与对比期，避免把不同时间范围混为一个查询。",
+        resume_payload={"operation": "resolve_time_range"},
+    )
+
+
+def _comparison_method_card(
+    _understanding: dict[str, Any],
+) -> ClarificationCard:
+    return _comparison_period_card(_understanding)
+
+
+def _multi_step_definition_card(
+    _understanding: dict[str, Any],
+) -> ClarificationCard:
+    return ClarificationCard(
+        question="请说明要先看哪个指标，以及下一步按什么维度下钻或归因。",
+        options=[],
+        reason="多步分析需要明确步骤顺序，当前问题还不能形成可执行计划。",
+        resume_payload={"operation": "set_intent_type"},
+    )
+
+
 def _intent_unknown_card(
     _understanding: dict[str, Any],
 ) -> ClarificationCard | None:
@@ -278,6 +312,9 @@ def _dimension_value_ambiguous_card(
 _CARD_BUILDERS = {
     "temporal_clarification_required": _temporal_clarification,
     "time_range_unsupported": _time_range_unsupported_card,
+    "comparison_period_missing": _comparison_period_card,
+    "comparison_method_missing": _comparison_method_card,
+    "multi_step_definition_missing": _multi_step_definition_card,
     "intent_unknown": _intent_unknown_card,
     "select_mode_conflict": _select_mode_conflict_card,
     "trend_time_missing": _trend_time_missing_card,

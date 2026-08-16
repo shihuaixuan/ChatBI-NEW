@@ -141,18 +141,23 @@ INTENT_SYSTEM_PROMPT = "\n\n".join(
 
 只输出以下 JSON 对象，不要输出 Markdown 或解释：
 {
-  "intent_type": "metric_query | trend_analysis | ranking_analysis | comparison_analysis | detail_query | share_analysis | anomaly_analysis | unknown",
+  "intent_type": "metric_query | trend_analysis | ranking_analysis | comparison_analysis | detail_query | share_analysis | composition | multi_step | anomaly_analysis | unknown",
   "confidence": 0.0,
   "metric_mentions": [],
   "time_mentions": [],
   "time_range": {"raw": null, "value_status": "provided | not_provided"},
+  "time_ranges": [],
+  "comparison": null,
+  "composition": null,
+  "multi_step": null,
   "query_shape": {
     "select_mode": "aggregate | detail",
     "needs_group_by": false,
     "needs_order_by": false,
     "order_direction": "asc | desc | null",
     "limit": null,
-    "time_grain": "day | week | month | quarter | year | null"
+    "time_grain": "day | week | month | quarter | year | null",
+    "comparison_type": "yoy | mom | custom | null"
   },
   "ambiguous_slots": [],
   "conflict_slots": []
@@ -162,7 +167,8 @@ INTENT_SYSTEM_PROMPT = "\n\n".join(
 - metric_query：指标值或统计值。
 - trend_analysis：趋势、走势或按时间粒度变化。
 - ranking_analysis：排行、最高、最低、TopN。
-- comparison_analysis：同比、环比、较上期或多个对象比较。
+- comparison_analysis：同比、环比、较上期或多个对象比较；比较时补充 comparison={"base":"...","compare":["..."],"method":"yoy|mom|custom"}。
+- composition：占比、构成和贡献度；multi_step：下钻或归因的多步分析。
 - detail_query：明细、列表、清单。
 - share_analysis：占比、构成、比例。
 - anomaly_analysis：异常、波动或变化原因。
@@ -265,17 +271,21 @@ QUESTION_UNDERSTANDING_SYSTEM_PROMPT = "\n\n".join(
 只输出以下 JSON 对象，不要输出 Markdown 或解释：
 {
   "category": "chitchat | data_query | meta_query | out_of_scope",
-  "intent_type": "metric_query | trend_analysis | ranking_analysis | comparison_analysis | detail_query | share_analysis | anomaly_analysis | unknown",
+  "intent_type": "metric_query | trend_analysis | ranking_analysis | comparison_analysis | detail_query | share_analysis | composition | multi_step | anomaly_analysis | unknown",
   "confidence": 0.0,
   "metric_mentions": [],
   "time_mentions": [],
   "time_range": {"raw": null, "value_status": "provided | not_provided"},
+  "time_ranges": [],
+  "comparison": null,
+  "composition": null,
+  "multi_step": null,
   "dimension_mentions": [],
   "dimension_slots": [
     {"name": "候选中的标准维度名", "role": "group_by | filter | display | ambiguous", "value": null, "value_status": "provided | not_provided | ambiguous", "value_confidence": 0.0}
   ],
   "ranking": null,
-  "query_shape": {"select_mode": "aggregate | detail", "needs_group_by": false, "needs_order_by": false, "order_direction": null, "limit": null, "time_grain": null},
+  "query_shape": {"select_mode": "aggregate | detail", "needs_group_by": false, "needs_order_by": false, "order_direction": null, "limit": null, "time_grain": null, "comparison_type": null},
   "ambiguous_slots": [],
   "conflict_slots": []
 }
@@ -1310,6 +1320,24 @@ def _validate_understanding(
                 slot.model_dump(mode="json") for slot in intent.dimension_slots
             ),
             time_range=intent.time_range.model_dump(mode="json"),
+            time_ranges=tuple(
+                item.model_dump(mode="json") for item in intent.time_ranges
+            ),
+            comparison=(
+                intent.comparison.model_dump(mode="json")
+                if intent.comparison is not None
+                else {}
+            ),
+            composition=(
+                intent.composition.model_dump(mode="json")
+                if intent.composition is not None
+                else {}
+            ),
+            multi_step=(
+                intent.multi_step.model_dump(mode="json")
+                if intent.multi_step is not None
+                else {}
+            ),
             query_shape=intent.query_shape.model_dump(mode="json"),
             ranking=(
                 intent.ranking.model_dump(mode="json")
@@ -1913,16 +1941,23 @@ def _stabilize_intent(
 ) -> IntentRecognitionOutput:
     """规范化无歧义数据，并从模型语义结果派生后续必需槽位。"""
 
-    time_range = (
+    source_time_ranges = intent.time_ranges or (
+        [intent.time_range]
+        if intent.time_range.value_status == "provided"
+        else []
+    )
+    time_ranges = [
         TimeRange.model_validate(
             normalize_time_range_payload(
-                intent.time_range.model_dump(mode="json"),
+                item.model_dump(mode="json"),
                 temporal_context=temporal_context,
             )
         )
         if use_legacy_time_interpretation
-        else intent.time_range
-    )
+        else item
+        for item in source_time_ranges
+    ]
+    time_range = time_ranges[0] if time_ranges else TimeRange()
     metric_internal_time_mentions = {
         mention
         for mention in intent.time_mentions
@@ -1937,8 +1972,9 @@ def _stabilize_intent(
         for mention in intent.time_mentions
         if mention not in metric_internal_time_mentions
     ]
-    if time_range.raw and time_range.raw not in time_mentions:
-        time_mentions.append(time_range.raw)
+    for item in time_ranges:
+        if item.raw and item.raw not in time_mentions:
+            time_mentions.append(item.raw)
 
     conflict_slots = list(intent.conflict_slots)
     if metric_internal_time_mentions and len(_unique_strings(time_mentions)) <= 1:
@@ -2016,6 +2052,7 @@ def _stabilize_intent(
     return intent.model_copy(
         update={
             "time_range": time_range,
+            "time_ranges": time_ranges,
             "time_mentions": _unique_strings(time_mentions),
             "required_slot_types": required,
             "query_shape": query_shape,

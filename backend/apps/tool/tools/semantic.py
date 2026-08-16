@@ -412,6 +412,8 @@ class CompileSemanticSqlArgs(BaseModel):
     time_bucket: dict[str, Any] | None = Field(default=None)
     order_by: list[CompileOrderBy] | None = Field(default=None)
     limit: int | None = Field(default=None)
+    having: list[dict[str, Any]] | None = Field(default=None)
+    time_offset: dict[str, Any] | None = Field(default=None)
 
     @classmethod
     def model_json_schema(
@@ -500,6 +502,8 @@ class CompileSemanticSqlTool(
                     "dimension_asset_ids",
                     "order_by",
                     "limit",
+                    "having",
+                    "time_offset",
                 },
             )
             trusted_plan["filters"] = [
@@ -669,6 +673,8 @@ class CompileSemanticSqlTool(
                     ],
                     limit=args.limit or ctx.semantic_default_limit,
                     time_bucket=args.time_bucket,
+                    time_offset=args.time_offset,
+                    having=args.having or [],
                 )
             )
         except (SemanticValidationError, ValueError) as exc:
@@ -861,6 +867,8 @@ def _validate_compile_plan(
         missing.append("group_dimension_asset_ids")
     if str(shape.get("time_grain") or "").strip() and time_bucket is None:
         missing.append("time_bucket")
+    if shape.get("comparison_type") in {"yoy", "mom", "custom"} and plan.time_offset is None:
+        missing.append("time_offset")
     if bool(shape.get("needs_order_by")) and not plan.order_by:
         missing.append("order_by")
     if plan.intent_type == "ranking_analysis" and plan.limit is None:

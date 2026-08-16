@@ -64,6 +64,9 @@ class SemanticSQLCompilationService:
                 time_bucket=request.time_bucket,
                 select_mode=request.select_mode,
                 having=request.having,
+                time_offset=request.time_offset,
+                pre_aggregation=request.pre_aggregation,
+                subplans=request.subplans,
             )
         )
         return SemanticQueryCompileResult(

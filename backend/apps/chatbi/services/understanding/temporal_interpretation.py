@@ -32,6 +32,7 @@ from apps.temporal import (
     TemporalError,
     TemporalPlan,
     project_time_range_payload,
+    project_time_ranges_payload,
     resolve_temporal_plan,
     validate_temporal_plan,
 )
@@ -256,7 +257,9 @@ def compare_temporal_shadow(
         )
 
     candidate_time_range = TimeRange.model_validate(
-        project_time_range_payload(resolved_plan)
+        project_time_ranges_payload(resolved_plan)[0]
+        if resolved_plan.filters
+        else project_time_range_payload(resolved_plan)
     )
     difference_codes = _time_range_differences(
         candidate_time_range,
@@ -294,6 +297,23 @@ def apply_temporal_interpretation_payload(
         or plan.grouping is not None
     ) and "time_dimension" not in required_slot_types:
         required_slot_types.append("time_dimension")
+    comparison = intent.get("comparison")
+    if plan.comparison is not None:
+        base_raw = plan.comparison.base
+        if base_raw is None and plan.expressions:
+            base_raw = next(
+                (
+                    expression.raw
+                    for expression in plan.expressions
+                    if expression.role == "query_filter"
+                ),
+                None,
+            )
+        comparison = {
+            "base": base_raw,
+            "compare": list(plan.comparison.compare),
+            "method": plan.comparison.method,
+        }
     temporal_conflict_slots = {
         "time",
         "time_range",
@@ -305,6 +325,11 @@ def apply_temporal_interpretation_payload(
     return {
         **intent,
         "time_range": temporal_interpretation.time_range.model_dump(mode="json"),
+        "time_ranges": [
+            item.model_dump(mode="json")
+            for item in temporal_interpretation.time_ranges
+        ],
+        "comparison": comparison,
         "time_mentions": list(
             dict.fromkeys(expression.raw for expression in plan.expressions)
         ),
@@ -401,6 +426,7 @@ def _resolve_execution_result(
 
     resolved_plan = None
     time_range = TimeRange()
+    time_ranges: list[TimeRange] = []
     if plan.status in {"resolved", "no_time"}:
         try:
             resolved_plan = resolve_temporal_plan(
@@ -409,9 +435,11 @@ def _resolve_execution_result(
                 rewritten_question=rewritten_question,
                 user_confirmation=user_confirmation,
             )
-            time_range = TimeRange.model_validate(
-                project_time_range_payload(resolved_plan)
-            )
+            time_ranges = [
+                TimeRange.model_validate(item)
+                for item in project_time_ranges_payload(resolved_plan)
+            ]
+            time_range = time_ranges[0] if time_ranges else TimeRange()
         except TemporalError as exc:
             raise TemporalInterpretationError(
                 exc.code,
@@ -423,10 +451,17 @@ def _resolve_execution_result(
     time_range = time_range.model_copy(
         update={"interpretation_source": interpretation_source}
     )
+    time_ranges = [
+        item.model_copy(update={"interpretation_source": interpretation_source})
+        for item in time_ranges
+    ]
+    if time_range.value_status == "provided" and not time_ranges:
+        time_ranges = [time_range]
     return TemporalInterpretationResult(
         plan=plan,
         resolved_plan=resolved_plan,
         time_range=time_range,
+        time_ranges=time_ranges,
         interpretation_source=interpretation_source,
     )
 

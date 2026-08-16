@@ -30,4 +30,21 @@ def derive_time_bucket(
     return {"dimension_id": dimension_id, "grain": grain}
 
 
-__all__ = ["derive_time_bucket"]
+def derive_time_buckets(
+    query_shape: dict[str, Any] | None,
+    time_dimension_ids: list[int] | tuple[int, ...],
+    time_ranges: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
+) -> list[dict[str, Any]]:
+    """为多时段复用同一个时间维槽，仅附加区间序号。"""
+
+    bucket = derive_time_bucket(query_shape, time_dimension_ids)
+    if bucket is None:
+        return []
+    range_count = len(time_ranges) or 1
+    return [
+        {**bucket, "range_index": index}
+        for index in range(range_count)
+    ]
+
+
+__all__ = ["derive_time_bucket", "derive_time_buckets"]

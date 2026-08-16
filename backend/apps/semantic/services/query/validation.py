@@ -11,6 +11,10 @@ from apps.semantic.models.dto import (
     SemanticValidationCheck,
     SemanticValidationReasonCode,
 )
+from apps.semantic.services.compilation.time_offset import (
+    TimeOffsetError,
+    decide_time_offset,
+)
 
 
 class SemanticQueryValidationService:
@@ -29,6 +33,7 @@ class SemanticQueryValidationService:
         checks.extend(self._validate_aggregation(plan, schema))
         checks.extend(self._validate_time(plan, schema))
         checks.extend(self._validate_filters(plan, schema))
+        checks.extend(self._validate_expression_extensions(plan, schema))
         reason_codes = tuple(
             dict.fromkeys(
                 item.reason_code
@@ -82,6 +87,59 @@ class SemanticQueryValidationService:
                     f"dataset:{plan.dataset_id}",
                     "语义契约版本已变化，必须重新规划",
                     SemanticValidationReasonCode.SEMANTIC_ASSET_VERSION_CHANGED,
+                )
+            )
+        return checks
+
+    def _validate_expression_extensions(
+        self,
+        plan: SemanticQueryPlan,
+        schema: DatasetSchema,
+    ) -> list[SemanticValidationCheck]:
+        """校验 P1-6 的比率保护、时间偏移和预聚合粒度。"""
+
+        checks: list[SemanticValidationCheck] = []
+        metrics = {item.id: item for item in schema.metrics}
+        for binding in plan.metrics:
+            metric = metrics.get(binding.metric_id)
+            if metric is None:
+                continue
+            params = metric.type_params or {}
+            metric_params = params.get("metricDefineByMetricParams") or {}
+            refs = metric_params.get("metrics") if isinstance(metric_params, dict) else []
+            expression = str(metric_params.get("expr") or "").lower() if isinstance(metric_params, dict) else ""
+            if isinstance(refs, list) and len(refs) == 2 and "/" in expression and "nullif" not in expression:
+                checks.append(
+                    _fail(
+                        "METRIC_RATIO_PROTECTION",
+                        f"metric:{binding.metric_id}",
+                        "比率指标的分母必须具备除零保护",
+                        SemanticValidationReasonCode.METRIC_RATIO_UNSAFE,
+                    )
+                )
+        if plan.time_offset:
+            try:
+                decide_time_offset(
+                    method=str(plan.time_offset.get("method") or ""),
+                    grain=str(plan.time_offset.get("grain") or plan.time_binding.grain or ""),
+                    range_count=int(plan.time_offset.get("range_count") or 1),
+                )
+            except (TimeOffsetError, TypeError, ValueError):
+                checks.append(
+                    _fail(
+                        "TIME_OFFSET",
+                        "query:time_offset",
+                        "时间偏移参数不满足固定周期编译约束",
+                        SemanticValidationReasonCode.TIME_OFFSET_INVALID,
+                    )
+                )
+        if plan.model_plan.pre_aggregation_required and not plan.model_plan.pre_aggregation_grain:
+            checks.append(
+                _fail(
+                    "PRE_AGGREGATION_GRAIN",
+                    "query:model_plan",
+                    "预聚合计划必须声明目标粒度",
+                    SemanticValidationReasonCode.PRE_AGGREGATION_GRAIN_INVALID,
                 )
             )
         return checks

@@ -23,7 +23,16 @@ class ParseTimeRangeArgs(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    raw: str = Field(min_length=1, description="问题理解阶段识别出的原始时间表达")
+    raw: str | None = Field(default=None, min_length=1, description="单个原始时间表达")
+    raws: list[str] = Field(default_factory=list, description="多个原始时间表达")
+
+    @property
+    def expressions(self) -> list[str]:
+        """统一返回单区间和多区间输入。"""
+
+        values = [self.raw] if self.raw else []
+        values.extend(self.raws)
+        return list(dict.fromkeys(value for value in values if value))
 
 
 class ParseTimeRangeResult(BaseModel):
@@ -34,6 +43,7 @@ class ParseTimeRangeResult(BaseModel):
     raw: str
     status: Literal["resolved", "unsupported", "not_provided"]
     normalized: dict[str, Any] | None = None
+    ranges: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ParseTimeRangeTool(AgentTool):
@@ -64,7 +74,20 @@ class ParseTimeRangeTool(AgentTool):
                 error_category=ToolErrorCategory.CONFIGURATION,
                 retry_advice=RetryAdvice.NEVER,
             )
-        normalized = resolve_time_range(args.raw, ctx.temporal_context)
+        expressions = args.expressions
+        if not expressions:
+            return ToolResult.failed(
+                "至少需要一个原始时间表达。",
+                error_code="time_range_input_required",
+                error_category=ToolErrorCategory.VALIDATION,
+                retry_advice=RetryAdvice.NEVER,
+            )
+        ranges = [
+            result
+            for expression in expressions
+            if (result := resolve_time_range(expression, ctx.temporal_context)) is not None
+        ]
+        normalized = ranges[0] if ranges else None
         status: Literal["resolved", "unsupported", "not_provided"]
         if normalized is None:
             status = "not_provided"
@@ -73,9 +96,10 @@ class ParseTimeRangeTool(AgentTool):
         else:
             status = "resolved"
         data = ParseTimeRangeResult(
-            raw=args.raw,
+            raw=expressions[0],
             status=status,
             normalized=normalized,
+            ranges=ranges,
         )
         return ToolResult.succeeded(
             json_summary(data.model_dump(mode="json"), ctx.summary_max_chars),

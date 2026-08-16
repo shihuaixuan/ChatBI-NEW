@@ -75,6 +75,14 @@ class SemanticCompilePlan(BaseModel):
     limit: int | None = Field(default=None, gt=0, le=1000)
     intent_type: str = "metric_query"
     query_shape: dict[str, Any] = Field(default_factory=dict)
+    having: tuple[dict[str, Any], ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+    )
+    time_offset: dict[str, Any] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class SemanticAssetScope(BaseModel):
@@ -147,6 +155,22 @@ def project_semantic_compile_plan(
     if not time_dimension_ids:
         time_dimension_ids = _binding_asset_ids(time_filters, "DIMENSION")
     raw_time_bucket = derive_time_bucket(query_shape, time_dimension_ids)
+    comparison = intent_payload.get("comparison")
+    comparison = comparison if isinstance(comparison, dict) else {}
+    comparison_method = str(
+        comparison.get("method") or query_shape.get("comparison_type") or ""
+    ).strip().lower()
+    time_ranges = intent_payload.get("time_ranges")
+    range_count = len(time_ranges) if isinstance(time_ranges, list) else 1
+    time_offset = (
+        {
+            "method": comparison_method,
+            "grain": query_shape.get("time_grain"),
+            "range_count": range_count,
+        }
+        if comparison_method in {"yoy", "mom", "custom"}
+        else None
+    )
     return SemanticCompilePlan(
         metric_asset_ids=metric_asset_ids,
         dimension_asset_ids=dimension_asset_ids,
@@ -163,6 +187,10 @@ def project_semantic_compile_plan(
         limit=_compile_limit(query_shape),
         intent_type=str(intent_payload.get("intent_type") or "metric_query"),
         query_shape=query_shape,
+        having=tuple(
+            item for item in query_shape.get("having") or [] if isinstance(item, dict)
+        ),
+        time_offset=time_offset,
     )
 
 

@@ -5,8 +5,8 @@ from __future__ import annotations
 from apps.chatbi.models.dto.analysis_plan import (
     AnalysisPlan,
     AnalysisPlanStatus,
-    ComputeTask,
     ComputeOperation,
+    ComputeTask,
     PlanValidation,
     QueryTask,
 )

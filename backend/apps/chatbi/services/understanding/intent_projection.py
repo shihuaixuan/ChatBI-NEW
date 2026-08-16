@@ -17,6 +17,8 @@ _INTENT_TYPES = {
     "comparison_analysis",
     "detail_query",
     "share_analysis",
+    "composition",
+    "multi_step",
     "anomaly_analysis",
     "unknown",
 }
@@ -74,6 +76,14 @@ def normalize_semantic(
     time_range = payload.get("time_range") or time_range_from_mentions(time_mentions)
     if not isinstance(time_range, dict):
         raise ValueError("QUESTION_INTENT_TIME_RANGE_INVALID")
+    raw_time_ranges = payload.get("time_ranges")
+    time_ranges = (
+        [item for item in raw_time_ranges if isinstance(item, dict)]
+        if isinstance(raw_time_ranges, list)
+        else []
+    )
+    if not time_ranges and isinstance(time_range, dict):
+        time_ranges = [time_range] if time_range.get("value_status") == "provided" else []
     return {
         "metric_mentions": normalize_text_list(payload.get("metric_mentions")),
         "time_mentions": time_mentions,
@@ -82,6 +92,8 @@ def normalize_semantic(
             if use_legacy_time_interpretation
             else time_range
         ),
+        "time_ranges": time_ranges,
+        "comparison": payload.get("comparison") if isinstance(payload.get("comparison"), dict) else None,
         "ambiguous_slots": normalize_text_list(payload.get("ambiguous_slots")),
         "conflict_slots": normalize_text_list(payload.get("conflict_slots")),
     }
@@ -137,7 +149,12 @@ def project_question_intent(
         and "time_dimension" not in required_slot_types
     ):
         required_slot_types.append("time_dimension")
-
+    raw_time_ranges = semantic.get("time_ranges")
+    time_ranges = (
+        raw_time_ranges if isinstance(raw_time_ranges, list) else []
+    )
+    if not time_ranges and str(time_range.get("value_status") or "").lower() == "provided":
+        time_ranges = [time_range]
     payload = {
         "intent_type": normalize_intent_type(shape.get("intent_type")),
         "confidence": min(
@@ -159,6 +176,7 @@ def project_question_intent(
         "dimension_slots": dimension_slots,
         "time_mentions": normalize_text_list(semantic.get("time_mentions")),
         "time_range": time_range or {"raw": None, "value_status": "not_provided"},
+        "time_ranges": time_ranges,
         "filter_mentions": (
             dimensions.get("residual_filter_mentions")
             if isinstance(dimensions.get("residual_filter_mentions"), list)
@@ -169,6 +187,27 @@ def project_question_intent(
             shape.get("query_shape")
             if isinstance(shape.get("query_shape"), dict)
             else {}
+        ),
+        "comparison": (
+            shape.get("comparison")
+            if isinstance(shape.get("comparison"), dict)
+            else semantic.get("comparison")
+            if isinstance(semantic.get("comparison"), dict)
+            else None
+        ),
+        "composition": (
+            shape.get("composition")
+            if isinstance(shape.get("composition"), dict)
+            else semantic.get("composition")
+            if isinstance(semantic.get("composition"), dict)
+            else None
+        ),
+        "multi_step": (
+            shape.get("multi_step")
+            if isinstance(shape.get("multi_step"), dict)
+            else semantic.get("multi_step")
+            if isinstance(semantic.get("multi_step"), dict)
+            else None
         ),
         "subject_domain": (
             shape.get("subject_domain")

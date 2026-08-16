@@ -18,6 +18,9 @@ class SemanticQueryCompileRequest:
     time_bucket: dict[str, Any] | None = None
     select_mode: str = "aggregate"
     having: list[dict[str, Any]] = field(default_factory=list)
+    time_offset: dict[str, Any] | None = None
+    pre_aggregation: dict[str, Any] | None = None
+    subplans: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)

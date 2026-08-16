@@ -28,9 +28,11 @@ from apps.temporal.plan import (
     CalendarPeriodExpression,
     FiscalPeriodExpression,
     RelativeDateExpression,
+    ResolvedTemporalComparison,
     ResolvedTemporalPlan,
     ResolvedTemporalRange,
     RollingRangeExpression,
+    TemporalComparisonMethod,
     TemporalExpression,
     TemporalPlan,
     validate_temporal_plan,
@@ -112,6 +114,21 @@ def resolve_temporal_plan(
             raise
         raise TemporalPlanResolutionError() from exc
 
+    comparison = None
+    if plan.comparison is not None:
+        method = plan.comparison.method
+        if len(filters) == 1 and method in {"yoy", "mom"}:
+            filters = derive_comparison_ranges(filters[0], method=method)
+        elif method == "custom" and len(filters) < 2:
+            raise TemporalPlanResolutionError("TEMPORAL_CUSTOM_COMPARISON_RANGES_REQUIRED")
+        if len(filters) < 2:
+            raise TemporalPlanResolutionError("TEMPORAL_COMPARISON_RANGES_REQUIRED")
+        comparison = ResolvedTemporalComparison(
+            method=method,
+            base_index=0,
+            compare_indexes=tuple(range(1, len(filters))),
+        )
+
     if max_span_days is not None and any(
         (item.end_exclusive - item.start).days > max_span_days for item in filters
     ):
@@ -120,6 +137,7 @@ def resolve_temporal_plan(
         status="resolved",
         filters=filters,
         grouping=plan.grouping,
+        comparison=comparison,
     )
 
 
@@ -145,6 +163,55 @@ def project_time_range_payload(
         "value_status": "provided",
         "normalized": normalized,
     }
+
+
+def project_time_ranges_payload(
+    resolved_plan: ResolvedTemporalPlan,
+) -> list[dict[str, Any]]:
+    """把多个权威时间区间投影为兼容 TimeRange 列表。"""
+
+    return [
+        {
+            "raw": resolved_range.source_raw,
+            "value_status": "provided",
+            "normalized": {
+                key: value
+                for key, value in resolved_range.model_dump(
+                    mode="json", exclude_none=True, exclude={"role"}
+                ).items()
+                if key not in {"calendar"}
+                or resolved_range.calendar != "natural"
+            },
+        }
+        for resolved_range in resolved_plan.filters
+    ]
+
+
+def derive_comparison_ranges(
+    base: ResolvedTemporalRange,
+    *,
+    method: TemporalComparisonMethod,
+    custom_compare: tuple[ResolvedTemporalRange, ...] = (),
+) -> tuple[ResolvedTemporalRange, ...]:
+    """根据基期确定性推导同比、环比或使用自定义对比期。"""
+
+    if method == "custom":
+        if not custom_compare:
+            raise TemporalPlanResolutionError("TEMPORAL_CUSTOM_COMPARISON_RANGES_REQUIRED")
+        return (base, *custom_compare)
+    month_offset = -12 if method == "yoy" else -1 if method == "mom" else 0
+    if month_offset == 0:
+        raise TemporalPlanResolutionError("TEMPORAL_COMPARISON_METHOD_UNSUPPORTED")
+    compare_start = shift_months(base.start, month_offset)
+    compare_end = shift_months(base.end_exclusive, month_offset)
+    compare = base.model_copy(
+        update={
+            "start": compare_start,
+            "end_exclusive": compare_end,
+            "source_raw": f"{base.source_raw} ({method})",
+        }
+    )
+    return (base, compare)
 
 
 def normalize_time_range(
@@ -447,7 +514,9 @@ def _resolved_temporal_range(
 __all__ = [
     "normalize_time_range",
     "normalize_time_range_payload",
+    "derive_comparison_ranges",
     "project_time_range_payload",
+    "project_time_ranges_payload",
     "resolve_temporal_plan",
     "resolve_time_range",
     "resolve_time_range_payload",

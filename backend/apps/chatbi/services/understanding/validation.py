@@ -52,6 +52,41 @@ def validate_question_understanding(
             )
         )
 
+    if data.intent_type == "comparison_analysis":
+        method = str(data.comparison.get("method") or "").lower()
+        base = data.comparison.get("base")
+        compare = data.comparison.get("compare")
+        # 多对象比较仍可只由维度多值表达；只有出现 comparison 结构时才校验时段字段。
+        comparison_declared = bool(data.comparison) or len(data.time_ranges) > 1
+        if comparison_declared and method not in {"yoy", "mom", "custom"}:
+            issues.append(
+                QuestionUnderstandingValidationIssue(
+                    code="comparison_method_missing",
+                    category="intent",
+                    clarification_slots=("comparison_target",),
+                )
+            )
+        if comparison_declared and (
+            not base
+            or (method == "custom" and (not isinstance(compare, list) or not compare))
+        ):
+            issues.append(
+                QuestionUnderstandingValidationIssue(
+                    code="comparison_period_missing",
+                    category="slot",
+                    clarification_slots=("time_range",),
+                )
+            )
+
+    if data.intent_type == "multi_step" and not data.multi_step.get("steps"):
+        issues.append(
+            QuestionUnderstandingValidationIssue(
+                code="multi_step_definition_missing",
+                category="intent",
+                clarification_slots=("intent",),
+            )
+        )
+
     query_shape = data.query_shape
     if query_shape:
         select_mode = str(query_shape.get("select_mode") or "")

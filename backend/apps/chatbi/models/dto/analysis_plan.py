@@ -52,6 +52,8 @@ class QueryTaskSpec(BaseModel):
     query_shape: str | None = None
     order_by: tuple[dict[str, Any], ...] = ()
     limit: int | None = Field(default=None, gt=0)
+    having: tuple[dict[str, Any], ...] = ()
+    time_offset: dict[str, Any] | None = None
 
 
 class CompiledQuery(BaseModel):

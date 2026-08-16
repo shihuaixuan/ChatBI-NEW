@@ -124,6 +124,14 @@ def validate_intent(
                 if isinstance(slot, dict)
             ),
             time_range=dict(intent.get("time_range") or {}),
+            time_ranges=tuple(
+                dict(item)
+                for item in intent.get("time_ranges") or []
+                if isinstance(item, dict)
+            ),
+            comparison=dict(intent.get("comparison") or {}),
+            composition=dict(intent.get("composition") or {}),
+            multi_step=dict(intent.get("multi_step") or {}),
             query_shape=dict(intent.get("query_shape") or {}),
             ambiguous_slots=tuple(
                 str(item) for item in intent.get("ambiguous_slots") or [] if str(item)

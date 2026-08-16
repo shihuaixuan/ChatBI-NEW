@@ -111,6 +111,8 @@ class RetrievalIntent(_StrictModel):
     dimension_slots: list[RetrievalDimensionSlot] = Field(default_factory=list)
     time_mentions: list[str] = Field(default_factory=list)
     time_range: dict[str, Any] = Field(default_factory=dict)
+    time_ranges: list[dict[str, Any]] = Field(default_factory=list)
+    comparison: dict[str, Any] = Field(default_factory=dict)
     filter_mentions: list[dict[str, Any]] = Field(default_factory=list)
     required_slot_types: list[str] = Field(default_factory=list)
     query_shape: dict[str, Any] = Field(default_factory=dict)

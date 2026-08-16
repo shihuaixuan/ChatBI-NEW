@@ -118,6 +118,8 @@ class AnalysisPlanner:
                     time_grain=(query_plan.get("time_binding") or {}).get("grain"),
                     query_shape="single_query",
                     limit=query_plan.get("limit"),
+                    having=tuple(item for item in query_plan.get("having") or [] if isinstance(item, dict)),
+                    time_offset=query_plan.get("time_offset") if isinstance(query_plan.get("time_offset"), dict) else None,
                 ),
             )
         temporal = compile_plan.get("temporal_plan") or {}
@@ -138,6 +140,8 @@ class AnalysisPlanner:
                 time_grain=time_bucket.get("grain"),
                 query_shape="single_query",
                 limit=compile_plan.get("limit"),
+                having=tuple(item for item in compile_plan.get("having") or [] if isinstance(item, dict)),
+                time_offset=compile_plan.get("time_offset") if isinstance(compile_plan.get("time_offset"), dict) else None,
             ),
         )
 
