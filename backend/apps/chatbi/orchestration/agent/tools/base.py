@@ -19,6 +19,7 @@ if TYPE_CHECKING:
         ChatBIResultArtifactRef,
         ResultArtifactWriteData,
     )
+    from apps.chatbi.services.execution.result_store import ResultStore
 
 
 class ResultArtifactWriter(Protocol):
@@ -35,6 +36,7 @@ class AgentToolContextServices:
     """创建工具执行上下文所需的稳定服务集合。"""
 
     result_artifact_service: ResultArtifactWriter
+    result_store: ResultStore | None = None
 
 
 @dataclass
@@ -50,6 +52,7 @@ class AgentToolContext:
     record_id: int | None = None
     dataset_id: int | None = None
     result_artifact_service: ResultArtifactWriter | None = None
+    result_store: ResultStore | None = None
     config: Any = None
     # Run 创建时固定的时间上下文，时间工具只能读取，不能重新生成。
     temporal_context: TemporalContext | None = None

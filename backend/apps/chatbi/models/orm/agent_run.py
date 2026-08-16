@@ -27,6 +27,13 @@ class AgentRunStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class AgentExecutionMode(str, Enum):
+    FAST = "fast"
+    PLAN = "plan"
+    RESEARCH = "research"
+    REACT_LEGACY = "react_legacy"
+
+
 class AgentStepStatus(str, Enum):
     RUNNING = "running"
     SUCCESS = "success"
@@ -73,6 +80,7 @@ class ChatbiAgentRun(SQLModel, table=True):
         Index("idx_chatbi_agent_run_record", "record_id"),
         Index("idx_chatbi_agent_run_chat", "chat_id", text("created_at DESC")),
         Index("idx_chatbi_agent_run_status", "oid", "status", text("updated_at DESC")),
+        Index("idx_chatbi_agent_run_execution_mode", "execution_mode"),
     )
 
     id: int | None = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
@@ -80,6 +88,11 @@ class ChatbiAgentRun(SQLModel, table=True):
     chat_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     record_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     status: str = Field(default=AgentRunStatus.CREATED.value, max_length=32, nullable=False)
+    execution_mode: str = Field(
+        default=AgentExecutionMode.REACT_LEGACY.value,
+        max_length=32,
+        nullable=False,
+    )
     # Agent 原生消息历史（不含 system）；工作流前置澄清保存在 clarification 与 derived_state 中。
     messages: list = Field(
         default_factory=list,
@@ -94,7 +107,7 @@ class ChatbiAgentRun(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False),
     )
-    # 工具执行的派生状态（语义资产集合、白名单表、最近执行摘要等，不含全量数据），
+    # 工具执行的派生状态（analysis_plan、result_sets、语义资产与最近执行摘要，不含全量数据），
     # 澄清挂起后恢复时回填 AgentToolContext.state，避免恢复后被迫重新检索。
     derived_state: dict = Field(
         default_factory=dict,

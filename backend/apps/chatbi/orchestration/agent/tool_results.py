@@ -5,14 +5,15 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
-from apps.chatbi.models import ResultArtifactWriteData
+from apps.chatbi.models import ResultSetKind
 from apps.chatbi.orchestration.agent.semantic_projection import (
     refresh_semantic_projection,
 )
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
-from apps.chatbi.services.execution import ResultArtifactWriteError
+from apps.chatbi.services.execution import ResultArtifactWriteError, ResultStore
+from apps.chatbi.services.execution.result_store import ResultArtifactStore
 from apps.conversation import ChatRecordExecutionType
 from apps.tool import (
     RetryAdvice,
@@ -326,24 +327,25 @@ class ChatBIToolResultProcessor:
         full_data = result.metadata.get("full_data")
         rows = full_data if isinstance(full_data, list) else []
         try:
-            artifact_ref = context.result_artifact_service.save(
-                ResultArtifactWriteData(
-                    execution_id=context.execution_id,
-                    execution_type=ChatRecordExecutionType.AGENT,
-                    chat_id=context.chat_id,
-                    record_id=context.record_id,
-                    kind="sql_result",
-                    payload={
-                        "query_id": "query-0",
-                        "fields": payload.get("fields") or [],
-                        "rows": rows,
-                        "row_count": payload.get("row_count") or 0,
-                    },
-                    metadata={
-                        "query_id": "query-0",
-                        "row_count": payload.get("row_count") or 0,
-                    },
-                )
+            # ResultStore 内部仍以 result_artifact_service.save 作为统一 Artifact 网关。
+            result_store = context.result_store or ResultStore(
+                cast(ResultArtifactStore, context.result_artifact_service)
+            )
+            plan_id = self._result_plan_id(context)
+            node_id = ResultStore.LEGACY_QUERY_ID
+            result_set_ref = result_store.register(
+                execution_id=context.execution_id,
+                execution_type=ChatRecordExecutionType.AGENT,
+                chat_id=context.chat_id,
+                record_id=context.record_id,
+                plan_id=plan_id,
+                node_id=node_id,
+                kind=ResultSetKind.QUERY,
+                fields=payload.get("fields") or [],
+                rows=rows,
+                row_count=payload.get("row_count") or 0,
+                source_sql=str(payload.get("sql") or "") or None,
+                semantic_refs=self._semantic_refs(context),
             )
         except ResultArtifactWriteError:
             return self._artifact_failure("sql_result_artifact_write_failed")
@@ -356,25 +358,38 @@ class ChatBIToolResultProcessor:
             and self._normalize_sql(sql) == self._normalize_sql(compiled)
             else "manual"
         )
-        artifact_payload = artifact_ref.model_dump(mode="json")
+        result_set_payload = result_set_ref.model_dump(mode="json")
+        artifact_payload = result_set_ref.artifact_ref.model_dump(mode="json")
         execution = {
             "sql": sql,
             "fields": payload.get("fields") or [],
             "row_count": payload.get("row_count") or 0,
             "sample_rows": payload.get("sample_rows") or [],
             "artifact_ref": artifact_payload,
+            "result_set_id": result_set_ref.result_set_id,
             "sql_source": sql_source,
         }
         projected_result = result.with_updates(
             metadata={
                 **result.metadata,
                 "artifact_ref": artifact_payload,
+                "result_set_ref": result_set_payload,
                 "sql_source": sql_source,
             }
         )
+        existing_result_sets = context.state.get("result_sets")
+        if not isinstance(existing_result_sets, dict):
+            existing_result_sets = {}
         return ToolResultProjection(
             result=projected_result,
-            state_patch={"last_execution": execution, "full_data": rows},
+            state_patch={
+                "last_execution": execution,
+                "full_data": rows,
+                "result_sets": {
+                    **existing_result_sets,
+                    result_set_ref.result_set_id: result_set_payload,
+                },
+            },
             events=(
                 SuggestedDomainEvent(
                     "sql-executed",
@@ -390,6 +405,28 @@ class ChatBIToolResultProcessor:
                 "fields": execution["fields"],
             },
         )
+
+    @staticmethod
+    def _result_plan_id(context: AgentToolContext) -> str:
+        analysis_plan = context.state.get("analysis_plan")
+        if isinstance(analysis_plan, dict):
+            plan_id = analysis_plan.get("id")
+            if isinstance(plan_id, str) and plan_id.strip():
+                return plan_id.strip()
+        if not context.execution_id:
+            raise ValueError("RESULT_SET_EXECUTION_ID_REQUIRED")
+        return f"legacy-{context.execution_id.replace(':', '-')}"
+
+    @staticmethod
+    def _semantic_refs(context: AgentToolContext) -> list[dict[str, Any]]:
+        scope = context.state.get("semantic_scope")
+        if not isinstance(scope, dict):
+            return []
+        return [
+            dict(item)
+            for item in scope.get("allowed_assets") or []
+            if isinstance(item, dict)
+        ]
 
     @staticmethod
     def _artifact_failure(error_code: str) -> ToolResultProjection:

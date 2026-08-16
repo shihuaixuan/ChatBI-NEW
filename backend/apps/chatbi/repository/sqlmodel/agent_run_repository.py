@@ -4,8 +4,10 @@ from typing import Any
 from sqlalchemy import and_, delete, desc, select
 from sqlmodel import col
 
+from apps.chatbi.models.dto.analysis_plan import AnalysisPlan, ResultSetRef
 from apps.chatbi.models.orm.agent_run import (
     AgentClarificationStatus,
+    AgentExecutionMode,
     AgentRunStatus,
     AgentStepStatus,
     AgentToolCallStatus,
@@ -43,6 +45,7 @@ def create_run(
     user_id: int,
     config: dict,
     temporal_context: TemporalContext | None = None,
+    execution_mode: str = AgentExecutionMode.REACT_LEGACY.value,
 ) -> ChatbiAgentRun:
     """创建 Agent 运行记录；事务提交由调用方统一控制。"""
 
@@ -53,6 +56,7 @@ def create_run(
         chat_id=chat_id,
         record_id=record_id,
         status=AgentRunStatus.CREATED.value,
+        execution_mode=AgentExecutionMode(execution_mode).value,
         config=config,
         temporal_context=fixed_temporal_context.model_dump(mode="json"),
         created_at=created_at,
@@ -199,6 +203,7 @@ def update_run(
     messages: list | None = None,
     budget_snapshot: dict | None = None,
     derived_state: dict | None = None,
+    execution_mode: str | None = None,
     error_class: str | None = None,
     error: str | None = None,
 ) -> None:
@@ -209,13 +214,38 @@ def update_run(
     if budget_snapshot is not None:
         run.budget_snapshot = budget_snapshot
     if derived_state is not None:
-        run.derived_state = derived_state
+        run.derived_state = validate_derived_state(derived_state)
+    if execution_mode is not None:
+        run.execution_mode = AgentExecutionMode(execution_mode).value
     if error_class is not None:
         run.error_class = error_class
     if error is not None:
         run.error = error
     run.updated_at = now()
     session.add(run)
+
+
+def validate_derived_state(derived_state: dict[str, Any]) -> dict[str, Any]:
+    """统一校验并规范化计划与命名结果集快照。"""
+
+    normalized = dict(derived_state)
+    analysis_plan = normalized.get("analysis_plan")
+    if analysis_plan is not None:
+        normalized["analysis_plan"] = AnalysisPlan.model_validate(analysis_plan).model_dump(
+            mode="json"
+        )
+    result_sets = normalized.get("result_sets")
+    if result_sets is not None:
+        if not isinstance(result_sets, dict):
+            raise ValueError("AGENT_RESULT_SETS_REGISTRY_INVALID")
+        normalized_refs: dict[str, dict[str, Any]] = {}
+        for result_set_id, value in result_sets.items():
+            ref = ResultSetRef.model_validate(value)
+            if result_set_id != ref.result_set_id:
+                raise ValueError("AGENT_RESULT_SET_REGISTRY_KEY_MISMATCH")
+            normalized_refs[result_set_id] = ref.model_dump(mode="json")
+        normalized["result_sets"] = normalized_refs
+    return normalized
 
 
 def request_cancel(
@@ -442,6 +472,7 @@ def build_timeline_response(session, record_id: int) -> dict:
         "record_id": record_id,
         "run_id": run.id,
         "status": run.status,
+        "execution_mode": run.execution_mode,
         "error_class": run.error_class,
         "budget": run.budget_snapshot or {},
         "steps": [

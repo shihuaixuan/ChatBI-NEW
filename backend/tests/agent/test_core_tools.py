@@ -515,6 +515,11 @@ def test_chatbi_result_processor_saves_public_sql_result_artifact():
         {"amount": 10},
         {"amount": 20},
     ]
+    assert artifact_service.calls[0].kind == "analysis_result_set"
+    result_set_id = "result:legacy-agent-10:query-0"
+    assert artifact_service.calls[0].payload["query_id"] == "query-0"
+    assert projection.state_patch["last_execution"]["result_set_id"] == result_set_id
+    assert result_set_id in projection.state_patch["result_sets"]
     assert projection.state_patch["last_execution"]["sql_source"] == "compiled"
     assert projection.state_patch["full_data"] == [
         {"amount": 10},

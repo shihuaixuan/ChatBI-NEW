@@ -130,6 +130,29 @@ def test_save_converts_storage_failure_to_stable_error():
         )
 
 
+def test_named_result_set_entry_points_validate_result_set_identity():
+    gateway = RecordingArtifactGateway()
+    service = ResultArtifactService(gateway)
+    data = ResultArtifactWriteData(
+        execution_id="agent:10",
+        execution_type=ChatRecordExecutionType.AGENT,
+        chat_id=20,
+        record_id=30,
+        kind="analysis_result_set",
+        payload={"result_set_id": "result:plan-1:query-1", "rows": []},
+        metadata={"result_set_id": "result:plan-1:query-1"},
+    )
+
+    ref = service.save_named_result_set(
+        data,
+        result_set_id="result:plan-1:query-1",
+    )
+
+    assert ref.kind == "analysis_result_set"
+    with pytest.raises(ValueError, match="RESULT_SET_ARTIFACT_ID_MISMATCH"):
+        service.save_named_result_set(data, result_set_id="result:plan-2:query-1")
+
+
 def test_read_returns_payload_only_after_execution_ownership_matches():
     gateway = RecordingArtifactGateway()
     service = ResultArtifactService(gateway)

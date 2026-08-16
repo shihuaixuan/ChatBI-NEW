@@ -108,6 +108,7 @@ class AgentRuntimeStateFactory:
             record_id=record.id,
             dataset_id=record.dataset_id,
             result_artifact_service=self._tool_services.result_artifact_service,
+            result_store=self._tool_services.result_store,
             config=self._config,
             temporal_context=TemporalContext.model_validate(run.temporal_context),
             state={"question": record.question or ""},

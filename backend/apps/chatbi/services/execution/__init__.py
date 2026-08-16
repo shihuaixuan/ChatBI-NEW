@@ -10,6 +10,7 @@ from apps.chatbi.services.execution.result_projection import (
     QueryResultProjectionError,
     QueryResultProjectionService,
 )
+from apps.chatbi.services.execution.result_store import ResultStore
 
 __all__ = [
     "QueryResultProjectionError",
@@ -19,4 +20,5 @@ __all__ = [
     "ResultArtifactReadError",
     "ResultArtifactService",
     "ResultArtifactWriteError",
+    "ResultStore",
 ]

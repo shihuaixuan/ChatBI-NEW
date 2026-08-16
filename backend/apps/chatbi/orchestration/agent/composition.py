@@ -28,7 +28,7 @@ from apps.chatbi.orchestration.agent.tools.base import AgentToolContextServices
 from apps.chatbi.orchestration.agent.tools.core import FinishTool
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.chatbi.orchestration.agent.tools.temporal import ParseTimeRangeTool
-from apps.chatbi.services.execution import ResultArtifactService
+from apps.chatbi.services.execution import ResultArtifactService, ResultStore
 from apps.chatbi.services.generation.agent_finalization import AgentFinalizationService
 from apps.chatbi.services.planning import PhysicalSchemaService
 from apps.chatbi.services.understanding import QuestionUnderstandingService
@@ -204,10 +204,12 @@ def build_agent_loop(
         resolved_recorder,
         resolved_memory_service,
     )
+    resolved_result_artifact_service = (
+        result_artifact_service or build_result_artifact_service(session)
+    )
     tool_services = AgentToolContextServices(
-        result_artifact_service=(
-            result_artifact_service or build_result_artifact_service(session)
-        ),
+        result_artifact_service=resolved_result_artifact_service,
+        result_store=ResultStore(resolved_result_artifact_service),
     )
     state_factory = AgentRuntimeStateFactory(
         session,

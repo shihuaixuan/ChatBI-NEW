@@ -20,7 +20,10 @@ from apps.chatbi.services.execution.ports import ResultArtifactGateway
 
 
 class ResultArtifactService:
-    """统一管理 Agent 与 Graph 完整结果的写入和会话级清理。"""
+    """统一管理 Agent、Graph 与命名结果集的完整正文和会话级清理。"""
+
+    LEGACY_SQL_RESULT_KIND = "sql_result"
+    NAMED_RESULT_SET_KIND = "analysis_result_set"
 
     _RESERVED_METADATA_KEYS = frozenset(
         {"execution_id", "execution_type", "chat_id", "record_id"}
@@ -63,6 +66,20 @@ class ResultArtifactService:
                 "RESULT_ARTIFACT_WRITE_FAILED"
             ) from exc
 
+    def save_named_result_set(
+        self,
+        data: ResultArtifactWriteData,
+        *,
+        result_set_id: str,
+    ) -> ChatBIResultArtifactRef:
+        """写入命名结果集，并集中校验结果集 ID 元数据。"""
+
+        if data.kind != self.NAMED_RESULT_SET_KIND:
+            raise ValueError("RESULT_SET_ARTIFACT_KIND_REQUIRED")
+        if data.metadata.get("result_set_id") != result_set_id:
+            raise ValueError("RESULT_SET_ARTIFACT_ID_MISMATCH")
+        return self.save(data)
+
     def read(self, data: ResultArtifactReadInput) -> ResultArtifactSnapshot:
         """读取 Artifact，并在返回正文前验证执行与会话归属。"""
 
@@ -98,6 +115,22 @@ class ResultArtifactService:
                 ResultArtifactReadError.OWNERSHIP_MISMATCH
             )
         return snapshot
+
+    def read_named_result_set(
+        self,
+        data: ResultArtifactReadInput,
+        *,
+        result_set_id: str,
+    ) -> ResultArtifactSnapshot:
+        """读取命名结果集，并要求读取契约携带同一结果集 ID。"""
+
+        if data.kind != self.NAMED_RESULT_SET_KIND:
+            raise ValueError("RESULT_SET_ARTIFACT_KIND_REQUIRED")
+        expected_metadata = {
+            **data.expected_metadata,
+            "result_set_id": result_set_id,
+        }
+        return self.read(data.model_copy(update={"expected_metadata": expected_metadata}))
 
     def schedule_chat_cleanup(
         self,
