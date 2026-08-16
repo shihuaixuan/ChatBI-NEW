@@ -40,6 +40,7 @@ from apps.chatbi.services.computation import ComputeEngine
 from apps.chatbi.services.execution import ResultArtifactService, ResultStore
 from apps.chatbi.services.generation.agent_finalization import AgentFinalizationService
 from apps.chatbi.services.generation.answer_composer import AnswerComposer
+from apps.chatbi.services.generation.fallback_sql import AssistedFallbackSQLService
 from apps.chatbi.services.planning import PhysicalSchemaService
 from apps.chatbi.services.understanding import QuestionUnderstandingService
 from apps.datasource.services import DatasourceQueryService
@@ -131,6 +132,7 @@ def build_agent_loop(
     cancellation_signal_factory: Callable[[int], CancellationSignal] | None = None,
     finalization_service: AgentFinalizationService | None = None,
     answer_composer: AnswerComposer | None = None,
+    assisted_fallback_service: AssistedFallbackSQLService | None = None,
     memory_service: MemoryService | None = None,
 ) -> AgentLoop:
     """构造依赖完整的 AgentLoop；生产入口和测试统一使用此函数。"""
@@ -182,6 +184,9 @@ def build_agent_loop(
     else:
         resolved_finalization_service = finalization_service
         resolved_answer_composer = answer_composer
+    resolved_assisted_fallback = assisted_fallback_service
+    if resolved_assisted_fallback is None and resolved_config.assisted_fallback_enabled and finalization_service is None:
+        resolved_assisted_fallback = AssistedFallbackSQLService(model_service, resolved_query_service)
     resolved_registry = registry or build_agent_tool_registry(
         query_service=resolved_query_service,
         semantic_query_service=resolved_semantic_query_service,
@@ -257,6 +262,9 @@ def build_agent_loop(
                 event_publisher=resolved_publisher,
                 session=session,
                 answer_composer=resolved_answer_composer,
+                assisted_fallback_service=resolved_assisted_fallback,
+                assisted_fallback_enabled=resolved_config.assisted_fallback_enabled,
+                semantic_schema_provider=resolved_semantic_schema_provider,
             )
         ),
         plan_pipeline=PlanPipeline(

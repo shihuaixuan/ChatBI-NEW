@@ -5,6 +5,11 @@ from apps.chatbi.services.generation.ports import (
     GenerationModelClient,
 )
 from apps.chatbi.services.planning.analysis_planner import AnalysisPlanner
+from apps.chatbi.services.planning.confidence import (
+    ConfidenceAssessment,
+    ConfidenceSignals,
+    assess_confidence,
+)
 from apps.chatbi.services.planning.datasource_candidates import (
     DatasourceSelectionCandidateRanker,
     DatasourceSelectionCandidateService,
@@ -39,6 +44,9 @@ __all__ = [
     "PhysicalSchemaAccessDeniedError",
     "resolve_execution_binding",
     "AnalysisPlanner",
+    "ConfidenceAssessment",
+    "ConfidenceSignals",
+    "assess_confidence",
     "AnalysisPlanValidator",
     "PlanValidationError",
     "validate_analysis_plan",

@@ -101,7 +101,7 @@ class SemanticAssetScope(BaseModel):
     normalized_time_range: dict[str, Any] | None = None
     compile_plan: SemanticCompilePlan | None = None
     # 严格模式使用完整语义计划；compile_plan 仅为迁移期旧链路保留。
-    semantic_enforcement: Literal["STRICT", "LEGACY"] = "LEGACY"
+    semantic_enforcement: Literal["STRICT", "ASSISTED", "LEGACY"] = "LEGACY"
     query_plan: SemanticQueryPlan | None = None
     validation_report: SemanticPlanValidationReport | None = None
     permission_version: str | None = None

@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from apps.chatbi.models.orm.agent_run import AgentExecutionMode
+from apps.chatbi.services.planning.confidence import (
+    ConfidenceAssessment,
+    ConfidenceSignals,
+    assess_confidence,
+)
 
 
 class ModeRoutingError(ValueError):
@@ -53,6 +58,12 @@ class ModeRouter:
         if AgentExecutionMode.PLAN.value in enabled and _is_complex_shape(request.query_shape):
             return AgentExecutionMode.PLAN
         return AgentExecutionMode.REACT_LEGACY
+
+    @staticmethod
+    def assess_confidence(signals: ConfidenceSignals) -> ConfidenceAssessment:
+        """公开统一置信度入口，模式选择和回答阶段使用同一规则。"""
+
+        return assess_confidence(signals)
 
     @staticmethod
     def _first_enabled(enabled: set[str], candidates: tuple[str, ...]) -> AgentExecutionMode:

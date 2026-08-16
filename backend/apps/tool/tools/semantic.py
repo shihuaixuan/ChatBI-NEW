@@ -1021,15 +1021,15 @@ def _semantic_enforcement(
     schema_provider: DatasetSchemaProvider | None,
     workspace_id: int,
     dataset_id: int,
-) -> Literal["STRICT", "LEGACY"]:
+) -> Literal["STRICT", "ASSISTED", "LEGACY"]:
     """读取数据集执行策略；读取失败由调用方显式处理。"""
 
     if schema_provider is None:
         return "LEGACY"
     schema = schema_provider.build_dataset_schema(workspace_id, dataset_id)
-    return (
-        "STRICT"
-        if str((schema.query_config or {}).get("semanticEnforcement") or "LEGACY").upper()
-        == "STRICT"
-        else "LEGACY"
-    )
+    enforcement = str(
+        (schema.query_config or {}).get("semanticEnforcement") or "LEGACY"
+    ).upper()
+    if enforcement in {"STRICT", "ASSISTED"}:
+        return enforcement  # type: ignore[return-value]
+    return "LEGACY"

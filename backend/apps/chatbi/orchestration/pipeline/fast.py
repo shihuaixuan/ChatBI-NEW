@@ -32,6 +32,14 @@ from apps.chatbi.services.generation.answer_composer import (
     AnswerComposer,
     AnswerComposerInput,
 )
+from apps.chatbi.services.generation.fallback_sql import (
+    AssistedFallbackSQLService,
+    FallbackSQLInput,
+)
+from apps.chatbi.services.planning.confidence import (
+    ConfidenceSignals,
+    assess_confidence,
+)
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import ToolCall, ToolCallContext, ToolRegistry, ToolResult, ToolStatus
 
@@ -53,6 +61,9 @@ class FastPipelineDependencies:
     event_publisher: EventPublisher
     session: Any
     answer_composer: AnswerComposer | None = None
+    assisted_fallback_service: AssistedFallbackSQLService | None = None
+    assisted_fallback_enabled: bool = False
+    semantic_schema_provider: Any | None = None
 
 
 class FastPipeline:
@@ -66,6 +77,9 @@ class FastPipeline:
         self._events = PipelineEvents(dependencies.event_publisher)
         self._session = dependencies.session
         self._answer_composer = dependencies.answer_composer
+        self._assisted_fallback_service = dependencies.assisted_fallback_service
+        self._assisted_fallback_enabled = dependencies.assisted_fallback_enabled
+        self._semantic_schema_provider = dependencies.semantic_schema_provider
 
     def run(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         """执行 bind→plan→validate→execute→answer 固定阶段。"""
@@ -81,7 +95,14 @@ class FastPipeline:
         )
         self._session.commit()
         if state.context.semantic_asset_scope is None:
-            self._call_tool(state, "search_semantic_assets", {})
+            try:
+                self._call_tool(state, "search_semantic_assets", {})
+                self._record_confidence(state)
+            except FastPipelineError as exc:
+                if self._can_use_assisted_fallback(state):
+                    yield from self._run_assisted_fallback(state, str(exc))
+                    return
+                raise
         if self._is_ambiguous(state):
             yield from self._suspend_semantic_clarification(state, plan_id)
             return
@@ -226,6 +247,134 @@ class FastPipeline:
                 projection.result.model_content,
             )
         return projection.result
+
+    def _can_use_assisted_fallback(self, state: AgentRuntimeState) -> bool:
+        """兜底只在全局开关、服务装配和数据集 ASSISTED 策略同时满足时启用。"""
+
+        if not self._assisted_fallback_enabled or self._assisted_fallback_service is None:
+            return False
+        if self._semantic_schema_provider is None or state.context.dataset_id is None:
+            return False
+        schema = self._semantic_schema_provider.build_dataset_schema(
+            state.context.workspace_id,
+            state.context.dataset_id,
+        )
+        return str((schema.query_config or {}).get("semanticEnforcement") or "LEGACY").upper() == "ASSISTED"
+
+    @staticmethod
+    def _record_confidence(state: AgentRuntimeState) -> None:
+        """把统一四档判定写入运行态，供口径卡片和审计读取。"""
+
+        package = state.context.state.get("semantic_package")
+        scope = state.context.state.get("semantic_scope")
+        understanding = state.context.state.get("question_understanding")
+        intent = understanding.get("intent", {}) if isinstance(understanding, dict) else {}
+        decision = package.get("decision", {}) if isinstance(package, dict) else {}
+        confidence = intent.get("confidence", 0.0) if isinstance(intent, dict) else 0.0
+        validation_status = "unknown"
+        if isinstance(scope, dict):
+            validation = scope.get("validation_report") or {}
+            validation_status = str(
+                validation.get("status")
+                or (scope.get("query_plan") or {}).get("validation_status")
+                or "unknown"
+            )
+        assessment = assess_confidence(
+            ConfidenceSignals(
+                binding_confidence=float(confidence or 0.0),
+                evidence_level="exact" if decision.get("status") == "resolved" else "rerank",
+                validation_status=validation_status,
+                verified_hit=bool(package.get("examples")) if isinstance(package, dict) else False,
+                semantic_enforcement=str((scope or {}).get("semantic_enforcement") or "LEGACY") if isinstance(scope, dict) else "LEGACY",
+                ambiguous=decision.get("status") == "ambiguous",
+            )
+        )
+        state.context.state["confidence_assessment"] = {
+            "route": assessment.route,
+            "score": assessment.score,
+            "reasons": list(assessment.reasons),
+            "certified": assessment.certified,
+            "fallback_allowed": assessment.fallback_allowed,
+            "evidence": assessment.evidence,
+        }
+
+    def _run_assisted_fallback(
+        self,
+        state: AgentRuntimeState,
+        failure_reason: str,
+    ) -> Iterator[RenderEvent]:
+        """ASSISTED 兜底仍经过物理 Schema、DatasourceQueryService 两次安全闸。"""
+
+        if self._semantic_schema_provider is None or self._assisted_fallback_service is None:
+            raise FastPipelineError("FAST_ASSISTED_FALLBACK_NOT_CONFIGURED")
+        schema_result = self._call_tool(state, "get_dataset_schema", {})
+        physical_schema = (
+            schema_result.data.model_dump(mode="json")
+            if schema_result.data is not None
+            else {"tables": []}
+        )
+        question = str(state.context.state.get("question") or state.record.question or "")
+        result = self._assisted_fallback_service.generate_and_execute(
+            FallbackSQLInput(
+                question=question,
+                datasource_id=state.context.datasource_id or 0,
+                user_id=state.context.user_id or 0,
+                workspace_id=state.context.workspace_id,
+                schema=physical_schema,
+                exemplars=[],
+                selected_tables=list(state.context.state.get("allowed_tables") or []),
+            )
+        )
+        execution = {
+            "status": "succeeded",
+            "sql": result.sql,
+            "sql_source": result.sql_source,
+            "fields": result.fields,
+            "row_count": result.row_count,
+            "sample_rows": result.sample_rows,
+            "stats_summary": result.stats_summary,
+            "full_data": result.rows,
+        }
+        state.context.state["last_execution"] = execution
+        state.context.state["full_data"] = result.rows
+        understanding = state.context.state.get("question_understanding")
+        intent = understanding.get("intent", {}) if isinstance(understanding, dict) else {}
+        if self._answer_composer is not None:
+            final = self._answer_composer.compose(
+                AnswerComposerInput(
+                    question=question,
+                    intent=intent if isinstance(intent, dict) else {},
+                    execution=execution,
+                    rows=result.rows,
+                    semantic_context={"semantic_enforcement": "ASSISTED", "certified": False},
+                    mode="fast",
+                )
+            )
+            answer = final.answer + "\n\n> " + result.warnings[0]
+            chart = final.chart
+            claims = final.claims
+            caliber_card = final.caliber_card
+            chart_spec = final.chart_spec
+        else:
+            answer = (
+                "已使用 ASSISTED 兜底完成查询，但未形成认证语义口径；以下为查询结果。"
+                f"（原语义路径：{failure_reason}）"
+            )
+            chart = {"type": "table", "columns": [{"name": field, "value": field} for field in result.fields], "data": result.rows[:100]}
+            claims = []
+            caliber_card = {"certified": False}
+            chart_spec = chart
+        yield from self._lifecycle.finish(
+            state,
+            answer=answer,
+            chart=chart,
+            sql=result.sql,
+            full_data=result.rows,
+            execution=execution,
+            claims=claims,
+            caliber_card=caliber_card,
+            chart_spec=chart_spec,
+        )
 
     @staticmethod
     def _require_understanding(state: AgentRuntimeState) -> None:

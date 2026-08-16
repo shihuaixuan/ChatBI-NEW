@@ -63,6 +63,7 @@ class AgentConfig(BaseModel):
     plan_max_query_tasks: int = 5
     compute_enabled: bool = True
     answer_citation_enforced: bool = True
+    assisted_fallback_enabled: bool = False
     tool_timeout_seconds: float = 60.0
     tool_default_timeout_seconds: float = 30.0
     query_transient_retries: int = 1

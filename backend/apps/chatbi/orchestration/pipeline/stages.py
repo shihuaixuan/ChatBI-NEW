@@ -6,6 +6,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
+from apps.chatbi.services.planning.confidence import (
+    ConfidenceAssessment,
+    ConfidenceSignals,
+    assess_confidence,
+)
+
 T = TypeVar("T")
 
 
@@ -46,6 +52,7 @@ class PipelineStages:
         execute: StageCallable | None = None,
         compute: StageCallable | None = None,
         answer: StageCallable | None = None,
+        confidence: StageCallable | None = None,
     ) -> None:
         self._handlers = {
             "bind": bind,
@@ -54,6 +61,7 @@ class PipelineStages:
             "execute": execute,
             "compute": compute,
             "answer": answer,
+            "confidence": confidence or assess_confidence,
         }
 
     def bind(self, *args: Any, **kwargs: Any) -> Any:
@@ -73,6 +81,11 @@ class PipelineStages:
 
     def answer(self, *args: Any, **kwargs: Any) -> Any:
         return self._call("answer", *args, **kwargs)
+
+    def confidence(self, signals: ConfidenceSignals) -> ConfidenceAssessment:
+        """统一执行四档置信度判定，供各模式共享。"""
+
+        return self._call("confidence", signals)
 
     def _call(self, name: str, *args: Any, **kwargs: Any) -> Any:
         handler = self._handlers[name]

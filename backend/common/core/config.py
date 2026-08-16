@@ -163,6 +163,7 @@ class Settings(BaseSettings):
     CHATBI_PLANNER_TIMEOUT_MS: int = 60000
     CHATBI_COMPUTE_ENABLED: bool = True
     CHATBI_ANSWER_CITATION_ENFORCED: bool = True
+    CHATBI_ASSISTED_FALLBACK_ENABLED: bool = False
     # 企业时间口径在 Run 创建时写入不可变 TemporalContext。
     TEMPORAL_TIMEZONE: str = "Asia/Shanghai"
     TEMPORAL_LOCALE: str = "zh-CN"

@@ -44,6 +44,11 @@ from apps.chatbi.services.generation.dynamic_sql_generation import (
     DynamicSQLGenerationError,
     DynamicSQLGenerationService,
 )
+from apps.chatbi.services.generation.fallback_sql import (
+    AssistedFallbackSQLService,
+    FallbackSQLInput,
+    FallbackSQLResult,
+)
 from apps.chatbi.services.generation.final_reply import (
     FinalReplyProjectionError,
     project_final_reply,
@@ -99,6 +104,9 @@ __all__ = [
     "DynamicSQLGenerationPromptBuilder",
     "DynamicSQLGenerationService",
     "FinalReplyProjectionError",
+    "AssistedFallbackSQLService",
+    "FallbackSQLInput",
+    "FallbackSQLResult",
     "GenerationModelClient",
     "GenerationContextService",
     "SchemaRankingClient",

@@ -32,11 +32,16 @@ def build_caliber_card(data: Any) -> CaliberCard:
     time = _time(intent)
     sql = execution.get("sql")
     source = str(execution.get("sql_source") or "compiled")
-    certified = bool(
-        execution.get("certified")
-        or semantic.get("certified")
-        or (source != "manual" and semantic.get("semantic_enforcement") in {None, "STRICT", "ASSISTED"})
-    )
+    if "certified" in semantic:
+        certified = bool(semantic["certified"])
+    else:
+        certified = bool(
+            execution.get("certified")
+            or (
+                source not in {"manual", "assisted_fallback"}
+                and semantic.get("semantic_enforcement") in {None, "STRICT"}
+            )
+        )
     return CaliberCard(
         metrics=metrics,
         dimensions=dimensions,
