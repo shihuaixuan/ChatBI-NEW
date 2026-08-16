@@ -1,0 +1,115 @@
+"""三模式路由规则。"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from apps.chatbi.models.orm.agent_run import AgentExecutionMode
+
+
+class ModeRoutingError(ValueError):
+    """请求了未启用或不允许的执行模式。"""
+
+
+@dataclass(frozen=True, slots=True)
+class ModeRouteInput:
+    """路由所需的已确认问题形态。"""
+
+    enabled_modes: tuple[str, ...] = (AgentExecutionMode.REACT_LEGACY.value,)
+    category: str = "data_query"
+    query_shape: dict[str, Any] = field(default_factory=dict)
+    requested_mode: str | None = None
+    multi_query: bool = False
+    cross_model: bool = False
+    dataset_mode: str | None = None
+
+
+class ModeRouter:
+    """按开关和问题形态选择执行模式，不选择未启用模式。"""
+
+    def route(self, request: ModeRouteInput) -> AgentExecutionMode:
+        enabled = _normalize_modes(request.enabled_modes)
+        requested = _normalize_mode(request.requested_mode)
+        if requested is not None:
+            if requested not in enabled:
+                raise ModeRoutingError(f"EXECUTION_MODE_NOT_ENABLED:{requested}")
+            return AgentExecutionMode(requested)
+
+        if request.category != "data_query":
+            return AgentExecutionMode.REACT_LEGACY
+        if request.cross_model or request.multi_query:
+            return self._first_enabled(
+                enabled,
+                (AgentExecutionMode.PLAN.value, AgentExecutionMode.REACT_LEGACY.value),
+            )
+        if _requires_research(request.query_shape):
+            return self._first_enabled(
+                enabled,
+                (AgentExecutionMode.RESEARCH.value, AgentExecutionMode.PLAN.value, AgentExecutionMode.REACT_LEGACY.value),
+            )
+        if _is_fast_shape(request.query_shape) and AgentExecutionMode.FAST.value in enabled:
+            return AgentExecutionMode.FAST
+        if AgentExecutionMode.PLAN.value in enabled and _is_complex_shape(request.query_shape):
+            return AgentExecutionMode.PLAN
+        return AgentExecutionMode.REACT_LEGACY
+
+    @staticmethod
+    def _first_enabled(enabled: set[str], candidates: tuple[str, ...]) -> AgentExecutionMode:
+        for candidate in candidates:
+            if candidate in enabled:
+                return AgentExecutionMode(candidate)
+        return AgentExecutionMode.REACT_LEGACY
+
+
+def _normalize_modes(modes: tuple[str, ...] | list[str] | str) -> set[str]:
+    values = modes.split(",") if isinstance(modes, str) else modes
+    normalized = {_normalize_mode(item) for item in values}
+    return {item for item in normalized if item is not None}
+
+
+def _normalize_mode(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    try:
+        return AgentExecutionMode(normalized).value
+    except ValueError as exc:
+        raise ModeRoutingError(f"EXECUTION_MODE_INVALID:{normalized}") from exc
+
+
+def _is_fast_shape(shape: dict[str, Any]) -> bool:
+    """FAST 只接受单查询、无跨结果集计算的形态。"""
+
+    return not any(
+        bool(shape.get(key))
+        for key in (
+            "multi_query",
+            "cross_query",
+            "comparison",
+            "comparison_type",
+            "needs_compute",
+            "needs_attribution",
+            "research",
+        )
+    )
+
+
+def _is_complex_shape(shape: dict[str, Any]) -> bool:
+    return bool(
+        shape.get("multi_query")
+        or shape.get("cross_query")
+        or shape.get("comparison")
+        or shape.get("comparison_type")
+        or shape.get("needs_compute")
+        or shape.get("needs_attribution")
+    )
+
+
+def _requires_research(shape: dict[str, Any]) -> bool:
+    return bool(shape.get("research") or shape.get("analysis_depth") == "research")
+
+
+__all__ = ["ModeRouteInput", "ModeRouter", "ModeRoutingError"]

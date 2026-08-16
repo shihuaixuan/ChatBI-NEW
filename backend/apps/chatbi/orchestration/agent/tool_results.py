@@ -332,7 +332,13 @@ class ChatBIToolResultProcessor:
                 cast(ResultArtifactStore, context.result_artifact_service)
             )
             plan_id = self._result_plan_id(context)
-            node_id = ResultStore.LEGACY_QUERY_ID
+            # 新编排为每个 AnalysisPlan 节点写入独立结果集；旧 ReAct 未设置时继续双写 query-0。
+            configured_node_id = context.state.get("result_node_id")
+            node_id = (
+                str(configured_node_id).strip()
+                if isinstance(configured_node_id, str) and configured_node_id.strip()
+                else ResultStore.LEGACY_QUERY_ID
+            )
             result_set_ref = result_store.register(
                 execution_id=context.execution_id,
                 execution_type=ChatRecordExecutionType.AGENT,

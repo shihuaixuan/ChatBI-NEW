@@ -117,6 +117,11 @@ def get_agent_config() -> AgentConfig:
         default_limit=settings.CHAT_AGENT_DEFAULT_LIMIT,
         history_rounds=settings.CHAT_AGENT_HISTORY_ROUNDS,
         context_fold_chars=settings.CHAT_AGENT_CONTEXT_FOLD_CHARS,
+        execution_modes=tuple(
+            item.strip().lower()
+            for item in (settings.CHAT_AGENT_EXECUTION_MODES or "react_legacy").split(",")
+            if item.strip()
+        )
     )
 
 

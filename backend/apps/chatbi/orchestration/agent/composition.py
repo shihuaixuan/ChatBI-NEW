@@ -28,6 +28,10 @@ from apps.chatbi.orchestration.agent.tools.base import AgentToolContextServices
 from apps.chatbi.orchestration.agent.tools.core import FinishTool
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.chatbi.orchestration.agent.tools.temporal import ParseTimeRangeTool
+from apps.chatbi.orchestration.pipeline.fast import (
+    FastPipeline,
+    FastPipelineDependencies,
+)
 from apps.chatbi.services.execution import ResultArtifactService, ResultStore
 from apps.chatbi.services.generation.agent_finalization import AgentFinalizationService
 from apps.chatbi.services.planning import PhysicalSchemaService
@@ -227,6 +231,16 @@ def build_agent_loop(
         tool_executor=resolved_tool_executor,
         input_preparer=resolved_input_preparer,
         state_factory=state_factory,
+        fast_pipeline=FastPipeline(
+            FastPipelineDependencies(
+                registry=resolved_registry,
+                result_processor=ChatBIToolResultProcessor(),
+                finalization_service=resolved_finalization_service,
+                lifecycle=lifecycle,
+                event_publisher=resolved_publisher,
+                session=session,
+            )
+        ),
     )
 
 

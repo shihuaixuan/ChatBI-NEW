@@ -39,6 +39,18 @@ class ArtifactEvent(RenderEvent):
     kind: Literal["artifact"] = "artifact"
 
 
+class PlanEvent(RenderEvent):
+    kind: Literal["plan"] = "plan"
+
+
+class TaskEvent(RenderEvent):
+    kind: Literal["task"] = "task"
+
+
+class ComputeEvent(RenderEvent):
+    kind: Literal["compute"] = "compute"
+
+
 class InteractionEvent(RenderEvent):
     kind: Literal["interaction"] = "interaction"
 
@@ -64,6 +76,11 @@ _EVENT_CONTRACT: dict[str, tuple[type[RenderEvent], EventPhase, str]] = {
     "chart-generated": (ArtifactEvent, "end", "chart.generated"),
     "clarification": (InteractionEvent, "start", "clarification.required"),
     "clarification-accepted": (InteractionEvent, "end", "clarification.accepted"),
+    "plan-created": (PlanEvent, "start", "plan.created"),
+    "plan-updated": (PlanEvent, "snapshot", "plan.updated"),
+    "task-started": (TaskEvent, "start", "task.started"),
+    "task-finished": (TaskEvent, "end", "task.finished"),
+    "compute-finished": (ComputeEvent, "end", "compute.finished"),
 }
 
 
@@ -112,6 +129,9 @@ def _block_id(
         tool_call_id = content.get("tool_call_id") if isinstance(content, dict) else None
         tool_name = content.get("tool_name") if isinstance(content, dict) else None
         return f"tool:{run_id}:{tool_call_id or tool_name or event_type}"
+    if event_class in {PlanEvent, TaskEvent, ComputeEvent} and isinstance(content, dict):
+        item_id = content.get("plan_id") or content.get("task_id") or content.get("node_id")
+        return f"{event_class.__name__.lower()}:{run_id}:{item_id or event_type}"
     if event_class is InteractionEvent and isinstance(content, dict):
         clarification_id = content.get("clarification_id")
         return f"interaction:{clarification_id or run_id}"
@@ -121,6 +141,9 @@ def _block_id(
 __all__ = [
     "ArtifactEvent",
     "InteractionEvent",
+    "PlanEvent",
+    "TaskEvent",
+    "ComputeEvent",
     "RenderEvent",
     "RunEvent",
     "TextEvent",

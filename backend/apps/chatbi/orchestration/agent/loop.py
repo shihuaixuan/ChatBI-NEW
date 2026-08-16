@@ -32,6 +32,8 @@ from apps.chatbi.orchestration.agent.state import (
     AgentRuntimeStateFactory,
 )
 from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
+from apps.chatbi.orchestration.pipeline.fast import FastPipeline, FastPipelineError
+from apps.chatbi.orchestration.pipeline.mode_router import ModeRouteInput, ModeRouter
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.generation.agent_finalization import (
     build_partial_finalization,
@@ -62,6 +64,8 @@ class AgentLoop:
         tool_executor: AgentToolExecutor,
         input_preparer: AgentInputPreparer,
         state_factory: AgentRuntimeStateFactory,
+        fast_pipeline: FastPipeline | None = None,
+        mode_router: ModeRouter | None = None,
     ) -> None:
         self.session = session
         self.event_publisher = event_publisher
@@ -71,6 +75,8 @@ class AgentLoop:
         self.tool_executor = tool_executor
         self.input_preparer = input_preparer
         self.state_factory = state_factory
+        self.fast_pipeline = fast_pipeline
+        self.mode_router = mode_router or ModeRouter()
 
     # ---- 入口 ----
 
@@ -122,6 +128,45 @@ class AgentLoop:
         try:
             ready = yield from self.input_preparer.prepare_initial(state)
             if not ready:
+                return
+            selected_mode = self._select_mode(state)
+            if selected_mode == "fast":
+                if self.fast_pipeline is None:
+                    yield from self.lifecycle.fail(
+                        state,
+                        "FAST 编排器未装配。",
+                        AgentErrorClass.PLAN_INVALID.value,
+                    )
+                    return
+                agent_run_repository.update_run(
+                    self.session,
+                    state.run,
+                    execution_mode=selected_mode,
+                )
+                self.session.commit()
+                try:
+                    yield from self.fast_pipeline.run(state)
+                except FastPipelineError as exc:
+                    yield from self.lifecycle.fail(
+                        state,
+                        str(exc),
+                        AgentErrorClass.PLAN_INVALID.value,
+                        error_details={"code": exc.code},
+                    )
+                return
+            if selected_mode in {"plan", "research"}:
+                agent_run_repository.update_run(
+                    self.session,
+                    state.run,
+                    execution_mode=selected_mode,
+                )
+                self.session.commit()
+                yield from self.lifecycle.fail(
+                    state,
+                    f"{selected_mode.upper()} 模式尚未实现。",
+                    AgentErrorClass.PLAN_INVALID.value,
+                    error_details={"code": f"{selected_mode.upper()}_MODE_NOT_READY"},
+                )
                 return
             yield from self._loop(state)
         except QuestionUnderstandingError as exc:
@@ -180,6 +225,32 @@ class AgentLoop:
                 error=run.error,
             )
 
+    def _select_mode(self, state: AgentRuntimeState) -> str:
+        """只在开关允许且问题形态符合时切换模式。"""
+
+        understanding = state.context.state.get("question_understanding")
+        intent = understanding.get("intent") if isinstance(understanding, dict) else {}
+        query_shape = intent.get("query_shape") if isinstance(intent, dict) else {}
+        query_shape = query_shape if isinstance(query_shape, dict) else {}
+        requested = (
+            state.run.execution_mode
+            if state.run.execution_mode != "react_legacy"
+            else None
+        )
+        selected = self.mode_router.route(
+            ModeRouteInput(
+                enabled_modes=tuple(getattr(state.context.config, "execution_modes", ()) or ("react_legacy",)),
+                category=str((understanding or {}).get("category") or "data_query")
+                if isinstance(understanding, dict)
+                else "data_query",
+                query_shape=query_shape,
+                requested_mode=requested,
+                multi_query=bool(query_shape.get("multi_query")),
+                cross_model=bool(query_shape.get("cross_model")),
+            )
+        )
+        return selected.value
+
     def _resume(
         self,
         run: ChatbiAgentRun,
@@ -203,6 +274,24 @@ class AgentLoop:
                 answer_text,
             )
             if not ready:
+                return
+            selected_mode = self._select_mode(state)
+            if selected_mode == "fast" and self.fast_pipeline is not None:
+                agent_run_repository.update_run(
+                    self.session,
+                    state.run,
+                    execution_mode=selected_mode,
+                )
+                self.session.commit()
+                try:
+                    yield from self.fast_pipeline.run(state)
+                except FastPipelineError as exc:
+                    yield from self.lifecycle.fail(
+                        state,
+                        str(exc),
+                        AgentErrorClass.PLAN_INVALID.value,
+                        error_details={"code": exc.code},
+                    )
                 return
             yield from self._loop(state)
         except QuestionUnderstandingError as exc:

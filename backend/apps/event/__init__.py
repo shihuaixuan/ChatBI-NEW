@@ -2,10 +2,13 @@
 
 from apps.event.models import (
     ArtifactEvent,
+    ComputeEvent,
     EventLog,
     InteractionEvent,
+    PlanEvent,
     RenderEvent,
     RunEvent,
+    TaskEvent,
     TextEvent,
     ThinkingEvent,
     ToolEvent,
@@ -25,6 +28,9 @@ __all__ = [
     "EventLog",
     "EventPublisher",
     "InteractionEvent",
+    "PlanEvent",
+    "TaskEvent",
+    "ComputeEvent",
     "RenderEvent",
     "RunEvent",
     "TextEvent",

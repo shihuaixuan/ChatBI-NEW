@@ -2,9 +2,12 @@
 
 from apps.event.models.dto import (
     ArtifactEvent,
+    ComputeEvent,
     InteractionEvent,
+    PlanEvent,
     RenderEvent,
     RunEvent,
+    TaskEvent,
     TextEvent,
     ThinkingEvent,
     ToolEvent,
@@ -16,6 +19,9 @@ __all__ = [
     "ArtifactEvent",
     "EventLog",
     "InteractionEvent",
+    "PlanEvent",
+    "TaskEvent",
+    "ComputeEvent",
     "RenderEvent",
     "RunEvent",
     "TextEvent",
