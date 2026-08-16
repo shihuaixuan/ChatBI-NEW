@@ -42,6 +42,7 @@ from apps.chatbi.services.planning.confidence import (
 )
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import ToolCall, ToolCallContext, ToolRegistry, ToolResult, ToolStatus
+from common.observability import MetricsRecorder
 
 
 class FastPipelineError(RuntimeError):
@@ -64,6 +65,7 @@ class FastPipelineDependencies:
     assisted_fallback_service: AssistedFallbackSQLService | None = None
     assisted_fallback_enabled: bool = False
     semantic_schema_provider: Any | None = None
+    metrics: MetricsRecorder | None = None
 
 
 class FastPipeline:
@@ -80,11 +82,14 @@ class FastPipeline:
         self._assisted_fallback_service = dependencies.assisted_fallback_service
         self._assisted_fallback_enabled = dependencies.assisted_fallback_enabled
         self._semantic_schema_provider = dependencies.semantic_schema_provider
+        self._metrics = dependencies.metrics
 
     def run(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         """执行 bind→plan→validate→execute→answer 固定阶段。"""
 
         run_id = state.require_run_id()
+        if self._metrics is not None:
+            self._metrics.record_run(mode="fast", status="started")
         self._require_understanding(state)
         plan_id = f"fast-{run_id}"
 
@@ -261,8 +266,7 @@ class FastPipeline:
         )
         return str((schema.query_config or {}).get("semanticEnforcement") or "LEGACY").upper() == "ASSISTED"
 
-    @staticmethod
-    def _record_confidence(state: AgentRuntimeState) -> None:
+    def _record_confidence(self, state: AgentRuntimeState) -> None:
         """把统一四档判定写入运行态，供口径卡片和审计读取。"""
 
         package = state.context.state.get("semantic_package")
@@ -297,6 +301,8 @@ class FastPipeline:
             "fallback_allowed": assessment.fallback_allowed,
             "evidence": assessment.evidence,
         }
+        if self._metrics is not None:
+            self._metrics.record_outcome(assessment.route, mode="fast")
 
     def _run_assisted_fallback(
         self,
@@ -325,6 +331,8 @@ class FastPipeline:
                 selected_tables=list(state.context.state.get("allowed_tables") or []),
             )
         )
+        if self._metrics is not None:
+            self._metrics.record_outcome("assisted_fallback", mode="fast")
         execution = {
             "status": "succeeded",
             "sql": result.sql,

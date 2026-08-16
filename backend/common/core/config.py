@@ -118,6 +118,8 @@ class Settings(BaseSettings):
     RETRIEVAL_EMBEDDING_MODEL: str = "BAAI/bge-m3"
     RETRIEVAL_EMBEDDING_DIMENSION: int = 1024
     RETRIEVAL_EMBEDDING_TOP_K: int = 20
+    # P1-9：检索诊断默认持久化；只保存结构化元数据，不保存原始敏感问题全文。
+    RETRIEVAL_QUERY_TRACE_ENABLED: bool = True
     RETRIEVAL_EMBEDDING_LOCAL_FILES_ONLY: bool = True
     RETRIEVAL_EMBEDDING_ALLOW_LEXICAL_FALLBACK: bool = True
 
@@ -125,9 +127,9 @@ class Settings(BaseSettings):
     CHATBI_MEMORY_EMBEDDING_ENABLED: bool = False
     # 用户隐含偏好提取默认关闭，启用后只处理明确澄清回答，不阻断问数主链路。
     CHATBI_MEMORY_LLM_EXTRACTION_ENABLED: bool = False
-    # 用户记忆召回灰度默认关闭，开启后按用户稳定分配 control/treatment。
-    CHATBI_MEMORY_RECALL_EXPERIMENT_ENABLED: bool = False
-    CHATBI_MEMORY_RECALL_TREATMENT_PERCENT: int = 0
+    # 用户记忆召回灰度默认开放 10%，按用户稳定分配 control/treatment。
+    CHATBI_MEMORY_RECALL_EXPERIMENT_ENABLED: bool = True
+    CHATBI_MEMORY_RECALL_TREATMENT_PERCENT: int = Field(default=10, ge=0, le=100)
     CHATBI_MEMORY_RECALL_EXPERIMENT_SALT: str = "chatbi-memory-recall-v1"
     CHATBI_MEMORY_RECALL_MIN_EVALUATED_PER_VARIANT: int = 100
     CHATBI_MEMORY_RECALL_MAX_ADOPTION_DROP: float = 0.05
@@ -164,6 +166,10 @@ class Settings(BaseSettings):
     CHATBI_COMPUTE_ENABLED: bool = True
     CHATBI_ANSWER_CITATION_ENFORCED: bool = True
     CHATBI_ASSISTED_FALLBACK_ENABLED: bool = False
+    # 指标出口保持关闭，接入 OTLP 后再通过环境变量开启。
+    OTEL_METRICS_ENABLED: bool = False
+    OTEL_METRICS_SERVICE_NAME: str = "numora-chatbi"
+    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: str = ""
     # 企业时间口径在 Run 创建时写入不可变 TemporalContext。
     TEMPORAL_TIMEZONE: str = "Asia/Shanghai"
     TEMPORAL_LOCALE: str = "zh-CN"
@@ -231,6 +237,9 @@ class Settings(BaseSettings):
                      'TEMPORAL_MODEL_SHADOW_ENABLED',
                      'TEMPORAL_MODEL_AUTHORITY_ENABLED',
                      'CHATBI_MEMORY_LLM_EXTRACTION_ENABLED',
+                     'CHATBI_MEMORY_RECALL_EXPERIMENT_ENABLED',
+                     'RETRIEVAL_QUERY_TRACE_ENABLED',
+                     'OTEL_METRICS_ENABLED',
                      'EXACT_ALIAS_ACCEPT',
                      mode='before')
     @classmethod

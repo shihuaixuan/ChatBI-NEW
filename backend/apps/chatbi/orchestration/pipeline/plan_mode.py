@@ -34,6 +34,7 @@ from apps.chatbi.services.planning.plan_validation import validate_analysis_plan
 from apps.conversation import ChatRecordExecutionType
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import ToolCall, ToolCallContext, ToolRegistry, ToolResult, ToolStatus
+from common.observability import MetricsRecorder
 
 
 class PlanPipelineError(RuntimeError):
@@ -56,6 +57,7 @@ class PlanPipelineDependencies:
     compute_engine: ComputeEngine | None = None
     compute_enabled: bool = True
     answer_composer: AnswerComposer | None = None
+    metrics: MetricsRecorder | None = None
 
 
 class PlanPipeline:
@@ -73,20 +75,33 @@ class PlanPipeline:
         self._compute_engine = dependencies.compute_engine
         self._compute_enabled = dependencies.compute_enabled
         self._answer_composer = dependencies.answer_composer
+        self._metrics = dependencies.metrics
 
     def run(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         run_id = state.require_run_id()
+        if self._metrics is not None:
+            self._metrics.record_run(mode="plan", status="started")
         understanding = state.context.state.get("question_understanding")
         if not isinstance(understanding, dict):
             raise PlanPipelineError("PLAN_QUESTION_UNDERSTANDING_REQUIRED")
         if state.context.semantic_asset_scope is None:
             self._call_tool(state, "search_semantic_assets", {})
         plan_id = f"plan-{run_id}"
-        plan = self._planner.plan_from_semantic_state(
-            plan_id=plan_id,
-            question_understanding=understanding,
-            semantic_state=state.context.state,
+        patched_payload = (
+            understanding.get("inherited_context", {}).get("patched_analysis_plan")
+            if isinstance(understanding.get("inherited_context"), dict)
+            else None
         )
+        if isinstance(patched_payload, dict):
+            # 补丁计划已经在问题理解阶段完成服务端校验，换用当前 Run 的计划编号。
+            patched = AnalysisPlan.model_validate(patched_payload)
+            plan = patched.model_copy(update={"id": plan_id})
+        else:
+            plan = self._planner.plan_from_semantic_state(
+                plan_id=plan_id,
+                question_understanding=understanding,
+                semantic_state=state.context.state,
+            )
         yield self._events.plan_created(
             run_id,
             {

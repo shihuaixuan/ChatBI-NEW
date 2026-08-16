@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
@@ -11,6 +12,7 @@ from apps.chatbi.services.planning.confidence import (
     ConfidenceSignals,
     assess_confidence,
 )
+from common.observability import MetricsRecorder, build_metrics_recorder
 
 T = TypeVar("T")
 
@@ -53,6 +55,7 @@ class PipelineStages:
         compute: StageCallable | None = None,
         answer: StageCallable | None = None,
         confidence: StageCallable | None = None,
+        metrics: MetricsRecorder | None = None,
     ) -> None:
         self._handlers = {
             "bind": bind,
@@ -63,6 +66,7 @@ class PipelineStages:
             "answer": answer,
             "confidence": confidence or assess_confidence,
         }
+        self._metrics = metrics or build_metrics_recorder()
 
     def bind(self, *args: Any, **kwargs: Any) -> Any:
         return self._call("bind", *args, **kwargs)
@@ -91,7 +95,19 @@ class PipelineStages:
         handler = self._handlers[name]
         if handler is None:
             raise PipelineStageError(f"PIPELINE_STAGE_NOT_CONFIGURED:{name}")
-        return handler(*args, **kwargs)
+        started = time.perf_counter()
+        status = "ok"
+        try:
+            return handler(*args, **kwargs)
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            self._metrics.observe_stage(
+                name,
+                (time.perf_counter() - started) * 1000,
+                status=status,
+            )
 
 
 __all__ = ["AnswerStageResult", "PipelineStageError", "PipelineStages", "StageResult"]

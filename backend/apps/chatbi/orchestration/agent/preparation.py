@@ -124,6 +124,9 @@ class AgentInputPreparer:
                         "has_previous_understanding": bool(
                             conversation_context.get("previous_understanding")
                         ),
+                        "has_previous_analysis_plan": bool(
+                            conversation_context.get("previous_analysis_plan")
+                        ),
                     }
                 )
                 context_node.set_output_detail(
@@ -137,6 +140,10 @@ class AgentInputPreparer:
                     "previous_understanding"
                 ),
             }
+            if conversation_context.get("previous_analysis_plan") is not None:
+                understanding_context["previous_analysis_plan"] = conversation_context[
+                    "previous_analysis_plan"
+                ]
             if conversation_context.get("memory_context"):
                 understanding_context["user_memory"] = conversation_context[
                     "memory_context"
@@ -749,6 +756,12 @@ class AgentInputPreparer:
             exclude_record_id=record.id,
             datasource_id=record.datasource,
         )
+        previous_analysis_plan = agent_run_repository.latest_successful_analysis_plan(
+            self._session,
+            chat_id=run.chat_id,
+            exclude_record_id=record.id,
+            datasource_id=record.datasource,
+        )
         previous_rewritten_question = (
             previous_understanding.get("rewritten_question")
             if previous_understanding
@@ -758,6 +771,7 @@ class AgentInputPreparer:
             "history": history,
             "last_rewritten_question": previous_rewritten_question,
             "previous_understanding": previous_understanding,
+            "previous_analysis_plan": previous_analysis_plan,
             "memory_context": self._load_memory_context(state),
         }
 

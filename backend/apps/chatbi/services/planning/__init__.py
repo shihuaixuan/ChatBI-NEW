@@ -26,6 +26,12 @@ from apps.chatbi.services.planning.physical_schema import (
     PhysicalSchemaAccessDeniedError,
     PhysicalSchemaService,
 )
+from apps.chatbi.services.planning.plan_patch import (
+    PlanPatch,
+    PlanPatchError,
+    PlanPatchResult,
+    apply_plan_patch,
+)
 from apps.chatbi.services.planning.plan_validation import (
     AnalysisPlanValidator,
     PlanValidationError,
@@ -50,4 +56,8 @@ __all__ = [
     "AnalysisPlanValidator",
     "PlanValidationError",
     "validate_analysis_plan",
+    "PlanPatch",
+    "PlanPatchError",
+    "PlanPatchResult",
+    "apply_plan_patch",
 ]

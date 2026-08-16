@@ -17,6 +17,7 @@ from apps.chatbi.errors import (
     QuestionUnderstandingError,
     TemporalInterpretationError,
 )
+from apps.chatbi.models.dto.analysis_plan import AnalysisPlan
 from apps.chatbi.models.dto.question_model import (
     QuestionModelInvocationData,
     QuestionModelResponse,
@@ -34,6 +35,11 @@ from apps.chatbi.models.dto.question_understanding import (
     TemporalInterpretationResult,
     TemporalShadowObservation,
     TimeRange,
+)
+from apps.chatbi.services.planning.plan_patch import (
+    PlanPatchError,
+    apply_plan_patch,
+    patch_from_understanding,
 )
 from apps.chatbi.services.understanding.dimension_candidates import (
     dimension_candidate_by_text,
@@ -93,7 +99,7 @@ REWRITE_SYSTEM_PROMPT = "\n\n".join(
 
 只输出以下 JSON 对象，不要输出 Markdown 或解释：
 {
-  "message_type": "new_question | followup | clarification_reply",
+  "message_type": "new_question | followup | plan_patch | clarification_reply",
   "rewritten_question": "补全上下文后的完整问题",
   "inherited_context": {},
   "need_user_input": false,
@@ -111,6 +117,7 @@ Agent 上下文规则：
 - 当本轮出现新的筛选值、但省略了维度名称时，检查 previous_understanding.intent.dimension_slots；如果其中只有一个与这些值类型相容的筛选维度，继承该维度名称和用途，只替换筛选值；不得继承上一轮的旧值、指标或时间。
 - 如果 previous_understanding.intent.dimension_slots 中存在多个可能的筛选维度，不能猜测，必须返回 need_user_input=true 并列出缺失维度。
 - 当前输入明显在回答挂起澄清时，message_type=clarification_reply。
+- 当前输入只修改上一 AnalysisPlan 的时间、维度或筛选，且 conversation_context.previous_analysis_plan 存在时，message_type=plan_patch；补丁必须放在 inherited_context.plan_patch 中，不能猜测资产 ID。
 
 典型示例：
 
@@ -418,6 +425,46 @@ class QuestionUnderstandingService:
             QuestionRewriteOutput,
             trace_run_id=trace_run_id,
         )
+
+        # 计划补丁必须由重写器显式产出，并经过服务端 DTO 与计划校验；
+        # 无法安全应用时继续完整理解，避免静默修改上一轮口径。
+        previous_plan = context.get("previous_analysis_plan")
+        previous_understanding = context.get("previous_understanding")
+        if rewrite.message_type == "plan_patch" and isinstance(previous_plan, dict):
+            try:
+                previous_plan_model = AnalysisPlan.model_validate(previous_plan)
+                patch = patch_from_understanding(
+                    {
+                        "inherited_context": rewrite.inherited_context,
+                    }
+                )
+                if patch is not None:
+                    patched = apply_plan_patch(previous_plan_model, patch)
+                    if isinstance(previous_understanding, dict):
+                        prior_output = QuestionUnderstandingOutput.model_validate(
+                            previous_understanding
+                        )
+                        patched_output = prior_output.model_copy(
+                            update={
+                                "original_question": question,
+                                "message_type": "plan_patch",
+                                "rewritten_question": rewrite.rewritten_question,
+                                "inherited_context": {
+                                    **prior_output.inherited_context,
+                                    **rewrite.inherited_context,
+                                    "patched_analysis_plan": patched.plan.model_dump(
+                                        mode="json"
+                                    ),
+                                },
+                            }
+                        )
+                        return QuestionUnderstandingOutcome(
+                            output=patched_output,
+                            usage_metadata=rewrite_usage,
+                        )
+            except (PlanPatchError, ValidationError, ValueError):
+                # 失败不修改历史计划，继续走完整理解以重新建立当前问题事实源。
+                pass
 
         understanding_payload = {
             "rewritten_question": rewrite.rewritten_question,

@@ -453,6 +453,39 @@ def latest_successful_question_understanding(
     return None
 
 
+def latest_successful_analysis_plan(
+    session,
+    *,
+    chat_id: int,
+    exclude_record_id: int,
+    datasource_id: int | None,
+) -> dict[str, Any] | None:
+    """读取同会话最近一次成功 Run 的分析计划，供多轮 patch 使用。"""
+
+    conditions = [
+        ChatbiAgentRun.chat_id == chat_id,
+        ChatbiAgentRun.record_id != exclude_record_id,
+        ChatbiAgentRun.status == AgentRunStatus.FINISHED.value,
+    ]
+    stmt = (
+        select(ChatbiAgentRun)
+        .where(and_(*conditions))
+        .order_by(desc(ChatbiAgentRun.created_at))
+        .limit(10)
+    )
+    record_service = build_chat_record_service(session)
+    for previous_run in session.exec(stmt).scalars().all():
+        record = record_service.get(previous_run.record_id)
+        if not record.finish or record.execution_type != "agent":
+            continue
+        if datasource_id is not None and record.datasource != datasource_id:
+            continue
+        plan = (previous_run.derived_state or {}).get("analysis_plan")
+        if isinstance(plan, dict):
+            return dict(plan)
+    return None
+
+
 def build_timeline_response(session, record_id: int) -> dict:
     """构建产品运行时间线，不读取可观测性 Trace。"""
 

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import replace
+from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from apps.retrieval.embedding import (
     EmbeddingProvider,
@@ -23,6 +27,7 @@ from apps.retrieval.models.dto import (
     RetrievalScores,
     RetrievalSourceType,
 )
+from apps.retrieval.models.orm import RetrievalQueryTraceModel
 from apps.retrieval.projection.payload import bundle_to_semantic_payload
 from apps.retrieval.query.hybrid import (
     HybridRetrievalConfig,
@@ -141,6 +146,7 @@ class SemanticBindingRunner:
         if len(request.scope.dataset_ids) != 1:
             raise ValueError("SEMANTIC_BINDING_DATASET_SCOPE_REQUIRED")
 
+        started = perf_counter()
         self._set_database_timeout(session, timeout_ms)
         strategy_request = request.model_copy(
             update={"strategy_version": SEMANTIC_BINDING_STRATEGY_VERSION}
@@ -170,6 +176,13 @@ class SemanticBindingRunner:
             bundle,
             schema,
         )
+        self._persist_query_trace(
+            session,
+            strategy_request,
+            recall,
+            bundle,
+            elapsed_ms=(perf_counter() - started) * 1000,
+        )
         return SemanticBindingExecutionResult(
             bundle=bundle,
             payload=payload,
@@ -185,6 +198,86 @@ class SemanticBindingRunner:
                 ],
             },
         )
+
+    @staticmethod
+    def _persist_query_trace(
+        session: Any,
+        request: RetrievalRequest,
+        recall: Any,
+        bundle: RetrievalBundle,
+        *,
+        elapsed_ms: float,
+    ) -> None:
+        """把可复现的检索诊断写入既有 retrieval_query_trace 表。"""
+
+        if not settings.RETRIEVAL_QUERY_TRACE_ENABLED:
+            return
+        add = getattr(session, "add", None)
+        if not callable(add):
+            # 纯内存测试适配器没有持久化端口，不伪造一条无法落库的记录。
+            return
+        exec_query = getattr(session, "exec", None)
+        if callable(exec_query):
+            existing = exec_query(
+                select(RetrievalQueryTraceModel).where(
+                    RetrievalQueryTraceModel.tenant_id == request.tenant_id,
+                    RetrievalQueryTraceModel.request_id == request.request_id,
+                    RetrievalQueryTraceModel.profile == request.profiles[0].value,
+                )
+            ).first()
+            if existing is not None:
+                # 同一请求可能因重试或页面重放再次进入，保持 trace 幂等。
+                return
+        candidate_ranks = {
+            slot.subquery.subquery_id: [
+                {
+                    "resource_id": hit.resource_id,
+                    "ranks_by_channel": {
+                        str(channel.value): rank
+                        for channel, rank in hit.ranks_by_channel.items()
+                    },
+                }
+                for hit in slot.hits
+            ]
+            for slot in recall.slots
+        }
+        query_hash = hashlib.sha256(
+            json.dumps(
+                {
+                    "original_question": request.original_question,
+                    "rewritten_question": request.rewritten_question,
+                    "intent": request.intent.model_dump(mode="json"),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        trace = RetrievalQueryTraceModel(
+            tenant_id=request.tenant_id,
+            actor_id=request.actor_id,
+            request_id=request.request_id,
+            profile=request.profiles[0].value,
+            query_hash=query_hash,
+            permission_version=request.scope.permission_version,
+            scope_filters=request.scope.model_dump(mode="json"),
+            filters={
+                "subqueries": [
+                    item.model_dump(mode="json") for item in recall.plan.subqueries
+                ]
+            },
+            channels=[item.model_dump(mode="json") for item in bundle.diagnostics.channels],
+            candidate_ranks=candidate_ranks,
+            decision=bundle.decision.model_dump(mode="json"),
+            strategy_version=bundle.diagnostics.strategy_version,
+            index_generation=bundle.diagnostics.index_generation,
+            latency_ms=max(int(round(elapsed_ms)), 0),
+            error_code=bundle.diagnostics.degraded_reason,
+            created_at=datetime.now(timezone.utc),
+        )
+        add(trace)
+        flush = getattr(session, "flush", None)
+        if callable(flush):
+            flush()
 
     def _attach_verified_exemplars(
         self,

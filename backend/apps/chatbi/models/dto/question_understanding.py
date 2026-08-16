@@ -88,7 +88,12 @@ class QuestionRewriteOutput(QuestionRewriteOutputBase):
     model_config = ConfigDict(extra="forbid")
 
     rewritten_question: str = Field(min_length=1)
-    message_type: Literal["new_question", "followup", "clarification_reply"]
+    message_type: Literal[
+        "new_question",
+        "followup",
+        "plan_patch",
+        "clarification_reply",
+    ]
     inherited_context: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(ge=0, le=1)
 
@@ -311,7 +316,12 @@ class QuestionUnderstandingOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     original_question: str
-    message_type: Literal["new_question", "followup", "clarification_reply"]
+    message_type: Literal[
+        "new_question",
+        "followup",
+        "plan_patch",
+        "clarification_reply",
+    ]
     rewritten_question: str
     inherited_context: dict[str, Any] = Field(default_factory=dict)
     intent: IntentRecognitionOutput

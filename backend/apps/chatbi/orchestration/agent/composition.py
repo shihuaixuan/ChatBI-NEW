@@ -72,6 +72,7 @@ from apps.tool.tools.semantic import (
     SearchTerminologyTool,
 )
 from apps.trace import AgentTraceRecorder
+from common.observability import build_metrics_recorder
 
 
 def build_agent_tool_registry(
@@ -233,6 +234,7 @@ def build_agent_loop(
     resolved_result_artifact_service = (
         result_artifact_service or build_result_artifact_service(session)
     )
+    metrics_recorder = build_metrics_recorder()
     tool_services = AgentToolContextServices(
         result_artifact_service=resolved_result_artifact_service,
         result_store=ResultStore(resolved_result_artifact_service),
@@ -265,6 +267,7 @@ def build_agent_loop(
                 assisted_fallback_service=resolved_assisted_fallback,
                 assisted_fallback_enabled=resolved_config.assisted_fallback_enabled,
                 semantic_schema_provider=resolved_semantic_schema_provider,
+                metrics=metrics_recorder,
             )
         ),
         plan_pipeline=PlanPipeline(
@@ -279,6 +282,7 @@ def build_agent_loop(
                 compute_engine=ComputeEngine(),
                 compute_enabled=resolved_config.compute_enabled,
                 answer_composer=resolved_answer_composer,
+                metrics=metrics_recorder,
             )
         ),
     )

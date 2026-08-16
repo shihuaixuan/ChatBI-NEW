@@ -19,6 +19,7 @@ from apps.datasource.models.dto.query import (
     DatasourceQuerySubject,
 )
 from apps.datasource.models.rules.sql_query import ReadOnlySQLRule
+from common.observability import MetricsRecorder, build_metrics_recorder
 
 
 class DatasourceQueryPolicyProvider(Protocol):
@@ -54,6 +55,7 @@ class DatasourceQueryService:
         default_limit: int | None = 100,
         sample_rows: int = 10,
         max_transient_retries: int = 0,
+        metrics: MetricsRecorder | None = None,
     ) -> None:
         if policy_provider is None:
             raise ValueError("DATASOURCE_QUERY_POLICY_PROVIDER_REQUIRED")
@@ -64,21 +66,35 @@ class DatasourceQueryService:
         self._sql_rule = ReadOnlySQLRule(default_limit=default_limit)
         self._sample_rows = max(sample_rows, 0)
         self._max_transient_retries = max(max_transient_retries, 0)
+        self._metrics = metrics or build_metrics_recorder()
 
     def validate(self, request: DatasourceQueryRequest) -> DatasourceQueryResult:
         """解析权限并校验改写前后的 SQL，不执行驱动。"""
-
+        started = time.perf_counter()
+        status = "ok"
         prepared = self._prepare(request)
         if isinstance(prepared, DatasourceQueryResult):
+            status = "rejected"
+            self._metrics.observe_stage(
+                "datasource.validate",
+                (time.perf_counter() - started) * 1000,
+                status=status,
+            )
             return prepared
         sql, tables, effective_tables = prepared
-        return DatasourceQueryResult.succeeded(
+        result = DatasourceQueryResult.succeeded(
             DatasourceQueryData(
                 sql=sql,
                 tables=sorted(tables),
                 effective_tables=effective_tables,
             )
         )
+        self._metrics.observe_stage(
+            "datasource.validate",
+            (time.perf_counter() - started) * 1000,
+            status=status,
+        )
+        return result
 
     def resolve_policy(
         self,
@@ -91,21 +107,33 @@ class DatasourceQueryService:
 
     def execute(self, request: DatasourceQueryRequest) -> DatasourceQueryResult:
         """重新完成全部安全校验后执行 SQL。"""
-
+        started = time.perf_counter()
+        status = "ok"
         prepared = self._prepare(request)
         if isinstance(prepared, DatasourceQueryResult):
+            self._metrics.observe_stage(
+                "datasource.execute",
+                (time.perf_counter() - started) * 1000,
+                status="rejected",
+            )
             return prepared
         sql, tables, effective_tables = prepared
         retry_count = 0
         while True:
             timeout_seconds = self._remaining_timeout(request)
             if timeout_seconds is not None and timeout_seconds <= 0:
-                return DatasourceQueryResult.failed(
+                result = DatasourceQueryResult.failed(
                     "SQL 执行截止时间已到",
                     error_code="query_deadline_exceeded",
                     error_category=DatasourceQueryErrorCategory.TIMEOUT,
                     retry_advice=DatasourceQueryRetryAdvice.NEVER,
                 )
+                self._metrics.observe_stage(
+                    "datasource.execute",
+                    (time.perf_counter() - started) * 1000,
+                    status="timeout",
+                )
+                return result
             if timeout_seconds is None:
                 executed = self._executor.execute(request.datasource_id, sql)
             else:
@@ -118,7 +146,7 @@ class DatasourceQueryService:
                 break
             retry_count += 1
         if not executed.succeeded:
-            return DatasourceQueryResult.failed(
+            result = DatasourceQueryResult.failed(
                 executed.message or "SQL 执行失败",
                 error_code=executed.error_code or "sql_execute_error",
                 error_category=(
@@ -134,6 +162,12 @@ class DatasourceQueryService:
                     else DatasourceQueryRetryAdvice.CORRECT_INPUT
                 ),
             ).model_copy(update={"retry_count": retry_count})
+            self._metrics.observe_stage(
+                "datasource.execute",
+                (time.perf_counter() - started) * 1000,
+                status="error",
+            )
+            return result
 
         payload = executed.payload
         raw_fields = payload.get("fields") or []
@@ -160,7 +194,7 @@ class DatasourceQueryService:
             if key not in {"fields", "data", "rows"}
         }
         metadata["retry_count"] = retry_count
-        return DatasourceQueryResult.succeeded(
+        result = DatasourceQueryResult.succeeded(
             DatasourceQueryData(
                 sql=sql,
                 tables=sorted(tables),
@@ -174,6 +208,12 @@ class DatasourceQueryService:
                 execution_metadata=metadata,
             )
         ).model_copy(update={"retry_count": retry_count})
+        self._metrics.observe_stage(
+            "datasource.execute",
+            (time.perf_counter() - started) * 1000,
+            status=status,
+        )
+        return result
 
     @staticmethod
     def _remaining_timeout(request: DatasourceQueryRequest) -> float | None:
