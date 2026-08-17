@@ -6,7 +6,7 @@ export type AgentFlowStatus = 'running' | 'success' | 'failed' | 'waiting'
 export interface AgentFlowStep {
   key: string
   index?: number
-  kind: 'understanding' | 'thinking' | 'tool'
+  kind: 'understanding' | 'thinking' | 'tool' | 'plan' | 'task' | 'compute'
   title: string
   status: AgentFlowStatus
   toolName?: string
@@ -54,6 +54,7 @@ export function buildAgentFlow(
   const toolSteps = new Map<string, AgentFlowStep>()
   const workflowSteps = new Map<number, AgentFlowStep>()
   const thinkingSteps = new Map<number, AgentFlowStep>()
+  const pipelineSteps = new Map<string, AgentFlowStep>()
   const stepIdToIndex = new Map<number, number>()
   let understandingStep: AgentFlowStep | undefined
   let currentIndex: number | undefined
@@ -90,6 +91,62 @@ export function buildAgentFlow(
           understanding: event,
         }
         break
+      case 'plan.created':
+        pipelineSteps.set(String(event.plan_id || 'plan'), {
+          key: `plan-${event.plan_id || 'current'}`,
+          kind: 'plan',
+          title: '生成分析计划',
+          status: 'running',
+          args: {},
+          result: { ...event },
+        })
+        break
+      case 'plan.updated': {
+        const key = String(event.plan_id || 'plan')
+        const step = pipelineSteps.get(key) || {
+          key: `plan-${event.plan_id || 'current'}`,
+          kind: 'plan' as const,
+          title: '生成分析计划',
+          status: 'running' as const,
+          args: {},
+          result: {},
+        }
+        step.result = { ...step.result, ...event }
+        step.status = event.status === 'REJECTED' ? 'failed' : 'success'
+        pipelineSteps.set(key, step)
+        break
+      }
+      case 'task.started':
+        pipelineSteps.set(`task:${event.task_id}`, {
+          key: `task-${event.task_id}`,
+          kind: 'task',
+          title: `执行任务 ${event.task_id}`,
+          status: 'running',
+          args: {},
+          result: { ...event },
+        })
+        break
+      case 'task.finished': {
+        const key = `task:${event.task_id}`
+        const step = pipelineSteps.get(key)
+        if (step) {
+          step.status = event.status === 'failed' ? 'failed' : 'success'
+          step.result = { ...step.result, ...event }
+        }
+        break
+      }
+      case 'compute.finished': {
+        const key = `compute:${event.task_id}`
+        pipelineSteps.set(key, {
+          key: `compute-${event.task_id}`,
+          kind: 'compute',
+          title: `计算结果 ${event.task_id}`,
+          status: event.status === 'failed' ? 'failed' : 'success',
+          args: {},
+          result: { ...event },
+        })
+        break
+      }
       case 'step.started':
         eventRunStatus = 'running'
         currentIndex = Number(event.step_index)
@@ -232,13 +289,20 @@ export function buildAgentFlow(
         for (const step of workflowSteps.values()) {
           if (step.status === 'running') step.status = 'success'
         }
+        for (const step of pipelineSteps.values()) {
+          if (step.status === 'running') step.status = 'success'
+        }
         break
     }
   }
 
   // 同一轮先展示模型为什么这样做，再展示实际工具调用，保留 Agent 的决策脉络。
   const steps: AgentFlowStep[] = understandingStep ? [understandingStep] : []
-  const indexedTools = [...toolSteps.values(), ...workflowSteps.values()]
+  const indexedTools = [
+    ...toolSteps.values(),
+    ...workflowSteps.values(),
+    ...pipelineSteps.values(),
+  ]
   const stepIndexes = [
     ...new Set([
       ...thinkingSteps.keys(),

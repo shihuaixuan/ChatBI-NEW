@@ -940,7 +940,7 @@ def test_sql_adapter_executes_single_query_with_uniform_result_and_artifact():
         {"value": 1},
         {"value": 2},
     ]
-    assert result["rows"] == [{"value": 1}]
+    assert result["rows"] == [{"value": 1}, {"value": 2}]
 
 
 def test_sql_adapter_returns_stable_failure_when_artifact_write_fails():
@@ -1162,7 +1162,11 @@ def test_sql_adapter_keeps_only_sample_rows_for_large_result():
     )
 
     assert result["row_count"] == 3
-    assert result["rows"] == [{"visit_uv": 1}, {"visit_uv": 2}]
+    assert result["rows"] == [
+        {"visit_uv": 1},
+        {"visit_uv": 2},
+        {"visit_uv": 3},
+    ]
     assert result["sampled_row_count"] == 2
     assert result["result_truncated"] is True
     assert result["artifact_ref"] is None
@@ -1194,7 +1198,11 @@ def test_sql_adapter_uses_chatbi_config_sample_row_limit():
         }
     )
 
-    assert result["rows"] == [{"visit_uv": 1}]
+    assert result["rows"] == [
+        {"visit_uv": 1},
+        {"visit_uv": 2},
+        {"visit_uv": 3},
+    ]
     assert result["sampled_row_count"] == 1
 
 

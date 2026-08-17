@@ -1,0 +1,22 @@
+flowchart LR
+    A["Agent Run / Graph Run"] --> B["TemporalContext"]
+    B --> C["Question Understanding"]
+    C --> D["Temporal Resolver"]
+    D --> E["Intent Validation"]
+    E --> F["Semantic Retrieval"]
+    F --> G["Default Time Dimension Binding"]
+    G --> H["Temporal Compile Plan"]
+    H --> I["Temporal SQL Renderer"]
+    I --> J["Semantic SQL Compiler"]
+
+    subgraph Temporal["apps/temporal"]
+        B
+        D
+        K["Extractor"]
+        L["Calendar"]
+        M["Bucket Binder"]
+        I
+        D --> L
+        C --> K
+        H --> M
+    end

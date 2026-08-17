@@ -1,0 +1,12 @@
+{"case_id":"P1-G001","question":"店铺100023在2026年6月30日的总GMV相比6月29日变化了多少，增长率是多少？","dataset":"商城店铺数据集","expected_text":[],"expected_points":["拆分两个日期查询","通过growth计算差值和增长率","回答数字均有结果引用"],"tags":["comparison","growth","dual_query"]}
+{"case_id":"P1-G002","question":"对比店铺100021在2026年6月与2026年5月的总订单数。","dataset":"商城店铺数据集","expected_text":[],"expected_points":["拆分两个自然月查询","同时展示基期和对比期"],"tags":["comparison","custom_period"]}
+{"case_id":"P1-G003","question":"2026年6月各店铺总GMV占全部店铺总GMV的比例是多少？","dataset":"商城店铺数据集","expected_text":[],"expected_points":["按店铺分组","使用share计算占比","占比合计接近100%"],"tags":["composition","share"]}
+{"case_id":"P1-G004","question":"2026年6月店铺100013各交易渠道销售件数占比是多少？","dataset":"商城店铺数据集","expected_text":[],"expected_points":["按交易渠道分组","使用share计算占比"],"tags":["composition","share"]}
+{"case_id":"P1-G005","question":"同时给出2026年6月店铺100013的总GMV和未发订单数。","dataset":"商城店铺数据集","expected_text":[],"expected_points":["生成跨模型多查询计划","回答同时消费两个结果集"],"tags":["cross_model","multi_query","multi_metric"]}
+{"case_id":"P1-G006","question":"对比2026年6月店铺100013的总GMV和2026年5月未发订单金额。","dataset":"商城店铺数据集","expected_text":[],"expected_points":["保留跨模型独立查询","不把不同口径错误合并"],"tags":["cross_model","multi_query","custom_period"]}
+{"case_id":"P1-G007","question":"2026年6月各店铺销售订单平均客单价是多少？","dataset":"商城店铺数据集","expected_text":[],"expected_points":["使用派生或比率指标","分母使用NULLIF保护"],"tags":["derived_metric","ratio"]}
+{"case_id":"P1-G008","question":"2026年6月总GMV高于10000元的店铺有哪些？","dataset":"商城店铺数据集","expected_text":[],"expected_points":["聚合后使用HAVING过滤","不把指标条件错误放入WHERE"],"tags":["having","metric_filter"]}
+{"case_id":"P1-G009","question":"展示2026年1月至6月每月总GMV及环比增长率。","dataset":"商城店铺数据集","expected_text":[],"expected_points":["按月分桶","固定周期偏移使用确定性计算"],"tags":["time_offset","mom","trend"]}
+{"case_id":"P1-G010","question":"展示2025年与2026年上半年总GMV同比。","dataset":"商城店铺数据集","expected_text":[],"expected_points":["使用两个半年区间","通过growth计算同比"],"tags":["comparison","yoy","dual_query"]}
+{"case_id":"P1-G011","question":"按店铺维度统计需要预聚合的销售额指标。","dataset":"商城店铺数据集","expected_text":[],"expected_points":["基础模型先按契约粒度预聚合","预聚合后再连接维表"],"tags":["strict","preaggregation"]}
+{"case_id":"P1-G012","question":"查询每个店铺当前期末库存并按库存量降序排列。","dataset":"商城店铺数据集","expected_text":[],"expected_points":["使用快照期末口径","不得对快照跨时间求和"],"tags":["snapshot","ranking"]}

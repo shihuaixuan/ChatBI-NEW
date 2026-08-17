@@ -75,6 +75,34 @@ const runtimeLoading = ref(false)
 const finalAnswer = computed(
   () => props.message?.record?.sql_answer || props.message?.record?.chart_answer || ''
 )
+const caliberCard = computed(() => props.message?.record?.caliber_card || {})
+const caliberMetrics = computed(() =>
+  Array.isArray(caliberCard.value.metrics) ? caliberCard.value.metrics : []
+)
+const caliberFilters = computed(() =>
+  Array.isArray(caliberCard.value.filters) ? caliberCard.value.filters : []
+)
+const answerClaims = computed(() =>
+  Array.isArray(props.message?.record?.claims) ? props.message.record.claims : []
+)
+const hasCaliberCard = computed(
+  () =>
+    caliberMetrics.value.length > 0 ||
+    caliberFilters.value.length > 0 ||
+    answerClaims.value.length > 0
+)
+const caliberMetricText = computed(() =>
+  caliberMetrics.value
+    .map((item: Record<string, any>) => item.name || item.biz_name)
+    .filter(Boolean)
+    .join('、')
+)
+const caliberFilterText = computed(() =>
+  caliberFilters.value
+    .map((item: Record<string, any>) => item.label || item.name || item.field)
+    .filter(Boolean)
+    .join('、')
+)
 
 async function pushOptimisticClarificationAccepted(currentRecord: ChatRecord) {
   // 用户已提交澄清后，先让时间线退出等待态；真实后端事件随后会补齐持久化序号。
@@ -343,6 +371,21 @@ defineExpose({
     <section v-if="finalAnswer" class="final-answer">
       <MdComponent :message="finalAnswer" />
     </section>
+    <section v-if="hasCaliberCard" class="caliber-card">
+      <div class="caliber-title">口径</div>
+      <div v-if="caliberMetrics.length" class="caliber-row">
+        <span class="caliber-label">指标</span>
+        <span>{{ caliberMetricText }}</span>
+      </div>
+      <div v-if="caliberFilters.length" class="caliber-row">
+        <span class="caliber-label">筛选</span>
+        <span>{{ caliberFilterText }}</span>
+      </div>
+      <div v-if="answerClaims.length" class="caliber-row">
+        <span class="caliber-label">依据</span>
+        <span>{{ answerClaims.length }} 条结果引用</span>
+      </div>
+    </section>
     <ChartBlock
       style="margin-top: 6px"
       :message="message"
@@ -365,5 +408,31 @@ defineExpose({
   color: rgba(31, 35, 41, 1);
   font-size: 15px;
   line-height: 24px;
+}
+
+.caliber-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(31, 35, 41, 0.12);
+  border-radius: 6px;
+  color: rgba(31, 35, 41, 0.8);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.caliber-title {
+  margin-bottom: 4px;
+  color: rgba(31, 35, 41, 1);
+  font-weight: 600;
+}
+
+.caliber-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.caliber-label {
+  color: rgba(31, 35, 41, 0.55);
 }
 </style>

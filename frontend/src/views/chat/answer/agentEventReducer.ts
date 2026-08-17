@@ -70,6 +70,9 @@ export function reduceAgentEvent(
       currentRecord.sql_answer = event.answer ?? event.content
       currentRecord.chart_answer = event.answer ?? event.content
       if (event.chart) currentRecord.chart = JSON.stringify(event.chart)
+      currentRecord.claims = Array.isArray(event.claims) ? event.claims : []
+      currentRecord.caliber_card = isObject(event.caliber_card) ? event.caliber_card : {}
+      currentRecord.chart_spec = isObject(event.chart_spec) ? event.chart_spec : {}
       break
     case 'clarification.required':
       currentRecord.status = 'waiting_user'
@@ -99,6 +102,9 @@ export function reduceAgentEvent(
       currentRecord.sql_answer = event.answer ?? event.content
       currentRecord.chart_answer = event.answer ?? event.content
       if (event.chart) currentRecord.chart = JSON.stringify(event.chart)
+      currentRecord.claims = Array.isArray(event.claims) ? event.claims : []
+      currentRecord.caliber_card = isObject(event.caliber_card) ? event.caliber_card : {}
+      currentRecord.chart_spec = isObject(event.chart_spec) ? event.chart_spec : {}
       return alreadyFinished ? {} : { terminal: 'finished' }
     }
   }

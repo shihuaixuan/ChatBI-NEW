@@ -76,6 +76,7 @@ def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions
         "interaction.intent.answered",
         "interaction.intent.skipped",
         "interaction.slot.answered",
+        "interaction.slot.temporal_answered",
         "interaction.slot.skipped",
         "interaction.metric.answered",
         "interaction.metric.skipped",

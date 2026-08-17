@@ -115,6 +115,17 @@ def execute_tool_batch(
     workers = max(1, min(max_workers, len(batch)))
     outcomes: dict[int, ToolResult[Any] | BaseException] = {}
     cancellation_requested = False
+
+    def execute_if_active(call: ToolCall) -> ToolResult[Any]:
+        # Future 可能已进入线程池队列；真正开始前再检查一次，关闭提交与执行之间的取消竞态。
+        if cancellation is not None and cancellation.is_cancelled():
+            return ToolResult.interrupted(
+                "用户已请求取消，工具未开始执行。",
+                error_code="tool_cancelled_before_start",
+                metadata={"underlying_operation_started": False},
+            )
+        return execute(call)
+
     with ThreadPoolExecutor(max_workers=workers) as pool:
         # 每个并行工具复制当前上下文，确保 OTEL 父 span 等 contextvars 不丢失。
         futures = {}
@@ -122,7 +133,7 @@ def execute_tool_batch(
             if cancellation is not None and cancellation.is_cancelled():
                 cancellation_requested = True
                 break
-            futures[pool.submit(copy_context().run, execute, call)] = index
+            futures[pool.submit(copy_context().run, execute_if_active, call)] = index
         pending = set(futures)
         while pending:
             done, pending = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED)

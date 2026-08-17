@@ -10,6 +10,7 @@ from apps.retrieval import (
     RetrievalRequest,
     bind_default_time_dimensions,
     bundle_to_semantic_payload,
+    is_compilation_decision_executable,
 )
 from apps.semantic import DatasetSchema
 from apps.tool.tools.semantic import project_semantic_package
@@ -130,7 +131,12 @@ def refresh_semantic_projection(
         intent if isinstance(intent, dict) else {},
     ).model_dump(mode="json")
 
-    if scope.get("semantic_enforcement") == "STRICT" and isinstance(schema_data, dict):
+    # 时间结果回投影也必须遵守检索决策门控，歧义状态只更新候选快照，不能生成严格计划。
+    if (
+        scope.get("semantic_enforcement") == "STRICT"
+        and is_compilation_decision_executable(scope.get("decision_status"))
+        and isinstance(schema_data, dict)
+    ):
         schema = DatasetSchema.model_validate(schema_data)
         query_plans = project_semantic_query_plans(
             schema,

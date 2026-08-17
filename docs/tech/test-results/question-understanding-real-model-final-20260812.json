@@ -1,0 +1,2410 @@
+{
+  "test_type": "real_model_question_understanding_evaluation",
+  "generated_at": "2026-08-12T16:44:05.557535+08:00",
+  "environment": {
+    "tenant_id": 1,
+    "dataset_id": 3,
+    "datasource_id": null,
+    "fixed_reference_at": "2026-08-12T10:00:00+08:00"
+  },
+  "summary": {
+    "case_count": 6,
+    "successful_case_count": 6,
+    "passed_checks": 79,
+    "total_checks": 87,
+    "field_accuracy": 0.908
+  },
+  "cases": [
+    {
+      "case_id": "metric_filter",
+      "question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+      "purpose": "验证指标、相对时间和单值筛选维度。",
+      "expected": {
+        "rewritten_question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+        "intent_type": "metric_query",
+        "metric_mentions_contains": "活跃客户数-线上访问",
+        "time_raw": "今天",
+        "normalized_time": {
+          "start": "2026-08-12",
+          "end_exclusive": "2026-08-13"
+        },
+        "residual_filter_mentions": [],
+        "dimension_role": {
+          "name_contains": "店铺ID",
+          "role": "filter"
+        },
+        "dimension_value_contains": "100011",
+        "query_shape": {
+          "select_mode": "aggregate",
+          "needs_group_by": false,
+          "needs_order_by": false,
+          "limit": null,
+          "time_grain": null
+        },
+        "validation_status": "valid"
+      },
+      "fixed_temporal_context": {
+        "reference_at": "2026-08-12T10:00:00+08:00",
+        "timezone": "Asia/Shanghai"
+      },
+      "model_calls": [
+        {
+          "sequence": 1,
+          "stage": "QUESTION_REWRITE",
+          "started_at": "2026-08-12T16:42:05.974876+08:00",
+          "finished_at": "2026-08-12T16:42:09.603535+08:00",
+          "duration_ms": 3628.66,
+          "input": {
+            "question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+            "datasource_id": null,
+            "conversation_context": {}
+          },
+          "raw_output": "{\n  \"message_type\": \"new_question\",\n  \"rewritten_question\": \"今天店铺ID 100011的活跃客户数-线上访问是多少？\",\n  \"inherited_context\": {},\n  \"need_user_input\": false,\n  \"missing_slots\": [],\n  \"confidence\": 1.0\n}",
+          "parsed_output": {
+            "message_type": "new_question",
+            "rewritten_question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+            "inherited_context": {},
+            "need_user_input": false,
+            "missing_slots": [],
+            "confidence": 1.0
+          },
+          "usage_metadata": {
+            "input_tokens": 473,
+            "output_tokens": 152,
+            "total_tokens": 625,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 83
+            }
+          }
+        },
+        {
+          "sequence": 2,
+          "stage": "INTENT_RECOGNITION",
+          "started_at": "2026-08-12T16:42:09.604924+08:00",
+          "finished_at": "2026-08-12T16:42:16.118363+08:00",
+          "duration_ms": 6513.44,
+          "input": {
+            "rewritten_question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+            "inherited_context": {}
+          },
+          "raw_output": "{\n  \"intent_type\": \"metric_query\",\n  \"confidence\": 0.95,\n  \"metric_mentions\": [\"活跃客户数-线上访问\"],\n  \"dimension_mentions\": [],\n  \"dimension_slots\": [],\n  \"time_mentions\": [\"今天\"],\n  \"time_range\": {\"raw\": \"今天\", \"value_status\": \"provided\"},\n  \"filter_mentions\": [],\n  \"required_slot_types\": [],\n  \"query_shape\": {\n    \"select_mode\": \"aggregate\",\n    \"needs_group_by\": false,\n    \"needs_order_by\": false,\n    \"order_direction\": null,\n    \"limit\": null,\n    \"time_grain\": null\n  },\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "intent_type": "metric_query",
+            "confidence": 0.95,
+            "metric_mentions": [
+              "活跃客户数-线上访问"
+            ],
+            "dimension_mentions": [],
+            "dimension_slots": [],
+            "time_mentions": [
+              "今天"
+            ],
+            "time_range": {
+              "raw": "今天",
+              "value_status": "provided"
+            },
+            "filter_mentions": [],
+            "required_slot_types": [],
+            "query_shape": {
+              "select_mode": "aggregate",
+              "needs_group_by": false,
+              "needs_order_by": false,
+              "order_direction": null,
+              "limit": null,
+              "time_grain": null
+            },
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 1123,
+            "output_tokens": 431,
+            "total_tokens": 1554,
+            "input_token_details": {
+              "cache_read": 1024
+            },
+            "output_token_details": {
+              "reasoning": 260
+            }
+          }
+        },
+        {
+          "sequence": 3,
+          "stage": "DIMENSION_RECOGNITION",
+          "started_at": "2026-08-12T16:42:16.120803+08:00",
+          "finished_at": "2026-08-12T16:42:19.257523+08:00",
+          "duration_ms": 3136.72,
+          "input": {
+            "rewritten_question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+            "metric_mentions": [
+              "活跃客户数-线上访问"
+            ],
+            "time_mentions": [
+              "今天"
+            ],
+            "inherited_context": {},
+            "available_dimensions": [
+              {
+                "name": "唯一ID",
+                "aliases": [
+                  "唯一"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "商家ID",
+                "aliases": [
+                  "商家"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "店铺ID",
+                "aliases": [
+                  "店铺"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              }
+            ],
+            "time_dimensions": [
+              {
+                "name": "时间",
+                "aliases": [],
+                "data_type": "date",
+                "semantic_type": "time",
+                "value_kind": "date",
+                "is_time": true
+              }
+            ]
+          },
+          "raw_output": "{\n  \"dimension_mentions\": [\"店铺ID\"],\n  \"dimension_slots\": [\n    {\"name\": \"店铺ID\", \"role\": \"filter\", \"value\": \"100011\", \"value_status\": \"provided\", \"value_confidence\": 1.0}\n  ],\n  \"residual_filter_mentions\": [],\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "dimension_mentions": [
+              "店铺ID"
+            ],
+            "dimension_slots": [
+              {
+                "name": "店铺ID",
+                "role": "filter",
+                "value": "100011",
+                "value_status": "provided",
+                "value_confidence": 1.0
+              }
+            ],
+            "residual_filter_mentions": [],
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 906,
+            "output_tokens": 167,
+            "total_tokens": 1073,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 78
+            }
+          }
+        }
+      ],
+      "final_understanding": {
+        "original_question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+        "message_type": "new_question",
+        "rewritten_question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+        "inherited_context": {},
+        "intent": {
+          "intent_type": "metric_query",
+          "confidence": 0.95,
+          "metric_mentions": [
+            "活跃客户数-线上访问"
+          ],
+          "dimension_mentions": [
+            "店铺ID"
+          ],
+          "dimension_slots": [
+            {
+              "name": "店铺ID",
+              "role": "filter",
+              "value": "100011",
+              "value_status": "provided",
+              "value_confidence": 1.0
+            }
+          ],
+          "time_mentions": [
+            "今天"
+          ],
+          "time_range": {
+            "raw": "今天",
+            "value_status": "provided",
+            "normalized": {
+              "kind": "absolute_range",
+              "start": "2026-08-12",
+              "end_exclusive": "2026-08-13",
+              "timezone": "Asia/Shanghai",
+              "source_raw": "今天"
+            },
+            "interpretation_source": "legacy_rule"
+          },
+          "filter_mentions": [],
+          "required_slot_types": [
+            "metric",
+            "filter",
+            "time_dimension"
+          ],
+          "query_shape": {
+            "select_mode": "aggregate",
+            "needs_group_by": false,
+            "needs_order_by": false,
+            "order_direction": null,
+            "limit": null,
+            "time_grain": null
+          },
+          "ambiguous_slots": [],
+          "conflict_slots": []
+        },
+        "validation": {
+          "status": "valid",
+          "reason_codes": [],
+          "clarification_slots": []
+        },
+        "temporal_interpretation": null
+      },
+      "validation_effect": {
+        "status": "valid",
+        "reason_codes": [],
+        "clarification_slots": [],
+        "explanation": "校验未发现阻断问题，当前理解可以进入后续流程。"
+      },
+      "accuracy_checks": [
+        {
+          "field": "rewritten_question",
+          "expected": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+          "actual": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+          "passed": true
+        },
+        {
+          "field": "intent.intent_type",
+          "expected": "metric_query",
+          "actual": "metric_query",
+          "passed": true
+        },
+        {
+          "field": "intent.metric_mentions",
+          "expected": "包含 活跃客户数-线上访问",
+          "actual": [
+            "活跃客户数-线上访问"
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.raw",
+          "expected": "今天",
+          "actual": "今天",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.start",
+          "expected": "2026-08-12",
+          "actual": "2026-08-12",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.end_exclusive",
+          "expected": "2026-08-13",
+          "actual": "2026-08-13",
+          "passed": true
+        },
+        {
+          "field": "intent.filter_mentions",
+          "expected": [],
+          "actual": [],
+          "passed": true
+        },
+        {
+          "field": "intent.dimension_slots.role",
+          "expected": {
+            "name_contains": "店铺ID",
+            "role": "filter"
+          },
+          "actual": [
+            {
+              "name": "店铺ID",
+              "role": "filter",
+              "value": "100011",
+              "value_status": "provided",
+              "value_confidence": 1.0
+            }
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.dimension_slots.value",
+          "expected": "包含 100011",
+          "actual": [
+            "100011"
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.select_mode",
+          "expected": "aggregate",
+          "actual": "aggregate",
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_group_by",
+          "expected": false,
+          "actual": false,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_order_by",
+          "expected": false,
+          "actual": false,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.limit",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.time_grain",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "validation.status",
+          "expected": "valid",
+          "actual": "valid",
+          "passed": true
+        }
+      ],
+      "score": {
+        "passed": 15,
+        "total": 15,
+        "accuracy": 1.0
+      },
+      "usage_metadata": {
+        "input_tokens": 2502,
+        "output_tokens": 750,
+        "total_tokens": 3252
+      },
+      "error": null,
+      "started_at": "2026-08-12T16:42:05.662012+08:00",
+      "finished_at": "2026-08-12T16:42:19.261594+08:00",
+      "duration_ms": 13599.58
+    },
+    {
+      "case_id": "grouped_metric",
+      "question": "最近7天各店铺ID的新增客户数-线上是多少？",
+      "purpose": "验证明确分组维度和相对时间范围。",
+      "expected": {
+        "rewritten_question": "最近7天各店铺ID的新增客户数-线上是多少？",
+        "intent_type": "metric_query",
+        "metric_mentions_contains": "新增客户数-线上",
+        "time_raw": "最近7天",
+        "normalized_time": {
+          "start": "2026-08-06",
+          "end_exclusive": "2026-08-13"
+        },
+        "residual_filter_mentions": [],
+        "dimension_role": {
+          "name_contains": "店铺ID",
+          "role": "group_by"
+        },
+        "query_shape": {
+          "select_mode": "aggregate",
+          "needs_group_by": true,
+          "needs_order_by": false,
+          "limit": null,
+          "time_grain": null
+        },
+        "validation_status": "valid"
+      },
+      "fixed_temporal_context": {
+        "reference_at": "2026-08-12T10:00:00+08:00",
+        "timezone": "Asia/Shanghai"
+      },
+      "model_calls": [
+        {
+          "sequence": 1,
+          "stage": "QUESTION_REWRITE",
+          "started_at": "2026-08-12T16:42:19.323625+08:00",
+          "finished_at": "2026-08-12T16:42:22.364147+08:00",
+          "duration_ms": 3040.52,
+          "input": {
+            "question": "最近7天各店铺ID的新增客户数-线上是多少？",
+            "datasource_id": null,
+            "conversation_context": {}
+          },
+          "raw_output": "{\n  \"message_type\": \"new_question\",\n  \"rewritten_question\": \"最近7天各店铺ID的新增客户数-线上是多少？\",\n  \"inherited_context\": {},\n  \"need_user_input\": false,\n  \"missing_slots\": [],\n  \"confidence\": 1.0\n}",
+          "parsed_output": {
+            "message_type": "new_question",
+            "rewritten_question": "最近7天各店铺ID的新增客户数-线上是多少？",
+            "inherited_context": {},
+            "need_user_input": false,
+            "missing_slots": [],
+            "confidence": 1.0
+          },
+          "usage_metadata": {
+            "input_tokens": 472,
+            "output_tokens": 101,
+            "total_tokens": 573,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 33
+            }
+          }
+        },
+        {
+          "sequence": 2,
+          "stage": "INTENT_RECOGNITION",
+          "started_at": "2026-08-12T16:42:22.364318+08:00",
+          "finished_at": "2026-08-12T16:42:29.605412+08:00",
+          "duration_ms": 7241.09,
+          "input": {
+            "rewritten_question": "最近7天各店铺ID的新增客户数-线上是多少？",
+            "inherited_context": {}
+          },
+          "raw_output": "{\n  \"intent_type\": \"metric_query\",\n  \"confidence\": 1.0,\n  \"metric_mentions\": [\"新增客户数-线上\"],\n  \"dimension_mentions\": [],\n  \"dimension_slots\": [],\n  \"time_mentions\": [\"最近7天\"],\n  \"time_range\": {\"raw\": \"最近7天\", \"value_status\": \"provided\"},\n  \"filter_mentions\": [],\n  \"required_slot_types\": [],\n  \"query_shape\": {\n    \"select_mode\": \"aggregate\",\n    \"needs_group_by\": true,\n    \"needs_order_by\": false,\n    \"order_direction\": null,\n    \"limit\": null,\n    \"time_grain\": null\n  },\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "intent_type": "metric_query",
+            "confidence": 1.0,
+            "metric_mentions": [
+              "新增客户数-线上"
+            ],
+            "dimension_mentions": [],
+            "dimension_slots": [],
+            "time_mentions": [
+              "最近7天"
+            ],
+            "time_range": {
+              "raw": "最近7天",
+              "value_status": "provided"
+            },
+            "filter_mentions": [],
+            "required_slot_types": [],
+            "query_shape": {
+              "select_mode": "aggregate",
+              "needs_group_by": true,
+              "needs_order_by": false,
+              "order_direction": null,
+              "limit": null,
+              "time_grain": null
+            },
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 1122,
+            "output_tokens": 489,
+            "total_tokens": 1611,
+            "input_token_details": {
+              "cache_read": 1024
+            },
+            "output_token_details": {
+              "reasoning": 315
+            }
+          }
+        },
+        {
+          "sequence": 3,
+          "stage": "DIMENSION_RECOGNITION",
+          "started_at": "2026-08-12T16:42:29.605491+08:00",
+          "finished_at": "2026-08-12T16:42:32.895383+08:00",
+          "duration_ms": 3289.89,
+          "input": {
+            "rewritten_question": "最近7天各店铺ID的新增客户数-线上是多少？",
+            "metric_mentions": [
+              "新增客户数-线上"
+            ],
+            "time_mentions": [
+              "最近7天"
+            ],
+            "inherited_context": {},
+            "available_dimensions": [
+              {
+                "name": "唯一ID",
+                "aliases": [
+                  "唯一"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "商家ID",
+                "aliases": [
+                  "商家"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "店铺ID",
+                "aliases": [
+                  "店铺"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              }
+            ],
+            "time_dimensions": [
+              {
+                "name": "时间",
+                "aliases": [],
+                "data_type": "date",
+                "semantic_type": "time",
+                "value_kind": "date",
+                "is_time": true
+              }
+            ]
+          },
+          "raw_output": "{\n  \"dimension_mentions\": [\"店铺ID\"],\n  \"dimension_slots\": [\n    {\"name\": \"店铺ID\", \"role\": \"group_by\", \"value\": null, \"value_status\": \"not_provided\", \"value_confidence\": 1.0}\n  ],\n  \"residual_filter_mentions\": [],\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "dimension_mentions": [
+              "店铺ID"
+            ],
+            "dimension_slots": [
+              {
+                "name": "店铺ID",
+                "role": "group_by",
+                "value": null,
+                "value_status": "not_provided",
+                "value_confidence": 1.0
+              }
+            ],
+            "residual_filter_mentions": [],
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 906,
+            "output_tokens": 223,
+            "total_tokens": 1129,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 132
+            }
+          }
+        }
+      ],
+      "final_understanding": {
+        "original_question": "最近7天各店铺ID的新增客户数-线上是多少？",
+        "message_type": "new_question",
+        "rewritten_question": "最近7天各店铺ID的新增客户数-线上是多少？",
+        "inherited_context": {},
+        "intent": {
+          "intent_type": "metric_query",
+          "confidence": 1.0,
+          "metric_mentions": [
+            "新增客户数-线上"
+          ],
+          "dimension_mentions": [
+            "店铺ID"
+          ],
+          "dimension_slots": [
+            {
+              "name": "店铺ID",
+              "role": "group_by",
+              "value": null,
+              "value_status": "not_provided",
+              "value_confidence": 1.0
+            }
+          ],
+          "time_mentions": [
+            "最近7天"
+          ],
+          "time_range": {
+            "raw": "最近7天",
+            "value_status": "provided",
+            "normalized": {
+              "kind": "absolute_range",
+              "start": "2026-08-06",
+              "end_exclusive": "2026-08-13",
+              "timezone": "Asia/Shanghai",
+              "source_raw": "最近7天"
+            },
+            "interpretation_source": "legacy_rule"
+          },
+          "filter_mentions": [],
+          "required_slot_types": [
+            "metric",
+            "dimension",
+            "time_dimension"
+          ],
+          "query_shape": {
+            "select_mode": "aggregate",
+            "needs_group_by": true,
+            "needs_order_by": false,
+            "order_direction": null,
+            "limit": null,
+            "time_grain": null
+          },
+          "ambiguous_slots": [],
+          "conflict_slots": []
+        },
+        "validation": {
+          "status": "valid",
+          "reason_codes": [],
+          "clarification_slots": []
+        },
+        "temporal_interpretation": null
+      },
+      "validation_effect": {
+        "status": "valid",
+        "reason_codes": [],
+        "clarification_slots": [],
+        "explanation": "校验未发现阻断问题，当前理解可以进入后续流程。"
+      },
+      "accuracy_checks": [
+        {
+          "field": "rewritten_question",
+          "expected": "最近7天各店铺ID的新增客户数-线上是多少？",
+          "actual": "最近7天各店铺ID的新增客户数-线上是多少？",
+          "passed": true
+        },
+        {
+          "field": "intent.intent_type",
+          "expected": "metric_query",
+          "actual": "metric_query",
+          "passed": true
+        },
+        {
+          "field": "intent.metric_mentions",
+          "expected": "包含 新增客户数-线上",
+          "actual": [
+            "新增客户数-线上"
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.raw",
+          "expected": "最近7天",
+          "actual": "最近7天",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.start",
+          "expected": "2026-08-06",
+          "actual": "2026-08-06",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.end_exclusive",
+          "expected": "2026-08-13",
+          "actual": "2026-08-13",
+          "passed": true
+        },
+        {
+          "field": "intent.filter_mentions",
+          "expected": [],
+          "actual": [],
+          "passed": true
+        },
+        {
+          "field": "intent.dimension_slots.role",
+          "expected": {
+            "name_contains": "店铺ID",
+            "role": "group_by"
+          },
+          "actual": [
+            {
+              "name": "店铺ID",
+              "role": "group_by",
+              "value": null,
+              "value_status": "not_provided",
+              "value_confidence": 1.0
+            }
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.select_mode",
+          "expected": "aggregate",
+          "actual": "aggregate",
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_group_by",
+          "expected": true,
+          "actual": true,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_order_by",
+          "expected": false,
+          "actual": false,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.limit",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.time_grain",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "validation.status",
+          "expected": "valid",
+          "actual": "valid",
+          "passed": true
+        }
+      ],
+      "score": {
+        "passed": 14,
+        "total": 14,
+        "accuracy": 1.0
+      },
+      "usage_metadata": {
+        "input_tokens": 2500,
+        "output_tokens": 813,
+        "total_tokens": 3313
+      },
+      "error": null,
+      "started_at": "2026-08-12T16:42:19.276336+08:00",
+      "finished_at": "2026-08-12T16:42:32.895894+08:00",
+      "duration_ms": 13619.56
+    },
+    {
+      "case_id": "top_ranking",
+      "question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+      "purpose": "验证排名、降序和明确 TopN 数量由模型生成。",
+      "expected": {
+        "rewritten_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+        "intent_type": "ranking_analysis",
+        "metric_mentions_contains": "新增客户数-线上",
+        "time_raw": "本月",
+        "normalized_time": {
+          "start": "2026-08-01",
+          "end_exclusive": "2026-09-01"
+        },
+        "residual_filter_mentions": [],
+        "dimension_role": {
+          "name_contains": "店铺ID",
+          "role": "group_by"
+        },
+        "query_shape": {
+          "select_mode": "aggregate",
+          "needs_group_by": true,
+          "needs_order_by": true,
+          "order_direction": "desc",
+          "limit": 5,
+          "time_grain": null
+        },
+        "validation_status": "valid"
+      },
+      "fixed_temporal_context": {
+        "reference_at": "2026-08-12T10:00:00+08:00",
+        "timezone": "Asia/Shanghai"
+      },
+      "model_calls": [
+        {
+          "sequence": 1,
+          "stage": "QUESTION_REWRITE",
+          "started_at": "2026-08-12T16:42:32.915803+08:00",
+          "finished_at": "2026-08-12T16:42:36.114696+08:00",
+          "duration_ms": 3198.89,
+          "input": {
+            "question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+            "datasource_id": null,
+            "conversation_context": {}
+          },
+          "raw_output": "{\n  \"message_type\": \"new_question\",\n  \"rewritten_question\": \"本月新增客户数-线上最高的5个店铺ID是哪些？\",\n  \"inherited_context\": {},\n  \"need_user_input\": false,\n  \"missing_slots\": [],\n  \"confidence\": 1.0\n}",
+          "parsed_output": {
+            "message_type": "new_question",
+            "rewritten_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+            "inherited_context": {},
+            "need_user_input": false,
+            "missing_slots": [],
+            "confidence": 1.0
+          },
+          "usage_metadata": {
+            "input_tokens": 472,
+            "output_tokens": 147,
+            "total_tokens": 619,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 79
+            }
+          }
+        },
+        {
+          "sequence": 2,
+          "stage": "INTENT_RECOGNITION",
+          "started_at": "2026-08-12T16:42:36.114796+08:00",
+          "finished_at": "2026-08-12T16:42:44.543768+08:00",
+          "duration_ms": 8428.97,
+          "input": {
+            "rewritten_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+            "inherited_context": {}
+          },
+          "raw_output": "{\n  \"intent_type\": \"ranking_analysis\",\n  \"confidence\": 0.95,\n  \"metric_mentions\": [\"新增客户数\"],\n  \"dimension_mentions\": [],\n  \"dimension_slots\": [],\n  \"time_mentions\": [\"本月\"],\n  \"time_range\": {\"raw\": \"本月\", \"value_status\": \"provided\"},\n  \"filter_mentions\": [],\n  \"required_slot_types\": [],\n  \"query_shape\": {\n    \"select_mode\": \"aggregate\",\n    \"needs_group_by\": true,\n    \"needs_order_by\": true,\n    \"order_direction\": \"desc\",\n    \"limit\": 5,\n    \"time_grain\": null\n  },\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "intent_type": "ranking_analysis",
+            "confidence": 0.95,
+            "metric_mentions": [
+              "新增客户数"
+            ],
+            "dimension_mentions": [],
+            "dimension_slots": [],
+            "time_mentions": [
+              "本月"
+            ],
+            "time_range": {
+              "raw": "本月",
+              "value_status": "provided"
+            },
+            "filter_mentions": [],
+            "required_slot_types": [],
+            "query_shape": {
+              "select_mode": "aggregate",
+              "needs_group_by": true,
+              "needs_order_by": true,
+              "order_direction": "desc",
+              "limit": 5,
+              "time_grain": null
+            },
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 1122,
+            "output_tokens": 645,
+            "total_tokens": 1767,
+            "input_token_details": {
+              "cache_read": 1024
+            },
+            "output_token_details": {
+              "reasoning": 474
+            }
+          }
+        },
+        {
+          "sequence": 3,
+          "stage": "DIMENSION_RECOGNITION",
+          "started_at": "2026-08-12T16:42:44.543874+08:00",
+          "finished_at": "2026-08-12T16:42:55.498254+08:00",
+          "duration_ms": 10954.38,
+          "input": {
+            "rewritten_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+            "metric_mentions": [
+              "新增客户数"
+            ],
+            "time_mentions": [
+              "本月"
+            ],
+            "inherited_context": {},
+            "available_dimensions": [
+              {
+                "name": "唯一ID",
+                "aliases": [
+                  "唯一"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "商家ID",
+                "aliases": [
+                  "商家"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "店铺ID",
+                "aliases": [
+                  "店铺"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              }
+            ],
+            "time_dimensions": [
+              {
+                "name": "时间",
+                "aliases": [],
+                "data_type": "date",
+                "semantic_type": "time",
+                "value_kind": "date",
+                "is_time": true
+              }
+            ]
+          },
+          "raw_output": "{\n  \"dimension_mentions\": [\"店铺ID\"],\n  \"dimension_slots\": [\n    {\n      \"name\": \"店铺ID\",\n      \"role\": \"ambiguous\",\n      \"value\": null,\n      \"value_status\": \"not_provided\",\n      \"value_confidence\": 0.0\n    }\n  ],\n  \"residual_filter_mentions\": [\n    {\n      \"name\": \"线上\",\n      \"value\": \"线上\",\n      \"operator\": \"=\"\n    }\n  ],\n  \"ambiguous_slots\": [\n    {\n      \"name\": \"店铺ID\",\n      \"role\": \"ambiguous\",\n      \"value\": null,\n      \"value_status\": \"not_provided\",\n      \"value_confidence\": 0.0\n    }\n  ],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "dimension_mentions": [
+              "店铺ID"
+            ],
+            "dimension_slots": [
+              {
+                "name": "店铺ID",
+                "role": "ambiguous",
+                "value": null,
+                "value_status": "not_provided",
+                "value_confidence": 0.0
+              }
+            ],
+            "residual_filter_mentions": [
+              {
+                "name": "线上",
+                "value": "线上",
+                "operator": "="
+              }
+            ],
+            "ambiguous_slots": [
+              {
+                "name": "店铺ID",
+                "role": "ambiguous",
+                "value": null,
+                "value_status": "not_provided",
+                "value_confidence": 0.0
+              }
+            ],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 902,
+            "output_tokens": 942,
+            "total_tokens": 1844,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 768
+            }
+          }
+        }
+      ],
+      "final_understanding": {
+        "original_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+        "message_type": "new_question",
+        "rewritten_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+        "inherited_context": {},
+        "intent": {
+          "intent_type": "ranking_analysis",
+          "confidence": 0.95,
+          "metric_mentions": [
+            "新增客户数"
+          ],
+          "dimension_mentions": [
+            "店铺ID"
+          ],
+          "dimension_slots": [
+            {
+              "name": "店铺ID",
+              "role": "ambiguous",
+              "value": null,
+              "value_status": "not_provided",
+              "value_confidence": 0.0
+            }
+          ],
+          "time_mentions": [
+            "本月"
+          ],
+          "time_range": {
+            "raw": "本月",
+            "value_status": "provided",
+            "normalized": {
+              "kind": "absolute_range",
+              "start": "2026-08-01",
+              "end_exclusive": "2026-09-01",
+              "timezone": "Asia/Shanghai",
+              "source_raw": "本月"
+            },
+            "interpretation_source": "legacy_rule"
+          },
+          "filter_mentions": [
+            {
+              "name": "线上",
+              "value": "线上",
+              "operator": "="
+            }
+          ],
+          "required_slot_types": [
+            "metric",
+            "time_dimension",
+            "order",
+            "limit",
+            "dimension"
+          ],
+          "query_shape": {
+            "select_mode": "aggregate",
+            "needs_group_by": true,
+            "needs_order_by": true,
+            "order_direction": "desc",
+            "limit": 5,
+            "time_grain": null
+          },
+          "ambiguous_slots": [],
+          "conflict_slots": []
+        },
+        "validation": {
+          "status": "clarification_required",
+          "reason_codes": [
+            "group_by_target_missing",
+            "ranking_dimension_missing",
+            "dimension_role_ambiguous"
+          ],
+          "clarification_slots": [
+            "dimension"
+          ]
+        },
+        "temporal_interpretation": null
+      },
+      "validation_effect": {
+        "status": "clarification_required",
+        "reason_codes": [
+          "group_by_target_missing",
+          "ranking_dimension_missing",
+          "dimension_role_ambiguous"
+        ],
+        "clarification_slots": [
+          "dimension"
+        ],
+        "explanation": "校验阻止当前理解直接进入后续执行。"
+      },
+      "accuracy_checks": [
+        {
+          "field": "rewritten_question",
+          "expected": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+          "actual": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+          "passed": true
+        },
+        {
+          "field": "intent.intent_type",
+          "expected": "ranking_analysis",
+          "actual": "ranking_analysis",
+          "passed": true
+        },
+        {
+          "field": "intent.metric_mentions",
+          "expected": "包含 新增客户数-线上",
+          "actual": [
+            "新增客户数"
+          ],
+          "passed": false
+        },
+        {
+          "field": "intent.time_range.raw",
+          "expected": "本月",
+          "actual": "本月",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.start",
+          "expected": "2026-08-01",
+          "actual": "2026-08-01",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.end_exclusive",
+          "expected": "2026-09-01",
+          "actual": "2026-09-01",
+          "passed": true
+        },
+        {
+          "field": "intent.filter_mentions",
+          "expected": [],
+          "actual": [
+            {
+              "name": "线上",
+              "value": "线上",
+              "operator": "="
+            }
+          ],
+          "passed": false
+        },
+        {
+          "field": "intent.dimension_slots.role",
+          "expected": {
+            "name_contains": "店铺ID",
+            "role": "group_by"
+          },
+          "actual": [
+            {
+              "name": "店铺ID",
+              "role": "ambiguous",
+              "value": null,
+              "value_status": "not_provided",
+              "value_confidence": 0.0
+            }
+          ],
+          "passed": false
+        },
+        {
+          "field": "intent.query_shape.select_mode",
+          "expected": "aggregate",
+          "actual": "aggregate",
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_group_by",
+          "expected": true,
+          "actual": true,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_order_by",
+          "expected": true,
+          "actual": true,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.order_direction",
+          "expected": "desc",
+          "actual": "desc",
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.limit",
+          "expected": 5,
+          "actual": 5,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.time_grain",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "validation.status",
+          "expected": "valid",
+          "actual": "clarification_required",
+          "passed": false
+        }
+      ],
+      "score": {
+        "passed": 11,
+        "total": 15,
+        "accuracy": 0.7333
+      },
+      "usage_metadata": {
+        "input_tokens": 2496,
+        "output_tokens": 1734,
+        "total_tokens": 4230
+      },
+      "error": null,
+      "started_at": "2026-08-12T16:42:32.897024+08:00",
+      "finished_at": "2026-08-12T16:42:55.500684+08:00",
+      "duration_ms": 22603.66
+    },
+    {
+      "case_id": "bottom_ranking",
+      "question": "本月新增客户数-线上最低的3个店铺ID是哪些？",
+      "purpose": "验证低值排名需要升序，防止方向识别错误。",
+      "expected": {
+        "rewritten_question": "本月新增客户数-线上最低的3个店铺ID是哪些？",
+        "intent_type": "ranking_analysis",
+        "metric_mentions_contains": "新增客户数-线上",
+        "time_raw": "本月",
+        "normalized_time": {
+          "start": "2026-08-01",
+          "end_exclusive": "2026-09-01"
+        },
+        "residual_filter_mentions": [],
+        "dimension_role": {
+          "name_contains": "店铺ID",
+          "role": "group_by"
+        },
+        "query_shape": {
+          "select_mode": "aggregate",
+          "needs_group_by": true,
+          "needs_order_by": true,
+          "order_direction": "asc",
+          "limit": 3,
+          "time_grain": null
+        },
+        "validation_status": "valid"
+      },
+      "fixed_temporal_context": {
+        "reference_at": "2026-08-12T10:00:00+08:00",
+        "timezone": "Asia/Shanghai"
+      },
+      "model_calls": [
+        {
+          "sequence": 1,
+          "stage": "QUESTION_REWRITE",
+          "started_at": "2026-08-12T16:42:55.543300+08:00",
+          "finished_at": "2026-08-12T16:42:58.177456+08:00",
+          "duration_ms": 2634.16,
+          "input": {
+            "question": "本月新增客户数-线上最低的3个店铺ID是哪些？",
+            "datasource_id": null,
+            "conversation_context": {}
+          },
+          "raw_output": "{\n  \"message_type\": \"new_question\",\n  \"rewritten_question\": \"本月新增客户数-线上最低的3个店铺ID是哪些？\",\n  \"inherited_context\": {},\n  \"need_user_input\": false,\n  \"missing_slots\": [],\n  \"confidence\": 1.0\n}",
+          "parsed_output": {
+            "message_type": "new_question",
+            "rewritten_question": "本月新增客户数-线上最低的3个店铺ID是哪些？",
+            "inherited_context": {},
+            "need_user_input": false,
+            "missing_slots": [],
+            "confidence": 1.0
+          },
+          "usage_metadata": {
+            "input_tokens": 473,
+            "output_tokens": 144,
+            "total_tokens": 617,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 75
+            }
+          }
+        },
+        {
+          "sequence": 2,
+          "stage": "INTENT_RECOGNITION",
+          "started_at": "2026-08-12T16:42:58.177694+08:00",
+          "finished_at": "2026-08-12T16:43:17.564190+08:00",
+          "duration_ms": 19386.5,
+          "input": {
+            "rewritten_question": "本月新增客户数-线上最低的3个店铺ID是哪些？",
+            "inherited_context": {}
+          },
+          "raw_output": "{\n  \"intent_type\": \"ranking_analysis\",\n  \"confidence\": 0.95,\n  \"metric_mentions\": [\"新增客户数\"],\n  \"dimension_mentions\": [],\n  \"dimension_slots\": [],\n  \"time_mentions\": [],\n  \"time_range\": {\"raw\": \"本月\", \"value_status\": \"provided\"},\n  \"filter_mentions\": [],\n  \"required_slot_types\": [],\n  \"query_shape\": {\n    \"select_mode\": \"aggregate\",\n    \"needs_group_by\": true,\n    \"needs_order_by\": true,\n    \"order_direction\": \"asc\",\n    \"limit\": 3,\n    \"time_grain\": null\n  },\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "intent_type": "ranking_analysis",
+            "confidence": 0.95,
+            "metric_mentions": [
+              "新增客户数"
+            ],
+            "dimension_mentions": [],
+            "dimension_slots": [],
+            "time_mentions": [],
+            "time_range": {
+              "raw": "本月",
+              "value_status": "provided"
+            },
+            "filter_mentions": [],
+            "required_slot_types": [],
+            "query_shape": {
+              "select_mode": "aggregate",
+              "needs_group_by": true,
+              "needs_order_by": true,
+              "order_direction": "asc",
+              "limit": 3,
+              "time_grain": null
+            },
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 1123,
+            "output_tokens": 1370,
+            "total_tokens": 2493,
+            "input_token_details": {
+              "cache_read": 1024
+            },
+            "output_token_details": {
+              "reasoning": 1201
+            }
+          }
+        },
+        {
+          "sequence": 3,
+          "stage": "DIMENSION_RECOGNITION",
+          "started_at": "2026-08-12T16:43:17.564681+08:00",
+          "finished_at": "2026-08-12T16:43:30.642838+08:00",
+          "duration_ms": 13078.16,
+          "input": {
+            "rewritten_question": "本月新增客户数-线上最低的3个店铺ID是哪些？",
+            "metric_mentions": [
+              "新增客户数"
+            ],
+            "time_mentions": [],
+            "inherited_context": {},
+            "available_dimensions": [
+              {
+                "name": "唯一ID",
+                "aliases": [
+                  "唯一"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "商家ID",
+                "aliases": [
+                  "商家"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "店铺ID",
+                "aliases": [
+                  "店铺"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              }
+            ],
+            "time_dimensions": [
+              {
+                "name": "时间",
+                "aliases": [],
+                "data_type": "date",
+                "semantic_type": "time",
+                "value_kind": "date",
+                "is_time": true
+              }
+            ]
+          },
+          "raw_output": "{\n  \"dimension_mentions\": [\"店铺ID\"],\n  \"dimension_slots\": [\n    {\"name\": \"店铺ID\", \"role\": \"ambiguous\", \"value\": null, \"value_status\": \"not_provided\", \"value_confidence\": 0.0}\n  ],\n  \"residual_filter_mentions\": [\n    {\"name\": \"线上\", \"value\": \"线上\", \"operator\": \"=\"}\n  ],\n  \"ambiguous_slots\": [\"店铺ID\"],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "dimension_mentions": [
+              "店铺ID"
+            ],
+            "dimension_slots": [
+              {
+                "name": "店铺ID",
+                "role": "ambiguous",
+                "value": null,
+                "value_status": "not_provided",
+                "value_confidence": 0.0
+              }
+            ],
+            "residual_filter_mentions": [
+              {
+                "name": "线上",
+                "value": "线上",
+                "operator": "="
+              }
+            ],
+            "ambiguous_slots": [
+              "店铺ID"
+            ],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 901,
+            "output_tokens": 781,
+            "total_tokens": 1682,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 667
+            }
+          }
+        }
+      ],
+      "final_understanding": {
+        "original_question": "本月新增客户数-线上最低的3个店铺ID是哪些？",
+        "message_type": "new_question",
+        "rewritten_question": "本月新增客户数-线上最低的3个店铺ID是哪些？",
+        "inherited_context": {},
+        "intent": {
+          "intent_type": "ranking_analysis",
+          "confidence": 0.95,
+          "metric_mentions": [
+            "新增客户数"
+          ],
+          "dimension_mentions": [
+            "店铺ID"
+          ],
+          "dimension_slots": [
+            {
+              "name": "店铺ID",
+              "role": "ambiguous",
+              "value": null,
+              "value_status": "not_provided",
+              "value_confidence": 0.0
+            }
+          ],
+          "time_mentions": [
+            "本月"
+          ],
+          "time_range": {
+            "raw": "本月",
+            "value_status": "provided",
+            "normalized": {
+              "kind": "absolute_range",
+              "start": "2026-08-01",
+              "end_exclusive": "2026-09-01",
+              "timezone": "Asia/Shanghai",
+              "source_raw": "本月"
+            },
+            "interpretation_source": "legacy_rule"
+          },
+          "filter_mentions": [
+            {
+              "name": "线上",
+              "value": "线上",
+              "operator": "="
+            }
+          ],
+          "required_slot_types": [
+            "metric",
+            "time_dimension",
+            "order",
+            "limit",
+            "dimension"
+          ],
+          "query_shape": {
+            "select_mode": "aggregate",
+            "needs_group_by": true,
+            "needs_order_by": true,
+            "order_direction": "asc",
+            "limit": 3,
+            "time_grain": null
+          },
+          "ambiguous_slots": [],
+          "conflict_slots": []
+        },
+        "validation": {
+          "status": "clarification_required",
+          "reason_codes": [
+            "group_by_target_missing",
+            "ranking_dimension_missing",
+            "dimension_role_ambiguous"
+          ],
+          "clarification_slots": [
+            "dimension"
+          ]
+        },
+        "temporal_interpretation": null
+      },
+      "validation_effect": {
+        "status": "clarification_required",
+        "reason_codes": [
+          "group_by_target_missing",
+          "ranking_dimension_missing",
+          "dimension_role_ambiguous"
+        ],
+        "clarification_slots": [
+          "dimension"
+        ],
+        "explanation": "校验阻止当前理解直接进入后续执行。"
+      },
+      "accuracy_checks": [
+        {
+          "field": "rewritten_question",
+          "expected": "本月新增客户数-线上最低的3个店铺ID是哪些？",
+          "actual": "本月新增客户数-线上最低的3个店铺ID是哪些？",
+          "passed": true
+        },
+        {
+          "field": "intent.intent_type",
+          "expected": "ranking_analysis",
+          "actual": "ranking_analysis",
+          "passed": true
+        },
+        {
+          "field": "intent.metric_mentions",
+          "expected": "包含 新增客户数-线上",
+          "actual": [
+            "新增客户数"
+          ],
+          "passed": false
+        },
+        {
+          "field": "intent.time_range.raw",
+          "expected": "本月",
+          "actual": "本月",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.start",
+          "expected": "2026-08-01",
+          "actual": "2026-08-01",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.end_exclusive",
+          "expected": "2026-09-01",
+          "actual": "2026-09-01",
+          "passed": true
+        },
+        {
+          "field": "intent.filter_mentions",
+          "expected": [],
+          "actual": [
+            {
+              "name": "线上",
+              "value": "线上",
+              "operator": "="
+            }
+          ],
+          "passed": false
+        },
+        {
+          "field": "intent.dimension_slots.role",
+          "expected": {
+            "name_contains": "店铺ID",
+            "role": "group_by"
+          },
+          "actual": [
+            {
+              "name": "店铺ID",
+              "role": "ambiguous",
+              "value": null,
+              "value_status": "not_provided",
+              "value_confidence": 0.0
+            }
+          ],
+          "passed": false
+        },
+        {
+          "field": "intent.query_shape.select_mode",
+          "expected": "aggregate",
+          "actual": "aggregate",
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_group_by",
+          "expected": true,
+          "actual": true,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_order_by",
+          "expected": true,
+          "actual": true,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.order_direction",
+          "expected": "asc",
+          "actual": "asc",
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.limit",
+          "expected": 3,
+          "actual": 3,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.time_grain",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "validation.status",
+          "expected": "valid",
+          "actual": "clarification_required",
+          "passed": false
+        }
+      ],
+      "score": {
+        "passed": 11,
+        "total": 15,
+        "accuracy": 0.7333
+      },
+      "usage_metadata": {
+        "input_tokens": 2497,
+        "output_tokens": 2295,
+        "total_tokens": 4792
+      },
+      "error": null,
+      "started_at": "2026-08-12T16:42:55.513141+08:00",
+      "finished_at": "2026-08-12T16:43:30.645240+08:00",
+      "duration_ms": 35132.1
+    },
+    {
+      "case_id": "daily_trend",
+      "question": "查看最近7天每天的活跃客户数-线上访问趋势。",
+      "purpose": "验证趋势意图、按天粒度和时间范围。",
+      "expected": {
+        "rewritten_question": "查看最近7天每天的活跃客户数-线上访问趋势。",
+        "intent_type": "trend_analysis",
+        "metric_mentions_contains": "活跃客户数-线上访问",
+        "time_raw": "最近7天",
+        "normalized_time": {
+          "start": "2026-08-06",
+          "end_exclusive": "2026-08-13"
+        },
+        "residual_filter_mentions": [],
+        "query_shape": {
+          "select_mode": "aggregate",
+          "needs_group_by": true,
+          "needs_order_by": false,
+          "limit": null,
+          "time_grain": "day"
+        },
+        "validation_status": "valid"
+      },
+      "fixed_temporal_context": {
+        "reference_at": "2026-08-12T10:00:00+08:00",
+        "timezone": "Asia/Shanghai"
+      },
+      "model_calls": [
+        {
+          "sequence": 1,
+          "stage": "QUESTION_REWRITE",
+          "started_at": "2026-08-12T16:43:30.693366+08:00",
+          "finished_at": "2026-08-12T16:43:33.491370+08:00",
+          "duration_ms": 2798.0,
+          "input": {
+            "question": "查看最近7天每天的活跃客户数-线上访问趋势。",
+            "datasource_id": null,
+            "conversation_context": {}
+          },
+          "raw_output": "{\n  \"message_type\": \"new_question\",\n  \"rewritten_question\": \"查看最近7天每天的活跃客户数-线上访问趋势。\",\n  \"inherited_context\": {},\n  \"need_user_input\": false,\n  \"missing_slots\": [],\n  \"confidence\": 1.0\n}",
+          "parsed_output": {
+            "message_type": "new_question",
+            "rewritten_question": "查看最近7天每天的活跃客户数-线上访问趋势。",
+            "inherited_context": {},
+            "need_user_input": false,
+            "missing_slots": [],
+            "confidence": 1.0
+          },
+          "usage_metadata": {
+            "input_tokens": 471,
+            "output_tokens": 129,
+            "total_tokens": 600,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 62
+            }
+          }
+        },
+        {
+          "sequence": 2,
+          "stage": "INTENT_RECOGNITION",
+          "started_at": "2026-08-12T16:43:33.491431+08:00",
+          "finished_at": "2026-08-12T16:43:45.069572+08:00",
+          "duration_ms": 11578.14,
+          "input": {
+            "rewritten_question": "查看最近7天每天的活跃客户数-线上访问趋势。",
+            "inherited_context": {}
+          },
+          "raw_output": "{\n  \"intent_type\": \"trend_analysis\",\n  \"confidence\": 0.95,\n  \"metric_mentions\": [\"活跃客户数-线上访问\"],\n  \"dimension_mentions\": [],\n  \"dimension_slots\": [],\n  \"time_mentions\": [\"最近7天\"],\n  \"time_range\": {\"raw\": \"最近7天\", \"value_status\": \"provided\"},\n  \"filter_mentions\": [],\n  \"required_slot_types\": [],\n  \"query_shape\": {\n    \"select_mode\": \"aggregate\",\n    \"needs_group_by\": true,\n    \"needs_order_by\": false,\n    \"order_direction\": null,\n    \"limit\": null,\n    \"time_grain\": \"day\"\n  },\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "intent_type": "trend_analysis",
+            "confidence": 0.95,
+            "metric_mentions": [
+              "活跃客户数-线上访问"
+            ],
+            "dimension_mentions": [],
+            "dimension_slots": [],
+            "time_mentions": [
+              "最近7天"
+            ],
+            "time_range": {
+              "raw": "最近7天",
+              "value_status": "provided"
+            },
+            "filter_mentions": [],
+            "required_slot_types": [],
+            "query_shape": {
+              "select_mode": "aggregate",
+              "needs_group_by": true,
+              "needs_order_by": false,
+              "order_direction": null,
+              "limit": null,
+              "time_grain": "day"
+            },
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 1121,
+            "output_tokens": 804,
+            "total_tokens": 1925,
+            "input_token_details": {
+              "cache_read": 1024
+            },
+            "output_token_details": {
+              "reasoning": 626
+            }
+          }
+        },
+        {
+          "sequence": 3,
+          "stage": "DIMENSION_RECOGNITION",
+          "started_at": "2026-08-12T16:43:45.069719+08:00",
+          "finished_at": "2026-08-12T16:43:48.670686+08:00",
+          "duration_ms": 3600.97,
+          "input": {
+            "rewritten_question": "查看最近7天每天的活跃客户数-线上访问趋势。",
+            "metric_mentions": [
+              "活跃客户数-线上访问"
+            ],
+            "time_mentions": [
+              "最近7天"
+            ],
+            "inherited_context": {},
+            "available_dimensions": [
+              {
+                "name": "唯一ID",
+                "aliases": [
+                  "唯一"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "商家ID",
+                "aliases": [
+                  "商家"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "店铺ID",
+                "aliases": [
+                  "店铺"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              }
+            ],
+            "time_dimensions": [
+              {
+                "name": "时间",
+                "aliases": [],
+                "data_type": "date",
+                "semantic_type": "time",
+                "value_kind": "date",
+                "is_time": true
+              }
+            ]
+          },
+          "raw_output": "{\n  \"dimension_mentions\": [],\n  \"dimension_slots\": [],\n  \"residual_filter_mentions\": [],\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "dimension_mentions": [],
+            "dimension_slots": [],
+            "residual_filter_mentions": [],
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 906,
+            "output_tokens": 233,
+            "total_tokens": 1139,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 187
+            }
+          }
+        }
+      ],
+      "final_understanding": {
+        "original_question": "查看最近7天每天的活跃客户数-线上访问趋势。",
+        "message_type": "new_question",
+        "rewritten_question": "查看最近7天每天的活跃客户数-线上访问趋势。",
+        "inherited_context": {},
+        "intent": {
+          "intent_type": "trend_analysis",
+          "confidence": 0.95,
+          "metric_mentions": [
+            "活跃客户数-线上访问"
+          ],
+          "dimension_mentions": [],
+          "dimension_slots": [],
+          "time_mentions": [
+            "最近7天"
+          ],
+          "time_range": {
+            "raw": "最近7天",
+            "value_status": "provided",
+            "normalized": {
+              "kind": "absolute_range",
+              "start": "2026-08-06",
+              "end_exclusive": "2026-08-13",
+              "timezone": "Asia/Shanghai",
+              "source_raw": "最近7天"
+            },
+            "interpretation_source": "legacy_rule"
+          },
+          "filter_mentions": [],
+          "required_slot_types": [
+            "metric",
+            "time_dimension"
+          ],
+          "query_shape": {
+            "select_mode": "aggregate",
+            "needs_group_by": true,
+            "needs_order_by": false,
+            "order_direction": null,
+            "limit": null,
+            "time_grain": "day"
+          },
+          "ambiguous_slots": [],
+          "conflict_slots": []
+        },
+        "validation": {
+          "status": "valid",
+          "reason_codes": [],
+          "clarification_slots": []
+        },
+        "temporal_interpretation": null
+      },
+      "validation_effect": {
+        "status": "valid",
+        "reason_codes": [],
+        "clarification_slots": [],
+        "explanation": "校验未发现阻断问题，当前理解可以进入后续流程。"
+      },
+      "accuracy_checks": [
+        {
+          "field": "rewritten_question",
+          "expected": "查看最近7天每天的活跃客户数-线上访问趋势。",
+          "actual": "查看最近7天每天的活跃客户数-线上访问趋势。",
+          "passed": true
+        },
+        {
+          "field": "intent.intent_type",
+          "expected": "trend_analysis",
+          "actual": "trend_analysis",
+          "passed": true
+        },
+        {
+          "field": "intent.metric_mentions",
+          "expected": "包含 活跃客户数-线上访问",
+          "actual": [
+            "活跃客户数-线上访问"
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.raw",
+          "expected": "最近7天",
+          "actual": "最近7天",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.start",
+          "expected": "2026-08-06",
+          "actual": "2026-08-06",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.end_exclusive",
+          "expected": "2026-08-13",
+          "actual": "2026-08-13",
+          "passed": true
+        },
+        {
+          "field": "intent.filter_mentions",
+          "expected": [],
+          "actual": [],
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.select_mode",
+          "expected": "aggregate",
+          "actual": "aggregate",
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_group_by",
+          "expected": true,
+          "actual": true,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_order_by",
+          "expected": false,
+          "actual": false,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.limit",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.time_grain",
+          "expected": "day",
+          "actual": "day",
+          "passed": true
+        },
+        {
+          "field": "validation.status",
+          "expected": "valid",
+          "actual": "valid",
+          "passed": true
+        }
+      ],
+      "score": {
+        "passed": 13,
+        "total": 13,
+        "accuracy": 1.0
+      },
+      "usage_metadata": {
+        "input_tokens": 2498,
+        "output_tokens": 1166,
+        "total_tokens": 3664
+      },
+      "error": null,
+      "started_at": "2026-08-12T16:43:30.651466+08:00",
+      "finished_at": "2026-08-12T16:43:48.671159+08:00",
+      "duration_ms": 18019.69
+    },
+    {
+      "case_id": "ambiguous_dimension",
+      "question": "最近7天店铺ID的新增客户数-线上是多少？",
+      "purpose": "验证维度用途不明确时不会被服务端擅自改成分组或筛选。",
+      "expected": {
+        "rewritten_question": "最近7天店铺ID的新增客户数-线上是多少？",
+        "intent_type": "metric_query",
+        "metric_mentions_contains": "新增客户数-线上",
+        "time_raw": "最近7天",
+        "normalized_time": {
+          "start": "2026-08-06",
+          "end_exclusive": "2026-08-13"
+        },
+        "residual_filter_mentions": [],
+        "dimension_role": {
+          "name_contains": "店铺ID",
+          "role": "ambiguous"
+        },
+        "query_shape": {
+          "select_mode": "aggregate",
+          "needs_group_by": false,
+          "needs_order_by": false,
+          "limit": null,
+          "time_grain": null
+        },
+        "validation_status": "clarification_required",
+        "reason_codes_contains": "dimension_role_ambiguous"
+      },
+      "fixed_temporal_context": {
+        "reference_at": "2026-08-12T10:00:00+08:00",
+        "timezone": "Asia/Shanghai"
+      },
+      "model_calls": [
+        {
+          "sequence": 1,
+          "stage": "QUESTION_REWRITE",
+          "started_at": "2026-08-12T16:43:48.710870+08:00",
+          "finished_at": "2026-08-12T16:43:51.206448+08:00",
+          "duration_ms": 2495.58,
+          "input": {
+            "question": "最近7天店铺ID的新增客户数-线上是多少？",
+            "datasource_id": null,
+            "conversation_context": {}
+          },
+          "raw_output": "{\n  \"message_type\": \"new_question\",\n  \"rewritten_question\": \"最近7天店铺ID的新增客户数-线上是多少？\",\n  \"inherited_context\": {},\n  \"need_user_input\": false,\n  \"missing_slots\": [],\n  \"confidence\": 1.0\n}",
+          "parsed_output": {
+            "message_type": "new_question",
+            "rewritten_question": "最近7天店铺ID的新增客户数-线上是多少？",
+            "inherited_context": {},
+            "need_user_input": false,
+            "missing_slots": [],
+            "confidence": 1.0
+          },
+          "usage_metadata": {
+            "input_tokens": 471,
+            "output_tokens": 146,
+            "total_tokens": 617,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 79
+            }
+          }
+        },
+        {
+          "sequence": 2,
+          "stage": "INTENT_RECOGNITION",
+          "started_at": "2026-08-12T16:43:51.206592+08:00",
+          "finished_at": "2026-08-12T16:44:00.219978+08:00",
+          "duration_ms": 9013.39,
+          "input": {
+            "rewritten_question": "最近7天店铺ID的新增客户数-线上是多少？",
+            "inherited_context": {}
+          },
+          "raw_output": "{\n  \"intent_type\": \"metric_query\",\n  \"confidence\": 0.95,\n  \"metric_mentions\": [\"新增客户数-线上\"],\n  \"dimension_mentions\": [],\n  \"dimension_slots\": [],\n  \"time_mentions\": [\"最近7天\"],\n  \"time_range\": {\"raw\": \"最近7天\", \"value_status\": \"provided\"},\n  \"filter_mentions\": [],\n  \"required_slot_types\": [],\n  \"query_shape\": {\n    \"select_mode\": \"aggregate\",\n    \"needs_group_by\": false,\n    \"needs_order_by\": false,\n    \"order_direction\": null,\n    \"limit\": null,\n    \"time_grain\": null\n  },\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "intent_type": "metric_query",
+            "confidence": 0.95,
+            "metric_mentions": [
+              "新增客户数-线上"
+            ],
+            "dimension_mentions": [],
+            "dimension_slots": [],
+            "time_mentions": [
+              "最近7天"
+            ],
+            "time_range": {
+              "raw": "最近7天",
+              "value_status": "provided"
+            },
+            "filter_mentions": [],
+            "required_slot_types": [],
+            "query_shape": {
+              "select_mode": "aggregate",
+              "needs_group_by": false,
+              "needs_order_by": false,
+              "order_direction": null,
+              "limit": null,
+              "time_grain": null
+            },
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 1121,
+            "output_tokens": 671,
+            "total_tokens": 1792,
+            "input_token_details": {
+              "cache_read": 1024
+            },
+            "output_token_details": {
+              "reasoning": 497
+            }
+          }
+        },
+        {
+          "sequence": 3,
+          "stage": "DIMENSION_RECOGNITION",
+          "started_at": "2026-08-12T16:44:00.220274+08:00",
+          "finished_at": "2026-08-12T16:44:05.555629+08:00",
+          "duration_ms": 5335.35,
+          "input": {
+            "rewritten_question": "最近7天店铺ID的新增客户数-线上是多少？",
+            "metric_mentions": [
+              "新增客户数-线上"
+            ],
+            "time_mentions": [
+              "最近7天"
+            ],
+            "inherited_context": {},
+            "available_dimensions": [
+              {
+                "name": "唯一ID",
+                "aliases": [
+                  "唯一"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "商家ID",
+                "aliases": [
+                  "商家"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "店铺ID",
+                "aliases": [
+                  "店铺"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              }
+            ],
+            "time_dimensions": [
+              {
+                "name": "时间",
+                "aliases": [],
+                "data_type": "date",
+                "semantic_type": "time",
+                "value_kind": "date",
+                "is_time": true
+              }
+            ]
+          },
+          "raw_output": "{\n  \"dimension_mentions\": [\"店铺ID\"],\n  \"dimension_slots\": [\n    {\n      \"name\": \"店铺ID\",\n      \"role\": \"ambiguous\",\n      \"value\": null,\n      \"value_status\": \"not_provided\",\n      \"value_confidence\": 0.0\n    }\n  ],\n  \"residual_filter_mentions\": [],\n  \"ambiguous_slots\": [\n    {\n      \"name\": \"店铺ID\",\n      \"role\": \"ambiguous\",\n      \"value\": null,\n      \"value_status\": \"not_provided\",\n      \"value_confidence\": 0.0\n    }\n  ],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "dimension_mentions": [
+              "店铺ID"
+            ],
+            "dimension_slots": [
+              {
+                "name": "店铺ID",
+                "role": "ambiguous",
+                "value": null,
+                "value_status": "not_provided",
+                "value_confidence": 0.0
+              }
+            ],
+            "residual_filter_mentions": [],
+            "ambiguous_slots": [
+              {
+                "name": "店铺ID",
+                "role": "ambiguous",
+                "value": null,
+                "value_status": "not_provided",
+                "value_confidence": 0.0
+              }
+            ],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 905,
+            "output_tokens": 329,
+            "total_tokens": 1234,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 182
+            }
+          }
+        }
+      ],
+      "final_understanding": {
+        "original_question": "最近7天店铺ID的新增客户数-线上是多少？",
+        "message_type": "new_question",
+        "rewritten_question": "最近7天店铺ID的新增客户数-线上是多少？",
+        "inherited_context": {},
+        "intent": {
+          "intent_type": "metric_query",
+          "confidence": 0.95,
+          "metric_mentions": [
+            "新增客户数-线上"
+          ],
+          "dimension_mentions": [
+            "店铺ID"
+          ],
+          "dimension_slots": [
+            {
+              "name": "店铺ID",
+              "role": "ambiguous",
+              "value": null,
+              "value_status": "not_provided",
+              "value_confidence": 0.0
+            }
+          ],
+          "time_mentions": [
+            "最近7天"
+          ],
+          "time_range": {
+            "raw": "最近7天",
+            "value_status": "provided",
+            "normalized": {
+              "kind": "absolute_range",
+              "start": "2026-08-06",
+              "end_exclusive": "2026-08-13",
+              "timezone": "Asia/Shanghai",
+              "source_raw": "最近7天"
+            },
+            "interpretation_source": "legacy_rule"
+          },
+          "filter_mentions": [],
+          "required_slot_types": [
+            "metric",
+            "time_dimension"
+          ],
+          "query_shape": {
+            "select_mode": "aggregate",
+            "needs_group_by": false,
+            "needs_order_by": false,
+            "order_direction": null,
+            "limit": null,
+            "time_grain": null
+          },
+          "ambiguous_slots": [],
+          "conflict_slots": []
+        },
+        "validation": {
+          "status": "clarification_required",
+          "reason_codes": [
+            "dimension_role_ambiguous"
+          ],
+          "clarification_slots": [
+            "dimension"
+          ]
+        },
+        "temporal_interpretation": null
+      },
+      "validation_effect": {
+        "status": "clarification_required",
+        "reason_codes": [
+          "dimension_role_ambiguous"
+        ],
+        "clarification_slots": [
+          "dimension"
+        ],
+        "explanation": "校验阻止当前理解直接进入后续执行。"
+      },
+      "accuracy_checks": [
+        {
+          "field": "rewritten_question",
+          "expected": "最近7天店铺ID的新增客户数-线上是多少？",
+          "actual": "最近7天店铺ID的新增客户数-线上是多少？",
+          "passed": true
+        },
+        {
+          "field": "intent.intent_type",
+          "expected": "metric_query",
+          "actual": "metric_query",
+          "passed": true
+        },
+        {
+          "field": "intent.metric_mentions",
+          "expected": "包含 新增客户数-线上",
+          "actual": [
+            "新增客户数-线上"
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.raw",
+          "expected": "最近7天",
+          "actual": "最近7天",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.start",
+          "expected": "2026-08-06",
+          "actual": "2026-08-06",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.end_exclusive",
+          "expected": "2026-08-13",
+          "actual": "2026-08-13",
+          "passed": true
+        },
+        {
+          "field": "intent.filter_mentions",
+          "expected": [],
+          "actual": [],
+          "passed": true
+        },
+        {
+          "field": "intent.dimension_slots.role",
+          "expected": {
+            "name_contains": "店铺ID",
+            "role": "ambiguous"
+          },
+          "actual": [
+            {
+              "name": "店铺ID",
+              "role": "ambiguous",
+              "value": null,
+              "value_status": "not_provided",
+              "value_confidence": 0.0
+            }
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.select_mode",
+          "expected": "aggregate",
+          "actual": "aggregate",
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_group_by",
+          "expected": false,
+          "actual": false,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_order_by",
+          "expected": false,
+          "actual": false,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.limit",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.time_grain",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "validation.status",
+          "expected": "clarification_required",
+          "actual": "clarification_required",
+          "passed": true
+        },
+        {
+          "field": "validation.reason_codes",
+          "expected": "包含 dimension_role_ambiguous",
+          "actual": [
+            "dimension_role_ambiguous"
+          ],
+          "passed": true
+        }
+      ],
+      "score": {
+        "passed": 15,
+        "total": 15,
+        "accuracy": 1.0
+      },
+      "usage_metadata": {
+        "input_tokens": 2497,
+        "output_tokens": 1146,
+        "total_tokens": 3643
+      },
+      "error": null,
+      "started_at": "2026-08-12T16:43:48.672465+08:00",
+      "finished_at": "2026-08-12T16:44:05.556431+08:00",
+      "duration_ms": 16883.97
+    }
+  ]
+}

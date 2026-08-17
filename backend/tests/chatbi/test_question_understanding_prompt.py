@@ -48,6 +48,14 @@ def test_agent_intent_prompt_requires_model_generated_query_shape():
     assert "不要求本阶段确定完整指标口径" in INTENT_SYSTEM_PROMPT
 
 
+def test_metric_prompt_preserves_complete_business_phrase():
+    assert "完整、连续的指标短语" in METRIC_TIME_EXTRACTION_RULES
+    assert "指标短语前后的业务限定词" in METRIC_TIME_EXTRACTION_RULES
+    assert "宁可保留更长的原文短语，不得缩短" in METRIC_TIME_EXTRACTION_RULES
+    assert "渠道订单平均金额" in METRIC_TIME_EXTRACTION_RULES
+    assert "必须保留用户原文中完整、连续的指标短语及其业务限定词" in INTENT_SYSTEM_PROMPT
+
+
 def test_agent_prompts_include_typical_few_shot_examples():
     assert "只替换上一轮时间的追问" in REWRITE_SYSTEM_PROMPT
     assert '"message_type":"followup"' in REWRITE_SYSTEM_PROMPT

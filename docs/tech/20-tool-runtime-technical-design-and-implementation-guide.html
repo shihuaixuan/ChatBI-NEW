@@ -1,0 +1,2058 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tool 运行时技术设计与实施指南</title>
+
+<!-- Google Fonts - JetBrains Mono -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<!-- Highlight.js -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/github.min.css" id="hljs-light">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/github-dark.min.css" id="hljs-dark" disabled>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/highlight.min.js"></script>
+
+<!-- Mermaid -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+
+<style>
+/* ── CSS Variables ─────────────────────────────────────────────────────── */
+:root, [data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fb;
+  --bg-tertiary: #f0f2f5;
+  --bg-code: #f6f8fa;
+  --bg-sidebar: #f8f9fb;
+  --bg-navbar: rgba(255,255,255,0.85);
+  --text-primary: #1a1a2e;
+  --text-secondary: #4a5568;
+  --text-tertiary: #718096;
+  --text-code: #24292e;
+  --border-color: #e2e8f0;
+  --border-light: #edf2f7;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-light: #dbeafe;
+  --accent-bg: #eff6ff;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.06);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.08);
+  --blockquote-border: #3b82f6;
+  --blockquote-bg: #eff6ff;
+  --table-header-bg: #f1f5f9;
+  --table-stripe: #f8fafc;
+  --scrollbar-thumb: #c1c9d4;
+  --search-overlay: rgba(0,0,0,0.4);
+  --card-bg: #ffffff;
+}
+
+[data-theme="dark"] {
+  --bg-primary: #0f1117;
+  --bg-secondary: #161822;
+  --bg-tertiary: #1e2030;
+  --bg-code: #1a1b26;
+  --bg-sidebar: #12141e;
+  --bg-navbar: rgba(15,17,23,0.9);
+  --text-primary: #e2e8f0;
+  --text-secondary: #a0aec0;
+  --text-tertiary: #718096;
+  --text-code: #e2e8f0;
+  --border-color: #2d3148;
+  --border-light: #252838;
+  --accent: #60a5fa;
+  --accent-hover: #93bbfd;
+  --accent-light: #1e3a5f;
+  --accent-bg: #172544;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.4);
+  --blockquote-border: #60a5fa;
+  --blockquote-bg: #172544;
+  --table-header-bg: #1e2030;
+  --table-stripe: #161822;
+  --scrollbar-thumb: #3a3f54;
+  --search-overlay: rgba(0,0,0,0.7);
+  --card-bg: #161822;
+}
+
+/* ── Reset & Base ──────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 80px;
+  font-size: 16px;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.75;
+  transition: background 0.25s ease, color 0.25s ease;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+
+/* ── Navbar ────────────────────────────────────────────────────────────── */
+.navbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  height: 56px;
+  background: var(--bg-navbar);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-color);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px;
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+
+.navbar-title {
+  font-size: 15px; font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 50%;
+}
+
+.navbar-actions {
+  display: flex; align-items: center; gap: 8px;
+}
+
+.navbar-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 16px;
+}
+
+.navbar-btn:hover {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.hamburger { display: none; }
+
+/* ── Sidebar ───────────────────────────────────────────────────────────── */
+.sidebar {
+  position: fixed; top: 56px; left: 0; bottom: 0;
+  width: 280px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-color);
+  overflow-y: auto;
+  padding: 20px 0;
+  transition: transform 0.3s ease, background 0.25s ease, border-color 0.25s ease;
+  z-index: 90;
+}
+
+.sidebar-header {
+  padding: 0 20px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+}
+
+.toc-list {
+  list-style: none; padding: 0; margin: 0;
+}
+
+.toc-list li {
+  margin: 0;
+}
+
+.toc-list a {
+  display: block;
+  padding: 5px 20px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 13.5px;
+  line-height: 1.5;
+  border-left: 2px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.toc-list a:hover {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.toc-list li.active > a {
+  color: var(--accent);
+  border-left-color: var(--accent);
+  background: var(--accent-bg);
+  font-weight: 500;
+}
+
+.toc-h1 > a { padding-left: 20px; font-weight: 600; font-size: 14px; }
+.toc-h2 > a { padding-left: 32px; }
+.toc-h3 > a { padding-left: 44px; font-size: 13px; }
+
+/* ── Main Content ──────────────────────────────────────────────────────── */
+.main {
+  margin-left: 280px;
+  padding: 80px 48px 60px;
+  max-width: calc(900px + 280px + 96px);
+}
+
+.content {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+/* ── Typography ────────────────────────────────────────────────────────── */
+.content h1 {
+  font-size: 2em; font-weight: 700;
+  margin: 0 0 0.6em; padding-bottom: 0.4em;
+  border-bottom: 2px solid var(--border-color);
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.content h2 {
+  font-size: 1.5em; font-weight: 650;
+  margin: 2em 0 0.6em;
+  color: var(--text-primary);
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border-light);
+  line-height: 1.35;
+}
+
+.content h3 {
+  font-size: 1.2em; font-weight: 600;
+  margin: 1.6em 0 0.5em;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.content p {
+  margin: 0 0 1em;
+  color: var(--text-primary);
+}
+
+.content a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s ease;
+}
+
+.content a:hover {
+  border-bottom-color: var(--accent);
+}
+
+/* ── Code ──────────────────────────────────────────────────────────────── */
+.content code {
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Consolas, monospace;
+  font-size: 0.875em;
+  background: var(--bg-code);
+  color: var(--text-code);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  border: 1px solid var(--border-light);
+}
+
+.content pre {
+  position: relative;
+  margin: 0 0 1.2em;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  background: var(--bg-code);
+  box-shadow: var(--shadow-sm);
+}
+
+.content pre code {
+  display: block;
+  padding: 16px 20px;
+  overflow-x: auto;
+  font-size: 13.5px;
+  line-height: 1.6;
+  border: none;
+  background: transparent;
+}
+
+.code-lang-label {
+  position: absolute; top: 0; right: 48px;
+  padding: 2px 10px;
+  font-size: 11px; font-weight: 500;
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  border-radius: 0 0 6px 6px;
+  text-transform: lowercase;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.copy-btn {
+  position: absolute; top: 6px; right: 6px;
+  width: 32px; height: 32px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+  transition: all 0.2s ease;
+  opacity: 0;
+}
+
+.content pre:hover .copy-btn { opacity: 1; }
+.copy-btn:hover { background: var(--accent-light); color: var(--accent); border-color: var(--accent); }
+.copy-btn.copied { color: #22c55e; }
+
+/* ── Tables ────────────────────────────────────────────────────────────── */
+.table-wrapper {
+  overflow-x: auto;
+  margin: 0 0 1.2em;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+}
+
+.content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.content thead th {
+  background: var(--table-header-bg);
+  padding: 10px 16px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.content tbody td {
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--border-light);
+  color: var(--text-secondary);
+}
+
+.content tbody tr:nth-child(even) { background: var(--table-stripe); }
+.content tbody tr:last-child td { border-bottom: none; }
+.content tbody tr:hover { background: var(--accent-bg); }
+
+/* ── Blockquote ────────────────────────────────────────────────────────── */
+.content blockquote {
+  margin: 0 0 1.2em;
+  padding: 14px 20px;
+  border-left: 4px solid var(--blockquote-border);
+  background: var(--blockquote-bg);
+  border-radius: 0 8px 8px 0;
+  color: var(--text-secondary);
+}
+
+.content blockquote p:last-child { margin-bottom: 0; }
+
+/* ── Lists ─────────────────────────────────────────────────────────────── */
+.content ul, .content ol {
+  margin: 0 0 1em;
+  padding-left: 1.6em;
+}
+
+.content li {
+  margin-bottom: 0.35em;
+  color: var(--text-primary);
+}
+
+.content li > ul, .content li > ol { margin-top: 0.35em; margin-bottom: 0; }
+
+/* ── Mermaid ───────────────────────────────────────────────────────────── */
+pre.mermaid {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 24px;
+  margin: 0 0 1.2em;
+  text-align: center;
+  overflow-x: auto;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Horizontal Rule ───────────────────────────────────────────────────── */
+.content hr {
+  border: none;
+  height: 1px;
+  background: var(--border-color);
+  margin: 2em 0;
+}
+
+/* ── Strong / Em ───────────────────────────────────────────────────────── */
+.content strong { font-weight: 650; color: var(--text-primary); }
+
+/* ── Back to Top ───────────────────────────────────────────────────────── */
+.back-to-top {
+  position: fixed; bottom: 28px; right: 28px;
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  box-shadow: var(--shadow-md);
+  opacity: 0; visibility: hidden;
+  transition: all 0.25s ease;
+  z-index: 80;
+}
+
+.back-to-top.visible { opacity: 1; visibility: visible; }
+.back-to-top:hover { background: var(--accent-hover); transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+
+/* ── Search Overlay ────────────────────────────────────────────────────── */
+.search-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: var(--search-overlay);
+  display: none; align-items: flex-start; justify-content: center;
+  padding-top: 120px;
+}
+
+.search-overlay.open { display: flex; }
+
+.search-box {
+  width: 560px; max-width: 90vw;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.search-input-wrap {
+  display: flex; align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.search-input-wrap svg { color: var(--text-tertiary); flex-shrink: 0; }
+
+.search-input {
+  flex: 1; border: none; outline: none;
+  font-size: 15px; padding: 0 12px;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.search-input::placeholder { color: var(--text-tertiary); }
+
+.search-results {
+  max-height: 360px; overflow-y: auto;
+  padding: 8px;
+}
+
+.search-result-item {
+  display: block;
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.search-result-item:hover {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.search-result-item .result-title {
+  font-weight: 600; color: var(--text-primary);
+  font-size: 13px; margin-bottom: 2px;
+}
+
+.search-result-item .result-snippet {
+  font-size: 13px; color: var(--text-tertiary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.search-result-item .result-snippet mark {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.search-empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+.search-hint {
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  border-top: 1px solid var(--border-light);
+  display: flex; gap: 12px;
+}
+
+.search-hint kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+/* ── Responsive ────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .sidebar {
+    transform: translateX(-100%);
+    width: 280px;
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .main { margin-left: 0; padding: 72px 20px 48px; }
+  .hamburger { display: flex; }
+  .navbar-title { max-width: 60%; }
+}
+
+@media (max-width: 600px) {
+  .content h1 { font-size: 1.5em; }
+  .content h2 { font-size: 1.25em; }
+  .content pre code { font-size: 12.5px; }
+}
+
+/* ── Sidebar overlay for mobile ────────────────────────────────────────── */
+.sidebar-overlay {
+  display: none;
+  position: fixed; inset: 0; z-index: 85;
+  background: rgba(0,0,0,0.3);
+}
+
+.sidebar-overlay.open { display: block; }
+</style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+  <div style="display:flex;align-items:center;gap:12px;min-width:0;">
+    <button class="navbar-btn hamburger" onclick="toggleSidebar()" aria-label="菜单">☰</button>
+    <span class="navbar-title">Tool 运行时技术设计与实施指南</span>
+  </div>
+  <div class="navbar-actions">
+    <button class="navbar-btn" onclick="openSearch()" aria-label="搜索" title="搜索 (Ctrl+K)">⌕</button>
+    <button class="navbar-btn" onclick="toggleTheme()" id="theme-btn" aria-label="切换主题" title="切换主题">☀</button>
+  </div>
+</nav>
+
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">目录</div>
+  <ul class="toc-list">
+<li class="toc-h1"><a href="#tool">Tool 运行时技术设计与实施指南</a></li>
+  <li class="toc-h2"><a href="#_1">文档定位</a></li>
+  <li class="toc-h2"><a href="#1">1. 概览</a></li>
+    <li class="toc-h3"><a href="#11">1.1 设计不变量</a></li>
+    <li class="toc-h3"><a href="#12">1.2 适用范围</a></li>
+  <li class="toc-h2"><a href="#2">2. 核心功能全景</a></li>
+    <li class="toc-h3"><a href="#21">2.1 职责分层</a></li>
+    <li class="toc-h3"><a href="#22-tool">2.2 Tool 类型</a></li>
+  <li class="toc-h2"><a href="#3">3. 使用流程与交互</a></li>
+    <li class="toc-h3"><a href="#31-tool">3.1 一次完整 Tool 调用</a></li>
+    <li class="toc-h3"><a href="#32">3.2 共享业务能力的两种调用方式</a></li>
+  <li class="toc-h2"><a href="#4">4. 系统架构</a></li>
+  <li class="toc-h2"><a href="#5">5. 核心模块详解</a></li>
+    <li class="toc-h3"><a href="#51-tool">5.1 Tool 定义与执行属性</a></li>
+    <li class="toc-h3"><a href="#52-tooldefinition">5.2 ToolDefinition 与模型适配</a></li>
+    <li class="toc-h3"><a href="#53-registry">5.3 Registry 与校验</a></li>
+    <li class="toc-h3"><a href="#54-toolresult">5.4 ToolResult</a></li>
+    <li class="toc-h3"><a href="#55">5.5 调用上下文、截止时间与取消</a></li>
+    <li class="toc-h3"><a href="#56-middleware">5.6 Middleware</a></li>
+    <li class="toc-h3"><a href="#57">5.7 并发分批</a></li>
+    <li class="toc-h3"><a href="#58-budget">5.8 Budget</a></li>
+    <li class="toc-h3"><a href="#59">5.9 调用方结果投影</a></li>
+  <li class="toc-h2"><a href="#6">6. 关键技术实现</a></li>
+    <li class="toc-h3"><a href="#61">6.1 一份契约驱动定义、模型和校验</a></li>
+    <li class="toc-h3"><a href="#62">6.2 可见性、白名单和授权分离</a></li>
+    <li class="toc-h3"><a href="#63">6.3 截止时间和取消使用真实语义</a></li>
+  <li class="toc-h2"><a href="#7">7. 已知限制与实施注意事项</a></li>
+  <li class="toc-h2"><a href="#8-sqlbot">8. SQLBot 当前实现映射</a></li>
+    <li class="toc-h3"><a href="#81">8.1 模块映射</a></li>
+    <li class="toc-h3"><a href="#82-tool">8.2 九个生产 Tool</a></li>
+    <li class="toc-h3"><a href="#83-sqlbot">8.3 SQLBot 状态投影</a></li>
+    <li class="toc-h3"><a href="#84">8.4 架构守卫</a></li>
+    <li class="toc-h3"><a href="#85">8.5 当前运行时约束</a></li>
+</ul>
+</aside>
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+<!-- Main Content -->
+<div class="main">
+  <div class="content" id="content">
+    <h1 id="tool">Tool 运行时技术设计与实施指南</h1>
+<p><strong>日期：</strong> 2026-07-29</p>
+<p><strong>状态：</strong> 基于 SQLBot 当前实现提炼</p>
+<p><strong>目标读者：</strong> 需要在其他项目中设计、实现或演进 Tool 运行时的架构师和开发者</p>
+<h2 id="_1">文档定位</h2>
+<p>本文不是 SQLBot 工具清单或源码导读，而是一份可迁移的 Tool 运行时技术方案。设计结论来自 SQLBot 已落地代码，正文使用无业务背景的示例解释契约和机制；SQLBot 的类、文件和业务 Tool 集中放在第 8 章，作为实现依据。</p>
+<p>本文与现有文档的关系：</p>
+<ul>
+<li><code>17-chatbi-agent-tool-architecture-design.md</code>：SQLBot Tool 架构目标。</li>
+<li><code>18-chatbi-agent-tool-architecture-implementation-plan.md</code>：SQLBot 分阶段实施计划。</li>
+<li><code>19-chatbi-agent-tool-current-baseline.md</code>：改造前的阶段 0 基线。</li>
+<li>本文：从已落地实现中提炼出的通用设计、实施方法和项目映射。</li>
+</ul>
+<h2 id="1">1. 概览</h2>
+<p>Tool 运行时位于模型与业务能力之间，负责把模型提出的结构化调用转换为受控、可校验、可观测的本地执行。</p>
+<p>它解决五类问题：</p>
+<ul>
+<li><strong>契约明确</strong>：每个 Tool 都有稳定名称、说明、输入模型、输出模型和执行属性。</li>
+<li><strong>调用受控</strong>：模型只能提出 Tool 和参数，最终可见性、白名单和授权由系统决定。</li>
+<li><strong>结果统一</strong>：成功、拒绝、失败和中断使用同一结果信封表达。</li>
+<li><strong>运行可靠</strong>：提供超时、取消、预算、并发分批、中间件和异常边界。</li>
+<li><strong>业务隔离</strong>：Runtime 不拥有业务状态、生命周期、持久化或产品事件，这些由调用方（例如 Agent 主循环或 Workflow 执行器）处理。</li>
+</ul>
+<h3 id="11">1.1 设计不变量</h3>
+<ol>
+<li>模型只能提出调用，不能绕过白名单、权限和业务校验。</li>
+<li>Tool 的输入和成功输出必须有明确 Schema，并由运行时校验。</li>
+<li>Tool 结果只有一个终态，不能同时维护容易冲突的 <code>success</code> 和 <code>status</code>。</li>
+<li>通用 Runtime 不依赖具体业务域、模型 SDK、产品 Event 或 Trace 实现。</li>
+<li>Tool 不直接控制调用方生命周期；挂起、结束和状态更新由调用方的结果处理器执行。</li>
+<li>可预期错误返回结构化结果，未声明程序错误向调用方传播，不能被宽泛异常处理吞掉。</li>
+</ol>
+<h3 id="12">1.2 适用范围</h3>
+<p>该设计适合使用 Function Calling（函数调用）或类似结构化调用协议的 Agent、工作流和自动化系统。业务 Tool 可以是查询、计算、外部 API、文件处理或控制请求；Runtime 本身不限定业务类型。</p>
+<h2 id="2">2. 核心功能全景</h2>
+<table>
+<thead>
+<tr>
+<th>功能</th>
+<th>说明</th>
+<th>对应位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tool 契约</td>
+<td>声明名称、描述、输入模型、输出模型和执行策略</td>
+<td><code>backend/apps/tool/base.py:39-85</code></td>
+</tr>
+<tr>
+<td>厂商无关定义</td>
+<td>生成输入输出 Schema 和行为注解，不绑定模型 SDK</td>
+<td><code>backend/apps/tool/definition.py:10-30</code></td>
+</tr>
+<tr>
+<td>白名单注册</td>
+<td>显式注册 Tool、拒绝重复名称、按允许集合导出定义</td>
+<td><code>backend/apps/tool/registry.py:25-50</code></td>
+</tr>
+<tr>
+<td>输入输出校验</td>
+<td>调用前校验参数，成功后校验结构化结果</td>
+<td><code>backend/apps/tool/registry.py:52-108</code></td>
+</tr>
+<tr>
+<td>统一结果信封</td>
+<td>隔离模型内容、业务数据、内部元数据和错误处置</td>
+<td><code>backend/apps/tool/result.py:20-139</code></td>
+</tr>
+<tr>
+<td>调用上下文</td>
+<td>携带 Tool Call ID、截止时间、取消信号和 Trace 上下文</td>
+<td><code>backend/apps/tool/context.py:13-73</code></td>
+</tr>
+<tr>
+<td>中间件</td>
+<td>用洋葱模型承载耗时等技术横切逻辑</td>
+<td><code>backend/apps/tool/middleware.py:17-74</code></td>
+</tr>
+<tr>
+<td>并发分批</td>
+<td>根据 Tool 声明分批执行，并保持模型调用顺序</td>
+<td><code>backend/apps/tool/concurrency.py:28-119</code></td>
+</tr>
+<tr>
+<td>通用预算</td>
+<td>控制步数、Token、墙钟时间和重复调用</td>
+<td><code>backend/apps/tool/budget.py:17-129</code></td>
+</tr>
+<tr>
+<td>模型适配</td>
+<td>把厂商无关定义转换为具体模型协议</td>
+<td><code>backend/apps/tool/adapters/openai.py:10-26</code></td>
+</tr>
+<tr>
+<td>调用方编排</td>
+<td>组合预算、调用事实、Trace、Event、状态和生命周期</td>
+<td><code>backend/apps/chatbi/orchestration/agent/tool_execution.py:65-669</code></td>
+</tr>
+<tr>
+<td>结果投影</td>
+<td>把 ToolResult 转换为状态补丁、控制动作和事件建议</td>
+<td><code>backend/apps/chatbi/orchestration/agent/tool_results.py:21-304</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="21">2.1 职责分层</h3>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>应负责</th>
+<th>不应负责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>模型适配层</td>
+<td>Schema 转换、模型消息转换、调用结果归一</td>
+<td>白名单、业务授权、业务状态</td>
+</tr>
+<tr>
+<td>Tool Runtime</td>
+<td>契约、注册、校验、结果、上下文、调度原语</td>
+<td>业务流程、持久化、产品事件</td>
+</tr>
+<tr>
+<td>业务 Tool</td>
+<td>参数到领域 Service 的翻译、局部业务硬门</td>
+<td>Run 生命周期、Event、Trace、Repository</td>
+</tr>
+<tr>
+<td>领域 Service</td>
+<td>权限、安全、业务规则和实际能力执行</td>
+<td>反向调用具体 Tool</td>
+</tr>
+<tr>
+<td>调用方</td>
+<td>可见性、预算策略、执行编排、状态投影和终态</td>
+<td>在 Runtime 内植入业务特例</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-tool">2.2 Tool 类型</h3>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>典型行为</th>
+<th>设计要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>查询 Tool</td>
+<td>读取数据并返回结果</td>
+<td>默认只读、幂等；确认依赖是否并发安全</td>
+</tr>
+<tr>
+<td>命令 Tool</td>
+<td>修改外部系统</td>
+<td>明确写操作、幂等性、破坏性和审计要求</td>
+</tr>
+<tr>
+<td>控制 Tool</td>
+<td>请求调用方挂起、结束或转移流程</td>
+<td>Tool 只返回控制请求，由调用方执行生命周期变化</td>
+</tr>
+</tbody>
+</table>
+<h2 id="3">3. 使用流程与交互</h2>
+<h3 id="31-tool">3.1 一次完整 Tool 调用</h3>
+<pre class="mermaid">sequenceDiagram
+    autonumber
+    participant H as Agent / Workflow 编排器
+    participant V as 可见性策略
+    participant A as 模型适配器
+    participant M as 模型
+    participant B as 预算与调度器
+    participant R as ToolRegistry
+    participant T as Tool
+    participant S as 领域 Service
+    participant P as 结果处理器
+    participant L as 生命周期
+
+    H->>V: 获取当前可见 Tool
+    V-->>H: 返回允许的 ToolDefinition
+    H->>A: 提交消息与 ToolDefinition
+    A->>M: 转换协议并调用模型
+    M-->>A: 返回 ToolCall
+    A-->>H: 归一化 ToolCall
+    H->>B: 检查预算、熔断并分批
+    alt 预算或熔断拒绝
+        B-->>H: 返回拒绝原因
+        H->>L: 关闭未完成调用并结束
+    else 允许执行
+        B-->>H: 返回批次与调用上下文
+        H->>R: execute(call, context)
+        R->>R: 白名单、输入和跨字段校验
+        alt 校验失败
+            R-->>H: 返回 rejected 或 failed
+        else 校验通过
+            R->>T: execute(context, args)
+            T->>S: 调用领域能力
+            S-->>T: 返回领域结果
+            alt Tool 抛出未声明异常
+                T-->>H: 异常向调用方传播
+                H->>L: 关闭未完成调用并使 Run 失败
+            else Tool 返回声明结果
+                T-->>R: 返回 ToolResult
+                R->>R: 校验成功输出模型
+                R-->>H: 返回 ToolResult
+            end
+        end
+        opt 已获得 ToolResult
+            H->>P: 解释 ToolResult
+            P-->>H: 返回状态补丁、事件和控制动作
+            alt 普通结果
+                H->>H: 写入 Observation，继续推理
+            else 控制或终态
+                H->>L: 挂起、结束、取消或失败
+            end
+        end
+    end</pre>
+<p>流程中有三个不同的安全门：</p>
+<ol>
+<li><strong>可见性</strong>决定模型本轮能看到什么。</li>
+<li><strong>Registry 白名单</strong>决定本地允许执行什么。</li>
+<li><strong>领域授权</strong>决定当前身份能否操作具体资源。</li>
+</ol>
+<p>三者不能互相替代。</p>
+<h3 id="32">3.2 共享业务能力的两种调用方式</h3>
+<p>Agent 与确定性 Workflow 可以复用同一领域能力，但调用方式不同。Agent 让模型选择公共 Tool，由 Tool Runtime 完成白名单和契约校验；确定性 Workflow 已经知道当前要执行的节点，可以由 Adapter 直接调用领域 Service。两条路径共享权限和业务规则，不互相转发。</p>
+<pre class="mermaid">sequenceDiagram
+    autonumber
+    participant A as Agent 主循环
+    participant R as Tool Runtime
+    participant T as 公共 Tool
+    participant S as 领域 Service
+    participant P as Agent 结果处理器
+    participant W as Workflow Adapter
+
+    alt 模型决定是否调用能力
+        A->>R: ToolCall + 可信上下文
+        R->>T: 校验后执行
+        T->>S: 领域请求
+        S-->>T: 领域结果
+        T-->>R: ToolResult
+        R-->>P: 结构化结果
+        P-->>A: 状态补丁或控制动作
+    else Workflow 已确定执行节点
+        W->>S: 领域请求
+        S-->>W: 领域结果
+    end</pre>
+<p>公共 Tool 是模型调用领域能力的受控入口，不是领域 Service 的上层公共 API。Workflow 不需要为了复用能力先构造 ToolCall，也不需要经过 Agent 的状态和结果处理器。</p>
+<h2 id="4">4. 系统架构</h2>
+<pre class="mermaid">flowchart LR
+    Host["调用方：Agent / Workflow 编排器与结果处理器"]
+    BusinessTool["业务 Tool"]
+    DomainService["领域 Service"]
+    ModelProtocol["模型 Function Calling 协议"]
+
+    subgraph Runtime["Tool Runtime"]
+        direction TB
+
+        subgraph ContractLayer["契约层"]
+            direction LR
+            Tool["Tool 泛型契约"]
+            Definition["ToolDefinition"]
+            Result["ToolResult"]
+            Policy["ToolExecutionPolicy"]
+            CallContext["ToolCall / ToolCallContext"]
+        end
+
+        subgraph DispatchLayer["注册、校验与适配"]
+            direction LR
+            Registry["ToolRegistry"]
+            Validation["输入 / 跨字段 / 输出校验"]
+            Middleware["Middleware 链"]
+            Adapter["模型协议适配器"]
+        end
+
+        subgraph ControlLayer["执行控制原语"]
+            direction LR
+            Budget["BudgetGuard"]
+            Concurrency["并发分批 / 顺序恢复"]
+            Deadline["截止时间 / 取消信号"]
+        end
+
+        Registry --> Tool
+        Registry --> Validation
+        Registry --> Middleware
+        Registry --> Result
+        Registry --> CallContext
+        Tool --> Definition
+        Tool --> Policy
+        Adapter --> Definition
+        Middleware --> CallContext
+        Middleware --> Result
+        Concurrency --> Policy
+        Deadline --> CallContext
+    end
+
+    Host --> Registry
+    Host --> Adapter
+    Host --> Result
+    Host --> Budget
+    Host --> Concurrency
+    Host --> Deadline
+    BusinessTool -. 实现 .-> Tool
+    BusinessTool --> DomainService
+    Adapter --> ModelProtocol</pre>
+<p>Tool Runtime 由三部分组成：契约层定义稳定的输入输出边界；注册、校验与适配层负责受控分发和协议转换；执行控制原语负责预算、并发、截止时间和取消。调用方组合这些能力并解释 <code>ToolResult</code>，业务 Tool 实现泛型契约并调用领域 Service。Runtime 不直接依赖具体业务实现或模型 SDK。</p>
+<h2 id="5">5. 核心模块详解</h2>
+<p>各子模块通过定义发布和运行时执行两条路径协作：</p>
+<pre class="mermaid">flowchart LR
+    Host["调用方：Agent / Workflow"]
+    Tool["5.1 Tool 契约与执行属性"]
+    Definition["5.2 ToolDefinition 与模型适配"]
+    Registry["5.3 Registry 与校验"]
+    Result["5.4 ToolResult"]
+    Context["5.5 调用上下文"]
+    Middleware["5.6 Middleware"]
+    Concurrency["5.7 并发分批"]
+    Budget["5.8 Budget"]
+    Projection["5.9 调用方结果投影"]
+
+    Tool -->|"导出定义"| Definition
+    Host --> Budget
+    Host --> Concurrency
+    Host --> Context
+    Budget -->|"允许执行"| Registry
+    Concurrency -->|"按批次提交"| Registry
+    Context -->|"随调用传入"| Registry
+    Registry -->|"参数校验通过"| Middleware
+    Middleware -->|"包裹执行"| Tool
+    Tool -->|"返回统一结果"| Result
+    Result --> Projection
+    Concurrency -. "读取 execution" .-> Tool
+    Registry -. "读取输入输出模型" .-> Tool
+    Registry -. "复验成功结果" .-> Result</pre>
+<table>
+<thead>
+<tr>
+<th>协作路径</th>
+<th>模块关系</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>定义发布</td>
+<td>5.1 生成厂商无关定义，5.2 将定义转换为模型协议</td>
+</tr>
+<tr>
+<td>调用准备</td>
+<td>调用方组合 5.8 的预算判定、5.7 的分批结果和 5.5 的调用上下文</td>
+</tr>
+<tr>
+<td>核心执行</td>
+<td>5.3 完成白名单和 Schema 校验，5.6 包裹 5.1 的 <code>execute</code></td>
+</tr>
+<tr>
+<td>结果处理</td>
+<td>5.4 统一表达执行结果，5.9 将结果转换为调用方状态和控制动作</td>
+</tr>
+<tr>
+<td>声明约束</td>
+<td>5.7 读取 5.1 的并发属性，5.3 读取 5.1 的输入输出模型</td>
+</tr>
+</tbody>
+</table>
+<h3 id="51-tool">5.1 Tool 定义与执行属性</h3>
+<p><code>Tool</code> 是由执行上下文、输入模型和输出模型参数化的通用执行契约，其结构包含三个泛型参数、七个类属性和两个固定方法。</p>
+<p>三个泛型参数分别约束执行入口的输入和输出：</p>
+<table>
+<thead>
+<tr>
+<th>泛型参数</th>
+<th>含义</th>
+<th>约束</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ContextT</code></td>
+<td>调用方创建的可信业务上下文</td>
+<td>不来自模型参数</td>
+</tr>
+<tr>
+<td><code>ArgsT</code></td>
+<td>模型提出、Registry 校验后的输入</td>
+<td>必须是结构化输入模型</td>
+</tr>
+<tr>
+<td><code>ResultT</code></td>
+<td>Tool 成功返回的业务数据</td>
+<td>必须是结构化输出模型</td>
+</tr>
+</tbody>
+</table>
+<p>基类的类属性结构如下。它们属于 Tool 定义，不应藏在 <code>execute</code> 的业务逻辑中：</p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Tool</span><span class="p">(</span><span class="n">Generic</span><span class="p">[</span><span class="n">ContextT</span><span class="p">,</span> <span class="n">ArgsT</span><span class="p">,</span> <span class="n">ResultT</span><span class="p">]):</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+    <span class="n">title</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">description</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+    <span class="n">args_model</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">type</span><span class="p">[</span><span class="n">ArgsT</span><span class="p">]]</span>
+    <span class="n">result_model</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">type</span><span class="p">[</span><span class="n">ResultT</span><span class="p">]]</span>
+    <span class="n">execution</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">ToolExecutionPolicy</span><span class="p">]</span> <span class="o">=</span> <span class="n">ToolExecutionPolicy</span><span class="p">()</span>
+    <span class="n">args_validator</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="n">ToolArgsValidator</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>属性</th>
+<th>作用</th>
+<th>是否必填</th>
+<th>是否模型可见</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td>稳定且唯一的调用标识</td>
+<td>是</td>
+<td>是</td>
+</tr>
+<tr>
+<td><code>title</code></td>
+<td>面向界面的短标题</td>
+<td>否</td>
+<td>由模型协议决定</td>
+</tr>
+<tr>
+<td><code>description</code></td>
+<td>说明调用时机、参数语义和返回内容</td>
+<td>是</td>
+<td>是</td>
+</tr>
+<tr>
+<td><code>args_model</code></td>
+<td>生成输入 Schema，并校验模型参数</td>
+<td>是</td>
+<td>是</td>
+</tr>
+<tr>
+<td><code>result_model</code></td>
+<td>校验成功结果的结构</td>
+<td>是</td>
+<td>由模型协议决定</td>
+</tr>
+<tr>
+<td><code>execution</code></td>
+<td>声明读写、并发、超时、幂等和取消属性</td>
+<td>否，有保守默认值</td>
+<td>部分转换为注解</td>
+</tr>
+<tr>
+<td><code>args_validator</code></td>
+<td>执行依赖上下文的跨字段校验</td>
+<td>否</td>
+<td>否</td>
+</tr>
+</tbody>
+</table>
+<p>基类还固定了定义导出和业务执行两个方法：</p>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>完整签名</th>
+<th>职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>definition</code></td>
+<td><code>definition() -&gt; ToolDefinition</code></td>
+<td>汇总标识、输入输出 Schema 和执行注解，生成厂商无关定义</td>
+</tr>
+<tr>
+<td><code>execute</code></td>
+<td><code>execute(self, ctx: ContextT, args: ArgsT) -&gt; ToolResult[ResultT]</code></td>
+<td>使用可信上下文和已校验参数执行业务能力，返回统一结果信封</td>
+</tr>
+</tbody>
+</table>
+<p><code>execute</code> 的参数及返回值语义如下：</p>
+<ul>
+<li><code>self</code> 保存通过构造函数注入的领域 Service；基类不限制具体构造函数。</li>
+<li><code>ctx</code> 由调用方组装，可以承载身份、资源范围和本轮共享状态，模型不能修改这些字段。</li>
+<li><code>args</code> 已由 Registry 从原始字典转换为 <code>args_model</code> 实例，Tool 不应再次解析原始参数。</li>
+<li>返回值必须是 <code>ToolResult[ResultT]</code>，不能直接返回字典、字符串或领域对象。</li>
+</ul>
+<p>一个完整的 Tool 类型关系包含业务上下文、输入模型和输出模型：</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">EchoContext</span><span class="p">:</span>
+    <span class="n">workspace_id</span><span class="p">:</span> <span class="nb">str</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">EchoArgs</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">text</span><span class="p">:</span> <span class="nb">str</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">EchoData</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">text</span><span class="p">:</span> <span class="nb">str</span>
+</code></pre></div>
+
+<p><code>EchoTool</code> 通过泛型参数绑定三类对象，并实现类型完整的执行入口：</p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">EchoTool</span><span class="p">(</span><span class="n">Tool</span><span class="p">[</span><span class="n">EchoContext</span><span class="p">,</span> <span class="n">EchoArgs</span><span class="p">,</span> <span class="n">EchoData</span><span class="p">]):</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;echo&quot;</span>
+    <span class="n">title</span> <span class="o">=</span> <span class="s2">&quot;Echo&quot;</span>
+    <span class="n">description</span> <span class="o">=</span> <span class="s2">&quot;返回输入文本&quot;</span>
+    <span class="n">args_model</span> <span class="o">=</span> <span class="n">EchoArgs</span>
+    <span class="n">result_model</span> <span class="o">=</span> <span class="n">EchoData</span>
+    <span class="n">execution</span> <span class="o">=</span> <span class="n">ToolExecutionPolicy</span><span class="p">(</span><span class="n">timeout_seconds</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">ctx</span><span class="p">:</span> <span class="n">EchoContext</span><span class="p">,</span> <span class="n">args</span><span class="p">:</span> <span class="n">EchoArgs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ToolResult</span><span class="p">[</span><span class="n">EchoData</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="n">ToolResult</span><span class="o">.</span><span class="n">succeeded</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">text</span><span class="p">,</span> <span class="n">EchoData</span><span class="p">(</span><span class="n">text</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">text</span><span class="p">))</span>
+</code></pre></div>
+
+<p>执行属性的含义：</p>
+<table>
+<thead>
+<tr>
+<th>属性</th>
+<th>设计问题</th>
+<th>保守默认值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>side_effect</code></td>
+<td>是否修改外部系统</td>
+<td><code>read</code></td>
+</tr>
+<tr>
+<td><code>concurrency</code></td>
+<td>能否与同轮其他 Tool 并发</td>
+<td><code>serial</code></td>
+</tr>
+<tr>
+<td><code>timeout_seconds</code></td>
+<td>单次调用期望上限</td>
+<td>由系统默认值补齐</td>
+</tr>
+<tr>
+<td><code>idempotent</code></td>
+<td>相同输入重复执行是否等价</td>
+<td><code>True</code></td>
+</tr>
+<tr>
+<td><code>destructive</code></td>
+<td>是否可能产生不可逆影响</td>
+<td><code>False</code></td>
+</tr>
+<tr>
+<td><code>supports_cancellation</code></td>
+<td>底层能否执行中取消</td>
+<td><code>False</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="52-tooldefinition">5.2 ToolDefinition 与模型适配</h3>
+<p>Runtime 先生成厂商无关定义，再由适配器转换为具体协议：</p>
+<div class="highlight"><pre><span></span><code><span class="n">definition</span> <span class="o">=</span> <span class="n">EchoTool</span><span class="o">.</span><span class="n">definition</span><span class="p">()</span>
+<span class="n">model_spec</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;function&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;function&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="n">definition</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+        <span class="s2">&quot;description&quot;</span><span class="p">:</span> <span class="n">definition</span><span class="o">.</span><span class="n">description</span><span class="p">,</span>
+        <span class="s2">&quot;parameters&quot;</span><span class="p">:</span> <span class="n">definition</span><span class="o">.</span><span class="n">input_schema</span><span class="p">,</span>
+    <span class="p">},</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><code>ToolDefinition</code> 是内部稳定契约，模型 SDK 的格式只存在于 Adapter。更换模型供应商时，应新增 Adapter，不修改 Tool。</p>
+<h3 id="53-registry">5.3 Registry 与校验</h3>
+<p>最小使用示例：</p>
+<div class="highlight"><pre><span></span><code><span class="n">registry</span> <span class="o">=</span> <span class="n">ToolRegistry</span><span class="p">(</span><span class="n">middlewares</span><span class="o">=</span><span class="n">default_middlewares</span><span class="p">())</span>
+<span class="n">registry</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">EchoTool</span><span class="p">())</span>
+<span class="n">call</span> <span class="o">=</span> <span class="n">ToolCall</span><span class="p">(</span><span class="s2">&quot;echo&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="s2">&quot;hello&quot;</span><span class="p">},</span> <span class="s2">&quot;call-1&quot;</span><span class="p">)</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">registry</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">call</span><span class="p">,</span> <span class="n">ctx</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">result</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">text</span> <span class="o">==</span> <span class="s2">&quot;hello&quot;</span>
+</code></pre></div>
+
+<p>执行顺序固定为：</p>
+<pre class="mermaid">flowchart LR
+    Allow["白名单"] --> Args["输入模型"]
+    Args --> Cross["跨字段校验"]
+    Cross --> Middleware["中间件"]
+    Middleware --> Execute["execute"]
+    Execute --> Output["成功输出模型"]</pre>
+<table>
+<thead>
+<tr>
+<th>情况</th>
+<th>处置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>名称未注册</td>
+<td>返回 <code>rejected/tool_not_allowed</code></td>
+</tr>
+<tr>
+<td>输入模型失败</td>
+<td>返回 <code>failed/invalid_tool_args</code>，建议修正输入</td>
+</tr>
+<tr>
+<td>跨字段校验失败</td>
+<td>返回相同的参数错误契约</td>
+</tr>
+<tr>
+<td>成功结果没有 <code>data</code></td>
+<td>抛出实现错误</td>
+</tr>
+<tr>
+<td>输出模型不匹配</td>
+<td>抛出校验错误</td>
+</tr>
+<tr>
+<td>Tool 未声明异常</td>
+<td>向调用方传播</td>
+</tr>
+</tbody>
+</table>
+<h3 id="54-toolresult">5.4 ToolResult</h3>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>含义</th>
+<th>是否应重试</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>succeeded</code></td>
+<td>正常完成并产生结构化数据</td>
+<td>否</td>
+</tr>
+<tr>
+<td><code>rejected</code></td>
+<td>被权限、安全或业务规则拒绝</td>
+<td>默认不重试</td>
+</tr>
+<tr>
+<td><code>failed</code></td>
+<td>参数、配置、领域或暂时性错误</td>
+<td>由 <code>retry_advice</code> 决定</td>
+</tr>
+<tr>
+<td><code>interrupted</code></td>
+<td>因取消或截止时间不再使用结果</td>
+<td>不重试</td>
+</tr>
+</tbody>
+</table>
+<p>成功结果：</p>
+<div class="highlight"><pre><span></span><code><span class="n">data</span> <span class="o">=</span> <span class="n">EchoData</span><span class="p">(</span><span class="n">text</span><span class="o">=</span><span class="s2">&quot;hello&quot;</span><span class="p">)</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">ToolResult</span><span class="o">.</span><span class="n">succeeded</span><span class="p">(</span>
+    <span class="n">model_content</span><span class="o">=</span><span class="s2">&quot;hello&quot;</span><span class="p">,</span>
+    <span class="n">data</span><span class="o">=</span><span class="n">data</span><span class="p">,</span>
+    <span class="n">metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;source&quot;</span><span class="p">:</span> <span class="s2">&quot;local&quot;</span><span class="p">},</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>可修正失败：</p>
+<div class="highlight"><pre><span></span><code><span class="n">result</span> <span class="o">=</span> <span class="n">ToolResult</span><span class="o">.</span><span class="n">failed</span><span class="p">(</span>
+    <span class="s2">&quot;text 不能为空&quot;</span><span class="p">,</span>
+    <span class="n">error_code</span><span class="o">=</span><span class="s2">&quot;invalid_text&quot;</span><span class="p">,</span>
+    <span class="n">error_category</span><span class="o">=</span><span class="n">ToolErrorCategory</span><span class="o">.</span><span class="n">VALIDATION</span><span class="p">,</span>
+    <span class="n">retry_advice</span><span class="o">=</span><span class="n">RetryAdvice</span><span class="o">.</span><span class="n">CORRECT_INPUT</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>结果字段按使用方隔离：</p>
+<ul>
+<li><code>model_content</code>：受控写入模型 Observation。</li>
+<li><code>data</code>：交给业务和结果处理器。</li>
+<li><code>metadata</code>：交给调用方、审计和 Artifact，不直接暴露给模型。</li>
+<li><code>details</code>：保存结构化错误细节。</li>
+</ul>
+<h3 id="55">5.5 调用上下文、截止时间与取消</h3>
+<p>有效超时取 Tool 声明、系统上限和 Run 剩余时间的最小值：</p>
+<div class="highlight"><pre><span></span><code><span class="n">timeout</span> <span class="o">=</span> <span class="n">effective_timeout_seconds</span><span class="p">(</span>
+    <span class="n">declared_timeout</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+    <span class="n">default_timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
+    <span class="n">maximum_timeout</span><span class="o">=</span><span class="mi">60</span><span class="p">,</span>
+    <span class="n">run_remaining</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="k">assert</span> <span class="n">timeout</span> <span class="o">==</span> <span class="mi">3</span>
+</code></pre></div>
+
+<p>调用方应执行前后两次检查：</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span> <span class="n">cancellation</span><span class="o">.</span><span class="n">is_cancelled</span><span class="p">()</span> <span class="ow">or</span> <span class="n">timeout</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">ToolResult</span><span class="o">.</span><span class="n">interrupted</span><span class="p">(</span><span class="s2">&quot;调用未开始&quot;</span><span class="p">,</span> <span class="n">error_code</span><span class="o">=</span><span class="s2">&quot;interrupted&quot;</span><span class="p">)</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">registry</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">call</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">call_context</span><span class="o">=</span><span class="n">call_context</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">cancellation</span><span class="o">.</span><span class="n">is_cancelled</span><span class="p">()</span> <span class="ow">or</span> <span class="n">call_context</span><span class="o">.</span><span class="n">deadline_exceeded</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">ToolResult</span><span class="o">.</span><span class="n">interrupted</span><span class="p">(</span><span class="s2">&quot;结果不再使用&quot;</span><span class="p">,</span> <span class="n">error_code</span><span class="o">=</span><span class="s2">&quot;interrupted&quot;</span><span class="p">)</span>
+<span class="k">return</span> <span class="n">result</span>
+</code></pre></div>
+
+<p>“调用方停止等待”和“底层操作已经停止”不是同一件事。只有底层 Service 明确支持取消或截止时间，才能声明真实中止。</p>
+<h3 id="56-middleware">5.6 Middleware</h3>
+<p>中间件适合耗时、审计字段、指标和统一技术上下文，不适合权限或业务门禁。</p>
+<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">LatencyMiddleware</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">around</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tool</span><span class="p">,</span> <span class="n">ctx</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">call</span><span class="p">):</span>
+        <span class="n">started</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">call</span><span class="p">()</span>
+        <span class="n">metadata</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">metadata</span><span class="p">)</span>
+        <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;latency_ms&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">int</span><span class="p">((</span><span class="n">time</span><span class="o">.</span><span class="n">monotonic</span><span class="p">()</span> <span class="o">-</span> <span class="n">started</span><span class="p">)</span> <span class="o">*</span> <span class="mi">1000</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">result</span><span class="o">.</span><span class="n">with_updates</span><span class="p">(</span><span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">)</span>
+</code></pre></div>
+
+<p>先注册的 Middleware 位于最外层。未知异常不应在 Middleware 中转成普通 Tool 失败，否则实现缺陷会被掩盖。</p>
+<h3 id="57">5.7 并发分批</h3>
+<p>假设四个 Tool Call 的并发声明如下：</p>
+<div class="highlight"><pre><span></span><code><span class="n">calls</span> <span class="o">=</span> <span class="p">[</span><span class="n">a_parallel</span><span class="p">,</span> <span class="n">b_parallel</span><span class="p">,</span> <span class="n">c_serial</span><span class="p">,</span> <span class="n">d_parallel</span><span class="p">]</span>
+<span class="n">batches</span> <span class="o">=</span> <span class="p">[[</span><span class="n">a_parallel</span><span class="p">,</span> <span class="n">b_parallel</span><span class="p">],</span> <span class="p">[</span><span class="n">c_serial</span><span class="p">],</span> <span class="p">[</span><span class="n">d_parallel</span><span class="p">]]</span>
+<span class="n">completed_order</span> <span class="o">=</span> <span class="p">[</span><span class="n">b_parallel</span><span class="p">,</span> <span class="n">a_parallel</span><span class="p">,</span> <span class="n">c_serial</span><span class="p">,</span> <span class="n">d_parallel</span><span class="p">]</span>
+<span class="n">returned_order</span> <span class="o">=</span> <span class="p">[</span><span class="n">a_parallel</span><span class="p">,</span> <span class="n">b_parallel</span><span class="p">,</span> <span class="n">c_serial</span><span class="p">,</span> <span class="n">d_parallel</span><span class="p">]</span>
+</code></pre></div>
+
+<p>分批规则：</p>
+<ol>
+<li>只有明确声明 <code>parallel_safe</code> 的连续调用才能合并。</li>
+<li>串行或未知 Tool 独立成批。</li>
+<li>并发完成顺序不能改变模型 Observation 顺序。</li>
+<li>并发批次发生程序错误时，要保留同批已经完成的结果。</li>
+</ol>
+<p>声明并发安全前，必须同时确认 Tool、领域 Service、数据库 Session 和上下文对象都可跨线程或任务使用。</p>
+<h3 id="58-budget">5.8 Budget</h3>
+<p>通用预算只表达跨业务可复用的资源约束：</p>
+<table>
+<thead>
+<tr>
+<th>预算</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>最大步骤</td>
+<td>防止无限规划循环</td>
+</tr>
+<tr>
+<td>Token 总量</td>
+<td>控制模型成本</td>
+</tr>
+<tr>
+<td>墙钟时间</td>
+<td>限制单次 Run 总耗时</td>
+</tr>
+<tr>
+<td>重复调用熔断</td>
+<td>阻止相同 Tool 和参数无限重试</td>
+</tr>
+<tr>
+<td>软阈值</td>
+<td>接近上限时促使调用方结束当前处理</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><span class="n">mode</span> <span class="o">=</span> <span class="n">budget</span><span class="o">.</span><span class="n">planning_mode</span><span class="p">()</span>
+<span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;normal&quot;</span><span class="p">:</span>
+    <span class="n">tools</span> <span class="o">=</span> <span class="n">normal_tools</span>
+<span class="k">elif</span> <span class="n">mode</span> <span class="o">==</span> <span class="s2">&quot;soft&quot;</span><span class="p">:</span>
+    <span class="n">tools</span> <span class="o">=</span> <span class="n">closure_tools</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">tools</span> <span class="o">=</span> <span class="p">[]</span>
+</code></pre></div>
+
+<p>业务重试次数、审批次数、澄清次数等属于业务预算，应由调用方策略实现，不应加入通用 Runtime。</p>
+<h3 id="59">5.9 调用方结果投影</h3>
+<p>Tool 只返回事实或控制请求；调用方决定如何改变状态：</p>
+<div class="highlight"><pre><span></span><code><span class="n">projection</span> <span class="o">=</span> <span class="n">processor</span><span class="o">.</span><span class="n">process</span><span class="p">(</span><span class="n">tool_name</span><span class="p">,</span> <span class="n">result</span><span class="p">)</span>
+<span class="n">state</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">projection</span><span class="o">.</span><span class="n">state_patch</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">projection</span><span class="o">.</span><span class="n">events</span><span class="p">:</span>
+    <span class="n">publisher</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="n">event</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">projection</span><span class="o">.</span><span class="n">control</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">lifecycle</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">projection</span><span class="o">.</span><span class="n">control</span><span class="p">)</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>ToolResult 内容</th>
+<th>调用方可能执行的动作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>查询数据</td>
+<td>保存 Artifact、更新派生状态、写 Observation</td>
+</tr>
+<tr>
+<td>澄清请求</td>
+<td>创建澄清记录并挂起 Run</td>
+</tr>
+<tr>
+<td>结束请求</td>
+<td>投影最终回答并结束 Run</td>
+</tr>
+<tr>
+<td>普通失败</td>
+<td>写 Observation，让模型决定是否修正</td>
+</tr>
+<tr>
+<td>取消</td>
+<td>关闭未完成调用并取消 Run</td>
+</tr>
+</tbody>
+</table>
+<p>集中投影可以让状态更新、事件和终态在一个入口表达，但应避免长期使用工具名称字符串分派；规模增大后可以让 ToolDefinition 声明稳定的结果处理类型。</p>
+<h2 id="6">6. 关键技术实现</h2>
+<h3 id="61">6.1 一份契约驱动定义、模型和校验</h3>
+<p>输入模型同时用于生成模型 Schema 和运行时校验，输出模型用于成功结果复验。这样可以避免模型协议、实现参数和测试契约分别维护后逐渐不一致。</p>
+<p>权衡是 Schema 生成能力依赖所选验证库；更换 Pydantic 等基础库时，应保持 <code>ToolDefinition</code> 对外结构稳定。</p>
+<h3 id="62">6.2 可见性、白名单和授权分离</h3>
+<table>
+<thead>
+<tr>
+<th>控制点</th>
+<th>回答的问题</th>
+<th>失败后果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>可见性</td>
+<td>模型当前应该看到什么</td>
+<td>不向模型暴露</td>
+</tr>
+<tr>
+<td>Registry 白名单</td>
+<td>系统允许执行什么</td>
+<td><code>tool_not_allowed</code></td>
+</tr>
+<tr>
+<td>领域授权</td>
+<td>当前身份能操作什么资源</td>
+<td>授权拒绝</td>
+</tr>
+</tbody>
+</table>
+<p>把三层合并会产生两类风险：仅隐藏 Tool 但本地仍可绕过调用，或把流程状态误当成真实数据权限。</p>
+<h3 id="63">6.3 截止时间和取消使用真实语义</h3>
+<p>Runtime 负责计算截止时间、传递取消信号和决定返回结果是否仍有效；底层 Service 负责真正停止 I/O 或数据库执行。Runtime 不能仅因外层等待超时，就声称底层副作用已经取消。</p>
+<p>收益是状态和审计更可信；代价是每个重要领域 Service 都要支持 deadline 或 cancellation，不能只在最外层加超时包装。</p>
+<h2 id="7">7. 已知限制与实施注意事项</h2>
+<table>
+<thead>
+<tr>
+<th>限制或风险</th>
+<th>影响</th>
+<th>实施建议</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>并发声明错误</td>
+<td>Session 冲突、状态竞争、重复副作用</td>
+<td>默认串行，逐个验证后放开</td>
+</tr>
+<tr>
+<td>底层不支持取消</td>
+<td>调用方停止后操作仍可能完成</td>
+<td>在领域 Service 传递 deadline/cancellation</td>
+</tr>
+<tr>
+<td>长结果只存内存</td>
+<td>恢复后 <code>offload_ref</code> 失效</td>
+<td>需要跨恢复时使用持久化 Artifact</td>
+</tr>
+<tr>
+<td>结果处理按名称分派</td>
+<td>重命名或扩展容易漏改</td>
+<td>使用稳定处理类型或注册处理器</td>
+</tr>
+<tr>
+<td>同步线程池并发</td>
+<td>不适合原生异步或进程隔离任务</td>
+<td>根据技术栈增加 async/process 调度器</td>
+</tr>
+<tr>
+<td>输出 Schema 未发送给模型</td>
+<td>模型不知道结构化输出约束</td>
+<td>继续内部强校验，或使用支持输出 Schema 的协议</td>
+</tr>
+<tr>
+<td>未声明异常传播</td>
+<td>当前批次和 Run 失败</td>
+<td>完整映射可预期错误，保留程序错误传播</td>
+</tr>
+<tr>
+<td>公共 Semantic Tool 尚无第二个生产 Agent 接入</td>
+<td>多 Agent 可复用性目前由契约和测试验证</td>
+<td>新 Agent 直接实现可信上下文并注册公共 Tool，不增加转发 Tool</td>
+</tr>
+</tbody>
+</table>
+<p>模型注解中的 <code>read_only</code>、<code>destructive</code> 和 <code>idempotent</code> 只是提示和调度依据，不能替代业务授权。</p>
+<h2 id="8-sqlbot">8. SQLBot 当前实现映射</h2>
+<p>本章只用于证明前述设计已经在真实项目中落地，并帮助 SQLBot 维护者定位代码。</p>
+<h3 id="81">8.1 模块映射</h3>
+<table>
+<thead>
+<tr>
+<th>通用概念</th>
+<th>SQLBot 实现</th>
+<th>位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tool 契约和执行策略</td>
+<td><code>Tool</code>、<code>ToolExecutionPolicy</code></td>
+<td><code>backend/apps/tool/base.py</code></td>
+</tr>
+<tr>
+<td>厂商无关定义</td>
+<td><code>ToolDefinition</code>、<code>ToolAnnotations</code></td>
+<td><code>backend/apps/tool/definition.py</code></td>
+</tr>
+<tr>
+<td>统一结果</td>
+<td><code>ToolResult</code>、<code>ToolStatus</code>、<code>RetryAdvice</code></td>
+<td><code>backend/apps/tool/result.py</code></td>
+</tr>
+<tr>
+<td>注册和校验</td>
+<td><code>ToolRegistry</code></td>
+<td><code>backend/apps/tool/registry.py</code></td>
+</tr>
+<tr>
+<td>调用上下文</td>
+<td><code>ToolCall</code>、<code>ToolCallContext</code></td>
+<td><code>backend/apps/tool/context.py</code></td>
+</tr>
+<tr>
+<td>并发分批</td>
+<td><code>batch_tool_calls()</code>、<code>execute_tool_batch()</code></td>
+<td><code>backend/apps/tool/concurrency.py</code></td>
+</tr>
+<tr>
+<td>通用预算</td>
+<td><code>BudgetGuard</code></td>
+<td><code>backend/apps/tool/budget.py</code></td>
+</tr>
+<tr>
+<td>OpenAI 适配</td>
+<td><code>to_openai_tool_specs()</code></td>
+<td><code>backend/apps/tool/adapters/openai.py</code></td>
+</tr>
+<tr>
+<td>调用方执行器</td>
+<td><code>AgentToolExecutor</code></td>
+<td><code>backend/apps/chatbi/orchestration/agent/tool_execution.py</code></td>
+</tr>
+<tr>
+<td>结果处理器</td>
+<td><code>ChatBIToolResultProcessor</code></td>
+<td><code>backend/apps/chatbi/orchestration/agent/tool_results.py</code></td>
+</tr>
+<tr>
+<td>公共 Semantic 上下文</td>
+<td><code>SemanticToolContext</code>、<code>SemanticAssetScope</code></td>
+<td><code>backend/apps/tool/tools/semantic_contracts.py</code></td>
+</tr>
+<tr>
+<td>公共语义检索 Tool</td>
+<td><code>SearchSemanticAssetsTool</code></td>
+<td><code>backend/apps/tool/tools/semantic.py</code></td>
+</tr>
+<tr>
+<td>公共语义编译 Tool</td>
+<td><code>CompileSemanticSqlTool</code></td>
+<td><code>backend/apps/tool/tools/semantic.py</code></td>
+</tr>
+<tr>
+<td>公共语义检索 Service</td>
+<td><code>RetrievalService</code></td>
+<td><code>backend/apps/retrieval/query/service.py</code></td>
+</tr>
+<tr>
+<td>公共语义编译 Service</td>
+<td><code>SemanticSQLCompilationService</code></td>
+<td><code>backend/apps/semantic/services/sql_compilation_service.py</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="82-tool">8.2 九个生产 Tool</h3>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>类型</th>
+<th>当前职责</th>
+<th>位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>search_semantic_assets</code></td>
+<td>公共语义查询</td>
+<td>使用可信检索请求召回语义资产，按当前表权限过滤，并生成编译可信范围</td>
+<td><code>backend/apps/tool/tools/semantic.py</code></td>
+</tr>
+<tr>
+<td><code>compile_semantic_sql</code></td>
+<td>公共语义计算</td>
+<td>重新检查权限、资产白名单和时间范围，确定性编译 SQL</td>
+<td><code>backend/apps/tool/tools/semantic.py</code></td>
+</tr>
+<tr>
+<td><code>finish</code></td>
+<td>ChatBI 控制</td>
+<td>返回结束请求和回答投影数据</td>
+<td><code>backend/apps/chatbi/orchestration/agent/tools/core.py</code></td>
+</tr>
+<tr>
+<td><code>clarify</code></td>
+<td>ChatBI 控制</td>
+<td>返回结构化澄清请求</td>
+<td><code>backend/apps/chatbi/orchestration/agent/tools/interaction.py</code></td>
+</tr>
+<tr>
+<td><code>get_dataset_schema</code></td>
+<td>公共查询</td>
+<td>读取权限过滤后的物理结构</td>
+<td><code>backend/apps/tool/tools/datasource.py</code></td>
+</tr>
+<tr>
+<td><code>validate_sql</code></td>
+<td>公共查询</td>
+<td>预检 SQL 安全、权限和资源限制</td>
+<td><code>backend/apps/tool/tools/datasource.py</code></td>
+</tr>
+<tr>
+<td><code>execute_sql</code></td>
+<td>公共查询</td>
+<td>再次校验并执行 SQL</td>
+<td><code>backend/apps/tool/tools/datasource.py</code></td>
+</tr>
+<tr>
+<td><code>search_terminology</code></td>
+<td>公共查询</td>
+<td>查询当前数据集业务术语</td>
+<td><code>backend/apps/tool/tools/semantic.py</code></td>
+</tr>
+<tr>
+<td><code>get_sql_examples</code></td>
+<td>公共查询</td>
+<td>召回相似 SQL 示例</td>
+<td><code>backend/apps/tool/tools/knowledge.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>九个 Tool 在 <code>build_agent_tool_registry()</code> 中显式注册。ChatBI composition 只选择和注入公共 Tool，不实现语义检索或 SQL 编译转发服务。来源：<code>backend/apps/chatbi/orchestration/agent/composition.py</code>。</p>
+<p>Semantic 公共能力有两条真实调用路径：</p>
+<pre class="mermaid">flowchart LR
+    Agent["ChatBI Agent"] --> Registry["ToolRegistry"]
+    Registry --> SearchTool["SearchSemanticAssetsTool"]
+    Registry --> CompileTool["CompileSemanticSqlTool"]
+
+    SearchTool --> Retrieval["RetrievalService"]
+    SearchTool --> Policy["DatasourceQueryService"]
+    CompileTool --> Compilation["SemanticSQLCompilationService"]
+    CompileTool --> Policy
+
+    Graph["ChatBI Workflow"] --> KnowledgeAdapter["SemanticKnowledgeAdapter"]
+    Graph --> SqlAdapter["SqlAdapter"]
+    KnowledgeAdapter --> Retrieval
+    KnowledgeAdapter --> Policy
+    SqlAdapter --> Compilation
+    SqlAdapter --> Policy</pre>
+<p>Agent 通过公共 Tool 获得模型可调用契约；Graph 节点已经确定执行动作，因此 Adapter 直接调用公共领域 Service。领域 Service 不反向依赖 Tool，两条路径不会形成循环。</p>
+<h3 id="83-sqlbot">8.3 SQLBot 状态投影</h3>
+<table>
+<thead>
+<tr>
+<th>Tool 结果</th>
+<th>状态补丁</th>
+<th>Event 或控制动作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>search_semantic_assets</code></td>
+<td><code>semantic_package</code>、<code>semantic_scope</code>、<code>semantic_asset_ids</code>、<code>allowed_tables</code></td>
+<td>无控制动作</td>
+</tr>
+<tr>
+<td><code>get_dataset_schema</code></td>
+<td>合并 <code>allowed_tables</code></td>
+<td>无控制动作</td>
+</tr>
+<tr>
+<td><code>compile_semantic_sql</code></td>
+<td><code>compiled_sql</code>、合并 <code>allowed_tables</code></td>
+<td><code>sql-generated</code></td>
+</tr>
+<tr>
+<td><code>validate_sql</code></td>
+<td>无</td>
+<td><code>sql-validated</code></td>
+</tr>
+<tr>
+<td><code>execute_sql</code></td>
+<td><code>last_execution</code>、<code>full_data</code>，保存 Artifact</td>
+<td><code>sql-executed</code></td>
+</tr>
+<tr>
+<td><code>clarify</code></td>
+<td>无</td>
+<td><code>CLARIFY</code>，挂起 Run</td>
+</tr>
+<tr>
+<td><code>finish</code></td>
+<td>无</td>
+<td><code>FINISH</code>，结束 Run</td>
+</tr>
+</tbody>
+</table>
+<p>来源：<code>backend/apps/chatbi/orchestration/agent/tool_results.py:43-304</code>。</p>
+<h3 id="84">8.4 架构守卫</h3>
+<p>SQLBot 通过测试约束以下依赖：</p>
+<ul>
+<li>Tool Runtime 不依赖业务域、Event 或 Trace。</li>
+<li>公共 Tool 不依赖 ChatBI 状态和生命周期。</li>
+<li>Datasource、Semantic、Knowledge Service 不反向依赖具体 Tool。</li>
+<li>ChatBI 控制 Tool 不直接依赖调用方执行器、Repository、Event 或 Trace。</li>
+<li>Graph 的 Semantic Adapter 直接依赖公共 Retrieval、Semantic 和 Datasource Service，不依赖 ChatBI 语义转发 Service。</li>
+</ul>
+<p>来源：<code>backend/tests/architecture/test_structure_rules.py:45-115</code>、<code>backend/tests/architecture/test_boundaries.py:832-876</code>。</p>
+<h3 id="85">8.5 当前运行时约束</h3>
+<table>
+<thead>
+<tr>
+<th>约束</th>
+<th>当前实现依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>九个生产 Tool 均使用默认串行策略</td>
+<td><code>backend/apps/tool/base.py:39-59</code>、生产 Tool 的 <code>execution</code> 声明</td>
+</tr>
+<tr>
+<td>SQL 和语义检索会接收调用截止时间</td>
+<td><code>backend/apps/tool/tools/datasource.py</code>、<code>backend/apps/tool/tools/semantic.py</code></td>
+</tr>
+<tr>
+<td>长结果卸载不跨恢复持久化</td>
+<td><code>backend/apps/chatbi/orchestration/agent/messages.py:151-185</code>、<code>backend/apps/chatbi/orchestration/agent/state.py:53-60</code></td>
+</tr>
+<tr>
+<td>ChatBI 结果投影按 Tool 名称分派</td>
+<td><code>backend/apps/chatbi/orchestration/agent/tool_results.py:72-143</code></td>
+</tr>
+<tr>
+<td>并发批次使用同步线程池</td>
+<td><code>backend/apps/tool/concurrency.py:80-119</code></td>
+</tr>
+<tr>
+<td>OpenAI Adapter 只发送输入 Schema</td>
+<td><code>backend/apps/tool/adapters/openai.py:10-19</code></td>
+</tr>
+<tr>
+<td>未声明异常由调用方关闭调用事实并使 Run 失败</td>
+<td><code>backend/apps/chatbi/orchestration/agent/tool_execution.py:215-286</code></td>
+</tr>
+</tbody>
+</table>
+<p>Semantic Tool 的检索结果同时返回模型可见的语义包和服务端可信范围。<code>SemanticAssetScope</code> 保存身份、数据源、数据集、检索决策状态、允许资产、授权表和归一化时间范围；编译 Tool 在每次执行前重新验证这些字段以及当前权限。ChatBI 结果处理器只把成功结果投影到 Agent state，Graph 则直接消费公共 Service 结果。</p>
+  </div>
+</div>
+
+<!-- Back to Top -->
+<button class="back-to-top" id="back-to-top" onclick="window.scrollTo({top:0})" aria-label="回到顶部">↑</button>
+
+<!-- Search Overlay -->
+<div class="search-overlay" id="search-overlay" onclick="if(event.target===this)closeSearch()">
+  <div class="search-box">
+    <div class="search-input-wrap">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input class="search-input" id="search-input" type="text" placeholder="搜索文档内容…" autocomplete="off">
+    </div>
+    <div class="search-results" id="search-results"></div>
+    <div class="search-hint">
+      <span><kbd>ESC</kbd> 关闭</span>
+      <span><kbd>↑↓</kbd> 导航</span>
+      <span><kbd>Enter</kbd> 跳转</span>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── Theme ─────────────────────────────────────────────────────────────── */
+function getPreferredTheme() {
+  const saved = localStorage.getItem('doc-theme');
+  if (saved) return saved;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('doc-theme', theme);
+  const btn = document.getElementById('theme-btn');
+  btn.textContent = theme === 'dark' ? '☾' : '☀';
+  const hljsLight = document.getElementById('hljs-light');
+  const hljsDark = document.getElementById('hljs-dark');
+  if (theme === 'dark') {
+    hljsLight.disabled = true;
+    hljsDark.disabled = false;
+  } else {
+    hljsLight.disabled = false;
+    hljsDark.disabled = true;
+  }
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'light';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+}
+
+applyTheme(getPreferredTheme());
+
+/* ── Mermaid ───────────────────────────────────────────────────────────── */
+// Disable startOnLoad to prevent default-config rendering before our init
+mermaid.initialize({ startOnLoad: false });
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Store original graph source for theme switching
+  document.querySelectorAll('pre.mermaid').forEach(el => {
+    el.setAttribute('data-graph', el.textContent);
+  });
+
+  // Apply theme-aware config and render
+  const theme = document.documentElement.getAttribute('data-theme');
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: theme === 'dark' ? 'dark' : 'default',
+    securityLevel: 'loose',
+    flowchart: { curve: 'basis' },
+  });
+  mermaid.run();
+});
+
+// Re-render mermaid on theme change
+const origToggle = toggleTheme;
+toggleTheme = function() {
+  origToggle();
+  const theme = document.documentElement.getAttribute('data-theme');
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: theme === 'dark' ? 'dark' : 'default',
+    securityLevel: 'loose',
+    flowchart: { curve: 'basis' },
+  });
+  // Restore original source and re-render all diagrams
+  document.querySelectorAll('pre.mermaid').forEach(el => {
+    el.removeAttribute('data-processed');
+    el.innerHTML = el.getAttribute('data-graph');
+  });
+  mermaid.run({ querySelector: 'pre.mermaid' });
+};
+
+/* ── Highlight.js ──────────────────────────────────────────────────────── */
+hljs.configure({ ignoreUnescapedHTML: true });
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('pre code').forEach(block => {
+    // Skip mermaid
+    if (block.parentElement.classList.contains('mermaid')) return;
+
+    // Detect language class
+    const cls = [...block.classList].find(c => c.startsWith('language-'));
+    const lang = cls ? cls.replace('language-', '') : '';
+
+    // Add language label
+    if (lang) {
+      const label = document.createElement('span');
+      label.className = 'code-lang-label';
+      label.textContent = lang;
+      block.parentElement.appendChild(label);
+    }
+
+    // Add copy button
+    const btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.innerHTML = '⧉';
+    btn.title = '复制';
+    btn.onclick = function() {
+      navigator.clipboard.writeText(block.textContent).then(() => {
+        btn.innerHTML = '✓';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.innerHTML = '⧉'; btn.classList.remove('copied'); }, 1500);
+      });
+    };
+    block.parentElement.appendChild(btn);
+
+    // Highlight
+    hljs.highlightElement(block);
+  });
+});
+
+/* ── Tables: wrap for horizontal scroll ────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.content table').forEach(table => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'table-wrapper';
+    table.parentNode.insertBefore(wrapper, table);
+    wrapper.appendChild(table);
+  });
+});
+
+/* ── External links ────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.content a[href^="http"]').forEach(a => {
+    a.setAttribute('target', '_blank');
+    a.setAttribute('rel', 'noopener noreferrer');
+  });
+});
+
+/* ── Scroll Spy ────────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  const headings = document.querySelectorAll('.content h1[id], .content h2[id], .content h3[id]');
+  const tocLinks = document.querySelectorAll('.toc-list a');
+  const backToTop = document.getElementById('back-to-top');
+
+  function onScroll() {
+    const scrollY = window.scrollY + 100;
+
+    // Back to top visibility
+    backToTop.classList.toggle('visible', window.scrollY > 400);
+
+    // Scroll spy
+    let current = '';
+    headings.forEach(h => {
+      if (h.offsetTop <= scrollY) current = h.id;
+    });
+
+    tocLinks.forEach(link => {
+      const li = link.parentElement;
+      li.classList.toggle('active', link.getAttribute('href') === '#' + current);
+    });
+  }
+
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+});
+
+/* ── Sidebar Toggle ────────────────────────────────────────────────────── */
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebar-overlay').classList.toggle('open');
+}
+
+// Close sidebar on link click (mobile)
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.toc-list a').forEach(a => {
+    a.addEventListener('click', () => {
+      if (window.innerWidth <= 900) {
+        document.getElementById('sidebar').classList.remove('open');
+        document.getElementById('sidebar-overlay').classList.remove('open');
+      }
+    });
+  });
+});
+
+/* ── Search ────────────────────────────────────────────────────────────── */
+const searchSections = [];
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Build search index from headings and paragraphs
+  const content = document.getElementById('content');
+  let currentSection = { title: 'Document Start', id: '', text: '' };
+
+  content.querySelectorAll('h1, h2, h3, p, li, td').forEach(el => {
+    if (/^H[1-3]$/.test(el.tagName)) {
+      if (currentSection.text) searchSections.push(currentSection);
+      currentSection = {
+        title: el.textContent.trim(),
+        id: el.id || '',
+        text: ''
+      };
+    } else {
+      currentSection.text += ' ' + el.textContent.trim();
+    }
+  });
+  if (currentSection.text) searchSections.push(currentSection);
+});
+
+function openSearch() {
+  document.getElementById('search-overlay').classList.add('open');
+  setTimeout(() => document.getElementById('search-input').focus(), 50);
+}
+
+function closeSearch() {
+  document.getElementById('search-overlay').classList.remove('open');
+  document.getElementById('search-input').value = '';
+  document.getElementById('search-results').innerHTML = '';
+}
+
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault();
+    const overlay = document.getElementById('search-overlay');
+    if (overlay.classList.contains('open')) closeSearch();
+    else openSearch();
+  }
+  if (e.key === 'Escape') closeSearch();
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  const input = document.getElementById('search-input');
+  const results = document.getElementById('search-results');
+
+  input.addEventListener('input', () => {
+    const query = input.value.trim().toLowerCase();
+    if (!query) { results.innerHTML = ''; return; }
+
+    const matches = searchSections
+      .filter(s => s.title.toLowerCase().includes(query) || s.text.toLowerCase().includes(query))
+      .slice(0, 12);
+
+    if (!matches.length) {
+      results.innerHTML = '<div class="search-empty">没有找到匹配结果</div>';
+      return;
+    }
+
+    results.innerHTML = matches.map(m => {
+      const idx = m.text.toLowerCase().indexOf(query);
+      let snippet = '';
+      if (idx >= 0) {
+        const start = Math.max(0, idx - 40);
+        const end = Math.min(m.text.length, idx + query.length + 60);
+        snippet = (start > 0 ? '…' : '') +
+          m.text.slice(start, idx).replace(/</g,'&lt;') +
+          '<mark>' + m.text.slice(idx, idx + query.length).replace(/</g,'&lt;') + '</mark>' +
+          m.text.slice(idx + query.length, end).replace(/</g,'&lt;') +
+          (end < m.text.length ? '…' : '');
+      }
+      return `<a class="search-result-item" href="#${m.id}" onclick="closeSearch()">
+        <div class="result-title">${m.title.replace(/</g,'&lt;')}</div>
+        ${snippet ? `<div class="result-snippet">${snippet}</div>` : ''}
+      </a>`;
+    }).join('');
+  });
+});
+</script>
+</body>
+</html>

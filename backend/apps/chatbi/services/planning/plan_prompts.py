@@ -24,6 +24,7 @@ def build_plan_prompt(
     semantic_state: dict[str, Any],
     verified_examples: list[dict[str, Any]] | None = None,
     instructions: list[str] | None = None,
+    retry_reason: str | None = None,
 ) -> str:
     """构造不包含裸 SQL 的规划输入。"""
 
@@ -59,6 +60,11 @@ def build_plan_prompt(
         "instructions": resolved_instructions or [],
         "analysis_plan_schema": AnalysisPlan.model_json_schema(),
     }
+    if retry_reason:
+        payload["retry"] = {
+            "reason": retry_reason,
+            "instruction": "只修正计划结构或资产引用，返回完整 AnalysisPlan JSON。",
+        }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 

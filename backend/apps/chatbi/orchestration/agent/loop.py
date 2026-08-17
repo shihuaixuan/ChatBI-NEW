@@ -257,11 +257,15 @@ class AgentLoop:
         )
         selected = self.mode_router.route(
             ModeRouteInput(
-                enabled_modes=tuple(getattr(state.context.config, "execution_modes", ()) or ("react_legacy",)),
+                enabled_modes=tuple(
+                    getattr(state.context.config, "execution_modes", ())
+                    or ("fast", "plan")
+                ),
                 category=str((understanding or {}).get("category") or "data_query")
                 if isinstance(understanding, dict)
                 else "data_query",
                 query_shape=query_shape,
+                intent_type=str(intent.get("intent_type") or "") or None,
                 requested_mode=requested,
                 multi_query=bool(query_shape.get("multi_query")) or multiple_metrics,
                 cross_model=bool(query_shape.get("cross_model")),

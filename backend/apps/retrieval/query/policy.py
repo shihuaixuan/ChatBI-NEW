@@ -621,6 +621,17 @@ def _constrain_metric_dimension_candidates(
             candidates = item.eligible_assets or item.decision.candidate_assets
         active[item.decision.subquery_id] = list(candidates)
 
+    metric_model_ids = {
+        asset.model_id
+        for item in metric_results
+        for asset in active[item.decision.subquery_id]
+        if asset.model_id is not None
+    }
+    if len(metric_model_ids) > 1:
+        # 跨模型查询由后续 payload 按指标模型拆分；不能先用“所有指标
+        # 同时兼容所有维度”的单模型规则把候选清空。
+        return slot_results
+
     changed = True
     while changed:
         changed = False

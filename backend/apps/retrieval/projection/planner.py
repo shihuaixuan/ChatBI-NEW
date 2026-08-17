@@ -51,7 +51,9 @@ class SemanticBindingQueryPlanner:
                     request,
                     subquery_id=f"metric:{index}",
                     purpose=RetrievalPurpose.METRIC,
-                    text=mention,
+                    text=_metric_retrieval_text(
+                        mention, request.rewritten_question
+                    ),
                     resource_types=(RetrievalResourceType.METRIC,),
                 )
             )
@@ -155,6 +157,39 @@ class SemanticBindingQueryPlanner:
             required=required,
             filters=filters,
         )
+
+
+
+def _metric_retrieval_text(mention: str, question: str) -> str:
+    """保留被问题理解截断的指标限定词，避免下游把近义指标误判为歧义。"""
+
+    normalized_mention = _clean_text(mention)
+    normalized_question = _clean_text(question)
+    if not normalized_mention or not normalized_question:
+        return normalized_mention
+    position = normalized_question.find(normalized_mention)
+    if position < 0:
+        return normalized_mention
+    before = normalized_question[position - 1] if position > 0 else ""
+    end = position + len(normalized_mention)
+    after = normalized_question[end] if end < len(normalized_question) else ""
+    separators = {"的", "与", "和", "及", "、", ",", "，", ":", "：", " ", "（", "("}
+    question_suffixes = {"是", "有", "为", "多少", "吗", "呢", "占", "比", "趋势"}
+    has_prefix_qualifier = _is_cjk_text(before) and before not in separators
+    has_suffix_qualifier = (
+        _is_cjk_text(after)
+        and after not in separators
+        and after not in question_suffixes
+    )
+    # 当指标名称两侧仍紧邻业务限定词时，以完整重写问题检索指标。
+    # 这不是无指标时的宽泛回退，仍只为已确认的 metric 槽服务。
+    if has_prefix_qualifier or has_suffix_qualifier:
+        return normalized_question
+    return normalized_mention
+
+
+def _is_cjk_text(value: str) -> bool:
+    return "\u4e00" <= value <= "\u9fff"
 
 
 def value_lookup_slots(intent: dict[str, Any]) -> list[tuple[str, str]]:

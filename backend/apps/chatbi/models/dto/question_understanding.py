@@ -168,6 +168,11 @@ class QueryShape(BaseModel):
     limit: int | None = Field(default=None, ge=1, le=1000, strict=True)
     time_grain: Literal["day", "week", "month", "quarter", "year"] | None = None
     comparison_type: Literal["yoy", "mom", "custom"] | None = None
+    # 指标阈值由服务端转换为 HAVING，保留在查询形状中供严格计划消费。
+    having: list[dict[str, Any]] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
 
 
 class RankingSpec(BaseModel):

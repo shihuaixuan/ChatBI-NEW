@@ -14,8 +14,11 @@ class TemporalSQLRenderError(ValueError):
 def render_time_filter_condition(expr: str, value: Any) -> str | None:
     """仅渲染绝对左闭右开范围，非时间值返回空结果。"""
 
-    if not isinstance(value, dict) or "kind" not in value:
+    if not isinstance(value, dict):
         return None
+    # 兼容旧计划中的 {start, end}；内部统一成左闭右开范围后再渲染。
+    if "kind" not in value and value.get("start") and value.get("end"):
+        value = {**value, "kind": "absolute_range", "end_exclusive": value["end"]}
     if str(value.get("kind") or "").lower() != "absolute_range":
         raise TemporalSQLRenderError("TEMPORAL_SQL_TIME_RANGE_UNSUPPORTED")
     start = _validated_iso_date(value.get("start"))

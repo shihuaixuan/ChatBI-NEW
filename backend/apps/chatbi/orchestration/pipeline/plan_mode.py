@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from apps.chatbi.models import AgentClarificationResumeKind
 from apps.chatbi.models.dto.analysis_plan import (
     AnalysisPlan,
     AnalysisPlanStatus,
@@ -18,6 +19,9 @@ from apps.chatbi.models.dto.analysis_plan import (
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tool_results import ChatBIToolResultProcessor
+from apps.chatbi.orchestration.agent.tools.interaction import (
+    prepare_semantic_clarification_args,
+)
 from apps.chatbi.orchestration.pipeline.events import PipelineEvents
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.computation import ComputeEngine, ComputeEngineError
@@ -34,7 +38,42 @@ from apps.chatbi.services.planning.plan_validation import validate_analysis_plan
 from apps.conversation import ChatRecordExecutionType
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import ToolCall, ToolCallContext, ToolRegistry, ToolResult, ToolStatus
+from apps.tool.tools.semantic_contracts import SemanticCompileFilter
 from common.observability import MetricsRecorder
+
+
+def _canonical_time_range(value: Any) -> Any:
+    """把旧计划的简化日期结构转换为统一的绝对范围。"""
+
+    if not isinstance(value, dict) or value.get("kind"):
+        return value
+    start = value.get("start")
+    end_exclusive = value.get("end_exclusive") or value.get("end")
+    if not start or not end_exclusive:
+        return value
+    return {
+        **value,
+        "kind": "absolute_range",
+        "start": start,
+        "end_exclusive": end_exclusive,
+    }
+
+
+def _task_time_range(task_spec: Any, time_dimension_id: int | None) -> dict[str, Any] | None:
+    """从 QueryTask 的显式时间范围或已绑定时间筛选提取唯一时间条件。"""
+
+    direct_range = getattr(task_spec, "time_range", None)
+    if isinstance(direct_range, dict):
+        return _canonical_time_range(direct_range)
+    for raw_filter in getattr(task_spec, "filters", ()) or ():
+        if not isinstance(raw_filter, dict):
+            continue
+        if raw_filter.get("asset_id") != time_dimension_id:
+            continue
+        value = raw_filter.get("value")
+        if isinstance(value, dict) and (value.get("kind") or value.get("start")):
+            return _canonical_time_range(value)
+    return None
 
 
 class PlanPipelineError(RuntimeError):
@@ -58,6 +97,7 @@ class PlanPipelineDependencies:
     compute_enabled: bool = True
     answer_composer: AnswerComposer | None = None
     metrics: MetricsRecorder | None = None
+    planner_model_service: Any | None = None
 
 
 class PlanPipeline:
@@ -70,7 +110,10 @@ class PlanPipeline:
         self._lifecycle = dependencies.lifecycle
         self._events = PipelineEvents(dependencies.event_publisher)
         self._session = dependencies.session
-        self._planner = AnalysisPlanner(max_query_tasks=dependencies.max_query_tasks)
+        self._planner = AnalysisPlanner(
+            max_query_tasks=dependencies.max_query_tasks,
+            model_service=dependencies.planner_model_service,
+        )
         self._max_query_tasks = dependencies.max_query_tasks
         self._compute_engine = dependencies.compute_engine
         self._compute_enabled = dependencies.compute_enabled
@@ -87,6 +130,9 @@ class PlanPipeline:
         if state.context.semantic_asset_scope is None:
             self._call_tool(state, "search_semantic_assets", {})
         plan_id = f"plan-{run_id}"
+        if self._is_ambiguous(state):
+            yield from self._suspend_semantic_clarification(state, plan_id)
+            return
         patched_payload = (
             understanding.get("inherited_context", {}).get("patched_analysis_plan")
             if isinstance(understanding.get("inherited_context"), dict)
@@ -123,7 +169,7 @@ class PlanPipeline:
             raise PlanPipelineError("PLAN_QUERY_TASK_REQUIRED")
         scope = state.context.semantic_asset_scope
         if scope is not None and scope.semantic_enforcement == "STRICT":
-            self._ensure_strict_query_plans_ready(scope, len(query_tasks))
+            self._ensure_strict_query_plans_ready(scope, query_tasks)
 
         execution_records: dict[str, dict[str, Any]] = {}
         full_data_records: dict[str, list[dict[str, Any]]] = {}
@@ -265,6 +311,19 @@ class PlanPipeline:
             raise PlanPipelineError("PLAN_PRIMARY_RESULT_MISSING")
         primary_rows = primary_execution.get("sample_rows") or []
         primary_full_data = full_data_records.get(primary_result_id, primary_rows)
+        answer_execution = {
+            **primary_execution,
+            "result_sets": {
+                str(execution.get("result_set_id") or task_id): {
+                    **execution,
+                    "rows": full_data_records.get(
+                        task_id,
+                        execution.get("sample_rows") or [],
+                    ),
+                }
+                for task_id, execution in execution_records.items()
+            },
+        }
         state.context.state["last_execution"] = primary_execution
         state.context.state["full_data"] = primary_full_data
         intent = understanding.get("intent")
@@ -276,7 +335,7 @@ class PlanPipeline:
                 AnswerComposerInput(
                     question=question,
                     intent=intent if isinstance(intent, dict) else {},
-                    execution=primary_execution,
+                    execution=answer_execution,
                     rows=primary_full_data,
                     plan=state.context.state.get("analysis_plan") if isinstance(state.context.state.get("analysis_plan"), dict) else {},
                     semantic_context=state.context.state.get("semantic_scope") if isinstance(state.context.state.get("semantic_scope"), dict) else {},
@@ -304,6 +363,42 @@ class PlanPipeline:
             chart_spec=dict(getattr(final, "chart_spec", {}) or {}),
         )
 
+    def _suspend_semantic_clarification(
+        self,
+        state: AgentRuntimeState,
+        plan_id: str,
+    ) -> Iterator[RenderEvent]:
+        """语义绑定存在歧义时暂停 PLAN，等待用户确认后再生成计划。"""
+
+        clarification = prepare_semantic_clarification_args(state.context.state)
+        if clarification is None or not clarification.options:
+            raise PlanPipelineError("PLAN_SEMANTIC_CLARIFICATION_OPTIONS_MISSING")
+        if not state.chatbi_budget.record_clarification().allowed:
+            raise PlanPipelineError("PLAN_CLARIFICATION_BUDGET_EXHAUSTED")
+        scope = state.context.state.get("semantic_scope")
+        retrieval_id = scope.get("retrieval_id") if isinstance(scope, dict) else None
+        options = [item.model_dump(mode="json") for item in clarification.options]
+        call_id = f"plan:{state.require_run_id()}:semantic_clarification"
+        yield self._lifecycle.suspend(
+            state,
+            clarification.question,
+            options,
+            call_id,
+            None,
+            resume_kind=AgentClarificationResumeKind.AGENT_TOOL,
+            resume_payload={
+                "operation": "resolve_semantic_bindings",
+                "retrieval_id": retrieval_id,
+                "options": options,
+                "plan_id": plan_id,
+            },
+        )
+
+    @staticmethod
+    def _is_ambiguous(state: AgentRuntimeState) -> bool:
+        scope = state.context.semantic_asset_scope
+        return bool(scope is not None and scope.decision_status.value == "ambiguous")
+
     def _compile_task(
         self,
         state: AgentRuntimeState,
@@ -316,11 +411,47 @@ class PlanPipeline:
             raise PlanPipelineError("PLAN_STRICT_MULTI_QUERY_NOT_READY")
         if scope.semantic_enforcement == "STRICT":
             query_plans = scope.query_plans or ((scope.query_plan,) if scope.query_plan else ())
-            if strict_query_index < 0 or strict_query_index >= len(query_plans):
+            if not query_plans:
                 raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
-            selected_plan = query_plans[strict_query_index]
+            task_spec = getattr(task, "spec", None)
+            selected_plan = None
+            if task_spec is not None:
+                selected_plan = next(
+                    (
+                        candidate
+                        for candidate in query_plans
+                        if {
+                            item.metric_id for item in candidate.metrics
+                        }
+                        == set(task_spec.metric_ids)
+                        and {
+                            item.physical_dimension_id for item in candidate.dimensions
+                        }
+                        == set(task_spec.dimension_ids)
+                    ),
+                    None,
+                )
+            if selected_plan is None and task_spec is None:
+                if strict_query_index < 0 or strict_query_index >= len(query_plans):
+                    raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
+                selected_plan = query_plans[strict_query_index]
+            if selected_plan is None and len(query_plans) == 1:
+                selected_plan = query_plans[0]
             if selected_plan is None:
                 raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
+            task_time_range = (
+                _task_time_range(task_spec, selected_plan.time_binding.dimension_id)
+                if task_spec is not None
+                else None
+            )
+            if task_time_range is not None:
+                selected_plan = selected_plan.model_copy(
+                    update={
+                        "time_binding": selected_plan.time_binding.model_copy(
+                            update={"time_range": task_time_range}
+                        )
+                    }
+                )
             state.context.state["semantic_scope"] = scope.model_copy(
                 update={"query_plan": selected_plan}
             ).model_dump(mode="json")
@@ -342,6 +473,41 @@ class PlanPipeline:
         compile_plan = scope.compile_plan
         if compile_plan is None:
             raise PlanPipelineError("PLAN_COMPILE_PLAN_REQUIRED")
+        temporal_plan = compile_plan.temporal_plan
+        if task.spec.time_range is not None:
+            task_time_range = _canonical_time_range(task.spec.time_range)
+            time_dimension_id = task.spec.time_dimension_id
+            if time_dimension_id is None:
+                time_dimension_id = next(
+                    (
+                        item.asset_id
+                        for item in temporal_plan.filters
+                        if isinstance(item.value, dict) and item.value.get("kind")
+                    ),
+                    None,
+                )
+            if time_dimension_id is None:
+                raise PlanPipelineError("PLAN_TIME_DIMENSION_REQUIRED")
+            replaced = False
+            temporal_filters = []
+            for item in temporal_plan.filters:
+                if item.asset_id == time_dimension_id:
+                    temporal_filters.append(
+                        item.model_copy(update={"value": task_time_range})
+                    )
+                    replaced = True
+                else:
+                    temporal_filters.append(item)
+            if not replaced:
+                temporal_filters.append(
+                    SemanticCompileFilter(
+                        asset_id=time_dimension_id,
+                        value=task_time_range,
+                    )
+                )
+            temporal_plan = temporal_plan.model_copy(
+                update={"filters": tuple(temporal_filters)}
+            )
         subset = compile_plan.model_copy(
             update={
                 "metric_asset_ids": task.spec.metric_ids,
@@ -349,6 +515,7 @@ class PlanPipeline:
                 "limit": task.spec.limit or compile_plan.limit,
                 "having": task.spec.having or compile_plan.having,
                 "time_offset": task.spec.time_offset or compile_plan.time_offset,
+                "temporal_plan": temporal_plan,
             }
         )
         state.context.state["semantic_scope"] = scope.model_copy(
@@ -371,18 +538,42 @@ class PlanPipeline:
     @staticmethod
     def _ensure_strict_query_plans_ready(
         scope: Any,
-        query_task_count: int,
+        query_tasks: list[QueryTask] | None = None,
+        *,
+        query_task_count: int | None = None,
     ) -> None:
         """执行前统一检查每个 QueryTask 都有独立且已证明的严格计划。"""
 
         strict_query_plans = scope.query_plans or (
             (scope.query_plan,) if scope.query_plan is not None else ()
         )
-        if len(strict_query_plans) < query_task_count:
+        if not strict_query_plans:
+            raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
+        if query_tasks is None:
+            if query_task_count is None:
+                raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
+            query_tasks = []
+        task_signatures = {
+            (
+                tuple(sorted(task.spec.metric_ids)),
+                tuple(sorted(task.spec.dimension_ids)),
+            )
+            for task in query_tasks
+        }
+        plan_signatures = {
+            (
+                tuple(sorted(item.metric_id for item in plan.metrics)),
+                tuple(sorted(item.physical_dimension_id for item in plan.dimensions)),
+            )
+            for plan in strict_query_plans
+        }
+        if query_tasks and not task_signatures <= plan_signatures:
+            raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
+        if query_task_count is not None and len(strict_query_plans) < query_task_count and not task_signatures:
             raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
         if any(
             plan.validation_status.value != "PROVEN"
-            for plan in strict_query_plans[:query_task_count]
+            for plan in strict_query_plans
         ):
             raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_NOT_PROVEN")
 

@@ -1,0 +1,436 @@
+{
+  "test_type": "real_model_question_understanding_evaluation",
+  "generated_at": "2026-08-12T17:04:51.723213+08:00",
+  "environment": {
+    "tenant_id": 1,
+    "dataset_id": 3,
+    "datasource_id": null,
+    "fixed_reference_at": "2026-08-12T10:00:00+08:00"
+  },
+  "summary": {
+    "case_count": 1,
+    "successful_case_count": 1,
+    "passed_checks": 13,
+    "total_checks": 15,
+    "field_accuracy": 0.8667
+  },
+  "cases": [
+    {
+      "case_id": "top_ranking",
+      "question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+      "purpose": "验证排名、降序和明确 TopN 数量由模型生成。",
+      "expected": {
+        "rewritten_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+        "intent_type": "ranking_analysis",
+        "metric_mentions_contains": "新增客户数-线上",
+        "time_raw": "本月",
+        "normalized_time": {
+          "start": "2026-08-01",
+          "end_exclusive": "2026-09-01"
+        },
+        "residual_filter_mentions": [],
+        "dimension_role": {
+          "name_contains": "店铺ID",
+          "role": "group_by"
+        },
+        "query_shape": {
+          "select_mode": "aggregate",
+          "needs_group_by": true,
+          "needs_order_by": true,
+          "order_direction": "desc",
+          "limit": 5,
+          "time_grain": null
+        },
+        "validation_status": "valid"
+      },
+      "fixed_temporal_context": {
+        "reference_at": "2026-08-12T10:00:00+08:00",
+        "timezone": "Asia/Shanghai"
+      },
+      "model_calls": [
+        {
+          "stage": "QUESTION_REWRITE",
+          "started_at": "2026-08-12T17:04:27.000887+08:00",
+          "finished_at": "2026-08-12T17:04:32.059856+08:00",
+          "duration_ms": 5058.97,
+          "input": {
+            "question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+            "datasource_id": null,
+            "conversation_context": {}
+          },
+          "raw_output": "{\n  \"message_type\": \"new_question\",\n  \"rewritten_question\": \"本月新增客户数-线上最高的5个店铺ID是哪些？\",\n  \"inherited_context\": {},\n  \"need_user_input\": false,\n  \"missing_slots\": [],\n  \"confidence\": 1.0\n}",
+          "parsed_output": {
+            "message_type": "new_question",
+            "rewritten_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+            "inherited_context": {},
+            "need_user_input": false,
+            "missing_slots": [],
+            "confidence": 1.0
+          },
+          "usage_metadata": {
+            "input_tokens": 472,
+            "output_tokens": 186,
+            "total_tokens": 658,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 118
+            }
+          },
+          "sequence": 1
+        },
+        {
+          "stage": "INTENT_RECOGNITION",
+          "started_at": "2026-08-12T17:04:32.062526+08:00",
+          "finished_at": "2026-08-12T17:04:40.707820+08:00",
+          "duration_ms": 8645.29,
+          "input": {
+            "rewritten_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+            "inherited_context": {}
+          },
+          "raw_output": "{\n  \"intent_type\": \"ranking_analysis\",\n  \"confidence\": 0.95,\n  \"metric_mentions\": [\"新增客户数\"],\n  \"time_mentions\": [\"本月\"],\n  \"time_range\": {\"raw\": \"本月\", \"value_status\": \"provided\"},\n  \"query_shape\": {\n    \"select_mode\": \"aggregate\",\n    \"needs_group_by\": true,\n    \"needs_order_by\": true,\n    \"order_direction\": \"desc\",\n    \"limit\": 5,\n    \"time_grain\": null\n  },\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "intent_type": "ranking_analysis",
+            "confidence": 0.95,
+            "metric_mentions": [
+              "新增客户数"
+            ],
+            "time_mentions": [
+              "本月"
+            ],
+            "time_range": {
+              "raw": "本月",
+              "value_status": "provided"
+            },
+            "query_shape": {
+              "select_mode": "aggregate",
+              "needs_group_by": true,
+              "needs_order_by": true,
+              "order_direction": "desc",
+              "limit": 5,
+              "time_grain": null
+            },
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 1028,
+            "output_tokens": 422,
+            "total_tokens": 1450,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 284
+            }
+          },
+          "sequence": 2
+        },
+        {
+          "stage": "DIMENSION_RECOGNITION",
+          "started_at": "2026-08-12T17:04:32.064914+08:00",
+          "finished_at": "2026-08-12T17:04:51.717124+08:00",
+          "duration_ms": 19652.21,
+          "input": {
+            "rewritten_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+            "inherited_context": {},
+            "available_dimensions": [
+              {
+                "name": "唯一ID",
+                "aliases": [
+                  "唯一"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "商家ID",
+                "aliases": [
+                  "商家"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "店铺ID",
+                "aliases": [
+                  "店铺"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              }
+            ],
+            "time_dimensions": [
+              {
+                "name": "时间",
+                "aliases": [],
+                "data_type": "date",
+                "semantic_type": "time",
+                "value_kind": "date",
+                "is_time": true
+              }
+            ]
+          },
+          "raw_output": "{\n  \"dimension_mentions\": [\"店铺ID\"],\n  \"dimension_slots\": [\n    {\"name\": \"店铺ID\", \"role\": \"group_by\", \"value\": null, \"value_status\": \"not_provided\", \"value_confidence\": 0.0}\n  ],\n  \"residual_filter_mentions\": [\n    {\"name\": \"线上\", \"value\": null, \"operator\": \"=\"}\n  ],\n  \"excluded_mentions\": [\n    {\"text\": \"本月\", \"reason\": \"time_candidate\"},\n    {\"text\": \"新增客户数\", \"reason\": \"metric_candidate\"},\n    {\"text\": \"最高的5个\", \"reason\": \"analysis_expression\"}\n  ],\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "dimension_mentions": [
+              "店铺ID"
+            ],
+            "dimension_slots": [
+              {
+                "name": "店铺ID",
+                "role": "group_by",
+                "value": null,
+                "value_status": "not_provided",
+                "value_confidence": 0.0
+              }
+            ],
+            "residual_filter_mentions": [
+              {
+                "name": "线上",
+                "value": null,
+                "operator": "="
+              }
+            ],
+            "excluded_mentions": [
+              {
+                "text": "本月",
+                "reason": "time_candidate"
+              },
+              {
+                "text": "新增客户数",
+                "reason": "metric_candidate"
+              },
+              {
+                "text": "最高的5个",
+                "reason": "analysis_expression"
+              }
+            ],
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 1025,
+            "output_tokens": 1918,
+            "total_tokens": 2943,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 1747
+            }
+          },
+          "sequence": 3
+        }
+      ],
+      "final_understanding": {
+        "original_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+        "message_type": "new_question",
+        "rewritten_question": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+        "inherited_context": {},
+        "intent": {
+          "intent_type": "ranking_analysis",
+          "confidence": 0.95,
+          "metric_mentions": [
+            "新增客户数"
+          ],
+          "dimension_mentions": [
+            "店铺ID"
+          ],
+          "dimension_slots": [
+            {
+              "name": "店铺ID",
+              "role": "group_by",
+              "value": null,
+              "value_status": "not_provided",
+              "value_confidence": 0.0
+            }
+          ],
+          "time_mentions": [
+            "本月"
+          ],
+          "time_range": {
+            "raw": "本月",
+            "value_status": "provided",
+            "normalized": {
+              "kind": "absolute_range",
+              "start": "2026-08-01",
+              "end_exclusive": "2026-09-01",
+              "timezone": "Asia/Shanghai",
+              "source_raw": "本月"
+            },
+            "interpretation_source": "legacy_rule"
+          },
+          "filter_mentions": [
+            {
+              "name": "线上",
+              "value": null,
+              "operator": "="
+            }
+          ],
+          "required_slot_types": [
+            "metric",
+            "dimension",
+            "time_dimension",
+            "order",
+            "limit"
+          ],
+          "query_shape": {
+            "select_mode": "aggregate",
+            "needs_group_by": true,
+            "needs_order_by": true,
+            "order_direction": "desc",
+            "limit": 5,
+            "time_grain": null
+          },
+          "ambiguous_slots": [],
+          "conflict_slots": []
+        },
+        "validation": {
+          "status": "valid",
+          "reason_codes": [],
+          "clarification_slots": []
+        },
+        "temporal_interpretation": null
+      },
+      "validation_effect": {
+        "status": "valid",
+        "reason_codes": [],
+        "clarification_slots": [],
+        "explanation": "校验未发现阻断问题，当前理解可以进入后续流程。"
+      },
+      "accuracy_checks": [
+        {
+          "field": "rewritten_question",
+          "expected": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+          "actual": "本月新增客户数-线上最高的5个店铺ID是哪些？",
+          "passed": true
+        },
+        {
+          "field": "intent.intent_type",
+          "expected": "ranking_analysis",
+          "actual": "ranking_analysis",
+          "passed": true
+        },
+        {
+          "field": "intent.metric_mentions",
+          "expected": "包含 新增客户数-线上",
+          "actual": [
+            "新增客户数"
+          ],
+          "passed": false
+        },
+        {
+          "field": "intent.time_range.raw",
+          "expected": "本月",
+          "actual": "本月",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.start",
+          "expected": "2026-08-01",
+          "actual": "2026-08-01",
+          "passed": true
+        },
+        {
+          "field": "intent.time_range.normalized.end_exclusive",
+          "expected": "2026-09-01",
+          "actual": "2026-09-01",
+          "passed": true
+        },
+        {
+          "field": "intent.filter_mentions",
+          "expected": [],
+          "actual": [
+            {
+              "name": "线上",
+              "value": null,
+              "operator": "="
+            }
+          ],
+          "passed": false
+        },
+        {
+          "field": "intent.dimension_slots.role",
+          "expected": {
+            "name_contains": "店铺ID",
+            "role": "group_by"
+          },
+          "actual": [
+            {
+              "name": "店铺ID",
+              "role": "group_by",
+              "value": null,
+              "value_status": "not_provided",
+              "value_confidence": 0.0
+            }
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.select_mode",
+          "expected": "aggregate",
+          "actual": "aggregate",
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_group_by",
+          "expected": true,
+          "actual": true,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_order_by",
+          "expected": true,
+          "actual": true,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.order_direction",
+          "expected": "desc",
+          "actual": "desc",
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.limit",
+          "expected": 5,
+          "actual": 5,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.time_grain",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "validation.status",
+          "expected": "valid",
+          "actual": "valid",
+          "passed": true
+        }
+      ],
+      "score": {
+        "passed": 13,
+        "total": 15,
+        "accuracy": 0.8667
+      },
+      "usage_metadata": {
+        "input_tokens": 2525,
+        "output_tokens": 2526,
+        "total_tokens": 5051
+      },
+      "error": null,
+      "started_at": "2026-08-12T17:04:26.808672+08:00",
+      "finished_at": "2026-08-12T17:04:51.720034+08:00",
+      "duration_ms": 24911.36
+    }
+  ]
+}

@@ -1,0 +1,1146 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ChatBI「今天店铺的客户数」真实数据流与完整 JSON</title><style>
+:root{color-scheme:light;--bg:#f3f6fb;--paper:#fff;--ink:#182235;--muted:#66758d;--line:#d9e2ef;--blue:#255fc6;--blue-soft:#eaf2ff;--amber:#a85a00;--amber-soft:#fff6df;--red:#b5322e;--red-soft:#fff0ee;--green:#137047;--green-soft:#eaf8f1;--code:#0e1728}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:linear-gradient(180deg,#eef4ff 0,#f6f8fc 380px);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;line-height:1.65}main{width:min(1640px,calc(100% - 36px));margin:auto;padding:34px 0 72px}.hero,section{background:var(--paper);border:1px solid var(--line);border-radius:18px;box-shadow:0 14px 42px rgba(36,55,88,.07)}.hero{padding:34px 38px}section{margin-top:24px;padding:28px 30px}h1,h2,h3{line-height:1.25}h1{font-size:clamp(29px,4vw,48px);margin:0}h2{font-size:25px;margin:0 0 16px}h3{font-size:18px;margin:22px 0 10px}.eyebrow{color:var(--blue);font-weight:800;letter-spacing:.12em;font-size:12px;margin:0 0 8px}.lead{max-width:1160px;color:var(--muted);margin:14px 0 0}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-top:22px}.card{padding:16px 17px;border:1px solid var(--line);border-radius:13px;background:#fafcff}.label{display:block;color:var(--muted);font-size:12px;font-weight:750;margin-bottom:5px}.value{font-size:17px;font-weight:780;overflow-wrap:anywhere}.callout{padding:15px 17px;border-left:4px solid var(--blue);background:var(--blue-soft);border-radius:9px;margin:16px 0}.callout.warn{border-color:var(--amber);background:var(--amber-soft)}.callout.danger{border-color:var(--red);background:var(--red-soft)}.callout strong{display:block;margin-bottom:4px}.badge{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:800}.ok{color:var(--green);background:var(--green-soft)}.warn{color:var(--amber);background:var(--amber-soft)}.fail{color:var(--red);background:var(--red-soft)}.info{color:var(--blue);background:var(--blue-soft)}nav{position:sticky;top:0;z-index:5;margin-top:18px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.95);backdrop-filter:blur(8px);display:flex;gap:12px;flex-wrap:wrap}nav a{color:var(--blue);text-decoration:none;font-size:13px;font-weight:700}.diagram-shell{overflow:auto;border:1px solid var(--line);border-radius:13px;background:#fbfdff;padding:16px;margin-top:14px}.mermaid{min-width:1500px;text-align:center}.stage-table{overflow:auto;border:1px solid var(--line);border-radius:12px}table{border-collapse:collapse;width:100%;min-width:1200px}th,td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:12px 13px;text-align:left;vertical-align:top;font-size:13px}th{background:#edf3fb;color:#33445f;position:sticky;top:0}tr:last-child td{border-bottom:0}th:last-child,td:last-child{border-right:0}code{font-family:"SFMono-Regular",Consolas,monospace;background:#f3f6fa;border:1px solid #dce4ef;border-radius:5px;padding:2px 5px;font-size:.92em}.json-stack{display:grid;gap:12px}.json-card{border:1px solid var(--line);border-radius:12px;background:#fbfcfe;overflow:hidden}.json-card summary{cursor:pointer;padding:13px 15px;font-weight:780;display:flex;justify-content:space-between;gap:15px;background:#f1f5fa}.json-card[open] summary{border-bottom:1px solid var(--line)}.json-size{color:var(--muted);font-size:12px;font-weight:650}.json-note{margin:12px 15px 0;color:var(--muted);font-size:13px}.json-toolbar{padding:8px 14px 0;text-align:right}.copy-json,.control-btn{border:1px solid #b9c8dc;background:white;color:#29496f;border-radius:7px;padding:6px 10px;cursor:pointer;font-weight:700}.controls{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}pre.json{margin:8px 14px 14px;max-height:760px;overflow:auto;padding:15px;border-radius:9px;background:var(--code);color:#dbe8ff;font:12px/1.55 "SFMono-Regular",Consolas,monospace;white-space:pre;tab-size:2}.source-list{columns:2;padding-left:20px}.source-list li{break-inside:avoid;margin-bottom:8px;color:var(--muted)}footer{text-align:center;color:var(--muted);font-size:13px;margin-top:22px}.small{font-size:13px;color:var(--muted)}@media(max-width:950px){main{width:min(100% - 18px,1640px);padding-top:12px}.hero,section{padding:21px 18px;border-radius:14px}.grid{grid-template-columns:1fr 1fr}.source-list{columns:1}.mermaid{min-width:1250px}}@media print{body{background:#fff}main{width:100%;padding:0}.hero,section{box-shadow:none}.json-card{break-inside:avoid}pre.json{max-height:none}.controls,nav,.copy-json{display:none}}
+</style></head>
+<body><main>
+<header class="hero"><p class="eyebrow">CHATBI RUN 219 · RECORD 7514 · CODE-LEVEL JSON</p><h1>「今天店铺的客户数」真实处理流程</h1><p class="lead">本文只描述当前代码和本地 Run 219 的实际行为。所有可从数据库或当前代码确定性恢复的数据均按代码中的 JSON 结构完整展示；数据库只保存摘要的边界会明确标注，不用自造字段补齐。</p><div class="grid"><div class="card"><span class="label">问题</span><div class="value">今天店铺的客户数</div></div><div class="card"><span class="label">执行绑定</span><div class="value">Datasource 13 / Dataset 243</div></div><div class="card"><span class="label">短暂 resolved</span><div class="value">Metric #272 + Dimension #278</div></div><div class="card"><span class="label">终态</span><div class="value"><span class="badge fail">failed · budget_exhausted</span></div></div></div><nav><a href="#uml">详细 UML</a><a href="#stages">阶段表</a><a href="#inputs">入口 JSON</a><a href="#semantic">Semantic 大 JSON</a><a href="#resolved-state">澄清后 JSON</a><a href="#audit">全量调用与事件</a><a href="#terminal">终态快照</a></nav></header>
+<section><h2>一、当前行为的关键事实</h2><div class="callout warn"><strong>默认时间维度 #276 存在，但本次没有绑定</strong>首次检索时指标槽位仍为 ambiguous，<code>bind_default_time_dimensions()</code> 看到 <code>selected_metrics=[]</code>，直接返回原 bundle。澄清选择 #272 后只执行 <code>apply_semantic_clarification()</code> 和 <code>apply_decision_to_semantic_payload()</code>，没有再次调用默认时间维度绑定。</div><div class="callout danger"><strong>第一次编译失败与后续失败是两个不同状态</strong>澄清后 scope 一度为 <code>resolved</code>，但 <code>filters=[]</code>，因此返回 <code>time_filter_mismatch</code>。随后模型再次调用 <code>search_semantic_assets({})</code>，新的 ambiguous 结果被状态投影直接覆盖进去，后续编译才返回 <code>semantic_decision_not_executable</code>。</div><div class="callout"><strong>4000 字符只处理模型 Observation</strong><code>ToolResult.data</code>、业务 metadata 和 state patch 在摘要前处理；编译读取 <code>semantic_scope</code>，不是读取 4000 字符文本。本次时间资产缺失在完整 payload 中已经存在。</div></section>
+<section id="uml"><h2>二、详细 UML 时序图</h2><h3>2.1 Start、问题理解、第一次澄清与恢复</h3><div class="diagram-shell"><pre class="mermaid">sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant API as interactions.agent_stream
+    participant SVC as agent.service
+    participant REC as ChatRecordService
+    participant RUN as AgentRunRepository
+    participant LOOP as AgentLoop
+    participant PREP as AgentInputPreparer
+    participant QU as QuestionUnderstandingService
+    participant EVT as EventPublisher
+    participant DB as PostgreSQL
+
+    U-&gt;&gt;API: POST /chat/agent/stream
+{action:start, chat_id:6907, question:今天店铺的客户数}
+    API-&gt;&gt;SVC: create_agent_start_events(current_user, AgentStartStreamRequest)
+    SVC-&gt;&gt;SVC: get_agent_config()
+max_steps=12, token_budget=100000, summary_max_chars=4000
+    SVC-&gt;&gt;REC: create(ChatRecordCreateData)
+    Note over SVC,REC: input JSON：chat_id=6907, user_id=1, question=今天店铺的客户数, dataset_id=243, datasource_id=13
+    REC-&gt;&gt;DB: INSERT chat_record
+    DB--&gt;&gt;REC: ChatRecord id=7514, status=created, execution_type=agent
+    SVC-&gt;&gt;RUN: create_run(oid=1, chat_id=6907, record_id=7514, config)
+    RUN-&gt;&gt;DB: INSERT chatbi_agent_run
+    DB--&gt;&gt;RUN: Run id=219, status=created
+    SVC-&gt;&gt;LOOP: run(run=219, record=7514)
+    LOOP-&gt;&gt;PREP: prepare_initial(state)
+    PREP-&gt;&gt;QU: understand(question, datasource_id=13, conversation_context)
+    QU--&gt;&gt;PREP: QuestionUnderstandingOutput
+    PREP-&gt;&gt;PREP: model_dump(mode=json)
+写 context.state.original_question/question/question_understanding
+    PREP-&gt;&gt;RUN: update_run(messages, budget_snapshot, derived_state)
+    RUN-&gt;&gt;DB: 持久化首次快照
+    PREP-&gt;&gt;EVT: publish(question-understood)
+    EVT-&gt;&gt;DB: event sequence=3
+    PREP-&gt;&gt;PREP: _preflight_clarification(validation)
+    alt validation.status == clarification_required
+        PREP-&gt;&gt;RUN: start_step(step_index=1)
+        RUN-&gt;&gt;DB: ChatbiAgentStep id=421
+        PREP-&gt;&gt;EVT: step-started / thinking / workflow-step
+        PREP-&gt;&gt;RUN: create clarification 41
+resume_kind=question_understanding
+        RUN-&gt;&gt;DB: run.status=waiting_user + clarification/options/resume_payload
+        EVT--&gt;&gt;U: clarification.required
+“店铺”按分组、筛选还是忽略
+    end
+    U-&gt;&gt;API: POST resume
+选择 group_by:店铺
+    API-&gt;&gt;SVC: create_agent_resume_events(...)
+    SVC-&gt;&gt;DB: clarification 41.answer=结构化 selections
+    SVC-&gt;&gt;LOOP: resume(run, record, clarification, answer_text)
+    LOOP-&gt;&gt;PREP: prepare_resume(state, clarification 41)
+    PREP-&gt;&gt;RUN: restore budget_snapshot + messages + derived_state
+    PREP-&gt;&gt;PREP: apply_question_understanding_clarification
+    PREP-&gt;&gt;PREP: dimension_slots[0].role=group_by
+validation.status=valid
+    PREP-&gt;&gt;EVT: run.resumed + question.understood(sequence=9)
+    PREP--&gt;&gt;LOOP: ready=true，进入 ReAct 主循环</pre></div><h3>2.2 search_semantic_assets 内部 JSON 产生与投影</h3><div class="diagram-shell"><pre class="mermaid">sequenceDiagram
+    autonumber
+    participant LLM as AgentReasoner / 模型
+    participant EX as AgentToolExecutor
+    participant REG as ToolRegistry
+    participant SSA as SearchSemanticAssetsTool
+    participant CTX as AgentToolContext
+    participant QP as RetrievalRequest Builder
+    participant RET as RetrievalService
+    participant HY as SemanticBindingHybridRetriever
+    participant POL as SemanticBindingPolicy
+    participant SCH as SemanticSchemaService
+    participant TIME as bind_default_time_dimensions
+    participant PROJ as bundle_to_semantic_payload
+    participant AUTH as DatasourceQueryService
+    participant RP as ChatBIToolResultProcessor
+    participant STATE as context.state / run.derived_state
+
+    LLM--&gt;&gt;EX: ToolCall JSON
+{name:search_semantic_assets,args:{},call_id:...1616}
+    EX-&gt;&gt;EX: start_tool_call + tool.called event
+args_summary 注入 rewritten_question 与 intent
+    EX-&gt;&gt;EX: BudgetGuard.check_tool_call(name,args)
+重复调用熔断检查
+    EX-&gt;&gt;EX: batch_tool_calls + effective_timeout_seconds
+    EX-&gt;&gt;REG: execute(ToolCall, AgentToolContext, ToolCallContext)
+    REG-&gt;&gt;REG: Pydantic 校验 SearchSemanticAssetsArgs
+extra=forbid；模型只能传 {}
+    REG-&gt;&gt;SSA: execute(ctx, args={})
+    SSA-&gt;&gt;CTX: semantic_retrieval_request
+    CTX-&gt;&gt;QP: build_semantic_binding_request
+从 question_understanding 投影，不读取模型 query
+    QP--&gt;&gt;SSA: RetrievalRequest JSON
+request_id=agent:219 / dataset_ids=[243]
+    SSA-&gt;&gt;AUTH: resolve_policy(user=1, workspace=1, datasource=13)
+    AUTH--&gt;&gt;SSA: allowed + authorized_tables
+    SSA-&gt;&gt;RET: retrieve(RetrievalRequest, timeout_ms)
+    RET-&gt;&gt;HY: retrieve(strategy_request)
+    HY-&gt;&gt;HY: QueryPlanner
+metric:1=客户数, dimension:1=店铺
+    HY-&gt;&gt;HY: exact / alias / lexical / dense 召回与排序
+    HY--&gt;&gt;POL: recall plan + 每槽位命中
+    POL-&gt;&gt;POL: 生成 slot_decisions / ambiguities / allowed_asset_ids
+    Note over POL: metric:1=ambiguous；dimension:1=ambiguous
+allowed_asset_ids=[]
+    POL--&gt;&gt;RET: RetrievalBundle(ambiguous)
+    RET-&gt;&gt;SCH: build_dataset_schema(oid=1,dataset=243)
+    SCH--&gt;&gt;RET: DatasetSchema
+含 metric #272、dimension #278、default time #276
+    RET-&gt;&gt;TIME: bind_default_time_dimensions(request,bundle,schema)
+    TIME-&gt;&gt;TIME: selected_metrics=[] → metric_model_ids=[]
+    TIME--&gt;&gt;RET: 原 bundle，不增加 time_dimension:model:246
+    RET-&gt;&gt;PROJ: bundle_to_semantic_payload(request,bundle,schema)
+    PROJ-&gt;&gt;PROJ: candidate_groups / selected_assets / slot_bindings / ambiguities / diagnostics
+    PROJ--&gt;&gt;RET: semantic_payload JSON
+    RET--&gt;&gt;SSA: RetrievalServiceResult
+payload + bundle + filters
+    SSA-&gt;&gt;SSA: 权限表过滤 + _project_semantic_package
+候选每组最多 5 个，仅保留公共字段
+    SSA-&gt;&gt;SSA: 构造 SemanticAssetScope
+decision_status=ambiguous, allowed_assets=[]
+    SSA--&gt;&gt;REG: ToolResult
+data={package,scope}
+metadata={payload,request,filters,bundle}
+    REG--&gt;&gt;EX: LatencyMiddleware 写 metadata 延迟
+    EX-&gt;&gt;RP: process(search_semantic_assets, ToolResult)
+    RP--&gt;&gt;EX: state_patch
+package/scope/bundle/payload/request/filters/asset_ids/tables
+    EX-&gt;&gt;STATE: context.state.update(state_patch)
+    EX-&gt;&gt;EX: json_summary(package,4000)
+maybe_offload_result 再裁剪并生成 offload_ref
+    EX-&gt;&gt;STATE: 持久化 AgentMessage(tool) + derived_state
+    EX--&gt;&gt;LLM: 模型 Observation 仅为截断文本
+完整 data/metadata 不进入模型消息</pre></div><h3>2.3 Semantic 澄清、编译、重复检索覆盖与终态</h3><div class="diagram-shell"><pre class="mermaid">sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant LLM as AgentReasoner / 模型
+    participant EX as AgentToolExecutor
+    participant LIFE as AgentLifecycle
+    participant PREP as AgentInputPreparer
+    participant DEC as apply_semantic_clarification
+    participant PROJ as apply_decision_to_semantic_payload
+    participant STATE as context.state / run.derived_state
+    participant COMP as CompileSemanticSqlTool
+    participant ALLOW as validate_compilation_allowlist
+    participant TIME as 时间一致性校验
+    participant RET as SearchSemanticAssetsTool / RetrievalService
+    participant DB as PostgreSQL
+
+    LLM--&gt;&gt;EX: clarify(options 含 metric 候选与 bindings)
+    EX-&gt;&gt;LIFE: suspend(question, options, call_id, resume_payload)
+    LIFE-&gt;&gt;DB: clarification 42
+operation=resolve_semantic_bindings
+retrieval_id=agent:219
+    LIFE--&gt;&gt;U: clarification.required
+    U-&gt;&gt;LIFE: resume selections=[销售下单客户数]
+    LIFE-&gt;&gt;DB: clarification 42.answer 保存结构化选择
+    LIFE-&gt;&gt;PREP: prepare_resume(..., answer_text)
+    PREP-&gt;&gt;STATE: 恢复 ambiguous bundle/payload/scope
+    PREP-&gt;&gt;PREP: 校验 retrieval_id、option value、bindings
+    PREP-&gt;&gt;DEC: apply_semantic_clarification(bundle,binding metric:1→#272,required={metric:1,dimension:1})
+    DEC-&gt;&gt;DEC: metric:1 resolved → #272/model246
+    DEC-&gt;&gt;DEC: compatible_dimension_selections
+dimension:1 resolved → #278/model246
+    DEC--&gt;&gt;PREP: RetrievalBundle decision=resolved
+allowed=[#272,#278]
+    PREP-&gt;&gt;PROJ: apply_decision_to_semantic_payload(request,raw_payload,updated_bundle)
+    PROJ--&gt;&gt;PREP: semantic_payload status=hit
+metrics=[#272], group_dimensions=[#278]
+time_dimensions=[], time_filters=[]
+    PREP-&gt;&gt;STATE: 覆盖 bundle/payload/package/scope/asset_ids
+    Note over PREP,STATE: 没有再次调用 bind_default_time_dimensions
+#276 未加入 allowed_assets
+    PREP--&gt;&gt;LLM: Tool 恢复消息
+metric_asset_ids=[272], dimension_asset_ids=[278]
+
+    LLM--&gt;&gt;EX: compile_semantic_sql
+metric=[272], dimension=[278], filters=[]
+    EX-&gt;&gt;COMP: execute(ctx,args)
+    COMP-&gt;&gt;COMP: scope 与身份/数据源/数据集匹配
+    COMP-&gt;&gt;ALLOW: decision=resolved + allowed=[272,278]
+    ALLOW--&gt;&gt;COMP: 白名单通过
+    COMP-&gt;&gt;TIME: scope.normalized_time_range=today
+逐项匹配 args.filters
+    TIME--&gt;&gt;COMP: filters=[]，matched_time_filter=false
+    COMP--&gt;&gt;EX: ToolResult rejected
+error_code=time_filter_mismatch
+    EX--&gt;&gt;LLM: “时间筛选与已确认问题不一致...”
+
+    LLM--&gt;&gt;EX: 再次 search_semantic_assets({})
+    EX-&gt;&gt;RET: 使用同一个 question_understanding 重跑检索
+    RET--&gt;&gt;EX: 新 ambiguous bundle/payload/scope
+allowed_assets=[]
+    EX-&gt;&gt;STATE: ChatBIToolResultProcessor 无条件 update
+resolved 状态被覆盖
+    EX-&gt;&gt;DB: 持久化最终 ambiguous derived_state
+
+    LLM--&gt;&gt;EX: get_dataset_schema({dataset_id:243})
+    EX--&gt;&gt;LLM: 5 张物理表 Schema；不改变 semantic_scope
+    LLM--&gt;&gt;EX: search_semantic_assets({query:...})
+    EX--&gt;&gt;LLM: invalid_tool_args
+SearchSemanticAssetsArgs extra=forbid
+    LLM--&gt;&gt;EX: compile_semantic_sql(...time_bucket day)
+    EX-&gt;&gt;COMP: execute(ctx,args)
+    COMP-&gt;&gt;ALLOW: decision=ambiguous + allowed=[]
+    ALLOW--&gt;&gt;COMP: RetrievalQueryError
+    COMP--&gt;&gt;EX: rejected semantic_decision_not_executable
+    LLM--&gt;&gt;EX: 再次非法 search；非法/合法 get_sql_examples；最终 compile
+    EX--&gt;&gt;LLM: invalid_tool_args / count=0 / semantic_decision_not_executable
+    EX-&gt;&gt;EX: steps=12 达到 max_steps
+    EX-&gt;&gt;LIFE: fail(error_class=budget_exhausted,error=预算已耗尽)
+    LIFE-&gt;&gt;DB: run 219=failed；record 7514=failed
+    LIFE--&gt;&gt;U: run.failed SSE event sequence=52</pre></div></section>
+<section id="stages"><h2>三、逐阶段输入输出索引</h2><div class="stage-table"><table><thead><tr><th>阶段</th><th>处理</th><th>输入</th><th>输出</th><th>完整 JSON</th></tr></thead><tbody>
+<tr><td>1</td><td>HTTP start</td><td><code>AgentStartStreamRequest</code></td><td>SSE 迭代器；随后创建 Record/Run</td><td><a href="#json-start">输入 JSON</a></td></tr>
+<tr><td>2</td><td>问题理解</td><td>问题、datasource、conversation_context</td><td><code>QuestionUnderstandingOutput</code>；首次需澄清</td><td><a href="#json-understanding">事件与完整快照</a></td></tr>
+<tr><td>3</td><td>问题理解澄清</td><td>Clarification 41 + resume request</td><td>维度 role=group_by，validation=valid</td><td><a href="#json-clarifications">完整 JSON</a></td></tr>
+<tr><td>4</td><td>模型规划</td><td>system + messages + tool definitions</td><td><code>search_semantic_assets({})</code></td><td><a href="#json-model-calls">全部实际 ToolCall</a></td></tr>
+<tr><td>5</td><td>工具执行前处理</td><td>ToolCall、BudgetGuard、registry policy</td><td>分批、预算/重复熔断、参数校验、超时上下文</td><td><a href="#json-tool-audit">ToolCall 事实记录</a></td></tr>
+<tr><td>6</td><td>检索请求投影</td><td>question_understanding + 可信身份/数据集</td><td><code>RetrievalRequest</code> + plan filters</td><td><a href="#json-retrieval-request">完整 JSON</a></td></tr>
+<tr><td>7</td><td>Semantic 检索与决策</td><td>RetrievalRequest + 索引 + DatasetSchema</td><td><code>RetrievalBundle</code> ambiguous</td><td><a href="#json-bundle">完整大 JSON</a></td></tr>
+<tr><td>8</td><td>Payload 投影</td><td>request + bundle + schema</td><td><code>semantic_payload</code></td><td><a href="#json-payload">完整大 JSON</a></td></tr>
+<tr><td>9</td><td>Tool 公共投影</td><td>semantic_payload + authorized tables</td><td><code>SemanticAssetPackage</code> + <code>SemanticAssetScope</code></td><td><a href="#json-package">完整大 JSON</a></td></tr>
+<tr><td>10</td><td>结果状态投影</td><td>ToolResult data/metadata</td><td>state_patch → context.state / derived_state</td><td><a href="#json-tool-result">完整 JSON</a></td></tr>
+<tr><td>11</td><td>Semantic 澄清</td><td>Clarification 42 + binding metric:1→272</td><td>resolved bundle/payload/scope</td><td><a href="#json-resolved">完整重放 JSON</a></td></tr>
+<tr><td>12</td><td>第一次编译</td><td>metric=[272], dimension=[278], filters=[]</td><td><code>time_filter_mismatch</code></td><td><a href="#json-compile">完整输入/结果</a></td></tr>
+<tr><td>13</td><td>重复检索覆盖</td><td>同一 understanding 再次 search({})</td><td>resolved → ambiguous，allowed=[]</td><td><a href="#json-final-state">最终 derived_state</a></td></tr>
+<tr><td>14</td><td>后续工具尝试</td><td>Schema、非法 query 参数、time_bucket、SQL 示例</td><td>invalid_tool_args / semantic_decision_not_executable</td><td><a href="#json-model-calls">全部实际 ToolCall</a></td></tr>
+<tr><td>15</td><td>终态</td><td>steps=12 / max_steps=12</td><td>Run/Record failed，budget_exhausted</td><td><a href="#json-terminal">完整持久化 JSON</a></td></tr>
+</tbody></table></div></section>
+<section id="inputs"><h2>四、入口、记录创建与问题理解 JSON</h2><div class="json-stack"><details class="json-card" open id="json-start">
+      <summary><span>可确认的 start 请求体（原始 HTTP 是否额外传 datasource_id 未持久化）</span><span class="json-size">68 字符</span></summary>
+      <p class="json-note">这里仅放数据库和 DTO 可以共同确认的字段；不把 Record 上的 datasource=13反推为 HTTP 一定显式传入。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">{
+  "action": "start",
+  "chat_id": 6907,
+  "question": "今天店铺的客户数"
+}</pre>
+    </details>
+<details class="json-card" open>
+      <summary><span>两次 resume 请求体（由 clarification.answer 精确还原）</span><span class="json-size">445 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">[
+  {
+    "action": "resume",
+    "record_id": 7514,
+    "clarification": {
+      "selections": [
+        {
+          "label": "按店铺分组查看",
+          "value": "group_by:店铺"
+        }
+      ],
+      "text": null
+    }
+  },
+  {
+    "action": "resume",
+    "record_id": 7514,
+    "clarification": {
+      "selections": [
+        {
+          "label": "销售下单客户数（销售下单的客户数量）",
+          "value": "销售下单客户数"
+        }
+      ],
+      "text": null
+    }
+  }
+]</pre>
+    </details>
+<details class="json-card" open>
+      <summary><span>ChatRecord 创建/终态概览</span><span class="json-size">348 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">{
+  "id": 7514,
+  "chat_id": 6907,
+  "dataset_id": 243,
+  "datasource": 13,
+  "engine_type": "MySQL",
+  "question": "今天店铺的客户数",
+  "finish": true,
+  "status": "failed",
+  "run_id": "219",
+  "execution_type": "agent",
+  "error": "预算已耗尽",
+  "create_time": "2026-07-29T14:45:59.174831",
+  "finish_time": "2026-07-29T14:47:19.979571",
+  "create_by": 1
+}</pre>
+    </details>
+<details class="json-card" open>
+      <summary><span>ChatbiAgentRun 配置与终态概览</span><span class="json-size">1,038 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">{
+  "id": 219,
+  "oid": 1,
+  "chat_id": 6907,
+  "record_id": 7514,
+  "status": "failed",
+  "budget_snapshot": {
+    "steps": 12,
+    "max_steps": 12,
+    "tokens_used": 84151,
+    "token_budget": 100000,
+    "planning_mode": "exhausted",
+    "clarifications": 2,
+    "elapsed_seconds": 38.22,
+    "sql_corrections": 0,
+    "pending_failed_sql": null
+  },
+  "config": {
+    "enabled": true,
+    "max_steps": 12,
+    "sample_rows": 10,
+    "token_budget": 100000,
+    "default_limit": 100,
+    "history_rounds": 3,
+    "max_sql_retries": 2,
+    "timeout_seconds": 120,
+    "summary_max_chars": 4000,
+    "context_fold_chars": 30000,
+    "max_clarifications": 2,
+    "datasource_allowlist": [],
+    "tool_timeout_seconds": 60.0,
+    "repeat_fuse_threshold": 3,
+    "tool_parallel_workers": 4,
+    "query_transient_retries": 1,
+    "tool_default_timeout_seconds": 30.0
+  },
+  "error_class": "budget_exhausted",
+  "error": "预算已耗尽",
+  "created_at": "2026-07-29T14:45:59.196255",
+  "updated_at": "2026-07-29T14:47:19.982094",
+  "created_by": 1
+}</pre>
+    </details><details class="json-card" open id="json-understanding">
+      <summary><span>首次 question-understood SSE payload（数据库精确值）</span><span class="json-size">457 字符</span></summary>
+      <p class="json-note">首次完整 QuestionUnderstandingOutput 在第二次恢复后被 derived_state 覆盖；当前数据库只保留这一份精确事件投影，文档不伪造被覆盖的完整对象。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">{
+  "kind": "thinking",
+  "phase": "end",
+  "domain": "question.understood",
+  "block_id": "thinking:219",
+  "record_id": 7514,
+  "confidence": 0.95,
+  "validation": {
+    "status": "clarification_required",
+    "reason_codes": [
+      "intent_ambiguous",
+      "dimension_role_ambiguous"
+    ],
+    "clarification_slots": [
+      "dimension"
+    ]
+  },
+  "intent_type": "metric_query",
+  "message_type": "new_question",
+  "rewritten_question": "今天店铺的客户数"
+}</pre>
+    </details>
+<details class="json-card" open>
+      <summary><span>最终 question-understood SSE payload（数据库精确值）</span><span class="json-size">353 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">{
+  "kind": "thinking",
+  "phase": "end",
+  "domain": "question.understood",
+  "block_id": "thinking:219",
+  "record_id": 7514,
+  "confidence": 0.95,
+  "validation": {
+    "status": "valid",
+    "reason_codes": [],
+    "clarification_slots": []
+  },
+  "intent_type": "metric_query",
+  "message_type": "new_question",
+  "rewritten_question": "今天店铺的客户数"
+}</pre>
+    </details>
+<details class="json-card" open>
+      <summary><span>最终持久化 question_understanding（完整对象）</span><span class="json-size">999 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">{
+  "intent": {
+    "confidence": 0.95,
+    "time_range": {
+      "raw": "今天",
+      "normalized": {
+        "kind": "single_date",
+        "anchor": "today",
+        "timezone": "Asia/Shanghai",
+        "offset_days": 0
+      },
+      "value_status": "provided"
+    },
+    "intent_type": "metric_query",
+    "query_shape": {},
+    "time_mentions": [
+      "今天"
+    ],
+    "conflict_slots": [],
+    "ambiguous_slots": [],
+    "dimension_slots": [
+      {
+        "name": "店铺",
+        "role": "group_by",
+        "value": null,
+        "value_status": "not_provided",
+        "value_confidence": 0.0
+      }
+    ],
+    "filter_mentions": [],
+    "metric_mentions": [
+      "客户数"
+    ],
+    "dimension_mentions": [
+      "店铺"
+    ],
+    "required_slot_types": []
+  },
+  "validation": {
+    "status": "valid",
+    "reason_codes": [],
+    "clarification_slots": []
+  },
+  "message_type": "new_question",
+  "inherited_context": {},
+  "original_question": "今天店铺的客户数",
+  "rewritten_question": "今天店铺的客户数"
+}</pre>
+    </details>
+<details class="json-card" id="json-clarifications">
+      <summary><span>Clarification 41、42 数据库完整记录</span><span class="json-size">4,668 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">[
+  {
+    "id": 41,
+    "oid": 1,
+    "run_id": 219,
+    "record_id": 7514,
+    "status": "answered",
+    "tool_call_id": null,
+    "question": "请确认“店铺”在本次查询中的使用方式。",
+    "options": [
+      {
+        "label": "按店铺分组查看",
+        "value": "group_by:店铺"
+      },
+      {
+        "label": "筛选某个具体店铺",
+        "value": "filter:店铺"
+      },
+      {
+        "label": "不使用店铺维度，查看汇总结果",
+        "value": "ignore:店铺"
+      }
+    ],
+    "answer": {
+      "text": null,
+      "selections": [
+        {
+          "label": "按店铺分组查看",
+          "value": "group_by:店铺"
+        }
+      ]
+    },
+    "created_at": "2026-07-29T14:46:05.594913",
+    "answered_at": "2026-07-29T14:46:07.727004",
+    "expires_at": "2026-07-30T14:46:05.594920",
+    "created_by": 1,
+    "resume_kind": "question_understanding",
+    "resume_payload": {
+      "operation": "set_dimension_role",
+      "slot_name": "店铺"
+    }
+  },
+  {
+    "id": 42,
+    "oid": 1,
+    "run_id": 219,
+    "record_id": 7514,
+    "status": "answered",
+    "tool_call_id": "call_00_0DpkOJNdvOOGx4GDG9Vv8671",
+    "question": "您提到的\"客户数\"是指哪个口径的客户数？",
+    "options": [
+      {
+        "label": "销售下单客户数（销售下单的客户数量）",
+        "value": "销售下单客户数",
+        "asset_id": 272,
+        "bindings": [
+          {
+            "asset_id": 272,
+            "model_id": 246,
+            "asset_type": "METRIC",
+            "subquery_id": "metric:1"
+          }
+        ]
+      },
+      {
+        "label": "订货下单客户数（订货下单的客户数量）",
+        "value": "订货下单客户数",
+        "asset_id": 273,
+        "bindings": [
+          {
+            "asset_id": 273,
+            "model_id": 246,
+            "asset_type": "METRIC",
+            "subquery_id": "metric:1"
+          }
+        ]
+      },
+      {
+        "label": "总下单客户数（含销售和订货的下单客户总数）",
+        "value": "总下单客户数",
+        "asset_id": 274,
+        "bindings": [
+          {
+            "asset_id": 274,
+            "model_id": 246,
+            "asset_type": "METRIC",
+            "subquery_id": "metric:1"
+          }
+        ]
+      },
+      {
+        "label": "新增成交客户数",
+        "value": "新增成交客户数",
+        "asset_id": 313,
+        "bindings": [
+          {
+            "asset_id": 313,
+            "model_id": 249,
+            "asset_type": "METRIC",
+            "subquery_id": "metric:1"
+          }
+        ]
+      },
+      {
+        "label": "欠款客户数",
+        "value": "欠款客户数",
+        "asset_id": 310,
+        "bindings": [
+          {
+            "asset_id": 310,
+            "model_id": 250,
+            "asset_type": "METRIC",
+            "subquery_id": "metric:1"
+          }
+        ]
+      }
+    ],
+    "answer": {
+      "text": null,
+      "selections": [
+        {
+          "label": "销售下单客户数（销售下单的客户数量）",
+          "value": "销售下单客户数"
+        }
+      ]
+    },
+    "created_at": "2026-07-29T14:46:39.471709",
+    "answered_at": "2026-07-29T14:46:41.757272",
+    "expires_at": "2026-07-30T14:46:39.471714",
+    "created_by": 1,
+    "resume_kind": "agent_tool",
+    "resume_payload": {
+      "options": [
+        {
+          "label": "销售下单客户数（销售下单的客户数量）",
+          "value": "销售下单客户数",
+          "asset_id": 272,
+          "bindings": [
+            {
+              "asset_id": 272,
+              "model_id": 246,
+              "asset_type": "METRIC",
+              "subquery_id": "metric:1"
+            }
+          ]
+        },
+        {
+          "label": "订货下单客户数（订货下单的客户数量）",
+          "value": "订货下单客户数",
+          "asset_id": 273,
+          "bindings": [
+            {
+              "asset_id": 273,
+              "model_id": 246,
+              "asset_type": "METRIC",
+              "subquery_id": "metric:1"
+            }
+          ]
+        },
+        {
+          "label": "总下单客户数（含销售和订货的下单客户总数）",
+          "value": "总下单客户数",
+          "asset_id": 274,
+          "bindings": [
+            {
+              "asset_id": 274,
+              "model_id": 246,
+              "asset_type": "METRIC",
+              "subquery_id": "metric:1"
+            }
+          ]
+        },
+        {
+          "label": "新增成交客户数",
+          "value": "新增成交客户数",
+          "asset_id": 313,
+          "bindings": [
+            {
+              "asset_id": 313,
+              "model_id": 249,
+              "asset_type": "METRIC",
+              "subquery_id": "metric:1"
+            }
+          ]
+        },
+        {
+          "label": "欠款客户数",
+          "value": "欠款客户数",
+          "asset_id": 310,
+          "bindings": [
+            {
+              "asset_id": 310,
+              "model_id": 250,
+              "asset_type": "METRIC",
+              "subquery_id": "metric:1"
+            }
+          ]
+        }
+      ],
+      "operation": "resolve_semantic_bindings",
+      "retrieval_id": "agent:219"
+    }
+  }
+]</pre>
+    </details></div></section>
+<section id="semantic"><h2>五、Semantic 检索后的完整大 JSON</h2><p class="small">以下内容直接来自 Run 219 的 <code>derived_state</code> 或当前 DatasetSchema。所有 JSON 默认折叠，展开后可复制；代码块只限制显示高度，不截断内容。</p><div class="controls"><button class="control-btn" data-action="open">展开本节全部 JSON</button><button class="control-btn" data-action="close">折叠本节全部 JSON</button></div><div class="json-stack"><details class="json-card" open id="json-retrieval-request">
+      <summary><span>RetrievalRequest：semantic_retrieval_request</span><span class="json-size">1,180 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">{
+  "scope": {
+    "source_ids": [],
+    "dataset_ids": [
+      243
+    ],
+    "principal_roles": [],
+    "knowledge_base_ids": [],
+    "permission_version": null,
+    "principal_role_ids": []
+  },
+  "intent": {
+    "time_range": {
+      "raw": "今天",
+      "normalized": {
+        "kind": "single_date",
+        "anchor": "today",
+        "timezone": "Asia/Shanghai",
+        "offset_days": 0
+      },
+      "value_status": "provided"
+    },
+    "intent_type": "metric_query",
+    "query_shape": {},
+    "time_mentions": [
+      "今天"
+    ],
+    "conflict_slots": [],
+    "subject_domain": {},
+    "ambiguous_slots": [],
+    "dimension_slots": [
+      {
+        "name": "店铺",
+        "role": "group_by",
+        "value": null,
+        "value_status": "not_provided"
+      }
+    ],
+    "filter_mentions": [],
+    "metric_mentions": [
+      "客户数"
+    ],
+    "dimension_mentions": [
+      "店铺"
+    ],
+    "required_slot_types": []
+  },
+  "actor_id": 1,
+  "profiles": [
+    "semantic_binding"
+  ],
+  "tenant_id": 1,
+  "request_id": "agent:219",
+  "strategy_version": "semantic-binding",
+  "inherited_context": {},
+  "original_question": "今天店铺的客户数",
+  "rewritten_question": "今天店铺的客户数"
+}</pre>
+    </details>
+<details class="json-card" open>
+      <summary><span>QueryPlanner 输出摘要：semantic_retrieval_filters</span><span class="json-size">312 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">{
+  "subqueries": [
+    {
+      "purpose": "metric",
+      "required": true,
+      "subquery_id": "metric:1"
+    },
+    {
+      "purpose": "dimension",
+      "required": true,
+      "subquery_id": "dimension:1"
+    }
+  ],
+  "plan_fingerprint": "502c27654c86a04eeea794a1f34568c7bd10603a79dfbd4600d405407c4e9086"
+}</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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" open>
+      <summary><span>相关 DatasetSchema 资产原始 JSON（Model #246 / Metric #272 / Dimension #276、#278）</span><span class="json-size">12,766 字符</span></summary>
+      <p class="json-note">#276 的 ext_info.is_default_time=true；它存在于 Schema，但未进入本次澄清后的 allowed_assets。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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" id="json-bundle">
+      <summary><span>RetrievalBundle：最终持久化的 ambiguous 大 JSON</span><span class="json-size">25,087 字符</span></summary>
+      <p class="json-note">这是重复 search_semantic_assets 后覆盖进 Run 219 的完整 bundle；字段未经人工裁剪。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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" id="json-payload">
+      <summary><span>semantic_payload：完整大 JSON</span><span class="json-size">28,069 字符</span></summary>
+      <p class="json-note">由 bundle_to_semantic_payload 生成，包含候选 payload、selected_assets、slot_bindings、ambiguities、diagnostics 等全部字段。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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" id="json-package">
+      <summary><span>semantic_package：完整大 JSON</span><span class="json-size">27,546 字符</span></summary>
+      <p class="json-note">这是当前 run.derived_state 中实际保存的 package。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card" open>
+      <summary><span>semantic_scope：编译工具实际读取的可信范围</span><span class="json-size">367 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">{
+  "user_id": 1,
+  "dataset_id": 243,
+  "retrieval_id": "agent:219",
+  "workspace_id": 1,
+  "datasource_id": 13,
+  "allowed_assets": [],
+  "decision_status": "ambiguous",
+  "authorized_tables": [],
+  "permission_version": null,
+  "normalized_time_range": {
+    "kind": "single_date",
+    "anchor": "today",
+    "timezone": "Asia/Shanghai",
+    "offset_days": 0
+  }
+}</pre>
+    </details></div></section>
+<section><h2>六、Search ToolResult、状态投影与 4000 字符处理</h2><div class="json-stack"><details class="json-card json-compressed" data-gzip="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" id="json-tool-result">
+      <summary><span>SearchSemanticAssetsResult.data = {package, scope}</span><span class="json-size">29,913 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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">
+      <summary><span>Search ToolResult 的业务 metadata</span><span class="json-size">58,849 字符</span></summary>
+      <p class="json-note">LatencyMiddleware 追加的 latency_ms/tool_name/tool_call_id 属于瞬时内部 metadata，数据库没有完整持久化其原值，因此这里不补造。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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">
+      <summary><span>ChatBIToolResultProcessor 生成的 state_patch</span><span class="json-size">88,830 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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">
+      <summary><span>模型观察摘要：json_summary 输出 + 最终持久化 Tool Message</span><span class="json-size">13,994 字符</span></summary>
+      <p class="json-note">完整 data/metadata 已先写入 state；随后仅 model_content 被 4000 字符处理。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details></div></section>
+<section id="resolved-state"><h2>七、用户选择 #272 后的完整 resolved JSON</h2><p class="small">Run 最终状态已被第二次检索覆盖，因此本节使用数据库中保存的原始候选、Clarification 42 的实际 binding 和当前生产代码函数做确定性重放。它对应 <code>prepare_resume()</code> 当时写入内存状态的对象。</p><div class="json-stack"><details class="json-card json-compressed" data-gzip="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" id="json-resolved">
+      <summary><span>澄清后 RetrievalBundle（按当前代码对 Run 219 原始候选确定性重放）</span><span class="json-size">24,131 字符</span></summary>
+      <p class="json-note">输入是 Run 219 的 bundle、Clarification 42 的 metric:1→#272 binding，以及实际 required subquery 集合。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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">
+      <summary><span>澄清后 semantic_payload / semantic_package（完整）</span><span class="json-size">12,515 字符</span></summary>
+      <p class="json-note">prepare_resume 实际把同一 updated_payload 同时写入 semantic_payload 与 semantic_package。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card" open>
+      <summary><span>澄清后 SemanticAssetScope（完整）</span><span class="json-size">547 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">{
+  "user_id": 1,
+  "dataset_id": 243,
+  "retrieval_id": "agent:219",
+  "workspace_id": 1,
+  "datasource_id": 13,
+  "allowed_assets": [
+    {
+      "asset_type": "METRIC",
+      "asset_id": 272,
+      "model_id": 246
+    },
+    {
+      "asset_type": "DIMENSION",
+      "asset_id": 278,
+      "model_id": 246
+    }
+  ],
+  "decision_status": "resolved",
+  "authorized_tables": [],
+  "permission_version": null,
+  "normalized_time_range": {
+    "kind": "single_date",
+    "anchor": "today",
+    "timezone": "Asia/Shanghai",
+    "offset_days": 0
+  }
+}</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="H4sIAFWsaWoC/+1dzW/cxhW/668w9iy7HA4/9yZL22QByTIsuUXQGgTFHUmMuOSG5NpWjADOKS7aoAGaNEAOReoUTYEGhg8B2jpF/5laSnzqv9Ahl/tBznBI7nK19Gp0WAgzQ/LN4/v4zeN7M082btxoBahvuqFtGUdDt+egVvvGE9yMO3z0wRAFoWH3cFvLPEFu2BaB3tocdR/Zbs92T4LJBbitj0LftqKmXyVNNyadyT0Db+hbKLmppsjJ7bL94fkgIqW11zm8191OD8oMOUUmpjsIqINGz5FkmdqbIWf0sLaoiunRQ9ces0FUoJDutDw3xKwxzjA/ohE9dGzj8bbnpseFdhhzt/Xm86cXn794/c/fXnz6xcWL55fP/nH5xcsMea49GKAwGn35u08uv/7k4sVXr//1m//9+6syF1sentfMa0na0WPTim7pDh1nM91lOrYZ0Lsc9Ni2TAd3Crd0XYj/dBkqqgTFzNAecgMUD1SAqgqaCjVRAlCDUmagj3zTPaM/DzMveZoARVkUJVXSNCAAGUozAz9KSw2+W2AcnRvWqem6yCHnPiZNzJ0dyL173wytU9Qzjm3kxG84RI/DFnVI3INH5LwZrB5mzwxNkj4zCFAiYlj6MkQe2R8artmPhcfze8g3rGEQev3oHyx4gYnlKnNJ3+shJ7mfpGzSHsbQsIhhmMwpSRLM3j+ZcKQZxGwK5jPXjArmVG5WlHml+j+ictFHjhmpc2zWHmSGvO9heT1ykDGmjjrK8voDfI9oXM/uY1nEtxuPzVAoqsTURFUlmzSySSeaNCHVkiUrwK8gIXylZOWq3sD3HiLXdC1EqkwkP8HAtFI+oJ283zZ+tRVFGptv9NjAXg4bp9h6tyeX3MSjb8b9N5XsXc9c75GDeifIOMJDRzenmLUB8vt2EDP4IfKD0f2jcblzTzzTdDQ27KfYV7eVdkxKO01KIv8+Os6zLmyFZ1qgtOrNkrxBIZ7t8ZVGenzI8vhwQY//04vnP33/7Zwev8zFTfD4oiarQAMiUHSdEKDSHl8QREHSAASCJkC9Bo8Pc2cnNsfjw2oe/8jzsOydNNrpw6pOnz4p7ve53+d+/6r8Plye39eb6PchYPh9VVzU71/+8eXF8z9dPvvs9au/VPb7ZS5ugN+Hugp1RcJeW4S6qM/p94EsSbqsqqokKbKuKjU4fpA7PaUpjh+LH8Pxu+hRykMy3b2+UndPTKTaVAomsz5OHgrSJtEkk00K2aSSTRrZRHAOA2myCZBNYl2A4a2ZIgcfjQIfpC1Mm4TFgg5qI4MOEivooCwKPp7+MGfEofDKBsAOAfMaKhKGDSIQ5402AFFWlclvHaBDzp0cbE60QaoWbQi9EM+gybEGqWqsgTYlHmngkQbu7K8q0iAtMdIAGxlpEBiRBiAt6uy/+/ryu/9U9/TMy5rg5jVdlzWMhnQsMtLcfh4/SgEy1KT4V67B0Uu505ObE10QGI7e9H1k+kHpCIMsrDjCIDCdfInpFExojaIMZDQGAnJVDshVOSBX5YBclQNyVQ7IVblIrspFclUu1hd4eItnzeFJw2IRAtMS0uHJRkaEWxOJrZAQCUABeNnp7nXuHHT371wRfpk8r42hdz6EkRSdDWFs7DkxXDnPAzB//ubi9990d3KRy48/fH/x6q8Xn33647cvI+SSjP+1m3Q8+zvuwx0Xr75884dX/3368WgE/ufNl3/DjbVhG3BLqAPayLoGBEkUFQ3IQFfU+aCNpOlA1oEqC1BXFLBICGMyv80lpk6OHsKGPPELnCuwoTHwToBX/LEGzx/IoKteDTAnYgqi+bQbVHYkPSMBp/UkEp/peLDJDKJoTHyVw76qQZM8FvK4CY+bcGCSa2CYVq7G0AlQmos+NEaqhqRJHH2sAn0kiZoYhUiSLsAa4EcezbXkcS4VfmhwUfihXl/4ocE64Ie6zvBDA6S7FskmSDZJZJNMNpEwQiNhhEbCCI2EEbpANpHU6yT1OqwNFl1HdnG41ji4pjHTWtSF4JqoNxeuZfN9Z+GaXJRZy+HaUuCaClUgQKBKSvwr1QDX4GbV72OwIXBNVxaFa9r1hWu6Ugdc09YZrukkjNBJGEEyUtRJGKGTMEInvz0J5Lcngfz2JIhkU32o6y2eNQdPjQNPhI1Om4+FwBNsLniCAgs8yRw8rQI8KQqUakoiGk9Q2qyaRSw1AzwR5RvVwZN+bcETpfZlHvCkrzF44nVSzZkih0VNg0Wk9a2xVErSmguLgMyARZrAYdEKYJGsi4I6/a0BFck5JCt1pFwvFRVlc0sro6KCJOu1RkVkYu4cqKgwqfutRkU8r/stmzXHTo3DToSNniu1+6HpDFFan1sh5kSmKb53pm00WePUDkcdGzMcwu4f9QeO6c9e00IPI+wSy8OkrYcsO2HfZPddbCLDYXRlDNqch2hqLFuB44XG+CJGPnowPPpgiPzzBFaNNvRtZ5LSB0N/4MU+ORmQwTb5dIxMnun2bCyByIhfDKn0T+YrzCnYdDQ3T46w7nU8H670+bQNWXIXCUuZv7Ti+QsFOCH9/I0cV9UKkIOsEGOnxohqLqk+MgNshS18LUln6/5B556xvbt1r/vz7vbWIbaSxkFnt7N92NmZxWkPCheMGQsxcd8MIzEZc7V2goH1CjLfaxPVkiRoBdqqLp8Eyhfd3I8tyyGBFhetzWaVJIGyCFmF2ViO5M5pObo7nTuH3cP3jJ3uwdbe7e4797ew0TBuv2eMrJuxt7/T2TW29/fuYrtyu7uLx+aYFAJHmf0j+2Roh3YWTOHFnvdozD9iZfBko4rFZVjbPH7lGb8yr4nxinIfRzAm95W0Djp7W/h9bBu3u3d2unfeMe51DvZ3f9GZjVy1DvfvAgP/iMY7W3eN253d/V8ah+/ike/u76YG7t3fPeze3e0Yk7e8t3W4/W7nYHZQ7iMjISAdy/jlp6FtzzZPXC8IR+dDzIBWvCpBJ+ep9UByJMXN5IyJdrbh5sBzbGsayqu8xmklUSiGWE3jVElQLsd3BUPLQqiXdV4OnpVrnRvxkkAUbgEJwqhMD8pAVEGOn7O8oRtFaFLgpYV83/NjUcgurfLEdIZ2SsCrGu1AuaUJUAIqEIGuAzltIinEy/URPw7xLUi+hGmXBRGokqCmE1Qo5Kc/iSxG/yh0uZDgKLeAKMnR/pqaGG1jUUC9VKPojKNbuRM4i4LjLPKFdKh6uZKeRKybQCxhzuMNp4z0q1XEW1ATZAFEKR06nJaNoxPfxGJhjHzA7M2jG8ecmJ7aMzDPHc/sTY/tOY1jvKE/RInhzcYlWnEwPNUyZVN09fi6KHiZGkYe75N7esfGzPyrBysSnzDrC4zE9LfW2EViP9MfZHhOD+7R9xaYBslT7KeDrMRnpoN2Y3mIokVzHfC0EBjr2cHAMc8nMf8Shx1VPUkm+ix4PAmnsT+XJZFKqhQuuO3Dojgyyyn618vC7ydpbmQ+LM45/aNhYLsoCIxrzocQTz/Dg2nnie8NB9edQ3EQ3Ti2HeyhMvyZfhSidse8pfbMNqZsaxJ2p5u74dH7eLlu9Ly+acdeanIVsY4vbworWLE4G2Ahe1TWxFa2l/nbO5Sw9dgzW749CLMcn9/el90grXirNT96fwjLoBGnJtR7Ztz05nmJHoyt8kqfo8dIFmEco1ch0YOVWFLjJkhs2zRWjgpGp6xxLDZ7pcU/xzJX1AA6B0plqJTIdCkU+WXsAVReFcjEptLZSuU0Ibtb0tVqQslvxpXwE9ccrjnrrzk0KJ0Cd9NQTQysUziNomI0TeRwjsM5DudKJo2P33DZsymXpAuwii7Qzhe8UnUowawVqMM8+yrVpg7MM0PLqkP6yNBVqkPZI9uWog6ZlK/y528xysrqV4ISLFqBEsxzVlxdSsA+QK+kEmTPz1upFpQ5PmhJHkGq4hHIU2Cu1B8U8WkFejDP8UV16QHzRKeyapA+0GmlWlB4tMaSvICQqwKFZyQwSmmWIP4sBq1A9uc50aM22Wcec1JW+DOnnPA4L49W8WjV0qNVm6uWdQ0uIuvqdZH1OjcWbpSsZ/ZgXm9hzyRAVhR27boIe53bMjZJ2LM7WK61sGcKYqoKu35dhL3ObbSaJOzZHcfWW9gzdQXVhJ25WF0rYa9zd5QmCXtmH5krWbymviGzKs6mXCmKg+R+rKWXfk3eR+4TaMKbu9TNeUgqG7w/dELbGJXwYgFPZabOSEROuVZx3VRhgQu7sIqoqqixqqq4trkC7RQlrkB79aqqWomnFlZVJL9iVVWt9FMKqyoJTuWqqirU0yqNCsuqKpBfolCpVnLJsqplEUtGFam1UPOXfdZTbVqimivlWmb87CLPpxV/WWfmCeLFX7z4ixd/8eIvXvzFi7948Rcv/uLZwjxbmBd/8aQAnhTAi7+45nDN4cVfvPiLwzkO53jxFy/+4sVfvPiLF3/x4i9e/MWLv3jxFy/+4sVfvPiLx3l5tIpHq3jxFy/+4sVfvPiLF3/x4i9e/MWLv3jxFy/+4sVfvPiLF3/x4i9e/MWLv3jxFy/+alLxF3bbg5nSr2GA/JHxB+zqoSlBoxN8TczCsI0t0bj265Hnn8UH0FNuNzq7fdQOac5zXT3nuIzNyK1da5nD8NTz7Q8jREiUzw2Q37eD+A7UMgTX8/vYq8QXRxlvWO9mCvvwgDMsD7HEYKFwkBFp0VQoTdfCj44/gng9c1Za8b0+9NyYJ1uBbf7sACv3yalpT4d4x8cRW/BlwUQhKQfNkdBo8qIwMzciRPXR/wHiRD9JUdYAAA==">
+      <summary><span>prepare_resume 写入 context.state 的完整补丁</span><span class="json-size">53,753 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details></div></section>
+<section><h2>八、编译输入与失败输出</h2><div class="json-stack"><details class="json-card" open id="json-compile">
+      <summary><span>三次 compile_semantic_sql 的模型 ToolCall 与持久化结果</span><span class="json-size">1,862 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">[
+  {
+    "message_index": 5,
+    "step_id": 424,
+    "tool_call": {
+      "args": {
+        "metric_asset_ids": [
+          272
+        ],
+        "dimension_asset_ids": [
+          278
+        ]
+      },
+      "name": "compile_semantic_sql",
+      "call_id": "call_00_g5U8pEYXJ1tbxCOcL4H63590"
+    },
+    "persisted_status": "rejected",
+    "persisted_result_summary": {
+      "status": "rejected",
+      "success": false,
+      "error_code": "time_filter_mismatch"
+    },
+    "persisted_error_code": "time_filter_mismatch",
+    "latency_ms": 17
+  },
+  {
+    "message_index": 13,
+    "step_id": 428,
+    "tool_call": {
+      "args": {
+        "time_bucket": {
+          "granularity": "day"
+        },
+        "metric_asset_ids": [
+          272
+        ],
+        "dimension_asset_ids": [
+          278
+        ]
+      },
+      "name": "compile_semantic_sql",
+      "call_id": "call_00_d3w4ByUSmQDLSMTQqq9E0011"
+    },
+    "persisted_status": "rejected",
+    "persisted_result_summary": {
+      "status": "rejected",
+      "success": false,
+      "error_code": "semantic_decision_not_executable"
+    },
+    "persisted_error_code": "semantic_decision_not_executable",
+    "latency_ms": 39
+  },
+  {
+    "message_index": 21,
+    "step_id": 432,
+    "tool_call": {
+      "args": {
+        "filters": [],
+        "time_bucket": {
+          "granularity": "day"
+        },
+        "metric_asset_ids": [
+          272
+        ],
+        "dimension_asset_ids": [
+          278
+        ]
+      },
+      "name": "compile_semantic_sql",
+      "call_id": "call_00_tWVn0AoO6dcJYy3mZbxJ8280"
+    },
+    "persisted_status": "rejected",
+    "persisted_result_summary": {
+      "status": "rejected",
+      "success": false,
+      "error_code": "semantic_decision_not_executable"
+    },
+    "persisted_error_code": "semantic_decision_not_executable",
+    "latency_ms": 41
+  }
+]</pre>
+    </details>
+<details class="json-card">
+      <summary><span>编译工具业务输入、可信 scope 与 ToolResult 业务字段</span><span class="json-size">3,616 字符</span></summary>
+      <p class="json-note">ToolResult 的业务字段由当前 execute 分支和持久化 error_code 共同确定；瞬时 latency metadata 不在此对象中。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">[
+  {
+    "tool_call_id": "call_00_g5U8pEYXJ1tbxCOcL4H63590",
+    "input_args": {
+      "metric_asset_ids": [
+        272
+      ],
+      "dimension_asset_ids": [
+        278
+      ]
+    },
+    "trusted_scope_at_execution": {
+      "user_id": 1,
+      "dataset_id": 243,
+      "retrieval_id": "agent:219",
+      "workspace_id": 1,
+      "datasource_id": 13,
+      "allowed_assets": [
+        {
+          "asset_type": "METRIC",
+          "asset_id": 272,
+          "model_id": 246
+        },
+        {
+          "asset_type": "DIMENSION",
+          "asset_id": 278,
+          "model_id": 246
+        }
+      ],
+      "decision_status": "resolved",
+      "authorized_tables": [],
+      "permission_version": null,
+      "normalized_time_range": {
+        "kind": "single_date",
+        "anchor": "today",
+        "timezone": "Asia/Shanghai",
+        "offset_days": 0
+      }
+    },
+    "tool_result_business_fields": {
+      "status": "rejected",
+      "model_content": "时间筛选与已确认问题不一致，禁止省略时间或替换成数据最大日期。",
+      "data": null,
+      "error_code": "time_filter_mismatch",
+      "error_category": "safety",
+      "retry_advice": "never",
+      "details": {}
+    }
+  },
+  {
+    "tool_call_id": "call_00_d3w4ByUSmQDLSMTQqq9E0011",
+    "input_args": {
+      "metric_asset_ids": [
+        272
+      ],
+      "dimension_asset_ids": [
+        278
+      ],
+      "time_bucket": {
+        "granularity": "day"
+      }
+    },
+    "trusted_scope_at_execution": {
+      "user_id": 1,
+      "dataset_id": 243,
+      "retrieval_id": "agent:219",
+      "workspace_id": 1,
+      "datasource_id": 13,
+      "allowed_assets": [],
+      "decision_status": "ambiguous",
+      "authorized_tables": [],
+      "permission_version": null,
+      "normalized_time_range": {
+        "kind": "single_date",
+        "anchor": "today",
+        "timezone": "Asia/Shanghai",
+        "offset_days": 0
+      }
+    },
+    "tool_result_business_fields": {
+      "status": "rejected",
+      "model_content": "SEMANTIC_BINDING_DECISION_NOT_EXECUTABLE；当前语义决策尚不可执行，请完成语义澄清后再编译。",
+      "data": null,
+      "error_code": "semantic_decision_not_executable",
+      "error_category": "business_rule",
+      "retry_advice": "never",
+      "details": {
+        "reason_code": "SEMANTIC_BINDING_DECISION_NOT_EXECUTABLE",
+        "decision_status": "ambiguous",
+        "retry_action": "clarify_semantic_binding"
+      }
+    }
+  },
+  {
+    "tool_call_id": "call_00_tWVn0AoO6dcJYy3mZbxJ8280",
+    "input_args": {
+      "metric_asset_ids": [
+        272
+      ],
+      "dimension_asset_ids": [
+        278
+      ],
+      "filters": [],
+      "time_bucket": {
+        "granularity": "day"
+      }
+    },
+    "trusted_scope_at_execution": {
+      "user_id": 1,
+      "dataset_id": 243,
+      "retrieval_id": "agent:219",
+      "workspace_id": 1,
+      "datasource_id": 13,
+      "allowed_assets": [],
+      "decision_status": "ambiguous",
+      "authorized_tables": [],
+      "permission_version": null,
+      "normalized_time_range": {
+        "kind": "single_date",
+        "anchor": "today",
+        "timezone": "Asia/Shanghai",
+        "offset_days": 0
+      }
+    },
+    "tool_result_business_fields": {
+      "status": "rejected",
+      "model_content": "SEMANTIC_BINDING_DECISION_NOT_EXECUTABLE；当前语义决策尚不可执行，请完成语义澄清后再编译。",
+      "data": null,
+      "error_code": "semantic_decision_not_executable",
+      "error_category": "business_rule",
+      "retry_advice": "never",
+      "details": {
+        "reason_code": "SEMANTIC_BINDING_DECISION_NOT_EXECUTABLE",
+        "decision_status": "ambiguous",
+        "retry_action": "clarify_semantic_binding"
+      }
+    }
+  }
+]</pre>
+    </details></div></section>
+<section id="audit"><h2>九、全部模型 ToolCall、ToolCall 事实、Step 与 SSE 事件</h2><div class="controls"><button class="control-btn" data-action="open">展开本节全部 JSON</button><button class="control-btn" data-action="close">折叠本节全部 JSON</button></div><div class="json-stack"><details class="json-card json-compressed" data-gzip="H4sIAFWsaWoC/+1Z3U/bVhR/56+I/MyDv5I4e2sJHyVJQ0IKlBZZN/YlGPyR+Nop7oSEpkqlGxNobcc0TevEOm3rKsZDtVWA+tfgrDzxL+zaSZwvJ04ohSL6gBQfn3N87+93fM7vmntDodCX+C8UIhSIEChAXlJFuEp8EaKGq3ZkwCIvidjC0nTNZmiazAtAlrG1Go6NQC8g53ptuG5RgQKxhUAQ6MISj6ACVEMSeIAQNBDh+TmZqo+o/iRJfiw7dhPlS2E1tzwRMTU2m4YFKkJFCDem9giiCHUk4QWKPDKAYSL3YaYgQChCkehw0iEyZYNHpqIA3Wpee/dwZ7cgL0Pn5r0Fz6ZAQ5eENqMbixyjoZvQM4uSAlUkaWq7ex2Ppqd7ECl5qWBq2Nplw1DXNZ0XNNFBWDVlueYhAwOqgsUrTj6KC0e5oVp4F54ZH56ZfniuXWOLVjTqu/OMoSaH2sLy0MlDnDxbt5/tHb/9xv72ub23W9n4t/J8//Roo9n+34+PvFsnj7dOj554dNTSlYFswq7p2r3diqvujo7SbTfzGApJLbSvv3MPgamqAGNOauVMs5HhbhkMq+iuPzWay94aIXz8kJkvmVC3aq+GAiSVaPNaa7leaLpaG+6Divd7u+/f/N5JRbN9ACp80/Wkgjk/KpirTUVl/bCTB3v7r2p5299tVsHFbLS4rR+6nt056czbkxD2/Ahhrzgh3+/buz9XNraPD152xa4Bcz/eTfAw1LmVfkeqTqRjnzbSr3+pvH7XB8a9/VogIc8PXTIA3TB5aeh6vxcaqQmcDznz2IXsqz8qW9v2xj7uG/cJD7r7ROWHvyubj+2nr47fvrK3frXfPWru86dHL+qr6FRzggx0adHqKd/IeHElPXlbLKfT46vseHw8NlPmIlHqMuRbqyr7EDlFMwFaKuyjpdjBtFRVWPL1CmwvWCw5fEn3NGaPSG6ovYh8yNWUoiTDhlZHJbkn04XwHa44endukjLyqyNpIclORJhwjAxmWofLUDDOSnRbdAvPi0BGDfndQi1hYKD4RUk2oM4rElKAISz1pbH9I31VdzSgTKI+ZRK+sKPVrZVUyrSU0vwySjw0lSTiFrN0mKU/H60G6QUMQwawHPNhOTJYMxCBARqKimW6vrYF7FR3RsIS3mrPEphVw7NzYFkaY2W9XHq4Mh6ezoZpmr389txaGZgEUzWcxvpBbTvoCEz5feuIDkaVO8XdkbvzW+WnF6HKzj8nO29CztYdZmD3eXqWryMJYbk8QiZKMQ4ilRmfEkfmqAjbx3hdBLi7n5G8lti+G66kYgEnibyLo4tbX922M8yX2qBWS/l93uAGo9Zt/HlTWIFGyw18q6ADXHVYDxku9yKwGuqtSfteuakuMg/Ym9adaSUTT06ncplSKTZKkhT1qU51b2MiFCQXMFUzeLgKBdNtJP3VXGAW30EQCypBP1UYO2N3+Tj9JLM0mRyZmZfnUrkbsWgO0Pm8FeNI5vr1k0gQmT7ajSHPSObx4df2yz99P2BWNp/YBzsnTw+InjMfv8e4PoFSdFRUL4ZnxDSVmCrHkw8y6XgqbuWSIj6aXMOJQQW+rj66jaEGZtg7gl8gyex09LZmJacyUyBrTawkQCkxFuFiH+ufJnVxRg5f8DmcImk6gEXaR9Ix9GAsVs96rSeL6ykHjNkZlbyhpSOiMHnXYpT5/OokR3PkZznQUZss5VTm0ML/7p8qm1odAAA=" id="json-model-calls">
+      <summary><span>模型实际返回的全部 ToolCall JSON（raw args）</span><span class="json-size">7,220 字符</span></summary>
+      <p class="json-note">search_semantic_assets 的非法 query 参数在这里可见；ToolCall 表的 args_summary 会改写无参 search 的展示输入。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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" id="json-tool-audit">
+      <summary><span>chatbi_agent_tool_call 完整记录</span><span class="json-size">11,451 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="H4sIAFWsaWoC/83Y227UMBAA0He+YrXPJbLHM/bMfgdvCEVRNrQRaVJykagQ/46z3W5ZsQbngshDV6pvcZwjz9gf3+123/3fbrcvj/vDDkHfvfzbDnV6KgIt56KuL57Ssj4W33zxpV3RDVWfdsPjY9Y++4qX4XxNlvdlU/uS/eD7tF2f1ceyvk/zKmvLz2WenarvXpt3zdDmxdj861B0Y1161W9/avjjMpesH7qxdTfkedF154H2VdYXdf6cPo6V9lzYN18KP1yX3Y8PqIeqOlcUbdu010V5W/ghjmnWj6ODAvteufcgHzQe0B4UJQSOWb8+8HNZl93DnzsYdNqML3Ca/vWCQ+SCw18XvG+aKs2zyv80Q92/faRxlllZ+Tn+3kTNWFb/jiw3l/Yyl7J+Gvr0VDn20MLu7m2efVa91YFic6lrhv6qo9i7G0Omx6L3L9T98sTxy2X5Q5H6zzeuomE81/y4OfjtIXznrqlHbYcd6dcBrpZoBhmXMCpEF0sGONHGr3GIjIkkY7ZDRvsXspPIGLISIoMObJCM1uRmovFdYaEaB7ISm1EBkaDEsjGSoAUNEmCDkWzw37DRM9igUzhJDWmEkBoioKAa88smNBENGbsQDTCthAZ1wgwKo8MT2oTYIlAADUWioQ2FJxGYhoYIg2icdUE0oOeiIVJL45O2bi003oBYNhCNRjwaURQKUDYSjd0OGmtwWkpjreEQGqcYg2gQZ+c0SEt3GuN4LTSSWEWsMRYNUSKevQ2FJxeJxm0nPPl9e1pSw6AphIYvS3Bzp4GZaHwEVUt3mtVS4dEAA2qORsMJGzFOBdBwJBreEBqNNA0NaR1E45SEM2HhmWh8LFiKRtbaaEYClvxWE2fGHZROlFY+lw+YkUgzsh0zhGSmmXEYjE4CJpwHI889PDEiLzSDZh00LwYMkEg0Gpugz4OVvY3GqNh7MbUdNT6tV5PUiKHgNY2wDV/TkLL/7/SEqNdS4xNh0MwUq0ZDIj4I+b3ptpro21S9pds9nhafRDCY1GilQAfZuLlqhBdnwmBWQjMasIw2Hg0l/uiEoUTYxN4Ia9jQRQ27iTfCyuelYTUo4VwYZ9/viSy+FTZv2fRSN56BO52HYt2IP0Ah0EuIevfpJ1CHKvK9GQAA">
+      <summary><span>chatbi_agent_step 完整记录</span><span class="json-size">6,589 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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">
+      <summary><span>Agent /runs/219/events API 完整 JSON（52 个事件）</span><span class="json-size">26,437 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details></div></section>
+<section id="terminal"><h2>十、最终持久化快照</h2><div class="json-stack"><details class="json-card json-compressed" data-gzip="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" id="json-final-state">
+      <summary><span>run.derived_state 最终完整 JSON</span><span class="json-size">90,164 字符</span></summary>
+      <p class="json-note">这是重复检索覆盖后的最终 ambiguous 状态。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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">
+      <summary><span>run.messages 最终完整 JSON</span><span class="json-size">25,317 字符</span></summary>
+      <p class="json-note">system prompt 不持久化；这里包含模型实际 ToolCall、截断 Observation、澄清恢复消息和失败消息。</p><div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card json-compressed" data-gzip="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" id="json-terminal">
+      <summary><span>chatbi_agent_run 219 完整数据库行</span><span class="json-size">123,676 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">正在加载完整 JSON…</pre>
+    </details>
+<details class="json-card">
+      <summary><span>chat_record 7514 完整数据库行</span><span class="json-size">776 字符</span></summary>
+      <div class="json-toolbar"><button type="button" class="copy-json">复制 JSON</button></div>
+      <pre class="json">{
+  "id": 7514,
+  "chat_id": 6907,
+  "create_time": "2026-07-29T14:45:59.174831",
+  "finish_time": "2026-07-29T14:47:19.979571",
+  "create_by": 1,
+  "datasource": 13,
+  "engine_type": "MySQL",
+  "question": "今天店铺的客户数",
+  "sql_answer": null,
+  "sql": null,
+  "sql_exec_result": null,
+  "data": null,
+  "chart_answer": null,
+  "chart": null,
+  "finish": true,
+  "error": "预算已耗尽",
+  "analysis": null,
+  "predict": null,
+  "predict_data": null,
+  "ai_modal_id": null,
+  "first_chat": false,
+  "recommended_question_answer": null,
+  "recommended_question": null,
+  "datasource_select_answer": null,
+  "analysis_record_id": null,
+  "predict_record_id": null,
+  "regenerate_record_id": null,
+  "status": "failed",
+  "dataset_id": 243,
+  "execution_type": "agent",
+  "run_id": "219"
+}</pre>
+    </details></div></section>
+<section><h2>十一、实现位置</h2><ul class="source-list"><li><code>backend/apps/chatbi/api/interactions.py:26</code>：start/resume SSE 入口。</li><li><code>backend/apps/chatbi/orchestration/agent/service.py:118</code>：创建记录和 Run。</li><li><code>backend/apps/chatbi/orchestration/agent/preparation.py:65</code>：首次理解与恢复。</li><li><code>backend/apps/chatbi/orchestration/agent/preparation.py:183</code>：Semantic 澄清收敛。</li><li><code>backend/apps/chatbi/orchestration/agent/tool_execution.py:86</code>：预算、分批、熔断、执行与持久化。</li><li><code>backend/apps/chatbi/orchestration/agent/tool_execution.py:707</code>：search 参数摘要投影。</li><li><code>backend/apps/chatbi/orchestration/agent/tool_results.py:145</code>：Semantic ToolResult 状态补丁。</li><li><code>backend/apps/chatbi/orchestration/agent/tools/base.py:79</code>：RetrievalRequest 构造入口。</li><li><code>backend/apps/tool/tools/semantic.py:158</code>：search_semantic_assets。</li><li><code>backend/apps/tool/tools/semantic.py:358</code>：compile_semantic_sql。</li><li><code>backend/apps/retrieval/query/semantic_binding.py:109</code>：召回、决策、Schema、时间绑定、payload。</li><li><code>backend/apps/retrieval/query/policy.py:616</code>：默认时间维度绑定。</li><li><code>backend/apps/retrieval/query/decision.py:24</code>：用户澄清后重新计算决策。</li><li><code>backend/apps/retrieval/projection/payload.py:132</code>：Bundle → payload。</li><li><code>backend/apps/retrieval/projection/payload.py:242</code>：澄清决策 → payload。</li></ul></section>
+<footer>基于 2026-07-29 当前工作区代码、PostgreSQL Run 219 / Record 7514 生成；未修改业务代码。</footer>
+</main>
+<script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";mermaid.initialize({startOnLoad:true,securityLevel:"strict",theme:"base",themeVariables:{fontFamily:"-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif",primaryColor:"#eaf2ff",primaryBorderColor:"#7298dc",primaryTextColor:"#182235",actorBkg:"#fff",actorBorder:"#71849e",signalColor:"#405978",signalTextColor:"#182235",noteBkgColor:"#fff6df",noteBorderColor:"#d39435",noteTextColor:"#54350a",activationBkgColor:"#dbe8ff",activationBorderColor:"#4d78c8"},sequence:{diagramMarginX:32,diagramMarginY:18,actorMargin:42,width:170,height:58,boxMargin:10,messageMargin:20,noteMargin:10,useMaxWidth:false,wrap:true}});</script>
+<script>
+async function loadJson(card){if(!card.dataset.gzip||card.dataset.loaded==='1')return;const bytes=Uint8Array.from(atob(card.dataset.gzip),c=>c.charCodeAt(0));const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));card.querySelector('pre.json').textContent=await new Response(stream).text();card.dataset.loaded='1';card.removeAttribute('data-gzip')}
+document.querySelectorAll('details.json-compressed').forEach(card=>{card.addEventListener('toggle',()=>{if(card.open)loadJson(card)});if(card.open)loadJson(card)});
+document.querySelectorAll('.copy-json').forEach(btn=>btn.addEventListener('click',async()=>{const card=btn.closest('.json-card');await loadJson(card);await navigator.clipboard.writeText(card.querySelector('pre.json').textContent);const old=btn.textContent;btn.textContent='已复制';setTimeout(()=>btn.textContent=old,1200)}));
+document.querySelectorAll('[data-action]').forEach(btn=>btn.addEventListener('click',()=>{const section=btn.closest('section');section.querySelectorAll('details.json-card').forEach(d=>d.open=btn.dataset.action==='open')}));
+</script>
+</body></html>

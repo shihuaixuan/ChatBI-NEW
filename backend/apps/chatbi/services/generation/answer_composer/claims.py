@@ -91,6 +91,11 @@ def validate_claim_bindings(
                     f"claim 数值与结果集字段不一致：{claim.field}。",
                     claim_index=index,
                 )
+            _validate_claim_text_numbers(
+                claim.text,
+                row,
+                claim_index=index,
+            )
             normalized.append(
                 claim.model_copy(
                     update={"value": actual},
@@ -101,6 +106,61 @@ def validate_claim_bindings(
         # 无数字的解释性 claim 不强制虚构定位，但仍保留结构化形态。
         normalized.append(claim.model_dump(mode="json", exclude_none=True))
     return normalized
+
+
+def validate_answer_numeric_coverage(
+    answer: str,
+    claims: list[dict[str, Any]],
+) -> None:
+    """确保回答中的每个数字都出现在已完成结果集绑定的 claim 中。"""
+
+    answer_numbers = _number_tokens(answer)
+    if not answer_numbers:
+        return
+    claim_numbers = [
+        number
+        for claim in claims
+        for number in _number_tokens(str(claim.get("text") or ""))
+    ]
+    uncovered = [
+        raw
+        for raw, number in answer_numbers
+        if not any(_same_number(number, candidate) for _, candidate in claim_numbers)
+    ]
+    if uncovered:
+        raise ClaimBindingError(
+            "ANSWER_NUMERIC_CLAIM_INCOMPLETE",
+            "回答包含未绑定到结果集的数字：" + ", ".join(uncovered),
+        )
+
+
+def _validate_claim_text_numbers(
+    text: str,
+    row: dict[str, Any],
+    *,
+    claim_index: int,
+) -> None:
+    """claim 文本中的数字只能来自它引用的真实结果行。"""
+
+    text_numbers = _number_tokens(text)
+    if not text_numbers:
+        return
+    row_numbers = [
+        number
+        for value in row.values()
+        for _, number in _number_tokens(str(value))
+    ]
+    unsupported = [
+        raw
+        for raw, number in text_numbers
+        if not any(_same_number(number, candidate) for candidate in row_numbers)
+    ]
+    if unsupported:
+        raise ClaimBindingError(
+            "CLAIM_TEXT_VALUE_MISMATCH",
+            "claim 文本包含结果行中不存在的数字：" + ", ".join(unsupported),
+            claim_index=claim_index,
+        )
 
 
 def _result_sets(
@@ -139,6 +199,20 @@ def _contains_number(text: str) -> bool:
     return bool(_NUMBER_PATTERN.search(text))
 
 
+def _number_tokens(text: str) -> list[tuple[str, float]]:
+    result: list[tuple[str, float]] = []
+    for match in _NUMBER_PATTERN.finditer(text):
+        raw = match.group(0)
+        value = _number(raw)
+        if value is not None:
+            result.append((raw, value))
+    return result
+
+
+def _same_number(left: float, right: float) -> bool:
+    return math.isclose(left, right, rel_tol=1e-9, abs_tol=1e-9)
+
+
 def _same_value(left: Any, right: Any) -> bool:
     left_number = _number(left)
     right_number = _number(right)
@@ -166,4 +240,9 @@ def _number(value: Any) -> float | None:
     return None
 
 
-__all__ = ["Claim", "ClaimBindingError", "validate_claim_bindings"]
+__all__ = [
+    "Claim",
+    "ClaimBindingError",
+    "validate_answer_numeric_coverage",
+    "validate_claim_bindings",
+]

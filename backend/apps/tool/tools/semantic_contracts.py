@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -175,6 +176,7 @@ def project_semantic_compile_plan(
         if comparison_method in {"yoy", "mom", "custom"}
         else None
     )
+    having = _derive_having(intent_payload, metrics)
     return SemanticCompilePlan(
         metric_asset_ids=metric_asset_ids,
         dimension_asset_ids=dimension_asset_ids,
@@ -191,9 +193,7 @@ def project_semantic_compile_plan(
         limit=_compile_limit(query_shape),
         intent_type=str(intent_payload.get("intent_type") or "metric_query"),
         query_shape=query_shape,
-        having=tuple(
-            item for item in query_shape.get("having") or [] if isinstance(item, dict)
-        ),
+        having=tuple(having),
         time_offset=time_offset,
     )
 
@@ -264,6 +264,7 @@ def project_semantic_query_plan(
             item.model_dump(mode="json") for item in legacy_compile_plan.order_by
         ),
         limit=legacy_compile_plan.limit,
+        having=legacy_compile_plan.having,
     )
     plan = SemanticQueryPlanningService().plan(schema, request)
     report = SemanticQueryValidationService().validate(plan, schema)
@@ -278,6 +279,7 @@ def project_semantic_query_plans(
 ) -> tuple[tuple[SemanticQueryPlan, SemanticPlanValidationReport], ...]:
     """按单查询或 CROSS_MODEL 子计划分别生成严格查询计划。"""
 
+    raw_intent = intent if isinstance(intent, dict) else {}
     if subplans:
         bindings: list[dict[str, Any]] = []
         for item in subplans:
@@ -286,8 +288,34 @@ def project_semantic_query_plans(
             bindings.append(item["slots"])
     else:
         bindings = [slot_bindings]
+        if (
+            str(raw_intent.get("intent_type") or "") in {"share_analysis", "composition"}
+            and slot_bindings.get("group_dimensions")
+        ):
+            # 占比需要同一指标在分组粒度和总计粒度各查询一次，
+            # 严格计划必须为两种签名分别生成可验证的查询计划。
+            total_bindings = deepcopy(slot_bindings)
+            total_bindings["group_dimensions"] = []
+            bindings.append(total_bindings)
+    time_ranges = [
+        item
+        for item in raw_intent.get("time_ranges") or []
+        if isinstance(item, dict) and isinstance(item.get("normalized"), dict)
+    ]
+    intents = [raw_intent]
+    if len(time_ranges) > 1:
+        intents = [
+            {
+                **raw_intent,
+                "time_range": time_range,
+                "time_ranges": [time_range],
+            }
+            for time_range in time_ranges
+        ]
     return tuple(
-        project_semantic_query_plan(schema, item, intent) for item in bindings
+        project_semantic_query_plan(schema, binding, query_intent)
+        for binding in bindings
+        for query_intent in intents
     )
 
 
@@ -360,6 +388,56 @@ def _compile_filters(items: list[Any]) -> tuple[SemanticCompileFilter, ...]:
             )
         )
     return tuple(result)
+
+
+def _derive_having(intent: dict[str, Any], metrics: list[Any]) -> list[dict[str, Any]]:
+    """把已识别的指标阈值转换为受控 HAVING 条件。"""
+
+    query_shape = intent.get("query_shape")
+    explicit = query_shape.get("having") if isinstance(query_shape, dict) else None
+    if isinstance(explicit, list) and explicit:
+        return [item for item in explicit if isinstance(item, dict)]
+    mentions = intent.get("filter_mentions")
+    if not isinstance(mentions, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for mention in mentions:
+        if not isinstance(mention, dict) or mention.get("value") in (None, ""):
+            continue
+        asset_type = str(mention.get("asset_type") or "").upper()
+        name = str(mention.get("name") or mention.get("display_name") or "").strip()
+        metric = next(
+            (
+                item
+                for item in metrics
+                if isinstance(item, dict)
+                and (
+                    asset_type == "METRIC"
+                    or mention.get("asset_id") == item.get("asset_id")
+                    or name
+                    in {
+                        str(item.get("name") or "").strip(),
+                        str(item.get("display_name") or "").strip(),
+                        str(item.get("biz_name") or "").strip(),
+                    }
+                )
+            ),
+            None,
+        )
+        if not isinstance(metric, dict):
+            continue
+        operator = str(mention.get("operator") or "=").lower()
+        if operator not in {"=", "!=", ">", ">=", "<", "<="}:
+            continue
+        result.append(
+            {
+                "asset_type": "METRIC",
+                "asset_id": metric.get("asset_id"),
+                "operator": operator,
+                "value": mention.get("value"),
+            }
+        )
+    return result
 
 
 __all__ = [

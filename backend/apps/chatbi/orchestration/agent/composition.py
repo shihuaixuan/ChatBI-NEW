@@ -283,6 +283,9 @@ def build_agent_loop(
                 compute_enabled=resolved_config.compute_enabled,
                 answer_composer=resolved_answer_composer,
                 metrics=metrics_recorder,
+                planner_model_service=(
+                    model_service if finalization_service is None else None
+                ),
             )
         ),
     )

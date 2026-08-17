@@ -310,6 +310,18 @@ class RecordingSemanticRetrievalService:
         )
 
 
+class StrictSchemaSnapshot:
+    """严格模式测试所需的最小 Schema 快照。"""
+
+    query_config = {"semanticEnforcement": "STRICT"}
+
+    def build_dataset_schema(self, workspace_id, dataset_id):
+        return self
+
+    def model_dump(self, mode="json"):
+        return {"query_config": self.query_config}
+
+
 class FailingSemanticRetrievalService:
     def retrieve(self, request, *, timeout_ms=None):
         raise RetrievalQueryError(
@@ -1496,6 +1508,28 @@ def test_search_maps_dimension_ambiguity_for_agent_flow():
 
     assert _succeeded(output)
     assert _data(output)["package"]["status"] == "dimension_ambiguous"
+
+
+def test_search_does_not_build_strict_plan_before_ambiguous_binding_is_clarified():
+    package = {
+        "status": "metric_ambiguous",
+        "dataset_id": 3,
+        "tables": ["dws_sales"],
+        "decision": {"status": "ambiguous"},
+        "ambiguities": [{"type": "metric"}],
+    }
+    output = SearchSemanticAssetsTool(
+        RecordingSemanticRetrievalService(package),
+        RecordingQueryService(),
+        schema_provider=StrictSchemaSnapshot(),
+    ).execute(_ctx(dataset_id=3), SearchSemanticAssetsArgs())
+
+    assert _succeeded(output)
+    assert output.data is not None
+    assert output.data.scope.semantic_enforcement == "STRICT"
+    assert output.data.scope.decision_status == RetrievalDecisionStatus.AMBIGUOUS
+    # 歧义结果必须保留给上层澄清，不能提前生成空指标的严格查询计划。
+    assert output.data.scope.query_plan is None
 
 
 def test_search_reports_missing_time_dimension_configuration():

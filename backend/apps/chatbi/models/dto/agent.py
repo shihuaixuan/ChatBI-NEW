@@ -59,6 +59,7 @@ class AgentConfig(BaseModel):
     summary_max_chars: int = 4000
     history_rounds: int = 3
     context_fold_chars: int = 30000
+    # 直接构造配置用于 legacy 适配与单测；生产入口会显式注入 settings 中的默认模式。
     execution_modes: tuple[str, ...] = ("react_legacy",)
     plan_max_query_tasks: int = 5
     compute_enabled: bool = True

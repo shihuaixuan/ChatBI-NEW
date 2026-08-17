@@ -193,9 +193,17 @@ def bundle_to_semantic_payload(
         intent,
         value_resolutions=_value_resolutions(request, bundle),
     )
+    metric_models = {
+        _positive_int(item.get("model_id"))
+        for item in selected_assets.get("metrics", [])
+        if _positive_int(item.get("model_id")) is not None
+    }
+    # 即使维度槽位仍有歧义，只要指标已明确跨模型，也必须保留独立子查询，
+    # 不能把两个不同粒度的指标合并成一个不可执行计划。
     multi_query_plans = (
         _cross_model_query_plans(selected_assets, intent, schema)
         if bundle.decision.status == RetrievalDecisionStatus.CROSS_MODEL
+        or len(metric_models) > 1
         else []
     )
     public_candidates = _public_candidate_groups(candidate_groups)
@@ -831,6 +839,7 @@ def _cross_model_query_plans(
             RetrievalResourceType.DIMENSION,
             model_id,
         )
+        dimensions = _add_intent_dimensions_for_model(dimensions, intent, schema, model_id)
         values = _assets_for_model(
             selected_assets.get("values", []),
             schema.dimension_values,
@@ -862,6 +871,48 @@ def _cross_model_query_plans(
             }
         )
     return plans
+
+
+def _add_intent_dimensions_for_model(
+    dimensions: list[dict[str, Any]],
+    intent: dict[str, Any],
+    schema: DatasetSchema,
+    model_id: int,
+) -> list[dict[str, Any]]:
+    """按模型补齐明确提及但因跨模型歧义未被全局选中的维度。"""
+
+    result = list(dimensions)
+    existing_ids = {int(item.get("asset_id")) for item in result if item.get("asset_id") is not None}
+    for slot in intent.get("dimension_slots") or []:
+        if not isinstance(slot, dict):
+            continue
+        slot_name = str(slot.get("name") or "").strip()
+        if not slot_name:
+            continue
+        normalized_slot_name = _normalize_text(slot_name)
+        candidate = next(
+            (
+                item
+                for item in schema.dimensions
+                if item.model == model_id
+                and normalized_slot_name in _element_names(item)
+            ),
+            None,
+        )
+        if candidate is None or candidate.id in existing_ids:
+            continue
+        result.append(
+            _asset_ref_to_candidate(
+                AssetReference(
+                    asset_type=RetrievalResourceType.DIMENSION,
+                    asset_id=candidate.id,
+                    model_id=model_id,
+                ),
+                {(RetrievalResourceType.DIMENSION.value, candidate.id): candidate},
+            )
+        )
+        existing_ids.add(candidate.id)
+    return result
 
 
 def _assets_for_model(

@@ -44,7 +44,11 @@ def _compile_compare(
     left_id, right_id = task.inputs[:2]
     left_schema = schemas[left_id]
     right_schema = schemas[right_id]
-    keys = _require_columns(task.join_on, left_schema, right_schema, "join_on")
+    keys = (
+        _require_columns(task.join_on, left_schema, right_schema, "join_on")
+        if task.join_on
+        else ()
+    )
     metrics = _metrics(task, left_schema, right_schema, keys)
     select_parts = [
         f"COALESCE(l.{_quote(key)}, r.{_quote(key)}) AS {_quote(key)}"
@@ -71,7 +75,7 @@ def _compile_compare(
             )
     join = " AND ".join(
         f"l.{_quote(key)} IS NOT DISTINCT FROM r.{_quote(key)}" for key in keys
-    )
+    ) or "TRUE"
     return (
         "SELECT "
         + ", ".join(select_parts)

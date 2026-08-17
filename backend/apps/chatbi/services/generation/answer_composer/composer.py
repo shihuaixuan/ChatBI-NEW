@@ -23,6 +23,7 @@ from apps.chatbi.services.generation.answer_composer.chart_spec import (
 from apps.chatbi.services.generation.answer_composer.claims import (
     Claim,
     ClaimBindingError,
+    validate_answer_numeric_coverage,
     validate_claim_bindings,
 )
 from apps.chatbi.services.generation.answer_composer.prompts import (
@@ -104,14 +105,7 @@ class AnswerComposer:
                     rows=data.rows,
                 )
                 if self._citation_enforced:
-                    # 对含数字的 answer，必须至少有一个数字 claim；否则不能证明文本。
-                    if _contains_number(output.answer) and not any(
-                        claim.get("value") is not None for claim in claims
-                    ):
-                        raise ClaimBindingError(
-                            "ANSWER_NUMERIC_CLAIM_MISSING",
-                            "回答包含数字但没有可验证的数字 claim。",
-                        )
+                    validate_answer_numeric_coverage(output.answer, claims)
                 return AnswerComposerResult(
                     answer=output.answer.strip(),
                     chart=chart_spec.model_dump(mode="json", exclude_none=True),
@@ -200,7 +194,7 @@ class AnswerComposer:
 def _build_context(data: AnswerComposerInput, card: CaliberCard) -> dict[str, Any]:
     execution = data.execution
     rows = [row for row in data.rows if isinstance(row, dict)]
-    return {
+    context = {
         "question": data.question,
         "mode": data.mode,
         "partial": data.partial,
@@ -217,6 +211,40 @@ def _build_context(data: AnswerComposerInput, card: CaliberCard) -> dict[str, An
         ],
         "caliber_card": card.model_dump(mode="json", exclude_none=True),
     }
+    result_sets = _result_set_context(execution)
+    if result_sets:
+        context["result_sets"] = result_sets
+    return context
+
+
+def _result_set_context(execution: dict[str, Any]) -> list[dict[str, Any]]:
+    """把 PLAN 的全部结果集压缩为可引用摘要，避免回答阶段只消费主结果。"""
+
+    raw_sets = execution.get("result_sets")
+    if not isinstance(raw_sets, dict):
+        return []
+    result = []
+    for result_set_id, payload in raw_sets.items():
+        if not isinstance(payload, dict):
+            continue
+        rows = [
+            row
+            for row in payload.get("rows") or payload.get("sample_rows") or []
+            if isinstance(row, dict)
+        ]
+        result.append(
+            {
+                "result_set_id": str(result_set_id),
+                "fields": payload.get("fields")
+                or list(dict.fromkeys(str(key) for row in rows for key in row)),
+                "row_count": payload.get("row_count", len(rows)),
+                "key_rows": [
+                    {"row_index": index, "values": row}
+                    for index, row in _key_rows(rows)
+                ],
+            }
+        )
+    return result
 
 
 def _key_rows(rows: list[dict[str, Any]], limit: int = 20) -> list[tuple[int, dict[str, Any]]]:

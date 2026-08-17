@@ -29,4 +29,6 @@ def test_sql_example_routes_keep_legacy_paths():
         "/system/data-training/template",
         "/system/data-training/uploadExcel",
         "/system/data-training/{id}/enable/{enabled}",
+        "/system/data-training/{id}/verify",
+        "/system/data-training/{id}/deprecate",
     }

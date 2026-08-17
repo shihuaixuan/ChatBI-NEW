@@ -322,7 +322,12 @@ class SearchSemanticAssetsTool(
                 ctx.workspace_id,
                 ctx.dataset_id,
             )
-        if scope.semantic_enforcement == "STRICT":
+        # 语义决策尚未完成时只能保留候选和歧义快照，不能提前投影严格计划。
+        # 否则会把“需要澄清”误报成“严格计划生成失败”，上层也就无法进入澄清流程。
+        if (
+            scope.semantic_enforcement == "STRICT"
+            and is_compilation_decision_executable(retrieval.bundle.decision.status)
+        ):
             if schema is None:
                 return ToolResult.rejected(
                     "严格语义数据集缺少运行时 Schema，禁止进入 Agent 编译链路。",

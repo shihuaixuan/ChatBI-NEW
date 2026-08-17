@@ -51,6 +51,9 @@ export class ChatRecord {
   execution_type?: ChatExecutionType
   execution_events?: any
   clarification?: any
+  claims?: Array<Record<string, any>>
+  caliber_card?: Record<string, any>
+  chart_spec?: Record<string, any>
 
   constructor()
   constructor(

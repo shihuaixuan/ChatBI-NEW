@@ -184,7 +184,7 @@ INTENT_SYSTEM_PROMPT = "\n\n".join(
         """
 Agent 输出约束：
 - 不输出 dimension_mentions、dimension_slots、filter_mentions 和 required_slot_types；维度与筛选由并行的独立维度任务识别，必需槽位由服务端派生。
-- metric_mentions 只提供后续语义检索所需的指标候选，不要求本阶段确定完整指标口径。
+- metric_mentions 只提供后续语义检索所需的指标候选；不要求本阶段确定完整指标口径，但必须保留用户原文中完整、连续的指标短语及其业务限定词，不得缩短。
 - query_shape 必须完整输出全部字段，只表示用户问题中的查询组织语义，不得绑定资产或生成 SQL。
 - detail_query 的 select_mode=detail；ranking_analysis 如果是对明细行排序也可以是 detail，其他情况为 aggregate。
 - 只有用户表达分组、趋势分桶、排名、比较或占比时，needs_group_by 才能为 true。
@@ -1766,6 +1766,7 @@ def _normalize_unified_payload(
 ) -> dict[str, Any]:
     """只做统一输出的字段规范化，不从原问题补造缺失语义。"""
 
+    payload = _normalize_comparison_payload(payload)
     metrics = [
         str(item).strip()
         for item in payload.get("metric_mentions") or []
@@ -1811,6 +1812,111 @@ def _normalize_unified_payload(
         normalized["query_shape"] = query_shape
 
     normalized.pop("repair_feedback", None)
+    return normalized
+
+
+def _normalize_comparison_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """兼容旧模型的比较字段，并把趋势环比转换为查询形状。"""
+
+    normalized = dict(payload)
+    query_shape = dict(normalized.get("query_shape") or {})
+    comparison_type_aliases = {
+        "year_over_year": "yoy",
+        "year-over-year": "yoy",
+        "同比": "yoy",
+        "month_over_month": "mom",
+        "month-over-month": "mom",
+        "环比": "mom",
+        "difference": "custom",
+        "growth": "custom",
+        "percent_change": "custom",
+        "percentage_change": "custom",
+        "change_rate": "custom",
+    }
+    shape_method = str(query_shape.get("comparison_type") or "").strip().lower()
+    if shape_method in comparison_type_aliases:
+        query_shape["comparison_type"] = comparison_type_aliases[shape_method]
+    comparison = normalized.get("comparison")
+    if not isinstance(comparison, dict):
+        if normalized.get("intent_type") == "comparison_analysis":
+            ranges = [
+                item
+                for item in normalized.get("time_ranges") or []
+                if isinstance(item, dict) and item.get("raw")
+            ]
+            if len(ranges) >= 2:
+                # 模型常把当前期放在前面；比较规范以最后一个时段为基期。
+                comparison = {
+                    "base": ranges[-1]["raw"],
+                    "compare": [item["raw"] for item in ranges[:-1]],
+                    # 用户已明确给出多个时段时，默认是自定义时段比较，
+                    # 不应因为模型遗漏 method 而要求用户重复说明。
+                    "method": query_shape.get("comparison_type") or "custom",
+                }
+            else:
+                normalized["query_shape"] = query_shape
+                return normalized
+        else:
+            normalized["query_shape"] = query_shape
+            return normalized
+    comparison = dict(comparison)
+    if "base" not in comparison and comparison.get("base_time") is not None:
+        comparison["base"] = comparison["base_time"]
+    if "compare" not in comparison and comparison.get("compare_time") is not None:
+        comparison["compare"] = [comparison["compare_time"]]
+    if "compare" not in comparison and comparison.get("target") is not None:
+        comparison["compare"] = [comparison["target"]]
+    if (
+        ("compare" not in comparison or not comparison.get("compare"))
+        and comparison.get("base") is not None
+    ):
+        ranges = [
+            item.get("raw")
+            for item in normalized.get("time_ranges") or []
+            if isinstance(item, dict) and item.get("raw")
+        ]
+        time_candidates = [item for item in ranges if item != comparison["base"]]
+        if time_candidates:
+            comparison["compare"] = time_candidates
+        values = []
+        for slot in normalized.get("dimension_slots") or []:
+            if not isinstance(slot, dict) or not isinstance(slot.get("value"), list):
+                continue
+            values.extend(item for item in slot["value"] if item not in (None, ""))
+        candidates = [item for item in values if item != comparison["base"]]
+        if candidates and not comparison.get("compare"):
+            comparison["compare"] = candidates
+    method = comparison.get("method") or comparison.get("type") or query_shape.get("comparison_type")
+    method = comparison_type_aliases.get(str(method or "").strip().lower(), method)
+    if method in {"yoy", "mom", "custom"}:
+        comparison["method"] = method
+    comparison.pop("type", None)
+    comparison.pop("base_time", None)
+    comparison.pop("compare_time", None)
+    # target 是旧输出中的冗余日期字段；base/compare 才是权威时段字段。
+    comparison.pop("target", None)
+    if isinstance(comparison.get("compare"), str):
+        comparison["compare"] = [comparison["compare"]]
+    if method in {"yoy", "mom", "custom"}:
+        query_shape["comparison_type"] = method
+    if (
+        normalized.get("intent_type") == "metric_query"
+        and query_shape.get("time_grain") is not None
+        and not query_shape.get("needs_group_by")
+    ):
+        # “2026年6月”是筛选时段而不是按月分组。只有声明分组时才保留粒度。
+        query_shape["time_grain"] = None
+    if (
+        normalized.get("intent_type") == "trend_analysis"
+        and method in {"yoy", "mom"}
+        and not {"base", "compare"} <= comparison.keys()
+    ):
+        query_shape["comparison_type"] = method
+        normalized["query_shape"] = query_shape
+        normalized["comparison"] = None
+    else:
+        normalized["comparison"] = comparison
+    normalized["query_shape"] = query_shape
     return normalized
 
 
@@ -2028,7 +2134,7 @@ def _stabilize_intent(
                 temporal_context=temporal_context,
             )
         )
-        if use_legacy_time_interpretation
+        if use_legacy_time_interpretation or item.normalized is None
         else item
         for item in source_time_ranges
     ]
@@ -2082,6 +2188,22 @@ def _stabilize_intent(
         require("time_dimension")
 
     query_shape = intent.query_shape
+    has_multi_value_comparison = (
+        intent.intent_type in {"comparison_analysis", "share_analysis"}
+        and any(
+            slot.role == "filter"
+            and isinstance(slot.value, list)
+            and len(slot.value) >= 2
+            for slot in dimension_slots
+        )
+    )
+    has_multi_period_comparison = (
+        intent.intent_type == "comparison_analysis" and len(time_ranges) >= 2
+    )
+    if has_multi_value_comparison or (
+        has_multi_period_comparison and query_shape.time_grain is not None
+    ):
+        query_shape = query_shape.model_copy(update={"needs_group_by": True})
     if query_shape.needs_order_by:
         require("order")
     if query_shape.limit is not None:

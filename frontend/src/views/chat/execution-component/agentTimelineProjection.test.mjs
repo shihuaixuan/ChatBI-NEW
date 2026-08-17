@@ -15,6 +15,11 @@ const CONTRACT = {
   'tool.completed': { kind: 'tool', phase: 'end' },
   'tool.failed': { kind: 'tool', phase: 'error' },
   'workflow.step': { kind: 'tool', phase: 'start' },
+  'plan.created': { kind: 'plan', phase: 'start' },
+  'plan.updated': { kind: 'plan', phase: 'snapshot' },
+  'task.started': { kind: 'task', phase: 'start' },
+  'task.finished': { kind: 'task', phase: 'end' },
+  'compute.finished': { kind: 'compute', phase: 'end' },
   'clarification.required': { kind: 'interaction', phase: 'start' },
   'clarification.accepted': { kind: 'interaction', phase: 'end' },
   'run.failed': { kind: 'run', phase: 'error' },
@@ -32,12 +37,55 @@ test('结构化事件契约产生回答投影', () => {
     kind: 'text',
     phase: 'end',
     domain: 'answer.completed',
-    content: { record_id: 7, content: '完成' },
+    content: {
+      record_id: 7,
+      content: '完成',
+      claims: [{ text: '销售额为 120', value: 120 }],
+      caliber_card: { metrics: [{ name: '销售额' }] },
+      chart_spec: { type: 'kpi' },
+    },
   })
 
   assert.equal(currentRecord.sql_answer, '完成')
   assert.equal(currentRecord.chart_answer, '完成')
   assert.equal(currentRecord.execution_events[0].domain, 'answer.completed')
+  assert.equal(currentRecord.claims[0].value, 120)
+  assert.equal(currentRecord.caliber_card.metrics[0].name, '销售额')
+  assert.equal(currentRecord.chart_spec.type, 'kpi')
+})
+
+test('PLAN 计划、查询和计算事件进入时间线', () => {
+  const flow = buildAgentFlow(undefined, [
+    agentEvent('plan.created', { sequence: 1, plan_id: 'plan-1', status: 'DRAFT' }),
+    agentEvent('task.started', { sequence: 2, task_id: 'q1', status: 'running' }),
+    agentEvent('task.finished', {
+      sequence: 3,
+      task_id: 'q1',
+      status: 'succeeded',
+      result_set_id: 'result:plan-1:q1',
+    }),
+    agentEvent('compute.finished', {
+      sequence: 4,
+      task_id: 'c1',
+      status: 'succeeded',
+      result_set_id: 'result:plan-1:c1',
+    }),
+    agentEvent('plan.updated', {
+      sequence: 5,
+      plan_id: 'plan-1',
+      status: 'PROVEN',
+    }),
+  ])
+
+  assert.deepEqual(
+    flow.steps.map((step) => [step.kind, step.status]),
+    [
+      ['plan', 'success'],
+      ['task', 'success'],
+      ['compute', 'success'],
+    ]
+  )
+  assert.equal(flow.steps[1].result.result_set_id, 'result:plan-1:q1')
 })
 
 test('未知 domain 不影响事件消费', () => {

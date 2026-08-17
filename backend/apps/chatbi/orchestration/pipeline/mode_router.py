@@ -21,9 +21,13 @@ class ModeRoutingError(ValueError):
 class ModeRouteInput:
     """路由所需的已确认问题形态。"""
 
-    enabled_modes: tuple[str, ...] = (AgentExecutionMode.REACT_LEGACY.value,)
+    enabled_modes: tuple[str, ...] = (
+        AgentExecutionMode.FAST.value,
+        AgentExecutionMode.PLAN.value,
+    )
     category: str = "data_query"
     query_shape: dict[str, Any] = field(default_factory=dict)
+    intent_type: str | None = None
     requested_mode: str | None = None
     multi_query: bool = False
     cross_model: bool = False
@@ -42,8 +46,14 @@ class ModeRouter:
             return AgentExecutionMode(requested)
 
         if request.category != "data_query":
+            # 非数据类仍由现有直接回答流程收口，不属于 FAST/PLAN 数据执行模式。
             return AgentExecutionMode.REACT_LEGACY
         if request.cross_model or request.multi_query:
+            return self._first_enabled(
+                enabled,
+                (AgentExecutionMode.PLAN.value, AgentExecutionMode.REACT_LEGACY.value),
+            )
+        if request.intent_type in {"share_analysis", "composition"}:
             return self._first_enabled(
                 enabled,
                 (AgentExecutionMode.PLAN.value, AgentExecutionMode.REACT_LEGACY.value),
@@ -55,9 +65,15 @@ class ModeRouter:
             )
         if _is_fast_shape(request.query_shape) and AgentExecutionMode.FAST.value in enabled:
             return AgentExecutionMode.FAST
-        if AgentExecutionMode.PLAN.value in enabled and _is_complex_shape(request.query_shape):
-            return AgentExecutionMode.PLAN
-        return AgentExecutionMode.REACT_LEGACY
+        if _is_complex_shape(request.query_shape):
+            return self._first_enabled(
+                enabled,
+                (AgentExecutionMode.PLAN.value, AgentExecutionMode.REACT_LEGACY.value),
+            )
+        return self._first_enabled(
+            enabled,
+            (AgentExecutionMode.REACT_LEGACY.value,),
+        )
 
     @staticmethod
     def assess_confidence(signals: ConfidenceSignals) -> ConfidenceAssessment:
@@ -70,7 +86,7 @@ class ModeRouter:
         for candidate in candidates:
             if candidate in enabled:
                 return AgentExecutionMode(candidate)
-        return AgentExecutionMode.REACT_LEGACY
+        raise ModeRoutingError("EXECUTION_MODE_NOT_AVAILABLE")
 
 
 def _normalize_modes(modes: tuple[str, ...] | list[str] | str) -> set[str]:
@@ -104,6 +120,8 @@ def _is_fast_shape(shape: dict[str, Any]) -> bool:
             "needs_compute",
             "needs_attribution",
             "research",
+            "share_analysis",
+            "composition",
         )
     )
 

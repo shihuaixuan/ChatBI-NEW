@@ -94,11 +94,6 @@ class FastPipeline:
         plan_id = f"fast-{run_id}"
 
         # bind：复用已确认的问题理解，通过现有语义检索服务产生可信范围。
-        yield self._events.plan_created(
-            run_id,
-            {"record_id": state.record.id, "run_id": run_id, "plan_id": plan_id, "status": "DRAFT"},
-        )
-        self._session.commit()
         if state.context.semantic_asset_scope is None:
             try:
                 self._call_tool(state, "search_semantic_assets", {})
@@ -111,6 +106,14 @@ class FastPipeline:
         if self._is_ambiguous(state):
             yield from self._suspend_semantic_clarification(state, plan_id)
             return
+
+        # 只有语义绑定完成且可以进入执行计划时，才发布 plan-created 事件。
+        # 澄清分支不再留下一个实际上不存在的 DRAFT AnalysisPlan。
+        yield self._events.plan_created(
+            run_id,
+            {"record_id": state.record.id, "run_id": run_id, "plan_id": plan_id, "status": "DRAFT"},
+        )
+        self._session.commit()
         query_task = self._build_query_task(state, plan_id)
         draft_plan = AnalysisPlan(
             id=plan_id,

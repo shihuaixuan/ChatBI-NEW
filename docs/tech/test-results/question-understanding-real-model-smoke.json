@@ -1,0 +1,377 @@
+{
+  "test_type": "real_model_question_understanding_evaluation",
+  "generated_at": "2026-08-12T16:35:05.685412+08:00",
+  "environment": {
+    "tenant_id": 1,
+    "dataset_id": 3,
+    "datasource_id": null,
+    "fixed_reference_at": "2026-08-12T10:00:00+08:00"
+  },
+  "summary": {
+    "case_count": 1,
+    "successful_case_count": 1,
+    "passed_checks": 10,
+    "total_checks": 10,
+    "field_accuracy": 1.0
+  },
+  "cases": [
+    {
+      "case_id": "metric_filter",
+      "question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+      "purpose": "验证指标、相对时间和单值筛选维度。",
+      "expected": {
+        "intent_type": "metric_query",
+        "metric_mentions_contains": "活跃客户数-线上访问",
+        "dimension_role": {
+          "name_contains": "店铺ID",
+          "role": "filter"
+        },
+        "dimension_value_contains": "100011",
+        "query_shape": {
+          "select_mode": "aggregate",
+          "needs_group_by": false,
+          "needs_order_by": false,
+          "limit": null,
+          "time_grain": null
+        },
+        "validation_status": "valid"
+      },
+      "fixed_temporal_context": {
+        "reference_at": "2026-08-12T10:00:00+08:00",
+        "timezone": "Asia/Shanghai"
+      },
+      "model_calls": [
+        {
+          "sequence": 1,
+          "stage": "TEMPORAL_INTERPRETATION",
+          "started_at": "2026-08-12T16:34:48.782624+08:00",
+          "finished_at": "2026-08-12T16:34:52.461189+08:00",
+          "duration_ms": 3678.57,
+          "input": {
+            "question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+            "datasource_id": null,
+            "conversation_context": {}
+          },
+          "raw_output": "{\n  \"message_type\": \"new_question\",\n  \"rewritten_question\": \"今天店铺ID 100011的活跃客户数-线上访问是多少？\",\n  \"inherited_context\": {},\n  \"need_user_input\": false,\n  \"missing_slots\": [],\n  \"confidence\": 1.0\n}",
+          "parsed_output": {
+            "message_type": "new_question",
+            "rewritten_question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+            "inherited_context": {},
+            "need_user_input": false,
+            "missing_slots": [],
+            "confidence": 1.0
+          },
+          "usage_metadata": {
+            "input_tokens": 473,
+            "output_tokens": 144,
+            "total_tokens": 617,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 75
+            }
+          }
+        },
+        {
+          "sequence": 2,
+          "stage": "INTENT_RECOGNITION",
+          "started_at": "2026-08-12T16:34:52.462489+08:00",
+          "finished_at": "2026-08-12T16:35:00.875145+08:00",
+          "duration_ms": 8412.66,
+          "input": {
+            "rewritten_question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+            "inherited_context": {}
+          },
+          "raw_output": "{\n  \"intent_type\": \"metric_query\",\n  \"confidence\": 1.0,\n  \"metric_mentions\": [\"活跃客户数-线上访问\"],\n  \"dimension_mentions\": [],\n  \"dimension_slots\": [],\n  \"time_mentions\": [\"今天\"],\n  \"time_range\": {\"raw\": \"今天\", \"value_status\": \"provided\"},\n  \"filter_mentions\": [],\n  \"required_slot_types\": [],\n  \"query_shape\": {\n    \"select_mode\": \"aggregate\",\n    \"needs_group_by\": false,\n    \"needs_order_by\": false,\n    \"order_direction\": null,\n    \"limit\": null,\n    \"time_grain\": null\n  },\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "intent_type": "metric_query",
+            "confidence": 1.0,
+            "metric_mentions": [
+              "活跃客户数-线上访问"
+            ],
+            "dimension_mentions": [],
+            "dimension_slots": [],
+            "time_mentions": [
+              "今天"
+            ],
+            "time_range": {
+              "raw": "今天",
+              "value_status": "provided"
+            },
+            "filter_mentions": [],
+            "required_slot_types": [],
+            "query_shape": {
+              "select_mode": "aggregate",
+              "needs_group_by": false,
+              "needs_order_by": false,
+              "order_direction": null,
+              "limit": null,
+              "time_grain": null
+            },
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 1123,
+            "output_tokens": 499,
+            "total_tokens": 1622,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 328
+            }
+          }
+        },
+        {
+          "sequence": 3,
+          "stage": "TEMPORAL_INTERPRETATION",
+          "started_at": "2026-08-12T16:35:00.875751+08:00",
+          "finished_at": "2026-08-12T16:35:05.671992+08:00",
+          "duration_ms": 4796.24,
+          "input": {
+            "rewritten_question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+            "metric_mentions": [
+              "活跃客户数-线上访问"
+            ],
+            "time_mentions": [
+              "今天"
+            ],
+            "inherited_context": {},
+            "available_dimensions": [
+              {
+                "name": "唯一ID",
+                "aliases": [
+                  "唯一"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "商家ID",
+                "aliases": [
+                  "商家"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              },
+              {
+                "name": "店铺ID",
+                "aliases": [
+                  "店铺"
+                ],
+                "data_type": "bigint",
+                "semantic_type": null,
+                "value_kind": "numeric_id",
+                "is_time": false
+              }
+            ],
+            "time_dimensions": [
+              {
+                "name": "时间",
+                "aliases": [],
+                "data_type": "date",
+                "semantic_type": "time",
+                "value_kind": "date",
+                "is_time": true
+              }
+            ]
+          },
+          "raw_output": "{\n  \"dimension_mentions\": [\"店铺ID\"],\n  \"dimension_slots\": [\n    {\"name\": \"店铺ID\", \"role\": \"filter\", \"value\": \"100011\", \"value_status\": \"provided\", \"value_confidence\": 1.0}\n  ],\n  \"residual_filter_mentions\": [],\n  \"ambiguous_slots\": [],\n  \"conflict_slots\": []\n}",
+          "parsed_output": {
+            "dimension_mentions": [
+              "店铺ID"
+            ],
+            "dimension_slots": [
+              {
+                "name": "店铺ID",
+                "role": "filter",
+                "value": "100011",
+                "value_status": "provided",
+                "value_confidence": 1.0
+              }
+            ],
+            "residual_filter_mentions": [],
+            "ambiguous_slots": [],
+            "conflict_slots": []
+          },
+          "usage_metadata": {
+            "input_tokens": 906,
+            "output_tokens": 232,
+            "total_tokens": 1138,
+            "input_token_details": {
+              "cache_read": 0
+            },
+            "output_token_details": {
+              "reasoning": 143
+            }
+          }
+        }
+      ],
+      "final_understanding": {
+        "original_question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+        "message_type": "new_question",
+        "rewritten_question": "今天店铺ID 100011的活跃客户数-线上访问是多少？",
+        "inherited_context": {},
+        "intent": {
+          "intent_type": "metric_query",
+          "confidence": 1.0,
+          "metric_mentions": [
+            "活跃客户数-线上访问"
+          ],
+          "dimension_mentions": [
+            "店铺ID"
+          ],
+          "dimension_slots": [
+            {
+              "name": "店铺ID",
+              "role": "filter",
+              "value": "100011",
+              "value_status": "provided",
+              "value_confidence": 1.0
+            }
+          ],
+          "time_mentions": [
+            "今天"
+          ],
+          "time_range": {
+            "raw": "今天",
+            "value_status": "provided",
+            "normalized": {
+              "kind": "absolute_range",
+              "start": "2026-08-12",
+              "end_exclusive": "2026-08-13",
+              "timezone": "Asia/Shanghai",
+              "source_raw": "今天"
+            },
+            "interpretation_source": "legacy_rule"
+          },
+          "filter_mentions": [],
+          "required_slot_types": [
+            "metric",
+            "filter",
+            "time_dimension"
+          ],
+          "query_shape": {
+            "select_mode": "aggregate",
+            "needs_group_by": false,
+            "needs_order_by": false,
+            "order_direction": null,
+            "limit": null,
+            "time_grain": null
+          },
+          "ambiguous_slots": [],
+          "conflict_slots": []
+        },
+        "validation": {
+          "status": "valid",
+          "reason_codes": [],
+          "clarification_slots": []
+        },
+        "temporal_interpretation": null
+      },
+      "validation_effect": {
+        "status": "valid",
+        "reason_codes": [],
+        "clarification_slots": [],
+        "explanation": "校验未发现阻断问题，当前理解可以进入后续流程。"
+      },
+      "accuracy_checks": [
+        {
+          "field": "intent.intent_type",
+          "expected": "metric_query",
+          "actual": "metric_query",
+          "passed": true
+        },
+        {
+          "field": "intent.metric_mentions",
+          "expected": "包含 活跃客户数-线上访问",
+          "actual": [
+            "活跃客户数-线上访问"
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.dimension_slots.role",
+          "expected": {
+            "name_contains": "店铺ID",
+            "role": "filter"
+          },
+          "actual": [
+            {
+              "name": "店铺ID",
+              "role": "filter",
+              "value": "100011",
+              "value_status": "provided",
+              "value_confidence": 1.0
+            }
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.dimension_slots.value",
+          "expected": "包含 100011",
+          "actual": [
+            "100011"
+          ],
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.select_mode",
+          "expected": "aggregate",
+          "actual": "aggregate",
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_group_by",
+          "expected": false,
+          "actual": false,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.needs_order_by",
+          "expected": false,
+          "actual": false,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.limit",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "intent.query_shape.time_grain",
+          "expected": null,
+          "actual": null,
+          "passed": true
+        },
+        {
+          "field": "validation.status",
+          "expected": "valid",
+          "actual": "valid",
+          "passed": true
+        }
+      ],
+      "score": {
+        "passed": 10,
+        "total": 10,
+        "accuracy": 1.0
+      },
+      "usage_metadata": {
+        "input_tokens": 2502,
+        "output_tokens": 875,
+        "total_tokens": 3377
+      },
+      "error": null,
+      "started_at": "2026-08-12T16:34:48.585620+08:00",
+      "finished_at": "2026-08-12T16:35:05.678535+08:00",
+      "duration_ms": 17092.92
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant R as Run 创建入口
+    participant Q as 问题理解
+    participant T as Temporal
+    participant V as 确定性校验
+    participant S as Semantic Retrieval
+    participant P as 时间计划投影
+    participant C as Semantic SQL Compiler
+    participant D as 数据库
+
+    U->>R: 提交自然语言问题
+    R->>T: build_run_temporal_context()
+    T-->>R: 固定 TemporalContext
+    R->>R: 持久化到 Agent Run 或 Graph request
+    R->>Q: 问题 + 固定 TemporalContext
+    Q-->>T: raw time_range
+    T-->>Q: absolute_range
+    Q->>V: 意图、维度槽位、时间范围
+    alt 时间不支持或误入普通维度
+        V-->>U: 要求澄清或返回明确错误
+    else 时间结构有效
+        V-->>S: 已确认的问题理解
+        S->>S: 根据指标模型绑定默认时间维度
+        alt 没有默认时间维度
+            S-->>U: time_dimension_not_configured
+        else 存在多个默认时间维度
+            S-->>U: 时间维度歧义
+        else 唯一时间维度
+            S->>P: 时间维度 + absolute_range + query_shape
+            P-->>C: 时间筛选 + 可选 time_bucket
+            C->>C: 校验并渲染左闭右开条件
+            C->>D: 执行只读 SQL
+            D-->>U: 基于真实结果回答
+        end
+    end

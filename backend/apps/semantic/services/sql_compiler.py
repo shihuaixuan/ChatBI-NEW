@@ -110,6 +110,12 @@ class SemanticSQLCompiler:
                 select_mode=str(plan.query_shape.get("select_mode") or "aggregate"),
                 having=list(plan.having),
                 time_offset=plan.time_offset,
+                pre_aggregation={
+                    "required": True,
+                    "grain": list(plan.model_plan.pre_aggregation_grain),
+                }
+                if plan.model_plan.pre_aggregation_required
+                else None,
                 subplans=list(plan.subplans),
             )
         )
@@ -196,7 +202,33 @@ class SemanticSQLCompiler:
         model_sql = {name: self._model_source(model_by_name[name], alias=name) for name in ordered_model_names}
 
         from_sql = self._build_from_sql(ordered_model_names, model_sql, relations)
-        if request.pre_aggregation:
+        preaggregation_pushed_filters: set[str] = set()
+        preaggregated_metric_ids: set[int] = set()
+        if request.pre_aggregation and request.pre_aggregation.get("required"):
+            (
+                model_sql[base_model_name],
+                preaggregation_pushed_filters,
+                preaggregated_metric_ids,
+            ) = self._build_verified_preaggregation_source(
+                schema=request.schema,
+                base_model_name=base_model_name,
+                model=model_by_name[base_model_name],
+                metrics=metrics,
+                dimensions=dimensions,
+                bucket_dimension=bucket_dimension,
+                grain=request.pre_aggregation.get("grain") or [],
+                filters=filters,
+                model_filters=self._model_filters([base_model_name], model_by_name),
+                metric_filters=self._metric_filters(
+                    metrics, model_by_name, model_name_by_id
+                )[0],
+                relations=relations,
+                selected_model_names=selected_model_names,
+                model_by_name=model_by_name,
+                model_name_by_id=model_name_by_id,
+            )
+            from_sql = self._build_from_sql(ordered_model_names, model_sql, relations)
+        elif request.pre_aggregation:
             source_sql = str(request.pre_aggregation.get("source_sql") or from_sql)
             select_expressions = request.pre_aggregation.get("select_expressions")
             group_expressions = request.pre_aggregation.get("group_expressions")
@@ -241,6 +273,25 @@ class SemanticSQLCompiler:
             *self._slot_filter_conditions(filters, model_by_name, model_name_by_id),
             *metric_filter_conditions,
         ]
+        if preaggregation_pushed_filters:
+            where_parts = [
+                item for item in where_parts if item not in preaggregation_pushed_filters
+            ]
+        if preaggregated_metric_ids:
+            # 外层只汇总预聚合结果，不能再次引用基础模型的明细表达式。
+            updated_metric_selects = []
+            for metric, expression, is_aggregate in metric_selects:
+                if metric.id in preaggregated_metric_ids:
+                    updated_metric_selects.append(
+                        (
+                            metric,
+                            f"sum({model_name_by_id[metric.model]}.{metric.biz_name})",
+                            True,
+                        )
+                    )
+                else:
+                    updated_metric_selects.append((metric, expression, is_aggregate))
+            metric_selects = updated_metric_selects
         group_parts = [self._qualified_dimension_expr(dimension, model_by_name, model_name_by_id) for dimension in dimensions]
         if bucket_dimension is not None:
             bucket_expr = self._time_bucket_expr(
@@ -574,6 +625,120 @@ class SemanticSQLCompiler:
         if sql_query:
             return f"({sql_query}) {alias}"
         raise ValueError("SEMANTIC_SQL_MODEL_SOURCE_REQUIRED")
+
+    def _build_verified_preaggregation_source(
+        self,
+        *,
+        schema: DatasetSchema,
+        base_model_name: str,
+        model: dict[str, Any],
+        metrics: list[SchemaElement],
+        dimensions: list[SchemaElement],
+        bucket_dimension: SchemaElement | None,
+        grain: list[Any],
+        filters: list[tuple[SchemaElement, str, Any]],
+        model_filters: list[str],
+        metric_filters: list[str],
+        relations: list[JoinRelation],
+        selected_model_names: list[str],
+        model_by_name: dict[str, dict[str, Any]],
+        model_name_by_id: dict[int | None, str],
+    ) -> tuple[str, set[str], set[int]]:
+        """在连接维表前按基础模型粒度聚合，避免一对多连接放大指标。"""
+
+        if not grain:
+            raise ValueError("SEMANTIC_SQL_PRE_AGGREGATION_GRAIN_REQUIRED")
+        if any(metric.model != model.get("id") for metric in metrics):
+            raise ValueError("SEMANTIC_SQL_PRE_AGGREGATION_BASE_MODEL_REQUIRED")
+        if any(self._metric_reference_ids(metric) for metric in metrics):
+            raise ValueError("SEMANTIC_SQL_PRE_AGGREGATION_DERIVED_METRIC_UNSUPPORTED")
+        if any(str((metric.ext_info or {}).get("snapshot_aggregation") or "").strip() for metric in metrics):
+            raise ValueError("SEMANTIC_SQL_PRE_AGGREGATION_SNAPSHOT_UNSUPPORTED")
+
+        base_element_by_name = {
+            str(item.get("bizName") or item.get("biz_name")): item
+            for item in model.get("dimensions") or []
+            if isinstance(item, dict)
+        }
+        group_fields: dict[str, str] = {}
+
+        def add_group_field(expression: str) -> None:
+            normalized = str(expression or "").strip()
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", normalized):
+                raise ValueError("SEMANTIC_SQL_PRE_AGGREGATION_FIELD_UNSAFE")
+            group_fields.setdefault(normalized, normalized)
+
+        for item in grain:
+            grain_name = str(item or "").strip()
+            expression = str(
+                (base_element_by_name.get(grain_name) or {}).get("expr") or grain_name
+            )
+            add_group_field(expression)
+
+        for dimension in [*dimensions, *([bucket_dimension] if bucket_dimension else [])]:
+            if dimension.model != model.get("id"):
+                continue
+            add_group_field(self._dimension_expr(model, dimension.biz_name))
+
+        for candidate in selected_model_names:
+            if candidate == base_model_name:
+                continue
+            relation = self._find_relation([base_model_name], candidate, relations)
+            if relation is None:
+                raise ValueError("SEMANTIC_SQL_PRE_AGGREGATION_RELATION_PATH_UNSUPPORTED")
+            if relation.left == base_model_name:
+                base_side = relation.left
+                fields = [condition[0] for condition in relation.join_condition]
+            else:
+                base_side = relation.right
+                fields = [condition[2] for condition in relation.join_condition]
+            if base_side != base_model_name:
+                raise ValueError("SEMANTIC_SQL_PRE_AGGREGATION_RELATION_PATH_UNSUPPORTED")
+            for join_field in fields:
+                add_group_field(join_field)
+
+        source_alias = "preagg_source"
+        source_sql = self._model_source(model, source_alias)
+        select_parts = [
+            f"{source_alias}.{field} AS {field}" for field in group_fields
+        ]
+        preaggregated_metric_ids: set[int] = set()
+        for metric in metrics:
+            raw_expression, measure_agg = self._metric_measure_expr(metric, model)
+            if self._contains_aggregate(raw_expression):
+                raise ValueError("SEMANTIC_SQL_PRE_AGGREGATION_METRIC_UNSUPPORTED")
+            resolved_agg = self._resolve_metric_agg(metric, measure_agg)
+            if resolved_agg.upper() != "SUM":
+                raise ValueError("SEMANTIC_SQL_PRE_AGGREGATION_METRIC_UNSUPPORTED")
+            qualified = self._qualify_expr(raw_expression, source_alias)
+            select_parts.append(
+                f"{self._aggregate_expr(resolved_agg, qualified)} AS {metric.biz_name}"
+            )
+            preaggregated_metric_ids.add(metric.id)
+
+        slot_conditions = self._slot_filter_conditions(
+            filters,
+            model_by_name,
+            model_name_by_id,
+        )
+        base_filter_conditions = [
+            condition
+            for (dimension, _, _), condition in zip(filters, slot_conditions, strict=True)
+            if model_name_by_id.get(dimension.model) == base_model_name
+        ]
+        pushed_filter_list = list(
+            dict.fromkeys([*model_filters, *metric_filters, *base_filter_conditions])
+        )
+        inner_filters = [
+            re.sub(rf"\b{re.escape(base_model_name)}\.", f"{source_alias}.", item)
+            for item in pushed_filter_list
+        ]
+        sql = (
+            f"(select {', '.join(select_parts)} from {source_sql}"
+            + (" where " + " and ".join(inner_filters) if inner_filters else "")
+            + f" group by {', '.join(f'{source_alias}.{field}' for field in group_fields)}) {base_model_name}"
+        )
+        return sql, set(pushed_filter_list), preaggregated_metric_ids
 
     @staticmethod
     def _model_table(model: dict[str, Any]) -> str:

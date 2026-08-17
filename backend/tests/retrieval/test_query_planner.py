@@ -71,6 +71,23 @@ def test_planner_generates_asset_slots_and_value_lookups():
     assert value_slots[0].filters["dimension_name"] == "城市"
 
 
+
+def test_planner_preserves_qualified_metric_context_when_understanding_truncates_metric():
+    request = _request().model_copy(
+        update={
+            "original_question": "2026年6月各店铺销售订单平均客单价是多少？",
+            "rewritten_question": "2026年6月各店铺销售订单平均客单价是多少？",
+            "intent": _request().intent.model_copy(
+                update={"metric_mentions": ["平均客单价"]}
+            ),
+        }
+    )
+
+    plan = SemanticBindingQueryPlanner().plan(request)
+
+    assert plan.subqueries[0].text == request.rewritten_question
+
+
 def test_planner_fingerprint_is_stable_and_does_not_use_whole_question_as_metric_fallback():
     planner = SemanticBindingQueryPlanner()
     request = _request()
