@@ -381,6 +381,8 @@ class QuestionUnderstandingValidationData:
     conflict_slots: tuple[str, ...] = ()
     subject_domain: dict[str, Any] = field(default_factory=dict)
     temporal_plan: TemporalPlan | None = None
+    # R0：维度和值的内部未绑定状态不得在理解阶段直接升级为用户澄清。
+    pending_binding_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)

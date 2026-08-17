@@ -48,6 +48,13 @@ from apps.chatbi.services.understanding.dimension_candidates import (
     normalize_dimension_candidates,
 )
 from apps.chatbi.services.understanding.model_invocation import StructuredModelService
+from apps.chatbi.services.understanding.normalization import (
+    apply_field_patches,
+    assert_repair_invariants,
+    build_patch_request,
+    normalize_model_payload,
+    parse_patch_payload,
+)
 from apps.chatbi.services.understanding.prompts import (
     DIMENSION_EXTRACTION_RULES,
     METRIC_TIME_EXTRACTION_RULES,
@@ -354,9 +361,13 @@ class QuestionUnderstandingService:
         temporal_interpretation_service: TemporalInterpretationService | None = None,
         temporal_shadow_enabled: bool = False,
         temporal_authority_enabled: bool = False,
+        semantic_repair_v2_enabled: bool = False,
         trace_recorder: AgentTraceRecorder | None = None,
     ) -> None:
-        if temporal_shadow_enabled and temporal_authority_enabled:
+        effective_temporal_authority = (
+            temporal_authority_enabled or semantic_repair_v2_enabled
+        )
+        if temporal_shadow_enabled and effective_temporal_authority:
             raise ValueError("TEMPORAL_INTERPRETATION_MODE_CONFLICT")
         if model_client is not None and question_model_service is not None:
             raise ValueError("QUESTION_UNDERSTANDING_MODEL_SOURCE_CONFLICT")
@@ -369,10 +380,12 @@ class QuestionUnderstandingService:
         self._schema_provider = schema_provider
         self._trace_recorder = trace_recorder or DisabledAgentTraceRecorder()
         self._temporal_shadow_enabled = temporal_shadow_enabled
-        temporal_enabled = temporal_shadow_enabled or temporal_authority_enabled
+        temporal_enabled = temporal_shadow_enabled or effective_temporal_authority
         if temporal_interpretation_service is not None and not temporal_enabled:
             raise ValueError("TEMPORAL_INTERPRETATION_SERVICE_DISABLED")
-        self._temporal_authority_enabled = temporal_authority_enabled
+        # R0 开启后，时间模型必须成为唯一事实源，避免模型字段被剥离后语义丢失。
+        self._temporal_authority_enabled = effective_temporal_authority
+        self._semantic_repair_v2_enabled = semantic_repair_v2_enabled
         self._temporal_interpretation_service = (
             temporal_interpretation_service
             or TemporalInterpretationService(self._question_model_service)
@@ -492,9 +505,18 @@ class QuestionUnderstandingService:
             "统一问题理解",
             input_data={"rewritten_question": rewrite.rewritten_question},
         ) as understanding_node:
+            understanding_system_prompt = QUESTION_UNDERSTANDING_SYSTEM_PROMPT
+            if self._semantic_repair_v2_enabled:
+                understanding_system_prompt += (
+                    "\n\nR0 语义契约约束：时间与时段比较由独立 Temporal 任务唯一解释。"
+                    "本次输出只登记 time_mentions，不得输出 time_range、time_ranges、"
+                    "comparison 或 query_shape.comparison_type；不得根据数据集字段选择时间维度。"
+                    "如果用户表达了变化、差值或增长率，只保留用户的指标和分析形态，"
+                    "不要自行填写比较方法。"
+                )
             intent, intent_usage = self._invoke_validated_model(
                 "QUESTION_UNDERSTANDING",
-                QUESTION_UNDERSTANDING_SYSTEM_PROMPT,
+                understanding_system_prompt,
                 understanding_payload,
                 IntentRecognitionOutput,
                 normalizer=lambda payload: _normalize_unified_payload(
@@ -592,6 +614,7 @@ class QuestionUnderstandingService:
                 rewrite,
                 intent,
                 temporal_interpretation=temporal_interpretation,
+                pending_binding_enabled=self._semantic_repair_v2_enabled,
             )
             if validation_node is not None:
                 validation_node.set_output(
@@ -827,7 +850,17 @@ class QuestionUnderstandingService:
         validation_fallback: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         trace_run_id: int | None = None,
     ) -> tuple[ModelType, dict[str, int]]:
-        """复用 Graph 的修复重试方式，格式错误时把精确校验信息反馈给模型。"""
+        """调用结构化模型并按开关选择旧重试或 R0 字段补丁协议。"""
+
+        if self._semantic_repair_v2_enabled:
+            return self._invoke_validated_model_v2(
+                stage,
+                system_prompt,
+                user_payload,
+                model_type,
+                normalizer=normalizer,
+                trace_run_id=trace_run_id,
+            )
 
         usage_items: list[dict[str, Any]] = []
         validation_error: ValidationError | None = None
@@ -966,6 +999,173 @@ class QuestionUnderstandingService:
             f"{stage}_MODEL_OUTPUT_INVALID: {validation_error}",
             details=model_call_error_details,
         ) from validation_error
+
+    def _invoke_validated_model_v2(
+        self,
+        stage: str,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        model_type: type[ModelType],
+        *,
+        normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None,
+        trace_run_id: int | None,
+    ) -> tuple[ModelType, dict[str, int]]:
+        """执行 R0 的归一化→校验→字段补丁→不变量流水线。"""
+
+        usage_items: list[dict[str, Any]] = []
+        with self._trace_node(
+            trace_run_id,
+            TraceNodeType.LLM,
+            stage.lower(),
+            _stage_display_name(stage, 0),
+            input_data={"stage": stage, "attempt": 1, "repair": False},
+            input_detail={
+                "system_prompt": system_prompt,
+                "user_prompt": orjson.dumps(user_payload).decode(),
+            },
+            attributes=llm_attributes(
+                model=self._question_model_service.model_name
+            ),
+            metadata={"stage": stage, "attempt": 1},
+        ) as model_node:
+            response = self._invoke_model(
+                stage,
+                system_prompt,
+                orjson.dumps(user_payload).decode(),
+            )
+            usage_items.append(response.usage_metadata)
+            normalized_result = normalize_model_payload(
+                response.payload,
+                stage=stage,
+                model_type=model_type,
+                temporal_authority_enabled=self._temporal_authority_enabled,
+            )
+            payload = (
+                normalizer(normalized_result.payload)
+                if normalizer is not None
+                else normalized_result.payload
+            )
+            if model_node is not None:
+                model_node.set_token_usage(response.usage_metadata)
+                model_node.set_output_detail(
+                    {
+                        "raw_content": response.raw_content,
+                        "parsed_payload": response.payload,
+                        "normalized_payload": payload,
+                        "dropped_fields": list(normalized_result.dropped_fields),
+                    }
+                )
+            try:
+                validated = model_type.model_validate(payload)
+            except ValidationError as validation_error:
+                if model_node is not None:
+                    model_node.set_status(TraceNodeStatus.REJECTED)
+                    model_node.set_output(
+                        {
+                            "stage": stage,
+                            "attempt": 1,
+                            "validation_status": "invalid",
+                            "validation_errors": _serializable_validation_errors(
+                                validation_error
+                            ),
+                            "dropped_fields": list(normalized_result.dropped_fields),
+                        }
+                    )
+                patched_payload = self._request_field_patch(
+                    stage=stage,
+                    payload=payload,
+                    model_type=model_type,
+                    validation_error=validation_error,
+                    trace_run_id=trace_run_id,
+                )
+                try:
+                    assert_repair_invariants(payload, patched_payload, stage=stage)
+                except ValueError as invariant_error:
+                    # 语义不变量失败必须归因到问题理解修复协议，不能向上冒泡成通用异常。
+                    raise QuestionUnderstandingError(
+                        f"{stage}_SEMANTIC_REPAIR_INVARIANT_VIOLATION",
+                        details={
+                            "repair_protocol": "field_patch",
+                            "error": str(invariant_error),
+                        },
+                    ) from invariant_error
+                try:
+                    repaired = model_type.model_validate(patched_payload)
+                except ValidationError as repaired_error:
+                    raise QuestionUnderstandingError(
+                        f"{stage}_MODEL_OUTPUT_INVALID",
+                        details={
+                            "validation_errors": _serializable_validation_errors(
+                                repaired_error
+                            ),
+                            "repair_protocol": "field_patch",
+                        },
+                    ) from repaired_error
+                if model_node is not None:
+                    model_node.set_status(TraceNodeStatus.SUCCEEDED)
+                    model_node.set_output(
+                        {
+                            "stage": stage,
+                            "attempt": 1,
+                            "validation_status": "field_patch_repaired",
+                            "dropped_fields": list(normalized_result.dropped_fields),
+                        }
+                    )
+                return repaired, _merge_usage(*usage_items)
+            else:
+                if model_node is not None:
+                    model_node.set_output(
+                        {
+                            "stage": stage,
+                            "attempt": 1,
+                            "validation_status": "valid",
+                            "dropped_fields": list(normalized_result.dropped_fields),
+                        }
+                    )
+                return validated, _merge_usage(*usage_items)
+
+    def _request_field_patch(
+        self,
+        *,
+        stage: str,
+        payload: dict[str, Any],
+        model_type: type[ModelType],
+        validation_error: ValidationError,
+        trace_run_id: int | None,
+    ) -> dict[str, Any]:
+        """请求一次只修改失败路径的补丁，不重新生成完整语义对象。"""
+
+        patch_request = build_patch_request(
+            stage=stage,
+            payload=payload,
+            validation_error=validation_error,
+            model_type=model_type,
+        )
+        patch_system_prompt = (
+            "你是结构化字段补丁器。只输出 JSON："
+            '{"patches":{"字段路径": "修复后的值"}}。'
+            "只修改 failed_fields 中列出的路径，不得新增、删除或改写其他语义字段；"
+            "不要输出 Markdown、解释或完整对象。"
+        )
+        patch_payload = {
+            "repair_feedback": patch_request,
+        }
+        try:
+            response = self._invoke_model(
+                f"{stage}_FIELD_PATCH",
+                patch_system_prompt,
+                orjson.dumps(patch_payload).decode(),
+            )
+            patches = parse_patch_payload(response.payload)
+            return apply_field_patches(payload, patches)
+        except (QuestionUnderstandingError, ValueError) as exc:
+            raise QuestionUnderstandingError(
+                f"{stage}_FIELD_PATCH_FAILED",
+                details={
+                    "repair_protocol": "field_patch",
+                    "error": str(exc),
+                },
+            ) from exc
 
     def _invoke_model(
         self,
@@ -1384,6 +1584,7 @@ def _validate_understanding(
     intent: IntentRecognitionOutput,
     *,
     temporal_interpretation: TemporalInterpretationResult | None = None,
+    pending_binding_enabled: bool = False,
 ) -> IntentValidationOutput:
     result = validate_question_understanding(
         QuestionUnderstandingValidationData(
@@ -1426,6 +1627,7 @@ def _validate_understanding(
                 if temporal_interpretation is not None
                 else None
             ),
+            pending_binding_enabled=pending_binding_enabled,
         )
     )
     return IntentValidationOutput(
@@ -2134,7 +2336,7 @@ def _stabilize_intent(
                 temporal_context=temporal_context,
             )
         )
-        if use_legacy_time_interpretation or item.normalized is None
+        if use_legacy_time_interpretation
         else item
         for item in source_time_ranges
     ]

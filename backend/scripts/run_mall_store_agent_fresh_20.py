@@ -10,7 +10,7 @@ import json
 import os
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -36,6 +36,8 @@ class FreshQuestion:
     dataset_name: str = "商城店铺数据集"
     expected_points: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
+    behavior: str = "direct"
+    golden_expectations: dict[str, Any] = field(default_factory=dict)
 
 
 # 问题使用当前源数据中的新对象和新分析组合，不复用历史测试问题。
@@ -185,7 +187,16 @@ def _load_questions() -> tuple[FreshQuestion, ...]:
             raise RuntimeError(f"黄金题集第 {line_number} 行不是合法 JSON") from exc
         case_id = str(payload.get("case_id") or "").strip()
         question = str(payload.get("question") or "").strip()
-        dataset_name = str(payload.get("dataset") or "").strip()
+        dataset_payload = payload.get("dataset")
+        if isinstance(dataset_payload, dict):
+            # P1 schema v2 使用业务名和 schema 版本；运行时仍按业务名查数据集。
+            dataset_name = str(
+                dataset_payload.get("dataset_biz_name")
+                or dataset_payload.get("name")
+                or ""
+            ).strip()
+        else:
+            dataset_name = str(dataset_payload or "").strip()
         if not case_id or not question or not dataset_name:
             raise RuntimeError(
                 f"黄金题集第 {line_number} 行缺少 case_id/question/dataset"
@@ -207,6 +218,19 @@ def _load_questions() -> tuple[FreshQuestion, ...]:
                     str(item) for item in payload.get("expected_points") or []
                 ),
                 tags=tags,
+                behavior=str(payload.get("behavior") or "direct"),
+                golden_expectations={
+                    key: payload[key]
+                    for key in (
+                        "dataset",
+                        "understanding_expect",
+                        "binding_expect",
+                        "plan_expect",
+                        "sql_expect",
+                        "result_expect",
+                    )
+                    if key in payload
+                },
             )
         )
     if not cases:
@@ -352,7 +376,11 @@ class AgentHttpClient:
 
     def find_dataset(self, dataset_name: str = "商城店铺数据集") -> dict[str, Any]:
         datasets = self.request("GET", "/semantic/datasets")
-        matches = [item for item in datasets if item.get("name") == dataset_name]
+        matches = [
+            item
+            for item in datasets
+            if item.get("name") == dataset_name or item.get("biz_name") == dataset_name
+        ]
         if len(matches) != 1:
             raise RuntimeError(f"数据集 {dataset_name!r} 未唯一匹配：{matches!r}")
         return cast(dict[str, Any], matches[0])
@@ -506,6 +534,11 @@ def _run_path(
     expected_hits = [
         value for value in case.expected_text if _contains_expected(answer_text, value)
     ]
+    behavior_pass = _behavior_matches(
+        case.behavior,
+        status=str(timeline.get("status") or ""),
+        clarification_rounds=rounds,
+    )
     replay_last = max((int(event.get("sequence") or 0) for event in replay_events), default=0)
     stream_last = max((int(event.get("sequence") or 0) for event in events), default=0)
     nodes = trace.get("nodes") or []
@@ -525,6 +558,9 @@ def _run_path(
         "dataset_name": case.dataset_name,
         "expected_points": list(case.expected_points),
         "tags": list(case.tags),
+        "behavior_expect": case.behavior,
+        "behavior_pass": behavior_pass,
+        "golden_expectations": case.golden_expectations,
         "choice_path": list(choice_path),
         "choice_path_matched": not path_mismatch
         and len(rounds) >= len(choice_path),
@@ -543,7 +579,7 @@ def _run_path(
         "answer_text": answer_text,
         "expected_text": list(case.expected_text),
         "expected_hits": expected_hits,
-        "expected_pass": len(expected_hits) == len(case.expected_text),
+        "expected_pass": behavior_pass and len(expected_hits) == len(case.expected_text),
         "clarification_rounds": rounds,
         "timeline_step_count": len(timeline.get("steps") or []),
         "timeline_tool_count": len(timeline.get("tool_calls") or []),
@@ -564,6 +600,27 @@ def _run_path(
             for batch in batches
         ),
     }
+
+
+def _behavior_matches(
+    expected_behavior: str,
+    *,
+    status: str,
+    clarification_rounds: list[dict[str, Any]],
+) -> bool:
+    """按黄金行为断言判断是否进入了正确的交互门。"""
+
+    if expected_behavior == "direct":
+        return status == "finished" and not clarification_rounds
+    if expected_behavior == "clarify_required":
+        return bool(clarification_rounds) or status == "waiting_user"
+    if expected_behavior == "clarify_allowed":
+        return status in {"finished", "waiting_user"}
+    if expected_behavior == "reject":
+        return status == "failed" and not clarification_rounds
+    if expected_behavior == "assisted_fallback":
+        return status == "finished"
+    return False
 
 
 def _run_all_clarifications(

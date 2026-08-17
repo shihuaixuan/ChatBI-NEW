@@ -18,6 +18,9 @@ from apps.temporal import TemporalContext
 from apps.tool import BudgetGuard, NeverCancelled
 from apps.tool.context import CancellationSignal
 
+SEMANTIC_CONTRACT_VERSION = "r0"
+BINDING_CONTRACT_VERSION = "legacy"
+
 
 @dataclass
 class AgentRuntimeState:
@@ -61,11 +64,15 @@ class AgentRuntimeState:
     def persistable_context(self) -> dict[str, Any]:
         """排除全量结果和临时卸载对象，返回可恢复的派生状态。"""
 
-        return {
+        snapshot = {
             key: value
             for key, value in self.context.state.items()
             if key not in {"full_data", "tool_offloads", "semantic_schema"}
         }
+        # R0 将契约版本写入每次 Run 快照，便于按版本分组回放和定位失败。
+        snapshot.setdefault("semantic_contract_version", SEMANTIC_CONTRACT_VERSION)
+        snapshot.setdefault("binding_contract_version", BINDING_CONTRACT_VERSION)
+        return snapshot
 
     def budget_snapshot(self) -> dict[str, Any]:
         """合并通用预算与 ChatBI 业务预算的持久化快照。"""

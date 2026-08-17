@@ -204,6 +204,7 @@ def build_question_understanding_service(
         schema_provider=schema_provider,
         temporal_shadow_enabled=settings.TEMPORAL_MODEL_SHADOW_ENABLED,
         temporal_authority_enabled=settings.TEMPORAL_MODEL_AUTHORITY_ENABLED,
+        semantic_repair_v2_enabled=settings.CHATBI_SEMANTIC_REPAIR_V2,
         trace_recorder=trace_recorder,
     )
 

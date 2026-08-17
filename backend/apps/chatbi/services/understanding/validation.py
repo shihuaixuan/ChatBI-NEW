@@ -260,18 +260,40 @@ def validate_question_understanding(
         for slot in data.dimension_slots
         if str(slot.get("role") or "").lower() == "ambiguous"
     }
+    user_underspecified_slots = {
+        "metric",
+        "intent",
+        "context",
+        "time_range",
+        "comparison_target",
+    }
     if data.ambiguous_slots:
-        issues.append(
-            QuestionUnderstandingValidationIssue(
-                code="intent_ambiguous",
-                category="intent",
-                clarification_slots=tuple(
-                    slot
-                    for slot in data.ambiguous_slots
-                    if slot not in ambiguous_dimension_names
-                ),
+        if data.pending_binding_enabled:
+            clarification_slots = tuple(
+                slot
+                for slot in data.ambiguous_slots
+                if slot not in ambiguous_dimension_names
+                and slot in user_underspecified_slots
             )
-        )
+        else:
+            # 旧模式保留 intent_ambiguous 诊断，但维度名称已经由下方维度规则归类，
+            # 不重复把具体维度名称当成用户需要填写的澄清槽位。
+            clarification_slots = tuple(
+                slot
+                for slot in data.ambiguous_slots
+                if slot not in ambiguous_dimension_names
+            )
+            if not clarification_slots and data.ambiguous_slots:
+                # 保持旧模式的 reason code；具体槽位由维度规则统一归类为 dimension。
+                clarification_slots = ("dimension",)
+        if clarification_slots:
+            issues.append(
+                QuestionUnderstandingValidationIssue(
+                    code="intent_ambiguous",
+                    category="intent",
+                    clarification_slots=clarification_slots,
+                )
+            )
 
     subject_domain = data.subject_domain
     subject_status = str(subject_domain.get("status") or "").lower()
@@ -312,7 +334,7 @@ def validate_question_understanding(
                     },
                 )
             )
-        if role == "ambiguous":
+        if role == "ambiguous" and not data.pending_binding_enabled:
             issues.append(
                 QuestionUnderstandingValidationIssue(
                     code="dimension_role_ambiguous",
@@ -321,7 +343,11 @@ def validate_question_understanding(
                     details=_dimension_issue_details(dimension, role, value_status),
                 )
             )
-        if role == "filter" and value_status == "ambiguous":
+        if (
+            role == "filter"
+            and value_status == "ambiguous"
+            and not data.pending_binding_enabled
+        ):
             issues.append(
                 QuestionUnderstandingValidationIssue(
                     code="dimension_value_ambiguous",

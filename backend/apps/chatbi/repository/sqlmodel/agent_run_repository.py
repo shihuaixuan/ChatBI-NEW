@@ -229,6 +229,12 @@ def validate_derived_state(derived_state: dict[str, Any]) -> dict[str, Any]:
     """统一校验并规范化计划与命名结果集快照。"""
 
     normalized = dict(derived_state)
+    for version_key in ("semantic_contract_version", "binding_contract_version"):
+        version = normalized.get(version_key)
+        if version is not None and (
+            not isinstance(version, str) or not version.strip() or len(version) > 64
+        ):
+            raise ValueError(f"AGENT_{version_key.upper()}_INVALID")
     analysis_plan = normalized.get("analysis_plan")
     if analysis_plan is not None:
         normalized["analysis_plan"] = AnalysisPlan.model_validate(analysis_plan).model_dump(

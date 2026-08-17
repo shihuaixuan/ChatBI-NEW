@@ -284,6 +284,7 @@ def apply_temporal_interpretation_payload(
     query_shape = dict(intent.get("query_shape") or {})
     # 先清除旧时间投影，确保 TemporalPlan 是唯一时间语义来源。
     query_shape.pop("time_grain", None)
+    query_shape.pop("comparison_type", None)
     required_slot_types = [
         slot
         for slot in intent.get("required_slot_types") or []
@@ -297,7 +298,7 @@ def apply_temporal_interpretation_payload(
         or plan.grouping is not None
     ) and "time_dimension" not in required_slot_types:
         required_slot_types.append("time_dimension")
-    comparison = intent.get("comparison")
+    comparison = None
     if plan.comparison is not None:
         base_raw = plan.comparison.base
         if base_raw is None and plan.expressions:
@@ -314,6 +315,7 @@ def apply_temporal_interpretation_payload(
             "compare": list(plan.comparison.compare),
             "method": plan.comparison.method,
         }
+        query_shape["comparison_type"] = plan.comparison.method
     temporal_conflict_slots = {
         "time",
         "time_range",

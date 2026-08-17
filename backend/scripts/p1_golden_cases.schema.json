@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatBI P1 golden case v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["case_id", "question", "dataset", "behavior", "understanding_expect", "binding_expect", "plan_expect", "sql_expect", "result_expect", "tags"],
+  "properties": {
+    "case_id": {"type": "string", "pattern": "^P1-G[0-9]{3}$"},
+    "question": {"type": "string", "minLength": 1},
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dataset_id", "dataset_biz_name", "schema_version"],
+      "properties": {
+        "dataset_id": {"type": "integer", "minimum": 1},
+        "dataset_biz_name": {"type": "string", "minLength": 1},
+        "schema_version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "behavior": {"enum": ["direct", "clarify_allowed", "clarify_required", "reject", "assisted_fallback"]},
+    "understanding_expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric_phrases", "expression_ops", "time_range_count"],
+      "properties": {
+        "metric_phrases": {"type": "array", "items": {"type": "string"}},
+        "expression_ops": {"type": "array", "items": {"type": "string"}},
+        "decomposition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["numerator_metric_biz_name", "denominator_metric_biz_name"],
+          "properties": {
+            "numerator_metric_biz_name": {"type": "string", "minLength": 1},
+            "denominator_metric_biz_name": {"type": "string", "minLength": 1}
+          }
+        },
+        "metric_conditions": {"type": "array", "items": {"type": "object"}},
+        "time_range_count": {"type": "integer", "minimum": 0},
+        "time_grain": {"type": "string"},
+        "order": {"type": "object"}
+      }
+    },
+    "binding_expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["groups"],
+      "properties": {
+        "groups": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["model_biz_name", "metric_biz_names", "dimension_biz_names"],
+            "properties": {
+              "model_biz_name": {"type": "string", "minLength": 1},
+              "metric_biz_names": {"type": "array", "items": {"type": "string"}},
+              "dimension_biz_names": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
+    "plan_expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query_tasks", "compute_ops"],
+      "properties": {
+        "query_tasks": {"type": "integer", "minimum": 1},
+        "compute_ops": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "sql_expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["per_task_time_predicate", "having", "ratio_nullif", "preaggregation", "order_by"],
+      "properties": {
+        "per_task_time_predicate": {"type": "boolean"},
+        "having": {"type": "boolean"},
+        "ratio_nullif": {"type": "boolean"},
+        "preaggregation": {"type": "boolean"},
+        "order_by": {"type": "boolean"}
+      }
+    },
+    "result_expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["non_empty", "columns_include", "consume_all_groups"],
+      "properties": {
+        "non_empty": {"type": "boolean"},
+        "columns_include": {"type": "array", "items": {"type": "string"}},
+        "consume_all_groups": {"type": "boolean"}
+      }
+    },
+    "tags": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+  }
+}

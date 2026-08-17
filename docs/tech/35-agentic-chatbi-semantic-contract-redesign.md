@@ -1,8 +1,8 @@
 # 35. 智能问数语义运行时重构设计（理解→绑定→规划契约 v2 · 合并稿）
 
-> 状态：设计评审稿 **v3** ｜ 日期：2026-08-17 ｜ 基线：`codex/agentic-chatbi-redesign` 工作区
+> 状态：设计评审稿 **v3 + R0 实施中** ｜ 日期：2026-08-17 ｜ 基线：`codex/agentic-chatbi-redesign` 工作区
 > 底稿：本文由两份独立设计稿合并——《语义契约重构设计》（本文件 v1）与《智能问数运行时重构设计》（`35-agentic-chatbi-runtime-refactoring-design.md`，已停止维护，仅存档）。合并取舍与勘误见附录 B。
-> 变更记录：v3（2026-08-17）——按实施评审意见（架构有条件通过、实施暂不通过）闭合六项契约缺口：① 复合指标拆解契约（DecompositionHint/RatioSpec，§4.1.1/4.3.3）；② 分组候选收敛决策表与 tie-break（§4.4.2）；③ SemanticRuntimeViewSnapshot Run 级冻结（§4.7）；④ temporal 旧字段投影契约（§4.2.8）；⑤ 验收门禁拆分为结构/业务双层（§7.3）；⑥ 分层黄金固定输入与 DTO 补全（§4.4.1/7.2）。另：R2 排期调整 3-4 周、R2 任务合并去重、Trace 快照治理规则（§6-R0）、跨模型 ratio 失败行为固定（§4.3.3）。闭环对照见附录 C。
+> 变更记录：v3（2026-08-17）——按实施评审意见（架构有条件通过、实施暂不通过）闭合六项契约缺口：① 复合指标拆解契约（DecompositionHint/RatioSpec，§4.1.1/4.3.3）；② 分组候选收敛决策表与 tie-break（§4.4.2）；③ SemanticRuntimeViewSnapshot Run 级冻结（§4.7）；④ temporal 旧字段投影契约（§4.2.8）；⑤ 验收门禁拆分为结构/业务双层（§7.3）；⑥ 分层黄金固定输入与 DTO 补全（§4.4.1/7.2）。另：R2 排期调整 3-4 周、R2 任务合并去重、Trace 快照治理规则（§6-R0）、跨模型 ratio 失败行为固定（§4.3.3）、补 §3.3 三模式编排范式澄清（FAST=确定性流水线 / PLAN=规划-执行 / RESEARCH=有界 agentic 循环，react_legacy 仅回滚）。闭环对照见附录 C。
 > 输入：docs/tech/32（架构方案）、33（实施计划）、34（P1 修复记录）；P1 黄金集 12 题三轮真实跑批（docs/test-results/p1-golden-2026-08-17{,-fixed,-fixed2}）；外部架构评审意见（2026-08-17）
 > 性质：**doc 32 的修订与补全**，不是推翻。本文重设计的是 doc 32 §5.2（问题理解）、§5.3（检索绑定）、§5.4（规划输入契约）与澄清/修复/验收机制；doc 32 §4 的 AnalysisPlan / ResultStore / ComputeEngine / 三模式编排、§5.1 语义资产层、权限与执行安全**全部确认保留**。
 > 编号说明：doc 33 §8 曾预留 35 号给 "analysis-plan-and-modes"，该文档未落笔，本文启用 35 号；后续计划模型契约文档顺延。
@@ -195,6 +195,25 @@ EXTRACTED ─解析→ CANDIDATES ─分组绑定→ BOUND(group_id, asset_id | 
 | 结果计算 | 白名单算子确定性计算 | LLM 心算 |
 | 回答组装 | 读取结果集并绑定数字引用 | 重新计算数字、补造缺失结果 |
 
+### 3.3 三模式的编排范式（doc 32 §4.3 的补充澄清）
+
+doc 32 §4.3 定义了三模式的触发条件与调用预算，但未点名各自的**编排范式**；且"Workflow"一词在本仓库另有所指（待退役的 Graph/Workflow 旧链路，doc 33 P2-6），易生混淆。此处成文，作为权威口径：
+
+| 模式 | 编排范式 | agentic 循环 | LLM 的职责 | 流程驱动者 | 代码宿主 | 状态 |
+|------|---------|-------------|-----------|-----------|---------|------|
+| FAST | **确定性流水线**（固定阶段序列） | 无 | 阶段内函数调用：重写/提及抽取/时间解析/作答（≤4 次），不驱动流程 | pipeline 代码（阶段顺序写死） | `orchestration/pipeline/fast.py` | 已实现，生产默认之一 |
+| PLAN | **规划-执行**（plan-and-execute） | 无（规划一次性产出，失败重试 1 次后规则降级） | FAST 四类 + 至多 1 次结构化规划产出完整 AnalysisPlan（规则直出通道 0 次）；模型不逐步决定下一动作 | 计划 DAG（服务端逐节点 PROVEN 校验后确定性执行） | `pipeline/plan_mode.py` + `planning/analysis_planner.py` | 已实现，生产默认之一 |
+| RESEARCH | **有界 agentic 循环**（ReAct 式：提子问题→生成 QueryTask→读结果摘要→决定下一步） | 有，预算封顶（≤8 查询 / ≤15 LLM / ≤300s，可配） | 循环内决策 + 报告组装；每个查询仍走绑定/校验/编译全链 | 研究模型（受限动作空间内） | `pipeline/research.py`（占位）+ 复用 `agent/` 预算/取消基建 | **未实现**（doc 33 P2-1） |
+| react_legacy | 旧 ReAct 循环（tool_visibility 状态机驱动；doc 32 §3.2 判定为"伪 ReAct"） | 有（每步一次 LLM） | 每步选择工具 | 工具可见性状态机 | `orchestration/agent/` | 仅回滚路径 + 暂承载非问数收口 |
+
+三点澄清：
+
+1. **范式差异是按问题难度分配算力的刻意决策**（doc 32 §1.2 混合编排共识："纯 ReAct 与纯 pipeline 都不是答案"）：FAST/PLAN 把模型自由度压缩为"阶段内函数"与"一次计划产出"，RESEARCH 是唯一保留自由循环的地方——agentic 成本只花在归因/开放问题上；
+2. **与旧 Graph/Workflow 链路无关**：三模式均不使用 workflow_engine；若"workflow 范式"指固定阶段编排，那正是 FAST/PLAN 的流水线本质，与待退役链路是两回事；
+3. **react_legacy 的两个残留职责需在退役前收口**：mode_router 目前把 `category != data_query`（闲聊/元问题/越界收口）与少数未覆盖形态回落 react_legacy（`mode_router.py:48-50, 73-76`）——非问数收口应随 R2 澄清门改造迁入 pipeline 直答阶段，使 react_legacy 成为纯回滚路径。
+
+LLM **选型**（各阶段用哪一档具体模型）与范式无关，仍是 doc 32 开放问题 5——建议 R3 重验收后按分层评测数据定档。
+
 ---
 
 ## 4. 分域设计
@@ -373,7 +392,8 @@ G001/G002/G009 类失败在此设计下**结构性消失**：模型不再被要�
      1. `numerator_text` / `denominator_text` **各自作为独立 METRIC 槽的检索文本**发起检索——hint 只是检索文本，不含任何资产信息，模型无法借 hint 指定资产；
      2. 两槽必须**各自达到 RESOLVED**（与普通指标同一门控阈值与歧义带）；任一 MISSED 或 AMBIGUOUS → 整体按 (c) 处理。**不为用户没有说过的假设短语发起澄清**——向用户询问其从未提及的词是不可解释的交互；
      3. 两资产必须属于**同一模型**（RuntimeSnapshot.models_of 判定）；跨模型 → 固定失败码 `RATIO_CROSS_MODEL_UNSUPPORTED`，按 (c) 处理；
-     4. 全部满足 → 服务端生成 `RatioSpec{origin="decomposition_hint"}`（4.4.1），composite mention 记为 BOUND（绑定到 ratio 而非单资产），编译期强制 NULLIF 保护；
+     4. 全部满足 → 服务端先执行**方向校验**：优先使用复合指标资产定义中的有序 `metric_refs`，否则使用 RuntimeSnapshot 已确认的 `numerator` / `denominator` 角色；反向绑定固定失败 `RATIO_DIRECTION_MISMATCH`，无法证明方向固定失败 `RATIO_DIRECTION_UNPROVEN`，两者都不进入用户澄清；
+     5. 方向校验通过后生成 `RatioSpec{origin="decomposition_hint"}`（4.4.1），composite mention 记为 BOUND（绑定到 ratio 而非单资产），编译期强制 NULLIF 保护；
    - **(c) 统一失败处置**（固定行为，进入 confidence 四档路由，不进澄清门）：
      - STRICT 数据集：拒答，reason_code ∈ {`COMPOSITE_METRIC_UNRESOLVED`, `RATIO_CROSS_MODEL_UNSUPPORTED`}，回答话术固定——未命中："未找到『销售订单平均客单价』的认证口径，可分别查询『销售订单金额』『销售订单数』"；跨模型："该口径的分子分母分属不同语义模型，当前不支持跨模型比率，建议分别查询"；
      - ASSISTED 数据集：受控兜底并标注非认证口径；
@@ -499,7 +519,7 @@ class ResolutionOutcome(BaseModel):
 
 第 4 步　分组
   按锁定指标的 model_id 分组 → QueryGroup[]（同模型多指标合一组；无指标的 detail 查询单组）
-  组数 > 上限 → 不执行，产出 USER_UNDERSPECIFIED（"问题涉及过多口径，请拆分提问"）
+  组数 > 上限 → 不执行，产出 `PLAN_QUERY_GROUP_LIMIT_EXCEEDED`（"查询组数量超过系统计划上限，请拆分提问"）；这是计划预算错误，不进入 USER_UNDERSPECIFIED 澄清门
 
 第 5 步　组内维度绑定：每个 dimension mention 在组的 model 语境下重新选择候选
   候选先按「与本组指标的 capability 兼容」过滤（Snapshot.compatible）；
@@ -562,9 +582,10 @@ class ResolutionOutcome(BaseModel):
 
 | 状态 | 定义 | 判定者 | 处置 |
 |------|------|--------|------|
-| `USER_UNDERSPECIFIED` | 用户表达本身缺必需信息："最近"无数量（temporal 已识别）、排名无方向且无默认、问题涉及口径数超上限 | 理解/时间解析/澄清门 | 澄清（立即，这是唯一允许在绑定前出门的澄清） |
+| `USER_UNDERSPECIFIED` | 用户表达本身缺必需信息："最近"无数量（temporal 已识别）、排名无方向且无默认 | 理解/时间解析/澄清门 | 澄清（立即，这是唯一允许在绑定前出门的澄清） |
 | `ASSET_AMBIGUOUS` | **绑定完成后**，组内某 mention 仍有 ≥2 个候选，且候选间业务口径确实不同（4.4.2 第 3 步决策表第 3 行、第 5/7 步引用），证据分差在歧义带内 | 澄清门 | 选项式澄清，选项=C_m 前 3（沿用现有卡片机制，展示口径定义与模型范围） |
 | `PENDING_BINDING` | 系统内部未完成状态：指标未绑定时的维度同名多候选、默认时间维度未加载、值未归一 | 绑定各步 | **禁止澄清**。继续绑定；绑定后自动消解或转前两态 |
+| `PLAN_QUERY_GROUP_LIMIT_EXCEEDED` | 已绑定查询组数量超过系统计划预算 | 计划校验 | 计划拒答或受控部分执行，不进入用户澄清 |
 
 **明确禁止向用户澄清的状态**（全部属于内部错误或 PENDING_BINDING，出现即按对应内部错误码处理）：DTO 字段/格式错误、字符串时间未归一化、比较字段缺兼容转换、指标尚未绑定导致的维度候选过多、默认时间维度尚未按模型确定、拆解假设短语的检索歧义（4.3.3-b2）、计划校验内部错误。
 
@@ -755,7 +776,7 @@ class SemanticRuntimeViewSnapshot:
 | 1 | `ResolutionOutcome` 及全部子 DTO（4.4.1） | `[新]` `apps/retrieval/models/dto/resolution.py` |
 | 2 | 分组与组内绑定算法（4.4.2 十一步，含约束传播、裁决表与全部 tie-break）；互斥收敛缩域；`bind_default_time_dimensions` 迁入；同资产合并 | `[新]` `apps/retrieval/query/grouping.py`；`[改]` `policy.py`（:568 缩域、:954 迁移） |
 | 3 | 生产侧统一切换：payload 层跨模型启发式退役（`_cross_model_query_plans`/`_assets_for_model`/`_add_intent_dimensions_for_model` 改为 ResolutionOutcome 投影）+ 语义工具改产 ResolutionOutcome（`semantic_state` dict 双写一个迭代，COMPAT_LEDGER 记账） | `[改]` `apps/retrieval/projection/payload.py:823-966`、`apps/tool/tools/semantic.py`、`semantic_contracts.py` |
-| 4 | 澄清门服务（三态判定 + 门控顺序 + 禁止清单 + 预算 + confidence 接线） | `[新]` `apps/chatbi/services/planning/clarification_gate.py`；`[改]` `pipeline/{fast,plan_mode}.py`、`agent/preparation.py` |
+| 4 | 澄清门服务（三态判定 + 门控顺序 + 禁止清单 + 预算 + confidence 接线）；非问数收口（chitchat/meta/out_of_scope 直答）自 react_legacy 迁入 pipeline 直答阶段（§3.3-3），使 react_legacy 成为纯回滚路径 | `[新]` `apps/chatbi/services/planning/clarification_gate.py`；`[改]` `pipeline/{mode_router,fast,plan_mode}.py`、`agent/preparation.py` |
 | 5 | AnalysisPlanner 输入切换 ResolutionOutcome；QueryGroup↔QueryTask 同构映射；join_on 确定性推导；表达映射表落码；多结果全消费规则 | `[改]` `services/planning/analysis_planner.py`（`_rule_plan_from_semantic_state`/`_multi_query_task` 重写） |
 | 测 | 分组算法矩阵（单模型/跨模型/同名维度/候选等价副本/约束传播回退/组数超限/无默认时间/同资产合并）；伪澄清回归（G002/G005 行为=direct）；G004/G005/G006 绑定层黄金；resolution-only fixture 回放 | `[新]` `tests/retrieval/test_query_grouping.py`、`tests/chatbi/test_clarification_gate.py` |
 
@@ -830,7 +851,7 @@ R4（题集与 runner）自 R1 起并行，R2/R3/R5 门禁依赖其产出
 {
   "case_id": "P1-G001",
   "question": "店铺100023在2026年6月30日的总GMV相比6月29日变化了多少，增长率是多少？",
-  "dataset": "商城店铺数据集",
+  "dataset": {"dataset_id": 243, "dataset_biz_name": "stall_dataset", "schema_version": 6},
   "behavior": "direct",              // direct | clarify_allowed | clarify_required | reject | assisted_fallback
   "understanding_expect": {
     "mentions": [
@@ -842,8 +863,9 @@ R4（题集与 runner）自 R1 起并行，R2/R3/R5 门禁依赖其产出
     "temporal": {"comparison_method": "custom", "range_count": 2}
   },
   "binding_expect": {
-    "groups": [{"model_hint": "fct_stall_order_daily", "metrics": ["总GMV"],
-                "filters": [{"dimension": "档口ID", "canonical": "100023"}]}]
+    "groups": [{"model_biz_name": "fct_stall_order_daily", "metric_biz_names": ["gmv_total"],
+                "dimension_biz_names": ["stall_id"],
+                "filters": [{"dimension_biz_name": "stall_id", "canonical": "100023"}]}]
   },
   "plan_expect": {"query_tasks": 2, "compute_ops": ["growth"]},
   "sql_expect": {"per_task_time_predicate": true, "having": false},
@@ -853,6 +875,15 @@ R4（题集与 runner）自 R1 起并行，R2/R3/R5 门禁依赖其产出
 ```
 
 **分层 runner 的固定输入**（回应实施评审第 6 项——隔离"算法变化"与"输入变化"）：
+
+**R0 当前实现状态（2026-08-17）**：问题理解链路已接入
+`CHATBI_SEMANTIC_REPAIR_V2`，完成“确定性归一化 → 字段级补丁 → 语义不变量校验”、顶层及嵌套 extra 剥离、Temporal 旧字段唯一投影和理解阶段澄清止血；对应单元测试已通过。查询组超限已归类为
+`PLAN_QUERY_GROUP_LIMIT_EXCEEDED`，复合比率方向校验已提供确定性拒答函数。Run 的 `derived_state` 已写入
+`semantic_contract_version` / `binding_contract_version`，评测脚本可读取 v2 黄金用例并按 `behavior` 判定是否误入澄清门。P1 12 题已迁移到真实稳定业务名引用的 v2 JSONL，并由
+`backend/scripts/validate_p1_golden_cases.py` 校验。分层 runner、全链 Trace 候选集/绑定快照和绑定/计划 R1-R3 能力仍未完成，不能据此宣称 P1 验收通过。
+
+P1-G007 的当前资产快照已包含认证派生指标 `fct_stall_order_daily.aov_sale`；黄金集中的
+`gmv_sale / order_cnt_sale` 仅作为理解层拆解假设，绑定期望以整短语命中的 `aov_sale` 为准。
 
 | runner | 输入 | 模型依赖 | 用途 |
 |--------|------|---------|------|

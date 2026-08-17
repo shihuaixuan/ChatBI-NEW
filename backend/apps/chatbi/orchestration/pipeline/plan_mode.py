@@ -160,6 +160,12 @@ class PlanPipeline:
         self._save_plan(state, plan)
         self._session.commit()
         if plan.validation.status is AnalysisPlanStatus.REJECTED:
+            if "PLAN_QUERY_GROUP_LIMIT_EXCEEDED" in plan.validation.reason_codes:
+                # 预算超限是内部计划复杂度错误，不能转换为用户信息不足澄清。
+                raise PlanPipelineError(
+                    "PLAN_QUERY_GROUP_LIMIT_EXCEEDED",
+                    "查询组数量超过系统计划上限，请拆分为多个问题",
+                )
             raise PlanPipelineError(
                 "PLAN_VALIDATION_FAILED",
                 ",".join(plan.validation.reason_codes),

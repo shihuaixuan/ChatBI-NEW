@@ -166,6 +166,8 @@ class Settings(BaseSettings):
     CHATBI_COMPUTE_ENABLED: bool = True
     CHATBI_ANSWER_CITATION_ENFORCED: bool = True
     CHATBI_ASSISTED_FALLBACK_ENABLED: bool = False
+    # R0：启用确定性归一化、字段级补丁和语义不变量校验。
+    CHATBI_SEMANTIC_REPAIR_V2: bool = True
     # 指标出口保持关闭，接入 OTLP 后再通过环境变量开启。
     OTEL_METRICS_ENABLED: bool = False
     OTEL_METRICS_SERVICE_NAME: str = "numora-chatbi"
@@ -236,6 +238,7 @@ class Settings(BaseSettings):
                      'QUERY_UNDERSTANDING_MODEL_ENABLED',
                      'TEMPORAL_MODEL_SHADOW_ENABLED',
                      'TEMPORAL_MODEL_AUTHORITY_ENABLED',
+                     'CHATBI_SEMANTIC_REPAIR_V2',
                      'CHATBI_MEMORY_LLM_EXTRACTION_ENABLED',
                      'CHATBI_MEMORY_RECALL_EXPERIMENT_ENABLED',
                      'RETRIEVAL_QUERY_TRACE_ENABLED',

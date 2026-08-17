@@ -37,7 +37,8 @@ class AnalysisPlanValidator:
         reasons: list[str] = []
         query_tasks = [task for task in plan.tasks if isinstance(task, QueryTask)]
         if len(query_tasks) > self._max_query_tasks:
-            reasons.append("PLAN_QUERY_TASK_LIMIT_EXCEEDED")
+            # 查询组数量是系统计划预算，不属于用户表达缺失，必须走计划拒答门。
+            reasons.append("PLAN_QUERY_GROUP_LIMIT_EXCEEDED")
         reasons.extend(self._validate_edges(plan))
         if require_proven:
             reasons.extend(
