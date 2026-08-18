@@ -5,6 +5,7 @@ from apps.chatbi.models.dto.question_understanding import (
     DimensionRecognitionOutput,
     IntentRecognitionOutput,
     NaturalLanguageIntentOutputBase,
+    QuestionRewriteOutput,
     QuestionRewriteOutputBase,
 )
 from apps.chatbi.orchestration.graph.schemas.v1 import (
@@ -139,6 +140,26 @@ def test_graph_outputs_inherit_shared_bases_without_expanding_payload():
         }
     ]
     assert "value_confidence" not in intent.model_dump()["dimension_slots"][0]
+
+
+def test_agent_rewrite_output_only_contains_original_and_rewrite_question():
+    output = QuestionRewriteOutput(
+        original_question="那上个月呢？",
+        rewrite_question="查询上个月销售额",
+    )
+
+    assert output.model_dump() == {
+        "original_question": "那上个月呢？",
+        "rewrite_question": "查询上个月销售额",
+    }
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        QuestionRewriteOutput.model_validate(
+            {
+                "original_question": "那上个月呢？",
+                "rewrite_question": "查询上个月销售额",
+                "message_type": "followup",
+            }
+        )
 
 
 def test_dimension_recognition_requires_one_slot_for_each_unique_mention():

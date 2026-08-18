@@ -58,7 +58,10 @@ def test_metric_prompt_preserves_complete_business_phrase():
 
 def test_agent_prompts_include_typical_few_shot_examples():
     assert "只替换上一轮时间的追问" in REWRITE_SYSTEM_PROMPT
-    assert '"message_type":"followup"' in REWRITE_SYSTEM_PROMPT
+    assert '"original_question"' in REWRITE_SYSTEM_PROMPT
+    assert '"rewrite_question"' in REWRITE_SYSTEM_PROMPT
+    assert "message_type" not in REWRITE_SYSTEM_PROMPT
+    assert "missing_slots" not in REWRITE_SYSTEM_PROMPT
     assert "示例 1：排名查询" in INTENT_SYSTEM_PROMPT
     assert '"order_direction":"desc","limit":5' in INTENT_SYSTEM_PROMPT
     assert "示例 2：明确筛选值" in DIMENSION_SYSTEM_PROMPT

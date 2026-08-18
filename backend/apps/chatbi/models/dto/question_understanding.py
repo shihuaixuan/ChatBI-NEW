@@ -83,20 +83,17 @@ class NaturalLanguageIntentOutputBase(
     conflict_slots: list[str] = Field(default_factory=list)
 
 
-class QuestionRewriteOutput(QuestionRewriteOutputBase):
-    """ChatBI 权威问题重写输出，Agent 使用严格扩展字段。"""
+class QuestionRewriteOutput(BaseModel):
+    """ChatBI 问题重写的唯一模型输出契约。
+
+    重写阶段只负责把自然语言问题改写成可独立理解的问题，不输出意图、置信度、
+    缺失槽位或上下文继承信息。异常由后续问题理解和确定性校验阶段处理。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    rewritten_question: str = Field(min_length=1)
-    message_type: Literal[
-        "new_question",
-        "followup",
-        "plan_patch",
-        "clarification_reply",
-    ]
-    inherited_context: dict[str, Any] = Field(default_factory=dict)
-    confidence: float = Field(ge=0, le=1)
+    original_question: str = Field(min_length=1)
+    rewrite_question: str = Field(min_length=1)
 
 
 class DimensionSlot(BaseModel):

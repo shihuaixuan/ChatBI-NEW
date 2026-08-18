@@ -17,7 +17,6 @@ from apps.chatbi.errors import (
     QuestionUnderstandingError,
     TemporalInterpretationError,
 )
-from apps.chatbi.models.dto.analysis_plan import AnalysisPlan
 from apps.chatbi.models.dto.mention import (
     MentionGraph,
     normalize_mention_graph_payload,
@@ -40,11 +39,6 @@ from apps.chatbi.models.dto.question_understanding import (
     TemporalInterpretationResult,
     TemporalShadowObservation,
     TimeRange,
-)
-from apps.chatbi.services.planning.plan_patch import (
-    PlanPatchError,
-    apply_plan_patch,
-    patch_from_understanding,
 )
 from apps.chatbi.services.understanding.dimension_candidates import (
     dimension_candidate_by_text,
@@ -106,49 +100,51 @@ class QuestionUnderstandingModelClient(Protocol):
 REWRITE_SYSTEM_PROMPT = "\n\n".join(
     [
         """
-你是 ChatBI 的问题上下文化重写器。你只负责判断当前输入与会话上下文的关系，并将其重写为语义完整、可独立理解的问题。
+你是智能问数场景下的问题重写大师。
 
-不识别资产 ID、字段名、表名或指标口径。
+你的唯一任务是：根据用户当前问题和必要的会话上下文，将当前问题重写为一个完整、明确、专业的在问数场景下的自然语言问题。
 
-只输出以下 JSON 对象，不要输出 Markdown 或解释：
+重写规则：
+1. 保留用户当前问题中明确表达的指标、维度、筛选条件、时间范围和展示要求。
+2. 消解代词、省略和上下文引用。
+3. 只有在历史上下文中存在唯一明确指向时，才能补全省略内容。
+4. 当前问题是对上一轮问题的修改时，只修改用户明确要求修改的部分，保留其他未修改条件。
+5. 当前问题可以独立表达完整含义时，不继承上一轮无关内容。
+6. 保留会影响后续模式分类的查询动作和分析关系，包括同查多个指标、比较不同时间或对象、差值、占比、增长率、趋势、排名、下钻和原因分析。
+7. 可以把口语化表达改写为明确的自然语言，但不能改变用户原意。
+8. 可以补全明确的相对时间表达，但不能猜测无法确定的时间。
+9. 保留用户原有的业务名称、指标名称、店铺编号、区域名称、渠道名称和筛选值。
+10. 不得增加用户没有提出的指标、维度、筛选条件、排序、Top N、比较关系、计算关系或分析目标。
+11. 不得将业务名称转换为表名、字段名、内部资产 ID 或 SQL。
+12. 不得输出问题分类、意图、模式、置信度、缺失字段、上下文继承字段或解释说明。
+13. 如果上下文存在多个可能指向，无法唯一确定时，不得自行猜测；在 rewrite_question 中保留无法确定的原有表达，交由后续流程处理。
+
+只输出一个合法 JSON 对象，且只能包含以下两个字段：
 {
-  "message_type": "new_question | followup | plan_patch | clarification_reply",
-  "rewritten_question": "补全上下文后的完整问题",
-  "inherited_context": {},
-  "need_user_input": false,
-  "missing_slots": [],
-  "confidence": 0.0
+  "original_question": "用户本轮提交的原始问题",
+  "rewrite_question": "重写后的完整问题"
 }
+字段要求：
+- original_question 必须完整保留用户本轮提交的问题原文；
+- rewrite_question 必须是供后续流程使用的完整自然语言问题；
+- rewrite_question 不得包含 JSON、Markdown、解释过程或 SQL；
+- 不得输出 JSON 以外的文字。
 """.strip(),
         QUESTION_REWRITE_BUSINESS_RULES,
         """
-Agent 上下文规则：
-- 当前输入本身构成完整问题时，message_type=new_question。
-- conversation_context.last_rewritten_question 只表示最近一次成功执行后的完整问题。
-- conversation_context.previous_understanding 只表示最近一次成功执行后的结构化问题理解结果。
-- “那上个月呢”“换成订单数”等依赖上文的表达属于 followup，只从 last_rewritten_question 继承本轮缺失的语义。
-- 当本轮出现新的筛选值、但省略了维度名称时，检查 previous_understanding.intent.dimension_slots；如果其中只有一个与这些值类型相容的筛选维度，继承该维度名称和用途，只替换筛选值；不得继承上一轮的旧值、指标或时间。
-- 如果 previous_understanding.intent.dimension_slots 中存在多个可能的筛选维度，不能猜测，必须返回 need_user_input=true 并列出缺失维度。
-- 当前输入明显在回答挂起澄清时，message_type=clarification_reply。
-- 当前输入只修改上一 AnalysisPlan 的时间、维度或筛选，且 conversation_context.previous_analysis_plan 存在时，message_type=plan_patch；补丁必须放在 inherited_context.plan_patch 中，不能猜测资产 ID。
-
 典型示例：
 
 示例 1：可独立理解的新问题
-输入：{"question":"本月新增客户数是多少？","conversation_context":{}}
-输出：{"message_type":"new_question","rewritten_question":"本月新增客户数是多少？","inherited_context":{},"need_user_input":false,"missing_slots":[],"confidence":1.0}
+输入：{"current_question":"本月新增客户数是多少？","conversation_context":{}}
+输出：{"original_question":"本月新增客户数是多少？","rewrite_question":"本月新增客户数是多少？"}
 
 示例 2：只替换上一轮时间的追问
-输入：{"question":"那上个月呢？","conversation_context":{"last_rewritten_question":"查询本月新增客户数"}}
-输出：{"message_type":"followup","rewritten_question":"查询上个月新增客户数","inherited_context":{"metric":"新增客户数"},"need_user_input":false,"missing_slots":[],"confidence":0.95}
+输入：{"current_question":"那上个月呢？","conversation_context":{"last_rewritten_question":"查询本月新增客户数"}}
+输出：{"original_question":"那上个月呢？","rewrite_question":"查询上个月新增客户数"}
 
 示例 3：无法确定引用对象
-输入：{"question":"那另一个呢？","conversation_context":{}}
-输出：{"message_type":"followup","rewritten_question":"那另一个呢？","inherited_context":{},"need_user_input":true,"missing_slots":["context"],"confidence":0.3}
-
-示例 4：继承上一轮唯一筛选维度但替换新值
-输入：{"question":"2026-06-30 对比100022和100023总商品件数","conversation_context":{"last_rewritten_question":"2026-06-10 店铺100013销售、订货、总订单数","previous_understanding":{"rewritten_question":"2026-06-10 店铺100013销售、订货、总订单数","intent":{"dimension_slots":[{"name":"档口ID","role":"filter","value":"100013","value_status":"provided"}]}}}}
-输出：{"message_type":"new_question","rewritten_question":"2026年6月30日，对比店铺100022和100023的总商品件数。","inherited_context":{"inherited_dimension":"档口ID"},"need_user_input":false,"missing_slots":[],"confidence":0.95}
+输入：{"current_question":"那另一个呢？","conversation_context":{}}
+输出：{"original_question":"那另一个呢？","rewrite_question":"那另一个呢？"}
 """.strip(),
     ]
 )
@@ -442,61 +438,35 @@ class QuestionUnderstandingService:
                 candidate_node.set_output_detail(
                     {"available_dimensions": available_dimensions}
                 )
+        rewrite_context = _build_rewrite_context(context)
         rewrite, rewrite_usage = self._invoke_validated_model(
             "QUESTION_REWRITE",
             REWRITE_SYSTEM_PROMPT,
             {
-                "question": question,
-                "datasource_id": datasource_id,
-                "conversation_context": context,
+                "current_question": question,
+                "conversation_context": rewrite_context,
+                "reference_datetime": fixed_temporal_context.reference_at.isoformat(),
+                "timezone": fixed_temporal_context.timezone,
             },
             QuestionRewriteOutput,
+            # 迁移期间只接受旧字段 rewritten_question 的显式映射；旧的意图、
+            # 置信度和槽位字段不会进入新的重写 DTO，也不会被后续流程消费。
+            normalizer=lambda payload: _normalize_question_rewrite_payload(
+                payload,
+                original_question=question,
+            ),
             trace_run_id=trace_run_id,
         )
 
-        # 计划补丁必须由重写器显式产出，并经过服务端 DTO 与计划校验；
-        # 无法安全应用时继续完整理解，避免静默修改上一轮口径。
-        previous_plan = context.get("previous_analysis_plan")
-        previous_understanding = context.get("previous_understanding")
-        if rewrite.message_type == "plan_patch" and isinstance(previous_plan, dict):
-            try:
-                previous_plan_model = AnalysisPlan.model_validate(previous_plan)
-                patch = patch_from_understanding(
-                    {
-                        "inherited_context": rewrite.inherited_context,
-                    }
-                )
-                if patch is not None:
-                    patched = apply_plan_patch(previous_plan_model, patch)
-                    if isinstance(previous_understanding, dict):
-                        prior_output = QuestionUnderstandingOutput.model_validate(
-                            previous_understanding
-                        )
-                        patched_output = prior_output.model_copy(
-                            update={
-                                "original_question": question,
-                                "message_type": "plan_patch",
-                                "rewritten_question": rewrite.rewritten_question,
-                                "inherited_context": {
-                                    **prior_output.inherited_context,
-                                    **rewrite.inherited_context,
-                                    "patched_analysis_plan": patched.plan.model_dump(
-                                        mode="json"
-                                    ),
-                                },
-                            }
-                        )
-                        return QuestionUnderstandingOutcome(
-                            output=patched_output,
-                            usage_metadata=rewrite_usage,
-                        )
-            except (PlanPatchError, ValidationError, ValueError):
-                # 失败不修改历史计划，继续走完整理解以重新建立当前问题事实源。
-                pass
+        if rewrite.original_question != question:
+            raise QuestionUnderstandingError(
+                "QUESTION_REWRITE_ORIGINAL_QUESTION_MISMATCH"
+            )
 
         understanding_payload = {
-            "rewritten_question": rewrite.rewritten_question,
-            "inherited_context": rewrite.inherited_context,
+            "rewritten_question": rewrite.rewrite_question,
+            # 重写阶段不再输出上下文继承对象；后续阶段只使用规范化后的问题文本。
+            "inherited_context": {},
             # 数据集治理指令单独放在固定模块槽位，避免与用户语义事实混淆。
             "dataset_instructions": {
                 "question_categorization": list(
@@ -522,7 +492,7 @@ class QuestionUnderstandingService:
             TraceNodeType.PHASE,
             "question_understanding",
             "统一问题理解",
-            input_data={"rewritten_question": rewrite.rewritten_question},
+            input_data={"rewrite_question": rewrite.rewrite_question},
         ) as understanding_node:
             understanding_system_prompt = (
                 MENTION_GRAPH_SYSTEM_PROMPT
@@ -546,13 +516,13 @@ class QuestionUnderstandingService:
                     MentionGraph,
                     normalizer=lambda payload: normalize_mention_graph_payload(
                         payload,
-                        rewritten_question=rewrite.rewritten_question,
+                        rewritten_question=rewrite.rewrite_question,
                     ),
                     trace_run_id=trace_run_id,
                 )
                 intent = project_mention_graph_to_intent(
                     mention_graph,
-                    rewritten_question=rewrite.rewritten_question,
+                    rewritten_question=rewrite.rewrite_question,
                 )
             else:
                 intent, intent_usage = self._invoke_validated_model(
@@ -563,7 +533,7 @@ class QuestionUnderstandingService:
                     normalizer=lambda payload: _normalize_unified_payload(
                         payload,
                         available_dimensions,
-                        rewritten_question=rewrite.rewritten_question,
+                        rewritten_question=rewrite.rewrite_question,
                     ),
                     trace_run_id=trace_run_id,
                 )
@@ -592,7 +562,7 @@ class QuestionUnderstandingService:
             _reconcile_detail_display_dimensions(
                 intent,
                 [] if self._mention_contract_enabled else available_dimensions,
-                rewritten_question=rewrite.rewritten_question,
+                rewritten_question=rewrite.rewrite_question,
             ),
             fixed_temporal_context,
             # Agent 前置阶段只识别原始时间表达，实际解析交给 ReAct 的时间工具。
@@ -614,7 +584,7 @@ class QuestionUnderstandingService:
             if self._temporal_authority_enabled:
                 temporal_interpretation, temporal_usage = (
                     self._interpret_authoritative_plan(
-                        rewritten_question=rewrite.rewritten_question,
+                        rewritten_question=rewrite.rewrite_question,
                         intent=intent,
                         mention_graph=mention_graph,
                         temporal_context=fixed_temporal_context,
@@ -628,7 +598,7 @@ class QuestionUnderstandingService:
                 )
             else:
                 temporal_shadow, temporal_usage = self._observe_temporal_plan(
-                    rewritten_question=rewrite.rewritten_question,
+                    rewritten_question=rewrite.rewrite_question,
                     intent=intent,
                     mention_graph=mention_graph,
                     temporal_context=fixed_temporal_context,
@@ -661,7 +631,6 @@ class QuestionUnderstandingService:
             },
         ) as validation_node:
             validation = _validate_understanding(
-                rewrite,
                 intent,
                 temporal_interpretation=temporal_interpretation,
                 pending_binding_enabled=self._semantic_repair_v2_enabled,
@@ -676,9 +645,13 @@ class QuestionUnderstandingService:
                 )
         output = QuestionUnderstandingOutput(
             original_question=question,
-            message_type=rewrite.message_type,
-            rewritten_question=rewrite.rewritten_question,
-            inherited_context=rewrite.inherited_context,
+            message_type=_derive_legacy_message_type(
+                question,
+                rewrite.rewrite_question,
+                context,
+            ),
+            rewritten_question=rewrite.rewrite_question,
+            inherited_context={},
             intent=intent,
             validation=validation,
             temporal_interpretation=temporal_interpretation,
@@ -775,17 +748,10 @@ class QuestionUnderstandingService:
             temporal_interpretation,
             temporal_context=temporal_context,
         )
-        rewrite = QuestionRewriteOutput(
-            message_type=previous.message_type,
-            rewritten_question=previous.rewritten_question,
-            inherited_context=previous.inherited_context,
-            confidence=1.0,
-        )
         output = previous.model_copy(
             update={
                 "intent": intent,
                 "validation": _validate_understanding(
-                    rewrite,
                     intent,
                     temporal_interpretation=temporal_interpretation,
                 ),
@@ -1339,14 +1305,7 @@ def apply_question_understanding_clarification(
         use_legacy_time_interpretation=False,
     )
     # 重写结果已经在挂起前确定；这里只重新执行无模型副作用的业务校验。
-    rewrite = QuestionRewriteOutput(
-        message_type=previous.message_type,
-        rewritten_question=previous.rewritten_question,
-        inherited_context=previous.inherited_context,
-        confidence=1.0,
-    )
     validation = _validate_understanding(
-        rewrite,
         updated_intent,
         temporal_interpretation=previous.temporal_interpretation,
     )
@@ -1635,8 +1594,85 @@ def _normalize_question_category(value: Any) -> str:
     return aliases.get(key, "data_query")
 
 
+def _build_rewrite_context(context: dict[str, Any]) -> dict[str, Any]:
+    """构造问题重写允许读取的自然语言上下文。
+
+    重写阶段不能读取上一轮的结构化意图、资产绑定、SQL 或 AnalysisPlan；
+    这些内容属于后续执行阶段，直接注入会让重写器越过职责边界。
+    """
+
+    result: dict[str, Any] = {}
+    last_question = context.get("last_rewritten_question")
+    if isinstance(last_question, str) and last_question.strip():
+        result["last_rewritten_question"] = last_question.strip()
+
+    history = context.get("history")
+    if isinstance(history, list):
+        safe_history: list[dict[str, str]] = []
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            safe_item: dict[str, str] = {}
+            for key in ("question", "answer_brief"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    safe_item[key] = value.strip()
+            if safe_item:
+                safe_history.append(safe_item)
+        if safe_history:
+            result["history"] = safe_history
+
+    for key in (
+        "pending_question",
+        "clarification_question",
+        "user_confirmation",
+    ):
+        value = context.get(key)
+        if isinstance(value, str) and value.strip():
+            result[key] = value.strip()
+    return result
+
+
+def _normalize_question_rewrite_payload(
+    payload: dict[str, Any],
+    *,
+    original_question: str,
+) -> dict[str, Any]:
+    """将迁移期旧重写字段映射到新契约，不保留旧扩展字段。"""
+
+    normalized = dict(payload)
+    if "rewrite_question" not in normalized and "rewritten_question" in normalized:
+        normalized["rewrite_question"] = normalized.pop("rewritten_question")
+        # 旧模型没有输出原问题字段，该字段由服务端保存的原始输入补齐。
+        normalized["original_question"] = original_question
+    return {
+        key: normalized[key]
+        for key in ("original_question", "rewrite_question")
+        if key in normalized
+    }
+
+
+def _derive_legacy_message_type(
+    original_question: str,
+    rewrite_question: str,
+    context: dict[str, Any],
+) -> str:
+    """为尚未迁移的完整问题理解结果保留只读兼容字段。
+
+    该字段不参与问题重写模型输出、语义解析或模式路由；新代码不应依赖它。
+    """
+
+    if context.get("pending_question") or context.get("clarification_question"):
+        return "clarification_reply"
+    if (
+        isinstance(context.get("last_rewritten_question"), str)
+        and rewrite_question.strip() != original_question.strip()
+    ):
+        return "followup"
+    return "new_question"
+
+
 def _validate_understanding(
-    rewrite: QuestionRewriteOutput,
     intent: IntentRecognitionOutput,
     *,
     temporal_interpretation: TemporalInterpretationResult | None = None,
@@ -1644,8 +1680,9 @@ def _validate_understanding(
 ) -> IntentValidationOutput:
     result = validate_question_understanding(
         QuestionUnderstandingValidationData(
-            rewrite_need_user_input=rewrite.need_user_input,
-            rewrite_missing_slots=tuple(rewrite.missing_slots),
+            # 重写阶段不输出缺失槽位；上下文歧义由统一理解和确定性校验处理。
+            rewrite_need_user_input=False,
+            rewrite_missing_slots=(),
             intent_type=intent.intent_type,
             metric_mentions=tuple(intent.metric_mentions),
             dimension_slots=tuple(
