@@ -21,23 +21,95 @@
     "understanding_expect": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["metric_phrases", "expression_ops", "time_range_count"],
+      "anyOf": [
+        {"required": ["metric_phrases", "expression_ops", "time_range_count"]},
+        {"required": ["mentions", "expressions", "metric_conditions", "temporal"]}
+      ],
       "properties": {
         "metric_phrases": {"type": "array", "items": {"type": "string"}},
         "expression_ops": {"type": "array", "items": {"type": "string"}},
-        "decomposition": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["numerator_metric_biz_name", "denominator_metric_biz_name"],
-          "properties": {
-            "numerator_metric_biz_name": {"type": "string", "minLength": 1},
-            "denominator_metric_biz_name": {"type": "string", "minLength": 1}
+        "mentions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["text", "kind"],
+            "properties": {
+              "text": {"type": "string", "minLength": 1},
+              "kind": {"enum": ["metric", "dimension", "time"]},
+              "metric_role": {"enum": ["base", "computed", "composite"]},
+              "role": {"type": "string", "minLength": 1}
+            }
           }
         },
-        "metric_conditions": {"type": "array", "items": {"type": "object"}},
+        "expressions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["op"],
+            "properties": {
+              "op": {"type": "string", "minLength": 1},
+              "over": {"type": "string", "minLength": 1},
+              "outputs": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "decomposition": {
+          "type": "object",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "required": ["numerator_text", "denominator_text"],
+              "properties": {
+                "numerator_text": {"type": "string", "minLength": 1},
+                "denominator_text": {"type": "string", "minLength": 1}
+              }
+            },
+            {
+              "additionalProperties": false,
+              "required": ["numerator_metric_biz_name", "denominator_metric_biz_name"],
+              "properties": {
+                "numerator_metric_biz_name": {"type": "string", "minLength": 1},
+                "denominator_metric_biz_name": {"type": "string", "minLength": 1}
+              }
+            }
+          ]
+        },
+        "metric_conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["operator", "value"],
+            "properties": {
+              "metric_ref": {"type": "string", "minLength": 1},
+              "operator": {"enum": [">", ">=", "<", "<=", "=", "!="]},
+              "value": {"type": "number"},
+              "raw": {"type": "string", "minLength": 1}
+            }
+          }
+        },
         "time_range_count": {"type": "integer", "minimum": 0},
         "time_grain": {"type": "string"},
-        "order": {"type": "object"}
+        "temporal": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "comparison_method": {"type": "string", "minLength": 1},
+            "range_count": {"type": "integer", "minimum": 0},
+            "grain": {"type": "string", "minLength": 1}
+          }
+        },
+        "order": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["direction", "target_metric_phrase"],
+          "properties": {
+            "direction": {"enum": ["asc", "desc"]},
+            "target_metric_phrase": {"type": "string", "minLength": 1}
+          }
+        }
       }
     },
     "binding_expect": {
@@ -51,12 +123,24 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["model_biz_name", "metric_biz_names", "dimension_biz_names"],
-            "properties": {
-              "model_biz_name": {"type": "string", "minLength": 1},
-              "metric_biz_names": {"type": "array", "items": {"type": "string"}},
-              "dimension_biz_names": {"type": "array", "items": {"type": "string"}}
-            }
+              "required": ["model_biz_name", "metric_biz_names", "dimension_biz_names"],
+              "properties": {
+                "model_biz_name": {"type": "string", "minLength": 1},
+                "metric_biz_names": {"type": "array", "items": {"type": "string"}},
+                "dimension_biz_names": {"type": "array", "items": {"type": "string"}},
+                "filters": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["dimension_biz_name", "canonical"],
+                    "properties": {
+                      "dimension_biz_name": {"type": "string", "minLength": 1},
+                      "canonical": {"type": "string", "minLength": 1}
+                    }
+                  }
+                }
+              }
           }
         }
       }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -42,6 +43,12 @@ from apps.chatbi.services.planning.confidence import (
 )
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import ToolCall, ToolCallContext, ToolRegistry, ToolResult, ToolStatus
+from apps.trace import (
+    AgentTraceRecorder,
+    TraceNodeSpec,
+    TraceNodeStatus,
+    TraceNodeType,
+)
 from common.observability import MetricsRecorder
 
 
@@ -66,6 +73,8 @@ class FastPipelineDependencies:
     assisted_fallback_enabled: bool = False
     semantic_schema_provider: Any | None = None
     metrics: MetricsRecorder | None = None
+    # 直接流水线也必须复用 Agent Trace，不能只在 ReAct 工具执行器中留痕。
+    trace_recorder: AgentTraceRecorder | None = None
 
 
 class FastPipeline:
@@ -83,6 +92,8 @@ class FastPipeline:
         self._assisted_fallback_enabled = dependencies.assisted_fallback_enabled
         self._semantic_schema_provider = dependencies.semantic_schema_provider
         self._metrics = dependencies.metrics
+        self._trace_recorder = dependencies.trace_recorder
+        self._plan_snapshot_counts: dict[int, int] = {}
 
     def run(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         """执行 bind→plan→validate→execute→answer 固定阶段。"""
@@ -242,19 +253,78 @@ class FastPipeline:
         if tool is None:
             raise FastPipelineError(f"FAST_TOOL_NOT_REGISTERED:{name}")
         call_id = f"fast:{run_id}:{name}"
-        result = self._registry.execute(
-            ToolCall(name=name, args=args, call_id=call_id),
-            state.context,
-            call_context=ToolCallContext(tool_call_id=call_id, cancellation=state.cancellation),
+        trace_spec = TraceNodeSpec(
+            run_id=run_id,
+            node_key=(
+                f"pipeline:fast:{run_id}:{name}:"
+                f"{state.context.state.get('result_node_id') or 'plan'}"
+            ),
+            node_type=_pipeline_trace_node_type(name),
+            name=_pipeline_trace_name(name),
+            display_name=_pipeline_trace_display_name(name),
+            metadata={"pipeline": "fast", "tool_name": name},
         )
-        projection = self._result_processor.process(state.context, name, result)
-        state.context.state.update(projection.state_patch)
-        if projection.result.status != ToolStatus.SUCCEEDED:
-            raise FastPipelineError(
-                projection.result.error_code or f"FAST_{name.upper()}_FAILED",
-                projection.result.model_content,
+        trace_context = (
+            self._trace_recorder.node(
+                trace_spec,
+                input_data={"tool_name": name, "call_id": call_id},
+                input_detail={
+                    "args": args,
+                    "semantic_retrieval_request": (
+                        state.context.state.get("semantic_retrieval_request")
+                        if name == "search_semantic_assets"
+                        else None
+                    ),
+                },
             )
-        return projection.result
+            if self._trace_recorder is not None
+            else nullcontext(None)
+        )
+        with trace_context as trace_node:
+            result = self._registry.execute(
+                ToolCall(name=name, args=args, call_id=call_id),
+                state.context,
+                call_context=ToolCallContext(
+                    tool_call_id=call_id,
+                    cancellation=state.cancellation,
+                ),
+            )
+            projection = self._result_processor.process(state.context, name, result)
+            state.context.state.update(projection.state_patch)
+            if trace_node is not None:
+                trace_summary = {
+                    "status": projection.result.status.value,
+                    "error_code": projection.result.error_code,
+                    "changed_keys": sorted(projection.state_patch),
+                }
+                if name == "search_semantic_assets":
+                    # R1 门禁只需要稳定的分槽摘要；完整语义包仍按原规则进入 detail，
+                    # 避免大结果截断时丢失“是否整句检索”的证据。
+                    metadata = projection.result.metadata
+                    if isinstance(metadata, dict):
+                        if isinstance(metadata.get("semantic_retrieval_filters"), dict):
+                            trace_summary["retrieval_filters"] = metadata[
+                                "semantic_retrieval_filters"
+                            ]
+                        if isinstance(metadata.get("semantic_retrieval_request"), dict):
+                            trace_summary["retrieval_request"] = metadata[
+                                "semantic_retrieval_request"
+                            ]
+                trace_node.set_output(trace_summary)
+                trace_node.set_output_detail(
+                    {
+                        "result": _pipeline_trace_result(projection.result),
+                        "state_patch": projection.state_patch,
+                    }
+                )
+                if projection.result.status != ToolStatus.SUCCEEDED:
+                    trace_node.set_status(TraceNodeStatus.FAILED)
+            if projection.result.status != ToolStatus.SUCCEEDED:
+                raise FastPipelineError(
+                    projection.result.error_code or f"FAST_{name.upper()}_FAILED",
+                    projection.result.model_content,
+                )
+            return projection.result
 
     def _can_use_assisted_fallback(self, state: AgentRuntimeState) -> bool:
         """兜底只在全局开关、服务装配和数据集 ASSISTED 策略同时满足时启用。"""
@@ -485,10 +555,38 @@ class FastPipeline:
             raise FastPipelineError("FAST_COMPILE_PLAN_REQUIRED")
         return QueryTask(id="q1", spec=spec)
 
-    @staticmethod
-    def _save_plan(state: AgentRuntimeState, plan: AnalysisPlan) -> None:
+    def _save_plan(self, state: AgentRuntimeState, plan: AnalysisPlan) -> None:
         state.context.state["analysis_plan"] = plan.model_dump(mode="json")
         FastPipeline._persist_state(state)
+        if self._trace_recorder is None:
+            return
+        run_id = state.require_run_id()
+        snapshot_index = self._plan_snapshot_counts.get(run_id, 0) + 1
+        self._plan_snapshot_counts[run_id] = snapshot_index
+        with self._trace_recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key=f"pipeline:fast:plan:{plan.id}:{snapshot_index}",
+                node_type=TraceNodeType.PHASE,
+                name="analysis_plan_snapshot",
+                display_name="记录分析计划快照",
+                metadata={"pipeline": "fast", "stage": "plan"},
+            ),
+            input_data={"plan_id": plan.id, "status": plan.validation.status.value},
+        ) as plan_node:
+            plan_node.set_output(
+                {
+                    "plan_id": plan.id,
+                    "status": plan.validation.status.value,
+                    "query_task_count": sum(
+                        isinstance(task, QueryTask) for task in plan.tasks
+                    ),
+                    "compute_task_count": sum(
+                        task.__class__.__name__ == "ComputeTask" for task in plan.tasks
+                    ),
+                }
+            )
+            plan_node.set_output_detail({"analysis_plan": plan.model_dump(mode="json")})
 
     @staticmethod
     def _persist_state(state: AgentRuntimeState) -> None:
@@ -501,3 +599,46 @@ class FastPipeline:
 
 
 __all__ = ["FastPipeline", "FastPipelineDependencies", "FastPipelineError"]
+
+
+def _pipeline_trace_node_type(name: str) -> TraceNodeType:
+    if name == "validate_sql":
+        return TraceNodeType.VALIDATION
+    if name == "execute_sql":
+        return TraceNodeType.TOOL
+    return TraceNodeType.PHASE
+
+
+def _pipeline_trace_name(name: str) -> str:
+    return {
+        "search_semantic_assets": "semantic_retrieval",
+        "compile_semantic_sql": "semantic_compilation",
+        "validate_sql": "sql_validation",
+        "execute_sql": "sql_execution",
+        "get_dataset_schema": "schema_snapshot",
+    }.get(name, f"pipeline_{name}")
+
+
+def _pipeline_trace_display_name(name: str) -> str:
+    return {
+        "search_semantic_assets": "语义检索与绑定快照",
+        "compile_semantic_sql": "语义编译快照",
+        "validate_sql": "SQL 校验快照",
+        "execute_sql": "SQL 执行快照",
+        "get_dataset_schema": "数据集 Schema 快照",
+    }.get(name, f"流水线工具：{name}")
+
+
+def _pipeline_trace_result(result: ToolResult[Any]) -> dict[str, Any]:
+    data = result.data
+    return {
+        "status": result.status.value,
+        "model_content": result.model_content,
+        "data": data.model_dump(mode="json") if data is not None else None,
+        "metadata": result.metadata,
+        "error_code": result.error_code,
+        "error_category": (
+            result.error_category.value if result.error_category is not None else None
+        ),
+        "details": result.details,
+    }

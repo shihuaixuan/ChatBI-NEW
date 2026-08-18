@@ -84,6 +84,11 @@ class SemanticCompilePlan(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    # R1 复合指标落地结果；操作数仍受统一资产白名单约束。
+    ratio_specs: tuple[dict[str, Any], ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+    )
 
 
 class SemanticAssetScope(BaseModel):
@@ -177,6 +182,11 @@ def project_semantic_compile_plan(
         else None
     )
     having = _derive_having(intent_payload, metrics)
+    ratio_specs = tuple(
+        item
+        for item in slot_bindings.get("ratio_specs") or []
+        if isinstance(item, dict)
+    )
     return SemanticCompilePlan(
         metric_asset_ids=metric_asset_ids,
         dimension_asset_ids=dimension_asset_ids,
@@ -195,6 +205,7 @@ def project_semantic_compile_plan(
         query_shape=query_shape,
         having=tuple(having),
         time_offset=time_offset,
+        ratio_specs=ratio_specs,
     )
 
 
@@ -265,6 +276,7 @@ def project_semantic_query_plan(
         ),
         limit=legacy_compile_plan.limit,
         having=legacy_compile_plan.having,
+        ratio_specs=legacy_compile_plan.ratio_specs,
     )
     plan = SemanticQueryPlanningService().plan(schema, request)
     report = SemanticQueryValidationService().validate(plan, schema)
@@ -396,7 +408,45 @@ def _derive_having(intent: dict[str, Any], metrics: list[Any]) -> list[dict[str,
     query_shape = intent.get("query_shape")
     explicit = query_shape.get("having") if isinstance(query_shape, dict) else None
     if isinstance(explicit, list) and explicit:
-        return [item for item in explicit if isinstance(item, dict)]
+        result: list[dict[str, Any]] = []
+        for item in explicit:
+            if not isinstance(item, dict):
+                continue
+            normalized = dict(item)
+            if normalized.get("asset_id") is None:
+                reference = str(
+                    normalized.get("metric_ref")
+                    or normalized.get("name")
+                    or ""
+                ).strip()
+                metric = next(
+                    (
+                        candidate
+                        for candidate in metrics
+                        if isinstance(candidate, dict)
+                        and reference
+                        in {
+                            str(candidate.get("asset_id") or ""),
+                            str(candidate.get("biz_name") or ""),
+                            str(candidate.get("name") or ""),
+                            str(candidate.get("display_name") or ""),
+                            str(candidate.get("mention_id") or ""),
+                            str(candidate.get("text") or ""),
+                        }
+                    ),
+                    None,
+                )
+                if metric is None and reference.startswith("m") and reference[1:].isdigit():
+                    metric_index = int(reference[1:]) - 1
+                    if 0 <= metric_index < len(metrics):
+                        candidate = metrics[metric_index]
+                        metric = candidate if isinstance(candidate, dict) else None
+                if isinstance(metric, dict):
+                    normalized["asset_id"] = metric.get("asset_id")
+                    normalized["asset_type"] = "METRIC"
+            if normalized.get("asset_id") is not None:
+                result.append(normalized)
+        return result
     mentions = intent.get("filter_mentions")
     if not isinstance(mentions, list):
         return []

@@ -770,6 +770,55 @@ def test_dimension_identity_matches_use_selected_metric_model_to_resolve():
     ]
 
 
+def test_cross_model_dimension_identity_selects_one_asset_per_metric_model():
+    """跨模型查询不能要求一个物理维度同时兼容所有指标模型。"""
+
+    result = SemanticBindingPolicy().apply(
+        _recall(
+            _slot(
+                "metric:1",
+                RetrievalPurpose.METRIC,
+                [_hit(100, "总GMV", exact=1.0, model_id=10)],
+            ),
+            _slot(
+                "metric:2",
+                RetrievalPurpose.METRIC,
+                [_hit(101, "未发订单数", exact=1.0, model_id=11)],
+            ),
+            _slot(
+                "dimension:1",
+                RetrievalPurpose.DIMENSION,
+                [
+                    _hit(
+                        200,
+                        "店铺",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        alias=1.0,
+                        model_id=10,
+                    ),
+                    _hit(
+                        201,
+                        "店铺",
+                        resource_type=RetrievalResourceType.DIMENSION,
+                        alias=1.0,
+                        model_id=11,
+                    ),
+                ],
+            ),
+        )
+    )
+
+    dimension = result.bundle.decision.slot_decisions[2]
+    assert result.bundle.decision.status == RetrievalDecisionStatus.CROSS_MODEL
+    assert [item.asset_id for item in dimension.selected_assets] == [200, 201]
+    assert [item.asset_id for item in result.bundle.decision.allowed_asset_ids] == [
+        100,
+        101,
+        200,
+        201,
+    ]
+
+
 def test_resolved_dimension_is_reselected_to_metric_model_before_execution():
     """维度初始 top1 在其他模型时，仍按指标模型重新筛选。"""
 

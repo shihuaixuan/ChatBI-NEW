@@ -5,6 +5,7 @@ from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from apps.chatbi.models.dto.mention import MentionGraph
 from apps.temporal import ResolvedTemporalPlan, TemporalPlan
 
 IntentType = Literal[
@@ -183,7 +184,7 @@ class RankingSpec(BaseModel):
     target: str | None = None
     metric: str | None = None
     direction: Literal["asc", "desc"] | None = None
-    selection: Literal["single", "top_n", "bottom_n"] = "single"
+    selection: Literal["single", "all", "top_n", "bottom_n"] = "single"
     limit: int | None = Field(default=None, ge=1, le=1000, strict=True)
 
 
@@ -333,6 +334,8 @@ class QuestionUnderstandingOutput(BaseModel):
     validation: IntentValidationOutput
     temporal_interpretation: TemporalInterpretationResult | None = None
     category: QuestionCategory = "data_query"
+    # R1 新契约；旧快照没有此字段时保持 None，继续使用 intent 兼容投影。
+    mention_graph: MentionGraph | None = None
 
 
 @dataclass(frozen=True)

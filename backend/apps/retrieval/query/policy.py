@@ -552,7 +552,7 @@ def _resolve_identity_dimensions_by_metric_compatibility(
                     "decision": item.decision.model_copy(
                         update={
                             "status": RetrievalDecisionStatus.RESOLVED,
-                            "selected_assets": [selected],
+                            "selected_assets": selected,
                             "reason_codes": [
                                 "IDENTITY_DISAMBIGUATED_BY_METRIC_MODEL_COMPATIBILITY"
                             ],
@@ -959,10 +959,25 @@ def bind_default_time_dimensions(
     """为已解析的单模型查询确定性绑定默认时间维度。"""
 
     time_range = request.intent.time_range
-    if str(time_range.get("value_status") or "").lower() != "provided":
-        return bundle
+    time_ranges = request.intent.time_ranges
+    normalized_ranges = [
+        item.get("normalized")
+        for item in time_ranges
+        if isinstance(item, dict)
+        and str(item.get("value_status") or "").lower() == "provided"
+        and isinstance(item.get("normalized"), dict)
+    ]
     normalized = time_range.get("normalized")
-    if not isinstance(normalized, dict) or normalized.get("kind") != "absolute_range":
+    if (
+        str(time_range.get("value_status") or "").lower() != "provided"
+        and not normalized_ranges
+    ):
+        return bundle
+    # 时间提及可能是相对日期或日历周期；只要 temporal 已经产出闭开区间，
+    # 默认时间维度绑定就可以确定执行模型，不应把 kind 再次误判为未解析。
+    if not isinstance(normalized, dict) and normalized_ranges:
+        normalized = normalized_ranges[0]
+    if not isinstance(normalized, dict):
         return bundle
 
     metric_by_id = {metric.id: metric for metric in schema.metrics}
@@ -1243,6 +1258,15 @@ def _default_time_candidates(
     )
 
 
+def default_time_candidates(
+    schema: DatasetSchema,
+    model_id: int,
+) -> list[SchemaElement]:
+    """返回模型的默认时间维度，供绑定层和 R1 候选层共享。"""
+
+    return _default_time_candidates(schema, model_id)
+
+
 def _is_time_dimension(dimension: SchemaElement) -> bool:
     ext_info = dimension.ext_info
     dimension_type = str(ext_info.get("dimension_type") or "").lower()
@@ -1302,4 +1326,5 @@ __all__ = [
     "SemanticBindingPolicy",
     "SemanticBindingPolicyResult",
     "bind_default_time_dimensions",
+    "default_time_candidates",
 ]

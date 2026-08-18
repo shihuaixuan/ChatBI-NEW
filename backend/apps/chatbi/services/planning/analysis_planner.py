@@ -92,6 +92,7 @@ class AnalysisPlanner:
                         "PLAN_MODEL_VALIDATION_FAILED:"
                         + ",".join(plan.validation.reason_codes)
                     )
+                self._validate_model_compute_contract(plan)
                 self._validate_model_asset_scope(plan, semantic_state)
                 return plan.model_copy(
                     update={
@@ -128,6 +129,23 @@ class AnalysisPlanner:
                 )
             }
         )
+
+    @staticmethod
+    def _validate_model_compute_contract(plan: AnalysisPlan) -> None:
+        """拒绝无法交给当前计算编译器的模型操作结构。"""
+
+        for task in plan.tasks:
+            if not isinstance(task, ComputeTask):
+                continue
+            if task.operation is ComputeOperation.SHARE:
+                if len(task.inputs) != 1:
+                    raise ValueError("PLAN_SHARE_INPUT_COUNT_INVALID")
+                dimensions = task.options.get("dimensions")
+                value_columns = task.options.get("value_columns")
+                if not isinstance(dimensions, list) or not dimensions:
+                    raise ValueError("PLAN_SHARE_DIMENSIONS_REQUIRED")
+                if not isinstance(value_columns, list) or len(value_columns) != 1:
+                    raise ValueError("PLAN_SHARE_VALUE_COLUMNS_REQUIRED")
 
     @staticmethod
     def _validate_model_asset_scope(
@@ -319,27 +337,60 @@ class AnalysisPlanner:
         dataset_id: int,
     ) -> QueryTask:
         slots = payload.get("slots") or {}
+        slots = slots if isinstance(slots, dict) else {}
         metrics = tuple(
             int(item["asset_id"])
             for item in slots.get("metrics") or []
             if isinstance(item, dict) and isinstance(item.get("asset_id"), int)
         )
-        dimensions = tuple(
+        group_dimensions = tuple(
             int(item["asset_id"])
             for item in slots.get("group_dimensions") or []
             if isinstance(item, dict) and isinstance(item.get("asset_id"), int)
         )
+        time_dimension_ids = _unique_ints(
+            [
+                int(item["asset_id"])
+                for key in ("time_dimensions", "time_filters")
+                for item in slots.get(key) or []
+                if isinstance(item, dict) and isinstance(item.get("asset_id"), int)
+            ]
+        )
+        payload_dimensions = _unique_ints(
+            [
+                int(item)
+                for item in payload.get("dimension_ids") or []
+                if isinstance(item, int) and not isinstance(item, bool)
+            ]
+        )
+        if time_dimension_ids:
+            # 严格语义计划把时间维度放在 time_binding，不能再作为普通输出维度匹配。
+            dimensions = tuple(
+                item for item in payload_dimensions if item not in time_dimension_ids
+            )
+            if not dimensions:
+                dimensions = tuple(
+                    item
+                    for item in group_dimensions
+                    if item not in time_dimension_ids
+                )
+        else:
+            dimensions = group_dimensions or payload_dimensions
         filters = tuple(item for item in slots.get("dimension_filters") or [] if isinstance(item, dict))
         intent = question_understanding.get("intent") or {}
         time_range = intent.get("time_range") if isinstance(intent, dict) else None
+        query_shape = intent.get("query_shape") if isinstance(intent, dict) else None
+        query_shape = query_shape if isinstance(query_shape, dict) else {}
         return QueryTask(
             id=f"q{index}",
             spec=QueryTaskSpec(
                 dataset_id=int(payload.get("dataset_id") or dataset_id),
                 metric_ids=metrics or tuple(int(item) for item in payload.get("metric_ids") or []),
-                dimension_ids=dimensions or tuple(int(item) for item in payload.get("dimension_ids") or []),
+                dimension_ids=dimensions,
                 filters=filters,
                 time_range=(time_range or {}).get("normalized") if isinstance(time_range, dict) else None,
+                time_dimension_id=time_dimension_ids[0] if time_dimension_ids else None,
+                time_grain=query_shape.get("time_grain"),
                 query_shape="single_query",
             ),
         )
@@ -378,9 +429,22 @@ class AnalysisPlanner:
         intent_type = str(intent.get("intent_type") or "")
         package = semantic_state.get("semantic_package")
         package = package if isinstance(package, dict) else {}
+        slot_bindings = package.get("slot_bindings")
+        slot_bindings = slot_bindings if isinstance(slot_bindings, dict) else {}
+        time_dimension_names = set(
+            _slot_binding_names(slot_bindings, "time_dimensions")
+            + _slot_binding_names(slot_bindings, "time_filters")
+        )
+        package_dimensions = [str(item) for item in package.get("dimensions") or [] if item]
         if intent_type in {"share_analysis", "composition"}:
-            dimensions = [str(item) for item in package.get("dimensions") or [] if item]
-            metrics = [str(item) for item in package.get("metrics") or [] if item]
+            dimensions = _slot_binding_names(slot_bindings, "group_dimensions")
+            if not dimensions:
+                dimensions = [
+                    item for item in package_dimensions if item not in time_dimension_names
+                ]
+            metrics = _slot_binding_names(slot_bindings, "metrics")
+            if not metrics:
+                metrics = [str(item) for item in package.get("metrics") or [] if item]
             options: dict[str, Any] = {}
             if dimensions:
                 options["dimensions"] = dimensions
@@ -409,15 +473,39 @@ class AnalysisPlanner:
             if comparison_type in {"growth", "yoy", "mom"}
             else ComputeOperation.COMPARE
         )
+        join_dimensions = _slot_binding_names(slot_bindings, "business_dimensions")
+        if not join_dimensions:
+            join_dimensions = [
+                item for item in package_dimensions if item not in time_dimension_names
+            ]
+        explicit_join_dimensions = shape.get("join_on")
+        join_dimensions = (
+            [str(item) for item in explicit_join_dimensions if item]
+            if isinstance(explicit_join_dimensions, list) and explicit_join_dimensions
+            else join_dimensions
+        )
         return ComputeTask(
             id="c1",
             operation=operation,
             inputs=query_ids[:2],
-            join_on=tuple(
-                str(item)
-                for item in shape.get("join_on") or package.get("dimensions") or []
-            ),
+            join_on=tuple(join_dimensions),
         )
+
+
+def _slot_binding_names(slot_bindings: dict[str, Any], key: str) -> list[str]:
+    """读取语义槽位绑定中的业务名称，避免使用包含时间维度的总维度列表。"""
+
+    return [
+        str(item["biz_name"])
+        for item in slot_bindings.get(key) or []
+        if isinstance(item, dict) and item.get("biz_name")
+    ]
+
+
+def _unique_ints(values: list[int]) -> tuple[int, ...]:
+    """按原顺序去重资产 ID，保持严格子查询顺序稳定。"""
+
+    return tuple(dict.fromkeys(values))
 
 
 def _query_shape(understanding: dict[str, Any]) -> dict[str, Any]:

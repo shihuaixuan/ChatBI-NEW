@@ -379,6 +379,13 @@ class QuestionAdapter:
                 ],
                 temporal_context=temporal_context,
                 conversation_context=conversation_context,
+                # Graph 的上游意图已经识别比较关系，时间模型只补充时间区间。
+                analysis_context={
+                    "intent_type": intent_payload.get("intent_type"),
+                    "comparison": intent_payload.get("comparison"),
+                    "query_shape": intent_payload.get("query_shape") or {},
+                    "expressions": intent_payload.get("expressions") or [],
+                },
                 user_feedback=user_feedback,
                 user_confirmation=user_confirmation,
             )

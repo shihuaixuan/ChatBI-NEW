@@ -59,8 +59,8 @@ class AgentConfig(BaseModel):
     summary_max_chars: int = 4000
     history_rounds: int = 3
     context_fold_chars: int = 30000
-    # 直接构造配置用于 legacy 适配与单测；生产入口会显式注入 settings 中的默认模式。
-    execution_modes: tuple[str, ...] = ("react_legacy",)
+    # 默认只启用 P1 的确定性 FAST/PLAN 管道，避免新请求回退到 ReAct。
+    execution_modes: tuple[str, ...] = ("fast", "plan")
     plan_max_query_tasks: int = 5
     compute_enabled: bool = True
     answer_citation_enforced: bool = True

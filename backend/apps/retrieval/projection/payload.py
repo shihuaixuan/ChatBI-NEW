@@ -8,7 +8,9 @@ from typing import Any, Literal, cast
 from apps.retrieval.errors import RetrievalQueryError
 from apps.retrieval.models.dto import (
     AssetReference,
+    CompositeMetricResolution,
     ExecutableAssetReference,
+    RatioSpec,
     RetrievalBindings,
     RetrievalBundle,
     RetrievalChannel,
@@ -135,6 +137,10 @@ def bundle_to_semantic_payload(
     request: RetrievalRequest,
     bundle: RetrievalBundle,
     schema: DatasetSchema,
+    *,
+    ratio_specs: tuple[RatioSpec, ...] | list[RatioSpec] = (),
+    composite_resolutions: tuple[CompositeMetricResolution, ...]
+    | list[CompositeMetricResolution] = (),
 ) -> dict[str, Any]:
     """把 Bundle 投影为 Graph/Agent payload，执行事实始终来自 Semantic schema。"""
 
@@ -192,6 +198,7 @@ def bundle_to_semantic_payload(
         selected_assets,
         intent,
         value_resolutions=_value_resolutions(request, bundle),
+        ratio_specs=ratio_specs,
     )
     metric_models = {
         _positive_int(item.get("model_id"))
@@ -231,6 +238,10 @@ def bundle_to_semantic_payload(
         "candidate_groups": public_candidates,
         "selected_assets": selected_with_dimensions,
         "slot_bindings": slot_bindings,
+        "ratio_specs": [item.model_dump(mode="json") for item in ratio_specs],
+        "composite_resolutions": [
+            item.model_dump(mode="json") for item in composite_resolutions
+        ],
         "subject_domain": request.intent.subject_domain,
         "decision": {
             "status": bundle.decision.status.value,
@@ -505,6 +516,7 @@ def _slot_bindings(
     selected_assets: dict[str, list[dict[str, Any]]],
     intent: dict[str, Any],
     value_resolutions: dict[tuple[int, str], dict[str, str]] | None = None,
+    ratio_specs: tuple[RatioSpec, ...] | list[RatioSpec] = (),
 ) -> dict[str, list[dict[str, Any]]]:
     dimensions = selected_assets.get("dimensions", [])
     business_dimensions = [
@@ -541,6 +553,7 @@ def _slot_bindings(
         "dimension_filters": dimension_filters,
         "time_filters": time_filters,
         "filters": [*value_filters, *dimension_filters, *time_filters],
+        "ratio_specs": [item.model_dump(mode="json") for item in ratio_specs],
     }
 
 

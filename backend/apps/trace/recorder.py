@@ -31,7 +31,11 @@ from apps.trace.ports import (
     TraceExportSpan,
     TraceRepository,
 )
-from apps.trace.redaction import redact_trace_mapping, redact_trace_payload
+from apps.trace.redaction import (
+    redact_trace_detail,
+    redact_trace_mapping,
+    redact_trace_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +72,7 @@ class TraceNodeHandle:
         self.output_summary = redact_trace_mapping(data)
 
     def set_output_detail(self, data: Mapping[str, Any]) -> None:
-        self.output_detail = redact_trace_mapping(data)
+        self.output_detail = redact_trace_detail(data)
 
     def set_state_diff(
         self,
@@ -211,7 +215,7 @@ class AgentTraceRecorder:
                 chat_id=chat_id,
                 record_id=record_id,
                 side="input",
-                payload=redact_trace_mapping(input_detail),
+                payload=redact_trace_detail(input_detail),
             )
             token = _active_frame.set(
                 _TraceFrame(active_ref, chat_id, record_id) if active_ref else None

@@ -35,7 +35,7 @@ class ModeRouteInput:
 
 
 class ModeRouter:
-    """按开关和问题形态选择执行模式，不选择未启用模式。"""
+    """按问题形态选择 P1 执行模式，不回退到 ReAct。"""
 
     def route(self, request: ModeRouteInput) -> AgentExecutionMode:
         enabled = _normalize_modes(request.enabled_modes)
@@ -46,33 +46,33 @@ class ModeRouter:
             return AgentExecutionMode(requested)
 
         if request.category != "data_query":
-            # 非数据类仍由现有直接回答流程收口，不属于 FAST/PLAN 数据执行模式。
+            # meta_query 和 out_of_scope 通常在准备阶段结束；chitchat 仍由现有直答收口。
             return AgentExecutionMode.REACT_LEGACY
         if request.cross_model or request.multi_query:
             return self._first_enabled(
                 enabled,
-                (AgentExecutionMode.PLAN.value, AgentExecutionMode.REACT_LEGACY.value),
+                (AgentExecutionMode.PLAN.value,),
             )
         if request.intent_type in {"share_analysis", "composition"}:
             return self._first_enabled(
                 enabled,
-                (AgentExecutionMode.PLAN.value, AgentExecutionMode.REACT_LEGACY.value),
+                (AgentExecutionMode.PLAN.value,),
             )
         if _requires_research(request.query_shape):
             return self._first_enabled(
                 enabled,
-                (AgentExecutionMode.RESEARCH.value, AgentExecutionMode.PLAN.value, AgentExecutionMode.REACT_LEGACY.value),
+                (AgentExecutionMode.RESEARCH.value, AgentExecutionMode.PLAN.value),
             )
         if _is_fast_shape(request.query_shape) and AgentExecutionMode.FAST.value in enabled:
             return AgentExecutionMode.FAST
         if _is_complex_shape(request.query_shape):
             return self._first_enabled(
                 enabled,
-                (AgentExecutionMode.PLAN.value, AgentExecutionMode.REACT_LEGACY.value),
+                (AgentExecutionMode.PLAN.value,),
             )
         return self._first_enabled(
             enabled,
-            (AgentExecutionMode.REACT_LEGACY.value,),
+            (AgentExecutionMode.FAST.value, AgentExecutionMode.PLAN.value),
         )
 
     @staticmethod

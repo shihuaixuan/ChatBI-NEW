@@ -95,6 +95,12 @@ class AgentToolContext:
             return None
         rewritten_question = understanding.get("rewritten_question")
         intent = understanding.get("intent")
+        if isinstance(intent, dict) and isinstance(understanding.get("mention_graph"), dict):
+            # R1 图结构与旧 intent 投影同时传入，检索规划器优先消费图结构。
+            intent = {
+                **intent,
+                "mention_graph": understanding["mention_graph"],
+            }
         dataset_id = self.dataset_id or self.state.get("dataset_id")
         if (
             not isinstance(rewritten_question, str)

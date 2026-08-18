@@ -166,3 +166,53 @@ def test_planner_preserves_detail_display_dimension_role():
     assert [(item.text, item.role) for item in dimension_queries] == [
         ("是否超时", "display")
     ]
+
+
+def test_r1_planner_emits_second_stage_decomposition_queries_only_as_internal_slots():
+    request = _request().model_copy(
+        update={
+            "intent": _request().intent.model_copy(
+                update={
+                    "metric_mentions": ["销售订单平均客单价"],
+                    "mention_graph": {
+                        "mentions": [
+                            {
+                                "mention_id": "m1",
+                                "text": "销售订单平均客单价",
+                                "start_offset": 0,
+                                "end_offset": 9,
+                                "kind": "metric_phrase",
+                                "metric_role": "composite_unknown",
+                                "decomposition": {
+                                    "kind": "ratio",
+                                    "numerator_text": "销售订单金额",
+                                    "denominator_text": "销售订单数",
+                                },
+                            }
+                        ],
+                        "query_shape": {"select_mode": "aggregate"},
+                    },
+                    "decomposition_queries": [
+                        {
+                            "mention_id": "m1",
+                            "role": "numerator",
+                            "text": "销售订单金额",
+                        },
+                        {
+                            "mention_id": "m1",
+                            "role": "denominator",
+                            "text": "销售订单数",
+                        },
+                    ],
+                }
+            ),
+        }
+    )
+
+    plan = SemanticBindingQueryPlanner().plan(request)
+
+    assert [(item.subquery_id, item.text, item.required) for item in plan.subqueries[:3]] == [
+        ("metric:1", "销售订单平均客单价", True),
+        ("ratio:m1:numerator", "销售订单金额", True),
+        ("ratio:m1:denominator", "销售订单数", True),
+    ]

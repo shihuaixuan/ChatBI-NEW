@@ -391,21 +391,25 @@ class SemanticSQLCompiler:
             raise ValueError("SEMANTIC_SQL_TIME_BUCKET_UNSUPPORTED") from exc
 
     def _select_metrics(self, request: SemanticSQLCompileRequest) -> list[SchemaElement]:
-        metric_ids = set(request.metric_ids or self._slot_asset_ids(request.slots, "metrics", "METRIC"))
+        metric_ids = request.metric_ids or self._slot_asset_ids(request.slots, "metrics", "METRIC")
         if metric_ids:
-            return [metric for metric in request.schema.metrics if metric.id in metric_ids]
+            # 计划中的列顺序是执行结果 Schema 的一部分，不能用 set 丢失用户顺序。
+            by_id = {metric.id: metric for metric in request.schema.metrics}
+            return [by_id[metric_id] for metric_id in metric_ids if metric_id in by_id]
         return self._match_elements(request.question, request.schema.metrics)
 
     def _select_dimensions(self, request: SemanticSQLCompileRequest) -> list[SchemaElement]:
         if request.dimension_ids:
-            dimension_ids = set(request.dimension_ids)
+            dimension_ids = request.dimension_ids
         elif "dimensions" in request.slots or "dimension" in request.slots:
-            dimension_ids = set(self._slot_asset_ids(request.slots, "dimensions", "DIMENSION"))
-            return [dimension for dimension in request.schema.dimensions if dimension.id in dimension_ids]
+            dimension_ids = self._slot_asset_ids(request.slots, "dimensions", "DIMENSION")
+            by_id = {dimension.id: dimension for dimension in request.schema.dimensions}
+            return [by_id[dimension_id] for dimension_id in dimension_ids if dimension_id in by_id]
         else:
-            dimension_ids = set()
+            dimension_ids = []
         if dimension_ids:
-            return [dimension for dimension in request.schema.dimensions if dimension.id in dimension_ids]
+            by_id = {dimension.id: dimension for dimension in request.schema.dimensions}
+            return [by_id[dimension_id] for dimension_id in dimension_ids if dimension_id in by_id]
         return self._match_elements(request.question, request.schema.dimensions)
 
     def _select_filters(self, request: SemanticSQLCompileRequest) -> list[tuple[SchemaElement, str, Any]]:
@@ -1085,12 +1089,18 @@ class SemanticSQLCompiler:
                 conditions.append(time_condition)
                 continue
             normalized_operator = str(operator or "=").strip().lower()
-            if normalized_operator in {"in", "not in"}:
+            if normalized_operator in {"in", "not_in", "not in"}:
                 if not isinstance(value, list) or not value:
                     raise ValueError("SEMANTIC_SQL_FILTER_VALUES_REQUIRED")
                 literals = ", ".join(self._literal(item) for item in value)
+                operator_sql = "not in" if normalized_operator == "not_in" else normalized_operator
+                conditions.append(f"{qualified_expr} {operator_sql} ({literals})")
+                continue
+            if normalized_operator == "between":
+                if not isinstance(value, list) or len(value) != 2:
+                    raise ValueError("SEMANTIC_SQL_FILTER_VALUES_REQUIRED")
                 conditions.append(
-                    f"{qualified_expr} {normalized_operator} ({literals})"
+                    f"{qualified_expr} between {self._literal(value[0])} and {self._literal(value[1])}"
                 )
                 continue
             conditions.append(f"{qualified_expr} {self._safe_operator(operator)} {self._literal(value)}")

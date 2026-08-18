@@ -26,6 +26,12 @@ from apps.retrieval.models.dto.retrieval import (
     RetrievalSubQuery,
     SemanticClarificationBinding,
 )
+from apps.retrieval.models.dto.resolution import (
+    CompositeMetricResolution,
+    EvidenceLevel,
+    RatioOperand,
+    RatioSpec,
+)
 
 __all__ = [
     "AssetReference",
@@ -52,4 +58,8 @@ __all__ = [
     "RetrievalSourceType",
     "RetrievalSubQuery",
     "SemanticClarificationBinding",
+    "CompositeMetricResolution",
+    "EvidenceLevel",
+    "RatioOperand",
+    "RatioSpec",
 ]

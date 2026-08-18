@@ -199,12 +199,26 @@ def build_question_understanding_service(
 ) -> QuestionUnderstandingService:
     """装配 Agent 使用的严格问题理解服务。"""
 
+    # 结构化模型不设置 max_tokens，避免合法语义输出因固定上限被截断。
+    question_model_service = build_question_model_service(
+        reasoning_effort=settings.QUERY_UNDERSTANDING_REASONING_EFFORT,
+        # 结构化问题理解必须先满足 JSON 传输协议，再交给领域 DTO 校验。
+        enforce_json=True,
+    )
+    temporal_question_model_service = build_question_model_service(
+        # Temporal 保留模型自身的输出预算，避免截断合法时间计划。
+        question_defaults=False,
+        enforce_json=True,
+    )
     return QuestionUnderstandingService(
-        question_model_service=build_question_model_service(),
+        question_model_service=question_model_service,
+        temporal_question_model_service=temporal_question_model_service,
         schema_provider=schema_provider,
-        temporal_shadow_enabled=settings.TEMPORAL_MODEL_SHADOW_ENABLED,
-        temporal_authority_enabled=settings.TEMPORAL_MODEL_AUTHORITY_ENABLED,
-        semantic_repair_v2_enabled=settings.CHATBI_SEMANTIC_REPAIR_V2,
+        # P1 的生产入口直接使用最终语义契约，不在未上线项目中保留旧链路切换。
+        temporal_shadow_enabled=False,
+        temporal_authority_enabled=True,
+        semantic_repair_v2_enabled=True,
+        mention_contract_enabled=True,
         trace_recorder=trace_recorder,
     )
 

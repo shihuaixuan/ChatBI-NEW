@@ -168,6 +168,8 @@ class Settings(BaseSettings):
     CHATBI_ASSISTED_FALLBACK_ENABLED: bool = False
     # R0：启用确定性归一化、字段级补丁和语义不变量校验。
     CHATBI_SEMANTIC_REPAIR_V2: bool = True
+    # P1 直接使用带原文跨度的 MentionGraph；项目未上线，不保留旧契约灰度分支。
+    CHATBI_MENTION_CONTRACT_ENABLED: bool = True
     # 指标出口保持关闭，接入 OTLP 后再通过环境变量开启。
     OTEL_METRICS_ENABLED: bool = False
     OTEL_METRICS_SERVICE_NAME: str = "numora-chatbi"
@@ -187,10 +189,10 @@ class Settings(BaseSettings):
     TEMPORAL_FISCAL_YEAR_START_MONTH: int = Field(default=1, ge=1, le=12)
     TEMPORAL_FISCAL_YEAR_LABEL: Literal["start_year", "end_year"] = "start_year"
     TEMPORAL_BUSINESS_CALENDAR_ID: str | None = None
-    # 默认关闭；开启后只记录模型时间计划与现有结果的差异。
+    # 旧时间旁路仅用于历史评估，生产链路不再把它作为事实源。
     TEMPORAL_MODEL_SHADOW_ENABLED: bool = False
-    # 默认关闭；开启后模型时间计划经过确定性解析并成为查询时间语义来源。
-    TEMPORAL_MODEL_AUTHORITY_ENABLED: bool = False
+    # P1 时间计划经过确定性解析后成为查询时间语义唯一来源。
+    TEMPORAL_MODEL_AUTHORITY_ENABLED: bool = True
     # P0-9：Agent 观测默认开启，按 10% 采样；关闭或零采样时不加载 OpenTelemetry。
     AGENT_TRACING_ENABLED: bool = True
     AGENT_TRACING_SAMPLE_RATE: float = 0.1
@@ -200,6 +202,10 @@ class Settings(BaseSettings):
     QUERY_UNDERSTANDING_MODEL_ENABLED: bool = True
     # 统一问题理解包含指标、维度和比较关系的联合识别，允许模型最多运行 60 秒。
     QUERY_UNDERSTANDING_TIMEOUT_MS: int = 60000
+    # 结构化问题理解默认关闭长链路思考；输出长度由模型服务自身管理。
+    QUERY_UNDERSTANDING_REASONING_EFFORT: Literal[
+        "none", "low", "medium", "high"
+    ] = "none"
     QUERY_UNDERSTANDING_MIN_CONFIDENCE: float = 0.65
     CORE_SLOT_MIN_CONFIDENCE: float = 0.65
     METRIC_ACCEPT_SCORE: float = 0.78
@@ -239,6 +245,7 @@ class Settings(BaseSettings):
                      'TEMPORAL_MODEL_SHADOW_ENABLED',
                      'TEMPORAL_MODEL_AUTHORITY_ENABLED',
                      'CHATBI_SEMANTIC_REPAIR_V2',
+                     'CHATBI_MENTION_CONTRACT_ENABLED',
                      'CHATBI_MEMORY_LLM_EXTRACTION_ENABLED',
                      'CHATBI_MEMORY_RECALL_EXPERIMENT_ENABLED',
                      'RETRIEVAL_QUERY_TRACE_ENABLED',

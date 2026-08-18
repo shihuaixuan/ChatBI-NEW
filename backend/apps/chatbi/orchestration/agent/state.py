@@ -17,6 +17,7 @@ from apps.chatbi.orchestration.agent.tools.base import (
 from apps.temporal import TemporalContext
 from apps.tool import BudgetGuard, NeverCancelled
 from apps.tool.context import CancellationSignal
+from common.core.config import settings
 
 SEMANTIC_CONTRACT_VERSION = "r0"
 BINDING_CONTRACT_VERSION = "legacy"
@@ -70,7 +71,10 @@ class AgentRuntimeState:
             if key not in {"full_data", "tool_offloads", "semantic_schema"}
         }
         # R0 将契约版本写入每次 Run 快照，便于按版本分组回放和定位失败。
-        snapshot.setdefault("semantic_contract_version", SEMANTIC_CONTRACT_VERSION)
+        snapshot.setdefault(
+            "semantic_contract_version",
+            "r1" if settings.CHATBI_MENTION_CONTRACT_ENABLED else SEMANTIC_CONTRACT_VERSION,
+        )
         snapshot.setdefault("binding_contract_version", BINDING_CONTRACT_VERSION)
         return snapshot
 

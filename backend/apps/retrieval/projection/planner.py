@@ -44,16 +44,37 @@ class SemanticBindingQueryPlanner:
             raise ValueError("SEMANTIC_BINDING_QUERY_PLANNER_PROFILE_MISMATCH")
 
         subqueries: list[RetrievalSubQuery] = []
-        metric_mentions = _unique_texts(request.intent.metric_mentions)
+        metric_mentions = _metric_mentions(request)
         for index, mention in enumerate(metric_mentions, start=1):
+            retrieval_text = (
+                mention
+                if request.intent.mention_graph is not None
+                else _legacy_metric_retrieval_text(mention, request.rewritten_question)
+            )
             subqueries.append(
                 self._subquery(
                     request,
                     subquery_id=f"metric:{index}",
                     purpose=RetrievalPurpose.METRIC,
-                    text=_metric_retrieval_text(
-                        mention, request.rewritten_question
-                    ),
+                    text=retrieval_text,
+                    resource_types=(RetrievalResourceType.METRIC,),
+                )
+            )
+
+        # 复合指标只在第一阶段整体短语未收敛后由 Runner 注入这些内部查询。
+        # 它们不来自模型直接的指标槽，也不会被展示为用户澄清选项。
+        for item in request.intent.decomposition_queries:
+            mention_id = _clean_text(item.get("mention_id"))
+            role = _clean_text(item.get("role"))
+            text = _clean_text(item.get("text"))
+            if not mention_id or role not in {"numerator", "denominator"} or not text:
+                continue
+            subqueries.append(
+                self._subquery(
+                    request,
+                    subquery_id=f"ratio:{mention_id}:{role}",
+                    purpose=RetrievalPurpose.METRIC,
+                    text=text,
                     resource_types=(RetrievalResourceType.METRIC,),
                 )
             )
@@ -63,6 +84,10 @@ class SemanticBindingQueryPlanner:
         dimension_index = 0
         for slot in request.intent.dimension_slots:
             name = _clean_text(slot.name)
+            # MentionGraph 保留“各店铺/每个店铺”的原文跨度，但检索槽只需
+            # 业务对象本身。量词不是语义资产名称，直接送入召回会降低精确
+            # 别名命中率，也不能依赖某个具体题目的固定文本。
+            name = _dimension_asset_text(name)
             identity = (name.casefold(), slot.role)
             if not name or identity in seen_dimensions:
                 continue
@@ -160,8 +185,27 @@ class SemanticBindingQueryPlanner:
 
 
 
-def _metric_retrieval_text(mention: str, question: str) -> str:
-    """保留被问题理解截断的指标限定词，避免下游把近义指标误判为歧义。"""
+def _metric_mentions(request: RetrievalRequest) -> list[str]:
+    """优先消费 R1 MentionGraph，computed 提及不生成 METRIC 检索槽。"""
+
+    graph = request.intent.mention_graph
+    if isinstance(graph, dict):
+        mentions = graph.get("mentions")
+        if isinstance(mentions, list):
+            return _unique_texts(
+                [
+                    item.get("text")
+                    for item in mentions
+                    if isinstance(item, dict)
+                    and item.get("kind") == "metric_phrase"
+                    and item.get("metric_role") != "computed"
+                ]
+            )
+    return _unique_texts(request.intent.metric_mentions)
+
+
+def _legacy_metric_retrieval_text(mention: str, question: str) -> str:
+    """R0 回滚路径保留旧的限定词兜底；R1 MentionGraph 不调用此函数。"""
 
     normalized_mention = _clean_text(mention)
     normalized_question = _clean_text(question)
@@ -181,8 +225,6 @@ def _metric_retrieval_text(mention: str, question: str) -> str:
         and after not in separators
         and after not in question_suffixes
     )
-    # 当指标名称两侧仍紧邻业务限定词时，以完整重写问题检索指标。
-    # 这不是无指标时的宽泛回退，仍只为已确认的 metric 槽服务。
     if has_prefix_qualifier or has_suffix_qualifier:
         return normalized_question
     return normalized_mention
@@ -190,6 +232,16 @@ def _metric_retrieval_text(mention: str, question: str) -> str:
 
 def _is_cjk_text(value: str) -> bool:
     return "\u4e00" <= value <= "\u9fff"
+
+
+def _dimension_asset_text(value: str) -> str:
+    """移除不属于维度名称的通用数量/分组量词。"""
+
+    text = _clean_text(value)
+    for prefix in ("每一个", "每个", "各个", "各"):
+        if text.startswith(prefix) and len(text) > len(prefix):
+            return text[len(prefix) :].strip()
+    return text
 
 
 def value_lookup_slots(intent: dict[str, Any]) -> list[tuple[str, str]]:

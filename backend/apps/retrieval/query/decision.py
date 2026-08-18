@@ -81,7 +81,7 @@ def apply_semantic_clarification(
     )
     if compatible_dimensions:
         updated_slots = [
-            _resolved_slot(
+            _resolved_slot_many(
                 slot,
                 compatible_dimensions[slot.subquery_id],
                 reason_code=(
@@ -184,8 +184,8 @@ def selection_requires_cross_model(
 def compatible_dimension_selections(
     hits: Iterable[RetrievalHit],
     decisions: list[RetrievalSlotDecision],
-) -> dict[str, AssetReference]:
-    """用已选指标的模型兼容关系确定唯一的维度身份候选。"""
+) -> dict[str, list[AssetReference]]:
+    """按已选指标模型确定维度身份，跨模型时返回每个模型的资产集合。"""
 
     hit_list = list(hits)
     selected_metric_keys = {
@@ -205,7 +205,12 @@ def compatible_dimension_selections(
     if not metric_hits:
         return {}
 
-    result: dict[str, AssetReference] = {}
+    result: dict[str, list[AssetReference]] = {}
+    metric_model_ids = {
+        hit.asset_ref.model_id
+        for hit in metric_hits
+        if hit.asset_ref is not None and hit.asset_ref.model_id is not None
+    }
     for decision in decisions:
         if (
             decision.purpose != RetrievalPurpose.DIMENSION
@@ -219,16 +224,38 @@ def compatible_dimension_selections(
             if hit.asset_ref is not None
             and _asset_key(hit.asset_ref) in candidate_keys
             and (hit.scores.exact is not None or hit.scores.alias is not None)
-            and _dimension_is_compatible_with_metrics(hit, metric_hits)
+            and (
+                _dimension_is_compatible_with_metrics(hit, metric_hits)
+                if len(metric_model_ids) <= 1
+                else any(
+                    _dimension_is_compatible_with_metrics(hit, [metric_hit])
+                    for metric_hit in metric_hits
+                )
+            )
         ]
         unique_assets = _unique_hit_assets(compatible_hits)
-        unique_assets = prefer_dimension_assets(
-            hit_list,
-            [hit.asset_ref for hit in metric_hits if hit.asset_ref is not None],
-            unique_assets,
-        )
-        if len(unique_assets) == 1:
-            result[decision.subquery_id] = unique_assets[0]
+        if len(metric_model_ids) > 1:
+            # 跨模型时同一个业务维度由每个指标模型各自绑定物理资产，
+            # 不能要求一个物理维度同时出现在所有指标的兼容集合中。
+            unique_assets = [
+                dimension
+                for dimension in unique_assets
+                if any(
+                    _dimension_is_compatible_with_metrics(dimension_hit, [metric_hit])
+                    for dimension_hit in hit_list
+                    if dimension_hit.asset_ref is not None
+                    and _asset_key(dimension_hit.asset_ref) == _asset_key(dimension)
+                    for metric_hit in metric_hits
+                )
+            ]
+        else:
+            unique_assets = prefer_dimension_assets(
+                hit_list,
+                [hit.asset_ref for hit in metric_hits if hit.asset_ref is not None],
+                unique_assets,
+            )
+        if len(unique_assets) == 1 or (len(metric_model_ids) > 1 and unique_assets):
+            result[decision.subquery_id] = unique_assets
     return result
 
 
@@ -333,6 +360,23 @@ def _resolved_slot(
         update={
             "status": RetrievalDecisionStatus.RESOLVED,
             "selected_assets": [selected],
+            "reason_codes": [reason_code],
+        }
+    )
+
+
+def _resolved_slot_many(
+    slot: RetrievalSlotDecision,
+    selected: list[AssetReference],
+    *,
+    reason_code: str,
+) -> RetrievalSlotDecision:
+    """把跨模型同一业务维度的多个物理资产作为一个已确认槽位输出。"""
+
+    return slot.model_copy(
+        update={
+            "status": RetrievalDecisionStatus.RESOLVED,
+            "selected_assets": selected,
             "reason_codes": [reason_code],
         }
     )

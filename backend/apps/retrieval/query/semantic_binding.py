@@ -19,7 +19,10 @@ from apps.retrieval.embedding import (
 )
 from apps.retrieval.errors import RetrievalConfigurationError
 from apps.retrieval.models.dto import (
+    CompositeMetricResolution,
+    RatioSpec,
     RetrievalBundle,
+    RetrievalDecisionStatus,
     RetrievalHit,
     RetrievalProfileName,
     RetrievalRequest,
@@ -38,6 +41,10 @@ from apps.retrieval.query.policy import (
     bind_default_time_dimensions,
 )
 from apps.retrieval.query.profiles import get_retrieval_profile
+from apps.retrieval.query.ratio_resolution import (
+    CompositeResolutionReport,
+    resolve_composite_metrics,
+)
 from apps.retrieval.query.semantic_runtime import (
     ObservedEmbeddingProvider,
     RetrievalEmbeddingRuntimeConfig,
@@ -65,6 +72,8 @@ class SemanticBindingExecutionResult(BaseModel):
     bundle: RetrievalBundle
     payload: dict[str, Any]
     filters: dict[str, Any] = Field(default_factory=dict)
+    ratio_specs: tuple[RatioSpec, ...] = ()
+    composite_resolutions: tuple[CompositeMetricResolution, ...] = ()
 
 
 class SemanticBindingRunner:
@@ -152,12 +161,14 @@ class SemanticBindingRunner:
             update={"strategy_version": SEMANTIC_BINDING_STRATEGY_VERSION}
         )
         provider = self._query_embedding_provider(timeout_ms)
-        recall = SemanticBindingHybridRetriever(
+        retriever = SemanticBindingHybridRetriever(
             session,
             embedding_provider=provider,
             config=self._hybrid_config,
-        ).retrieve(strategy_request)
-        policy_result = self._semantic_binding_policy(timeout_ms).apply(recall)
+        )
+        policy = self._semantic_binding_policy(timeout_ms)
+        recall = retriever.retrieve(strategy_request)
+        policy_result = policy.apply(recall)
         schema_provider = self._schema_provider or build_semantic_schema_service(
             session
         )
@@ -170,33 +181,94 @@ class SemanticBindingRunner:
             policy_result.bundle,
             schema,
         )
+        composite_report = CompositeResolutionReport((), ())
+        decomposition_recall: Any | None = None
+        if settings.CHATBI_MENTION_CONTRACT_ENABLED:
+            decomposition_queries = _decomposition_queries_for_request(
+                strategy_request,
+                bundle,
+            )
+            decomposition_bundle: RetrievalBundle | None = None
+            if decomposition_queries:
+                decomposition_request = strategy_request.model_copy(
+                    update={
+                        "intent": strategy_request.intent.model_copy(
+                            update={"decomposition_queries": decomposition_queries}
+                        )
+                    }
+                )
+                decomposition_recall = retriever.retrieve(decomposition_request)
+                decomposition_bundle = policy.apply(decomposition_recall).bundle
+            composite_report = resolve_composite_metrics(
+                strategy_request,
+                bundle,
+                decomposition_bundle,
+                schema,
+            )
+            if composite_report.resolutions:
+                bundle = _merge_composite_bundle(
+                    bundle,
+                    decomposition_bundle,
+                    composite_report,
+                    strategy_request,
+                )
         bundle = self._attach_verified_exemplars(session, strategy_request, bundle)
         payload = bundle_to_semantic_payload(
             strategy_request,
             bundle,
             schema,
+            ratio_specs=composite_report.ratio_specs,
+            composite_resolutions=composite_report.resolutions,
         )
         self._persist_query_trace(
             session,
             strategy_request,
             recall,
             bundle,
+            decomposition_recall=decomposition_recall,
             elapsed_ms=(perf_counter() - started) * 1000,
+        )
+        initial_subqueries = [
+            {
+                "subquery_id": item.subquery_id,
+                "purpose": item.purpose.value,
+                "text": item.text,
+                "required": item.required,
+                "stage": "initial",
+            }
+            for item in recall.plan.subqueries
+        ]
+        decomposition_subqueries = (
+            [
+                {
+                    "subquery_id": item.subquery_id,
+                    "purpose": item.purpose.value,
+                    "text": item.text,
+                    "required": item.required,
+                    "stage": "decomposition",
+                }
+                for item in decomposition_recall.plan.subqueries
+            ]
+            if decomposition_recall is not None
+            else []
         )
         return SemanticBindingExecutionResult(
             bundle=bundle,
             payload=payload,
             filters={
                 "plan_fingerprint": recall.plan.fingerprint,
-                "subqueries": [
-                    {
-                        "subquery_id": item.subquery_id,
-                        "purpose": item.purpose.value,
-                        "required": item.required,
-                    }
-                    for item in recall.plan.subqueries
+                "subqueries": [*initial_subqueries, *decomposition_subqueries],
+                "stages": [
+                    {"stage": "initial", "subqueries": initial_subqueries},
+                    *(
+                        [{"stage": "decomposition", "subqueries": decomposition_subqueries}]
+                        if decomposition_subqueries
+                        else []
+                    ),
                 ],
             },
+            ratio_specs=composite_report.ratio_specs,
+            composite_resolutions=composite_report.resolutions,
         )
 
     @staticmethod
@@ -206,6 +278,7 @@ class SemanticBindingRunner:
         recall: Any,
         bundle: RetrievalBundle,
         *,
+        decomposition_recall: Any | None = None,
         elapsed_ms: float,
     ) -> None:
         """把可复现的检索诊断写入既有 retrieval_query_trace 表。"""
@@ -252,6 +325,17 @@ class SemanticBindingRunner:
                 sort_keys=True,
             ).encode("utf-8")
         ).hexdigest()
+        initial_subqueries = [
+            item.model_dump(mode="json") for item in recall.plan.subqueries
+        ]
+        decomposition_subqueries = (
+            [
+                item.model_dump(mode="json")
+                for item in decomposition_recall.plan.subqueries
+            ]
+            if decomposition_recall is not None
+            else []
+        )
         trace = RetrievalQueryTraceModel(
             tenant_id=request.tenant_id,
             actor_id=request.actor_id,
@@ -261,9 +345,15 @@ class SemanticBindingRunner:
             permission_version=request.scope.permission_version,
             scope_filters=request.scope.model_dump(mode="json"),
             filters={
-                "subqueries": [
-                    item.model_dump(mode="json") for item in recall.plan.subqueries
-                ]
+                "subqueries": [*initial_subqueries, *decomposition_subqueries],
+                "stages": [
+                    {"stage": "initial", "subqueries": initial_subqueries},
+                    *(
+                        [{"stage": "decomposition", "subqueries": decomposition_subqueries}]
+                        if decomposition_subqueries
+                        else []
+                    ),
+                ],
             },
             channels=[item.model_dump(mode="json") for item in bundle.diagnostics.channels],
             candidate_ranks=candidate_ranks,
@@ -401,3 +491,167 @@ __all__ = [
     "SemanticBindingExecutionResult",
     "SemanticBindingRunner",
 ]
+
+
+def _decomposition_queries_for_request(
+    request: RetrievalRequest,
+    bundle: RetrievalBundle,
+) -> list[dict[str, str]]:
+    """只为整体短语未收敛的 composite mention 建立二阶段检索文本。"""
+
+    graph = request.intent.mention_graph
+    if not isinstance(graph, dict) or not isinstance(graph.get("mentions"), list):
+        return []
+    metric_mentions = [
+        item
+        for item in graph["mentions"]
+        if isinstance(item, dict)
+        and item.get("kind") == "metric_phrase"
+        and item.get("metric_role") != "computed"
+    ]
+    slots = {
+        item.subquery_id: item
+        for item in bundle.decision.slot_decisions
+        if item.purpose.value == "metric"
+    }
+    queries: list[dict[str, str]] = []
+    for index, mention in enumerate(metric_mentions, start=1):
+        if mention.get("metric_role") != "composite_unknown":
+            continue
+        slot = slots.get(f"metric:{index}")
+        if slot is not None and slot.status == RetrievalDecisionStatus.RESOLVED:
+            # 整短语已经绑定认证资产，优先使用资产定义，不再拆解。
+            continue
+        decomposition = mention.get("decomposition")
+        if not isinstance(decomposition, dict):
+            continue
+        mention_id = str(mention.get("mention_id") or "").strip()
+        for role in ("numerator", "denominator"):
+            text = str(decomposition.get(f"{role}_text") or "").strip()
+            if mention_id and text:
+                queries.append({"mention_id": mention_id, "role": role, "text": text})
+    return queries
+
+
+def _merge_composite_bundle(
+    base: RetrievalBundle,
+    decomposition: RetrievalBundle | None,
+    report: CompositeResolutionReport,
+    request: RetrievalRequest,
+) -> RetrievalBundle:
+    """把二阶段操作数候选合入统一 Bundle，同时禁止失败进入澄清状态。"""
+
+    graph = request.intent.mention_graph or {}
+    composite_ids = {
+        str(item.get("mention_id"))
+        for item in graph.get("mentions") or []
+        if isinstance(item, dict)
+        and item.get("kind") == "metric_phrase"
+        and item.get("metric_role") == "composite_unknown"
+    }
+    ratio_ids = {
+        f"ratio:{mention_id}:{role}"
+        for mention_id in composite_ids
+        for role in ("numerator", "denominator")
+    }
+    metric_slot_ids = {
+        f"metric:{index}"
+        for index, item in enumerate(
+            [
+                mention
+                for mention in graph.get("mentions") or []
+                if isinstance(mention, dict)
+                and mention.get("kind") == "metric_phrase"
+                and mention.get("metric_role") != "computed"
+            ],
+        start=1)
+        if str(item.get("mention_id")) in composite_ids
+    }
+    metric_hits = _deduplicate_hits(
+        [
+            *base.bindings.metrics,
+            *(decomposition.bindings.metrics if decomposition is not None else ()),
+        ]
+    )
+    bindings = base.bindings.model_copy(update={"metrics": metric_hits})
+    decisions_by_id = {item.subquery_id: item for item in base.decision.slot_decisions}
+    if decomposition is not None:
+        for item in decomposition.decision.slot_decisions:
+            decisions_by_id.setdefault(item.subquery_id, item)
+    decisions = tuple(decisions_by_id.values())
+    ambiguity_ids = metric_slot_ids | ratio_ids
+    ambiguities = tuple(
+        item for item in base.decision.ambiguities if item.subquery_id not in ambiguity_ids
+    )
+    allowed = _deduplicate_executable_assets(
+        [
+            *base.decision.allowed_asset_ids,
+            *(
+                decomposition.decision.allowed_asset_ids
+                if decomposition is not None
+                else ()
+            ),
+        ]
+    )
+    non_composite_unresolved = any(
+        item.status in {
+            RetrievalDecisionStatus.AMBIGUOUS,
+            RetrievalDecisionStatus.MISSED,
+            RetrievalDecisionStatus.PARTIAL,
+        }
+        and item.subquery_id not in metric_slot_ids
+        for item in base.decision.slot_decisions
+        if item.purpose.value == "metric"
+    )
+    if report.has_failure:
+        status = RetrievalDecisionStatus.MISSED
+    elif non_composite_unresolved:
+        status = base.decision.status
+    elif base.decision.status == RetrievalDecisionStatus.CROSS_MODEL:
+        status = RetrievalDecisionStatus.CROSS_MODEL
+    else:
+        status = RetrievalDecisionStatus.RESOLVED
+    reason_codes = list(base.decision.reason_codes)
+    for item in report.resolutions:
+        if item.reason_code and item.reason_code not in reason_codes:
+            reason_codes.append(item.reason_code)
+    decision = base.decision.model_copy(
+        update={
+            "status": status,
+            "slot_decisions": decisions,
+            "ambiguities": ambiguities,
+            "allowed_asset_ids": allowed,
+            "reason_codes": reason_codes,
+        }
+    )
+    return base.model_copy(update={"bindings": bindings, "decision": decision})
+
+
+def _deduplicate_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
+    result: list[RetrievalHit] = []
+    seen: set[tuple[str, int, int | None]] = set()
+    for hit in hits:
+        if hit.asset_ref is None:
+            continue
+        key = (
+            hit.asset_ref.asset_type.value,
+            hit.asset_ref.asset_id,
+            hit.asset_ref.model_id,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(hit)
+    return result
+
+
+def _deduplicate_executable_assets(items: list[Any]) -> list[Any]:
+    result: list[Any] = []
+    seen: set[tuple[str, int, int | None]] = set()
+    for item in items:
+        key = (item.asset_type.value, item.asset_id, item.model_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result

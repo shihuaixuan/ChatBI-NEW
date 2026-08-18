@@ -41,3 +41,9 @@ def test_asset_plan_registers_store_synonyms_for_stall_dimension():
 
     for model in plan.values():
         assert model["dimension_aliases"]["stall_id"] == ["店铺", "档口", "门店"]
+
+
+def test_asset_plan_registers_snapshot_inventory_phrase_alias():
+    aliases = build_asset_plan()["snap_product_inventory"]["metric_aliases"]["stock_qty"]
+
+    assert "当前期末库存" in aliases

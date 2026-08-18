@@ -33,6 +33,10 @@ class SemanticQueryPlanningInput(SemanticBaseDTO):
     subplans: tuple[dict[str, Any], ...] = ()
     order_by: tuple[dict[str, Any], ...] = ()
     limit: int | None = Field(default=None, gt=0, le=1000)
+    ratio_specs: tuple[dict[str, Any], ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+    )
 
 
 class SemanticMetricBinding(SemanticBaseDTO):

@@ -37,6 +37,7 @@ class FreshQuestion:
     expected_points: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     behavior: str = "direct"
+    dataset_id: int | None = None
     golden_expectations: dict[str, Any] = field(default_factory=dict)
 
 
@@ -188,13 +189,17 @@ def _load_questions() -> tuple[FreshQuestion, ...]:
         case_id = str(payload.get("case_id") or "").strip()
         question = str(payload.get("question") or "").strip()
         dataset_payload = payload.get("dataset")
+        dataset_id: int | None = None
         if isinstance(dataset_payload, dict):
-            # P1 schema v2 使用业务名和 schema 版本；运行时仍按业务名查数据集。
+            # P1 schema v2 同时提供稳定 ID 和业务名；运行时优先按 ID 校验资产。
             dataset_name = str(
                 dataset_payload.get("dataset_biz_name")
                 or dataset_payload.get("name")
                 or ""
             ).strip()
+            raw_dataset_id = dataset_payload.get("dataset_id")
+            if isinstance(raw_dataset_id, int) and raw_dataset_id > 0:
+                dataset_id = raw_dataset_id
         else:
             dataset_name = str(dataset_payload or "").strip()
         if not case_id or not question or not dataset_name:
@@ -219,6 +224,7 @@ def _load_questions() -> tuple[FreshQuestion, ...]:
                 ),
                 tags=tags,
                 behavior=str(payload.get("behavior") or "direct"),
+                dataset_id=dataset_id,
                 golden_expectations={
                     key: payload[key]
                     for key in (
@@ -374,8 +380,17 @@ class AgentHttpClient:
             raise RuntimeError("登录接口未返回访问令牌")
         self.headers["X-SQLBOT-TOKEN"] = f"Bearer {token}"
 
-    def find_dataset(self, dataset_name: str = "商城店铺数据集") -> dict[str, Any]:
+    def find_dataset(
+        self,
+        dataset_name: str = "商城店铺数据集",
+        *,
+        dataset_id: int | None = None,
+    ) -> dict[str, Any]:
         datasets = self.request("GET", "/semantic/datasets")
+        if dataset_id is not None:
+            matches_by_id = [item for item in datasets if item.get("id") == dataset_id]
+            if len(matches_by_id) == 1:
+                return cast(dict[str, Any], matches_by_id[0])
         matches = [
             item
             for item in datasets
@@ -411,6 +426,14 @@ class AgentHttpClient:
     def trace(self, record_id: int) -> dict[str, Any]:
         return cast(
             dict[str, Any], self.request("GET", f"/chat/agent/record/{record_id}/trace")
+        )
+
+    def trace_node(self, record_id: int, node_id: int) -> dict[str, Any]:
+        """读取管理员可见的单节点脱敏详情，用于阶段 fixture 落盘。"""
+
+        return cast(
+            dict[str, Any],
+            self.request("GET", f"/chat/agent/record/{record_id}/trace/nodes/{node_id}"),
         )
 
     def replay(self, run_id: int) -> dict[str, Any]:
@@ -542,6 +565,7 @@ def _run_path(
     replay_last = max((int(event.get("sequence") or 0) for event in replay_events), default=0)
     stream_last = max((int(event.get("sequence") or 0) for event in events), default=0)
     nodes = trace.get("nodes") or []
+    stage_fixtures = _load_stage_fixtures(client, record_id, nodes)
     failure = next(
         (event for event in reversed(events) if event.get("domain") == "run.failed"), {}
     )
@@ -550,6 +574,11 @@ def _run_path(
     ]
     executed_sql = [
         event.get("content") for event in events if event.get("domain") == "sql.executed"
+    ]
+    task_finished = [
+        event.get("content")
+        for event in events
+        if event.get("domain") == "task.finished"
     ]
     return {
         "case_id": case.case_id,
@@ -574,7 +603,11 @@ def _run_path(
         "api_errors": api_errors,
         "event_domains": domains,
         "sse_event_count": len(events),
-        "has_query_execution": "sql.executed" in domains,
+        # PLAN/FAST 新链路以 task.finished 作为 SQL 任务完成事件；兼容旧链路的
+        # sql.executed，不能再只统计旧事件，否则会把真实执行误报为 0。
+        "has_query_execution": bool(
+            "sql.executed" in domains or task_finished
+        ),
         "has_answer": "answer.completed" in domains,
         "answer_text": answer_text,
         "expected_text": list(case.expected_text),
@@ -586,12 +619,14 @@ def _run_path(
         "timeline": timeline,
         "generated_sql_events": generated_sql,
         "executed_sql_events": executed_sql,
+        "task_finished_events": task_finished,
         "trace_available": bool(trace.get("available")),
         "trace_node_count": len(nodes),
         "trace_node_types": sorted(
             {str(node.get("node_type")) for node in nodes if isinstance(node, dict)}
         ),
         "trace_overview": trace.get("overview") or {},
+        "stage_fixtures": stage_fixtures,
         "replay_event_count": len(replay_events),
         "replay_complete": replay_last >= stream_last,
         "batch_sequences_ordered": all(
@@ -599,6 +634,61 @@ def _run_path(
             == sorted(int(event.get("sequence") or 0) for event in batch)
             for batch in batches
         ),
+    }
+
+
+def _load_stage_fixtures(
+    client: AgentHttpClient,
+    record_id: int,
+    nodes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """把 R0 观测节点转换为理解、绑定、计划三层可回放骨架。"""
+
+    stage_nodes: dict[str, list[dict[str, Any]]] = {
+        "understanding": [],
+        "binding": [],
+        "plan": [],
+    }
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        name = str(node.get("name") or "")
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        tool_name = str(metadata.get("tool_name") or "")
+        if name in {
+            "question_understanding",
+            "temporal_processing",
+            "validate_question_understanding",
+            "question_rewrite",
+        } or str(metadata.get("stage") or "").startswith("QUESTION_"):
+            stage = "understanding"
+        elif name == "semantic_retrieval" or tool_name == "search_semantic_assets":
+            stage = "binding"
+        elif name in {
+            "analysis_plan_snapshot",
+            "semantic_compilation",
+            "sql_validation",
+            "sql_execution",
+        } or tool_name in {"compile_semantic_sql", "validate_sql", "execute_sql"}:
+            stage = "plan"
+        else:
+            continue
+        node_id = node.get("id")
+        if not isinstance(node_id, int):
+            continue
+        try:
+            detail = client.trace_node(record_id, node_id)
+        except httpx.HTTPStatusError as exc:
+            # 详情读取失败必须显式保留错误，不能伪造完整 fixture。
+            detail = {
+                "node": node,
+                "detail_error": f"HTTP_{exc.response.status_code}",
+            }
+        stage_nodes[stage].append(detail)
+
+    return {
+        stage: {"nodes": values, "complete": bool(values)}
+        for stage, values in stage_nodes.items()
     }
 
 
@@ -687,6 +777,40 @@ def _write_outputs(summary: dict[str, Any], output_dir: Path) -> None:
     """写出机器明细和本次运行概览。"""
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    fixture_root = output_dir / "p1_stage_fixtures"
+    fixture_root.mkdir(parents=True, exist_ok=True)
+    for run in summary.get("all_runs") or []:
+        if not isinstance(run, dict):
+            continue
+        case_id = str(run.get("case_id") or "unknown")
+        run_id = str(run.get("run_id") or "unknown")
+        fixture_paths: dict[str, str] = {}
+        stage_fixtures = run.get("stage_fixtures")
+        if not isinstance(stage_fixtures, dict):
+            continue
+        for stage in ("understanding", "binding", "plan"):
+            fixture = stage_fixtures.get(stage)
+            if not isinstance(fixture, dict):
+                continue
+            stage_dir = fixture_root / stage
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            fixture_path = stage_dir / f"{case_id}--run-{run_id}.json"
+            fixture_path.write_text(
+                json.dumps(
+                    {
+                        "case_id": case_id,
+                        "run_id": run.get("run_id"),
+                        "record_id": run.get("record_id"),
+                        "stage": stage,
+                        "fixture": fixture,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            fixture_paths[stage] = str(fixture_path)
+        run["stage_fixture_files"] = fixture_paths
     json_path = output_dir / "mall_store_agent_fresh_20_results_2026-08-15.json"
     json_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     cases = summary["cases"]
@@ -784,7 +908,10 @@ def main() -> None:
         for index, case in enumerate(questions, start=1):
             dataset = datasets.get(case.dataset_name)
             if dataset is None:
-                dataset = client.find_dataset(case.dataset_name)
+                dataset = client.find_dataset(
+                    case.dataset_name,
+                    dataset_id=case.dataset_id,
+                )
                 datasets[case.dataset_name] = dataset
             dataset_id = int(dataset["id"])
             previous_case = previous_cases.get(case.case_id)

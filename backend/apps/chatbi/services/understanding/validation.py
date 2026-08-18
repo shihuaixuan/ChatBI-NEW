@@ -194,7 +194,9 @@ def validate_question_understanding(
                         clarification_slots=("order",),
                     )
                 )
-            if limit is None:
+            # “全部结果排序”不需要 limit；只有单个结果或 top/bottom N 才要求数量。
+            ranking_selection = str(ranking.get("selection") or "single")
+            if limit is None and ranking_selection != "all":
                 issues.append(
                     QuestionUnderstandingValidationIssue(
                         code="ranking_limit_missing",
@@ -269,11 +271,18 @@ def validate_question_understanding(
     }
     if data.ambiguous_slots:
         if data.pending_binding_enabled:
+            # MentionGraph 已经保留了完整指标短语时，指标名是否对应一个或
+            # 多个语义资产属于检索绑定责任，不是用户语义缺失。提前生成“请
+            # 说明指标”的澄清会阻断后续候选检索，导致认证派生指标永远没有
+            # 机会被解析。只有完全没有指标提及时，metric 才是用户澄清槽位。
+            binding_resolved_slots = {
+                "metric"} if data.metric_mentions else set()
             clarification_slots = tuple(
                 slot
                 for slot in data.ambiguous_slots
                 if slot not in ambiguous_dimension_names
                 and slot in user_underspecified_slots
+                and slot not in binding_resolved_slots
             )
         else:
             # 旧模式保留 intent_ambiguous 诊断，但维度名称已经由下方维度规则归类，

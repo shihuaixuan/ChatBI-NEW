@@ -44,6 +44,14 @@ class FailingQuestionModel:
         raise TimeoutError("模型调用超时")
 
 
+class InvalidJSONQuestionModel:
+    def invoke(self, system_prompt: str, user_prompt: str) -> QuestionModelResponse:
+        return QuestionModelResponse(
+            content="模型输出不是 JSON",
+            usage_metadata={"total_tokens": 10},
+        )
+
+
 def _context() -> TemporalContext:
     return TemporalContext(
         reference_at=datetime(
@@ -197,6 +205,96 @@ def test_temporal_interpretation_retries_once_with_precise_feedback() -> None:
         "rolling_range",
         "amount",
     ]
+
+
+def test_temporal_interpretation_receives_upstream_analysis_context() -> None:
+    model = SequenceQuestionModel([_rolling_plan()])
+    service = TemporalInterpretationService(StructuredModelService(model))
+
+    service.interpret(
+        rewritten_question="最近7天销售额环比增长率",
+        metric_mentions=["销售额"],
+        time_mentions=["最近7天"],
+        temporal_context=_context(),
+        analysis_context={
+            "intent_type": "trend_analysis",
+            "comparison": {"method": "mom", "base": "前7天", "compare": ["最近7天"]},
+            "expressions": [
+                {
+                    "op": "growth",
+                    "display_name": "环比增长率",
+                    "over": "time_comparison",
+                }
+            ],
+        },
+    )
+
+    payload = orjson.loads(model.calls[0][1])
+    assert payload["analysis_context"]["intent_type"] == "trend_analysis"
+    assert payload["analysis_context"]["expressions"][0]["op"] == "growth"
+
+
+def test_temporal_interpretation_repairs_explicit_mentions_rejected_by_model() -> None:
+    model = SequenceQuestionModel(
+        [
+            {
+                "schema_version": "1",
+                "status": "unsupported",
+                "expressions": [],
+                "grouping": None,
+                "comparison": None,
+                "ambiguities": [
+                    {
+                        "code": "time_expression_unsupported",
+                        "raw": "2026年6月",
+                    }
+                ],
+                "confidence": 0.2,
+            }
+        ]
+    )
+    service = TemporalInterpretationService(StructuredModelService(model))
+
+    outcome = service.interpret(
+        rewritten_question="对比2026年6月与2026年5月总订单数",
+        metric_mentions=["总订单数"],
+        time_mentions=["2026年6月", "2026年5月"],
+        temporal_context=_context(),
+        analysis_context={
+            "intent_type": "comparison_analysis",
+            "expressions": [{"op": "compare"}],
+        },
+    )
+
+    assert outcome.plan.status == "resolved"
+    assert [item.raw for item in outcome.plan.expressions] == [
+        "2026年6月",
+        "2026年5月",
+    ]
+    assert outcome.plan.comparison is not None
+    assert outcome.plan.comparison.method == "custom"
+    assert len(model.calls) == 1
+
+
+def test_temporal_interpretation_repairs_explicit_mentions_after_invalid_json() -> None:
+    service = TemporalInterpretationService(
+        StructuredModelService(InvalidJSONQuestionModel())
+    )
+
+    outcome = service.interpret(
+        rewritten_question="对比店铺100021在2026年6月与2026年5月的总订单数。",
+        metric_mentions=["总订单数"],
+        time_mentions=["2026年6月", "2026年5月"],
+        temporal_context=_context(),
+        analysis_context={
+            "intent_type": "comparison_analysis",
+            "expressions": [{"op": "compare"}],
+        },
+    )
+
+    assert outcome.plan.status == "resolved"
+    assert outcome.plan.comparison is not None
+    assert outcome.plan.comparison.method == "custom"
 
 
 def test_temporal_interpretation_rejects_two_invalid_outputs() -> None:

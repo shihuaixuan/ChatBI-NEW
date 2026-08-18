@@ -1,6 +1,6 @@
 # 35. 智能问数语义运行时重构设计（理解→绑定→规划契约 v2 · 合并稿）
 
-> 状态：设计评审稿 **v3 + R0 实施中** ｜ 日期：2026-08-17 ｜ 基线：`codex/agentic-chatbi-redesign` 工作区
+> 状态：设计评审稿 **v3 + R0 已完成，R1 核心链路已实现** ｜ 日期：2026-08-18 ｜ 基线：`codex/agentic-chatbi-redesign` 工作区
 > 底稿：本文由两份独立设计稿合并——《语义契约重构设计》（本文件 v1）与《智能问数运行时重构设计》（`35-agentic-chatbi-runtime-refactoring-design.md`，已停止维护，仅存档）。合并取舍与勘误见附录 B。
 > 变更记录：v3（2026-08-17）——按实施评审意见（架构有条件通过、实施暂不通过）闭合六项契约缺口：① 复合指标拆解契约（DecompositionHint/RatioSpec，§4.1.1/4.3.3）；② 分组候选收敛决策表与 tie-break（§4.4.2）；③ SemanticRuntimeViewSnapshot Run 级冻结（§4.7）；④ temporal 旧字段投影契约（§4.2.8）；⑤ 验收门禁拆分为结构/业务双层（§7.3）；⑥ 分层黄金固定输入与 DTO 补全（§4.4.1/7.2）。另：R2 排期调整 3-4 周、R2 任务合并去重、Trace 快照治理规则（§6-R0）、跨模型 ratio 失败行为固定（§4.3.3）、补 §3.3 三模式编排范式澄清（FAST=确定性流水线 / PLAN=规划-执行 / RESEARCH=有界 agentic 循环，react_legacy 仅回滚）。闭环对照见附录 C。
 > 输入：docs/tech/32（架构方案）、33（实施计划）、34（P1 修复记录）；P1 黄金集 12 题三轮真实跑批（docs/test-results/p1-golden-2026-08-17{,-fixed,-fixed2}）；外部架构评审意见（2026-08-17）
@@ -40,7 +40,7 @@
 | G001 | 两日 GMV 对比+增长率 | failed：`comparison.target` 额外字段 | failed：`comparison.method='percent_change'` 不在枚举 | C1 |
 | G002 | 两月订单数对比 | failed：`method='difference'` 不在枚举 | **waiting_user（伪澄清）**：问题本身完全清晰 | C1→C5 |
 | G003 | 各店铺 GMV 占比 | finished 2/3：无 share 节点、SQL 无 6 月过滤 | failed：`PLAN_STRICT_QUERY_PLAN_MISSING`（回归） | C3/C4 + 证据链 |
-| G004 | 渠道×销售件数占比 | failed：`semantic_metric_dimension_incompatible` | 同左 | C3/C4 |
+| G004 | 渠道×销售件数占比 | failed：`semantic_metric_dimension_incompatible` | 同左（历史首版） | C3/C4 |
 | G005 | 跨模型双指标并列 | failed：跨模型组合不可执行 | **waiting_user（伪澄清）** | C4→C5 |
 | G006 | 跨模型双口径对比 | waiting_user（澄清本身合理） | waiting_user | C4 |
 | G007 | 平均客单价（派生） | failed：`SEMANTIC_QUERY_METRIC_REQUIRED` | 同左 | C3 |
@@ -755,21 +755,25 @@ class SemanticRuntimeViewSnapshot:
 
 ### R1 提及契约（2-3 周）——目标：理解输出携带跨度与表达，检索消费 mention
 
+**R1 当前实现状态（2026-08-18，按当前代码复核）**：R1 提及契约已接入现有公共 Agent 主路径，由 `QuestionUnderstandingService` 产出 MentionGraph，再由 `AgentLoop` 进入 FAST/PLAN 的检索、编译、执行和回答阶段；不存在独立的 `QuestionRuntimeService` 公共生产入口。已完成 SemanticMention/AnalysisExpression 契约、跨度和字段级结构归一化、完整指标短语保真、过滤值与维度分离、多时间表达、HAVING/排序/预聚合编译等改动。结构与业务门禁仍需通过现有 Agent 公共入口重新跑批确认，不能把旁路运行时的历史结果当作 P1 验收结果。
+
 | # | 事项 | 文件 |
 |---|------|------|
 | 1 | `SemanticMention` / `DecompositionHint` / `AnalysisExpression` / `MetricCondition` / `OrderRef` / `MentionGraph` DTO + 跨度不变量 normalizer + computed 兜底词表 + 排序去重 + 拆解假设校验 | `[新]` `apps/chatbi/models/dto/mention.py`；`[改]` `question_understanding.py`（投影字段） |
 | 2 | 提及抽取提示词（替换统一理解的指标/维度部分；schema 注入移除；temporal 提示词不动；拆解假设的产出规则与示例） | `[改]` `understanding/prompts.py`、`understanding_service.py`（`QUESTION_UNDERSTANDING` 阶段输出改 MentionGraph） |
 | 3 | 指标条件的 stage 裁决规则（4.1.4，先落服务函数，R3 接 RuntimeSnapshot） | `[新]` `services/understanding/condition_stage.py`（或并入 normalization） |
 | 4 | 检索规划器消费 mention；**删除 `_metric_retrieval_text`**；computed 不建 METRIC 槽 | `[改]` `apps/retrieval/projection/planner.py`（:47-59 输入、**:163-188 删除**） |
-| 5 | composite 分段解析（整体→拆解→固定失败处置，含 `RATIO_CROSS_MODEL_UNSUPPORTED` 行为与话术）与 RatioSpec 生成 | `[改]` `apps/retrieval/query/semantic_binding.py` 或独立 `resolution.py` 前置步 |
-| 6 | STRICT 指标门槛修正（`SEMANTIC_QUERY_METRIC_REQUIRED` 判定对象改为"已绑定 base 或 RatioSpec 已落地"） | `[改]` `apps/semantic/services/query/planning.py:38` 调用侧 |
+| 5 | composite 分段解析（整体→拆解→固定失败处置，含 `RATIO_CROSS_MODEL_UNSUPPORTED` 行为与话术）与 RatioSpec 生成 | **已完成第一版**：`apps/retrieval/query/ratio_resolution.py`、`semantic_binding.py`、`models/dto/resolution.py` |
+| 6 | STRICT 指标门槛修正（`SEMANTIC_QUERY_METRIC_REQUIRED` 判定对象改为"已绑定 base 或 RatioSpec 已落地"） | **已完成第一版**：`apps/semantic/services/query/planning.py`、`tool/tools/semantic_contracts.py` |
 | 7 | `IntentRecognitionOutput` 投影与 Graph/快照兼容层（含 §4.2.8 时间/比较投影） | `[改]` `question_understanding.py`、`orchestration/agent/semantic_projection.py` |
-| 测 | 跨度不变量、词表降级、拆解各分支（命中/单边失败/歧义/跨模型）、条件裁决、排序去重 | `[新]` `tests/chatbi/test_mention_graph.py`、`tests/retrieval/test_mention_resolution.py` |
+| 测 | 跨度不变量、词表降级、拆解各分支（命中/单边失败/歧义/跨模型）、条件裁决、排序去重 | **已覆盖第一版**：`tests/chatbi/test_mention_graph.py`、`tests/retrieval/test_mention_resolution.py`、`tests/retrieval/test_query_planner.py` |
 
 **开关**：`CHATBI_MENTION_CONTRACT_ENABLED`（灰度；关=R0 形态）。
 **验收门禁**：结构门槛——理解层结构断言 12/12（mentions/expressions/conditions/order/temporal，含 G007 拆解结构与 G008 条件结构）；检索层无整句指标检索文本（trace 断言）。
 
 ### R2 QueryGroup 绑定（3-4 周）——目标：跨模型正确性内建，澄清门后移
+
+**R2 当前实现状态（2026-08-18，按当前代码复核）**：跨模型、多指标和复合口径由现有检索绑定与 PLAN 管道处理，候选和计划仍需以公共 Agent 入口的实际 Trace 作为验收依据。已删除只服务于旁路运行时的独立 `QuestionRuntimeService`、适配器和分层 runner，避免公共 SSE 与另一套语义事实源并存。
 
 | # | 事项 | 文件 |
 |---|------|------|
@@ -785,9 +789,11 @@ class SemanticRuntimeViewSnapshot:
 
 ### R3 事实源与证据链（2 周）
 
+**R3 当前实现状态（2026-08-18）**：`QueryPlan` 的证据源同时覆盖查询任务和计算任务；计划校验已覆盖组内指标/维度/分组/排序/输出顺序和证据源引用。SQL 编译结果携带 `CompilationEvidence`，执行边界校验指标和维度资产集合、时间谓词、HAVING、排序、预聚合和输出 Schema；执行元数据和 `EvidenceBundle.audit` 保存编译证据。证据构建会校验结果任务集合与 Schema，答案只消费计划声明的 claim key。真实 G001、G008、G012 回归已通过。
+
 | # | 事项 | 文件 |
 |---|------|------|
-| 1 | SemanticRuntimeViewSnapshot（构建/缓存/Run 冻结/fingerprint 落 derived_state）+ 各消费方接入；分散启发式逐个删除（删除清单进 PR 描述逐条勾销）；条件 stage 裁决接入 Snapshot | `[新]` `apps/semantic/services/runtime_view.py`；`[改]` grouping/planner/plan_validation/compilation 消费点、`pipeline/stages` 传递 |
+| 1 | 运行态语义与 Trace 快照治理；分散启发式逐个删除（删除清单进 PR 描述逐条勾销）；条件 stage 裁决接入现有理解与计划链 | `[改]` `understanding/`、`retrieval/`、`pipeline/{fast,plan_mode}.py`、Trace 持久化点 |
 | 2 | 编译证据断言（时间谓词/HAVING/不降级/区间数不减） | `[改]` `services/planning/plan_validation.py`、`apps/semantic/services/sql_compiler.py`（产物结构暴露断言接口） |
 | 3 | claims 数值归一 + 派生值必须来自 compute 结果列 + 降级粒度细化 + 多结果集并列引用 | `[改]` `services/generation/answer_composer/{claims,composer}.py` |
 | 4 | `ResolvedMetricCondition` → QueryTask.having 传递链贯通（G008） | `[改]` `pipeline/fast.py`、`analysis_planner.py` |
@@ -797,10 +803,17 @@ class SemanticRuntimeViewSnapshot:
 
 ### R4 分层评测与门禁（1-2 周，自 R1 起并行建设）
 
+**R4 当前实现状态（2026-08-18，按当前代码复核）**：现有黄金题校验脚本和公共 Agent 跑批脚本仍可用于验证题集结构与运行结果；此前绑定独立 `QuestionRuntimeService` 的分层 runner 已随旁路运行时删除。当前没有可以宣称 12/12 的四层回放报告，必须从公共 Agent 入口重新生成结果并完成分层断言。
+
+**R4 验收状态**：尚未完成真实 12 题四档跑批；当前提交只完成 runner、快照和确定性回放基础，
+不能据此宣称 12/12 结构门禁或 P1 业务门槛通过。下一步必须使用 admin/123456 在目标数据集
+跑一轮 `e2e --fixture-dir`，提交 fixture 变更与报告后，再执行无外部依赖的
+`resolution-only` 和 `plan-only` 门禁。
+
 | # | 事项 | 文件 |
 |---|------|------|
 | 1 | 黄金题 schema v2（§7.2）；存量 12+50 题补全四层期望（R0 已起骨架）；`validate_golden_cases.py` schema 校验进 CI | `[改]` `backend/scripts/p1_golden_cases.jsonl`、`golden_cases.jsonl`；`[新]` `backend/scripts/validate_golden_cases.py` |
-| 2 | 分层 runner：understanding-only（真实模型，每日跑批）/ resolution-only（**固定输入 fixture 三元组**，§7.2）/ plan-only（固定 ResolutionOutcome）/ e2e 四档；阶段产物自动落盘为回放 fixture | `[新]` `backend/scripts/run_layered_golden.py`（复用现有跑批脚本骨架） |
+| 2 | 基于公共 Agent 入口的黄金题跑批与阶段结果归因；阶段产物按需要落盘为回放 fixture | `[改]` `backend/scripts/run_mall_store_agent_fresh_20.py`、`backend/scripts/check_r1_acceptance.py` |
 | 3 | 行为判定（direct/clarify_allowed/clarify_required/reject/assisted_fallback）机器断言 | 同上 |
 | 4 | PR 门禁：绑定/计划层黄金进 CI（fixture 回放，无外部依赖）；理解层每日真模型跑批 | `[改]` CI 配置（评测平台本体仍按 doc 33 留在 P2-3） |
 
@@ -876,11 +889,12 @@ R4（题集与 runner）自 R1 起并行，R2/R3/R5 门禁依赖其产出
 
 **分层 runner 的固定输入**（回应实施评审第 6 项——隔离"算法变化"与"输入变化"）：
 
-**R0 当前实现状态（2026-08-17）**：问题理解链路已接入
+**R0 当前实现状态（2026-08-17）**：R0 止血与观测冻结已完成。问题理解链路已接入
 `CHATBI_SEMANTIC_REPAIR_V2`，完成“确定性归一化 → 字段级补丁 → 语义不变量校验”、顶层及嵌套 extra 剥离、Temporal 旧字段唯一投影和理解阶段澄清止血；对应单元测试已通过。查询组超限已归类为
 `PLAN_QUERY_GROUP_LIMIT_EXCEEDED`，复合比率方向校验已提供确定性拒答函数。Run 的 `derived_state` 已写入
-`semantic_contract_version` / `binding_contract_version`，评测脚本可读取 v2 黄金用例并按 `behavior` 判定是否误入澄清门。P1 12 题已迁移到真实稳定业务名引用的 v2 JSONL，并由
-`backend/scripts/validate_p1_golden_cases.py` 校验。分层 runner、全链 Trace 候选集/绑定快照和绑定/计划 R1-R3 能力仍未完成，不能据此宣称 P1 验收通过。
+`semantic_contract_version` / `binding_contract_version`；FAST/PLAN 直接流水线已统一记录理解、语义检索/绑定、编译、SQL 校验、SQL 执行和计划快照，Trace 详情已统一脱敏并限制单节点默认不超过 32KB。评测脚本已按 schema v2 的稳定 `dataset_id` 优先匹配数据集，按 `task.finished` 统计 SQL 任务完成，并将理解/绑定/计划阶段快照落盘；新增
+`backend/scripts/check_r0_acceptance.py` 执行 R0 结构门禁。使用 admin/123456 的真实 12 题跑批报告已落在
+`docs/test-results/r0-20260817-v2/`，R0 结构门禁通过（理解失败、不变量违反、时间/比较语义丢失、失败不可归因、Trace 缺失、阶段 fixture 缺失均为 0）。这不等于 P1 业务验收通过：G002/G009 仍在计划阶段失败，部分直接题在绑定阶段进入等待用户，属于 R2/R3 的后续问题。
 
 P1-G007 的当前资产快照已包含认证派生指标 `fct_stall_order_daily.aov_sale`；黄金集中的
 `gmv_sale / order_cnt_sale` 仅作为理解层拆解假设，绑定期望以整短语命中的 `aov_sale` 为准。

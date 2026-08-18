@@ -25,6 +25,11 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
             "grain": ["stat_date", "stall_id"],
             "default_time": "stat_date",
             "dimension_aliases": {"stall_id": ["店铺", "档口", "门店"]},
+            # “销售额”是销售类 GMV 的业务别名，必须写入语义资产而不是在检索代码中硬编码。
+            "metric_aliases": {
+                "gmv_sale": ["销售额"],
+                "item_qty_sale": ["销售件数", "销售商品数量"],
+            },
             "metrics": [
                 _metric(
                     "aov_sale",
@@ -50,6 +55,7 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
             "grain": ["snapshot_date", "order_no"],
             "default_time": "snapshot_date",
             "dimension_aliases": {"stall_id": ["店铺", "档口", "门店"]},
+            "metric_aliases": {"order_amount": ["未发订单金额"]},
             "obsolete_metrics": ["overtime_unshipped_order_cnt"],
             "metrics": [
                 _metric("unshipped_order_cnt", "未发订单数", "COUNT(DISTINCT order_no)", ["未发订单笔数"]),
@@ -66,7 +72,9 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
             "default_time": "snapshot_date",
             "dimension_aliases": {"stall_id": ["店铺", "档口", "门店"]},
             "obsolete_metrics": ["dormant_product_cnt_30d"],
-            "metric_aliases": {"stock_qty": ["库存总量", "库存量"]},
+            "metric_aliases": {
+                "stock_qty": ["库存总量", "库存量", "当前期末库存"],
+            },
             "metrics": [
                 _metric(
                     "negative_stock_product_cnt",
@@ -85,11 +93,18 @@ def build_asset_plan() -> dict[str, dict[str, Any]]:
         "fct_customer_trade_daily": {
             "grain": ["stat_date", "customer_id", "stall_id"],
             "default_time": "stat_date",
-            "dimension_aliases": {"stall_id": ["店铺", "档口", "门店"]},
+            "dimension_aliases": {
+                "stall_id": ["店铺", "档口", "门店"],
+                # 交易渠道是模型中的业务维度名，检索不能依赖字段名猜测。
+                "channel_type": ["交易渠道", "渠道"],
+            },
             "obsolete_metrics": ["new_deal_customer_cnt"],
             "metric_aliases": {
                 "customer_gmv": ["消费金额", "客户GMV", "GMV"],
                 "order_cnt": ["订单数", "客户订单数"],
+                # 交易渠道只能在客户交易事实表中统计购买件数；该别名让
+                # “销售件数”在带渠道维度时进入正确模型，而不是猜测订单事实表。
+                "item_qty": ["销售件数", "销售商品数量"],
             },
             "metrics": [
                 _metric(

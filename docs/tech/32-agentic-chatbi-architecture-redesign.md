@@ -4,7 +4,7 @@
 > 输入：三路外部调研（国际商业产品 / 国内商业产品 / 开源与学术 / 语义层专题，来源见附录 A）+ 三份代码现状勘探（Agent 流程 / 语义与检索 / 支撑域）
 > 范围：Agent 问数链路及其依赖的全部域。Graph/Workflow 链路不在设计范围内，仅在 §6.3 给出退役建议。
 > 相关文档：现状基线 docs/tech/19/23/25/28；可执行语义模型 docs/tech/27；DDD 评审 docs/tech/12-14；记忆 docs/tech/29；观测 docs/tech/16/26
-> 实施进度（2026-08-16）：P0 代码项、真实 PostgreSQL 迁移与 50 题真实 Agent 跑批已完成。针对首轮失败，已修复 Trace 参数、并发时间结果回投影、明细查询默认时间维度绑定、模型 JSON 一次受控修复、跨模型不兼容组合正常拒答，并修正评测脚本擅自代答澄清的问题。最终 43/50 `finished`、7/50 `waiting_user`、30/50 执行 SQL、43/50 产生答案、`run.failed=0`；按 `expected_points` 人工初审 40/50（80%），达到 P0 的 ≥65% 与死局为 0 目标。P1-1 至 P1-6 已完成首版：AnalysisPlan/ResultStore 契约、三模式路由、FAST/PLAN 管道、DuckDB ComputeEngine、comparison/composition/multi_step 意图和多区间时间计划，以及 derived/ratio、HAVING、时间偏移、预聚合、快照和关系契约安全校验已接入。旧单区间 TimeRange 投影继续保留；固定周期偏移渲染单 SQL，复杂偏移明确走现有双 QueryTask + ComputeTask 计划路径。默认仍保持 `react_legacy`，需通过灰度等价性验证后再切换；RESEARCH 尚未实现。仍有 6 条业务结果错误和 4 条多余澄清，作为后续质量改进项。
+> 实施进度（2026-08-16，按当前代码复核）：P0 代码项、真实 PostgreSQL 迁移与 50 题真实 Agent 跑批已完成。针对首轮失败，已修复 Trace 参数、并发时间结果回投影、明细查询默认时间维度绑定、模型 JSON 一次受控修复、跨模型不兼容组合正常拒答，并修正评测脚本擅自代答澄清的问题。P1-1 至 P1-6 已完成首版：AnalysisPlan/ResultStore 契约、FAST/PLAN 管道、DuckDB ComputeEngine、comparison/composition/multi_step 意图和多区间时间计划，以及 derived/ratio、HAVING、时间偏移、预聚合、快照和关系契约安全校验已接入。当前公共 Agent 入口统一经过 `AgentLoop`，数据问题默认进入 FAST/PLAN；`react_legacy` 只保留给非数据直答和显式回退，不能作为 P1 数据验收路径；RESEARCH 尚未实现。P1 业务结果仍需按 12 题重新跑批确认。
 > 变更记录：2026-08-16 —— 按团队决策，评测平台建设下调为低优先级：从 P0 移至 P2（与运营闭环合并建设）；P0–P1 阶段验收改用现有脚本人工跑批。详见 docs/tech/33 v1.1。
 
 ---
@@ -476,7 +476,7 @@
 | 9 | 多轮计划 patch；记忆灰度开启；metrics 观测层；`retrieval_query_trace` 写入 | **首版已完成（2026-08-16）** |
 | 10 | instructions 资产 + 消费；STRICT 逐数据集推广启动 | **首版已完成（2026-08-16）**：迁移 114、CRUD/API、Schema 投影、理解/规划提示词固定槽位和 STRICT readiness 报告已落地；推广仍按数据集人工执行。 |
 
-**实施状态（2026-08-16）**：P1-7 首版已落地。AnswerComposer 将模型输出限制为结构化回答与 claims，服务端校验数字 claim 的结果集、字段和行定位；失败最多重试一次，仍失败统一表格直出。口径卡片和图表 spec 由服务端规则生成，并通过 answer/run-finished 事件输出。FAST/PLAN 已接入，默认 `react_legacy` 仍保留 `AgentFinalizationService` 过渡链路。
+**实施状态（2026-08-16）**：P1-7 首版已落地。AnswerComposer 将模型输出限制为结构化回答与 claims，服务端校验数字 claim 的结果集、字段和行定位；失败最多重试一次，仍失败统一表格直出。口径卡片和图表 spec 由服务端规则生成，并通过 answer/run-finished 事件输出。公共 Agent 入口已通过 `AgentLoop` 统一选择 FAST/PLAN；`AgentFinalizationService` 仅作为回答组件未装配时的明确收口，不代表另一条问数主路径。
 
 **实施状态（2026-08-16）**：P1-8 首版已落地。置信度服务按绑定证据、校验状态、verified 命中和兜底通道输出 direct/disclose/clarify/reject，并将依据写入运行态；ASSISTED 兜底只在数据集策略与全局开关同时开启时生效，生成 SQL 后仍走统一 DatasourceQueryService 校验和执行，且显式标记非认证口径。
 

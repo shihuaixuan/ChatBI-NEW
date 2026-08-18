@@ -18,6 +18,11 @@ from apps.chatbi.errors import (
     TemporalInterpretationError,
 )
 from apps.chatbi.models.dto.analysis_plan import AnalysisPlan
+from apps.chatbi.models.dto.mention import (
+    MentionGraph,
+    normalize_mention_graph_payload,
+    project_mention_graph_to_intent,
+)
 from apps.chatbi.models.dto.question_model import (
     QuestionModelInvocationData,
     QuestionModelResponse,
@@ -57,6 +62,7 @@ from apps.chatbi.services.understanding.normalization import (
 )
 from apps.chatbi.services.understanding.prompts import (
     DIMENSION_EXTRACTION_RULES,
+    MENTION_GRAPH_SYSTEM_PROMPT,
     METRIC_TIME_EXTRACTION_RULES,
     QUESTION_REWRITE_BUSINESS_RULES,
 )
@@ -357,13 +363,17 @@ class QuestionUnderstandingService:
         self,
         model_client: QuestionUnderstandingModelClient | None = None,
         question_model_service: StructuredModelService | None = None,
+        temporal_question_model_service: StructuredModelService | None = None,
         schema_provider: DatasetSchemaProvider | None = None,
         temporal_interpretation_service: TemporalInterpretationService | None = None,
         temporal_shadow_enabled: bool = False,
         temporal_authority_enabled: bool = False,
         semantic_repair_v2_enabled: bool = False,
+        mention_contract_enabled: bool = False,
         trace_recorder: AgentTraceRecorder | None = None,
     ) -> None:
+        if mention_contract_enabled and not semantic_repair_v2_enabled:
+            raise ValueError("MENTION_CONTRACT_REQUIRES_SEMANTIC_REPAIR_V2")
         effective_temporal_authority = (
             temporal_authority_enabled or semantic_repair_v2_enabled
         )
@@ -386,9 +396,12 @@ class QuestionUnderstandingService:
         # R0 开启后，时间模型必须成为唯一事实源，避免模型字段被剥离后语义丢失。
         self._temporal_authority_enabled = effective_temporal_authority
         self._semantic_repair_v2_enabled = semantic_repair_v2_enabled
+        self._mention_contract_enabled = mention_contract_enabled
         self._temporal_interpretation_service = (
             temporal_interpretation_service
-            or TemporalInterpretationService(self._question_model_service)
+            or TemporalInterpretationService(
+                temporal_question_model_service or self._question_model_service
+            )
             if temporal_enabled
             else None
         )
@@ -484,12 +497,6 @@ class QuestionUnderstandingService:
         understanding_payload = {
             "rewritten_question": rewrite.rewritten_question,
             "inherited_context": rewrite.inherited_context,
-            "available_dimensions": [
-                item for item in available_dimensions if not item.get("is_time")
-            ],
-            "time_dimensions": [
-                item for item in available_dimensions if item.get("is_time")
-            ],
             # 数据集治理指令单独放在固定模块槽位，避免与用户语义事实混淆。
             "dataset_instructions": {
                 "question_categorization": list(
@@ -497,6 +504,18 @@ class QuestionUnderstandingService:
                 )
             },
         }
+        if not self._mention_contract_enabled:
+            # R0 兼容路径仍使用旧的 schema 辅助理解；R1 明确禁止资产清单进入提及抽取。
+            understanding_payload.update(
+                {
+                    "available_dimensions": [
+                        item for item in available_dimensions if not item.get("is_time")
+                    ],
+                    "time_dimensions": [
+                        item for item in available_dimensions if item.get("is_time")
+                    ],
+                }
+            )
         # 意图、排名对象和维度用途必须由同一次模型调用共同判断，避免并行结果互相缺少上下文。
         with self._trace_node(
             trace_run_id,
@@ -505,8 +524,12 @@ class QuestionUnderstandingService:
             "统一问题理解",
             input_data={"rewritten_question": rewrite.rewritten_question},
         ) as understanding_node:
-            understanding_system_prompt = QUESTION_UNDERSTANDING_SYSTEM_PROMPT
-            if self._semantic_repair_v2_enabled:
+            understanding_system_prompt = (
+                MENTION_GRAPH_SYSTEM_PROMPT
+                if self._mention_contract_enabled
+                else QUESTION_UNDERSTANDING_SYSTEM_PROMPT
+            )
+            if self._semantic_repair_v2_enabled and not self._mention_contract_enabled:
                 understanding_system_prompt += (
                     "\n\nR0 语义契约约束：时间与时段比较由独立 Temporal 任务唯一解释。"
                     "本次输出只登记 time_mentions，不得输出 time_range、time_ranges、"
@@ -514,18 +537,36 @@ class QuestionUnderstandingService:
                     "如果用户表达了变化、差值或增长率，只保留用户的指标和分析形态，"
                     "不要自行填写比较方法。"
                 )
-            intent, intent_usage = self._invoke_validated_model(
-                "QUESTION_UNDERSTANDING",
-                understanding_system_prompt,
-                understanding_payload,
-                IntentRecognitionOutput,
-                normalizer=lambda payload: _normalize_unified_payload(
-                    payload,
-                    available_dimensions,
+            mention_graph: MentionGraph | None = None
+            if self._mention_contract_enabled:
+                mention_graph, intent_usage = self._invoke_validated_model(
+                    "QUESTION_UNDERSTANDING",
+                    understanding_system_prompt,
+                    understanding_payload,
+                    MentionGraph,
+                    normalizer=lambda payload: normalize_mention_graph_payload(
+                        payload,
+                        rewritten_question=rewrite.rewritten_question,
+                    ),
+                    trace_run_id=trace_run_id,
+                )
+                intent = project_mention_graph_to_intent(
+                    mention_graph,
                     rewritten_question=rewrite.rewritten_question,
-                ),
-                trace_run_id=trace_run_id,
-            )
+                )
+            else:
+                intent, intent_usage = self._invoke_validated_model(
+                    "QUESTION_UNDERSTANDING",
+                    understanding_system_prompt,
+                    understanding_payload,
+                    IntentRecognitionOutput,
+                    normalizer=lambda payload: _normalize_unified_payload(
+                        payload,
+                        available_dimensions,
+                        rewritten_question=rewrite.rewritten_question,
+                    ),
+                    trace_run_id=trace_run_id,
+                )
             if understanding_node is not None:
                 understanding_node.set_output(
                     {
@@ -538,12 +579,19 @@ class QuestionUnderstandingService:
                     }
                 )
                 understanding_node.set_output_detail(
-                    {"understanding": intent.model_dump(mode="json")}
+                    {
+                        "understanding": intent.model_dump(mode="json"),
+                        "mention_graph": (
+                            mention_graph.model_dump(mode="json")
+                            if mention_graph is not None
+                            else None
+                        ),
+                    }
                 )
         intent = _stabilize_intent(
             _reconcile_detail_display_dimensions(
                 intent,
-                available_dimensions,
+                [] if self._mention_contract_enabled else available_dimensions,
                 rewritten_question=rewrite.rewritten_question,
             ),
             fixed_temporal_context,
@@ -568,6 +616,7 @@ class QuestionUnderstandingService:
                     self._interpret_authoritative_plan(
                         rewritten_question=rewrite.rewritten_question,
                         intent=intent,
+                        mention_graph=mention_graph,
                         temporal_context=fixed_temporal_context,
                         conversation_context=context,
                     )
@@ -581,6 +630,7 @@ class QuestionUnderstandingService:
                 temporal_shadow, temporal_usage = self._observe_temporal_plan(
                     rewritten_question=rewrite.rewritten_question,
                     intent=intent,
+                    mention_graph=mention_graph,
                     temporal_context=fixed_temporal_context,
                     conversation_context=context,
                 )
@@ -633,6 +683,7 @@ class QuestionUnderstandingService:
             validation=validation,
             temporal_interpretation=temporal_interpretation,
             category=intent.category,
+            mention_graph=mention_graph,
         )
         return QuestionUnderstandingOutcome(
             output=output,
@@ -649,6 +700,7 @@ class QuestionUnderstandingService:
         *,
         rewritten_question: str,
         intent: IntentRecognitionOutput,
+        mention_graph: MentionGraph | None = None,
         temporal_context: TemporalContext,
         conversation_context: dict[str, Any],
         user_confirmation: str | None = None,
@@ -666,6 +718,7 @@ class QuestionUnderstandingService:
             time_mentions=intent.time_mentions,
             temporal_context=temporal_context,
             conversation_context=conversation_context,
+            analysis_context=_temporal_analysis_context(intent, mention_graph),
             user_feedback=user_feedback,
             user_confirmation=user_confirmation,
         )
@@ -711,6 +764,7 @@ class QuestionUnderstandingService:
                 self._interpret_authoritative_plan(
                     rewritten_question=previous.rewritten_question,
                     intent=previous.intent,
+                    mention_graph=previous.mention_graph,
                     temporal_context=temporal_context,
                     conversation_context=previous.inherited_context,
                     user_confirmation=confirmation,
@@ -748,6 +802,7 @@ class QuestionUnderstandingService:
         *,
         rewritten_question: str,
         intent: IntentRecognitionOutput,
+        mention_graph: MentionGraph | None = None,
         temporal_context: TemporalContext,
         conversation_context: dict[str, Any],
     ) -> tuple[TemporalShadowObservation | None, dict[str, int]]:
@@ -769,6 +824,7 @@ class QuestionUnderstandingService:
                 time_mentions=intent.time_mentions,
                 temporal_context=temporal_context,
                 conversation_context=conversation_context,
+                analysis_context=_temporal_analysis_context(intent, mention_graph),
                 user_feedback=user_feedback,
                 user_confirmation=user_confirmation,
             )
@@ -2485,6 +2541,41 @@ def _apply_temporal_interpretation(
     if "time_dimension" not in required_slot_types:
         required_slot_types.append("time_dimension")
     return projected.model_copy(update={"required_slot_types": required_slot_types})
+
+
+def _temporal_analysis_context(
+    intent: IntentRecognitionOutput,
+    mention_graph: MentionGraph | None,
+) -> dict[str, Any]:
+    """把上游已确认的分析关系传给时间模型，避免时间层重新猜测分析语义。"""
+
+    return {
+        "intent_type": intent.intent_type,
+        "comparison": (
+            intent.comparison.model_dump(mode="json")
+            if intent.comparison is not None
+            else None
+        ),
+        "query_shape": intent.query_shape.model_dump(mode="json"),
+        "time_expressions": (
+            [
+                {
+                    "raw": item.text,
+                    "start_offset": item.start_offset,
+                    "end_offset": item.end_offset,
+                }
+                for item in mention_graph.mentions
+                if item.kind == "time_expression"
+            ]
+            if mention_graph is not None
+            else []
+        ),
+        "expressions": (
+            [item.model_dump(mode="json") for item in mention_graph.expressions]
+            if mention_graph is not None
+            else []
+        ),
+    }
 
 
 def _is_metric_internal_time_conflict(

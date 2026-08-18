@@ -34,13 +34,28 @@ class SemanticQueryPlanningService:
     ) -> SemanticQueryPlan:
         if request.dataset_id != schema.data_set.id:
             raise SemanticValidationError("SEMANTIC_QUERY_DATASET_MISMATCH")
-        if not request.metric_ids:
+        metric_ids = tuple(request.metric_ids)
+        if not metric_ids and request.ratio_specs:
+            # RatioSpec 已经证明分子分母是已绑定基础指标，规划层只需把
+            # 两个操作数纳入同一受控查询；表达式渲染由后续编译阶段负责。
+            metric_ids = tuple(
+                dict.fromkeys(
+                    int(asset_id)
+                    for spec in request.ratio_specs
+                    for asset_id in (
+                        (spec.get("numerator") or {}).get("asset_id"),
+                        (spec.get("denominator") or {}).get("asset_id"),
+                    )
+                    if isinstance(asset_id, int) and asset_id > 0
+                )
+            )
+        if not metric_ids:
             raise SemanticValidationError("SEMANTIC_QUERY_METRIC_REQUIRED")
 
         metric_elements = {
-            item.id: item for item in schema.metrics if item.id in request.metric_ids
+            item.id: item for item in schema.metrics if item.id in metric_ids
         }
-        missing_metric_ids = [item for item in request.metric_ids if item not in metric_elements]
+        missing_metric_ids = [item for item in metric_ids if item not in metric_elements]
         if missing_metric_ids:
             raise SemanticValidationError("SEMANTIC_QUERY_METRIC_NOT_FOUND")
 
@@ -60,7 +75,7 @@ class SemanticQueryPlanningService:
                 time_semantics=(metric_contracts.get(metric_id) or {}).get("time_semantics"),
                 metric_refs=_metric_refs(metric_elements[metric_id]),
             )
-            for metric_id in request.metric_ids
+            for metric_id in metric_ids
         )
         base_model_id = metric_bindings[0].model_id
         if base_model_id <= 0:

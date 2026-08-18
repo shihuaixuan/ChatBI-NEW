@@ -176,7 +176,7 @@ def build_agent_loop(
     )
     # 新模式共享同一个结构化模型服务；legacy 仍使用原来的双模型收口。
     if finalization_service is None:
-        model_service = build_question_model_service()
+        model_service = build_question_model_service(enforce_json=True)
         resolved_finalization_service = AgentFinalizationService(model_service)
         resolved_answer_composer = answer_composer or AnswerComposer(
             model_service,
@@ -268,6 +268,7 @@ def build_agent_loop(
                 assisted_fallback_enabled=resolved_config.assisted_fallback_enabled,
                 semantic_schema_provider=resolved_semantic_schema_provider,
                 metrics=metrics_recorder,
+                trace_recorder=resolved_recorder,
             )
         ),
         plan_pipeline=PlanPipeline(
@@ -286,6 +287,7 @@ def build_agent_loop(
                 planner_model_service=(
                     model_service if finalization_service is None else None
                 ),
+                trace_recorder=resolved_recorder,
             )
         ),
     )

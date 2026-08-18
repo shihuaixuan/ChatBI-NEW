@@ -88,7 +88,17 @@ from apps.chatbi.models.dto.generation_schema_context import (
     GenerationSchemaContext,
     GenerationSchemaTableCandidate,
 )
+from apps.chatbi.models.dto.intent_projection import project_mention_graph_to_intent
 from apps.chatbi.models.dto.legacy_query import AiModelQuestion, ChatQuestion
+from apps.chatbi.models.dto.mention import (
+    AnalysisExpression,
+    DecompositionHint,
+    MentionGraph,
+    MetricCondition,
+    OrderRef,
+    SemanticMention,
+    normalize_mention_graph_payload,
+)
 from apps.chatbi.models.dto.permission_sql_generation import (
     PermissionSQLFilter,
     PermissionSQLGenerationData,
@@ -149,6 +159,7 @@ from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
 
 __all__ = [
     "AnalysisPlan",
+    "AnalysisExpression",
     "AnalysisPlanStatus",
     "AnalysisTask",
     "AnalysisTaskType",
@@ -196,6 +207,7 @@ __all__ = [
     "DatasourceSelectionEvent",
     "DatasourceSelectionRankingCandidate",
     "DimensionRecognitionOutput",
+    "DecompositionHint",
     "DimensionSlot",
     "DynamicSQLGenerationData",
     "DynamicSQLSubqueryMapping",
@@ -216,6 +228,9 @@ __all__ = [
     "IntentRecognitionOutput",
     "IntentValidationOutput",
     "NaturalLanguageIntentOutputBase",
+    "MentionGraph",
+    "MetricCondition",
+    "OrderRef",
     "QuestionClassificationOutputBase",
     "QuestionIntentProjectionData",
     "QuestionIntentProjectionResult",
@@ -251,5 +266,8 @@ __all__ = [
     "SQLGenerationData",
     "SQLGenerationEvent",
     "SQLGenerationResult",
+    "SemanticMention",
     "TimeRange",
+    "normalize_mention_graph_payload",
+    "project_mention_graph_to_intent",
 ]

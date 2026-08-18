@@ -64,7 +64,6 @@ async def ask_recommend_questions(
 
         model_id, model_name, assistant_name, llm = await _resolve_generation_runtime(
             session,
-            current_user,
             current_assistant,
             no_reasoning=True,
         )
@@ -166,7 +165,6 @@ async def analysis_or_predict(
 
         model_id, model_name, assistant_name, llm = await _resolve_generation_runtime(
             session,
-            current_user,
             current_assistant,
             no_reasoning=False,
         )
@@ -221,7 +219,6 @@ async def analysis_or_predict(
 
 async def _resolve_generation_runtime(
     session: Session,
-    current_user: CurrentUser,
     current_assistant: CurrentAssistant | None,
     *,
     no_reasoning: bool,

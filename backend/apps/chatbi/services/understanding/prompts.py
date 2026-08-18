@@ -86,6 +86,13 @@ expressions 中每个元素都必须包含：
 - 示例和已有 time_mentions 只是线索，不是支持范围白名单；必须检查完整 rewritten_question。
 - 不补充用户没有表达的数量、单位、日期、范围或分组。
 - 多个时间表达分别输出，冲突表达全部保留并进入 ambiguities。
+- 如果输入的 analysis_context 已经给出 comparison 或 expressions，必须把其中的比较关系作为上游确定的分析语义；
+  “增长率”“同比”“环比”“占比”“比例”等分析表达不是时间表达，不得放入 expressions 或 ambiguities。
+- analysis_context 中的 comparison 只表示分析关系，不要把比较关系本身当作新的时间范围；仍需从原文提取其中明确的时间范围。
+- 同一问题中已经出现明确年份时，比较关系里的“6月29日”“上半年”等省略年份的时间表达继承该明确年份；
+  例如“2026年6月30日相比6月29日”应输出两个可执行日期，不得因为第二个表达省略年份而返回 time_calendar_ambiguous。
+- “2026年6月”“2026年5月”“2025年”“2026年上半年”等明确日历周期都属于支持范围，必须输出
+  calendar_period 或 absolute_range，不得返回 time_expression_unsupported。
 - query_filter 与 metric_definition 同时出现不是冲突；“当前库存件数”“客户当日GMV”“近30天销量”
   等完整指标短语内部的时间不得进入 ambiguities。
 - “最近”“前段时间”等缺少数量或单位的表达必须 clarification_required，不能默认最近 7 天。
@@ -102,8 +109,54 @@ expressions 中每个元素都必须包含：
 """.strip()
 
 
+MENTION_GRAPH_SYSTEM_PROMPT = """
+你是 ChatBI R1 语义提及理解器。你只登记用户原文中的连续语义短语和分析表达，
+不回答问题，不生成 SQL，不选择语义资产、字段或时间字段。
+
+只输出一个 JSON 对象，不要输出 Markdown 或解释：
+{
+  "mentions": [],
+  "expressions": [],
+  "metric_conditions": [],
+  "order": null,
+  "intent_type": "metric_query | trend_analysis | ranking_analysis | comparison_analysis | detail_query | share_analysis | composition | multi_step | anomaly_analysis | unknown",
+  "query_shape": {"select_mode": "aggregate", "needs_group_by": false, "needs_order_by": false, "order_direction": null, "limit": null, "time_grain": null},
+  "unresolved_notes": [],
+  "category": "chitchat | data_query | meta_query | out_of_scope",
+  "confidence": 0.0,
+  "required_slot_types": [],
+  "ambiguous_slots": [],
+  "conflict_slots": []
+}
+
+mentions 中每项必须包含：
+{"mention_id":"m1","text":"用户原文连续短语","start_offset":0,"end_offset":2,"kind":"metric_phrase | dimension_phrase | filter_value | time_expression"}
+
+规则：
+- text 必须是 rewritten_question 的严格连续切片，偏移按 Unicode 字符左闭右开计算。
+- metric_phrase 必须保留完整限定词，例如“销售订单平均客单价”不能缩短为“平均客单价”。
+- base 是可直接检索的基础指标；composite_unknown 是可能对应派生资产或需要拆解的完整复合指标。
+- 对“平均、客单价、转化率、完成率、占比”等可能由两个基础指标计算的完整短语，若不能确认它是认证派生资产，
+  必须保留完整短语并标记 composite_unknown，同时给出 numerator_text 和 denominator_text 的拆解假设；
+  不得把复合短语标记为 base，也不得只保留其中的核心词。
+- computed 仅表示增长率、环比、同比、占比、比例、贡献率、差值等计算表达，必须被 expressions 引用，不能作为指标检索槽。
+- composite_unknown 可以携带 decomposition={"kind":"ratio","numerator_text":"...","denominator_text":"..."}；这两个假设短语不是用户 mention，也不需要偏移。
+- dimension_phrase 只登记业务对象或分组/筛选对象；用途放入 dimension_role=group_by|filter|display|unresolved。
+- filter_value 只登记用户明确给出的筛选值，可用 attached_to 指向所属 dimension_phrase 的 mention_id。
+- 时间原文只登记为 time_expression，不选择时间字段，不生成 time_range 或 comparison。
+- expressions 中每个元素都必须完整输出 expr_id、op、display_name、of、over、outputs；
+  op 只能是 growth、share、ratio、diff、compare、topn，不能省略。compare 表示多个时间段的对比，
+  growth 表示变化/增长及增长率，差值和增长率放在同一个 growth 表达的 outputs 中。
+- of 只能引用 mention_id 或 expr_id；没有明确的基础指标时不要编造引用。
+- 指标条件只表达 metric_ref、operator、value、raw，不输出 where/having stage。
+- 排序通过 order 引用已有 mention 或 expression，不要为排序目标重复创建指标 mention。
+- 不确定或无法归类的原文放入 unresolved_notes，不要编造资产名称。
+""".strip()
+
+
 __all__ = [
     "DIMENSION_EXTRACTION_RULES",
+    "MENTION_GRAPH_SYSTEM_PROMPT",
     "METRIC_TIME_EXTRACTION_RULES",
     "QUESTION_REWRITE_BUSINESS_RULES",
     "TEMPORAL_INTERPRETATION_SYSTEM_PROMPT",

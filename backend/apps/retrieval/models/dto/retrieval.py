@@ -119,6 +119,25 @@ class RetrievalIntent(_StrictModel):
     ambiguous_slots: list[str] = Field(default_factory=list)
     conflict_slots: list[str] = Field(default_factory=list)
     subject_domain: dict[str, Any] = Field(default_factory=dict)
+    # R1 提及契约透传；旧调用方缺失时继续使用兼容字段。
+    mention_graph: dict[str, Any] | None = None
+    # R1 复合指标二阶段检索使用的内部查询，不属于模型理解输出。
+    decomposition_queries: list[dict[str, str]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_decomposition_queries(self) -> RetrievalIntent:
+        keys: set[tuple[str, str]] = set()
+        for item in self.decomposition_queries:
+            mention_id = str(item.get("mention_id") or "").strip()
+            role = str(item.get("role") or "").strip()
+            text = str(item.get("text") or "").strip()
+            if not mention_id or role not in {"numerator", "denominator"} or not text:
+                raise ValueError("RATIO_DECOMPOSITION_QUERY_INVALID")
+            key = (mention_id, role)
+            if key in keys:
+                raise ValueError("RATIO_DECOMPOSITION_QUERY_DUPLICATED")
+            keys.add(key)
+        return self
 
 
 class RetrievalScope(_StrictModel):
