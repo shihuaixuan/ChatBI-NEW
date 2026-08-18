@@ -100,9 +100,10 @@ class QuestionUnderstandingModelClient(Protocol):
 REWRITE_SYSTEM_PROMPT = "\n\n".join(
     [
         """
-你是智能问数场景下的问题重写大师。
+你是智能问数场景下的问题重写模型。
 
-你的唯一任务是：根据用户当前问题和必要的会话上下文，将当前问题重写为一个完整、明确、专业的在问数场景下的自然语言问题。
+你的任务是：根据用户当前问题和必要的会话上下文，将当前问题重写为一个完整、明确、专业的在问数场景下的自然语言问题，
+并从重写后的问题中识别指标短语和维度短语。
 
 重写规则：
 1. 保留用户当前问题中明确表达的指标、维度、筛选条件、时间范围和展示要求。
@@ -116,17 +117,24 @@ REWRITE_SYSTEM_PROMPT = "\n\n".join(
 9. 保留用户原有的业务名称、指标名称、店铺编号、区域名称、渠道名称和筛选值。
 10. 不得增加用户没有提出的指标、维度、筛选条件、排序、Top N、比较关系、计算关系或分析目标。
 11. 不得将业务名称转换为表名、字段名、内部资产 ID 或 SQL。
-12. 不得输出问题分类、意图、模式、置信度、缺失字段、上下文继承字段或解释说明。
+12. 不得输出问题分类、意图、模式、置信度、缺失字段、资产 ID、字段名或解释说明。
 13. 如果上下文存在多个可能指向，无法唯一确定时，不得自行猜测；在 rewrite_question 中保留无法确定的原有表达，交由后续流程处理。
+14. metric_phrases 和 dimension_phrases 必须依据 rewrite_question 的自然语言含义识别，不得按字符位置、固定句式或固定词表截取。
+15. 指标短语保留完整的业务限定词和核心指标；维度短语保留完整的业务对象名称。
+16. 时间表达、维度值、疑问词、排序词和计算关系不进入两个短语列表。
 
-只输出一个合法 JSON 对象，且只能包含以下两个字段：
+只输出一个合法 JSON 对象，且只能包含以下四个字段：
 {
   "original_question": "用户本轮提交的原始问题",
-  "rewrite_question": "重写后的完整问题"
+  "rewrite_question": "重写后的完整问题",
+  "metric_phrases": ["指标业务短语"],
+  "dimension_phrases": ["维度业务短语"]
 }
 字段要求：
 - original_question 必须完整保留用户本轮提交的问题原文；
 - rewrite_question 必须是供后续流程使用的完整自然语言问题；
+- metric_phrases 只包含指标业务短语；
+- dimension_phrases 只包含维度业务短语；
 - rewrite_question 不得包含 JSON、Markdown、解释过程或 SQL；
 - 不得输出 JSON 以外的文字。
 """.strip(),
@@ -136,15 +144,15 @@ REWRITE_SYSTEM_PROMPT = "\n\n".join(
 
 示例 1：可独立理解的新问题
 输入：{"current_question":"本月新增客户数是多少？","conversation_context":{}}
-输出：{"original_question":"本月新增客户数是多少？","rewrite_question":"本月新增客户数是多少？"}
+输出：{"original_question":"本月新增客户数是多少？","rewrite_question":"本月新增客户数是多少？","metric_phrases":["新增客户数"],"dimension_phrases":[]}
 
 示例 2：只替换上一轮时间的追问
 输入：{"current_question":"那上个月呢？","conversation_context":{"last_rewritten_question":"查询本月新增客户数"}}
-输出：{"original_question":"那上个月呢？","rewrite_question":"查询上个月新增客户数"}
+输出：{"original_question":"那上个月呢？","rewrite_question":"查询上个月新增客户数","metric_phrases":["新增客户数"],"dimension_phrases":[]}
 
 示例 3：无法确定引用对象
 输入：{"current_question":"那另一个呢？","conversation_context":{}}
-输出：{"original_question":"那另一个呢？","rewrite_question":"那另一个呢？"}
+输出：{"original_question":"那另一个呢？","rewrite_question":"那另一个呢？","metric_phrases":[],"dimension_phrases":[]}
 """.strip(),
     ]
 )
@@ -449,12 +457,6 @@ class QuestionUnderstandingService:
                 "timezone": fixed_temporal_context.timezone,
             },
             QuestionRewriteOutput,
-            # 迁移期间只接受旧字段 rewritten_question 的显式映射；旧的意图、
-            # 置信度和槽位字段不会进入新的重写 DTO，也不会被后续流程消费。
-            normalizer=lambda payload: _normalize_question_rewrite_payload(
-                payload,
-                original_question=question,
-            ),
             trace_run_id=trace_run_id,
         )
 
@@ -651,6 +653,8 @@ class QuestionUnderstandingService:
                 context,
             ),
             rewritten_question=rewrite.rewrite_question,
+            metric_phrases=rewrite.metric_phrases,
+            dimension_phrases=rewrite.dimension_phrases,
             inherited_context={},
             intent=intent,
             validation=validation,
@@ -1631,25 +1635,6 @@ def _build_rewrite_context(context: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, str) and value.strip():
             result[key] = value.strip()
     return result
-
-
-def _normalize_question_rewrite_payload(
-    payload: dict[str, Any],
-    *,
-    original_question: str,
-) -> dict[str, Any]:
-    """将迁移期旧重写字段映射到新契约，不保留旧扩展字段。"""
-
-    normalized = dict(payload)
-    if "rewrite_question" not in normalized and "rewritten_question" in normalized:
-        normalized["rewrite_question"] = normalized.pop("rewritten_question")
-        # 旧模型没有输出原问题字段，该字段由服务端保存的原始输入补齐。
-        normalized["original_question"] = original_question
-    return {
-        key: normalized[key]
-        for key in ("original_question", "rewrite_question")
-        if key in normalized
-    }
 
 
 def _derive_legacy_message_type(

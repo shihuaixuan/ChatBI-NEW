@@ -103,12 +103,10 @@ class FakeSchemaProvider:
 
 def _rewrite_payload(question):
     return {
-        "message_type": "new_question",
-        "rewritten_question": question,
-        "inherited_context": {},
-        "need_user_input": False,
-        "missing_slots": [],
-        "confidence": 0.98,
+        "original_question": question,
+        "rewrite_question": question,
+        "metric_phrases": [],
+        "dimension_phrases": [],
     }
 
 

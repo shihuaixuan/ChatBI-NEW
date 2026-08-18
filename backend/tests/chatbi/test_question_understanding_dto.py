@@ -146,11 +146,15 @@ def test_agent_rewrite_output_only_contains_original_and_rewrite_question():
     output = QuestionRewriteOutput(
         original_question="那上个月呢？",
         rewrite_question="查询上个月销售额",
+        metric_phrases=["销售额"],
+        dimension_phrases=[],
     )
 
     assert output.model_dump() == {
         "original_question": "那上个月呢？",
         "rewrite_question": "查询上个月销售额",
+        "metric_phrases": ["销售额"],
+        "dimension_phrases": [],
     }
     with pytest.raises(ValidationError, match="extra_forbidden"):
         QuestionRewriteOutput.model_validate(

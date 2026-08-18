@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
 
 from apps.chatbi.models.dto.mention import MentionGraph
 from apps.temporal import ResolvedTemporalPlan, TemporalPlan
@@ -86,14 +86,36 @@ class NaturalLanguageIntentOutputBase(
 class QuestionRewriteOutput(BaseModel):
     """ChatBI 问题重写的唯一模型输出契约。
 
-    重写阶段只负责把自然语言问题改写成可独立理解的问题，不输出意图、置信度、
-    缺失槽位或上下文继承信息。异常由后续问题理解和确定性校验阶段处理。
+    重写阶段同时输出可独立理解的问题，以及供语义资产检索使用的指标和维度短语。
+    不输出完整意图、置信度、缺失槽位或上下文继承信息。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     original_question: str = Field(min_length=1)
     rewrite_question: str = Field(min_length=1)
+    metric_phrases: list[StrictStr]
+    dimension_phrases: list[StrictStr]
+
+    @field_validator("metric_phrases", "dimension_phrases")
+    @classmethod
+    def validate_phrases(cls, values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        for phrase in values:
+            if not phrase.strip():
+                raise ValueError("检索短语不能为空")
+            key = phrase.casefold()
+            if key in seen:
+                raise ValueError("检索短语不能重复")
+            seen.add(key)
+        return values
+
+    @model_validator(mode="after")
+    def validate_phrase_boundaries(self) -> QuestionRewriteOutput:
+        for phrase in [*self.metric_phrases, *self.dimension_phrases]:
+            if phrase not in self.rewrite_question:
+                raise ValueError("检索短语必须来自 rewrite_question")
+        return self
 
 
 class DimensionSlot(BaseModel):
@@ -326,6 +348,8 @@ class QuestionUnderstandingOutput(BaseModel):
         "clarification_reply",
     ]
     rewritten_question: str
+    metric_phrases: list[StrictStr]
+    dimension_phrases: list[StrictStr]
     inherited_context: dict[str, Any] = Field(default_factory=dict)
     intent: IntentRecognitionOutput
     validation: IntentValidationOutput

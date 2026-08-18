@@ -27,7 +27,7 @@ def normalize_model_payload(
 ) -> PayloadNormalizationResult:
     """在 Pydantic 校验前执行确定性字段归一化。
 
-    R0 只处理已知的兼容字段和路径级额外字段，不重新解释用户问题。
+    R0 只处理结构路径级的格式噪声，不转换业务字段名称。
     """
 
     normalized = deepcopy(payload)

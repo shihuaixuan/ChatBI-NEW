@@ -336,6 +336,8 @@ class StaticUnderstandingService:
                 original_question=question,
                 message_type="new_question",
                 rewritten_question=self.rewritten_question,
+                metric_phrases=["gmv"],
+                dimension_phrases=["城市"],
                 inherited_context={},
                 intent=IntentRecognitionOutput(
                     intent_type="metric_query",

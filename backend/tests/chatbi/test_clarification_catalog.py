@@ -62,6 +62,8 @@ def _understanding_with_codes(*reason_codes: str) -> dict[str, Any]:
         original_question="按门店看本月销售额",
         message_type="new_question",
         rewritten_question="按门店看本月销售额",
+        metric_phrases=["销售额"],
+        dimension_phrases=["门店"],
         intent=IntentRecognitionOutput(intent_type="metric_query", confidence=0.9),
         validation=IntentValidationOutput(status="valid"),
     )

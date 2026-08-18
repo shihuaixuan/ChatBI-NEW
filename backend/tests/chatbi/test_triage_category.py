@@ -26,6 +26,8 @@ def _output_with_category(category: str) -> QuestionUnderstandingOutput:
         original_question="你好",
         message_type="new_question",
         rewritten_question="你好",
+        metric_phrases=[],
+        dimension_phrases=[],
         intent=IntentRecognitionOutput(intent_type="unknown", confidence=0.9),
         validation=IntentValidationOutput(status="valid"),
         category=category,
@@ -52,6 +54,8 @@ def test_category_defaults_to_data_query_for_old_snapshots():
         original_question="q",
         message_type="new_question",
         rewritten_question="q",
+        metric_phrases=[],
+        dimension_phrases=[],
         intent=IntentRecognitionOutput(intent_type="metric_query", confidence=0.9),
         validation=IntentValidationOutput(status="valid"),
     )
