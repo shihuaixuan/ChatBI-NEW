@@ -12,7 +12,6 @@ from apps.chatbi.composition import (
     build_chat_record_service,
     build_physical_schema_service,
     build_query_service,
-    build_question_understanding_service,
     build_result_artifact_service,
     build_semantic_parse_service,
 )
@@ -44,10 +43,7 @@ from apps.chatbi.services.generation.agent_finalization import AgentFinalization
 from apps.chatbi.services.generation.answer_composer import AnswerComposer
 from apps.chatbi.services.generation.fallback_sql import AssistedFallbackSQLService
 from apps.chatbi.services.planning import PhysicalSchemaService
-from apps.chatbi.services.understanding import (
-    QuestionUnderstandingService,
-    SemanticParseService,
-)
+from apps.chatbi.services.understanding import SemanticParseService
 from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
 from apps.knowledge.composition import build_sql_example_query_service
@@ -121,7 +117,6 @@ def build_run_orchestrator(
     *,
     model_client: AgentModelClient | None = None,
     registry: ToolRegistry | None = None,
-    understanding_service: QuestionUnderstandingService | None = None,
     semantic_parse_service: SemanticParseService | None = None,
     term_query_service: SemanticTermQueryService | None = None,
     query_service: DatasourceQueryService | None = None,
@@ -180,9 +175,9 @@ def build_run_orchestrator(
     resolved_sql_example_query_service = (
         sql_example_query_service or build_sql_example_query_service(session)
     )
-    # 新模式共享同一个结构化模型服务；legacy 仍使用原来的双模型收口。
+    # 重写、语义解析、回答和计划阶段共享同一个结构化模型服务。
+    model_service = build_question_model_service(enforce_json=True)
     if finalization_service is None:
-        model_service = build_question_model_service(enforce_json=True)
         resolved_finalization_service = AgentFinalizationService(model_service)
         resolved_answer_composer = answer_composer or AnswerComposer(
             model_service,
@@ -220,30 +215,23 @@ def build_run_orchestrator(
         resolved_publisher,
         ChatBIToolResultProcessor(),
     )
-    resolved_understanding_service = (
-        understanding_service
-        or build_question_understanding_service(
-            resolved_semantic_schema_provider,
-            trace_recorder=resolved_recorder,
-        )
-    )
     resolved_semantic_parse_service = (
-        semantic_parse_service or build_semantic_parse_service()
+        semantic_parse_service or build_semantic_parse_service(model_service)
     )
     result_processor = ChatBIToolResultProcessor()
-    resolved_input_preparer = input_preparer or AgentInputPreparer(
-        session,
-        resolved_config,
-        resolved_understanding_service,
-        resolved_semantic_schema_provider,
-        lifecycle,
-        resolved_publisher,
-        resolved_recorder,
-        resolved_memory_service,
-        resolved_registry,
-        result_processor,
-        resolved_semantic_parse_service,
-    )
+    if input_preparer is not None:
+        resolved_input_preparer = input_preparer
+    else:
+        search_tool = resolved_registry.get("search_semantic_assets")
+        if not isinstance(search_tool, SearchSemanticAssetsTool):
+            raise ValueError("AGENT_INPUT_SEARCH_TOOL_REQUIRED")
+        resolved_input_preparer = AgentInputPreparer(
+            session,
+            model_service,
+            resolved_semantic_parse_service,
+            search_tool,
+            history_rounds=resolved_config.history_rounds,
+        )
     resolved_result_artifact_service = (
         result_artifact_service or build_result_artifact_service(session)
     )

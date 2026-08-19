@@ -419,7 +419,34 @@ def latest_successful_rewrite_question(
         datasource_id=datasource_id,
     )
     rewrite_question = understanding.get("rewrite_question") if understanding else None
-    return rewrite_question.strip() if isinstance(rewrite_question, str) and rewrite_question.strip() else None
+    if isinstance(rewrite_question, str) and rewrite_question.strip():
+        return rewrite_question.strip()
+
+    conditions = [
+        ChatbiAgentRun.chat_id == chat_id,
+        ChatbiAgentRun.record_id != exclude_record_id,
+        ChatbiAgentRun.status == AgentRunStatus.FINISHED.value,
+    ]
+    stmt = (
+        select(ChatbiAgentRun)
+        .where(and_(*conditions))
+        .order_by(desc(ChatbiAgentRun.created_at))
+        .limit(10)
+    )
+    record_service = build_chat_record_service(session)
+    for previous_run in session.exec(stmt).scalars().all():
+        record = record_service.get(previous_run.record_id)
+        if not record.finish or record.execution_type != "agent":
+            continue
+        if datasource_id is not None and record.datasource != datasource_id:
+            continue
+        rewrite = (previous_run.derived_state or {}).get("question_rewrite")
+        if not isinstance(rewrite, dict):
+            continue
+        rewrite_question = rewrite.get("rewrite_question")
+        if isinstance(rewrite_question, str) and rewrite_question.strip():
+            return rewrite_question.strip()
+    return None
 
 
 def latest_successful_question_understanding(

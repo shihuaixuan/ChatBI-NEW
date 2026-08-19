@@ -1274,7 +1274,7 @@ def test_old_question_understanding_path_has_been_removed():
     assert "apps.capabilities.question_understanding" not in agent_loop_source
 
 
-def test_agent_input_preparation_owns_understanding_and_preflight_clarification():
+def test_agent_input_preparation_owns_rewrite_retrieval_and_semantic_parse():
     loop_source = (
         BACKEND_DIR__question_understanding
         / "apps/chatbi/orchestration/agent/run_orchestrator.py"
@@ -1287,12 +1287,10 @@ def test_agent_input_preparation_owns_understanding_and_preflight_clarification(
     assert "self.input_preparer.prepare_initial" in loop_source
     assert "self.input_preparer.prepare_resume" in loop_source
     assert "self.understanding_service.understand" not in loop_source
-    assert "apply_question_understanding_clarification" not in loop_source
-    # 澄清归宿注册表在 understanding 域，preparation 只负责挂起、分诊与收口编排。
-    assert "evaluate_clarification" in preparation_source
-    assert "def _suspend_for_preflight_clarification" in preparation_source
-    assert "def _triage_without_query" in preparation_source
-    assert "build_system_prompt" in preparation_source
+    assert "FastInputPreparer" not in preparation_source
+    assert "QUESTION_REWRITE" in preparation_source
+    assert "build_retrieval_request" in preparation_source
+    assert "self._semantic_parse_service.parse" in preparation_source
 
 
 def test_agent_runtime_dependencies_are_owned_by_composition():
