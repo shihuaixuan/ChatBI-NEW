@@ -32,6 +32,7 @@ from apps.chatbi.orchestration.pipeline.fast import (
     FastPipeline,
     FastPipelineDependencies,
 )
+from apps.chatbi.orchestration.pipeline.mode_router import ModeRouter
 from apps.chatbi.orchestration.pipeline.plan_mode import (
     PlanPipeline,
     PlanPipelineDependencies,
@@ -255,6 +256,7 @@ def build_agent_loop(
         tool_executor=resolved_tool_executor,
         input_preparer=resolved_input_preparer,
         state_factory=state_factory,
+        mode_router=ModeRouter(resolved_semantic_schema_provider),
         fast_pipeline=FastPipeline(
             FastPipelineDependencies(
                 registry=resolved_registry,

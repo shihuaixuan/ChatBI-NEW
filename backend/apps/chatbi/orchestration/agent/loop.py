@@ -18,6 +18,7 @@ from apps.chatbi.models import (
     ChatbiAgentClarification,
     ChatbiAgentRun,
 )
+from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
 from apps.chatbi.orchestration.agent.cancellation import (
     AgentCancellationRequested,
     CancellationStage,
@@ -33,7 +34,11 @@ from apps.chatbi.orchestration.agent.state import (
 )
 from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
 from apps.chatbi.orchestration.pipeline.fast import FastPipeline, FastPipelineError
-from apps.chatbi.orchestration.pipeline.mode_router import ModeRouteInput, ModeRouter
+from apps.chatbi.orchestration.pipeline.mode_router import (
+    ModeRouteInput,
+    ModeRouter,
+    ModeRoutingError,
+)
 from apps.chatbi.orchestration.pipeline.plan_mode import PlanPipeline, PlanPipelineError
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.generation.agent_finalization import (
@@ -79,7 +84,9 @@ class AgentLoop:
         self.state_factory = state_factory
         self.fast_pipeline = fast_pipeline
         self.plan_pipeline = plan_pipeline
-        self.mode_router = mode_router or ModeRouter()
+        if mode_router is None:
+            raise ValueError("AGENT_MODE_ROUTER_REQUIRED")
+        self.mode_router = mode_router
 
     # ---- 入口 ----
 
@@ -183,6 +190,13 @@ class AgentLoop:
                     )
                 return
             yield from self._loop(state)
+        except ModeRoutingError as exc:
+            yield from self.lifecycle.fail(
+                state,
+                str(exc),
+                AgentErrorClass.PLAN_INVALID.value,
+                error_details={"code": str(exc)},
+            )
         except QuestionUnderstandingError as exc:
             yield from self.lifecycle.fail(
                 state,
@@ -240,38 +254,38 @@ class AgentLoop:
             )
 
     def _select_mode(self, state: AgentRuntimeState) -> str:
-        """只在开关允许且问题形态符合时切换模式。"""
+        """模式选择。"""
 
-        understanding = state.context.state.get("question_understanding")
-        intent = understanding.get("intent") if isinstance(understanding, dict) else {}
-        query_shape = intent.get("query_shape") if isinstance(intent, dict) else {}
-        query_shape = query_shape if isinstance(query_shape, dict) else {}
-        metric_mentions = intent.get("metric_mentions") if isinstance(intent, dict) else []
-        # 多指标问题可能尚未被理解模型显式标记为 multi_query；在指标数量
-        # 超过一个时提前进入 PLAN，避免严格 CROSS_MODEL 只编译首个子计划。
-        multiple_metrics = isinstance(metric_mentions, list) and len(metric_mentions) > 1
+        semantic_parse_payload = state.context.state.get("semantic_parse")
+        candidate_groups = state.context.state.get("candidate_groups")
+        if not isinstance(semantic_parse_payload, dict):
+            raise ModeRoutingError("SEMANTIC_PARSE_STATE_REQUIRED")
+        if not isinstance(candidate_groups, dict):
+            raise ModeRoutingError("SEMANTIC_CANDIDATE_GROUPS_STATE_REQUIRED")
+        try:
+            semantic_parse = SemanticParseOutput.model_validate(semantic_parse_payload)
+        except ValueError as exc:
+            raise ModeRoutingError("SEMANTIC_PARSE_STATE_INVALID") from exc
         requested = (
             state.run.execution_mode
             if state.run.execution_mode != "react_legacy"
             else None
         )
-        selected = self.mode_router.route(
+        result = self.mode_router.route(
             ModeRouteInput(
+                semantic_parse=semantic_parse,
+                candidate_groups=candidate_groups,
+                dataset_id=state.context.dataset_id or 0,
+                tenant_id=state.context.oid,
                 enabled_modes=tuple(
                     getattr(state.context.config, "execution_modes", ())
                     or ("fast", "plan")
                 ),
-                category=str((understanding or {}).get("category") or "data_query")
-                if isinstance(understanding, dict)
-                else "data_query",
-                query_shape=query_shape,
-                intent_type=str(intent.get("intent_type") or "") or None,
                 requested_mode=requested,
-                multi_query=bool(query_shape.get("multi_query")) or multiple_metrics,
-                cross_model=bool(query_shape.get("cross_model")),
             )
         )
-        return selected.value
+        state.context.state["execution_requirement"] = result
+        return str(result["route"]["mode"])
 
     def _resume(
         self,
