@@ -41,7 +41,11 @@ from apps.chatbi.services.planning import (
     DatasourceSelectionCandidateService,
     PhysicalSchemaService,
 )
-from apps.chatbi.services.understanding import QuestionUnderstandingService
+from apps.chatbi.services.understanding import (
+    QuestionUnderstandingService,
+    SemanticParseService,
+    StructuredModelService,
+)
 from apps.conversation import (
     ChatLogService,
     ChatRecordService,
@@ -221,6 +225,17 @@ def build_question_understanding_service(
         mention_contract_enabled=True,
         trace_recorder=trace_recorder,
     )
+
+
+def build_semantic_parse_service(
+    model_service: StructuredModelService | None = None,
+) -> SemanticParseService:
+    """装配候选资产后的语义解析服务。"""
+
+    resolved_model_service = model_service or build_question_model_service(
+        enforce_json=True,
+    )
+    return SemanticParseService(resolved_model_service)
 
 
 

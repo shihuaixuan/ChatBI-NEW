@@ -58,6 +58,13 @@ from apps.chatbi.services.understanding.prompts import (
     QUESTION_REWRITE_BUSINESS_RULES,
     TEMPORAL_INTERPRETATION_SYSTEM_PROMPT,
 )
+from apps.chatbi.services.understanding.semantic_parse import (
+    SEMANTIC_PARSE_SYSTEM_PROMPT,
+    SemanticParseCandidate,
+    SemanticParseCandidateContext,
+    SemanticParseService,
+    build_semantic_parse_user_prompt,
+)
 from apps.chatbi.services.understanding.temporal_interpretation import (
     TemporalInterpretationOutcome,
     TemporalInterpretationResult,
@@ -108,6 +115,11 @@ __all__ = [
     "ResolvedMetricCondition",
     "REWRITE_SYSTEM_PROMPT",
     "StructuredModelService",
+    "SEMANTIC_PARSE_SYSTEM_PROMPT",
+    "SemanticParseCandidate",
+    "SemanticParseCandidateContext",
+    "SemanticParseService",
+    "build_semantic_parse_user_prompt",
     "TemporalInterpretationOutcome",
     "TemporalInterpretationResult",
     "TemporalInterpretationService",

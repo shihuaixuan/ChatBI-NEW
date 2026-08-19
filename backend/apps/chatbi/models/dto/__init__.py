@@ -148,6 +148,15 @@ from apps.chatbi.models.dto.result_artifact import (
     ResultArtifactSnapshot,
     ResultArtifactWriteData,
 )
+from apps.chatbi.models.dto.semantic_parse import (
+    SemanticParseAssetRef,
+    SemanticParseCalculation,
+    SemanticParseFilter,
+    SemanticParseOrderBy,
+    SemanticParseOutput,
+    SemanticParseTimeFilter,
+    SemanticParseUnresolved,
+)
 from apps.chatbi.models.dto.sql_generation import (
     SQLGenerationData,
     SQLGenerationEvent,
@@ -262,6 +271,13 @@ __all__ = [
     "SQLGenerationData",
     "SQLGenerationEvent",
     "SQLGenerationResult",
+    "SemanticParseAssetRef",
+    "SemanticParseCalculation",
+    "SemanticParseFilter",
+    "SemanticParseOrderBy",
+    "SemanticParseOutput",
+    "SemanticParseTimeFilter",
+    "SemanticParseUnresolved",
     "SemanticMention",
     "TimeRange",
     "normalize_mention_graph_payload",
