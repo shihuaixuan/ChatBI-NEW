@@ -1,4 +1,4 @@
-"""Graph 专用的问题输入与意图契约投影（纯函数 + 兼容薄包装）。
+"""Graph 专用的问题输入与意图契约投影（纯函数）。
 
 本模块只做"共享理解结果 → Graph 节点稳定契约"的确定性映射；模型调用、重试编排、
 降级触发仍由 Graph 编排层负责。
@@ -10,7 +10,7 @@ from typing import Any
 
 from apps.chatbi.models.dto.question_understanding import (
     QuestionClassificationOutputBase,
-    QuestionRewriteProjectionOutput,
+    QuestionRewriteOutput,
     QuestionUnderstandingValidationData,
 )
 from apps.chatbi.services.understanding.validation import (
@@ -57,48 +57,14 @@ def project_classification(payload: dict[str, Any]) -> dict[str, Any]:
 
 def project_rewrite(
     payload: dict[str, Any],
-    dataset_id: int | None,
+    original_question: str,
 ) -> dict[str, Any]:
-    """校验重写输出，并清除模型误报的已提供数据集槽位。"""
+    """校验 Graph 重写输出，并确认原问题没有被模型改写。"""
 
-    output = QuestionRewriteProjectionOutput.model_validate(payload)
-    if dataset_id is None or "dataset_id" not in output.missing_slots:
-        return output.model_dump(mode="json")
-    missing_slots = [slot for slot in output.missing_slots if slot != "dataset_id"]
-    return output.model_copy(
-        update={
-            "missing_slots": missing_slots,
-            "need_user_input": bool(missing_slots),
-        }
-    ).model_dump(mode="json")
-
-
-def empty_rewrite() -> dict[str, Any]:
-    """投影空问题的固定澄清结果。"""
-
-    return QuestionRewriteProjectionOutput(
-        rewritten_question="",
-        need_user_input=True,
-        missing_slots=["question"],
-        image_profile_hint=None,
-    ).model_dump(mode="json")
-
-
-def fallback_rewrite(
-    question: str,
-    user_feedback: dict[str, Any],
-) -> dict[str, Any]:
-    """模型失败时生成 Graph 既有的最小重写降级结果。"""
-
-    need_user_input = not user_feedback and any(
-        keyword in question for keyword in ("需要澄清", "信息不足", "补充")
-    )
-    return QuestionRewriteProjectionOutput(
-        rewritten_question=question,
-        need_user_input=need_user_input,
-        missing_slots=["metric"] if need_user_input else [],
-        image_profile_hint=None,
-    ).model_dump(mode="json")
+    output = QuestionRewriteOutput.model_validate(payload)
+    if output.original_question != original_question:
+        raise ValueError("QUESTION_REWRITE_ORIGINAL_QUESTION_MISMATCH")
+    return output.model_dump(mode="json")
 
 
 # --- 意图校验投影 ---
@@ -212,8 +178,6 @@ def intent_retry_feedback(validation: dict[str, Any]) -> dict[str, Any]:
 __all__ = [
     "DEFAULT_MAX_INTENT_RETRY",
     "classification_precondition",
-    "empty_rewrite",
-    "fallback_rewrite",
     "intent_retry_feedback",
     "project_classification",
     "project_rewrite",

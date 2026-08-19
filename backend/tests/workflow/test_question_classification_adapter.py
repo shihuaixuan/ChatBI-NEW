@@ -112,20 +112,20 @@ def test_question_adapter_extracts_json_from_markdown_response():
     assert result["confidence"] == 0.88
 
 
-def test_question_rewrite_prompt_includes_dataset_id_and_ignores_false_missing_dataset():
+def test_question_rewrite_prompt_includes_dataset_id_and_returns_phrases():
     client = FakeModelClient(
-        '{"rewritten_question":"今日店铺流量","need_user_input":true,'
-        '"missing_slots":["dataset_id"],"image_profile_hint":null}'
+        '{"original_question":"今日店铺流量","rewrite_question":"今日店铺流量",'
+        '"metric_phrases":["流量"],"dimension_phrases":["店铺"]}'
     )
     adapter = QuestionAdapter(model_client=client)
 
     result = adapter.rewrite(_v1_request("今日店铺流量", dataset_id=3))
 
     assert result == {
-        "rewritten_question": "今日店铺流量",
-        "need_user_input": False,
-        "missing_slots": [],
-        "image_profile_hint": None,
+        "original_question": "今日店铺流量",
+        "rewrite_question": "今日店铺流量",
+        "metric_phrases": ["流量"],
+        "dimension_phrases": ["店铺"],
     }
     assert '"dataset_id": 3' in client.prompts[0].user_prompt
 

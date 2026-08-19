@@ -97,8 +97,8 @@ class ChatBIRunContext:
     def question(self) -> str:
         """优先使用标准化后的问题，回退到原始问题。"""
 
-        rewritten = str(self.rewrite.get("rewritten_question") or "").strip()
-        return rewritten or self.raw_question
+        rewrite_question = str(self.rewrite.get("rewrite_question") or "").strip()
+        return rewrite_question or self.raw_question
 
     # ---- variables 域读取（全部带 dict 守卫） ----
 
@@ -177,10 +177,6 @@ class ChatBIRunContext:
 
     def interaction_response(self, node_name: str, legacy_key: str | None = None) -> dict[str, Any]:
         return read_interaction_response(self._variables, node_name, legacy_key)
-
-    @property
-    def rewrite_response(self) -> dict[str, Any]:
-        return self.interaction_response("ask_rewrite_clarification", "rewrite_response")
 
     @property
     def intent_response(self) -> dict[str, Any]:

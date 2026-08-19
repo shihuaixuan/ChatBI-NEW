@@ -140,12 +140,10 @@ def _confirmed_rolling_plan() -> dict[str, Any]:
 
 def _rewrite_payload(question: str) -> dict[str, Any]:
     return {
-        "message_type": "new_question",
-        "rewritten_question": question,
-        "inherited_context": {},
-        "need_user_input": False,
-        "missing_slots": [],
-        "confidence": 0.98,
+        "original_question": question,
+        "rewrite_question": question,
+        "metric_phrases": ["销售额"] if "销售额" in question else [],
+        "dimension_phrases": [],
     }
 
 

@@ -33,7 +33,6 @@ def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions
         "reject_answer",
         "chitchat_answer",
         "rewrite_question",
-        "ask_rewrite_clarification",
         "draw_image_profile",
         "recognize_intent",
         "ask_intent_clarification",
@@ -60,8 +59,6 @@ def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions
         # 能力节点业务失败时优先转入解释性回答，而不是终止整个 Run。
         "node.degraded",
         # 澄清入口带轮次门控：轮次内继续提问，用尽后转兜底回答。
-        "clarify.rewrite.allowed",
-        "clarify.rewrite.exhausted",
         "clarify.intent.allowed",
         "clarify.intent.exhausted",
         "clarify.slot.allowed",
@@ -71,8 +68,6 @@ def test_chatbi_v1_definition_publishes_with_business_nodes_and_route_conditions
         "clarify.cross_model.allowed",
         "clarify.cross_model.exhausted",
         # 交互出口只消费本节点自己的回答，避免残留回答串扰路由。
-        "interaction.rewrite.answered",
-        "interaction.rewrite.skipped",
         "interaction.intent.answered",
         "interaction.intent.skipped",
         "interaction.slot.answered",

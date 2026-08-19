@@ -403,7 +403,7 @@ def recent_qa_summaries(session, chat_id: int, exclude_record_id: int, limit: in
     return summaries
 
 
-def latest_successful_rewritten_question(
+def latest_successful_rewrite_question(
     session,
     *,
     chat_id: int,
@@ -418,8 +418,8 @@ def latest_successful_rewritten_question(
         exclude_record_id=exclude_record_id,
         datasource_id=datasource_id,
     )
-    rewritten_question = understanding.get("rewritten_question") if understanding else None
-    return rewritten_question.strip() if isinstance(rewritten_question, str) and rewritten_question.strip() else None
+    rewrite_question = understanding.get("rewrite_question") if understanding else None
+    return rewrite_question.strip() if isinstance(rewrite_question, str) and rewrite_question.strip() else None
 
 
 def latest_successful_question_understanding(
@@ -453,8 +453,8 @@ def latest_successful_question_understanding(
         understanding = (previous_run.derived_state or {}).get("question_understanding")
         if not isinstance(understanding, dict):
             continue
-        rewritten_question = understanding.get("rewritten_question")
-        if isinstance(rewritten_question, str) and rewritten_question.strip():
+        rewrite_question = understanding.get("rewrite_question")
+        if isinstance(rewrite_question, str) and rewrite_question.strip():
             return dict(understanding)
     return None
 

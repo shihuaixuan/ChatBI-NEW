@@ -439,9 +439,9 @@ class ChatBIWorkflowApiExtension:
             "last_run_id": run.run_id,
             "last_question": record.question,
         }
-        rewritten_question = rewrite.get("rewritten_question")
-        if isinstance(rewritten_question, str) and rewritten_question.strip():
-            projected["last_rewritten_question"] = rewritten_question.strip()
+        rewrite_question = rewrite.get("rewrite_question")
+        if isinstance(rewrite_question, str) and rewrite_question.strip():
+            projected["last_rewrite_question"] = rewrite_question.strip()
         if projected_intent:
             projected["last_intent"] = projected_intent
         return projected

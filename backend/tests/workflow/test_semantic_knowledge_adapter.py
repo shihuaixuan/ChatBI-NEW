@@ -79,7 +79,7 @@ def test_adapter_projects_workflow_context_to_semantic_binding_request():
                 "user_id": 30,
             },
             "variables": {
-                "rewrite": {"rewritten_question": "改写后的销售额"},
+                "rewrite": {"rewrite_question": "改写后的销售额"},
                 "intent": {
                     "intent_type": "metric_query",
                     "metric_mentions": ["销售额"],

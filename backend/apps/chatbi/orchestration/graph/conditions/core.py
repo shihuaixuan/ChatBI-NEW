@@ -96,26 +96,6 @@ class QuestionDataOrFollowupCondition:
         )
 
 
-class RewriteNeedUserInputCondition:
-    """问题重写缺少必要槽位时暂停等待用户补充。"""
-
-    def evaluate(
-        self, context: WorkflowContext, result: NodeExecutionResult
-    ) -> ConditionDecision:
-        need_user_input = bool(
-            context.variables.get("rewrite", {}).get("need_user_input")
-        )
-        return ConditionDecision(
-            matched=need_user_input,
-            reason_code="REWRITE_NEED_USER_INPUT"
-            if need_user_input
-            else "REWRITE_READY",
-            reason_summary="问题重写需要用户补充"
-            if need_user_input
-            else "问题重写信息充分",
-        )
-
-
 class IntentAmbiguousCondition:
     """意图识别不明确时进入意图澄清。"""
 
@@ -658,7 +638,6 @@ def register_chatbi_conditions(registry: ConditionRegistry) -> None:
     registry.register("question.forbidden", QuestionForbiddenCondition())
     registry.register("question.chitchat", QuestionChitchatCondition())
     registry.register("question.data_or_followup", QuestionDataOrFollowupCondition())
-    registry.register("rewrite.need_user_input", RewriteNeedUserInputCondition())
     registry.register("intent.ambiguous", IntentAmbiguousCondition())
     registry.register("slot.clarification_needed", SlotClarificationNeededCondition())
     registry.register(
@@ -704,7 +683,6 @@ def register_chatbi_conditions(registry: ConditionRegistry) -> None:
 
     # 澄清轮次门控：入口条件命中但轮次用尽时改走兜底回答。
     clarification_gates = {
-        "rewrite": (RewriteNeedUserInputCondition(), "ask_rewrite_clarification"),
         "intent": (IntentAmbiguousCondition(), "ask_intent_clarification"),
         "slot": (SlotClarificationNeededCondition(), "ask_slot_clarification"),
         "metric": (KnowledgeMetricAmbiguousCondition(), "ask_metric_selection"),

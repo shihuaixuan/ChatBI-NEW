@@ -3,7 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 from apps.chatbi.models.dto.mention import MentionGraph
 from apps.temporal import ResolvedTemporalPlan, TemporalPlan
@@ -46,20 +53,6 @@ class QuestionClassificationOutputBase(BaseModel):
     reason: str
     risk_level: Literal["low", "medium", "high"] = "low"
     confidence: float = Field(default=0.0, ge=0, le=1)
-
-
-class QuestionRewriteOutputBase(BaseModel):
-    """Agent 与 Graph 共享的问题重写最小契约。"""
-
-    rewritten_question: str
-    need_user_input: bool = False
-    missing_slots: list[str] = Field(default_factory=list)
-
-
-class QuestionRewriteProjectionOutput(QuestionRewriteOutputBase):
-    """Graph 问题重写节点使用的稳定投影契约。"""
-
-    image_profile_hint: str | None = None
 
 
 class NaturalLanguageIntentOutputBase(
@@ -112,7 +105,12 @@ class QuestionRewriteOutput(BaseModel):
 
     @model_validator(mode="after")
     def validate_phrase_boundaries(self) -> QuestionRewriteOutput:
+        seen: set[str] = set()
         for phrase in [*self.metric_phrases, *self.dimension_phrases]:
+            key = phrase.casefold()
+            if key in seen:
+                raise ValueError("指标短语和维度短语不能重复")
+            seen.add(key)
             if phrase not in self.rewrite_question:
                 raise ValueError("检索短语必须来自 rewrite_question")
         return self
@@ -341,16 +339,9 @@ class QuestionUnderstandingOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     original_question: str
-    message_type: Literal[
-        "new_question",
-        "followup",
-        "plan_patch",
-        "clarification_reply",
-    ]
-    rewritten_question: str
+    rewrite_question: str
     metric_phrases: list[StrictStr]
     dimension_phrases: list[StrictStr]
-    inherited_context: dict[str, Any] = Field(default_factory=dict)
     intent: IntentRecognitionOutput
     validation: IntentValidationOutput
     temporal_interpretation: TemporalInterpretationResult | None = None
@@ -389,8 +380,6 @@ class QuestionIntentProjectionResult:
 class QuestionUnderstandingValidationData:
     """问题重写和自然语言意图的确定性校验输入。"""
 
-    rewrite_need_user_input: bool = False
-    rewrite_missing_slots: tuple[str, ...] = ()
     intent_type: str = "unknown"
     metric_mentions: tuple[str, ...] = ()
     dimension_slots: tuple[dict[str, Any], ...] = ()
@@ -453,8 +442,6 @@ __all__ = [
     "QuestionCategory",
     "QuestionClassificationOutputBase",
     "QuestionRewriteOutput",
-    "QuestionRewriteOutputBase",
-    "QuestionRewriteProjectionOutput",
     "QueryShape",
     "RankingSpec",
     "QuestionIntentProjectionData",

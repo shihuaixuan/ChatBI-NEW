@@ -100,7 +100,7 @@ def build_intent_recognition_prompt(
         DIMENSION_EXTRACTION_RULES,
     )
     user_payload = {
-        "rewritten_question": rewritten_question,
+        "rewrite_question": rewritten_question,
         "conversation_context": conversation_context or {},
         "user_feedback": user_feedback or {},
         "subject_domains": domain_candidates,

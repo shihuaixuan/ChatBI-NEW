@@ -19,14 +19,6 @@ def validate_question_understanding(
 
     issues: list[QuestionUnderstandingValidationIssue] = []
 
-    if data.rewrite_need_user_input:
-        issues.append(
-            QuestionUnderstandingValidationIssue(
-                code="rewrite_context_incomplete",
-                category="rewrite",
-                clarification_slots=data.rewrite_missing_slots,
-            )
-        )
     if data.intent_type == "unknown":
         issues.append(
             QuestionUnderstandingValidationIssue(

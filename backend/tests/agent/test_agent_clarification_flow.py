@@ -88,9 +88,7 @@ def _ambiguous_store_understanding_state():
         "question": "今天店铺的客户数",
         "question_understanding": {
             "original_question": "今天店铺的客户数",
-            "message_type": "new_question",
-            "rewritten_question": "今天店铺的客户数",
-            "inherited_context": {},
+            "rewrite_question": "今天店铺的客户数",
             "intent": {
                 "intent_type": "metric_query",
                 "confidence": 0.95,
@@ -138,7 +136,7 @@ def _loop(model, config=None):
         config or AgentConfig(max_steps=6),
         model_client=model,
         registry=_registry_with_clarify(),
-        understanding_service=StaticUnderstandingService(rewritten_question="额度趋势"),
+        understanding_service=StaticUnderstandingService(rewrite_question="额度趋势"),
         recorder=DisabledAgentTraceRecorder(),
     )
 
@@ -198,7 +196,7 @@ def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval()
             )
             output = outcome.output.model_copy(
                 update={
-                    "rewritten_question": "今天店铺的客户数",
+                    "rewrite_question": "今天店铺的客户数",
                     "intent": outcome.output.intent.model_copy(
                         update={
                             "metric_mentions": ["客户数"],
@@ -769,7 +767,7 @@ def test_resume_continues_from_clarification_to_finish():
 def test_resume_emits_acceptance_without_reunderstanding():
     class TrackingUnderstandingService(StaticUnderstandingService):
         def __init__(self):
-            super().__init__(rewritten_question="用户澄清后的完整问题")
+            super().__init__(rewrite_question="用户澄清后的完整问题")
             self.called = False
 
         def understand(
@@ -888,7 +886,7 @@ def test_filter_role_clarification_resumes_to_targeted_value_clarification():
     ]
     assert run.status == AgentRunStatus.FAILED.value
     confirmed = run.derived_state["question_understanding"]
-    assert confirmed["rewritten_question"] == "今天店铺的客户数"
+    assert confirmed["rewrite_question"] == "今天店铺的客户数"
     assert confirmed["intent"]["dimension_slots"][0]["value"] == "1号店铺"
     assert confirmed["validation"]["status"] == "valid"
 
@@ -1076,7 +1074,7 @@ def test_resume_updates_target_slot_without_rewriting_or_reunderstanding():
     assert updated["validation"]["status"] == "valid"
     assert updated["intent"]["dimension_slots"][0]["role"] == "group_by"
     assert updated["intent"]["query_shape"]["needs_group_by"] is True
-    assert updated["rewritten_question"] == "今天店铺的客户数"
+    assert updated["rewrite_question"] == "今天店铺的客户数"
     assert run.derived_state["semantic_asset_ids"] == [272, 276]
 
 
@@ -1105,7 +1103,7 @@ def test_system_prompt_is_stable_and_runtime_context_has_dynamic_sections():
     runtime_context = build_runtime_context(
         history_summary="- 问：上月 GMV\n  SQL：select 1\n  答（摘要）：100 万",
         question_understanding={
-            "rewritten_question": "查询上月授信额度",
+            "rewrite_question": "查询上月授信额度",
             "intent": {"metric_mentions": ["授信额度"]},
             "validation": {"status": "valid"},
         },

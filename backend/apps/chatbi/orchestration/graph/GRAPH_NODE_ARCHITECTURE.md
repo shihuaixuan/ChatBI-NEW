@@ -183,7 +183,7 @@ RewriteQuestionNode
   capability: question.rewrite
 
 KnowledgeRetrieveNode
-  input: rewritten_question, intent, datasource_id
+  input: rewrite_question, intent, datasource_id
   output: variables.knowledge
   capability: knowledge.retrieve
 ```
@@ -222,7 +222,6 @@ gateway.invoke(capability: str, request: dict, idempotency_key: str) -> dict
   - `metric_mentions` 只召回指标候选。
   - `dimension_mentions` 只召回维度候选。
   - `time_mentions` 补充时间维度和时间值候选。
-  - `rewritten_question` 只在缺少必需槽位候选时作为 fallback。
 - 统一检索服务按 exact、alias、中文词法和 dense 通道召回候选。
   - `SemanticBindingPolicy` 根据绝对阈值、top gap、槽位覆盖和模型兼容性决策。
   - 候选保留通道分数、排名、命中字段和 reason codes，供 trace 排查。
@@ -240,7 +239,6 @@ context + last_node_result -> ConditionDecision
 - `question.is_forbidden`
 - `question.is_chitchat`
 - `question.is_data_question`
-- `rewrite.need_user_input`
 - `intent.ambiguous`
 - `knowledge.missed`
 - `knowledge.metric_ambiguous`
@@ -261,7 +259,6 @@ context + last_node_result -> ConditionDecision
 | `reject_answer` | CAPABILITY | `answer.reject` | `variables.answer` |
 | `chitchat_answer` | CAPABILITY | `answer.chitchat` | `variables.answer` |
 | `rewrite_question` | CAPABILITY | `question.rewrite` | `variables.rewrite` |
-| `ask_rewrite_clarification` | INTERACTION | `interaction.ask_rewrite` | `pending_interaction_id` |
 | `draw_image_profile` | CAPABILITY | `question.image_profile` | `variables.image_profile` |
 | `recognize_intent` | DECISION | `intent.recognize` | `variables.intent` |
 | `ask_intent_clarification` | INTERACTION | `interaction.ask_intent` | `pending_interaction_id` |
@@ -282,10 +279,7 @@ context + last_node_result -> ConditionDecision
 | `classify_question` | `question.forbidden` | `reject_answer` |
 | `classify_question` | `question.chitchat` | `chitchat_answer` |
 | `classify_question` | `question.data_or_followup` | `rewrite_question` |
-| `rewrite_question` | `rewrite.need_user_input` | `ask_rewrite_clarification` |
 | `rewrite_question` | default | `recognize_intent` |
-| `ask_rewrite_clarification` | `interaction.answered` | `rewrite_question` |
-| `ask_rewrite_clarification` | `interaction.skipped` | `generate_question_answer` |
 | `recognize_intent` | `intent.ambiguous` | `ask_intent_clarification` |
 | `recognize_intent` | default | `retrieve_knowledge` |
 | `retrieve_knowledge` | `knowledge.missed` | `generate_question_answer` |

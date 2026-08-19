@@ -514,41 +514,6 @@ def test_chatbi_v1_retryable_sql_error_regenerates_sql_before_answer():
     assert outcome.context.variables["sql_execution"]["status"] == "succeeded"
 
 
-def test_chatbi_v1_placeholder_rewrite_clarification_can_resume_to_success():
-    gateway = TrackingGateway()
-    runtime = _runtime(gateway)
-    run = runtime.create_run(
-        "chatbi-v1-rewrite-clarification",
-        "chatbi",
-        "v1",
-        WorkflowContext(request={"question": "需要澄清的问题", "dataset_id": 1, "tenant_id": 10, "user_id": 20}),
-    )
-
-    paused = runtime.execute(run.run_id)
-    pending_interaction_id = paused.context.control.pending_interaction_id
-    resumed = runtime.resume(
-        run.run_id,
-        pending_interaction_id or "",
-        {"metric": "sales_amount"},
-        tenant_id=10,
-        user_id=20,
-    )
-
-    assert paused.status is RunStatus.WAITING_INPUT
-    assert paused.current_node == "ask_rewrite_clarification"
-    assert pending_interaction_id is not None
-    interaction = runtime._interactions.get(pending_interaction_id)
-    assert interaction.prompt == "请补充要分析的指标。"
-    assert interaction.options[:3] == [
-        {"label": "访问人数", "value": {"metric": "访问人数"}},
-        {"label": "销售额", "value": {"metric": "销售额"}},
-        {"label": "订单数", "value": {"metric": "订单数"}},
-    ]
-    assert resumed.status is RunStatus.SUCCEEDED
-    assert gateway.calls.count("question.rewrite") == 2
-    assert gateway.calls[-2:] == ["question.recommend", "answer.compose"]
-
-
 def test_chatbi_v1_placeholder_intent_clarification_can_resume_to_success():
     gateway = TrackingGateway()
     runtime = _runtime(gateway)

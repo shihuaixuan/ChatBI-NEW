@@ -147,7 +147,7 @@ REWRITE_SYSTEM_PROMPT = "\n\n".join(
 输出：{"original_question":"本月新增客户数是多少？","rewrite_question":"本月新增客户数是多少？","metric_phrases":["新增客户数"],"dimension_phrases":[]}
 
 示例 2：只替换上一轮时间的追问
-输入：{"current_question":"那上个月呢？","conversation_context":{"last_rewritten_question":"查询本月新增客户数"}}
+输入：{"current_question":"那上个月呢？","conversation_context":{"last_rewrite_question":"查询本月新增客户数"}}
 输出：{"original_question":"那上个月呢？","rewrite_question":"查询上个月新增客户数","metric_phrases":["新增客户数"],"dimension_phrases":[]}
 
 示例 3：无法确定引用对象
@@ -213,15 +213,15 @@ Agent 输出约束：
 典型示例：
 
 示例 1：排名查询
-输入：{"rewritten_question":"本月新增客户数最高的5个店铺是哪些？","inherited_context":{}}
+输入：{"rewrite_question":"本月新增客户数最高的5个店铺是哪些？"}
 输出：{"intent_type":"ranking_analysis","confidence":0.98,"metric_mentions":["新增客户数"],"time_mentions":["本月"],"time_range":{"raw":"本月","value_status":"provided"},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":true,"order_direction":"desc","limit":5,"time_grain":null},"ambiguous_slots":[],"conflict_slots":[]}
 
 示例 2：按天趋势
-输入：{"rewritten_question":"查看最近7天每天的销售额趋势","inherited_context":{}}
+输入：{"rewrite_question":"查看最近7天每天的销售额趋势"}
 输出：{"intent_type":"trend_analysis","confidence":0.98,"metric_mentions":["销售额"],"time_mentions":["最近7天"],"time_range":{"raw":"最近7天","value_status":"provided"},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":false,"order_direction":null,"limit":null,"time_grain":"day"},"ambiguous_slots":[],"conflict_slots":[]}
 
 示例 3：普通指标查询
-输入：{"rewritten_question":"今天店铺100011的活跃客户数是多少？","inherited_context":{}}
+输入：{"rewrite_question":"今天店铺100011的活跃客户数是多少？"}
 输出：{"intent_type":"metric_query","confidence":0.98,"metric_mentions":["活跃客户数"],"time_mentions":["今天"],"time_range":{"raw":"今天","value_status":"provided"},"query_shape":{"select_mode":"aggregate","needs_group_by":false,"needs_order_by":false,"order_direction":null,"limit":null,"time_grain":null},"ambiguous_slots":[],"conflict_slots":[]}
 """.strip(),
     ]
@@ -269,15 +269,15 @@ Agent 示例：
 典型示例：
 
 示例 1：排名对象
-输入：{"rewritten_question":"本月新增客户数最高的5个店铺是哪些？","available_dimensions":[{"name":"店铺ID","aliases":["店铺"]}],"time_dimensions":[{"name":"时间","aliases":[]}]}
+输入：{"rewrite_question":"本月新增客户数最高的5个店铺是哪些？","available_dimensions":[{"name":"店铺ID","aliases":["店铺"]}],"time_dimensions":[{"name":"时间","aliases":[]}]}
 输出：{"dimension_mentions":["店铺ID"],"dimension_slots":[{"name":"店铺ID","role":"group_by","value":null,"value_status":"not_provided","value_confidence":1.0}],"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}
 
 示例 2：明确筛选值
-输入：{"rewritten_question":"今天店铺100011的活跃客户数是多少？","available_dimensions":[{"name":"店铺ID","aliases":["店铺"]}],"time_dimensions":[{"name":"时间","aliases":[]}]}
+输入：{"rewrite_question":"今天店铺100011的活跃客户数是多少？","available_dimensions":[{"name":"店铺ID","aliases":["店铺"]}],"time_dimensions":[{"name":"时间","aliases":[]}]}
 输出：{"dimension_mentions":["店铺ID"],"dimension_slots":[{"name":"店铺ID","role":"filter","value":"100011","value_status":"provided","value_confidence":1.0}],"residual_filter_mentions":[],"ambiguous_slots":[],"conflict_slots":[]}
 
 示例 3：用途不明确
-输入：{"rewritten_question":"最近7天店铺的新增客户数是多少？","available_dimensions":[{"name":"店铺ID","aliases":["店铺"]}],"time_dimensions":[{"name":"时间","aliases":[]}]}
+输入：{"rewrite_question":"最近7天店铺的新增客户数是多少？","available_dimensions":[{"name":"店铺ID","aliases":["店铺"]}],"time_dimensions":[{"name":"时间","aliases":[]}]}
 输出：{"dimension_mentions":["店铺ID"],"dimension_slots":[{"name":"店铺ID","role":"ambiguous","value":null,"value_status":"not_provided","value_confidence":0.5}],"residual_filter_mentions":[],"ambiguous_slots":["店铺ID"],"conflict_slots":[]}
 """.strip(),
     ]
@@ -345,15 +345,15 @@ category 分诊规则（必填，最先判断）：
 典型示例：
 
 示例 1：自然表达的日期排名
-输入：{"rewritten_question":"2026年6月8日至14日，店铺100021哪一天的总GMV最高？","available_dimensions":[{"name":"档口ID","aliases":["店铺"]}],"time_dimensions":[{"name":"统计日期","aliases":[]}]}
+输入：{"rewrite_question":"2026年6月8日至14日，店铺100021哪一天的总GMV最高？","available_dimensions":[{"name":"档口ID","aliases":["店铺"]}],"time_dimensions":[{"name":"统计日期","aliases":[]}]}
 输出：{"category":"data_query","intent_type":"ranking_analysis","confidence":0.99,"metric_mentions":["总GMV"],"time_mentions":["2026年6月8日至14日"],"time_range":{"raw":"2026年6月8日至14日","value_status":"provided"},"dimension_mentions":["档口ID","统计日期"],"dimension_slots":[{"name":"档口ID","role":"filter","value":"100021","value_status":"provided","value_confidence":1.0},{"name":"统计日期","role":"group_by","value":null,"value_status":"not_provided","value_confidence":1.0}],"ranking":{"target":"统计日期","metric":"总GMV","direction":"desc","selection":"single","limit":1},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":true,"order_direction":"desc","limit":1,"time_grain":"day"},"ambiguous_slots":[],"conflict_slots":[]}
 
 示例 2：排名对象和数量在名词短语中
-输入：{"rewritten_question":"库存最多的商品","available_dimensions":[{"name":"商品ID","aliases":["商品"]}],"time_dimensions":[]}
+输入：{"rewrite_question":"库存最多的商品","available_dimensions":[{"name":"商品ID","aliases":["商品"]}],"time_dimensions":[]}
 输出：{"category":"data_query","intent_type":"ranking_analysis","confidence":0.98,"metric_mentions":["库存"],"time_mentions":[],"time_range":{"raw":null,"value_status":"not_provided"},"dimension_mentions":["商品ID"],"dimension_slots":[{"name":"商品ID","role":"group_by","value":null,"value_status":"not_provided","value_confidence":1.0}],"ranking":{"target":"商品ID","metric":"库存","direction":"desc","selection":"single","limit":1},"query_shape":{"select_mode":"aggregate","needs_group_by":true,"needs_order_by":true,"order_direction":"desc","limit":1,"time_grain":null},"ambiguous_slots":[],"conflict_slots":[]}
 
 示例 3：能力询问（元问题）
-输入：{"rewritten_question":"你都能查哪些指标？","available_dimensions":[],"time_dimensions":[]}
+输入：{"rewrite_question":"你都能查哪些指标？","available_dimensions":[],"time_dimensions":[]}
 输出：{"category":"meta_query","intent_type":"unknown","confidence":0.9,"metric_mentions":[],"time_mentions":[],"time_range":{"raw":null,"value_status":"not_provided"},"dimension_mentions":[],"dimension_slots":[],"ranking":null,"query_shape":{"select_mode":"aggregate","needs_group_by":false,"needs_order_by":false,"order_direction":null,"limit":null,"time_grain":null},"ambiguous_slots":[],"conflict_slots":[]}
 """.strip(),
     ]
@@ -466,9 +466,7 @@ class QuestionUnderstandingService:
             )
 
         understanding_payload = {
-            "rewritten_question": rewrite.rewrite_question,
-            # 重写阶段不再输出上下文继承对象；后续阶段只使用规范化后的问题文本。
-            "inherited_context": {},
+            "rewrite_question": rewrite.rewrite_question,
             # 数据集治理指令单独放在固定模块槽位，避免与用户语义事实混淆。
             "dataset_instructions": {
                 "question_categorization": list(
@@ -647,15 +645,9 @@ class QuestionUnderstandingService:
                 )
         output = QuestionUnderstandingOutput(
             original_question=question,
-            message_type=_derive_legacy_message_type(
-                question,
-                rewrite.rewrite_question,
-                context,
-            ),
-            rewritten_question=rewrite.rewrite_question,
+            rewrite_question=rewrite.rewrite_question,
             metric_phrases=rewrite.metric_phrases,
             dimension_phrases=rewrite.dimension_phrases,
-            inherited_context={},
             intent=intent,
             validation=validation,
             temporal_interpretation=temporal_interpretation,
@@ -722,7 +714,7 @@ class QuestionUnderstandingService:
                 raise QuestionUnderstandingError("TEMPORAL_AUTHORITY_SERVICE_REQUIRED")
             temporal_interpretation = service.resolve_confirmed_plan(
                 plan=confirmed_plan,
-                rewritten_question=previous.rewritten_question,
+                rewritten_question=previous.rewrite_question,
                 metric_mentions=previous.intent.metric_mentions,
                 temporal_context=temporal_context,
                 user_confirmation=confirmation,
@@ -739,11 +731,11 @@ class QuestionUnderstandingService:
         else:
             temporal_interpretation, usage_metadata = (
                 self._interpret_authoritative_plan(
-                    rewritten_question=previous.rewritten_question,
+                    rewritten_question=previous.rewrite_question,
                     intent=previous.intent,
                     mention_graph=previous.mention_graph,
                     temporal_context=temporal_context,
-                    conversation_context=previous.inherited_context,
+                    conversation_context={},
                     user_confirmation=confirmation,
                 )
             )
@@ -1606,9 +1598,9 @@ def _build_rewrite_context(context: dict[str, Any]) -> dict[str, Any]:
     """
 
     result: dict[str, Any] = {}
-    last_question = context.get("last_rewritten_question")
+    last_question = context.get("last_rewrite_question")
     if isinstance(last_question, str) and last_question.strip():
-        result["last_rewritten_question"] = last_question.strip()
+        result["last_rewrite_question"] = last_question.strip()
 
     history = context.get("history")
     if isinstance(history, list):
@@ -1637,26 +1629,6 @@ def _build_rewrite_context(context: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _derive_legacy_message_type(
-    original_question: str,
-    rewrite_question: str,
-    context: dict[str, Any],
-) -> str:
-    """为尚未迁移的完整问题理解结果保留只读兼容字段。
-
-    该字段不参与问题重写模型输出、语义解析或模式路由；新代码不应依赖它。
-    """
-
-    if context.get("pending_question") or context.get("clarification_question"):
-        return "clarification_reply"
-    if (
-        isinstance(context.get("last_rewritten_question"), str)
-        and rewrite_question.strip() != original_question.strip()
-    ):
-        return "followup"
-    return "new_question"
-
-
 def _validate_understanding(
     intent: IntentRecognitionOutput,
     *,
@@ -1665,9 +1637,6 @@ def _validate_understanding(
 ) -> IntentValidationOutput:
     result = validate_question_understanding(
         QuestionUnderstandingValidationData(
-            # 重写阶段不输出缺失槽位；上下文歧义由统一理解和确定性校验处理。
-            rewrite_need_user_input=False,
-            rewrite_missing_slots=(),
             intent_type=intent.intent_type,
             metric_mentions=tuple(intent.metric_mentions),
             dimension_slots=tuple(

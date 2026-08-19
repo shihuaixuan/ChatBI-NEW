@@ -119,10 +119,7 @@ def apply_plan_patch(
 def patch_from_understanding(understanding: dict[str, Any]) -> PlanPatch | None:
     """只接受重写器显式给出的补丁，不根据自然语言自行猜测字段。"""
 
-    inherited = understanding.get("inherited_context")
-    payload = inherited.get("plan_patch") if isinstance(inherited, dict) else None
-    if not isinstance(payload, dict):
-        payload = understanding.get("plan_patch")
+    payload = understanding.get("plan_patch")
     if not isinstance(payload, dict):
         return None
     try:

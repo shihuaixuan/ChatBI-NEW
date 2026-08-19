@@ -25,11 +25,6 @@ class InteractionSpec:
 
 
 CHATBI_V1_INTERACTION_SPECS: dict[str, InteractionSpec] = {
-    "ask_rewrite_clarification": InteractionSpec(
-        node_name="ask_rewrite_clarification",
-        name="rewrite",
-        legacy_key="rewrite_response",
-    ),
     "ask_intent_clarification": InteractionSpec(
         node_name="ask_intent_clarification",
         name="intent",

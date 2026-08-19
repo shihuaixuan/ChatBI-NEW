@@ -22,7 +22,7 @@
 
 - `recognize_intent` 输出自然语言槽位线索：`metric_mentions`、`dimension_mentions`、`time_mentions`、`filter_mentions`、`required_slot_types`、`query_shape`。
 - `knowledge.retrieve` 已改为优先按上述 mention 分槽位召回 Semantic 候选。
-- `rewritten_question` 只在必需槽位缺候选时作为 fallback。
+- `rewrite_question` 输出同时包含 `metric_phrases` 和 `dimension_phrases`，供后续流程使用。
 - 候选经过 `SemanticBindingPolicy` 门控，并保留通道分数、排名和 reason codes。
 - 已通过单元测试验证：“访问人数”优先于“转化人数/关注人数”等仅部分重叠候选；只有“人数”这种弱词时仍保留 `metric_ambiguous`。
 
@@ -168,16 +168,16 @@ ask_metric_selection
 
 ```json
 {
-  "rewritten_question": "今日访问人数",
-  "need_user_input": false,
-  "missing_slots": [],
-  "image_profile_hint": null
+  "original_question": "今日访问人数",
+  "rewrite_question": "今日访问人数",
+  "metric_phrases": ["访问人数"],
+  "dimension_phrases": []
 }
 ```
 
 说明：
 
-- 当前问题无需进入 `ask_rewrite_clarification`。
+- 问题重写节点只负责生成完整问题和指标、维度短语，不生成意图、不判断澄清，也不直接选择语义资产。
 
 ### 6.3 `draw_image_profile`
 

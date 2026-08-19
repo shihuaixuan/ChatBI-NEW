@@ -135,19 +135,27 @@ def _fake_chatbi_v1_data_policy_provider(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _fake_chatbi_v1_question_model(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        chatbi_runtime.settings,
+        "TEMPORAL_MODEL_AUTHORITY_ENABLED",
+        False,
+    )
+
     class FakeQuestionModelClient:
         def __call__(self, prompt):
             user_prompt = getattr(prompt, "user_prompt", "")
             system_prompt = getattr(prompt, "system_prompt", "")
-            if "rewritten_question" in system_prompt:
-                if "需要澄清" in user_prompt and "sales_amount" not in user_prompt:
-                    return (
-                        '{"rewritten_question":"需要澄清 今日访问人数",'
-                        '"need_user_input":true,"missing_slots":["metric"],"image_profile_hint":null}'
-                    )
-                return (
-                    '{"rewritten_question":"今日访问人数","need_user_input":false,'
-                    '"missing_slots":[],"image_profile_hint":null}'
+            if '"rewrite_question"' in system_prompt:
+                payload = json.loads(user_prompt.split("\n", 1)[1])
+                question = payload["question"]
+                return json.dumps(
+                    {
+                        "original_question": question,
+                        "rewrite_question": question,
+                        "metric_phrases": [],
+                        "dimension_phrases": [],
+                    },
+                    ensure_ascii=False,
                 )
             if "intent_type" in system_prompt:
                 return (
@@ -375,17 +383,6 @@ def _seed_graph_chat() -> tuple[int, int]:
         session.commit()
         session.refresh(chat)
         return chat.id or 0, dataset_id
-
-
-def _load_pending_interaction_id(run_id: str) -> str:
-    with Session(engine) as session:
-        interaction = session.exec(
-            select(InteractionRequestModel).where(
-                InteractionRequestModel.run_id == run_id,
-                InteractionRequestModel.status == "pending",
-            )
-        ).one()
-        return interaction.interaction_id
 
 
 def _load_chat_record(record_id: int) -> ChatRecord:
@@ -779,62 +776,6 @@ def test_stream_drains_final_event_after_worker_finishes(monkeypatch):
         _cleanup(session)
 
 
-def test_graph_chat_waiting_record_resumes_into_stable_snapshot():
-    chat_id, dataset_id = _seed_graph_chat()
-    created = _client().post(
-        f"/graph/chats/{chat_id}/queries",
-        json={
-            "question": "需要澄清 今日访问人数",
-            "dataset_id": dataset_id,
-            "definition_version": "v1",
-            "run_id": "api-chat-clarify",
-        },
-    )
-    assert created.status_code == 200
-    record_id = created.json()["record_id"]
-    assert _load_chat_record(record_id).status == "waiting_user"
-    interaction_id = _load_pending_interaction_id("api-chat-clarify")
-
-    answered = _client().post(
-        f"/graph/runs/api-chat-clarify/interactions/{interaction_id}/responses",
-        json={"response": {"metric": "sales_amount"}},
-    )
-
-    assert answered.status_code == 200
-    record = _load_chat_record(record_id)
-    assert record.id == record_id
-    assert record.status == "succeeded"
-    assert record.finish is True
-    assert record.sql_answer
-    with Session(engine) as session:
-        _cleanup(session)
-
-
-def test_graph_chat_cancel_projects_cancelled_status():
-    chat_id, dataset_id = _seed_graph_chat()
-    created = _client().post(
-        f"/graph/chats/{chat_id}/queries",
-        json={
-            "question": "需要澄清 今日访问人数",
-            "dataset_id": dataset_id,
-            "definition_version": "v1",
-            "run_id": "api-chat-cancel",
-        },
-    )
-    assert created.status_code == 200
-    record_id = created.json()["record_id"]
-
-    cancelled = _client().post("/graph/runs/api-chat-cancel/cancel")
-
-    assert cancelled.status_code == 200
-    record = _load_chat_record(record_id)
-    assert record.id == record_id
-    assert record.status == "cancelled"
-    assert record.finish is True
-    with Session(engine) as session:
-        _cleanup(session)
-
-
 def test_graph_chat_retry_reuses_record_and_clears_error():
     chat_id, dataset_id = _seed_graph_chat()
     created = _client().post(
@@ -931,42 +872,6 @@ def test_graph_query_stream_creates_run_and_streams_execution_events():
     assert "event: node.started\n" in text
     assert "event: run.succeeded\n" in text
     assert '"event_type":"run.succeeded"' in text
-
-    with Session(engine) as session:
-        _cleanup(session)
-
-
-def test_graph_query_stream_waiting_input_event_contains_pending_interaction():
-    with Session(engine) as session:
-        _cleanup(session)
-        dataset_id = _seed_v1_semantic_dataset(session)
-
-    with _client().stream(
-        "POST",
-        "/graph/queries/stream",
-        json={
-            "question": "需要澄清 今日访问人数",
-            "dataset_id": dataset_id,
-            "definition_version": "v1",
-            "request_id": "api-query-stream-request-waiting",
-            "run_id": "api-query-stream-run-waiting",
-        },
-    ) as response:
-        text = response.read().decode("utf-8")
-
-    assert response.status_code == 200
-    assert "event: run.waiting_input\n" in text
-    assert '"pending_interaction"' in text
-    assert '"interaction_id"' in text
-    assert '"status":"pending"' in text
-    assert '"node_name":"ask_rewrite_clarification"' in text
-    assert "请补充要分析的指标" in text
-
-    run_response = _client().get("/graph/runs/api-query-stream-run-waiting")
-    assert run_response.status_code == 200
-    pending_interaction = run_response.json()["context_summary"]["pending_interaction"]
-    assert pending_interaction["status"] == "pending"
-    assert pending_interaction["node_name"] == "ask_rewrite_clarification"
 
     with Session(engine) as session:
         _cleanup(session)
@@ -1180,7 +1085,12 @@ def test_graph_chat_query_loads_previous_semantic_context():
                     },
                     "conversation": {"question": "今天店铺的访问人数"},
                     "variables": {
-                        "rewrite": {"rewritten_question": "查询今天店铺的访问人数"},
+                        "rewrite": {
+                            "original_question": "今天店铺的访问人数",
+                            "rewrite_question": "查询今天店铺的访问人数",
+                            "metric_phrases": ["访问人数"],
+                            "dimension_phrases": ["店铺"],
+                        },
                         "intent": {
                             "intent_type": "metric_query",
                             "metric_mentions": ["访问人数"],
@@ -1298,7 +1208,7 @@ def test_graph_chat_query_loads_previous_semantic_context():
         assert record.finish is True
         assert context["conversation"]["question"] == "那订单数呢"
         assert context["conversation"]["last_question"] == "今天店铺的访问人数"
-        assert context["conversation"]["last_rewritten_question"] == "查询今天店铺的访问人数"
+        assert context["conversation"]["last_rewrite_question"] == "查询今天店铺的访问人数"
         assert context["conversation"]["last_intent"]["metric_mentions"] == ["访问人数"]
         assert context["conversation"]["last_intent"]["time_range"] == {
             "raw": "今天",
@@ -1361,73 +1271,6 @@ def test_graph_v1_classification_model_failure_degrades_to_explanatory_answer(mo
         assert executions[0].node_name == "classify_question"
         assert executions[0].status == "succeeded"
         assert [execution.node_name for execution in executions][-1] == "finish"
-        _cleanup(session)
-
-
-def test_graph_v1_interaction_response_resumes_runtime_to_final_reply():
-    with Session(engine) as session:
-        _cleanup(session)
-        dataset_id = _seed_v1_semantic_dataset(session)
-
-    created = _client().post(
-        "/graph/queries",
-        json={
-            "question": "需要澄清 今日访问人数",
-            "dataset_id": dataset_id,
-            "definition_version": "v1",
-            "request_id": "api-request-v1-clarify",
-            "run_id": "api-run-v1-clarify",
-        },
-    )
-
-    assert created.status_code == 200
-    assert created.json()["status"] == "waiting_input"
-    assert created.json()["current_node"] == "ask_rewrite_clarification"
-
-    with Session(engine) as session:
-        interaction = session.exec(
-            select(InteractionRequestModel).where(
-                InteractionRequestModel.run_id == "api-run-v1-clarify",
-                InteractionRequestModel.status == "pending",
-            )
-        ).one()
-        interaction_id = interaction.interaction_id
-
-    answered = _client().post(
-        f"/graph/runs/api-run-v1-clarify/interactions/{interaction_id}/responses",
-        json={"response": {"metric": "sales_amount"}},
-    )
-    run_response = _client().get("/graph/runs/api-run-v1-clarify")
-
-    assert answered.status_code == 200
-    assert answered.json()["status"] == "succeeded"
-    assert run_response.status_code == 200
-    body = run_response.json()
-    assert body["status"] == "succeeded"
-    assert body["current_node"] == "finish"
-    assert body["context_summary"]["variables"]["rewrite_response"] == {"metric": "sales_amount"}
-    assert body["context_summary"]["variables"]["final_reply"]["final_answer"] == "暂时无法生成完整回答，请稍后重试。"
-
-    with Session(engine) as session:
-        interaction = session.exec(
-            select(InteractionRequestModel).where(InteractionRequestModel.interaction_id == interaction_id)
-        ).one()
-        events = session.exec(
-            select(WorkflowEventModel)
-            .where(WorkflowEventModel.run_id == "api-run-v1-clarify")
-            .order_by(WorkflowEventModel.sequence)
-        ).all()
-        rewrite_executions = session.exec(
-            select(NodeExecutionModel)
-            .where(
-                NodeExecutionModel.run_id == "api-run-v1-clarify",
-                NodeExecutionModel.node_name == "rewrite_question",
-            )
-            .order_by(NodeExecutionModel.attempt)
-        ).all()
-        assert interaction.status == "answered"
-        assert [execution.attempt for execution in rewrite_executions] == [1, 2]
-        assert events[-1].event_type == "run.succeeded"
         _cleanup(session)
 
 
@@ -1684,49 +1527,6 @@ def test_graph_query_persists_node_execution_summaries_for_trace_and_retry():
             "confidence": 0.9,
         }
         assert classify.route_summary["reason_code"] == "QUESTION_DATA_OR_FOLLOWUP"
-        _cleanup(session)
-
-
-def test_graph_v1_cancelled_waiting_run_cannot_resume_from_interaction():
-    with Session(engine) as session:
-        _cleanup(session)
-
-    _client().post(
-        "/graph/queries",
-        json={
-            "question": "需要澄清的问题",
-            "dataset_id": 7001,
-            "definition_version": "v1",
-            "request_id": "api-request-v1-cancel",
-            "run_id": "api-run-v1-cancel",
-        },
-    )
-    with Session(engine) as session:
-        interaction_id = session.exec(
-            select(InteractionRequestModel.interaction_id).where(
-                InteractionRequestModel.run_id == "api-run-v1-cancel",
-                InteractionRequestModel.status == "pending",
-            )
-        ).one()
-
-    cancel = _client().post("/graph/runs/api-run-v1-cancel/cancel")
-    answer = _client().post(
-        f"/graph/runs/api-run-v1-cancel/interactions/{interaction_id}/responses",
-        json={"response": {"metric": "sales_amount"}},
-    )
-    run_response = _client().get("/graph/runs/api-run-v1-cancel")
-
-    assert cancel.status_code == 200
-    assert cancel.json()["status"] == "cancelled"
-    assert answer.status_code == 409
-    assert answer.json()["detail"] == "RUN_NOT_WAITING_INPUT"
-    assert run_response.json()["status"] == "cancelled"
-
-    with Session(engine) as session:
-        interaction = session.exec(
-            select(InteractionRequestModel).where(InteractionRequestModel.interaction_id == interaction_id)
-        ).one()
-        assert interaction.status == "cancelled"
         _cleanup(session)
 
 

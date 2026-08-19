@@ -27,7 +27,6 @@ V1_NODE_OUTPUT_PATHS = {
     "reject_answer": ("variables", "answer"),
     "chitchat_answer": ("variables", "answer"),
     "rewrite_question": ("variables", "rewrite"),
-    "ask_rewrite_clarification": ("control", "pending_interaction_id"),
     "draw_image_profile": ("variables", "image_profile"),
     "recognize_intent": ("variables", "intent"),
     "ask_intent_clarification": ("control", "pending_interaction_id"),

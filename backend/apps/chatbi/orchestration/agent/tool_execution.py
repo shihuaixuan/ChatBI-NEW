@@ -1208,7 +1208,7 @@ def _tool_args_summary(
         return {}
     return _args_summary(
         {
-            "rewritten_question": understanding.get("rewritten_question"),
+            "rewrite_question": understanding.get("rewrite_question"),
             "intent": understanding.get("intent") or {},
         }
     )

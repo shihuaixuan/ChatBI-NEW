@@ -216,27 +216,19 @@ class QuestionAdapter:
 
         ctx = ChatBIRunContext(request)
         question = ctx.raw_question
-        user_feedback = ctx.rewrite_response
         if not question:
-            return graph_contracts.empty_rewrite()
+            raise ValueError("QUESTION_REWRITE_QUESTION_REQUIRED")
 
         prompt = build_question_rewrite_prompt(
             question=question,
             dataset_id=ctx.dataset_id,
             conversation_context=ctx.conversation,
-            user_feedback=user_feedback,
         )
-        try:
-            payload = self._invoke_prompt(prompt, "rewrite")
-            return graph_contracts.project_rewrite(
-                payload,
-                dataset_id=ctx.dataset_id,
-            )
-        except Exception:
-            return graph_contracts.fallback_rewrite(
-                question,
-                user_feedback,
-            )
+        payload = self._invoke_prompt(prompt, "rewrite")
+        return graph_contracts.project_rewrite(
+            payload,
+            original_question=question,
+        )
 
     def recognize_intent(self, request: dict[str, Any]) -> dict[str, Any]:
         """调用大模型分段识别分析意图，并在失败时使用轻量规则兜底。"""

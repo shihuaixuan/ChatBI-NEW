@@ -87,21 +87,6 @@ class InteractionAdapter:
         self._schema_provider = schema_provider
         self._card_builder = ClarificationCardBuilder()
 
-    def ask_rewrite_clarification(self, request: dict[str, Any]) -> dict[str, Any]:
-        ctx = ChatBIRunContext(request)
-        missing_slots = [str(slot) for slot in ctx.rewrite.get("missing_slots") or []]
-        slots = missing_slots or ["metric"]
-        return self._card_builder.build(
-            ClarificationPlan(
-                clarification_type="rewrite_slots",
-                prompt=self._rewrite_prompt(slots),
-                slots=slots,
-                options=self._rewrite_options(slots, ctx),
-                allowed_update_path="variables.rewrite_response",
-                question_key=f"rewrite:{','.join(slots)}",
-            )
-        )
-
     def ask_intent_clarification(self, request: dict[str, Any]) -> dict[str, Any]:
         intent = ChatBIRunContext(request).intent
         conflict_slots = intent.get("conflict_slots") or []
@@ -255,43 +240,6 @@ class InteractionAdapter:
             if isinstance(issues, list)
             else []
         )
-
-    def _rewrite_prompt(self, slots: list[str]) -> str:
-        labels = [self._slot_label(slot) for slot in slots]
-        if not labels:
-            return "请补充问题中的关键信息。"
-        if len(labels) == 1:
-            return f"请补充要分析的{labels[0]}。"
-        return "请补充要分析的" + "和".join(labels) + "。"
-
-    def _rewrite_options(
-        self,
-        slots: list[str],
-        ctx: ChatBIRunContext,
-    ) -> list[dict[str, Any]]:
-        options: list[dict[str, Any]] = []
-        schema = self._load_schema(ctx)
-        if "metric" in slots or "analysis_object" in slots:
-            options.extend(
-                self._asset_options(ctx, "metrics", "metric")
-                or self._schema_asset_options(schema, "metrics", "metric")
-                or self._default_metric_options()
-            )
-        if "time_range" in slots:
-            options.extend(
-                [
-                    {"label": "今天", "value": {"time_range": "今天"}},
-                    {"label": "最近 7 天", "value": {"time_range": "最近 7 天"}},
-                    {"label": "本月", "value": {"time_range": "本月"}},
-                ]
-            )
-        if "dimension" in slots:
-            options.extend(
-                self._asset_options(ctx, "dimensions", "dimension")
-                or self._schema_asset_options(schema, "dimensions", "dimension")
-                or self._default_dimension_options()
-            )
-        return options
 
     def _asset_options(
         self, ctx: ChatBIRunContext, group_name: str, slot_name: str
@@ -486,22 +434,6 @@ class InteractionAdapter:
         return None
 
     @staticmethod
-    def _default_metric_options() -> list[dict[str, Any]]:
-        return [
-            {"label": "访问人数", "value": {"metric": "访问人数"}},
-            {"label": "销售额", "value": {"metric": "销售额"}},
-            {"label": "订单数", "value": {"metric": "订单数"}},
-        ]
-
-    @staticmethod
-    def _default_dimension_options() -> list[dict[str, Any]]:
-        return [
-            {"label": "按日期", "value": {"dimension": "日期"}},
-            {"label": "按店铺", "value": {"dimension": "店铺"}},
-            {"label": "按商品", "value": {"dimension": "商品"}},
-        ]
-
-    @staticmethod
     def _intent_options() -> list[dict[str, Any]]:
         return [
             {"label": "查指标数值", "value": {"intent": "metric_query"}},
@@ -555,14 +487,3 @@ class InteractionAdapter:
         properties = {slot: {"type": "string"} for slot in slots}
         properties["skipped"] = {"type": "boolean"}
         return {"type": "object", "properties": properties}
-
-    @staticmethod
-    def _slot_label(slot: str) -> str:
-        return {
-            "metric": "指标",
-            "analysis_object": "分析对象",
-            "time_range": "时间范围",
-            "dimension": "维度",
-            "filter": "筛选条件",
-            "intent": "分析方式",
-        }.get(slot, slot)

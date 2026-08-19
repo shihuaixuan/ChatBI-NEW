@@ -209,14 +209,15 @@ def test_question_rewrite_prompt_constrains_model_to_rewrite_only():
     prompt = build_question_rewrite_prompt(
         question="那上个月呢",
         conversation_context={"last_question": "这个月销售额"},
-        user_feedback={},
     )
 
     assert "只做问题重写" in prompt.system_prompt
     assert "不要回答问题" in prompt.system_prompt
     assert "不要生成 SQL" in prompt.system_prompt
-    assert '"rewritten_question"' in prompt.system_prompt
-    assert '"need_user_input"' in prompt.system_prompt
+    assert '"original_question"' in prompt.system_prompt
+    assert '"rewrite_question"' in prompt.system_prompt
+    assert '"metric_phrases"' in prompt.system_prompt
+    assert '"dimension_phrases"' in prompt.system_prompt
     assert "那上个月呢" in prompt.user_prompt
     assert "last_question" in prompt.user_prompt
 
@@ -225,21 +226,11 @@ def test_question_rewrite_prompt_defines_chatbi_required_information():
     prompt = build_question_rewrite_prompt(
         question="看一下情况",
         conversation_context={},
-        user_feedback={},
     )
 
-    assert "ChatBI 必需信息判定" in prompt.system_prompt
-    assert "dataset_id" in prompt.system_prompt
-    assert "metric" in prompt.system_prompt
-    assert "analysis_object" in prompt.system_prompt
-    assert "time_range" in prompt.system_prompt
-    assert "dimension" in prompt.system_prompt
-    assert "filter" in prompt.system_prompt
-    assert "默认不要因为缺少时间范围而澄清" in prompt.system_prompt
-    assert (
-        "只有用户明确要求趋势、对比、环比、同比、排行、按维度拆解"
-        in prompt.system_prompt
-    )
+    assert "metric_phrases 和 dimension_phrases" in prompt.system_prompt
+    assert "不得按字符位置、固定句式或固定词表截取" in prompt.system_prompt
+    assert "不输出消息类型、继承字段、置信度、缺失槽位或澄清选项" in prompt.system_prompt
 
 
 def test_question_rewrite_prompt_preserves_semantic_boundaries_for_followup():
@@ -247,14 +238,13 @@ def test_question_rewrite_prompt_preserves_semantic_boundaries_for_followup():
         question="那订单数呢",
         conversation_context={
             "last_question": "今天店铺的访问人数",
-            "last_rewritten_question": "查询今天店铺的访问人数",
+            "last_rewrite_question": "查询今天店铺的访问人数",
             "last_intent": {
                 "metric_mentions": ["访问人数"],
                 "time_range": {"raw": "今天", "value_status": "provided"},
                 "dimension_slots": [{"name": "店铺", "role": "ambiguous"}],
             },
         },
-        user_feedback={},
     )
 
     assert "语义保真规范化" in prompt.system_prompt
@@ -264,7 +254,7 @@ def test_question_rewrite_prompt_preserves_semantic_boundaries_for_followup():
         "不新增用户没有表达的分组、筛选、比较、排序或明细意图" in prompt.system_prompt
     )
     assert "不拆分或重组指标短语内部的业务修饰关系" in prompt.system_prompt
-    assert "last_rewritten_question" in prompt.user_prompt
+    assert "last_question" in prompt.user_prompt
     assert "那订单数呢" in prompt.user_prompt
 
 
@@ -287,8 +277,8 @@ def test_dimension_prompt_keeps_metric_phrase_as_boundary_without_semantic_depen
 def test_question_adapter_rewrites_question_with_model_json():
     adapter = QuestionAdapter(
         model_client=FakeModelClient(
-            '{"rewritten_question":"上个月销售额是多少","need_user_input":false,'
-            '"missing_slots":[],"image_profile_hint":"table"}'
+            '{"original_question":"那上个月呢","rewrite_question":"上个月销售额是多少",'
+            '"metric_phrases":["销售额"],"dimension_phrases":[]}'
         )
     )
 
@@ -297,39 +287,27 @@ def test_question_adapter_rewrites_question_with_model_json():
     )
 
     assert result == {
-        "rewritten_question": "上个月销售额是多少",
-        "need_user_input": False,
-        "missing_slots": [],
-        "image_profile_hint": "table",
+        "original_question": "那上个月呢",
+        "rewrite_question": "上个月销售额是多少",
+        "metric_phrases": ["销售额"],
+        "dimension_phrases": [],
     }
 
 
-def test_question_adapter_rewrite_degrades_to_original_question_when_model_output_is_invalid():
+def test_question_adapter_rewrite_rejects_invalid_model_output():
     adapter = QuestionAdapter(model_client=FakeModelClient("不是 JSON"))
 
-    result = adapter.rewrite(_v1_request("今日的访问量"))
-
-    assert result == {
-        "rewritten_question": "今日的访问量",
-        "need_user_input": False,
-        "missing_slots": [],
-        "image_profile_hint": None,
-    }
+    with pytest.raises(Exception, match="QUESTION_MODEL_OUTPUT_NOT_JSON_OBJECT:rewrite"):
+        adapter.rewrite(_v1_request("今日的访问量"))
 
 
-def test_question_adapter_rewrite_fallback_can_still_request_clarification():
+def test_question_adapter_rewrite_propagates_model_call_failure():
     adapter = QuestionAdapter(
         model_client=FakeModelClient(RuntimeError("model unavailable"))
     )
 
-    result = adapter.rewrite(_v1_request("需要澄清的问题"))
-
-    assert result == {
-        "rewritten_question": "需要澄清的问题",
-        "need_user_input": True,
-        "missing_slots": ["metric"],
-        "image_profile_hint": None,
-    }
+    with pytest.raises(Exception, match="QUESTION_MODEL_CALL_FAILED:rewrite"):
+        adapter.rewrite(_v1_request("需要澄清的问题"))
 
 
 def test_intent_recognition_prompt_constrains_model_to_structured_intent():
@@ -513,7 +491,7 @@ def test_question_adapter_recognizes_intent_with_split_subtasks_and_program_merg
     result = adapter.recognize_intent(
         _v1_request(
             "近 30 天访问量趋势",
-            variables={"rewrite": {"rewritten_question": "近 30 天访问量趋势"}},
+            variables={"rewrite": {"rewrite_question": "近 30 天访问量趋势"}},
         )
     )
 
@@ -618,7 +596,7 @@ def test_question_adapter_parallel_intent_subtasks_merge_by_name_not_finish_orde
     result = adapter.recognize_intent(
         _v1_request(
             "最近 7 天按店铺看访问人数",
-            variables={"rewrite": {"rewritten_question": "最近 7 天按店铺看访问人数"}},
+            variables={"rewrite": {"rewrite_question": "最近 7 天按店铺看访问人数"}},
         )
     )
 
@@ -682,7 +660,7 @@ def test_question_adapter_parallel_intent_subtask_failure_only_falls_back_that_s
     result = adapter.recognize_intent(
         _v1_request(
             "销售额最高的商品",
-            variables={"rewrite": {"rewritten_question": "销售额最高的商品"}},
+            variables={"rewrite": {"rewrite_question": "销售额最高的商品"}},
         )
     )
 
@@ -714,7 +692,7 @@ def test_question_adapter_parallel_intent_records_all_subtasks_fallback_when_mod
     result = adapter.recognize_intent(
         _v1_request(
             "看一下销售额",
-            variables={"rewrite": {"rewritten_question": "看一下销售额"}},
+            variables={"rewrite": {"rewrite_question": "看一下销售额"}},
         )
     )
 
@@ -774,7 +752,7 @@ def test_question_adapter_can_disable_parallel_intent_subtasks():
 
     result = adapter.recognize_intent(
         _v1_request(
-            "访问人数", variables={"rewrite": {"rewritten_question": "访问人数"}}
+            "访问人数", variables={"rewrite": {"rewrite_question": "访问人数"}}
         )
     )
 
@@ -845,7 +823,7 @@ def test_question_adapter_authority_uses_shared_temporal_plan(monkeypatch):
     result = adapter.recognize_intent(
         _v1_request(
             "往前看两周销售额",
-            variables={"rewrite": {"rewritten_question": "往前看两周销售额"}},
+            variables={"rewrite": {"rewrite_question": "往前看两周销售额"}},
         )
     )
 
@@ -895,7 +873,7 @@ def test_question_adapter_temporal_resume_skips_unrelated_intent_subtasks():
         _v1_request(
             "最近销售额",
             variables={
-                "rewrite": {"rewritten_question": "最近销售额"},
+                "rewrite": {"rewrite_question": "最近销售额"},
                 "intent": previous_intent,
                 "slot_response": selected_value,
             },
@@ -958,7 +936,7 @@ def test_question_adapter_parallel_intent_subtask_timeout_uses_fallback_payload(
     )
 
     result = adapter.recognize_intent(
-        _v1_request("销售额", variables={"rewrite": {"rewritten_question": "销售额"}})
+        _v1_request("销售额", variables={"rewrite": {"rewrite_question": "销售额"}})
     )
 
     assert result["metric_mentions"] == ["销售额"]
@@ -1014,7 +992,7 @@ def test_question_adapter_recognizes_subject_domain_from_dataset_schema():
     result = adapter.recognize_intent(
         _v1_request(
             "今天商品访问人数",
-            variables={"rewrite": {"rewritten_question": "今天商品访问人数"}},
+            variables={"rewrite": {"rewrite_question": "今天商品访问人数"}},
         )
     )
 
@@ -1037,7 +1015,7 @@ def test_question_adapter_intent_falls_back_to_rules_when_model_output_is_invali
     result = adapter.recognize_intent(
         _v1_request(
             "销售额最高的商品",
-            variables={"rewrite": {"rewritten_question": "销售额最高的商品"}},
+            variables={"rewrite": {"rewrite_question": "销售额最高的商品"}},
         )
     )
 
@@ -1079,7 +1057,7 @@ def test_question_adapter_intent_marks_ambiguous_metric_when_question_is_too_vag
 
     result = adapter.recognize_intent(
         _v1_request(
-            "看一下情况", variables={"rewrite": {"rewritten_question": "看一下情况"}}
+            "看一下情况", variables={"rewrite": {"rewrite_question": "看一下情况"}}
         )
     )
 
@@ -1109,7 +1087,7 @@ def test_question_adapter_intent_fallback_extracts_dimension_slot_and_time_range
     result = adapter.recognize_intent(
         _v1_request(
             "今天档口的访问人数",
-            variables={"rewrite": {"rewritten_question": "今天档口的访问人数"}},
+            variables={"rewrite": {"rewrite_question": "今天档口的访问人数"}},
         )
     )
 
@@ -1150,7 +1128,7 @@ def test_question_adapter_intent_fallback_extracts_explicit_month_and_topn():
             "2026 年 6 月销售 GMV 最高的 5 个档口是哪些？",
             variables={
                 "rewrite": {
-                    "rewritten_question": "2026 年 6 月销售 GMV 最高的 5 个档口是哪些？"
+                    "rewrite_question": "2026 年 6 月销售 GMV 最高的 5 个档口是哪些？"
                 }
             },
         )
@@ -1187,7 +1165,7 @@ def test_question_adapter_intent_fallback_keeps_multiple_explicit_metrics():
             "最近 30 天每天的总订单数和总 GMV 趋势如何？",
             variables={
                 "rewrite": {
-                    "rewritten_question": "最近 30 天每天的总订单数和总 GMV 趋势如何？"
+                    "rewrite_question": "最近 30 天每天的总订单数和总 GMV 趋势如何？"
                 }
             },
         )
@@ -1211,7 +1189,7 @@ def test_question_adapter_applies_confirmed_intent_feedback_deterministically():
         _v1_request(
             "今天店铺的访问人数",
             variables={
-                "rewrite": {"rewritten_question": "今天店铺的访问人数"},
+                "rewrite": {"rewrite_question": "今天店铺的访问人数"},
                 "intent_response": {"intent": "metric_query"},
             },
         )
@@ -1247,7 +1225,7 @@ def test_question_adapter_retries_dimension_subtask_when_dimension_value_is_time
     result = adapter.recognize_intent(
         _v1_request(
             "今天店铺的访问人数",
-            variables={"rewrite": {"rewritten_question": "今天店铺的访问人数"}},
+            variables={"rewrite": {"rewrite_question": "今天店铺的访问人数"}},
         )
     )
 
@@ -1285,7 +1263,7 @@ def test_question_adapter_uses_dimension_subtask_for_structured_filter_slots():
     result = adapter.recognize_intent(
         _v1_request(
             "今天店铺1的线上客户数",
-            variables={"rewrite": {"rewritten_question": "今天店铺1的线上客户数"}},
+            variables={"rewrite": {"rewrite_question": "今天店铺1的线上客户数"}},
         )
     )
 
@@ -1316,7 +1294,7 @@ def test_question_adapter_keeps_residual_filter_mentions_without_duplicate_dimen
     result = adapter.recognize_intent(
         _v1_request(
             "店铺1的高价值客户销售额",
-            variables={"rewrite": {"rewritten_question": "店铺1的高价值客户销售额"}},
+            variables={"rewrite": {"rewrite_question": "店铺1的高价值客户销售额"}},
         )
     )
 
@@ -1385,7 +1363,7 @@ def test_question_adapter_preserves_unmatched_dimension_slots_and_normalizes_mat
     result = adapter.recognize_intent(
         _v1_request(
             "今天店铺1的线上客户数",
-            variables={"rewrite": {"rewritten_question": "今天店铺1的线上客户数"}},
+            variables={"rewrite": {"rewrite_question": "今天店铺1的线上客户数"}},
         )
     )
 
@@ -1513,7 +1491,7 @@ def test_question_adapter_filters_time_dimensions_from_plain_dimension_slots():
     result = adapter.recognize_intent(
         _v1_request(
             "今天店铺1的档口客户数",
-            variables={"rewrite": {"rewritten_question": "今天店铺1的档口客户数"}},
+            variables={"rewrite": {"rewrite_question": "今天店铺1的档口客户数"}},
         )
     )
 
@@ -1571,7 +1549,7 @@ def test_question_adapter_retries_dimension_subtask_when_value_contains_dimensio
     result = adapter.recognize_intent(
         _v1_request(
             "店铺1的累积线上总客户数",
-            variables={"rewrite": {"rewritten_question": "店铺1的累积线上总客户数"}},
+            variables={"rewrite": {"rewrite_question": "店铺1的累积线上总客户数"}},
         )
     )
 
@@ -1605,7 +1583,7 @@ def test_answer_projection_excludes_sql_candidates_and_full_result_rows():
         _v1_request(
             "今日的访问量",
             variables={
-                "rewrite": {"rewritten_question": "今日访问量"},
+                "rewrite": {"rewrite_question": "今日访问量"},
                 "plan": {
                     "status": "ready",
                     "metrics": [{"asset_id": 1, "display_name": "访问量"}],
@@ -1887,10 +1865,10 @@ def test_recommendation_adapter_generates_contextual_questions_from_selected_ass
 def test_real_gateway_routes_rewrite_and_answer_capabilities_to_real_adapters():
     class GatewayQuestionModelClient:
         def __call__(self, prompt):
-            if '"rewritten_question"' in prompt.system_prompt:
+            if '"rewrite_question"' in prompt.system_prompt:
                 return (
-                    '{"rewritten_question":"今日访问量","need_user_input":false,'
-                    '"missing_slots":[],"image_profile_hint":"table"}'
+                    '{"original_question":"今日的访问量","rewrite_question":"今日访问量",'
+                    '"metric_phrases":["访问量"],"dimension_phrases":[]}'
                 )
             marker = PromptAwareConcurrentModelClient._marker_for_prompt(prompt)
             return {
@@ -1929,7 +1907,7 @@ def test_real_gateway_routes_rewrite_and_answer_capabilities_to_real_adapters():
     intent = gateway.invoke(
         "intent.recognize",
         _v1_request(
-            "今日的访问量", variables={"rewrite": {"rewritten_question": "今日访问量"}}
+            "今日的访问量", variables={"rewrite": {"rewrite_question": "今日访问量"}}
         ),
         "run:intent",
     )
@@ -1955,7 +1933,7 @@ def test_real_gateway_routes_rewrite_and_answer_capabilities_to_real_adapters():
         "run:recommend",
     )
 
-    assert rewrite["rewritten_question"] == "今日访问量"
+    assert rewrite["rewrite_question"] == "今日访问量"
     assert intent["intent_type"] == "metric_query"
     assert answer["answer"] == "今日访问量为 1,234。"
     assert sql["strategy"] == "semantic_sql_compiler"

@@ -39,8 +39,7 @@ ChatBIV1CapabilityNode
 | `classify_question` | `question.classify` | 已接入 `QuestionAdapter`：大模型结构化分类，模型异常直接节点失败 | 当前使用默认大模型配置，输出 `category/reason/risk_level/confidence`；失败时不继续图执行 |
 | `reject_answer` | `answer.reject` | 已接入 `AnswerAdapter`：大模型生成安全拒绝回复，失败时稳定降级 | 后续可细化权限/安全原因映射 |
 | `chitchat_answer` | `answer.chitchat` | 已接入 `AnswerAdapter`：大模型生成闲聊引导回复，失败时稳定降级 | 后续可补模板兜底和产品能力介绍口径 |
-| `rewrite_question` | `question.rewrite` | 已接入 `QuestionAdapter`：大模型结构化重写，失败时保留原问题；明显澄清场景保留 waiting_input 兜底 | 后续可接 `QueryUnderstandingService` 的 normalized question、confirmed slots |
-| `ask_rewrite_clarification` | `interaction.ask_rewrite_clarification` | 已接入 `InteractionAdapter`：根据缺失槽位生成澄清 prompt/options/schema | 优先使用 `knowledge.candidate_groups`；没有 knowledge 时可轻量加载 Semantic schema；失败时回退内置示例 |
+| `rewrite_question` | `question.rewrite` | 已接入 `QuestionAdapter`：大模型结构化重写，并返回指标、维度短语 | 后续可接 `QueryUnderstandingService` 的 normalized question |
 | `draw_image_profile` | `question.draw_image_profile` | 固定图表候选 | 需要基于 intent、metric、dimension、result schema 推断展示类型 |
 | `recognize_intent` | `intent.recognize` | 已接入 `QuestionAdapter`：大模型结构化意图识别，失败时规则兜底 | 后续可接 `QueryUnderstandingService` 的 intent、confidence、slot issues |
 | `ask_intent_clarification` | `interaction.ask_intent_clarification` | 已接入 `InteractionAdapter`：根据低置信度/歧义/冲突生成意图澄清选项 | 后续可根据数据集能力动态裁剪意图选项 |
@@ -287,7 +286,7 @@ question.recommend -> RecommendationAdapter
 
 ### 5.4 `rewrite_question`
 
-职责：把用户原始问题和澄清回答合并成可理解、可检索的问题。
+职责：根据原始问题和会话上下文生成完整问题，并识别供后续流程使用的指标、维度短语。
 
 真实逻辑：
 
@@ -301,21 +300,18 @@ question.recommend -> RecommendationAdapter
 
    ```json
    {
-     "rewritten_question": "补全上下文后的用户问题",
-     "need_user_input": false,
-     "missing_slots": [],
-     "image_profile_hint": null
+     "original_question": "用户本轮提交的原始问题",
+     "rewrite_question": "补全上下文后的完整问题",
+     "metric_phrases": ["指标业务短语"],
+     "dimension_phrases": ["维度业务短语"]
    }
    ```
 
 4. 输入会合并：
    - 原始 `request.question`
    - `conversation_context`
-   - `variables.rewrite_response`
 5. 模型输出通过 `QuestionRewriteOutput` 校验后写入 `variables.rewrite`。
-6. 模型失败或输出非法时：
-   - 默认保留原问题继续推进。
-   - 如果问题明显包含“需要澄清/信息不足/补充”，且用户还没有提供 `rewrite_response`，保留 waiting_input 兜底，`missing_slots=["metric"]`。
+6. 模型输出非法或调用失败时直接报告节点失败，不使用旧输出结构或原问题兜底。
 
 复用能力：
 
@@ -328,36 +324,7 @@ question.recommend -> RecommendationAdapter
 注意：
 
 - `rewrite_question` 不应该直接决定 SQL 策略。
-- 用户澄清后的 confirmed slots 必须优先级高于模型重新识别结果。
-
-### 5.5 `ask_rewrite_clarification`
-
-职责：在问题信息不足时暂停 run，等待用户补充。
-
-真实逻辑：
-
-- 已由 `InteractionAdapter.ask_rewrite_clarification()` 接入。
-- 根据 `variables.rewrite.missing_slots` 生成 prompt、options、response_schema。
-- 当前支持的缺失槽位：
-  - `metric` / `analysis_object`：优先从 `variables.knowledge.candidate_groups.metrics` 生成真实指标选项；无候选时回退访问人数、销售额、订单数等示例选项。
-  - `time_range`：生成今天、最近 7 天、本月等时间选项。
-  - `dimension`：优先从 `variables.knowledge.candidate_groups.dimensions` 生成真实维度选项；无候选时回退按日期、按店铺、按商品等示例选项。
-- 如果尚未执行 `knowledge.retrieve`，真实 runtime 会给 `InteractionAdapter` 注入 `DatasetSchemaProvider`，按 `request.dataset_id` 加载 schema，并从 schema.metrics/schema.dimensions 生成候选。
-- schema 加载失败不会让交互节点失败，会继续使用内置示例选项，保证澄清链路可用。
-- 回答写入 `variables.rewrite_response`，恢复后回到 `rewrite_question`。
-
-复用能力：
-
-- 当前为本地规则版。
-- 真实候选优先来自上游 `knowledge.retrieve` 已写入的 `candidate_groups`。
-- 当尚未有 knowledge 上下文时，真实 runtime 允许交互节点通过 `DatasetSchemaProvider` 加载候选。
-
-输出：
-
-- `interaction_request` 表
-- 用户回答写回 `variables.rewrite_response`
-
-### 5.6 `draw_image_profile`
+### 5.5 `draw_image_profile`
 
 职责：提前生成图表/展示倾向，不参与关键路由。
 
@@ -379,7 +346,7 @@ question.recommend -> RecommendationAdapter
 - `profile`
 - `chart_candidates`
 
-### 5.7 `recognize_intent`
+### 5.6 `recognize_intent`
 
 职责：识别查询意图、自然语言槽位线索和槽位置信度，决定是否需要澄清。
 
@@ -445,7 +412,7 @@ question.recommend -> RecommendationAdapter
 - `confidence < 0.8` 或存在 `ambiguous_slots/conflict_slots` -> `ask_intent_clarification`
 - 否则进入 `retrieve_knowledge`
 
-### 5.8 `ask_intent_clarification`
+### 5.7 `ask_intent_clarification`
 
 职责：处理意图低置信度、冲突、歧义。
 
@@ -465,7 +432,7 @@ question.recommend -> RecommendationAdapter
 
 - 用户回答写回 `variables.intent_response`
 
-### 5.9 `retrieve_knowledge`
+### 5.8 `retrieve_knowledge`
 
 职责：根据意图节点输出的自然语言线索确认 Semantic 语义资产，并收集生成 SQL 所需的业务知识、schema 和例子。
 
@@ -474,7 +441,7 @@ question.recommend -> RecommendationAdapter
 1. 从请求读取：
    - `request.dataset_id`
    - `request.tenant_id` / `request.oid`
-   - `variables.rewrite.rewritten_question`
+   - `variables.rewrite.rewrite_question`
    - `variables.intent`
 2. 适配器应用已提交的澄清回答，并通过 `build_semantic_binding_request()` 构造唯一检索请求。
 3. `SemanticBindingQueryPlanner` 按 `variables.intent` 的自然语言槽位分别生成子查询：
@@ -527,7 +494,7 @@ question.recommend -> RecommendationAdapter
 - 真实数据集可能因为多个指标分数接近而进入 `ask_metric_selection`，例如多个指标都包含“人数”时，这是有效业务歧义，不是执行失败。
 - 当前已完成第一阶段可解释 rerank：当 mention 足够具体时优先绑定完整短语匹配的资产；当 mention 只有“人数/次数/率”等弱词时，仍保留 `metric_ambiguous` 让用户选择。
 
-### 5.10 `ask_metric_selection`
+### 5.9 `ask_metric_selection`
 
 职责：在指标候选歧义时让用户选择。
 
@@ -541,7 +508,7 @@ question.recommend -> RecommendationAdapter
 - 恢复后直接进入 `bind_query_plan`，由 `QueryPlanBinder` 根据用户选择把单一指标绑定到 `variables.plan.metrics`。
 - 除非用户选择了“其他，请补充”，否则不必重新检索知识。
 
-### 5.11 `generate_sql`
+### 5.10 `generate_sql`
 
 职责：只生成 SQL，不执行 SQL。
 
@@ -575,7 +542,7 @@ question.recommend -> RecommendationAdapter
 
 - 当前 `generate_sql` 只做语义编译和 SQL 安全校验，不执行真实 SQL，也没有替代 SQL 生成策略。
 
-### 5.12 `execute_sql`
+### 5.11 `execute_sql`
 
 职责：执行已生成的 SQL，并把执行结果标准化为 v1 图上下文。
 
@@ -605,7 +572,7 @@ question.recommend -> RecommendationAdapter
 - `result_truncated`
 - 失败时 `error_code/message`
 
-### 5.13 `handle_sql_error`
+### 5.12 `handle_sql_error`
 
 职责：把 SQL 执行失败转为用户可读解释，并给出稳定修复建议。
 
@@ -634,7 +601,7 @@ question.recommend -> RecommendationAdapter
 - `repair_hint`
 - `repair_plan`
 
-### 5.14 `generate_question_answer`
+### 5.13 `generate_question_answer`
 
 职责：基于 SQL 结果、知识未命中或错误处理结果生成用户回答。
 
@@ -658,7 +625,7 @@ question.recommend -> RecommendationAdapter
 - 后续可接 `AnswerGenerateTool` 或新的 result summarizer，但必须适配 v1 `AnswerOutput`。
 - 后续需要补 result artifact/sample rows 的输入摘要，避免大结果集进入 prompt。
 
-### 5.15 `recommend_questions`
+### 5.14 `recommend_questions`
 
 职责：给用户推荐下一步可问的问题。
 
@@ -681,7 +648,7 @@ question.recommend -> RecommendationAdapter
 - 输出通过 `RecommendationOutput` 校验后写入 `variables.recommendations`。
 - 后续可在同一 adapter 内接 LLM 或推荐策略服务，但仍需保持稳定 JSON 输出。
 
-### 5.16 `compose_final_reply`
+### 5.15 `compose_final_reply`
 
 职责：统一前端输出结构。
 

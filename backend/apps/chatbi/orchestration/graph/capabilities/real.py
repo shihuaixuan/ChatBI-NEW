@@ -62,8 +62,6 @@ class RealChatBICapabilityGateway:
             return self._knowledge_adapter.retrieve(request)
         if capability == "plan.bind":
             return self._planning_binder.bind(request)
-        if capability == "interaction.ask_rewrite_clarification":
-            return self._interaction_adapter.ask_rewrite_clarification(request)
         if capability == "interaction.ask_intent_clarification":
             return self._interaction_adapter.ask_intent_clarification(request)
         if capability == "interaction.ask_slot_clarification":

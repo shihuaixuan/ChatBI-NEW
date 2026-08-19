@@ -107,15 +107,11 @@ class PlaceholderChatBICapabilityGateway:
             }
         if capability == "question.rewrite":
             question = self._question_from_v1_request(request)
-            variables = request.get("variables", {})
-            need_user_input = not variables.get("rewrite_response") and any(
-                keyword in question for keyword in ("需要澄清", "信息不足", "补充")
-            )
             return {
-                "rewritten_question": question,
-                "need_user_input": need_user_input,
-                "missing_slots": ["metric"] if need_user_input else [],
-                "image_profile_hint": "placeholder_profile",
+                "original_question": question,
+                "rewrite_question": question,
+                "metric_phrases": ["访问人数"] if "访问人数" in question else [],
+                "dimension_phrases": [],
             }
         if capability == "question.draw_image_profile":
             return {"profile": "default_table_chart", "chart_candidates": ["table", "line"]}
@@ -187,8 +183,6 @@ class PlaceholderChatBICapabilityGateway:
             return self._interaction().ask_metric_selection(request)
         if capability == "interaction.ask_cross_model_split":
             return self._interaction().ask_cross_model_split(request)
-        if capability == "interaction.ask_rewrite_clarification":
-            return self._interaction().ask_rewrite_clarification(request)
         if capability == "interaction.ask_intent_clarification":
             return self._interaction().ask_intent_clarification(request)
         if capability == "interaction.ask_slot_clarification":

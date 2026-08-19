@@ -93,7 +93,7 @@ class AgentToolContext:
         understanding = self.state.get("question_understanding")
         if not isinstance(understanding, dict):
             return None
-        rewritten_question = understanding.get("rewritten_question")
+        rewrite_question = understanding.get("rewrite_question")
         intent = understanding.get("intent")
         if isinstance(intent, dict) and isinstance(understanding.get("mention_graph"), dict):
             # R1 图结构与旧 intent 投影同时传入，检索规划器优先消费图结构。
@@ -103,8 +103,8 @@ class AgentToolContext:
             }
         dataset_id = self.dataset_id or self.state.get("dataset_id")
         if (
-            not isinstance(rewritten_question, str)
-            or not rewritten_question.strip()
+            not isinstance(rewrite_question, str)
+            or not rewrite_question.strip()
             or not isinstance(intent, dict)
             or not isinstance(dataset_id, int)
             or dataset_id <= 0
@@ -120,9 +120,9 @@ class AgentToolContext:
             original_question=str(
                 self.state.get("original_question")
                 or self.state.get("question")
-                or rewritten_question
+                or rewrite_question
             ),
-            rewritten_question=rewritten_question,
+            rewritten_question=rewrite_question,
             intent=intent,
             principal_roles=self.principal_roles or None,
             principal_role_ids=self.principal_role_ids or None,

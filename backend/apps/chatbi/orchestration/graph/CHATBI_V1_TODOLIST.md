@@ -44,10 +44,10 @@
   - 验收：越权、闲聊、数据问题三类占位输出可驱动不同路由。
 
 - [x] 为问题重写节点定义 schema。
-  - 输入：原始问题、上下文、用户补充。
-  - 输出：`rewritten_question`、`need_user_input`、`missing_slots`、`image_profile_hint`
+  - 输入：原始问题、上下文。
+  - 输出：`original_question`、`rewrite_question`、`metric_phrases`、`dimension_phrases`
   - 写入：`variables.rewrite`
-  - 验收：信息不足时走澄清分支，信息充分时进入意图识别。
+  - 验收：输出完整重写问题，并返回可供后续流程使用的指标、维度短语。
 
 - [x] 为意图识别节点定义 schema。
   - 输入：重写问题、上下文信息、用户补充。
@@ -61,7 +61,7 @@
   - 输出：`hit`、`tables`、`fields`、`metrics`、`terms`、`examples`、`ambiguities`
   - 写入：`variables.knowledge`
   - 验收：未命中、多指标歧义、命中三种结果可路由到不同节点。
-  - 验收：优先使用 `metric_mentions/dimension_mentions/time_mentions/filter_mentions` 分槽位召回，`rewritten_question` 仅作为缺槽位 fallback。
+  - 验收：检索节点继续使用既有输入契约；问题重写节点的短语输出单独保存在 `variables.rewrite`。
   - 验收：统一检索候选经过 `SemanticBindingPolicy` 门控，并输出通道分数、排名和 reason codes。
 
 - [x] 为人机交互节点定义统一 schema。
@@ -88,10 +88,6 @@
   - 条件：`question.forbidden`、`question.chitchat`、`question.data_or_followup`
   - 文件建议：`backend/apps/chatbi/orchestration/graph/conditions/question.py`
   - 验收：三类输入分别路由到拒绝、闲聊、问题重写。
-
-- [x] 新增问题重写条件。
-  - 条件：`rewrite.need_user_input`
-  - 验收：`need_user_input=true` 时进入 `ask_rewrite_clarification`。
 
 - [x] 新增意图识别条件。
   - 条件：`intent.ambiguous`
@@ -152,9 +148,8 @@
 ## 里程碑 5：迁移旧 Agentic ChatBI 能力为 adapter
 
 - [x] 实现 `InteractionAdapter`。
-  - 能力：`interaction.ask_rewrite_clarification`、`interaction.ask_intent_clarification`、`interaction.ask_metric_selection`
-  - 验收：根据 `missing_slots`、`ambiguous_slots/conflict_slots`、`knowledge.ambiguities` 生成 prompt/options/response_schema。
-  - 验收：rewrite 澄清优先使用 `knowledge.candidate_groups.metrics/dimensions` 真实候选；无候选时回退内置示例。
+  - 能力：`interaction.ask_intent_clarification`、`interaction.ask_metric_selection`
+  - 验收：根据 `ambiguous_slots/conflict_slots`、`knowledge.ambiguities` 生成 prompt/options/response_schema。
   - 验收：metric selection 在 ambiguity candidates 为空时可回退到 `knowledge.candidate_groups.metrics`。
   - 验收：没有 knowledge 上下文时，真实 runtime 注入 `DatasetSchemaProvider`，可按 `dataset_id` 加载 schema 候选。
   - 后续：按问题文本对 schema 候选排序，而不是直接取前 5 个。

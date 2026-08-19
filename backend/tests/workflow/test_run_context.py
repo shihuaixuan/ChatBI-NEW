@@ -41,9 +41,9 @@ def test_context_tenant_falls_back_to_oid_then_default():
     assert ChatBIRunContext({"request": {}}).tenant_id == 1
 
 
-def test_context_question_prefers_rewritten_over_raw():
+def test_context_question_prefers_rewrite_over_raw():
     ctx = ChatBIRunContext(
-        _request(variables={"rewrite": {"rewritten_question": " 最近 7 天销售额趋势 "}})
+        _request(variables={"rewrite": {"rewrite_question": " 最近 7 天销售额趋势 "}})
     )
     assert ctx.question == "最近 7 天销售额趋势"
 
@@ -62,10 +62,9 @@ def test_context_domains_guard_against_non_dict_values():
 
 def test_context_interaction_responses_are_dict_guarded():
     ctx = ChatBIRunContext(
-        _request(variables={"intent_response": {"skipped": True}, "rewrite_response": "bad"})
+        _request(variables={"intent_response": {"skipped": True}})
     )
     assert ctx.intent_response == {"skipped": True}
-    assert ctx.rewrite_response == {}
 
 
 def test_run_context_prefers_standard_interaction_response_over_legacy_key():

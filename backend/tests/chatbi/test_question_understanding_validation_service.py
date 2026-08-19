@@ -3,11 +3,9 @@ from apps.chatbi.services.understanding import validate_question_understanding
 from apps.temporal import TemporalPlan
 
 
-def test_validation_collects_rewrite_intent_metric_and_time_issues():
+def test_validation_collects_intent_metric_and_time_issues():
     result = validate_question_understanding(
         QuestionUnderstandingValidationData(
-            rewrite_need_user_input=True,
-            rewrite_missing_slots=("context",),
             intent_type="unknown",
             time_range={
                 "raw": "发薪日",
@@ -19,13 +17,12 @@ def test_validation_collects_rewrite_intent_metric_and_time_issues():
     )
 
     assert result.reason_codes == [
-        "rewrite_context_incomplete",
         "intent_unknown",
         "metric_missing",
         "intent_conflict",
         "time_range_unsupported",
     ]
-    assert result.clarification_slots == ["context", "intent", "metric", "time_range"]
+    assert result.clarification_slots == ["intent", "metric", "time_range"]
 
 
 def test_validation_keeps_dimension_role_and_filter_value_rules_in_one_result():

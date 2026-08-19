@@ -193,7 +193,7 @@ def test_sql_adapter_generates_sql_from_semantic_selected_assets():
         {
             "request": {"question": "按日期看访问人数", "dataset_id": 20, "tenant_id": 10},
             "variables": {
-                "rewrite": {"rewritten_question": "按日期看访问人数"},
+                "rewrite": {"rewrite_question": "按日期看访问人数"},
                 "knowledge": {
                     "slot_bindings": {
                         "metrics": [{"asset_type": "METRIC", "asset_id": 100, "display_name": "访问人数"}],
@@ -290,7 +290,7 @@ def test_sql_adapter_treats_filter_dimensions_as_where_conditions_only():
         {
             "request": {"question": "今天档口1的访问人数", "dataset_id": 20, "tenant_id": 10},
             "variables": {
-                "rewrite": {"rewritten_question": "今天档口1的访问人数"},
+                "rewrite": {"rewrite_question": "今天档口1的访问人数"},
                 "knowledge": {
                     "slot_bindings": {
                         "metrics": [{"asset_type": "METRIC", "asset_id": 100, "display_name": "访问人数"}],

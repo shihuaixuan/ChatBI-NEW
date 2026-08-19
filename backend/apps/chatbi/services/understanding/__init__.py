@@ -26,8 +26,6 @@ from apps.chatbi.services.understanding.condition_stage import (
 from apps.chatbi.services.understanding.graph_contracts import (
     DEFAULT_MAX_INTENT_RETRY,
     classification_precondition,
-    empty_rewrite,
-    fallback_rewrite,
     intent_retry_feedback,
     project_classification,
     project_rewrite,
@@ -118,9 +116,7 @@ __all__ = [
     "build_temporal_clarification_options",
     "classification_precondition",
     "compare_temporal_shadow",
-    "empty_rewrite",
     "evaluate_clarification",
-    "fallback_rewrite",
     "intent_retry_feedback",
     "is_time_expression",
     "normalize_confidence",

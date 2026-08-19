@@ -318,8 +318,8 @@ class FailingExporter:
 class StaticUnderstandingService:
     """AgentLoop 测试使用的确定性问题理解结果。"""
 
-    def __init__(self, rewritten_question="按城市看 gmv"):
-        self.rewritten_question = rewritten_question
+    def __init__(self, rewrite_question="按城市看 gmv"):
+        self.rewrite_question = rewrite_question
 
     def understand(
         self,
@@ -334,11 +334,9 @@ class StaticUnderstandingService:
         return QuestionUnderstandingOutcome(
             output=QuestionUnderstandingOutput(
                 original_question=question,
-                message_type="new_question",
-                rewritten_question=self.rewritten_question,
+                rewrite_question=self.rewrite_question,
                 metric_phrases=["gmv"],
                 dimension_phrases=["城市"],
-                inherited_context={},
                 intent=IntentRecognitionOutput(
                     intent_type="metric_query",
                     confidence=0.95,
@@ -384,6 +382,27 @@ def _understanding_response(payload, total_tokens=0):
     return QuestionUnderstandingModelResponse(
         content=content,
         usage_metadata={"total_tokens": total_tokens},
+    )
+
+
+def _rewrite_response(
+    original_question,
+    rewritten_question,
+    *,
+    metric_phrases=(),
+    dimension_phrases=(),
+    total_tokens=0,
+):
+    """构造严格的问题重写输出，短语由重写模型直接返回。"""
+
+    return _understanding_response(
+        {
+            "original_question": original_question,
+            "rewrite_question": rewritten_question,
+            "metric_phrases": list(metric_phrases),
+            "dimension_phrases": list(dimension_phrases),
+        },
+        total_tokens=total_tokens,
     )
 
 
@@ -1582,7 +1601,7 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
     monkeypatch.setattr(
         "apps.chatbi.orchestration.agent.preparation.agent_run_repository.latest_successful_question_understanding",
         lambda session, **kwargs: {
-            "rewritten_question": "今天按店铺分组的销售下单客户数",
+            "rewrite_question": "今天按店铺分组的销售下单客户数",
             "intent": {"intent_type": "metric_query"},
         },
     )
@@ -1602,9 +1621,9 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
     list(loop.run(run, record))
 
     assert captured_context == {
-        "last_rewritten_question": "今天按店铺分组的销售下单客户数",
+        "last_rewrite_question": "今天按店铺分组的销售下单客户数",
         "previous_understanding": {
-            "rewritten_question": "今天按店铺分组的销售下单客户数",
+            "rewrite_question": "今天按店铺分组的销售下单客户数",
             "intent": {"intent_type": "metric_query"},
         },
     }
@@ -1622,7 +1641,7 @@ def test_search_semantic_assets_trace_records_effective_understanding_input():
     events = list(_loop(model).run(run, record))
 
     tool_event = next(item for item in events if item.domain == "tool.called")
-    assert tool_event.content["args_summary"]["rewritten_question"] == "按城市看 gmv"
+    assert tool_event.content["args_summary"]["rewrite_question"] == "按城市看 gmv"
     assert tool_event.content["args_summary"]["intent"]["metric_mentions"] == ["gmv"]
 
 
@@ -1734,15 +1753,11 @@ def test_unknown_tool_is_rejected_and_direct_data_answer_still_fails():
 def test_understanding_rewrites_followup_before_recognizing_intent():
     model = ScriptedUnderstandingModel(
         [
-            _understanding_response(
-                {
-                    "message_type": "followup",
-                    "rewritten_question": "按城市统计上个月销售额",
-                    "inherited_context": {"metric": "销售额", "dimension": "城市"},
-                    "need_user_input": False,
-                    "missing_slots": [],
-                    "confidence": 0.96,
-                },
+            _rewrite_response(
+                "那上个月呢",
+                "按城市统计上个月销售额",
+                metric_phrases=("销售额",),
+                dimension_phrases=("城市",),
                 total_tokens=30,
             ),
             _understanding_response(_valid_intent(), total_tokens=40),
@@ -1752,7 +1767,7 @@ def test_understanding_rewrites_followup_before_recognizing_intent():
     outcome = QuestionUnderstandingService(model).understand(
         question="那上个月呢",
         datasource_id=5,
-        conversation_context={"last_rewritten_question": "按城市统计本月销售额"},
+        conversation_context={"last_rewrite_question": "按城市统计本月销售额"},
         temporal_context=build_temporal_context(
             reference_at=datetime(
                 2026,
@@ -1764,7 +1779,7 @@ def test_understanding_rewrites_followup_before_recognizing_intent():
         ),
     )
 
-    assert outcome.output.rewritten_question == "按城市统计上个月销售额"
+    assert outcome.output.rewrite_question == "按城市统计上个月销售额"
     assert outcome.output.intent.metric_mentions == ["销售额"]
     # Agent 前置阶段只保留原始时间表达，实际解析由 ReAct 时间工具完成。
     assert outcome.output.intent.time_range.normalized is None
@@ -1772,22 +1787,18 @@ def test_understanding_rewrites_followup_before_recognizing_intent():
     assert outcome.output.validation.status == "valid"
     assert outcome.usage_metadata["total_tokens"] == 70
     intent_request = orjson.loads(model.calls[1][1])
-    assert intent_request["rewritten_question"] == "按城市统计上个月销售额"
+    assert intent_request["rewrite_question"] == "按城市统计上个月销售额"
     assert "那上个月呢" not in model.calls[1][1]
 
 
 def test_understanding_keeps_today_for_agent_time_tool():
     model = ScriptedUnderstandingModel(
         [
-            _understanding_response(
-                {
-                    "message_type": "new_question",
-                    "rewritten_question": "今天店铺的客户数",
-                    "inherited_context": {},
-                    "need_user_input": False,
-                    "missing_slots": [],
-                    "confidence": 0.98,
-                }
+            _rewrite_response(
+                "今天店铺的客户数",
+                "今天店铺的客户数",
+                metric_phrases=("客户数",),
+                dimension_phrases=("店铺",),
             ),
             _understanding_response(
                 _valid_intent(
@@ -1836,15 +1847,11 @@ def test_understanding_keeps_today_for_agent_time_tool():
 def test_understanding_rejects_filter_dimension_without_concrete_value():
     model = ScriptedUnderstandingModel(
         [
-            _understanding_response(
-                {
-                    "message_type": "new_question",
-                    "rewritten_question": "今天店铺的客户数",
-                    "inherited_context": {},
-                    "need_user_input": False,
-                    "missing_slots": [],
-                    "confidence": 0.98,
-                }
+            _rewrite_response(
+                "今天店铺的客户数",
+                "今天店铺的客户数",
+                metric_phrases=("客户数",),
+                dimension_phrases=("店铺",),
             ),
             _understanding_response(
                 _valid_intent(
@@ -1895,15 +1902,11 @@ def test_understanding_rejects_filter_dimension_without_concrete_value():
 def test_understanding_does_not_treat_ambiguous_dimension_role_as_missing_filter_value():
     model = ScriptedUnderstandingModel(
         [
-            _understanding_response(
-                {
-                    "message_type": "new_question",
-                    "rewritten_question": "今天店铺的客户数",
-                    "inherited_context": {},
-                    "need_user_input": False,
-                    "missing_slots": [],
-                    "confidence": 0.98,
-                }
+            _rewrite_response(
+                "今天店铺的客户数",
+                "今天店铺的客户数",
+                metric_phrases=("客户数",),
+                dimension_phrases=("店铺",),
             ),
             _understanding_response(
                 _valid_intent(
@@ -1952,15 +1955,10 @@ def test_understanding_does_not_treat_ambiguous_dimension_role_as_missing_filter
 def test_understanding_does_not_reject_time_before_agent_time_tool():
     model = ScriptedUnderstandingModel(
         [
-            _understanding_response(
-                {
-                    "message_type": "new_question",
-                    "rewritten_question": "发薪日销售额",
-                    "inherited_context": {},
-                    "need_user_input": False,
-                    "missing_slots": [],
-                    "confidence": 0.98,
-                }
+            _rewrite_response(
+                "发薪日销售额",
+                "发薪日销售额",
+                metric_phrases=("销售额",),
             ),
             _understanding_response(
                 _valid_intent(
@@ -1988,15 +1986,9 @@ def test_understanding_does_not_reject_time_before_agent_time_tool():
 def test_understanding_marks_missing_metric_for_clarification_without_guessing():
     model = ScriptedUnderstandingModel(
         [
-            _understanding_response(
-                {
-                    "message_type": "new_question",
-                    "rewritten_question": "看一下北京最近7天的数据",
-                    "inherited_context": {},
-                    "need_user_input": False,
-                    "missing_slots": [],
-                    "confidence": 0.98,
-                }
+            _rewrite_response(
+                "看一下北京最近7天的数据",
+                "看一下北京最近7天的数据",
             ),
             _understanding_response(
                 _valid_intent(
@@ -2047,15 +2039,10 @@ def test_understanding_repairs_non_json_once_without_semantic_fallback():
     model = ScriptedUnderstandingModel(
         [
             _understanding_response("不是 JSON"),
-            _understanding_response(
-                {
-                    "message_type": "new_question",
-                    "rewritten_question": "本月销售额",
-                    "inherited_context": {},
-                    "need_user_input": False,
-                    "missing_slots": [],
-                    "confidence": 0.98,
-                }
+            _rewrite_response(
+                "本月销售额",
+                "本月销售额",
+                metric_phrases=("销售额",),
             ),
             _understanding_response(_valid_intent()),
         ]
@@ -2066,7 +2053,7 @@ def test_understanding_repairs_non_json_once_without_semantic_fallback():
         datasource_id=5,
     )
 
-    assert outcome.output.rewritten_question == "本月销售额"
+    assert outcome.output.rewrite_question == "本月销售额"
     assert len(model.calls) == 3
     assert "QUESTION_REWRITE_MODEL_OUTPUT_NOT_JSON" in model.calls[1][1]
 
@@ -2093,12 +2080,10 @@ def test_understanding_rejects_fields_outside_contract():
         [
             _understanding_response(
                 {
-                    "message_type": "new_question",
-                    "rewritten_question": "本月销售额",
-                    "inherited_context": {},
-                    "need_user_input": False,
-                    "missing_slots": [],
-                    "confidence": 0.9,
+                    "original_question": "本月销售额",
+                    "rewrite_question": "本月销售额",
+                    "metric_phrases": ["销售额"],
+                    "dimension_phrases": [],
                     "tool_name": "search_semantic_assets",
                 }
             )

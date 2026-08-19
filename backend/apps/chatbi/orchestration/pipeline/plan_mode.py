@@ -144,11 +144,7 @@ class PlanPipeline:
         if self._is_ambiguous(state):
             yield from self._suspend_semantic_clarification(state, plan_id)
             return
-        patched_payload = (
-            understanding.get("inherited_context", {}).get("patched_analysis_plan")
-            if isinstance(understanding.get("inherited_context"), dict)
-            else None
-        )
+        patched_payload = understanding.get("patched_analysis_plan")
         if isinstance(patched_payload, dict):
             # 补丁计划已经在问题理解阶段完成服务端校验，换用当前 Run 的计划编号。
             patched = AnalysisPlan.model_validate(patched_payload)

@@ -118,8 +118,8 @@ class AgentInputPreparer:
                 context_node.set_output(
                     {
                         "history_count": len(conversation_context.get("history") or []),
-                        "has_last_rewritten_question": bool(
-                            conversation_context.get("last_rewritten_question")
+                        "has_last_rewrite_question": bool(
+                            conversation_context.get("last_rewrite_question")
                         ),
                         "has_previous_understanding": bool(
                             conversation_context.get("previous_understanding")
@@ -133,8 +133,8 @@ class AgentInputPreparer:
                     {"conversation_context": conversation_context}
                 )
             understanding_context = {
-                "last_rewritten_question": conversation_context.get(
-                    "last_rewritten_question"
+                "last_rewrite_question": conversation_context.get(
+                    "last_rewrite_question"
                 ),
                 "previous_understanding": conversation_context.get(
                     "previous_understanding"
@@ -161,7 +161,7 @@ class AgentInputPreparer:
             state.context.state.update(
                 {
                     "original_question": record.question or "",
-                    "question": outcome.output.rewritten_question,
+                    "question": outcome.output.rewrite_question,
                     "question_understanding": understanding,
                 }
             )
@@ -170,7 +170,7 @@ class AgentInputPreparer:
                 state.context.state["temporal_shadow_observation"] = (
                     outcome.temporal_shadow.model_dump(mode="json")
                 )
-            state.messages = [AgentMessage.user(outcome.output.rewritten_question)]
+            state.messages = [AgentMessage.user(outcome.output.rewrite_question)]
             state.system = self._build_system(
                 state,
                 conversation_context=conversation_context,
@@ -178,7 +178,6 @@ class AgentInputPreparer:
             )
             understanding_node.set_output(
                 {
-                    "message_type": outcome.output.message_type,
                     "intent_type": outcome.output.intent.intent_type,
                     "validation_status": outcome.output.validation.status,
                 }
@@ -332,7 +331,7 @@ class AgentInputPreparer:
                     )
                     state.context.state.update(
                         {
-                            "question": understanding.get("rewritten_question"),
+                            "question": understanding.get("rewrite_question"),
                             "question_understanding": understanding,
                             "time_parse_status": "resolved",
                         }
@@ -359,7 +358,7 @@ class AgentInputPreparer:
                     understanding = updated_output.model_dump(mode="json")
                     state.context.state.update(
                         {
-                            "question": updated_output.rewritten_question,
+                            "question": updated_output.rewrite_question,
                             "question_understanding": understanding,
                         }
                     )
@@ -762,14 +761,14 @@ class AgentInputPreparer:
             exclude_record_id=record.id,
             datasource_id=record.datasource,
         )
-        previous_rewritten_question = (
-            previous_understanding.get("rewritten_question")
+        previous_rewrite_question = (
+            previous_understanding.get("rewrite_question")
             if previous_understanding
             else None
         )
         return {
             "history": history,
-            "last_rewritten_question": previous_rewritten_question,
+            "last_rewrite_question": previous_rewrite_question,
             "previous_understanding": previous_understanding,
             "previous_analysis_plan": previous_analysis_plan,
             "memory_context": self._load_memory_context(state),
@@ -1108,8 +1107,7 @@ class AgentInputPreparer:
             "question-understood",
             {
                 "record_id": state.record.id,
-                "message_type": understanding["message_type"],
-                "rewritten_question": understanding["rewritten_question"],
+                "rewrite_question": understanding["rewrite_question"],
                 "intent_type": understanding["intent"]["intent_type"],
                 "confidence": understanding["intent"]["confidence"],
                 "validation": understanding["validation"],

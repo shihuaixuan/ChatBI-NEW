@@ -6,7 +6,6 @@ from apps.chatbi.models.dto.question_understanding import (
     IntentRecognitionOutput,
     NaturalLanguageIntentOutputBase,
     QuestionRewriteOutput,
-    QuestionRewriteOutputBase,
 )
 from apps.chatbi.orchestration.graph.schemas.v1 import (
     IntentRecognitionOutput as GraphIntentRecognitionOutput,
@@ -106,11 +105,15 @@ def test_agent_query_shape_rejects_unknown_fields_and_invalid_limit_type():
         )
 
 
-def test_graph_outputs_inherit_shared_bases_without_expanding_payload():
-    assert issubclass(GraphQuestionRewriteOutput, QuestionRewriteOutputBase)
+def test_graph_and_agent_use_the_same_rewrite_contract():
     assert issubclass(GraphIntentRecognitionOutput, NaturalLanguageIntentOutputBase)
 
-    rewrite = GraphQuestionRewriteOutput(rewritten_question="本月销售额")
+    rewrite = GraphQuestionRewriteOutput(
+        original_question="本月销售额",
+        rewrite_question="本月销售额",
+        metric_phrases=["销售额"],
+        dimension_phrases=[],
+    )
     intent = GraphIntentRecognitionOutput(
         intent_type="metric_query",
         confidence=0.9,
@@ -126,10 +129,10 @@ def test_graph_outputs_inherit_shared_bases_without_expanding_payload():
     )
 
     assert rewrite.model_dump() == {
-        "rewritten_question": "本月销售额",
-        "need_user_input": False,
-        "missing_slots": [],
-        "image_profile_hint": None,
+        "original_question": "本月销售额",
+        "rewrite_question": "本月销售额",
+        "metric_phrases": ["销售额"],
+        "dimension_phrases": [],
     }
     assert intent.model_dump()["dimension_slots"] == [
         {
@@ -142,7 +145,7 @@ def test_graph_outputs_inherit_shared_bases_without_expanding_payload():
     assert "value_confidence" not in intent.model_dump()["dimension_slots"][0]
 
 
-def test_agent_rewrite_output_only_contains_original_and_rewrite_question():
+def test_agent_rewrite_output_contains_question_and_phrase_fields_only():
     output = QuestionRewriteOutput(
         original_question="那上个月呢？",
         rewrite_question="查询上个月销售额",
@@ -162,6 +165,38 @@ def test_agent_rewrite_output_only_contains_original_and_rewrite_question():
                 "original_question": "那上个月呢？",
                 "rewrite_question": "查询上个月销售额",
                 "message_type": "followup",
+            }
+        )
+
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        QuestionRewriteOutput.model_validate(
+            {
+                "original_question": "那上个月呢？",
+                "rewritten_question": "查询上个月销售额",
+                "metric_phrases": ["销售额"],
+                "dimension_phrases": [],
+            }
+        )
+
+
+def test_question_rewrite_phrases_must_be_non_repeated_substrings():
+    with pytest.raises(ValidationError, match="必须来自 rewrite_question"):
+        QuestionRewriteOutput.model_validate(
+            {
+                "original_question": "按城市看销售额",
+                "rewrite_question": "按城市看销售额",
+                "metric_phrases": ["订单数"],
+                "dimension_phrases": ["城市"],
+            }
+        )
+
+    with pytest.raises(ValidationError, match="不能重复"):
+        QuestionRewriteOutput.model_validate(
+            {
+                "original_question": "按城市看销售额",
+                "rewrite_question": "按城市看销售额",
+                "metric_phrases": ["销售额"],
+                "dimension_phrases": ["销售额"],
             }
         )
 

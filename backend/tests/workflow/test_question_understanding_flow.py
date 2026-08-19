@@ -51,12 +51,15 @@ def test_question_understanding_flow_runs_classify_rewrite_intent_without_branch
         },
         "inputs": {},
     }
-    assert rewrite["output"]["rewritten_question"] == "今日店铺流量"
-    assert rewrite["output"]["need_user_input"] is False
-    assert rewrite["output"]["missing_slots"] == []
+    assert rewrite["output"] == {
+        "original_question": "今日店铺流量",
+        "rewrite_question": "今日店铺流量",
+        "metric_phrases": ["流量"],
+        "dimension_phrases": ["店铺"],
+    }
     assert rewrite["route"] == {
-        "condition": "rewrite.need_user_input",
-        "matched": False,
+        "condition": None,
+        "matched": True,
         "reason_code": "REWRITE_READY",
         "next_node": "recognize_intent",
     }

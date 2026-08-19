@@ -29,13 +29,13 @@ class StableQuestionModelClient:
                 },
                 ensure_ascii=False,
             )
-        if "rewritten_question" in system_prompt:
+        if '"rewrite_question"' in system_prompt:
             return json.dumps(
                 {
-                    "rewritten_question": "今日店铺流量",
-                    "need_user_input": False,
-                    "missing_slots": [],
-                    "image_profile_hint": None,
+                    "original_question": "今日店铺流量",
+                    "rewrite_question": "今日店铺流量",
+                    "metric_phrases": ["流量"],
+                    "dimension_phrases": ["店铺"],
                 },
                 ensure_ascii=False,
             )
@@ -161,8 +161,8 @@ def run_question_understanding_flow(
             "input": rewrite_input_snapshot,
             "output": rewrite,
             "route": {
-                "condition": "rewrite.need_user_input",
-                "matched": bool(rewrite["need_user_input"]),
+                "condition": None,
+                "matched": True,
                 "reason_code": "REWRITE_READY",
                 "next_node": "recognize_intent",
             },
@@ -197,13 +197,12 @@ def run_question_understanding_flow(
             "start_node": "classify_question",
             "end_node": "recognize_intent",
             "excluded_nodes": [
-                "ask_rewrite_clarification",
                 "ask_intent_clarification",
                 "retrieve_knowledge",
                 "generate_sql",
                 "execute_sql",
             ],
-            "branch_policy": "本测试固定模型输出为 data、need_user_input=false、intent 无歧义，因此不走分叉节点。",
+            "branch_policy": "本测试固定模型输出为 data、问题重写四字段完整、intent 无歧义，因此不走分叉节点。",
         },
         "nodes": logs,
         "final_context_variables": context["variables"],

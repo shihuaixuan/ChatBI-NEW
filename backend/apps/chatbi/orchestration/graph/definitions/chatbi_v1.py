@@ -101,11 +101,6 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
             "问题标准化",
             ("variables", "rewrite"),
         ),
-        "ask_rewrite_clarification": _interaction_node(
-            "ask_rewrite_clarification",
-            "interaction.ask_rewrite_clarification",
-            "补充问题信息",
-        ),
         "draw_image_profile": _capability_node(
             "draw_image_profile",
             "question.draw_image_profile",
@@ -245,32 +240,7 @@ def build_chatbi_v1_definition() -> WorkflowDefinition:
             EdgeDefinition(source="reject_answer", target="compose_final_reply"),
             EdgeDefinition(source="chitchat_answer", target="compose_final_reply"),
             EdgeDefinition(source="rewrite_question", target="generate_question_answer", condition="node.degraded", priority=0),
-            EdgeDefinition(
-                source="rewrite_question",
-                target="ask_rewrite_clarification",
-                condition="clarify.rewrite.allowed",
-                priority=1,
-            ),
-            EdgeDefinition(
-                source="rewrite_question",
-                target="generate_question_answer",
-                condition="clarify.rewrite.exhausted",
-                priority=2,
-            ),
             EdgeDefinition(source="rewrite_question", target="draw_image_profile"),
-            EdgeDefinition(
-                source="ask_rewrite_clarification",
-                target="rewrite_question",
-                condition="interaction.rewrite.answered",
-                priority=0,
-            ),
-            EdgeDefinition(
-                source="ask_rewrite_clarification",
-                target="generate_question_answer",
-                condition="interaction.rewrite.skipped",
-                priority=1,
-            ),
-            EdgeDefinition(source="ask_rewrite_clarification", target="rewrite_question"),
             EdgeDefinition(source="draw_image_profile", target="generate_question_answer", condition="node.degraded", priority=0),
             EdgeDefinition(source="draw_image_profile", target="recognize_intent"),
             EdgeDefinition(source="recognize_intent", target="generate_question_answer", condition="node.degraded", priority=0),
@@ -521,10 +491,6 @@ def register_chatbi_v1_handlers(registry: HandlerRegistry, gateway: ChatBICapabi
             ),
         )
 
-    registry.register(
-        "interaction.ask_rewrite_clarification",
-        ChatBIV1InteractionNode(gateway, "interaction.ask_rewrite_clarification", "variables.rewrite_response"),
-    )
     registry.register(
         "interaction.ask_intent_clarification",
         ChatBIV1InteractionNode(gateway, "interaction.ask_intent_clarification", "variables.intent_response"),

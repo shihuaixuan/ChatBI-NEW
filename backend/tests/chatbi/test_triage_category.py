@@ -24,8 +24,7 @@ from apps.tool import BudgetGuard
 def _output_with_category(category: str) -> QuestionUnderstandingOutput:
     return QuestionUnderstandingOutput(
         original_question="你好",
-        message_type="new_question",
-        rewritten_question="你好",
+        rewrite_question="你好",
         metric_phrases=[],
         dimension_phrases=[],
         intent=IntentRecognitionOutput(intent_type="unknown", confidence=0.9),
@@ -52,8 +51,7 @@ def _state_with_category(category: str) -> AgentRuntimeState:
 def test_category_defaults_to_data_query_for_old_snapshots():
     output = QuestionUnderstandingOutput(
         original_question="q",
-        message_type="new_question",
-        rewritten_question="q",
+        rewrite_question="q",
         metric_phrases=[],
         dimension_phrases=[],
         intent=IntentRecognitionOutput(intent_type="metric_query", confidence=0.9),

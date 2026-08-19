@@ -6,7 +6,9 @@ from apps.chatbi.models import AnswerGenerationResult, FinalReplyProjectionResul
 from apps.chatbi.models.dto.question_understanding import (
     NaturalLanguageIntentOutputBase,
     QuestionClassificationOutputBase,
-    QuestionRewriteProjectionOutput,
+)
+from apps.chatbi.models.dto.question_understanding import (
+    QuestionRewriteOutput as SharedQuestionRewriteOutput,
 )
 
 
@@ -27,23 +29,22 @@ class QuestionClassificationOutput(QuestionClassificationOutputBase):
 class QuestionRewriteInput(BaseModel):
     """问题重写节点输入。"""
 
-    question: str
+    original_question: str
     conversation_context: dict[str, Any] = Field(default_factory=dict)
-    user_feedback: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerOutput(AnswerGenerationResult):
     """业务回复节点输出。"""
 
 
-class QuestionRewriteOutput(QuestionRewriteProjectionOutput):
+class QuestionRewriteOutput(SharedQuestionRewriteOutput):
     """问题重写节点输出。"""
 
 
 class IntentRecognitionInput(BaseModel):
     """意图识别节点输入。"""
 
-    rewritten_question: str
+    rewrite_question: str
     conversation_context: dict[str, Any] = Field(default_factory=dict)
     user_feedback: dict[str, Any] = Field(default_factory=dict)
 
@@ -98,7 +99,7 @@ class IntentValidationOutput(BaseModel):
 class KnowledgeRetrieveInput(BaseModel):
     """知识检索节点输入。"""
 
-    rewritten_question: str
+    rewrite_question: str
     intent: dict[str, Any]
     tenant_id: int
     dataset_id: int
@@ -162,7 +163,7 @@ class QueryPlanOutput(BaseModel):
 class SqlGenerateInput(BaseModel):
     """SQL 生成节点输入。"""
 
-    rewritten_question: str
+    rewrite_question: str
     intent: dict[str, Any]
     knowledge: dict[str, Any]
     dataset_id: int

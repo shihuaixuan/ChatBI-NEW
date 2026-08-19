@@ -63,14 +63,20 @@ def _data(**overrides: Any) -> QuestionModelInvocationData:
 def test_strict_mode_returns_json_object_and_usage():
     client = FakeQuestionModelClient(
         QuestionModelResponse(
-            content='{"rewritten_question":"本月销售额"}',
+            content='{"original_question":"本月销售额","rewrite_question":"本月销售额",'
+            '"metric_phrases":["销售额"],"dimension_phrases":[]}',
             usage_metadata={"total_tokens": 12},
         )
     )
 
     result = StructuredModelService(client).invoke(_data())
 
-    assert result.payload == {"rewritten_question": "本月销售额"}
+    assert result.payload == {
+        "original_question": "本月销售额",
+        "rewrite_question": "本月销售额",
+        "metric_phrases": ["销售额"],
+        "dimension_phrases": [],
+    }
     assert result.usage_metadata == {"total_tokens": 12}
     assert client.calls == [("只输出 JSON 对象", "重写本月销售额")]
 

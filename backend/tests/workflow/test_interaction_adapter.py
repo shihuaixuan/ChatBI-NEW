@@ -34,41 +34,6 @@ def _v1_request(variables: dict) -> dict:
     }
 
 
-def test_interaction_adapter_builds_rewrite_clarification_from_missing_slots():
-    adapter = InteractionAdapter()
-
-    result = adapter.ask_rewrite_clarification(
-        _v1_request({"rewrite": {"missing_slots": ["metric", "time_range"]}})
-    )
-
-    assert result == {
-        "prompt": "请补充要分析的指标和时间范围。",
-        "options": [
-            {"label": "访问人数", "value": {"metric": "访问人数"}},
-            {"label": "销售额", "value": {"metric": "销售额"}},
-            {"label": "订单数", "value": {"metric": "订单数"}},
-            {"label": "今天", "value": {"time_range": "今天"}},
-            {"label": "最近 7 天", "value": {"time_range": "最近 7 天"}},
-            {"label": "本月", "value": {"time_range": "本月"}},
-        ],
-        "response_schema": {
-            "type": "object",
-            "properties": {
-                "metric": {"type": "string"},
-                "time_range": {"type": "string"},
-                "skipped": {"type": "boolean"},
-            },
-            "x-card": {
-                "card_type": "clarification",
-                "clarification_type": "rewrite_slots",
-                "input_type": "single_select_with_text",
-                "question_key": "rewrite:metric,time_range",
-            },
-        },
-        "allowed_update_paths": ["variables.rewrite_response"],
-    }
-
-
 def test_interaction_adapter_builds_cross_model_split_confirmation():
     result = InteractionAdapter().ask_cross_model_split(
         _v1_request(
@@ -101,92 +66,6 @@ def test_interaction_adapter_builds_cross_model_split_confirmation():
         {"label": "取消查询", "value": {"cross_model_action": "cancel"}},
     ]
     assert result["allowed_update_paths"] == ["variables.cross_model_response"]
-
-
-def test_interaction_adapter_prefers_knowledge_candidates_for_rewrite_options():
-    adapter = InteractionAdapter()
-
-    result = adapter.ask_rewrite_clarification(
-        _v1_request(
-            {
-                "rewrite": {"missing_slots": ["metric", "dimension"]},
-                "knowledge": {
-                    "candidate_groups": {
-                        "metrics": [
-                            {
-                                "asset_id": 100,
-                                "display_name": "访问人数",
-                                "biz_name": "visit_uv",
-                            },
-                            {
-                                "asset_id": 101,
-                                "display_name": "访问次数",
-                                "biz_name": "visit_pv",
-                            },
-                        ],
-                        "dimensions": [
-                            {
-                                "asset_id": 200,
-                                "display_name": "统计日期",
-                                "biz_name": "stat_date",
-                            },
-                        ],
-                    }
-                },
-            }
-        )
-    )
-
-    assert result["options"] == [
-        {"label": "访问人数", "value": {"metric": "访问人数", "asset_id": 100}},
-        {"label": "访问次数", "value": {"metric": "访问次数", "asset_id": 101}},
-        {"label": "统计日期", "value": {"dimension": "统计日期", "asset_id": 200}},
-    ]
-
-
-def test_interaction_adapter_loads_schema_candidates_when_knowledge_is_absent():
-    schema = DatasetSchema(
-        data_set=SchemaElement(
-            data_set_id=30,
-            data_set_name="店铺明细数据集",
-            id=30,
-            name="店铺明细数据集",
-            biz_name="stall_dataset",
-            type="DATASET",
-        ),
-        metrics=[
-            SchemaElement(
-                data_set_id=30,
-                data_set_name="店铺明细数据集",
-                id=100,
-                name="访问人数",
-                biz_name="visit_uv",
-                type="METRIC",
-            )
-        ],
-        dimensions=[
-            SchemaElement(
-                data_set_id=30,
-                data_set_name="店铺明细数据集",
-                id=200,
-                name="统计日期",
-                biz_name="stat_date",
-                type="DIMENSION",
-            )
-        ],
-    )
-    schema_provider = FakeDatasetSchemaProvider(schema)
-    adapter = InteractionAdapter(schema_provider=schema_provider)
-
-    result = adapter.ask_rewrite_clarification(
-        _v1_request({"rewrite": {"missing_slots": ["metric", "dimension"]}})
-    )
-
-    assert schema_provider.calls == [(10, 30)]
-    assert result["options"] == [
-        {"label": "访问人数", "value": {"metric": "访问人数", "asset_id": 100}},
-        {"label": "统计日期", "value": {"dimension": "统计日期", "asset_id": 200}},
-    ]
 
 
 def test_interaction_adapter_builds_intent_clarification_options():

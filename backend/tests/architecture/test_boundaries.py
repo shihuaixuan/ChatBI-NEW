@@ -1222,7 +1222,7 @@ def test_question_understanding_dtos_are_owned_by_chatbi():
         assert f"class {class_name}" in dto_source
 
     assert "QuestionClassificationOutputBase" in graph_source
-    assert "QuestionRewriteProjectionOutput" in graph_source
+    assert "SharedQuestionRewriteOutput" in graph_source
     assert "NaturalLanguageIntentOutputBase" in graph_source
 
 
@@ -1420,15 +1420,15 @@ def test_question_input_projection_rules_are_owned_by_chatbi():
     assert "def _rewrite_fallback" not in graph_source
 
 
-def test_graph_keeps_question_model_error_and_rewrite_fallback_orchestration():
+def test_graph_rejects_invalid_rewrite_output_without_fallback():
     graph_source = (
         BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
     ).read_text(encoding="utf-8")
 
     assert "CLASSIFICATION_MODEL_CALL_FAILED" in graph_source
     assert "CLASSIFICATION_MODEL_OUTPUT_INVALID" in graph_source
-    assert "except Exception:" in graph_source
-    assert "graph_contracts.fallback_rewrite" in graph_source
+    assert "graph_contracts.fallback_rewrite" not in graph_source
+    assert "original_question=question" in graph_source
 
 
 def test_question_intent_fallback_rules_are_owned_by_chatbi():
