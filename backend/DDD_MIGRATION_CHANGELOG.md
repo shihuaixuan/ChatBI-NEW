@@ -2761,3 +2761,41 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
    Alembic 确认位于 `100_chatbi_agent_trace_node (head)`，后端 Ruff、严格 Mypy、前端
    ESLint、Vue 类型检查和生产构建通过。全后端测试 1444 项通过，另有 1 项既有 Graph
    Workflow 条件清单断言未包含 `interaction.slot.temporal_answered`，与本阶段改动无关。
+
+## Agentic ChatBI Plan 重构第一阶段（2026-08-19）
+
+1. `ExecutionRequirement` 成为 Fast/Plan 唯一执行输入，查询和计算需求禁止未声明字段；
+   计算操作改为白名单枚举，并统一校验输入数量、依赖引用、DAG、单一最终结果和路由形状。
+2. `AnalysisPlanner` 删除模型规划、重试和降级分支，只根据完整执行需求确定性生成
+   QueryTask、ComputeTask、依赖边和主要结果；多查询没有明确合并关系时直接拒绝。
+3. 补齐 `merge`、`difference`、`growth_rate`、`share`、`ratio`、`topn_other`、`pivot`
+   和受限 `expr` 计算操作；跨查询计算使用明确连接键、值字段及除零策略。
+4. Plan 执行改为先编译并校验全部 QueryTask，整份计划达到 `PROVEN` 后才允许执行任何
+   查询；新增回归用例验证后续查询编译失败时不会提前执行已证明的查询。
+5. 语义解析歧义在模式路由前挂起，恢复时只复用已持久化的问题重写和候选资产重跑
+   SemanticParse；删除 RunOrchestrator 中不可达的旧 ReAct 执行分支及对应私有测试。
+6. 阶段 1 定向回归 67 项通过，完整 ChatBI 回归 532 项通过、1 项跳过；另有 9 项既有
+   Graph、Plan Patch 和时间回放测试失败，与本阶段改动无关。变更范围 Ruff、Compileall
+   和 7 个核心源文件严格 Mypy 通过。
+
+## Agentic ChatBI Plan 分阶段手动验证一（2026-08-19）
+
+1. 新增只读脚本 `scripts/run_plan_routing_stage.py`，从已经完成的 SemanticParse 开始，
+   使用真实语义 Schema 执行 ModeRouter，并再次通过 DTO 校验最终 ExecutionRequirement。
+2. 脚本支持直接传入指标、维度引用，也支持读取完整 SemanticParse 和 CandidateGroups
+   JSON；只有路由结果明确为 Plan 且执行需求完整时返回成功。
+3. 使用数据集 243 的总 GMV 与当前欠款余额完成真实跨模型验证，结果包含两个查询需求、
+   一个 merge 计算需求和 Plan 路由原因；单指标 Fast 反例按预期返回失败。Ruff、Mypy 和
+   Compileall 通过。
+
+## Agentic ChatBI Plan 完整手动验证（2026-08-19）
+
+1. 新增 `scripts/run_plan_full_stage_cases.py`，逐阶段输出 SemanticParse、CandidateGroups、
+   ModeRouter、ExecutionRequirement、DRAFT AnalysisPlan、语义查询计划、编译 SQL、SQL
+   安全校验、PROVEN AnalysisPlan、查询结果、ComputeTask 和主要结果。
+2. 内置跨模型合并、周期差值、增长率、按档口占比、指标比率、Top N + 其他共 6 个完整
+   Plan 用例，以及单模型单查询必须进入 Fast 的边界用例。
+3. 使用租户 1、数据集 243、数据源 13 完成真实只读执行；所有 Plan 用例均完成查询和
+   DuckDB 确定性计算，并校验最终字段、差值、增长率、占比总和、比率和其他项结果。
+4. 脚本支持选择单个或多个用例、只运行到 PROVEN、限制输出采样行，以及列出全部用例；
+   Ruff、严格 Mypy、Compileall 和 7 个真实分阶段用例通过。

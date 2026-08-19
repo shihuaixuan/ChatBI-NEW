@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apps.chatbi.models.dto.execution_requirement import CalculationOperation
+
 
 class SemanticParseAssetRef(BaseModel):
     """语义解析结果中的候选资产引用。"""
@@ -49,7 +51,7 @@ class SemanticParseCalculation(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    type: str = Field(min_length=1)
+    type: CalculationOperation
     current_time_role: str | None = None
     previous_time_role: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)

@@ -65,6 +65,7 @@ from apps.chatbi.models.dto.execution_binding import (
     ExecutionBindingData,
 )
 from apps.chatbi.models.dto.execution_requirement import (
+    CalculationOperation,
     CalculationRequirement,
     ExecutionRequirement,
     ExecutionRoute,
@@ -193,6 +194,7 @@ __all__ = [
     "ResultSetSummary",
     "build_result_set_id",
     "CalculationRequirement",
+    "CalculationOperation",
     "ExecutionRequirement",
     "ExecutionRoute",
     "QueryRequirement",

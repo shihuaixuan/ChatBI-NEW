@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -18,14 +19,27 @@ class ExecutionRoute(BaseModel):
     reasons: tuple[str, ...] = ()
 
 
+class CalculationOperation(StrEnum):
+    """执行需求允许声明的确定性计算操作。"""
+
+    MERGE = "merge"
+    DIFFERENCE = "difference"
+    GROWTH_RATE = "growth_rate"
+    SHARE = "share"
+    RATIO = "ratio"
+    TOPN_OTHER = "topn_other"
+    PIVOT = "pivot"
+    EXPR = "expr"
+
+
 class QueryRequirement(BaseModel):
     """单个可执行查询的完整需求。"""
 
-    model_config = ConfigDict(extra="allow", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(min_length=1, max_length=128)
     model_ref: str = Field(min_length=1)
-    metrics: tuple[dict[str, Any], ...] = ()
+    metrics: tuple[dict[str, Any], ...] = Field(min_length=1)
     group_by: tuple[dict[str, Any], ...] = ()
     filters: tuple[dict[str, Any], ...] = ()
     time: dict[str, Any] | None = None
@@ -39,16 +53,50 @@ class QueryRequirement(BaseModel):
 class CalculationRequirement(BaseModel):
     """查询完成后的确定性计算需求。"""
 
-    model_config = ConfigDict(extra="allow", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(min_length=1, max_length=128)
-    type: str = Field(min_length=1)
-    inputs: tuple[str, ...] = ()
+    type: CalculationOperation
+    inputs: tuple[str, ...] = Field(min_length=1)
     join_keys: tuple[str, ...] = ()
-    metric_ref: str | None = None
-    current_input: str | None = None
-    previous_input: str | None = None
-    details: dict[str, Any] = Field(default_factory=dict)
+    value_columns: tuple[str, ...] = ()
+    derive: tuple[dict[str, str], ...] = ()
+    options: dict[str, Any] = Field(default_factory=dict)
+    # 阶段 1 只声明计算引擎已经严格实现的策略，禁止接受后再忽略。
+    null_policy: Literal["preserve"] = "preserve"
+    zero_division_policy: Literal["null"] = "null"
+
+    @model_validator(mode="after")
+    def validate_operation_contract(self) -> CalculationRequirement:
+        """在执行需求边界校验计算输入，避免错误延迟到计算引擎。"""
+
+        if len(self.inputs) != len(set(self.inputs)):
+            raise ValueError("EXECUTION_REQUIREMENT_CALCULATION_INPUT_DUPLICATED")
+        if (
+            self.type
+            in {
+                CalculationOperation.DIFFERENCE,
+                CalculationOperation.GROWTH_RATE,
+            }
+            and len(self.inputs) != 2
+        ):
+            raise ValueError("EXECUTION_REQUIREMENT_CALCULATION_TWO_INPUTS_REQUIRED")
+        if self.type is CalculationOperation.MERGE and len(self.inputs) < 2:
+            raise ValueError("EXECUTION_REQUIREMENT_MERGE_INPUTS_REQUIRED")
+        if (
+            self.type
+            in {
+                CalculationOperation.RATIO,
+                CalculationOperation.EXPR,
+            }
+            and not self.derive
+        ):
+            raise ValueError("EXECUTION_REQUIREMENT_CALCULATION_DERIVE_REQUIRED")
+        if self.type is CalculationOperation.TOPN_OTHER:
+            top_n = self.options.get("top_n")
+            if not isinstance(top_n, int) or isinstance(top_n, bool) or top_n <= 0:
+                raise ValueError("EXECUTION_REQUIREMENT_TOPN_LIMIT_REQUIRED")
+        return self
 
 
 class ExecutionRequirement(BaseModel):
@@ -56,7 +104,7 @@ class ExecutionRequirement(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    status: Literal["ready"] | str
+    status: Literal["ready"]
     route: ExecutionRoute
     query_requirements: tuple[QueryRequirement, ...] = ()
     post_calculations: tuple[CalculationRequirement, ...] = ()
@@ -66,7 +114,7 @@ class ExecutionRequirement(BaseModel):
 
     @model_validator(mode="after")
     def validate_unique_requirement_ids(self) -> ExecutionRequirement:
-        """需求 ID 必须唯一，后续计划节点只能按 ID 精确引用。"""
+        """统一校验 ID、依赖图和 Fast/Plan 路由不变量。"""
 
         query_ids = [item.id for item in self.query_requirements]
         calculation_ids = [item.id for item in self.post_calculations]
@@ -74,6 +122,27 @@ class ExecutionRequirement(BaseModel):
             raise ValueError("EXECUTION_REQUIREMENT_QUERY_ID_DUPLICATED")
         if len(calculation_ids) != len(set(calculation_ids)):
             raise ValueError("EXECUTION_REQUIREMENT_CALCULATION_ID_DUPLICATED")
+        if set(query_ids) & set(calculation_ids):
+            raise ValueError("EXECUTION_REQUIREMENT_ID_CONFLICT")
+        known_ids = set(query_ids) | set(calculation_ids)
+        dependencies = {item.id: item.inputs for item in self.post_calculations}
+        for item in self.post_calculations:
+            if item.id in item.inputs:
+                raise ValueError("EXECUTION_REQUIREMENT_CALCULATION_SELF_DEPENDENCY")
+            if any(input_id not in known_ids for input_id in item.inputs):
+                raise ValueError("EXECUTION_REQUIREMENT_CALCULATION_INPUT_UNKNOWN")
+        _validate_acyclic_dependencies(dependencies)
+        if self.status == "ready" and not self.query_requirements:
+            raise ValueError("EXECUTION_REQUIREMENT_QUERY_REQUIRED")
+        if self.route.mode == "fast" and (
+            len(self.query_requirements) != 1 or self.post_calculations
+        ):
+            raise ValueError("EXECUTION_REQUIREMENT_FAST_SHAPE_INVALID")
+        if self.route.mode == "plan":
+            if len(self.query_requirements) == 1 and not self.post_calculations:
+                raise ValueError("EXECUTION_REQUIREMENT_PLAN_SHAPE_INVALID")
+            if len(self.query_requirements) > 1 and not self.post_calculations:
+                raise ValueError("EXECUTION_REQUIREMENT_MULTI_QUERY_RESULT_UNRESOLVED")
         return self
 
     def require_ready(self, mode: str) -> ExecutionRequirement:
@@ -164,11 +233,36 @@ def _asset_id(item: dict[str, Any], asset_type: str) -> int:
 def _optional_asset_id(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         return None
-    return value
+    return int(value)
+
+
+def _validate_acyclic_dependencies(
+    dependencies: dict[str, tuple[str, ...]],
+) -> None:
+    """计算需求依赖只能形成有向无环图。"""
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node_id: str) -> None:
+        if node_id in visiting:
+            raise ValueError("EXECUTION_REQUIREMENT_CALCULATION_CYCLE")
+        if node_id in visited:
+            return
+        visiting.add(node_id)
+        for input_id in dependencies.get(node_id, ()):
+            if input_id in dependencies:
+                visit(input_id)
+        visiting.remove(node_id)
+        visited.add(node_id)
+
+    for calculation_id in dependencies:
+        visit(calculation_id)
 
 
 __all__ = [
     "CalculationRequirement",
+    "CalculationOperation",
     "ExecutionRequirement",
     "ExecutionRoute",
     "QueryRequirement",

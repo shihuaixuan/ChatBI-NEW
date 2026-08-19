@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from apps.chatbi.models.dto.execution_requirement import ExecutionRequirement
+from apps.chatbi.models.dto.execution_requirement import (
+    CalculationOperation,
+    ExecutionRequirement,
+    ExecutionRoute,
+)
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
 from apps.chatbi.models.orm.agent_run import AgentExecutionMode
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
@@ -30,7 +34,6 @@ class ModeRouteInput:
         AgentExecutionMode.FAST.value,
         AgentExecutionMode.PLAN.value,
     )
-    requested_mode: str | None = None
     temporal_context: TemporalContext | None = None
     datasource_id: int | None = None
 
@@ -65,25 +68,19 @@ class ModeRouter:
 
         execution = self._build_execution_requirements(request, schema, candidates)
         mode, reasons = self._select_mode(execution)
-        requested = _normalize_mode(request.requested_mode)
-        if requested is not None:
-            if requested not in enabled:
-                raise ModeRoutingError(f"EXECUTION_MODE_NOT_ENABLED:{requested}")
-            if requested == AgentExecutionMode.FAST.value and mode != AgentExecutionMode.FAST:
-                raise ModeRoutingError("FAST_ROUTE_INCOMPATIBLE_WITH_EXECUTION_REQUIREMENT")
-            mode = AgentExecutionMode(requested)
-            reasons = ["requested_mode", *reasons]
-
         if mode.value not in enabled:
             raise ModeRoutingError(f"EXECUTION_MODE_NOT_AVAILABLE:{mode.value}")
 
-
         return ExecutionRequirement(
             status="ready",
-            route={
-                "mode": mode.value,
-                "reasons": tuple(dict.fromkeys(reasons)),
-            },
+            route=ExecutionRoute(
+                mode=(
+                    AgentExecutionMode.FAST.value
+                    if mode is AgentExecutionMode.FAST
+                    else AgentExecutionMode.PLAN.value
+                ),
+                reasons=tuple(dict.fromkeys(reasons)),
+            ),
             **execution,
             runtime={
                 "tenant_id": request.tenant_id,
@@ -150,7 +147,7 @@ class ModeRouter:
         if not model_ids:
             raise ModeRoutingError("SEMANTIC_EXECUTABLE_MODEL_REQUIRED")
 
-        time_filters = semantic_parse.time_filters or [None]
+        time_filters: list[Any] = list(semantic_parse.time_filters) or [None]
         query_requirements: list[dict[str, Any]] = []
         for model_id in sorted(model_ids):
             model_metrics = [
@@ -204,8 +201,16 @@ class ModeRouter:
             for query in query_requirements
             for item in (*query["metrics"], *query["group_by"])
         }
-        covered_refs.update(item["target_ref"] for query in query_requirements for item in query["filters"])
-        covered_refs.update(item["target_ref"] for query in query_requirements for item in query["order_by"])
+        covered_refs.update(
+            item["target_ref"]
+            for query in query_requirements
+            for item in query["filters"]
+        )
+        covered_refs.update(
+            item["target_ref"]
+            for query in query_requirements
+            for item in query["order_by"]
+        )
         missing_execution_refs = sorted(set(selected_refs) - covered_refs)
         if missing_execution_refs:
             raise ModeRoutingError(
@@ -214,9 +219,11 @@ class ModeRouter:
             )
 
         post_calculations = [
-            _calculation_requirement(item, query_requirements, metric_refs)
+            _calculation_requirement(item, query_requirements)
             for item in semantic_parse.calculations
         ]
+        if len(query_requirements) > 1 and not post_calculations:
+            post_calculations.append(_merge_requirement(query_requirements))
         return {
             "query_requirements": query_requirements,
             "post_calculations": post_calculations,
@@ -266,6 +273,7 @@ def _asset_definition(element: SchemaElement) -> dict[str, Any]:
             "asset_type": element.type,
             "asset_id": element.id,
             "display_name": element.name,
+            "biz_name": element.biz_name,
             "expression": expression,
         }
     field = str(element.ext_info.get("field_name") or "").strip()
@@ -278,6 +286,7 @@ def _asset_definition(element: SchemaElement) -> dict[str, Any]:
         "asset_type": element.type,
         "asset_id": element.id,
         "display_name": element.name,
+        "biz_name": element.biz_name,
         "column": field,
     }
 
@@ -292,7 +301,10 @@ def _metric_expression(element: SchemaElement) -> str:
         metric_params = params.get("metricDefineByMetricParams") or {}
         return str(metric_params.get("expr") or "").strip()
     measure_params = params.get("metricDefineByMeasureParams") or {}
-    measures = measure_params.get("measures") if isinstance(measure_params, dict) else []
+    raw_measures = (
+        measure_params.get("measures") if isinstance(measure_params, dict) else []
+    )
+    measures = raw_measures if isinstance(raw_measures, list) else []
     expressions = [
         str(item.get("expr") or "").strip()
         for item in measures
@@ -333,8 +345,7 @@ def _time_requirement(
         (
             item
             for item in schema.dimensions
-            if item.model == model_id
-            and bool(item.ext_info.get("is_default_time"))
+            if item.model == model_id and bool(item.ext_info.get("is_default_time"))
         ),
         None,
     )
@@ -366,29 +377,155 @@ def _query_requirement_id(metrics: list[dict[str, Any]], role: str, index: int) 
 def _calculation_requirement(
     calculation: Any,
     query_requirements: list[dict[str, Any]],
-    metric_refs: list[str],
 ) -> dict[str, Any]:
     details = dict(calculation.details)
-    metric_ref = details.get("metric_ref") or (metric_refs[0] if metric_refs else None)
     current_role = calculation.current_time_role or "current"
     previous_role = calculation.previous_time_role or "previous"
-    inputs = [
+    current_inputs = [
         item["id"]
         for item in query_requirements
         if isinstance(item.get("time"), dict)
-        and item["time"].get("role") in {current_role, previous_role}
+        and item["time"].get("role") == current_role
     ]
+    previous_inputs = [
+        item["id"]
+        for item in query_requirements
+        if isinstance(item.get("time"), dict)
+        and item["time"].get("role") == previous_role
+    ]
+    inputs = [*current_inputs, *previous_inputs]
     if not inputs:
         inputs = [item["id"] for item in query_requirements]
+    operation = CalculationOperation(calculation.type)
+    if operation is CalculationOperation.RATIO:
+        numerator = _metric_query_location(
+            query_requirements,
+            details.get("numerator_ref"),
+        )
+        denominator = _metric_query_location(
+            query_requirements,
+            details.get("denominator_ref"),
+        )
+        if numerator is None or denominator is None:
+            raise ModeRoutingError("SEMANTIC_RATIO_METRICS_REQUIRED")
+        inputs = list(dict.fromkeys((numerator[0], denominator[0])))
+    if operation in {
+        CalculationOperation.DIFFERENCE,
+        CalculationOperation.GROWTH_RATE,
+    } and (len(current_inputs) != 1 or len(previous_inputs) != 1):
+        raise ModeRoutingError("SEMANTIC_PERIOD_CALCULATION_INPUTS_INVALID")
+    join_keys = _common_group_columns(
+        [item for item in query_requirements if item["id"] in inputs]
+    )
+    metric_names = tuple(
+        str(item.get("biz_name") or item.get("display_name") or "").strip()
+        for query in query_requirements
+        if query["id"] in inputs
+        for item in query["metrics"]
+        if str(item.get("biz_name") or item.get("display_name") or "").strip()
+    )
+    value_columns = tuple(dict.fromkeys(metric_names))
+    derive = tuple(
+        item for item in details.get("derive") or [] if isinstance(item, dict)
+    )
+    if operation is CalculationOperation.RATIO and not derive:
+        numerator = _metric_query_location(
+            query_requirements,
+            details.get("numerator_ref"),
+        )
+        denominator = _metric_query_location(
+            query_requirements,
+            details.get("denominator_ref"),
+        )
+        if numerator is None or denominator is None:
+            raise ModeRoutingError("SEMANTIC_RATIO_METRICS_REQUIRED")
+        numerator_expr = (
+            numerator[1] if len(inputs) == 1 else f'{numerator[0]}."{numerator[1]}"'
+        )
+        denominator_expr = (
+            denominator[1]
+            if len(inputs) == 1
+            else f'{denominator[0]}."{denominator[1]}"'
+        )
+        derive = (
+            {
+                "name": str(details.get("result_name") or "ratio"),
+                "expr": f"{numerator_expr} / NULLIF({denominator_expr}, 0)",
+            },
+        )
+    options = {
+        key: value
+        for key, value in details.items()
+        if key
+        in {
+            "dimensions",
+            "dimension",
+            "top_n",
+            "index",
+            "columns",
+            "column",
+        }
+    }
+    if value_columns:
+        options["value_columns"] = list(value_columns)
     return {
         "id": str(details.get("result_name") or calculation.type),
-        "type": calculation.type,
-        "metric_ref": metric_ref,
+        "type": operation.value,
         "inputs": inputs,
-        "current_time_role": current_role,
-        "previous_time_role": previous_role,
-        "details": details,
+        "join_keys": list(join_keys),
+        "value_columns": list(value_columns),
+        "derive": list(derive),
+        "options": options,
     }
+
+
+def _merge_requirement(query_requirements: list[dict[str, Any]]) -> dict[str, Any]:
+    """多查询共同回答问题时生成明确合并节点，禁止默认选择首个结果。"""
+
+    return {
+        "id": "merge_results",
+        "type": CalculationOperation.MERGE.value,
+        "inputs": [item["id"] for item in query_requirements],
+        "join_keys": list(_common_group_columns(query_requirements)),
+    }
+
+
+def _metric_query_location(
+    query_requirements: list[dict[str, Any]],
+    metric_ref: Any,
+) -> tuple[str, str] | None:
+    """返回指标所在查询和稳定结果字段名。"""
+
+    if not isinstance(metric_ref, str) or not metric_ref:
+        return None
+    for query in query_requirements:
+        for metric in query.get("metrics") or []:
+            if metric.get("ref") != metric_ref:
+                continue
+            field = str(
+                metric.get("biz_name") or metric.get("display_name") or ""
+            ).strip()
+            return (str(query["id"]), field) if field else None
+    return None
+
+
+def _common_group_columns(
+    query_requirements: list[dict[str, Any]],
+) -> tuple[str, ...]:
+    """只使用全部输入查询共有的业务维度列作为结果连接键。"""
+
+    if not query_requirements:
+        return ()
+    column_sets = [
+        {
+            str(item.get("column"))
+            for item in query.get("group_by") or []
+            if item.get("column")
+        }
+        for query in query_requirements
+    ]
+    common = set.intersection(*column_sets) if column_sets else set()
+    return tuple(sorted(common))
 
 
 def _normalize_modes(modes: tuple[str, ...] | list[str] | str) -> set[str]:

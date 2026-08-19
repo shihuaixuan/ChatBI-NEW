@@ -18,22 +18,78 @@ def compile_operation(
     """根据 ComputeTask 结构生成固定模板 SQL，不接受裸 SQL。"""
 
     operation = task.operation
-    if operation is ComputeOperation.COMPARE:
-        return _compile_compare(task, table_names, schemas, growth=False)
-    if operation is ComputeOperation.GROWTH:
-        return _compile_compare(task, table_names, schemas, growth=True)
+    if operation is ComputeOperation.MERGE:
+        return _compile_merge(task, table_names, schemas)
+    if operation is ComputeOperation.DIFFERENCE:
+        return _compile_period_calculation(task, table_names, schemas, growth=False)
+    if operation is ComputeOperation.GROWTH_RATE:
+        return _compile_period_calculation(task, table_names, schemas, growth=True)
     if operation is ComputeOperation.SHARE:
         return _compile_share(task, table_names, schemas)
     if operation is ComputeOperation.TOPN_OTHER:
         return _compile_topn_other(task, table_names, schemas)
     if operation is ComputeOperation.PIVOT:
         return _compile_pivot(task, table_names, schemas)
-    if operation is ComputeOperation.EXPR:
+    if operation in {ComputeOperation.RATIO, ComputeOperation.EXPR}:
         return _compile_expr(task, table_names, schemas)
     raise ComputeOperationError(f"COMPUTE_OPERATION_NOT_ALLOWED:{operation.value}")
 
 
-def _compile_compare(
+def _compile_merge(
+    task: ComputeTask,
+    table_names: Mapping[str, str],
+    schemas: Mapping[str, tuple[str, ...]],
+) -> str:
+    """按照明确连接键合并多个结果集，重复字段使用输入 ID 形成稳定别名。"""
+
+    _require_inputs(task, 2)
+    keys = tuple(task.join_on)
+    if keys:
+        first_schema = schemas[task.inputs[0]]
+        for input_id in task.inputs[1:]:
+            _require_columns(keys, first_schema, schemas[input_id], "join_on")
+    aliases = {input_id: f"i{index}" for index, input_id in enumerate(task.inputs)}
+    select_parts = [
+        "COALESCE("
+        + ", ".join(f"{aliases[input_id]}.{_quote(key)}" for input_id in task.inputs)
+        + f") AS {_quote(key)}"
+        for key in keys
+    ]
+    field_counts: dict[str, int] = {}
+    for input_id in task.inputs:
+        for field in schemas[input_id]:
+            if field not in keys:
+                field_counts[field] = field_counts.get(field, 0) + 1
+    for input_id in task.inputs:
+        for field in schemas[input_id]:
+            if field in keys:
+                continue
+            output = field if field_counts[field] == 1 else f"{field}__{input_id}"
+            select_parts.append(
+                f"{aliases[input_id]}.{_quote(field)} AS {_quote(output)}"
+            )
+    from_sql = f"{table_names[task.inputs[0]]} {aliases[task.inputs[0]]}"
+    joined_inputs = [task.inputs[0]]
+    for input_id in task.inputs[1:]:
+        if keys:
+            join = " AND ".join(
+                "COALESCE("
+                + ", ".join(
+                    f"{aliases[joined_id]}.{_quote(key)}" for joined_id in joined_inputs
+                )
+                + f") IS NOT DISTINCT FROM {aliases[input_id]}.{_quote(key)}"
+                for key in keys
+            )
+        else:
+            join = "TRUE"
+        from_sql += (
+            f" FULL OUTER JOIN {table_names[input_id]} {aliases[input_id]} ON {join}"
+        )
+        joined_inputs.append(input_id)
+    return f"SELECT {', '.join(select_parts)} FROM {from_sql}"
+
+
+def _compile_period_calculation(
     task: ComputeTask,
     table_names: Mapping[str, str],
     schemas: Mapping[str, tuple[str, ...]],
@@ -41,45 +97,55 @@ def _compile_compare(
     growth: bool,
 ) -> str:
     _require_inputs(task, 2)
-    left_id, right_id = task.inputs[:2]
-    left_schema = schemas[left_id]
-    right_schema = schemas[right_id]
+    current_id, previous_id = task.inputs[:2]
+    current_schema = schemas[current_id]
+    previous_schema = schemas[previous_id]
     keys = (
-        _require_columns(task.join_on, left_schema, right_schema, "join_on")
+        _require_columns(task.join_on, current_schema, previous_schema, "join_on")
         if task.join_on
         else ()
     )
-    metrics = _metrics(task, left_schema, right_schema, keys)
+    metrics = _metrics(task, current_schema, previous_schema, keys)
     select_parts = [
-        f"COALESCE(l.{_quote(key)}, r.{_quote(key)}) AS {_quote(key)}"
-        for key in keys
+        f"COALESCE(c.{_quote(key)}, p.{_quote(key)}) AS {_quote(key)}" for key in keys
     ]
     for metric in metrics:
-        left_alias = _quote(f"{metric}_base")
-        right_alias = _quote(f"{metric}_compare")
+        current_alias = _quote(f"{metric}_current")
+        previous_alias = _quote(f"{metric}_previous")
         select_parts.extend(
             [
-                f"l.{_quote(metric)} AS {left_alias}",
-                f"r.{_quote(metric)} AS {right_alias}",
+                f"c.{_quote(metric)} AS {current_alias}",
+                f"p.{_quote(metric)} AS {previous_alias}",
             ]
         )
         if growth:
             select_parts.append(
-                "CASE WHEN TRY_CAST(l.{metric} AS DOUBLE) IS NULL "
-                "OR ABS(TRY_CAST(l.{metric} AS DOUBLE)) = 0 THEN NULL "
-                "ELSE (TRY_CAST(r.{metric} AS DOUBLE) - TRY_CAST(l.{metric} AS DOUBLE)) "
-                "/ ABS(TRY_CAST(l.{metric} AS DOUBLE)) END AS {growth}".format(
+                "CASE WHEN TRY_CAST(p.{metric} AS DOUBLE) IS NULL "
+                "OR ABS(TRY_CAST(p.{metric} AS DOUBLE)) = 0 THEN NULL "
+                "ELSE (TRY_CAST(c.{metric} AS DOUBLE) - TRY_CAST(p.{metric} AS DOUBLE)) "
+                "/ ABS(TRY_CAST(p.{metric} AS DOUBLE)) END AS {growth}".format(
                     metric=_quote(metric),
-                    growth=_quote(f"{metric}_growth"),
+                    growth=_quote(f"{metric}_growth_rate"),
                 )
             )
-    join = " AND ".join(
-        f"l.{_quote(key)} IS NOT DISTINCT FROM r.{_quote(key)}" for key in keys
-    ) or "TRUE"
+        else:
+            select_parts.append(
+                "TRY_CAST(c.{metric} AS DOUBLE) - TRY_CAST(p.{metric} AS DOUBLE) "
+                "AS {difference}".format(
+                    metric=_quote(metric),
+                    difference=_quote(f"{metric}_difference"),
+                )
+            )
+    join = (
+        " AND ".join(
+            f"c.{_quote(key)} IS NOT DISTINCT FROM p.{_quote(key)}" for key in keys
+        )
+        or "TRUE"
+    )
     return (
         "SELECT "
         + ", ".join(select_parts)
-        + f" FROM {table_names[left_id]} l FULL OUTER JOIN {table_names[right_id]} r ON {join}"
+        + f" FROM {table_names[current_id]} c FULL OUTER JOIN {table_names[previous_id]} p ON {join}"
     )
 
 
@@ -94,7 +160,11 @@ def _compile_share(
     dimensions = _option_columns(task, "dimensions", schema)
     if not dimensions:
         dimension = task.options.get("dimension")
-        dimensions = _require_columns((dimension,), schema, schema, "dimension") if dimension else ()
+        dimensions = (
+            _require_columns((dimension,), schema, schema, "dimension")
+            if dimension
+            else ()
+        )
     metrics = _metrics(task, schema, schema, dimensions)
     if len(metrics) != 1:
         raise ComputeOperationError("COMPUTE_SHARE_METRIC_REQUIRED")
@@ -116,7 +186,9 @@ def _compile_topn_other(
     source_id = task.inputs[0]
     schema = schemas[source_id]
     dimension = task.options.get("dimension")
-    dimensions = _require_columns((dimension,), schema, schema, "dimension") if dimension else ()
+    dimensions = (
+        _require_columns((dimension,), schema, schema, "dimension") if dimension else ()
+    )
     if len(dimensions) != 1:
         raise ComputeOperationError("COMPUTE_TOPN_DIMENSION_REQUIRED")
     dimension_name = dimensions[0]
@@ -191,15 +263,10 @@ def _compile_expr(
         from_sql = f"{table_names[source_id]} src"
     else:
         keys = _require_join_columns(task, schemas)
-        qualifiers = {
-            input_id: schemas[input_id]
-            for input_id in task.inputs
-        }
+        qualifiers = {input_id: schemas[input_id] for input_id in task.inputs}
         expressions = [
             "COALESCE("
-            + ", ".join(
-                f"{_quote(input_id)}.{_quote(key)}" for input_id in task.inputs
-            )
+            + ", ".join(f"{_quote(input_id)}.{_quote(key)}" for input_id in task.inputs)
             + f") AS {_quote(key)}"
             for key in keys
         ]
@@ -212,8 +279,7 @@ def _compile_expr(
                 for key in keys
             )
             from_sql += (
-                f" FULL OUTER JOIN {table_names[input_id]} {_quote(input_id)}"
-                f" ON {join}"
+                f" FULL OUTER JOIN {table_names[input_id]} {_quote(input_id)} ON {join}"
             )
     for derivation in task.derive:
         validated = validate_expression(
@@ -233,7 +299,10 @@ def _require_join_columns(
         raise ComputeOperationError("COMPUTE_EXPR_JOIN_ON_REQUIRED")
     first_schema = schemas[task.inputs[0]]
     for input_id in task.inputs[1:]:
-        if any(key not in first_schema or key not in schemas[input_id] for key in task.join_on):
+        if any(
+            key not in first_schema or key not in schemas[input_id]
+            for key in task.join_on
+        ):
             raise ComputeOperationError("COMPUTE_EXPR_JOIN_COLUMN_UNKNOWN")
     return tuple(task.join_on)
 
@@ -285,7 +354,11 @@ def _metrics(
     if raw is None:
         common = [field for field in left_schema if field in right_schema]
         return tuple(field for field in common if field not in excluded)
-    if not isinstance(raw, list) or not raw or not all(isinstance(item, str) for item in raw):
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or not all(isinstance(item, str) for item in raw)
+    ):
         raise ComputeOperationError("COMPUTE_VALUE_COLUMNS_INVALID")
     metrics = tuple(str(item) for item in raw)
     if any(item not in left_schema or item not in right_schema for item in metrics):

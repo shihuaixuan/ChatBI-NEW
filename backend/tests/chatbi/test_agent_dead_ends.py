@@ -2,21 +2,28 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from apps.chatbi.errors import AgentFinalizationError
 from apps.chatbi.models import AgentErrorClass
+from apps.chatbi.models.dto.analysis_plan import CompiledQuery
 from apps.chatbi.orchestration.agent.messages import AgentMessage
+from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tool_execution import _bounded_summary
 from apps.chatbi.orchestration.agent.tool_visibility import visible_tool_names
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.core import FinishTool
+from apps.chatbi.orchestration.pipeline.plan_mode import PlanPipeline, PlanPipelineError
 from apps.chatbi.services.generation.agent_finalization import (
     AgentFinalizationInput,
     AgentFinalizationResult,
     build_partial_finalization,
 )
+from apps.chatbi.services.planning.analysis_planner import AnalysisPlanner
 from apps.tool import BudgetGuard, ToolStatus
 
 REGISTERED_TOOLS = [
@@ -52,7 +59,10 @@ def _state() -> AgentRuntimeState:
 def test_invalid_validation_exposes_clarify_instead_of_nothing():
     state = _state()
     state.context.state["question_understanding"] = {
-        "validation": {"status": "clarification_required", "reason_codes": ["intent_unknown"]},
+        "validation": {
+            "status": "clarification_required",
+            "reason_codes": ["intent_unknown"],
+        },
         "category": "data_query",
     }
     assert visible_tool_names(state, "normal", REGISTERED_TOOLS) == ["clarify"]
@@ -165,3 +175,125 @@ def test_agent_error_class_extended_for_failure_attribution():
     assert AgentErrorClass.BINDING_AMBIGUOUS.value == "binding_ambiguous"
     assert AgentErrorClass.PLAN_INVALID.value == "plan_invalid"
     assert AgentErrorClass.FINALIZE.value == "finalize_failed"
+
+
+def test_plan_proves_all_queries_before_any_execution() -> None:
+    """后续查询证明失败时，前面的查询也不能提前执行。"""
+
+    tool_calls: list[str] = []
+    saved_plans = []
+    pipeline = object.__new__(PlanPipeline)
+    pipeline._metrics = None
+    pipeline._planner = AnalysisPlanner(max_query_tasks=5)
+    pipeline._max_query_tasks = 5
+    pipeline._session = SimpleNamespace(commit=lambda: None)
+    pipeline._events = SimpleNamespace(
+        plan_created=lambda *args: "plan-created",
+        plan_updated=lambda *args: "plan-updated",
+    )
+    pipeline._save_plan = lambda _state, plan: saved_plans.append(plan)
+    compile_count = 0
+
+    def compile_task(_state, _task, *, strict_query_index=0):
+        nonlocal compile_count
+        compile_count += 1
+        if compile_count == 2:
+            raise PlanPipelineError("PLAN_SECOND_QUERY_COMPILE_FAILED")
+        return CompiledQuery(
+            plan_fingerprint=f"proof:{strict_query_index}",
+            sql="SELECT 1",
+        )
+
+    def call_tool(_state, name, _args):
+        tool_calls.append(name)
+        return SimpleNamespace(data=None)
+
+    pipeline._compile_task = compile_task
+    pipeline._call_tool = call_tool
+    state = SimpleNamespace(
+        record=SimpleNamespace(id=1, question="销售额和欠款"),
+        context=SimpleNamespace(
+            dataset_id=1,
+            semantic_asset_scope=None,
+            state={
+                "execution_requirement": {
+                    "status": "ready",
+                    "route": {"mode": "plan"},
+                    "query_requirements": [
+                        {
+                            "id": "sales",
+                            "model_ref": "MODEL:10",
+                            "metrics": [{"ref": "METRIC:1:10", "asset_id": 1}],
+                        },
+                        {
+                            "id": "arrears",
+                            "model_ref": "MODEL:11",
+                            "metrics": [{"ref": "METRIC:2:11", "asset_id": 2}],
+                        },
+                    ],
+                    "post_calculations": [
+                        {
+                            "id": "merge_results",
+                            "type": "merge",
+                            "inputs": ["sales", "arrears"],
+                        }
+                    ],
+                    "runtime": {"dataset_id": 1},
+                },
+                "question_understanding": {},
+            },
+        ),
+        require_run_id=lambda: 100,
+    )
+
+    with pytest.raises(PlanPipelineError, match="PLAN_SECOND_QUERY_COMPILE_FAILED"):
+        list(pipeline.run(state))
+
+    assert tool_calls == ["validate_sql"]
+    assert len(saved_plans) == 1
+    assert saved_plans[0].validation.status.value == "DRAFT"
+
+
+def test_semantic_clarification_resume_only_reparses_candidates() -> None:
+    """澄清恢复只重跑语义解析，不重新执行问题重写和候选检索。"""
+
+    parse_calls = []
+    preparer = object.__new__(AgentInputPreparer)
+
+    def parse(*, rewrite_question, candidate_payload):
+        parse_calls.append((rewrite_question, candidate_payload))
+        return SimpleNamespace(
+            model_dump=lambda mode="json": {
+                "status": "resolved",
+                "measures": [{"ref": "METRIC:1:10"}],
+            }
+        )
+
+    preparer._semantic_parse_service = SimpleNamespace(parse=parse)
+    persisted = []
+    preparer._persist_snapshot = lambda state: persisted.append(state)
+    candidate_groups = {"metrics": [{"ref": "METRIC:1:10"}]}
+    state = SimpleNamespace(
+        context=SimpleNamespace(
+            state={
+                "question_rewrite": {"rewrite_question": "查询客户数"},
+                "candidate_groups": candidate_groups,
+            }
+        ),
+        messages=[],
+    )
+    clarification = SimpleNamespace(
+        resume_kind="question_understanding",
+        resume_payload={"operation": "resume_semantic_parse"},
+    )
+
+    assert list(preparer.prepare_resume(state, clarification, "销售客户数")) == []
+    assert parse_calls == [
+        (
+            "查询客户数\n销售客户数",
+            {"candidate_groups": candidate_groups},
+        )
+    ]
+    assert state.context.state["semantic_parse"]["status"] == "resolved"
+    assert len(state.messages) == 1
+    assert persisted == [state]

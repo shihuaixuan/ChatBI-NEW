@@ -128,7 +128,10 @@ class SemanticParseService:
                 except ValidationError as exc:
                     raise QuestionUnderstandingError(
                         "SEMANTIC_PARSE_CANDIDATE_INVALID",
-                        details={"group": group_name, "errors": exc.errors(include_url=False)},
+                        details={
+                            "group": group_name,
+                            "errors": exc.errors(include_url=False),
+                        },
                     ) from exc
                 expected_type = {
                     "metrics": "METRIC",
@@ -158,13 +161,9 @@ class SemanticParseService:
             for items in context.candidate_groups.values()
             for item in items
         }
-        metric_refs = {
-            item.ref
-            for item in context.candidate_groups.get("metrics", [])
-        }
+        metric_refs = {item.ref for item in context.candidate_groups.get("metrics", [])}
         dimension_refs = {
-            item.ref
-            for item in context.candidate_groups.get("dimensions", [])
+            item.ref for item in context.candidate_groups.get("dimensions", [])
         }
 
         def require_refs(refs: list[str], allowed: set[str], field_name: str) -> None:
@@ -208,9 +207,7 @@ class SemanticParseService:
                 "SEMANTIC_PARSE_DUPLICATED_MEASURES",
                 details={"refs": duplicated_measure_refs},
             )
-        duplicated_group_refs = _duplicated_refs(
-            [item.ref for item in output.group_by]
-        )
+        duplicated_group_refs = _duplicated_refs([item.ref for item in output.group_by])
         if duplicated_group_refs:
             raise QuestionUnderstandingError(
                 "SEMANTIC_PARSE_DUPLICATED_GROUP_BY",
@@ -234,7 +231,9 @@ class SemanticParseService:
                 "SEMANTIC_PARSE_RESOLVED_WITH_UNRESOLVED_FIELDS"
             )
         if output.status == "resolved" and not candidates:
-            raise QuestionUnderstandingError("SEMANTIC_PARSE_RESOLVED_WITHOUT_CANDIDATES")
+            raise QuestionUnderstandingError(
+                "SEMANTIC_PARSE_RESOLVED_WITHOUT_CANDIDATES"
+            )
 
 
 def _duplicated_refs(refs: list[str]) -> list[str]:
@@ -268,7 +267,7 @@ SEMANTIC_PARSE_SYSTEM_PROMPT = """
   "order_by": [{"target_ref": "...", "direction": "asc | desc"}],
   "limit": null,
   "calculations": [{
-    "type": "growth_rate | difference | ratio | share | ...",
+    "type": "merge | growth_rate | difference | ratio | share | topn_other | pivot | expr",
     "current_time_role": "current | null",
     "previous_time_role": "previous | null",
     "details": {

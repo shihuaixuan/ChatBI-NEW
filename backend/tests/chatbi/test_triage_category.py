@@ -2,23 +2,16 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from apps.chatbi.models.dto.question_understanding import (
     IntentRecognitionOutput,
     IntentValidationOutput,
     QuestionUnderstandingOutput,
 )
-from apps.chatbi.orchestration.agent.messages import AgentMessage
-from apps.chatbi.orchestration.agent.run_orchestrator import _allows_direct_answer
-from apps.chatbi.orchestration.agent.state import AgentRuntimeState
-from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.services.generation.capability_answer import build_capability_answer
 from apps.chatbi.services.understanding.understanding_service import (
     _normalize_question_category,
 )
 from apps.semantic.models.dto.dataset_schema import DatasetSchema, SchemaElement
-from apps.tool import BudgetGuard
 
 
 def _output_with_category(category: str) -> QuestionUnderstandingOutput:
@@ -31,21 +24,6 @@ def _output_with_category(category: str) -> QuestionUnderstandingOutput:
         validation=IntentValidationOutput(status="valid"),
         category=category,
     )
-
-
-def _state_with_category(category: str) -> AgentRuntimeState:
-    state = AgentRuntimeState(
-        run=SimpleNamespace(id=1, oid=1, chat_id=1),
-        record=SimpleNamespace(id=1),
-        context=AgentToolContext(session=None, oid=1, user_id=1, datasource_id=1),
-        messages=[AgentMessage.user("你好")],
-        budget=BudgetGuard(max_steps=5),
-        system=AgentMessage.system("系统提示词"),
-    )
-    state.context.state["question_understanding"] = (
-        _output_with_category(category).model_dump(mode="json")
-    )
-    return state
 
 
 def test_category_defaults_to_data_query_for_old_snapshots():
@@ -63,26 +41,6 @@ def test_category_defaults_to_data_query_for_old_snapshots():
     payload.pop("category")
     restored = QuestionUnderstandingOutput.model_validate(payload)
     assert restored.category == "data_query"
-
-
-def test_direct_answer_only_allowed_for_chitchat(monkeypatch):
-    monkeypatch.setattr(
-        "apps.chatbi.orchestration.agent.run_orchestrator.settings.CHATBI_TRIAGE_ENABLED",
-        True,
-    )
-    assert _allows_direct_answer(_state_with_category("chitchat")) is True
-    assert _allows_direct_answer(_state_with_category("data_query")) is False
-    assert _allows_direct_answer(_state_with_category("meta_query")) is False
-    assert _allows_direct_answer(_state_with_category("out_of_scope")) is False
-
-
-def test_triage_switch_can_restore_legacy_behavior(monkeypatch):
-    monkeypatch.setattr(
-        "apps.chatbi.orchestration.agent.run_orchestrator.settings.CHATBI_TRIAGE_ENABLED",
-        False,
-    )
-
-    assert _allows_direct_answer(_state_with_category("chitchat")) is False
 
 
 def test_category_normalized_from_model_aliases():

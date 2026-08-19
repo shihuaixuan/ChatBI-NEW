@@ -90,7 +90,7 @@ class FastPipelineDependencies:
 
 
 class FastPipeline:
-    """理解完成后的单查询路径，不进入 AgentReasoner 或 AgentToolExecutor。"""
+    """理解完成后的单查询路径，不进入旧 ReAct 执行链。"""
 
     def __init__(self, dependencies: FastPipelineDependencies) -> None:
         self._registry = dependencies.registry
@@ -128,7 +128,12 @@ class FastPipeline:
         # 澄清分支不再留下一个实际上不存在的 DRAFT AnalysisPlan。
         yield self._events.plan_created(
             run_id,
-            {"record_id": state.record.id, "run_id": run_id, "plan_id": plan_id, "status": "DRAFT"},
+            {
+                "record_id": state.record.id,
+                "run_id": run_id,
+                "plan_id": plan_id,
+                "status": "DRAFT",
+            },
         )
         self._session.commit()
         query_requirement = execution_requirement.query_requirements[0]
@@ -146,13 +151,24 @@ class FastPipeline:
         self._save_plan(state, draft_plan)
         yield self._events.plan_updated(
             run_id,
-            {"record_id": state.record.id, "run_id": run_id, "plan_id": plan_id, "status": "DRAFT"},
+            {
+                "record_id": state.record.id,
+                "run_id": run_id,
+                "plan_id": plan_id,
+                "status": "DRAFT",
+            },
         )
         self._session.commit()
 
         yield self._events.task_started(
             run_id,
-            {"record_id": state.record.id, "run_id": run_id, "plan_id": plan_id, "task_id": query_task.id, "status": "running"},
+            {
+                "record_id": state.record.id,
+                "run_id": run_id,
+                "plan_id": plan_id,
+                "task_id": query_task.id,
+                "status": "running",
+            },
         )
         self._session.commit()
 
@@ -167,7 +183,9 @@ class FastPipeline:
                 "compiled": CompiledQuery(
                     plan_fingerprint=self._plan_fingerprint(state),
                     sql=str(compiled_payload["sql"]),
-                    tables=tuple(str(item) for item in compiled_payload.get("tables") or []),
+                    tables=tuple(
+                        str(item) for item in compiled_payload.get("tables") or []
+                    ),
                 )
             }
         )
@@ -183,7 +201,12 @@ class FastPipeline:
         self._save_plan(state, proven_plan)
         yield self._events.plan_updated(
             run_id,
-            {"record_id": state.record.id, "run_id": run_id, "plan_id": plan_id, "status": "PROVEN"},
+            {
+                "record_id": state.record.id,
+                "run_id": run_id,
+                "plan_id": plan_id,
+                "status": "PROVEN",
+            },
         )
         self._session.commit()
 
@@ -197,7 +220,9 @@ class FastPipeline:
         # 查询结果集引用必须在回答收口前写入 Run 快照，保证 Timeline/恢复可读取。
         self._persist_state(state)
         execution = state.context.state.get("last_execution")
-        result_set_id = execution.get("result_set_id") if isinstance(execution, dict) else None
+        result_set_id = (
+            execution.get("result_set_id") if isinstance(execution, dict) else None
+        )
         yield self._events.task_finished(
             run_id,
             {
@@ -214,21 +239,33 @@ class FastPipeline:
         # answer：只把真实结果摘要交给现有回答服务，算术不交给模型。
         rows = state.context.state.get("full_data")
         if not isinstance(rows, list):
-            rows = (execution or {}).get("sample_rows") if isinstance(execution, dict) else []
+            rows = (
+                (execution or {}).get("sample_rows")
+                if isinstance(execution, dict)
+                else []
+            )
         if not isinstance(rows, list):
             rows = []
         understanding = state.context.state.get("question_understanding")
         intent = understanding.get("intent") if isinstance(understanding, dict) else {}
-        question = str(state.context.state.get("question") or state.record.question or "")
+        question = str(
+            state.context.state.get("question") or state.record.question or ""
+        )
         if self._answer_composer is not None:
             final = self._answer_composer.compose(
                 AnswerComposerInput(
                     question=question,
                     intent=intent if isinstance(intent, dict) else {},
-                    execution=execution if isinstance(execution, dict) else {"status": "succeeded"},
+                    execution=execution
+                    if isinstance(execution, dict)
+                    else {"status": "succeeded"},
                     rows=rows,
-                    plan=state.context.state.get("analysis_plan") if isinstance(state.context.state.get("analysis_plan"), dict) else {},
-                    semantic_context=state.context.state.get("semantic_scope") if isinstance(state.context.state.get("semantic_scope"), dict) else {},
+                    plan=state.context.state.get("analysis_plan")
+                    if isinstance(state.context.state.get("analysis_plan"), dict)
+                    else {},
+                    semantic_context=state.context.state.get("semantic_scope")
+                    if isinstance(state.context.state.get("semantic_scope"), dict)
+                    else {},
                     mode="fast",
                 )
             )
@@ -237,7 +274,9 @@ class FastPipeline:
                 AgentFinalizationInput(
                     question=question,
                     intent=intent if isinstance(intent, dict) else {},
-                    execution=execution if isinstance(execution, dict) else {"status": "succeeded"},
+                    execution=execution
+                    if isinstance(execution, dict)
+                    else {"status": "succeeded"},
                     rows=rows,
                 )
             )
@@ -340,7 +379,10 @@ class FastPipeline:
     def _can_use_assisted_fallback(self, state: AgentRuntimeState) -> bool:
         """兜底只在全局开关、服务装配和数据集 ASSISTED 策略同时满足时启用。"""
 
-        if not self._assisted_fallback_enabled or self._assisted_fallback_service is None:
+        if (
+            not self._assisted_fallback_enabled
+            or self._assisted_fallback_service is None
+        ):
             return False
         if self._semantic_schema_provider is None or state.context.dataset_id is None:
             return False
@@ -348,7 +390,12 @@ class FastPipeline:
             state.context.workspace_id,
             state.context.dataset_id,
         )
-        return str((schema.query_config or {}).get("semanticEnforcement") or "LEGACY").upper() == "ASSISTED"
+        return (
+            str(
+                (schema.query_config or {}).get("semanticEnforcement") or "LEGACY"
+            ).upper()
+            == "ASSISTED"
+        )
 
     def _record_confidence(self, state: AgentRuntimeState) -> None:
         """把统一四档判定写入运行态，供口径卡片和审计读取。"""
@@ -356,7 +403,9 @@ class FastPipeline:
         package = state.context.state.get("semantic_package")
         scope = state.context.state.get("semantic_scope")
         understanding = state.context.state.get("question_understanding")
-        intent = understanding.get("intent", {}) if isinstance(understanding, dict) else {}
+        intent = (
+            understanding.get("intent", {}) if isinstance(understanding, dict) else {}
+        )
         decision = package.get("decision", {}) if isinstance(package, dict) else {}
         confidence = intent.get("confidence", 0.0) if isinstance(intent, dict) else 0.0
         validation_status = "unknown"
@@ -370,10 +419,18 @@ class FastPipeline:
         assessment = assess_confidence(
             ConfidenceSignals(
                 binding_confidence=float(confidence or 0.0),
-                evidence_level="exact" if decision.get("status") == "resolved" else "rerank",
+                evidence_level="exact"
+                if decision.get("status") == "resolved"
+                else "rerank",
                 validation_status=validation_status,
-                verified_hit=bool(package.get("examples")) if isinstance(package, dict) else False,
-                semantic_enforcement=str((scope or {}).get("semantic_enforcement") or "LEGACY") if isinstance(scope, dict) else "LEGACY",
+                verified_hit=bool(package.get("examples"))
+                if isinstance(package, dict)
+                else False,
+                semantic_enforcement=str(
+                    (scope or {}).get("semantic_enforcement") or "LEGACY"
+                )
+                if isinstance(scope, dict)
+                else "LEGACY",
                 ambiguous=decision.get("status") == "ambiguous",
             )
         )
@@ -395,7 +452,10 @@ class FastPipeline:
     ) -> Iterator[RenderEvent]:
         """ASSISTED 兜底仍经过物理 Schema、DatasourceQueryService 两次安全闸。"""
 
-        if self._semantic_schema_provider is None or self._assisted_fallback_service is None:
+        if (
+            self._semantic_schema_provider is None
+            or self._assisted_fallback_service is None
+        ):
             raise FastPipelineError("FAST_ASSISTED_FALLBACK_NOT_CONFIGURED")
         schema_result = self._call_tool(state, "get_dataset_schema", {})
         physical_schema = (
@@ -403,7 +463,9 @@ class FastPipeline:
             if schema_result.data is not None
             else {"tables": []}
         )
-        question = str(state.context.state.get("question") or state.record.question or "")
+        question = str(
+            state.context.state.get("question") or state.record.question or ""
+        )
         result = self._assisted_fallback_service.generate_and_execute(
             FallbackSQLInput(
                 question=question,
@@ -430,7 +492,9 @@ class FastPipeline:
         state.context.state["last_execution"] = execution
         state.context.state["full_data"] = result.rows
         understanding = state.context.state.get("question_understanding")
-        intent = understanding.get("intent", {}) if isinstance(understanding, dict) else {}
+        intent = (
+            understanding.get("intent", {}) if isinstance(understanding, dict) else {}
+        )
         if self._answer_composer is not None:
             final = self._answer_composer.compose(
                 AnswerComposerInput(
@@ -438,7 +502,10 @@ class FastPipeline:
                     intent=intent if isinstance(intent, dict) else {},
                     execution=execution,
                     rows=result.rows,
-                    semantic_context={"semantic_enforcement": "ASSISTED", "certified": False},
+                    semantic_context={
+                        "semantic_enforcement": "ASSISTED",
+                        "certified": False,
+                    },
                     mode="fast",
                 )
             )
@@ -452,7 +519,11 @@ class FastPipeline:
                 "已使用 ASSISTED 兜底完成查询，但未形成认证语义口径；以下为查询结果。"
                 f"（原语义路径：{failure_reason}）"
             )
-            chart = {"type": "table", "columns": [{"name": field, "value": field} for field in result.fields], "data": result.rows[:100]}
+            chart = {
+                "type": "table",
+                "columns": [{"name": field, "value": field} for field in result.fields],
+                "data": result.rows[:100],
+            }
             claims = []
             caliber_card = {"certified": False}
             chart_spec = chart
@@ -519,9 +590,7 @@ class FastPipeline:
                 else None
             )
             if not isinstance(logical_id, int) or logical_id <= 0:
-                raise FastPipelineError(
-                    f"FAST_LOGICAL_DIMENSION_REQUIRED:{asset_id}"
-                )
+                raise FastPipelineError(f"FAST_LOGICAL_DIMENSION_REQUIRED:{asset_id}")
             if logical_id not in logical_dimension_ids:
                 logical_dimension_ids.append(logical_id)
             usage = "GROUP_BY" if item in requirement.group_by else "FILTER"
@@ -565,9 +634,7 @@ class FastPipeline:
             logical_dimension_ids=tuple(logical_dimension_ids),
             dimension_usages=dimension_usages,
             filters=where_filters,
-            time_range=(
-                normalized_time if isinstance(normalized_time, dict) else None
-            ),
+            time_range=(normalized_time if isinstance(normalized_time, dict) else None),
             time_dimension_id=(
                 int(time["dimension_id"])
                 if isinstance(time.get("dimension_id"), int)
@@ -729,13 +796,19 @@ class FastPipeline:
             spec = QueryTaskSpec(
                 dataset_id=plan.dataset_id,
                 metric_ids=tuple(item.metric_id for item in plan.metrics),
-                dimension_ids=tuple(item.physical_dimension_id for item in plan.dimensions),
+                dimension_ids=tuple(
+                    item.physical_dimension_id for item in plan.dimensions
+                ),
                 filters=tuple(item.model_dump(mode="json") for item in plan.filters),
                 time_range=plan.time_binding.time_range,
                 time_dimension_id=plan.time_binding.dimension_id,
                 time_grain=plan.time_binding.grain,
                 select_mode=str(plan.query_shape.get("select_mode") or "aggregate"),
-                query_shape=str(plan.query_shape.get("shape") or plan.query_shape.get("query_shape") or "single_query"),
+                query_shape=str(
+                    plan.query_shape.get("shape")
+                    or plan.query_shape.get("query_shape")
+                    or "single_query"
+                ),
                 order_by=tuple(plan.order_by),
                 limit=plan.limit,
             )
@@ -754,8 +827,12 @@ class FastPipeline:
                 time_range=scope.normalized_time_range,
                 time_dimension_id=time_bucket.dimension_id if time_bucket else None,
                 time_grain=time_bucket.grain if time_bucket else None,
-                query_shape=str(compile_plan.query_shape.get("shape") or "single_query"),
-                order_by=tuple(item.model_dump(mode="json") for item in compile_plan.order_by),
+                query_shape=str(
+                    compile_plan.query_shape.get("shape") or "single_query"
+                ),
+                order_by=tuple(
+                    item.model_dump(mode="json") for item in compile_plan.order_by
+                ),
                 limit=compile_plan.limit,
             )
         else:

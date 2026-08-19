@@ -70,7 +70,9 @@ def _canonical_time_range(value: Any) -> Any:
     }
 
 
-def _task_time_range(task_spec: Any, time_dimension_id: int | None) -> dict[str, Any] | None:
+def _task_time_range(
+    task_spec: Any, time_dimension_id: int | None
+) -> dict[str, Any] | None:
     """从 QueryTask 的显式时间范围或已绑定时间筛选提取唯一时间条件。"""
 
     direct_range = getattr(task_spec, "time_range", None)
@@ -116,7 +118,6 @@ class PlanPipelineDependencies:
     compute_enabled: bool = True
     answer_composer: AnswerComposer | None = None
     metrics: MetricsRecorder | None = None
-    planner_model_service: Any | None = None
     # 直接规划流水线也必须写入同一棵 Agent Trace 调用树。
     trace_recorder: AgentTraceRecorder | None = None
 
@@ -131,10 +132,7 @@ class PlanPipeline:
         self._lifecycle = dependencies.lifecycle
         self._events = PipelineEvents(dependencies.event_publisher)
         self._session = dependencies.session
-        self._planner = AnalysisPlanner(
-            max_query_tasks=dependencies.max_query_tasks,
-            model_service=dependencies.planner_model_service,
-        )
+        self._planner = AnalysisPlanner(max_query_tasks=dependencies.max_query_tasks)
         self._max_query_tasks = dependencies.max_query_tasks
         self._compute_engine = dependencies.compute_engine
         self._compute_enabled = dependencies.compute_enabled
@@ -160,7 +158,7 @@ class PlanPipeline:
         if not isinstance(dataset_id, int) or isinstance(dataset_id, bool):
             dataset_id = state.context.dataset_id or 0
         try:
-            plan = self._planner.plan_from_execution_requirement(
+            plan = self._planner.plan(
                 plan_id=plan_id,
                 requirement=execution_requirement,
                 dataset_id=dataset_id,
@@ -196,10 +194,45 @@ class PlanPipeline:
         if scope is not None and scope.semantic_enforcement == "STRICT":
             self._ensure_strict_query_plans_ready(scope, query_tasks)
 
-        execution_records: dict[str, dict[str, Any]] = {}
-        full_data_records: dict[str, list[dict[str, Any]]] = {}
+        # 整个计划先完成编译和 SQL 校验，任何查询都不能在计划整体证明前执行。
         completed_tasks: dict[str, QueryTask] = {}
         for query_index, task in enumerate(query_tasks):
+            compiled = self._compile_task(state, task, strict_query_index=query_index)
+            self._call_tool(state, "validate_sql", {"sql": compiled.sql})
+            completed_tasks[task.id] = task.model_copy(update={"compiled": compiled})
+        proven_plan = plan.model_copy(
+            update={
+                "tasks": tuple(
+                    completed_tasks.get(task.id, task) for task in plan.tasks
+                )
+            }
+        )
+        proven_validation = validate_analysis_plan(
+            proven_plan,
+            max_query_tasks=self._max_query_tasks,
+            require_proven=True,
+        )
+        if proven_validation.status is not AnalysisPlanStatus.PROVEN:
+            raise PlanPipelineError(
+                "PLAN_PROOF_FAILED",
+                ",".join(proven_validation.reason_codes),
+            )
+        proven_plan = proven_plan.model_copy(update={"validation": proven_validation})
+        self._save_plan(state, proven_plan)
+        self._session.commit()
+        yield self._events.plan_updated(
+            run_id,
+            {
+                "record_id": state.record.id,
+                "run_id": run_id,
+                "plan_id": plan_id,
+                "status": AnalysisPlanStatus.PROVEN.value,
+            },
+        )
+
+        execution_records: dict[str, dict[str, Any]] = {}
+        full_data_records: dict[str, list[dict[str, Any]]] = {}
+        for task in query_tasks:
             yield self._events.task_started(
                 run_id,
                 {
@@ -210,18 +243,16 @@ class PlanPipeline:
                     "status": "running",
                 },
             )
-            compiled = self._compile_task(state, task, strict_query_index=query_index)
-            completed_tasks[task.id] = task.model_copy(update={"compiled": compiled})
-            self._save_plan(
-                state,
-                self._plan_with_completed_queries(plan, completed_tasks),
-            )
+            proven_compiled = completed_tasks[task.id].compiled
+            if proven_compiled is None:
+                raise PlanPipelineError("PLAN_QUERY_TASK_NOT_PROVEN")
             state.context.state["result_node_id"] = task.id
-            self._call_tool(state, "validate_sql", {"sql": compiled.sql})
-            self._call_tool(state, "execute_sql", {"sql": compiled.sql})
+            self._call_tool(state, "execute_sql", {"sql": proven_compiled.sql})
             self._persist_state(state)
             execution = state.context.state.get("last_execution")
-            execution_records[task.id] = execution if isinstance(execution, dict) else {}
+            execution_records[task.id] = (
+                execution if isinstance(execution, dict) else {}
+            )
             full_data = state.context.state.get("full_data")
             if isinstance(full_data, list):
                 full_data_records[task.id] = [
@@ -245,7 +276,9 @@ class PlanPipeline:
             result_sets = state.context.state.get("result_sets")
             available_nodes = {
                 payload.get("node_id")
-                for payload in (result_sets.values() if isinstance(result_sets, dict) else ())
+                for payload in (
+                    result_sets.values() if isinstance(result_sets, dict) else ()
+                )
                 if isinstance(payload, dict)
             }
             ready_tasks = [
@@ -299,38 +332,7 @@ class PlanPipeline:
                 task for task in pending_compute_tasks if task not in ready_tasks
             ]
 
-        final_plan = plan.model_copy(
-            update={
-                "tasks": tuple(
-                    completed_tasks.get(task.id, task) for task in plan.tasks
-                ),
-                "validation": validate_analysis_plan(
-                    plan.model_copy(
-                        update={
-                            "tasks": tuple(
-                                completed_tasks.get(task.id, task)
-                                for task in plan.tasks
-                            )
-                        }
-                    ),
-                    max_query_tasks=self._max_query_tasks,
-                    require_proven=True,
-                ),
-            }
-        )
-        self._save_plan(state, final_plan)
-        self._session.commit()
-        yield self._events.plan_updated(
-            run_id,
-            {
-                "record_id": state.record.id,
-                "run_id": run_id,
-                "plan_id": plan_id,
-                "status": final_plan.validation.status.value,
-            },
-        )
-
-        primary_result_id = plan.presentation.primary_result
+        primary_result_id = proven_plan.presentation.primary_result
         primary_execution = execution_records.get(primary_result_id)
         if primary_execution is None:
             raise PlanPipelineError("PLAN_PRIMARY_RESULT_MISSING")
@@ -362,8 +364,12 @@ class PlanPipeline:
                     intent=intent if isinstance(intent, dict) else {},
                     execution=answer_execution,
                     rows=primary_full_data,
-                    plan=state.context.state.get("analysis_plan") if isinstance(state.context.state.get("analysis_plan"), dict) else {},
-                    semantic_context=state.context.state.get("semantic_scope") if isinstance(state.context.state.get("semantic_scope"), dict) else {},
+                    plan=state.context.state.get("analysis_plan")
+                    if isinstance(state.context.state.get("analysis_plan"), dict)
+                    else {},
+                    semantic_context=state.context.state.get("semantic_scope")
+                    if isinstance(state.context.state.get("semantic_scope"), dict)
+                    else {},
                     mode="plan",
                 )
             )
@@ -448,7 +454,9 @@ class PlanPipeline:
         if scope is None:
             raise PlanPipelineError("PLAN_STRICT_MULTI_QUERY_NOT_READY")
         if scope.semantic_enforcement == "STRICT":
-            query_plans = scope.query_plans or ((scope.query_plan,) if scope.query_plan else ())
+            query_plans = scope.query_plans or (
+                (scope.query_plan,) if scope.query_plan else ()
+            )
             if not query_plans:
                 raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
             task_spec = getattr(task, "spec", None)
@@ -458,9 +466,7 @@ class PlanPipeline:
                     (
                         candidate
                         for candidate in query_plans
-                        if {
-                            item.metric_id for item in candidate.metrics
-                        }
+                        if {item.metric_id for item in candidate.metrics}
                         == set(task_spec.metric_ids)
                         and {
                             item.physical_dimension_id for item in candidate.dimensions
@@ -476,7 +482,10 @@ class PlanPipeline:
                     ),
                     None,
                 )
-            if selected_plan is None and getattr(task, "source_requirement_id", None) is not None:
+            if (
+                selected_plan is None
+                and getattr(task, "source_requirement_id", None) is not None
+            ):
                 # 新契约节点必须按来源需求精确匹配，不能退回索引或唯一计划兜底。
                 raise PlanPipelineError("PLAN_STRICT_SOURCE_REQUIREMENT_NOT_MATCHED")
             if selected_plan is None and task_spec is None:
@@ -617,12 +626,13 @@ class PlanPipeline:
         }
         if query_tasks and not task_signatures <= plan_signatures:
             raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
-        if query_task_count is not None and len(strict_query_plans) < query_task_count and not task_signatures:
-            raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
-        if any(
-            plan.validation_status.value != "PROVEN"
-            for plan in strict_query_plans
+        if (
+            query_task_count is not None
+            and len(strict_query_plans) < query_task_count
+            and not task_signatures
         ):
+            raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
+        if any(plan.validation_status.value != "PROVEN" for plan in strict_query_plans):
             raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_NOT_PROVEN")
 
     def _execute_compute_task(
@@ -673,7 +683,9 @@ class PlanPipeline:
             execution_type=ChatRecordExecutionType.AGENT,
             chat_id=chat_id,
             record_id=record_id,
-            plan_id=str((state.context.state.get("analysis_plan") or {}).get("id") or ""),
+            plan_id=str(
+                (state.context.state.get("analysis_plan") or {}).get("id") or ""
+            ),
             node_id=task.id,
             kind=ResultSetKind.COMPUTE,
             fields=list(computed.fields),
@@ -712,19 +724,6 @@ class PlanPipeline:
             if isinstance(payload, dict) and payload.get("node_id") == node_id:
                 return str(result_set_id)
         return None
-
-    @staticmethod
-    def _plan_with_completed_queries(
-        plan: AnalysisPlan,
-        completed_tasks: dict[str, QueryTask],
-    ) -> AnalysisPlan:
-        return plan.model_copy(
-            update={
-                "tasks": tuple(
-                    completed_tasks.get(task.id, task) for task in plan.tasks
-                )
-            }
-        )
 
     def _call_tool(
         self,

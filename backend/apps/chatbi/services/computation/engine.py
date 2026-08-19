@@ -73,7 +73,9 @@ class ComputeEngine:
             connection.close()
 
     @staticmethod
-    def _validate_inputs(task: ComputeTask, inputs: dict[str, ResultSetSnapshot]) -> None:
+    def _validate_inputs(
+        task: ComputeTask, inputs: dict[str, ResultSetSnapshot]
+    ) -> None:
         if not task.inputs:
             raise ComputeEngineError("COMPUTE_INPUTS_REQUIRED")
         if len(set(task.inputs)) != len(task.inputs):
@@ -81,7 +83,10 @@ class ComputeEngine:
         missing = [item for item in task.inputs if item not in inputs]
         if missing:
             raise ComputeEngineError("COMPUTE_INPUT_RESULT_SET_MISSING")
-        if task.operation.value in {"compare", "growth"} and not task.join_on:
+        if (
+            task.operation.value in {"merge", "difference", "growth_rate"}
+            and not task.join_on
+        ):
             if any(len(inputs[input_id].rows) > 1 for input_id in task.inputs[:2]):
                 raise ComputeEngineError("COMPUTE_COMPARE_JOIN_KEYS_REQUIRED")
 

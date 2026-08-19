@@ -1,10 +1,4 @@
-"""RunOrchestrator：统一运行路由、Fast/Plan 管道和 legacy ReAct 回退。
-
-Fast/Plan 使用确定性执行管道；只有 legacy 回退分支由 LLM 选择工具、组织参数、
-决定顺序、决定何时澄清与结束。所有分支都不能越出白名单、绕过守护或超出预算。
-状态即消息历史：run.messages 持久化除 system 外的全部消息，恢复=反序列化继续。
-工具运行时内核见 apps.tool；本模块负责 ChatBI 公共入口的运行编排。
-"""
+"""RunOrchestrator：统一运行路由以及 Fast/Plan 执行管道。"""
 
 from __future__ import annotations
 
@@ -13,26 +7,19 @@ from typing import Any
 
 from apps.chatbi.errors import QuestionUnderstandingError, SemanticClarificationError
 from apps.chatbi.models import (
+    AgentClarificationResumeKind,
     AgentErrorClass,
     AgentRunStatus,
     ChatbiAgentClarification,
     ChatbiAgentRun,
 )
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
-from apps.chatbi.orchestration.agent.cancellation import (
-    AgentCancellationRequested,
-    CancellationStage,
-)
-from apps.chatbi.orchestration.agent.cancellation_guard import CancellationGuard
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
-from apps.chatbi.orchestration.agent.messages import close_unfinished_tool_calls
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
-from apps.chatbi.orchestration.agent.reasoning import AgentReasoner
 from apps.chatbi.orchestration.agent.state import (
     AgentRuntimeState,
     AgentRuntimeStateFactory,
 )
-from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
 from apps.chatbi.orchestration.pipeline.fast import FastPipeline, FastPipelineError
 from apps.chatbi.orchestration.pipeline.mode_router import (
     ModeRouteInput,
@@ -41,9 +28,6 @@ from apps.chatbi.orchestration.pipeline.mode_router import (
 )
 from apps.chatbi.orchestration.pipeline.plan_mode import PlanPipeline, PlanPipelineError
 from apps.chatbi.repository.sqlmodel import agent_run_repository
-from apps.chatbi.services.generation.agent_finalization import (
-    build_partial_finalization,
-)
 from apps.event import EventPublisher, RenderEvent
 from apps.trace import (
     AgentTraceRecorder,
@@ -53,7 +37,6 @@ from apps.trace import (
     TraceNodeType,
     agent_attributes,
 )
-from common.core.config import settings
 
 __all__ = ["RunOrchestrator"]
 
@@ -66,8 +49,6 @@ class RunOrchestrator:
         event_publisher: EventPublisher,
         recorder: AgentTraceRecorder,
         lifecycle: AgentLifecycle,
-        reasoner: AgentReasoner,
-        tool_executor: AgentToolExecutor,
         input_preparer: AgentInputPreparer,
         state_factory: AgentRuntimeStateFactory,
         fast_pipeline: FastPipeline | None = None,
@@ -78,8 +59,6 @@ class RunOrchestrator:
         self.event_publisher = event_publisher
         self.recorder = recorder
         self.lifecycle = lifecycle
-        self.reasoner = reasoner
-        self.tool_executor = tool_executor
         self.input_preparer = input_preparer
         self.state_factory = state_factory
         self.fast_pipeline = fast_pipeline
@@ -139,6 +118,10 @@ class RunOrchestrator:
             ready = yield from self.input_preparer.prepare_initial(state)
             if not ready:
                 return
+            clarification_event = self._semantic_parse_clarification_event(state)
+            if clarification_event is not None:
+                yield clarification_event
+                return
             selected_mode = self._select_mode(state)
             if selected_mode == "fast":
                 if self.fast_pipeline is None:
@@ -186,10 +169,16 @@ class RunOrchestrator:
                         state,
                         f"{selected_mode.upper()} 模式尚未实现。",
                         AgentErrorClass.PLAN_INVALID.value,
-                        error_details={"code": f"{selected_mode.upper()}_MODE_NOT_READY"},
+                        error_details={
+                            "code": f"{selected_mode.upper()}_MODE_NOT_READY"
+                        },
                     )
                 return
-            yield from self._run_legacy_react(state)
+            yield from self.lifecycle.fail(
+                state,
+                f"不支持的执行模式：{selected_mode}",
+                AgentErrorClass.PLAN_INVALID.value,
+            )
         except ModeRoutingError as exc:
             yield from self.lifecycle.fail(
                 state,
@@ -206,7 +195,9 @@ class RunOrchestrator:
             )
         except Exception as exc:  # 任意未预期异常收敛为失败事件，避免 SSE 静默中断。
             message = str(exc) or exc.__class__.__name__
-            yield from self.lifecycle.fail(state, message, AgentErrorClass.UNEXPECTED.value)
+            yield from self.lifecycle.fail(
+                state, message, AgentErrorClass.UNEXPECTED.value
+            )
 
     def resume(
         self,
@@ -259,19 +250,13 @@ class RunOrchestrator:
         semantic_parse_payload = state.context.state.get("semantic_parse")
         candidate_groups = state.context.state.get("candidate_groups")
         if not isinstance(semantic_parse_payload, dict):
-            # 兼容未装配新语义解析服务的旧注册表，交回 ReAct 工具循环。
-            return "react_legacy"
+            raise ModeRoutingError("SEMANTIC_PARSE_STATE_REQUIRED")
         if not isinstance(candidate_groups, dict):
-            return "react_legacy"
+            raise ModeRoutingError("SEMANTIC_CANDIDATES_STATE_REQUIRED")
         try:
             semantic_parse = SemanticParseOutput.model_validate(semantic_parse_payload)
         except ValueError as exc:
             raise ModeRoutingError("SEMANTIC_PARSE_STATE_INVALID") from exc
-        requested = (
-            state.run.execution_mode
-            if state.run.execution_mode != "react_legacy"
-            else None
-        )
         result = self.mode_router.route(
             ModeRouteInput(
                 semantic_parse=semantic_parse,
@@ -282,13 +267,71 @@ class RunOrchestrator:
                     getattr(state.context.config, "execution_modes", ())
                     or ("fast", "plan")
                 ),
-                requested_mode=requested,
                 temporal_context=state.temporal_context,
                 datasource_id=state.context.datasource_id,
             )
         )
         state.context.state["execution_requirement"] = result
         return str(result["route"]["mode"])
+
+    def _semantic_parse_clarification_event(
+        self,
+        state: AgentRuntimeState,
+    ) -> RenderEvent | None:
+        """语义解析未解决时挂起运行，不把业务歧义转换成计划失败。"""
+
+        payload = state.context.state.get("semantic_parse")
+        if not isinstance(payload, dict) or payload.get("status") == "resolved":
+            return None
+        if payload.get("status") != "needs_clarification":
+            raise ModeRoutingError("SEMANTIC_PARSE_NOT_RESOLVED")
+        if not state.chatbi_budget.record_clarification().allowed:
+            raise ModeRoutingError("SEMANTIC_CLARIFICATION_BUDGET_EXHAUSTED")
+        unresolved = [
+            item for item in payload.get("unresolved") or [] if isinstance(item, dict)
+        ]
+        candidate_refs = {
+            str(ref)
+            for item in unresolved
+            for ref in item.get("candidate_refs") or []
+            if ref
+        }
+        candidate_groups = state.context.state.get("candidate_groups")
+        candidate_groups = (
+            candidate_groups if isinstance(candidate_groups, dict) else {}
+        )
+        candidates = {
+            str(item.get("ref")): item
+            for group in candidate_groups.values()
+            if isinstance(group, list)
+            for item in group
+            if isinstance(item, dict) and item.get("ref")
+        }
+        options = [
+            {
+                "label": str(
+                    candidates[ref].get("display_name")
+                    or candidates[ref].get("biz_name")
+                    or ref
+                ),
+                "value": ref,
+            }
+            for ref in sorted(candidate_refs)
+            if ref in candidates
+        ]
+        reasons = [str(item.get("reason") or "").strip() for item in unresolved]
+        question = "；".join(item for item in reasons if item)
+        if not question:
+            question = "请补充需要查询的业务口径。"
+        return self.lifecycle.suspend(
+            state,
+            question,
+            options,
+            f"semantic-parse:{state.require_run_id()}",
+            None,
+            resume_kind=AgentClarificationResumeKind.QUESTION_UNDERSTANDING,
+            resume_payload={"operation": "resume_semantic_parse"},
+        )
 
     def _resume(
         self,
@@ -313,6 +356,10 @@ class RunOrchestrator:
                 answer_text,
             )
             if not ready:
+                return
+            clarification_event = self._semantic_parse_clarification_event(state)
+            if clarification_event is not None:
+                yield clarification_event
                 return
             selected_mode = self._select_mode(state)
             if selected_mode == "fast" and self.fast_pipeline is not None:
@@ -349,7 +396,18 @@ class RunOrchestrator:
                         error_details={"code": exc.code},
                     )
                 return
-            yield from self._run_legacy_react(state)
+            yield from self.lifecycle.fail(
+                state,
+                f"不支持的执行模式：{selected_mode}",
+                AgentErrorClass.PLAN_INVALID.value,
+            )
+        except ModeRoutingError as exc:
+            yield from self.lifecycle.fail(
+                state,
+                str(exc),
+                AgentErrorClass.PLAN_INVALID.value,
+                error_details={"code": str(exc)},
+            )
         except QuestionUnderstandingError as exc:
             yield from self.lifecycle.fail(
                 state,
@@ -365,483 +423,9 @@ class RunOrchestrator:
             )
         except Exception as exc:
             message = str(exc) or exc.__class__.__name__
-            yield from self.lifecycle.fail(state, message, AgentErrorClass.UNEXPECTED.value)
-
-    # ---- legacy ReAct 回退 ----
-
-    def _run_legacy_react(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
-        run = state.run
-        record = state.record
-        ctx = state.context
-        messages = state.messages
-        budget = state.budget
-
-        while True:
-            step_index = budget.steps + 1
-            state_before = _trace_runtime_snapshot(state)
-            with self.recorder.node(
-                TraceNodeSpec(
-                    run_id=state.require_run_id(),
-                    node_key=f"react_iteration:{step_index}",
-                    node_type=TraceNodeType.PHASE,
-                    name="react_iteration",
-                    display_name=f"ReAct 第 {step_index} 轮",
-                    metadata={"step_index": step_index},
-                ),
-                input_data={
-                    "step_index": step_index,
-                    "budget_steps": budget.steps,
-                    "tokens_used": budget.tokens_used,
-                },
-                input_detail={"runtime_state": state_before},
-            ) as iteration_node:
-                cancelled = state.cancellation.is_cancelled()
-                mode = "cancelled" if cancelled else budget.planning_mode()
-                guard_reason: str | None = None
-                guard_error_class: str | None = None
-                soft_tools_available = True
-                with self.recorder.node(
-                    TraceNodeSpec(
-                        run_id=state.require_run_id(),
-                        node_key=f"react_guard:{step_index}",
-                        node_type=TraceNodeType.VALIDATION,
-                        name="validate_react_iteration",
-                        display_name="检查取消、预算与可用动作",
-                        metadata={"step_index": step_index},
-                    ),
-                    input_data={"step_index": step_index},
-                    input_detail={"budget": state.budget_snapshot()},
-                ) as guard_node:
-                    if cancelled:
-                        guard_reason = "用户已请求取消运行"
-                        guard_node.set_status(TraceNodeStatus.CANCELLED)
-                    elif mode == "exhausted":
-                        guard_reason = "运行预算已耗尽"
-                        guard_error_class = AgentErrorClass.BUDGET.value
-                        guard_node.set_status(TraceNodeStatus.REJECTED)
-                    elif mode == "soft":
-                        soft_tools_available = bool(
-                            self.reasoner.available_tool_names(state, mode)
-                        )
-                        if not soft_tools_available:
-                            guard_reason = "软预算模式下没有可用收口动作"
-                            guard_error_class = AgentErrorClass.BUDGET.value
-                            guard_node.set_status(TraceNodeStatus.REJECTED)
-                    if guard_reason is None:
-                        verdict = budget.check_before_step()
-                        if not verdict.allowed:
-                            guard_reason = verdict.reason
-                            guard_error_class = verdict.error_class
-                            guard_node.set_status(TraceNodeStatus.REJECTED)
-                    guard_node.set_output(
-                        {
-                            "allowed": guard_reason is None,
-                            "cancelled": cancelled,
-                            "planning_mode": mode,
-                            "soft_tools_available": soft_tools_available,
-                            "reason": guard_reason,
-                            "error_class": guard_error_class,
-                        }
-                    )
-
-                if cancelled:
-                    _set_iteration_result(
-                        iteration_node,
-                        state_before,
-                        state,
-                        "cancelled",
-                        TraceNodeStatus.CANCELLED,
-                    )
-                    yield from self.lifecycle.cancel(state)
-                    _set_iteration_result(
-                        iteration_node,
-                        state_before,
-                        state,
-                        "cancelled",
-                        TraceNodeStatus.CANCELLED,
-                    )
-                    return
-                if guard_reason is not None:
-                    has_execution = isinstance(
-                        ctx.state.get("last_execution"), dict
-                    ) and bool((ctx.state.get("last_execution") or {}).get("sql"))
-                    _set_iteration_result(
-                        iteration_node,
-                        state_before,
-                        state,
-                        "budget_finished" if has_execution else "budget_failed",
-                        (
-                            TraceNodeStatus.SUCCEEDED
-                            if has_execution
-                            else TraceNodeStatus.FAILED
-                        ),
-                        reason=guard_reason,
-                    )
-                    yield from self._budget_exhausted(
-                        state,
-                        reason=guard_reason,
-                        error_class=guard_error_class,
-                    )
-                    _set_iteration_result(
-                        iteration_node,
-                        state_before,
-                        state,
-                        "budget_finished" if has_execution else "budget_failed",
-                        (
-                            TraceNodeStatus.SUCCEEDED
-                            if has_execution
-                            else TraceNodeStatus.FAILED
-                        ),
-                        reason=guard_reason,
-                    )
-                    return
-
-                with self.recorder.node(
-                    TraceNodeSpec(
-                        run_id=state.require_run_id(),
-                        node_key=f"persist_step_started:{step_index}",
-                        node_type=TraceNodeType.PERSISTENCE,
-                        name="persist_agent_step_started",
-                        display_name="创建 Agent 步骤记录",
-                        metadata={"step_index": step_index},
-                    ),
-                    input_data={"step_index": step_index, "planning_mode": mode},
-                ) as step_node:
-                    step = agent_run_repository.start_step(
-                        self.session,
-                        run,
-                        step_index,
-                    )
-                    self.session.commit()
-                    step_node.set_output({"step_id": step.id, "status": step.status})
-                    yield self._emit(
-                        state,
-                        "step-started",
-                        {
-                            "record_id": record.id,
-                            "step_id": step.id,
-                            "step_index": step_index,
-                        },
-                        step.id,
-                    )
-
-                try:
-                    decision = self.reasoner.decide(
-                        state,
-                        mode,
-                        step_id=step.id,
-                        step_index=step_index,
-                    )
-                except AgentCancellationRequested as exc:
-                    reason = f"用户在 {exc.stage.value} 阶段请求取消运行"
-                    agent_run_repository.cancel_step(self.session, step, reason)
-                    self.session.commit()
-                    _set_iteration_result(
-                        iteration_node,
-                        state_before,
-                        state,
-                        "cancelled_during_llm",
-                        TraceNodeStatus.CANCELLED,
-                        step_id=step.id,
-                    )
-                    yield from self.lifecycle.cancel(state, message=reason)
-                    _set_iteration_result(
-                        iteration_node,
-                        state_before,
-                        state,
-                        "cancelled_during_llm",
-                        TraceNodeStatus.CANCELLED,
-                        step_id=step.id,
-                    )
-                    return
-                usage = decision.usage
-                text = decision.reasoning
-
-                cancelled_after_reasoning = CancellationGuard(
-                    state.cancellation
-                ).check(CancellationStage.AFTER_LLM)
-                with self.recorder.node(
-                    TraceNodeSpec(
-                        run_id=state.require_run_id(),
-                        node_key=f"post_reasoning_guard:{step_index}",
-                        node_type=TraceNodeType.VALIDATION,
-                        name="validate_post_reasoning_state",
-                        display_name="检查模型返回后的取消状态",
-                        metadata={"step_id": step.id, "step_index": step_index},
-                    ),
-                    input_data={"cancelled": cancelled_after_reasoning},
-                ) as post_guard_node:
-                    post_guard_node.set_output(
-                        {"allowed": not cancelled_after_reasoning}
-                    )
-                    if cancelled_after_reasoning:
-                        post_guard_node.set_status(TraceNodeStatus.CANCELLED)
-
-                if cancelled_after_reasoning:
-                    if state.messages and state.messages[-1] is decision.response:
-                        state.messages.pop()
-                    reason = "用户在模型返回后请求取消运行"
-                    agent_run_repository.cancel_step(self.session, step, reason)
-                    self.session.commit()
-                    _set_iteration_result(
-                        iteration_node,
-                        state_before,
-                        state,
-                        "cancelled_after_reasoning",
-                        TraceNodeStatus.CANCELLED,
-                        step_id=step.id,
-                    )
-                    yield from self.lifecycle.cancel(state, message=reason)
-                    _set_iteration_result(
-                        iteration_node,
-                        state_before,
-                        state,
-                        "cancelled_after_reasoning",
-                        TraceNodeStatus.CANCELLED,
-                        step_id=step.id,
-                    )
-                    return
-
-                if text:
-                    yield self._emit(
-                        state,
-                        "thinking",
-                        {"record_id": record.id, "content": text},
-                        step.id,
-                    )
-
-                if decision.is_direct_answer:
-                    direct_answer_allowed = _allows_direct_answer(state)
-                    with self.recorder.node(
-                        TraceNodeSpec(
-                            run_id=state.require_run_id(),
-                            node_key=f"direct_answer_guard:{step_index}",
-                            node_type=TraceNodeType.VALIDATION,
-                            name="validate_direct_answer",
-                            display_name="校验直接回答条件",
-                            metadata={"step_id": step.id},
-                        ),
-                        input_data={
-                            "has_execution": bool(ctx.state.get("last_execution")),
-                            "answer_length": len(text),
-                        },
-                    ) as answer_guard_node:
-                        answer_guard_node.set_output(
-                            {"allowed": direct_answer_allowed}
-                        )
-                        if not direct_answer_allowed:
-                            answer_guard_node.set_status(TraceNodeStatus.REJECTED)
-                    if not direct_answer_allowed:
-                        close_unfinished_tool_calls(messages)
-                        agent_run_repository.fail_step(
-                            self.session,
-                            step,
-                            "问数消息没有成功查询结果，禁止直接回答",
-                        )
-                        _set_iteration_result(
-                            iteration_node,
-                            state_before,
-                            state,
-                            "direct_answer_rejected",
-                            TraceNodeStatus.FAILED,
-                            step_id=step.id,
-                        )
-                        yield from self.lifecycle.fail(
-                            state,
-                            "问数消息必须成功执行查询后才能结束，禁止生成看似来自数据库的直接回答。",
-                            AgentErrorClass.SQL.value,
-                        )
-                        _set_iteration_result(
-                            iteration_node,
-                            state_before,
-                            state,
-                            "direct_answer_rejected",
-                            TraceNodeStatus.FAILED,
-                            step_id=step.id,
-                        )
-                        return
-                    close_unfinished_tool_calls(messages)
-                    agent_run_repository.finish_step(
-                        self.session,
-                        step,
-                        {"mode": "direct_answer"},
-                        usage,
-                    )
-                    _set_iteration_result(
-                        iteration_node,
-                        state_before,
-                        state,
-                        "direct_answer_finished",
-                        TraceNodeStatus.SUCCEEDED,
-                        step_id=step.id,
-                    )
-                    yield from self.lifecycle.finish(
-                        state,
-                        answer=text or "（模型未给出回答）",
-                        chart={},
-                        sql=(ctx.state.get("last_execution") or {}).get("sql"),
-                        step_id=step.id,
-                        full_data=ctx.state.get("full_data"),
-                        execution=ctx.state.get("last_execution"),
-                    )
-                    _set_iteration_result(
-                        iteration_node,
-                        state_before,
-                        state,
-                        "direct_answer_finished",
-                        TraceNodeStatus.SUCCEEDED,
-                        step_id=step.id,
-                    )
-                    return
-
-                tool_result = yield from self.tool_executor.execute(
-                    state,
-                    step,
-                    decision.tool_calls,
-                    usage,
-                    mode,
-                )
-                status_by_result = {
-                    "continue": TraceNodeStatus.SUCCEEDED,
-                    "suspended": TraceNodeStatus.WAITING,
-                    "finished": TraceNodeStatus.SUCCEEDED,
-                    "failed": TraceNodeStatus.FAILED,
-                    "cancelled": TraceNodeStatus.CANCELLED,
-                }
-                _set_iteration_result(
-                    iteration_node,
-                    state_before,
-                    state,
-                    f"tools_{tool_result.status.value}",
-                    status_by_result[tool_result.status.value],
-                    step_id=step.id,
-                    tool_call_count=len(decision.tool_calls),
-                )
-                if tool_result.terminal:
-                    return
-
-    def _budget_exhausted(
-        self,
-        state: AgentRuntimeState,
-        *,
-        reason: str | None = None,
-        error_class: str | None = None,
-    ) -> Iterator[RenderEvent]:
-        """预算耗尽：有执行结果则软收口，否则硬失败。"""
-
-        ctx = state.context
-        execution = ctx.state.get("last_execution")
-        if isinstance(execution, dict) and execution.get("sql"):
-            close_unfinished_tool_calls(state.messages)
-            raw_full_data = ctx.state.get("full_data")
-            rows = (
-                [item for item in raw_full_data if isinstance(item, dict)]
-                if isinstance(raw_full_data, list)
-                else []
+            yield from self.lifecycle.fail(
+                state, message, AgentErrorClass.UNEXPECTED.value
             )
-            partial = build_partial_finalization(
-                execution=execution,
-                rows=rows,
-                reason=(
-                    f"预算已达上限（{reason or '运行步数耗尽'}），"
-                    "以下基于已成功执行的查询结果直接作答。"
-                ),
-            )
-            yield from self.lifecycle.finish(
-                state,
-                answer=partial.answer,
-                chart=partial.chart,
-                sql=execution.get("sql"),
-                full_data=ctx.state.get("full_data"),
-                execution=execution,
-            )
-            return
-        yield from self.lifecycle.fail(
-            state,
-            reason or "预算已耗尽",
-            error_class or AgentErrorClass.BUDGET.value,
-        )
-
-    def _emit(
-        self,
-        state: AgentRuntimeState,
-        event_type: str,
-        payload: dict[str, Any],
-        step_id: int | None = None,
-    ) -> RenderEvent:
-        event = self.event_publisher.publish(
-            state.require_run_id(),
-            event_type,
-            payload,
-            step_id=step_id,
-        )
-        self.session.commit()
-        return event
-
-
-def _trace_runtime_snapshot(state: AgentRuntimeState) -> dict[str, Any]:
-    """提取足以判断循环进展、且不会复制大结果集的运行状态。"""
-
-    context = state.context.state
-    return {
-        "run_status": state.run.status,
-        "record_status": state.record.status,
-        "budget": state.budget_snapshot(),
-        "message_count": len(state.messages),
-        "state_revision": int(context.get("state_revision") or 0),
-        "state_keys": sorted(context),
-        "has_semantic_scope": isinstance(context.get("semantic_scope"), dict),
-        "semantic_enforcement": (
-            context.get("semantic_scope", {}).get("semantic_enforcement")
-            if isinstance(context.get("semantic_scope"), dict)
-            else None
-        ),
-        "semantic_plan_fingerprint": (
-            context.get("semantic_scope", {}).get("query_plan", {}).get("fingerprint")
-            if isinstance(context.get("semantic_scope"), dict)
-            and isinstance(context.get("semantic_scope", {}).get("query_plan"), dict)
-            else None
-        ),
-        "semantic_plan_status": (
-            context.get("semantic_scope", {}).get("query_plan", {}).get("validation_status")
-            if isinstance(context.get("semantic_scope"), dict)
-            and isinstance(context.get("semantic_scope", {}).get("query_plan"), dict)
-            else None
-        ),
-        "has_compiled_sql": bool(context.get("compiled_sql")),
-        "has_validated_sql": bool(context.get("validated_sql")),
-        "has_execution": isinstance(context.get("last_execution"), dict),
-    }
-
-
-def _set_iteration_result(
-    node: TraceNodeHandle,
-    before: dict[str, Any],
-    state: AgentRuntimeState,
-    outcome: str,
-    status: TraceNodeStatus,
-    **summary: Any,
-) -> None:
-    """统一收口每轮 ReAct 的结果和状态变化摘要。"""
-
-    after = _trace_runtime_snapshot(state)
-    node.set_status(status)
-    node.set_output({"outcome": outcome, **summary})
-    node.set_state_diff(before, after)
-    node.set_output_detail({"runtime_state": after})
-
-
-def _allows_direct_answer(state: AgentRuntimeState) -> bool:
-    """只有分诊为闲聊的问题允许直接回答，问数必须通过 finish 生成最终结果。"""
-
-    if not settings.CHATBI_TRIAGE_ENABLED:
-        return False
-    understanding = state.context.state.get("question_understanding")
-    is_chitchat = (
-        isinstance(understanding, dict)
-        and understanding.get("category") == "chitchat"
-    )
-    return is_chitchat
 
 
 # ---- Trace 结果 ----

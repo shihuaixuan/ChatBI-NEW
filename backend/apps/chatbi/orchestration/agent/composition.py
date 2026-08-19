@@ -17,12 +17,9 @@ from apps.chatbi.composition import (
 )
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
-from apps.chatbi.orchestration.agent.model_client import DefaultAgentModelClient
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
-from apps.chatbi.orchestration.agent.reasoning import AgentModelClient, AgentReasoner
 from apps.chatbi.orchestration.agent.run_orchestrator import RunOrchestrator
 from apps.chatbi.orchestration.agent.state import AgentRuntimeStateFactory
-from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
 from apps.chatbi.orchestration.agent.tool_results import ChatBIToolResultProcessor
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContextServices
 from apps.chatbi.orchestration.agent.tools.core import FinishTool
@@ -115,7 +112,6 @@ def build_run_orchestrator(
     current_user: Any,
     config: AgentConfig | None = None,
     *,
-    model_client: AgentModelClient | None = None,
     registry: ToolRegistry | None = None,
     semantic_parse_service: SemanticParseService | None = None,
     term_query_service: SemanticTermQueryService | None = None,
@@ -128,8 +124,6 @@ def build_run_orchestrator(
     result_artifact_service: ResultArtifactService | None = None,
     event_publisher: EventPublisher | None = None,
     recorder: AgentTraceRecorder | None = None,
-    reasoner: AgentReasoner | None = None,
-    tool_executor: AgentToolExecutor | None = None,
     input_preparer: AgentInputPreparer | None = None,
     cancellation_signal_factory: Callable[[int], CancellationSignal] | None = None,
     finalization_service: AgentFinalizationService | None = None,
@@ -187,8 +181,14 @@ def build_run_orchestrator(
         resolved_finalization_service = finalization_service
         resolved_answer_composer = answer_composer
     resolved_assisted_fallback = assisted_fallback_service
-    if resolved_assisted_fallback is None and resolved_config.assisted_fallback_enabled and finalization_service is None:
-        resolved_assisted_fallback = AssistedFallbackSQLService(model_service, resolved_query_service)
+    if (
+        resolved_assisted_fallback is None
+        and resolved_config.assisted_fallback_enabled
+        and finalization_service is None
+    ):
+        resolved_assisted_fallback = AssistedFallbackSQLService(
+            model_service, resolved_query_service
+        )
     resolved_registry = registry or build_agent_tool_registry(
         query_service=resolved_query_service,
         semantic_query_service=resolved_semantic_query_service,
@@ -199,21 +199,6 @@ def build_run_orchestrator(
         semantic_schema_provider=resolved_semantic_schema_provider,
         finalization_service=resolved_finalization_service,
         answer_composer=resolved_answer_composer,
-    )
-    resolved_reasoner = reasoner or AgentReasoner(
-        resolved_config,
-        model_client or DefaultAgentModelClient(),
-        resolved_registry,
-        resolved_recorder,
-    )
-    resolved_tool_executor = tool_executor or AgentToolExecutor(
-        session,
-        resolved_config,
-        resolved_registry,
-        resolved_recorder,
-        lifecycle,
-        resolved_publisher,
-        ChatBIToolResultProcessor(),
     )
     resolved_semantic_parse_service = (
         semantic_parse_service or build_semantic_parse_service(model_service)
@@ -252,8 +237,6 @@ def build_run_orchestrator(
         event_publisher=resolved_publisher,
         recorder=resolved_recorder,
         lifecycle=lifecycle,
-        reasoner=resolved_reasoner,
-        tool_executor=resolved_tool_executor,
         input_preparer=resolved_input_preparer,
         state_factory=state_factory,
         mode_router=ModeRouter(resolved_semantic_schema_provider),
@@ -286,9 +269,6 @@ def build_run_orchestrator(
                 compute_enabled=resolved_config.compute_enabled,
                 answer_composer=resolved_answer_composer,
                 metrics=metrics_recorder,
-                planner_model_service=(
-                    model_service if finalization_service is None else None
-                ),
                 trace_recorder=resolved_recorder,
             )
         ),

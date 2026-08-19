@@ -15,7 +15,9 @@ from apps.chatbi.models.dto.analysis_plan import (
 class PlanValidationError(ValueError):
     """计划不能进入确定性执行阶段。"""
 
-    def __init__(self, reason_codes: tuple[str, ...], message: str | None = None) -> None:
+    def __init__(
+        self, reason_codes: tuple[str, ...], message: str | None = None
+    ) -> None:
         self.reason_codes = reason_codes
         super().__init__(message or ",".join(reason_codes))
 
@@ -40,6 +42,8 @@ class AnalysisPlanValidator:
             # 查询组数量是系统计划预算，不属于用户表达缺失，必须走计划拒答门。
             reasons.append("PLAN_QUERY_GROUP_LIMIT_EXCEEDED")
         reasons.extend(self._validate_edges(plan))
+        reasons.extend(self._validate_dependency_source(plan))
+        reasons.extend(self._validate_primary_result(plan))
         if require_proven:
             reasons.extend(
                 "QUERY_TASK_NOT_PROVEN"
@@ -47,8 +51,12 @@ class AnalysisPlanValidator:
                 if task.compiled is None or not task.compiled.sql.strip()
             )
         reasons.extend(self._validate_compute_inputs(plan))
-        status = AnalysisPlanStatus.PROVEN if not reasons and require_proven else (
-            AnalysisPlanStatus.DRAFT if not reasons else AnalysisPlanStatus.REJECTED
+        status = (
+            AnalysisPlanStatus.PROVEN
+            if not reasons and require_proven
+            else (
+                AnalysisPlanStatus.DRAFT if not reasons else AnalysisPlanStatus.REJECTED
+            )
         )
         return PlanValidation(
             status=status,
@@ -101,9 +109,11 @@ class AnalysisPlanValidator:
                     reasons.append("COMPUTE_TASK_INPUTS_DUPLICATED")
                 minimum_inputs = (
                     2
-                    if task.operation in {
-                        ComputeOperation.COMPARE,
-                        ComputeOperation.GROWTH,
+                    if task.operation
+                    in {
+                        ComputeOperation.MERGE,
+                        ComputeOperation.DIFFERENCE,
+                        ComputeOperation.GROWTH_RATE,
                     }
                     else 1
                 )
@@ -112,6 +122,41 @@ class AnalysisPlanValidator:
                 if any(item not in known for item in task.inputs):
                     reasons.append("COMPUTE_TASK_INPUT_UNKNOWN")
         return reasons
+
+    @staticmethod
+    def _validate_dependency_source(plan: AnalysisPlan) -> list[str]:
+        """ComputeTask.inputs 是依赖事实源，持久化边必须与其完全一致。"""
+
+        expected = {
+            (input_id, task.id)
+            for task in plan.tasks
+            if isinstance(task, ComputeTask)
+            for input_id in task.inputs
+        }
+        actual = {(edge.source, edge.target) for edge in plan.edges}
+        return [] if actual == expected else ["PLAN_EDGES_INPUTS_MISMATCH"]
+
+    @staticmethod
+    def _validate_primary_result(plan: AnalysisPlan) -> list[str]:
+        """所有任务必须汇聚到唯一主要叶子结果。"""
+
+        reverse: dict[str, set[str]] = {task.id: set() for task in plan.tasks}
+        outgoing: set[str] = set()
+        for edge in plan.edges:
+            reverse[edge.target].add(edge.source)
+            outgoing.add(edge.source)
+        if plan.presentation.primary_result in outgoing:
+            return ["PLAN_PRIMARY_RESULT_NOT_LEAF"]
+        reachable = {plan.presentation.primary_result}
+        pending = [plan.presentation.primary_result]
+        while pending:
+            node_id = pending.pop()
+            for source in reverse[node_id]:
+                if source not in reachable:
+                    reachable.add(source)
+                    pending.append(source)
+        known = {task.id for task in plan.tasks}
+        return [] if reachable == known else ["PLAN_TASK_NOT_REACH_PRIMARY"]
 
 
 def validate_analysis_plan(

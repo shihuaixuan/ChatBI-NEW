@@ -12,6 +12,10 @@ from apps.chatbi.models.dto.question_model import (
     QuestionModelJSONMode,
 )
 from apps.chatbi.models.dto.question_understanding import QuestionRewriteOutput
+from apps.chatbi.models.orm.agent_run import (
+    AgentClarificationResumeKind,
+    ChatbiAgentClarification,
+)
 from apps.chatbi.orchestration.agent.messages import AgentMessage
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tool_results import ChatBIToolResultProcessor
@@ -92,9 +96,7 @@ class AgentInputPreparer:
         try:
             rewrite = QuestionRewriteOutput.model_validate(rewrite_result.payload)
         except ValueError as exc:
-            raise QuestionUnderstandingError(
-                "QUESTION_REWRITE_OUTPUT_INVALID"
-            ) from exc
+            raise QuestionUnderstandingError("QUESTION_REWRITE_OUTPUT_INVALID") from exc
         if rewrite.original_question != original_question:
             raise QuestionUnderstandingError(
                 "QUESTION_REWRITE_ORIGINAL_QUESTION_MISMATCH"
@@ -169,12 +171,35 @@ class AgentInputPreparer:
 
     def prepare_resume(
         self,
-        *_args: Any,
-        **_kwargs: Any,
+        state: AgentRuntimeState,
+        clarification: ChatbiAgentClarification,
+        answer_text: str,
     ) -> Generator[RenderEvent, None, bool]:
-        """当前新输入契约尚未迁移澄清恢复。"""
+        """从语义解析边界恢复，只重做需要用户补充的语义解析。"""
 
-        raise QuestionUnderstandingError("AGENT_INPUT_RESUME_NOT_SUPPORTED")
+        if (
+            clarification.resume_kind
+            != AgentClarificationResumeKind.QUESTION_UNDERSTANDING.value
+        ):
+            raise QuestionUnderstandingError("AGENT_CLARIFICATION_RESUME_KIND_INVALID")
+        if clarification.resume_payload.get("operation") != "resume_semantic_parse":
+            raise QuestionUnderstandingError("AGENT_CLARIFICATION_OPERATION_INVALID")
+        candidate_groups = state.context.state.get("candidate_groups")
+        rewrite = state.context.state.get("question_rewrite")
+        if not isinstance(candidate_groups, dict) or not isinstance(rewrite, dict):
+            raise QuestionUnderstandingError("AGENT_CLARIFICATION_STATE_REQUIRED")
+        rewrite_question = str(rewrite.get("rewrite_question") or "").strip()
+        if not rewrite_question:
+            raise QuestionUnderstandingError("AGENT_CLARIFICATION_QUESTION_REQUIRED")
+        semantic_parse = self._semantic_parse_service.parse(
+            rewrite_question=f"{rewrite_question}\n{answer_text}",
+            candidate_payload={"candidate_groups": candidate_groups},
+        )
+        state.context.state["semantic_parse"] = semantic_parse.model_dump(mode="json")
+        state.messages.append(AgentMessage.user(answer_text))
+        self._persist_snapshot(state)
+        yield from ()
+        return True
 
     def _persist_snapshot(self, state: AgentRuntimeState) -> None:
         agent_run_repository.update_run(
@@ -248,7 +273,9 @@ def normalize_candidate_groups(value: Any) -> dict[str, list[dict[str, Any]]]:
             result[group].append(
                 {
                     **item,
-                    "ref": str(item.get("ref") or f"{asset_type}:{asset_id}:{model_id}"),
+                    "ref": str(
+                        item.get("ref") or f"{asset_type}:{asset_id}:{model_id}"
+                    ),
                     "asset_type": asset_type,
                     "asset_id": asset_id,
                     "model_id": model_id,
