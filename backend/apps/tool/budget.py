@@ -1,6 +1,6 @@
 """通用预算与熔断原语。
 
-宿主（如 ChatBI AgentLoop）负责把 soft/hard 判定落实为 allowlist 与收口策略。
+宿主（如 ChatBI RunOrchestrator）负责把 soft/hard 判定落实为 allowlist 与收口策略。
 """
 
 from __future__ import annotations

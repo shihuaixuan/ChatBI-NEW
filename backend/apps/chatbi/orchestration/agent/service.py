@@ -24,7 +24,7 @@ from apps.chatbi.models.dto.agent import (
 from apps.chatbi.orchestration.agent.cancellation import (
     DatabaseRunCancellationSignal,
 )
-from apps.chatbi.orchestration.agent.composition import build_agent_loop
+from apps.chatbi.orchestration.agent.composition import build_run_orchestrator
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.planning import resolve_execution_binding
 from apps.conversation import (
@@ -185,7 +185,7 @@ def create_agent_start_events(
                         "datasource_allowed": True,
                     }
                 )
-            loop = build_agent_loop(
+            orchestrator = build_run_orchestrator(
                 stream_session,
                 current_user,
                 config,
@@ -194,7 +194,7 @@ def create_agent_start_events(
                     DatabaseRunCancellationSignal(engine, run_id)
                 ),
             )
-            yield from loop.run(run, record)
+            yield from orchestrator.run(run, record)
 
     return stream()
 
@@ -271,7 +271,7 @@ def create_agent_resume_events(
                         "clarification_status": clarification.status,
                     }
                 )
-            loop = build_agent_loop(
+            orchestrator = build_run_orchestrator(
                 stream_session,
                 current_user,
                 config,
@@ -280,6 +280,6 @@ def create_agent_resume_events(
                     DatabaseRunCancellationSignal(engine, run_id)
                 ),
             )
-            yield from loop.resume(run, record, clarification, answer_text)
+            yield from orchestrator.resume(run, record, clarification, answer_text)
 
     return stream()

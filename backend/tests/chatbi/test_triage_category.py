@@ -9,8 +9,8 @@ from apps.chatbi.models.dto.question_understanding import (
     IntentValidationOutput,
     QuestionUnderstandingOutput,
 )
-from apps.chatbi.orchestration.agent.loop import _allows_direct_answer
 from apps.chatbi.orchestration.agent.messages import AgentMessage
+from apps.chatbi.orchestration.agent.run_orchestrator import _allows_direct_answer
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.services.generation.capability_answer import build_capability_answer
@@ -67,7 +67,7 @@ def test_category_defaults_to_data_query_for_old_snapshots():
 
 def test_direct_answer_only_allowed_for_chitchat(monkeypatch):
     monkeypatch.setattr(
-        "apps.chatbi.orchestration.agent.loop.settings.CHATBI_TRIAGE_ENABLED",
+        "apps.chatbi.orchestration.agent.run_orchestrator.settings.CHATBI_TRIAGE_ENABLED",
         True,
     )
     assert _allows_direct_answer(_state_with_category("chitchat")) is True
@@ -78,7 +78,7 @@ def test_direct_answer_only_allowed_for_chitchat(monkeypatch):
 
 def test_triage_switch_can_restore_legacy_behavior(monkeypatch):
     monkeypatch.setattr(
-        "apps.chatbi.orchestration.agent.loop.settings.CHATBI_TRIAGE_ENABLED",
+        "apps.chatbi.orchestration.agent.run_orchestrator.settings.CHATBI_TRIAGE_ENABLED",
         False,
     )
 

@@ -1,9 +1,9 @@
-"""AgentLoop：LLM 自主规划 + 受控工具循环。
+"""RunOrchestrator：统一运行路由、Fast/Plan 管道和 legacy ReAct 回退。
 
-LLM 拥有：选择工具、组织参数、决定顺序、决定何时澄清与结束。
-LLM 没有：越出白名单、绕过守护、超出预算（BudgetGuard 硬/软上限）。
+Fast/Plan 使用确定性执行管道；只有 legacy 回退分支由 LLM 选择工具、组织参数、
+决定顺序、决定何时澄清与结束。所有分支都不能越出白名单、绕过守护或超出预算。
 状态即消息历史：run.messages 持久化除 system 外的全部消息，恢复=反序列化继续。
-工具运行时内核见 apps.tool；本模块只负责 ChatBI 编排策略。
+工具运行时内核见 apps.tool；本模块负责 ChatBI 公共入口的运行编排。
 """
 
 from __future__ import annotations
@@ -55,10 +55,10 @@ from apps.trace import (
 )
 from common.core.config import settings
 
-__all__ = ["AgentLoop"]
+__all__ = ["RunOrchestrator"]
 
 
-class AgentLoop:
+class RunOrchestrator:
     def __init__(
         self,
         session: Any,
@@ -189,7 +189,7 @@ class AgentLoop:
                         error_details={"code": f"{selected_mode.upper()}_MODE_NOT_READY"},
                     )
                 return
-            yield from self._loop(state)
+            yield from self._run_legacy_react(state)
         except ModeRoutingError as exc:
             yield from self.lifecycle.fail(
                 state,
@@ -259,9 +259,10 @@ class AgentLoop:
         semantic_parse_payload = state.context.state.get("semantic_parse")
         candidate_groups = state.context.state.get("candidate_groups")
         if not isinstance(semantic_parse_payload, dict):
-            raise ModeRoutingError("SEMANTIC_PARSE_STATE_REQUIRED")
+            # 兼容未装配新语义解析服务的旧注册表，交回 ReAct 工具循环。
+            return "react_legacy"
         if not isinstance(candidate_groups, dict):
-            raise ModeRoutingError("SEMANTIC_CANDIDATE_GROUPS_STATE_REQUIRED")
+            return "react_legacy"
         try:
             semantic_parse = SemanticParseOutput.model_validate(semantic_parse_payload)
         except ValueError as exc:
@@ -282,6 +283,8 @@ class AgentLoop:
                     or ("fast", "plan")
                 ),
                 requested_mode=requested,
+                temporal_context=state.temporal_context,
+                datasource_id=state.context.datasource_id,
             )
         )
         state.context.state["execution_requirement"] = result
@@ -346,7 +349,7 @@ class AgentLoop:
                         error_details={"code": exc.code},
                     )
                 return
-            yield from self._loop(state)
+            yield from self._run_legacy_react(state)
         except QuestionUnderstandingError as exc:
             yield from self.lifecycle.fail(
                 state,
@@ -364,9 +367,9 @@ class AgentLoop:
             message = str(exc) or exc.__class__.__name__
             yield from self.lifecycle.fail(state, message, AgentErrorClass.UNEXPECTED.value)
 
-    # ---- 主循环 ----
+    # ---- legacy ReAct 回退 ----
 
-    def _loop(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
+    def _run_legacy_react(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         run = state.run
         record = state.record
         ctx = state.context

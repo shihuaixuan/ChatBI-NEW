@@ -14,13 +14,14 @@ from apps.chatbi.composition import (
     build_query_service,
     build_question_understanding_service,
     build_result_artifact_service,
+    build_semantic_parse_service,
 )
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
-from apps.chatbi.orchestration.agent.loop import AgentLoop
 from apps.chatbi.orchestration.agent.model_client import DefaultAgentModelClient
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
 from apps.chatbi.orchestration.agent.reasoning import AgentModelClient, AgentReasoner
+from apps.chatbi.orchestration.agent.run_orchestrator import RunOrchestrator
 from apps.chatbi.orchestration.agent.state import AgentRuntimeStateFactory
 from apps.chatbi.orchestration.agent.tool_execution import AgentToolExecutor
 from apps.chatbi.orchestration.agent.tool_results import ChatBIToolResultProcessor
@@ -43,7 +44,10 @@ from apps.chatbi.services.generation.agent_finalization import AgentFinalization
 from apps.chatbi.services.generation.answer_composer import AnswerComposer
 from apps.chatbi.services.generation.fallback_sql import AssistedFallbackSQLService
 from apps.chatbi.services.planning import PhysicalSchemaService
-from apps.chatbi.services.understanding import QuestionUnderstandingService
+from apps.chatbi.services.understanding import (
+    QuestionUnderstandingService,
+    SemanticParseService,
+)
 from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
 from apps.knowledge.composition import build_sql_example_query_service
@@ -110,7 +114,7 @@ def build_agent_tool_registry(
     return registry
 
 
-def build_agent_loop(
+def build_run_orchestrator(
     session: Any,
     current_user: Any,
     config: AgentConfig | None = None,
@@ -118,6 +122,7 @@ def build_agent_loop(
     model_client: AgentModelClient | None = None,
     registry: ToolRegistry | None = None,
     understanding_service: QuestionUnderstandingService | None = None,
+    semantic_parse_service: SemanticParseService | None = None,
     term_query_service: SemanticTermQueryService | None = None,
     query_service: DatasourceQueryService | None = None,
     semantic_query_service: SemanticSQLCompilationService | None = None,
@@ -136,8 +141,8 @@ def build_agent_loop(
     answer_composer: AnswerComposer | None = None,
     assisted_fallback_service: AssistedFallbackSQLService | None = None,
     memory_service: MemoryService | None = None,
-) -> AgentLoop:
-    """构造依赖完整的 AgentLoop；生产入口和测试统一使用此函数。"""
+) -> RunOrchestrator:
+    """构造依赖完整的 RunOrchestrator；生产入口和测试统一使用此函数。"""
 
     resolved_config = config or AgentConfig()
     resolved_publisher = event_publisher or build_agent_event_publisher(session)
@@ -222,6 +227,10 @@ def build_agent_loop(
             trace_recorder=resolved_recorder,
         )
     )
+    resolved_semantic_parse_service = (
+        semantic_parse_service or build_semantic_parse_service()
+    )
+    result_processor = ChatBIToolResultProcessor()
     resolved_input_preparer = input_preparer or AgentInputPreparer(
         session,
         resolved_config,
@@ -231,6 +240,9 @@ def build_agent_loop(
         resolved_publisher,
         resolved_recorder,
         resolved_memory_service,
+        resolved_registry,
+        result_processor,
+        resolved_semantic_parse_service,
     )
     resolved_result_artifact_service = (
         result_artifact_service or build_result_artifact_service(session)
@@ -247,7 +259,7 @@ def build_agent_loop(
         tool_services,
         cancellation_signal_factory,
     )
-    return AgentLoop(
+    return RunOrchestrator(
         session,
         event_publisher=resolved_publisher,
         recorder=resolved_recorder,
@@ -260,7 +272,7 @@ def build_agent_loop(
         fast_pipeline=FastPipeline(
             FastPipelineDependencies(
                 registry=resolved_registry,
-                result_processor=ChatBIToolResultProcessor(),
+                result_processor=result_processor,
                 finalization_service=resolved_finalization_service,
                 lifecycle=lifecycle,
                 event_publisher=resolved_publisher,
@@ -276,7 +288,7 @@ def build_agent_loop(
         plan_pipeline=PlanPipeline(
             PlanPipelineDependencies(
                 registry=resolved_registry,
-                result_processor=ChatBIToolResultProcessor(),
+                result_processor=result_processor,
                 finalization_service=resolved_finalization_service,
                 lifecycle=lifecycle,
                 event_publisher=resolved_publisher,
@@ -295,4 +307,4 @@ def build_agent_loop(
     )
 
 
-__all__ = ["build_agent_loop", "build_agent_tool_registry"]
+__all__ = ["build_run_orchestrator", "build_agent_tool_registry"]

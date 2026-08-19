@@ -1,4 +1,4 @@
-"""AgentLoop 端到端行为测试：FakeSession + 脚本化模型客户端，不依赖真实 DB/LLM。"""
+"""RunOrchestrator 端到端行为测试：FakeSession + 脚本化模型客户端，不依赖真实 DB/LLM。"""
 
 from contextlib import contextmanager
 from datetime import datetime
@@ -23,7 +23,7 @@ from apps.chatbi.models import (
     QuestionUnderstandingOutcome,
     QuestionUnderstandingOutput,
 )
-from apps.chatbi.orchestration.agent.composition import build_agent_loop
+from apps.chatbi.orchestration.agent.composition import build_run_orchestrator
 from apps.chatbi.orchestration.agent.messages import AgentMessage, ModelDecision
 from apps.chatbi.orchestration.agent.reasoning import AgentReasoner
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
@@ -316,7 +316,7 @@ class FailingExporter:
 
 
 class StaticUnderstandingService:
-    """AgentLoop 测试使用的确定性问题理解结果。"""
+    """RunOrchestrator 测试使用的确定性问题理解结果。"""
 
     def __init__(self, rewrite_question="按城市看 gmv"):
         self.rewrite_question = rewrite_question
@@ -672,7 +672,7 @@ def _run_and_record():
 
 
 def _loop(model, config=None):
-    return build_agent_loop(
+    return build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         config or AgentConfig(max_steps=5),
@@ -1009,7 +1009,7 @@ def test_happy_path_tool_then_finish():
 def test_understanding_failure_rolls_back_before_persisting_terminal_state():
     session = FakeSession()
     run, record = _run_and_record()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         session,
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -1082,7 +1082,7 @@ def test_multiple_tool_calls_preserve_model_order_in_events_and_observations():
     run, record = _run_and_record()
 
     session = FakeSession()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         session,
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -1154,7 +1154,7 @@ def test_regular_tool_error_is_observed_but_cannot_masquerade_as_answer():
         AIMessage(content="工具失败后如实结束。"),
     ])
     run, record = _run_and_record()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -1203,7 +1203,7 @@ def test_execute_sql_retry_exhaustion_has_single_failed_terminal_event():
         _tool_message("execute_sql", {"sql": "ignored"}, "sql-3"),
     ])
     run, record = _run_and_record()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=10, max_sql_retries=1),
@@ -1236,7 +1236,7 @@ def test_agent_tracing_records_run_llm_and_tool_hierarchy():
         _tool_message("finish", {"value": ""}, "c2"),
     ])
     run, record = _run_and_record()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -1301,7 +1301,7 @@ def test_stage4_trace_records_react_decision_tool_projection_and_final_state():
         ]
     )
     run, record = _run_and_record()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -1404,7 +1404,7 @@ def test_stage4_trace_distinguishes_tool_argument_validation_failure():
     run, record = _run_and_record()
     registry = _registry()
     registry.register(PrepareSqlProbeTool())
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -1458,7 +1458,7 @@ def test_opentelemetry_exporter_receives_agent_span_hierarchy():
         _tool_message("finish", {"value": ""}, "c2"),
     ])
     run, record = _run_and_record()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -1497,7 +1497,7 @@ def test_agent_span_closes_when_event_generator_is_closed():
     recorder = AgentTraceRecorder(DisabledTraceRepository(), exporter)
     model = ScriptedModel([AIMessage(content="完成")])
     run, record = _run_and_record()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -1549,7 +1549,7 @@ def test_runtime_tracing_failure_does_not_change_agent_events():
         _tool_message("finish", {"value": ""}, "c2"),
     ])
     run, record = _run_and_record()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),
@@ -1608,7 +1608,7 @@ def test_problem_rewrite_only_receives_last_rewritten_question(monkeypatch):
 
     model = ScriptedModel([AIMessage(content="完成")])
     run, record = _run_and_record()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=5),

@@ -13,7 +13,7 @@ from apps.chatbi.models import (
     ChatbiAgentRun,
     DimensionSlot,
 )
-from apps.chatbi.orchestration.agent.composition import build_agent_loop
+from apps.chatbi.orchestration.agent.composition import build_run_orchestrator
 from apps.chatbi.orchestration.agent.messages import (
     FOLDED_PLACEHOLDER,
     AgentMessage,
@@ -130,7 +130,7 @@ def _semantic_hit(asset: AssetReference, title: str) -> RetrievalHit:
 
 
 def _loop(model, config=None):
-    return build_agent_loop(
+    return build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         config or AgentConfig(max_steps=6),
@@ -232,7 +232,7 @@ def test_dimension_role_ambiguity_suspends_before_agent_planning_and_retrieval()
     run, record = _run_and_record()
     record.question = "今天店铺的客户数"
     session = FakeSession()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         session,
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=6),
@@ -340,7 +340,7 @@ def test_resume_restores_derived_state_into_tool_context():
             _tool_message("finish", {"value": ""}, "c9"),
         ]
     )
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=6),
@@ -623,7 +623,7 @@ def test_resume_applies_structured_semantic_clarification_to_trusted_scope():
             ),
         ],
     )
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=6),
@@ -791,7 +791,7 @@ def test_resume_emits_acceptance_without_reunderstanding():
     run.messages = [AgentMessage.user("今天店铺的客户数").model_dump(mode="json")]
     run.derived_state = _ambiguous_store_understanding_state()
     understanding_service = TrackingUnderstandingService()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=6),
@@ -826,7 +826,7 @@ def test_filter_role_clarification_resumes_to_targeted_value_clarification():
     run.derived_state = _ambiguous_store_understanding_state()
     session = FakeSession()
     understanding_service = StaticUnderstandingService()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         session,
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=6),
@@ -865,7 +865,7 @@ def test_filter_role_clarification_resumes_to_targeted_value_clarification():
     }
     next_clarification.answer = {"selections": [], "text": "1号店铺"}
     finish_model = ScriptedModel([AIMessage(content="查询完成")])
-    finish_loop = build_agent_loop(
+    finish_loop = build_run_orchestrator(
         session,
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=6),
@@ -1036,7 +1036,7 @@ def test_resume_updates_target_slot_without_rewriting_or_reunderstanding():
         ]
     )
     understanding_service = TrackingUnderstandingService()
-    loop = build_agent_loop(
+    loop = build_run_orchestrator(
         FakeSession(),
         SimpleNamespace(id=1, oid=1),
         AgentConfig(max_steps=6),

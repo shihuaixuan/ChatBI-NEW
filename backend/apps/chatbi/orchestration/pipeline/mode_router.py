@@ -5,10 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from apps.chatbi.models.dto.execution_requirement import ExecutionRequirement
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
 from apps.chatbi.models.orm.agent_run import AgentExecutionMode
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.schema_service import DatasetSchemaProvider
+from apps.temporal import TemporalContext
+from apps.temporal.resolver import resolve_time_range
 
 
 class ModeRoutingError(ValueError):
@@ -28,6 +31,8 @@ class ModeRouteInput:
         AgentExecutionMode.PLAN.value,
     )
     requested_mode: str | None = None
+    temporal_context: TemporalContext | None = None
+    datasource_id: int | None = None
 
 
 class ModeRouter:
@@ -73,15 +78,27 @@ class ModeRouter:
             raise ModeRoutingError(f"EXECUTION_MODE_NOT_AVAILABLE:{mode.value}")
 
 
-        return {
-            "status": "ready",
-            "route": {
+        return ExecutionRequirement(
+            status="ready",
+            route={
                 "mode": mode.value,
-                "reasons": list(dict.fromkeys(reasons)),
+                "reasons": tuple(dict.fromkeys(reasons)),
             },
             **execution,
-            "unresolved": [],
-        }
+            runtime={
+                "tenant_id": request.tenant_id,
+                "datasource_id": request.datasource_id,
+                "dataset_id": request.dataset_id,
+                "schema_version": schema.schema_version,
+                "contract_version": schema.contract_version,
+            },
+            asset_snapshot={
+                "schema_version": schema.schema_version,
+                "contract_version": schema.contract_version,
+                "schema_fingerprint": schema.schema_fingerprint,
+            },
+            unresolved=(),
+        ).model_dump(mode="json")
 
     def _resolve_candidates(
         self,
@@ -159,7 +176,12 @@ class ModeRouter:
                 if candidates[item.target_ref]["model_id"] == model_id
             ]
             for index, time_filter in enumerate(time_filters):
-                time_requirement = _time_requirement(schema, model_id, time_filter)
+                time_requirement = _time_requirement(
+                    schema,
+                    model_id,
+                    time_filter,
+                    request.temporal_context,
+                )
                 role = time_filter.role if time_filter is not None else "single"
                 query_requirements.append(
                     {
@@ -303,6 +325,7 @@ def _time_requirement(
     schema: DatasetSchema,
     model_id: int,
     time_filter: Any,
+    temporal_context: TemporalContext | None = None,
 ) -> dict[str, Any] | None:
     if time_filter is None:
         return None
@@ -320,13 +343,19 @@ def _time_requirement(
     column = str(time_dimension.ext_info.get("field_name") or "").strip()
     if not column:
         raise ModeRoutingError(f"SEMANTIC_TIME_FIELD_REQUIRED:{time_dimension.id}")
-    return {
+    requirement = {
         "role": time_filter.role,
         "expression": time_filter.expression,
         "dimension_ref": f"DIMENSION:{time_dimension.id}:{model_id}",
         "dimension_id": time_dimension.id,
         "column": column,
     }
+    if temporal_context is not None:
+        normalized = resolve_time_range(time_filter.expression, temporal_context)
+        if not isinstance(normalized, dict) or normalized.get("kind") == "unsupported":
+            raise ModeRoutingError("SEMANTIC_TIME_RANGE_UNRESOLVED")
+        requirement["normalized"] = normalized
+    return requirement
 
 
 def _query_requirement_id(metrics: list[dict[str, Any]], role: str, index: int) -> str:

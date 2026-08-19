@@ -1267,7 +1267,7 @@ def test_old_question_understanding_path_has_been_removed():
     compatibility_path = "apps/capabilities/question_understanding.py"
     agent_loop_source = (
         BACKEND_DIR__question_understanding
-        / "apps/chatbi/orchestration/agent/loop.py"
+        / "apps/chatbi/orchestration/agent/run_orchestrator.py"
     ).read_text(encoding="utf-8")
 
     assert not (BACKEND_DIR__question_understanding / compatibility_path).exists()
@@ -1277,7 +1277,7 @@ def test_old_question_understanding_path_has_been_removed():
 def test_agent_input_preparation_owns_understanding_and_preflight_clarification():
     loop_source = (
         BACKEND_DIR__question_understanding
-        / "apps/chatbi/orchestration/agent/loop.py"
+        / "apps/chatbi/orchestration/agent/run_orchestrator.py"
     ).read_text(encoding="utf-8")
     preparation_source = (
         BACKEND_DIR__question_understanding
@@ -1298,7 +1298,7 @@ def test_agent_input_preparation_owns_understanding_and_preflight_clarification(
 def test_agent_runtime_dependencies_are_owned_by_composition():
     loop_source = (
         BACKEND_DIR__question_understanding
-        / "apps/chatbi/orchestration/agent/loop.py"
+        / "apps/chatbi/orchestration/agent/run_orchestrator.py"
     ).read_text(encoding="utf-8")
     composition_source = (
         BACKEND_DIR__question_understanding
@@ -1313,9 +1313,9 @@ def test_agent_runtime_dependencies_are_owned_by_composition():
         / "apps/chatbi/orchestration/agent/state.py"
     ).read_text(encoding="utf-8")
 
-    assert "def build_agent_loop" in composition_source
+    assert "def build_run_orchestrator" in composition_source
     assert "def build_agent_tool_registry" in composition_source
-    assert "build_agent_loop(" in service_source
+    assert "build_run_orchestrator(" in service_source
     assert "cancellation_signal_factory" in service_source
     assert "apps.chatbi.composition" not in loop_source
     assert "build_default_tools" not in loop_source
@@ -1633,7 +1633,7 @@ def test_agent_record_terminal_projection_uses_chatbi_service():
             if isinstance(node, ast.FunctionDef) and node.name == "fail"
         )
     )
-    loop_source = (BACKEND_DIR__record / "apps/chatbi/orchestration/agent/loop.py").read_text()
+    loop_source = (BACKEND_DIR__record / "apps/chatbi/orchestration/agent/run_orchestrator.py").read_text()
 
     assert "self._record_service.transition" in finish_source
     assert "self._record_service.transition" in fail_source

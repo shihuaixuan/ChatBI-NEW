@@ -69,6 +69,8 @@ class QueryTask(BaseModel):
 
     id: str = Field(min_length=1, max_length=128)
     type: Literal[AnalysisTaskType.QUERY] = AnalysisTaskType.QUERY
+    # 查询任务只能引用执行需求，不能由规划模型重新拼装查询口径。
+    source_requirement_id: str | None = Field(default=None, min_length=1, max_length=128)
     spec: QueryTaskSpec
     compiled: CompiledQuery | None = None
 
@@ -85,6 +87,8 @@ class ComputeTask(BaseModel):
 
     id: str = Field(min_length=1, max_length=128)
     type: Literal[AnalysisTaskType.COMPUTE] = AnalysisTaskType.COMPUTE
+    # 计算任务只能引用执行需求中的后置计算定义。
+    source_calculation_id: str | None = Field(default=None, min_length=1, max_length=128)
     operation: ComputeOperation
     inputs: tuple[str, ...] = Field(min_length=1)
     join_on: tuple[str, ...] = ()

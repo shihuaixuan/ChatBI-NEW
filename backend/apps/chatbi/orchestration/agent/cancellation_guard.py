@@ -1,4 +1,4 @@
-"""AgentLoop 和 ToolExecutor 共用的取消检查守卫。"""
+"""RunOrchestrator 和 ToolExecutor 共用的取消检查守卫。"""
 
 from __future__ import annotations
 

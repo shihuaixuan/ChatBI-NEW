@@ -23,12 +23,14 @@ from apps.chatbi.orchestration.agent.semantic_projection import (
     refresh_semantic_projection,
 )
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
+from apps.chatbi.orchestration.agent.tool_results import ChatBIToolResultProcessor
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.generation.capability_answer import build_capability_answer
 from apps.chatbi.services.understanding import (
     ClarificationCard,
     ClarificationRefusal,
     QuestionUnderstandingService,
+    SemanticParseService,
     apply_question_understanding_clarification,
     evaluate_clarification,
 )
@@ -47,6 +49,8 @@ from apps.retrieval import (
 )
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.temporal import resolve_time_range
+from apps.tool import ToolCall, ToolCallContext, ToolRegistry, ToolStatus
+from apps.tool.tools.semantic import SearchSemanticAssetsTool
 from apps.tool.tools.semantic_contracts import (
     project_semantic_compile_plan,
     project_semantic_query_plan,
@@ -73,6 +77,9 @@ class AgentInputPreparer:
         event_publisher: EventPublisher,
         trace_recorder: AgentTraceRecorder,
         memory_service: MemoryService | None = None,
+        registry: ToolRegistry | None = None,
+        result_processor: ChatBIToolResultProcessor | None = None,
+        semantic_parse_service: SemanticParseService | None = None,
     ) -> None:
         self._session = session
         self._config = config
@@ -82,6 +89,9 @@ class AgentInputPreparer:
         self._event_publisher = event_publisher
         self._trace_recorder = trace_recorder
         self._memory_service = memory_service
+        self._registry = registry
+        self._result_processor = result_processor
+        self._semantic_parse_service = semantic_parse_service
 
     def prepare_initial(
         self,
@@ -170,6 +180,7 @@ class AgentInputPreparer:
                 state.context.state["temporal_shadow_observation"] = (
                     outcome.temporal_shadow.model_dump(mode="json")
                 )
+            self._prepare_semantic_parse(state)
             state.messages = [AgentMessage.user(outcome.output.rewrite_question)]
             state.system = self._build_system(
                 state,
@@ -471,6 +482,75 @@ class AgentInputPreparer:
                 yield from self._refuse_question(state, preflight)
                 return False
         return True
+
+    def _prepare_semantic_parse(self, state: AgentRuntimeState) -> None:
+        """在模式路由前固定候选资产和语义解析，后续阶段只消费执行需求。"""
+
+        if self._registry is None or self._result_processor is None:
+            raise QuestionUnderstandingError("SEMANTIC_PREPARATION_SERVICES_REQUIRED")
+        if self._semantic_parse_service is None:
+            raise QuestionUnderstandingError("SEMANTIC_PARSE_SERVICE_REQUIRED")
+        search_tool = self._registry.get("search_semantic_assets")
+        if search_tool is None:
+            # 旧注册表没有候选检索工具时，保留原有 ReAct 入口。
+            return
+        is_contract_search = isinstance(search_tool, SearchSemanticAssetsTool)
+        run_id = state.require_run_id()
+        original_state = dict(state.context.state)
+        result = self._registry.execute(
+            ToolCall(
+                name="search_semantic_assets",
+                args={},
+                call_id=f"prepare:{run_id}:search_semantic_assets",
+            ),
+            state.context,
+            call_context=ToolCallContext(
+                tool_call_id=f"prepare:{run_id}:search_semantic_assets",
+                cancellation=state.cancellation,
+            ),
+        )
+        projection = self._result_processor.process(
+            state.context,
+            "search_semantic_assets",
+            result,
+        )
+        state.context.state.update(projection.state_patch)
+        if projection.result.status is not ToolStatus.SUCCEEDED:
+            raise QuestionUnderstandingError(
+                projection.result.error_code or "SEMANTIC_RETRIEVAL_FAILED"
+            )
+        package = state.context.state.get("semantic_package")
+        if not isinstance(package, dict):
+            raise QuestionUnderstandingError("SEMANTIC_PACKAGE_REQUIRED")
+        raw_candidate_groups = package.get("candidate_groups")
+        if not isinstance(raw_candidate_groups, dict):
+            if is_contract_search:
+                raise QuestionUnderstandingError("SEMANTIC_CANDIDATE_GROUPS_REQUIRED")
+            # 非新模式工具注册表可能只提供旧语义摘要，交回旧主循环处理。
+            state.context.state.clear()
+            state.context.state.update(original_state)
+            return
+        candidate_groups = _normalize_candidate_groups(raw_candidate_groups)
+        if not candidate_groups["metrics"]:
+            if is_contract_search:
+                raise QuestionUnderstandingError("SEMANTIC_METRIC_CANDIDATE_REQUIRED")
+            state.context.state.clear()
+            state.context.state.update(original_state)
+            return
+        understanding = state.context.state.get("question_understanding")
+        if not isinstance(understanding, dict):
+            raise QuestionUnderstandingError("QUESTION_UNDERSTANDING_REQUIRED")
+        semantic_parse = self._semantic_parse_service.parse(
+            rewrite_question=str(understanding.get("rewrite_question") or ""),
+            candidate_payload={"candidate_groups": candidate_groups},
+        )
+        state.context.state.update(
+            {
+                "candidate_groups": candidate_groups,
+                "semantic_parse": semantic_parse.model_dump(mode="json"),
+            }
+        )
+        self._persist_snapshot(state)
 
     def _apply_time_range_clarification(
         self,
@@ -1180,6 +1260,50 @@ def _remaining_ambiguity_summary(payload: dict[str, Any]) -> list[dict[str, Any]
                 "candidates": candidates,
             }
         )
+    return result
+
+
+def _normalize_candidate_groups(value: Any) -> dict[str, list[dict[str, Any]]]:
+    """补齐候选引用，保证语义解析和模式路由使用同一组候选资产。"""
+
+    if not isinstance(value, dict):
+        raise QuestionUnderstandingError("SEMANTIC_CANDIDATE_GROUPS_REQUIRED")
+    result: dict[str, list[dict[str, Any]]] = {"metrics": [], "dimensions": []}
+    for group, asset_type in (("metrics", "METRIC"), ("dimensions", "DIMENSION")):
+        items = value.get(group) or []
+        if not isinstance(items, list):
+            raise QuestionUnderstandingError("SEMANTIC_CANDIDATE_GROUPS_INVALID")
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            asset_id = item.get("asset_id")
+            model_id = item.get("model_id")
+            if (
+                isinstance(asset_id, bool)
+                or not isinstance(asset_id, int)
+                or asset_id <= 0
+                or isinstance(model_id, bool)
+                or not isinstance(model_id, int)
+                or model_id <= 0
+            ):
+                continue
+            display_name = str(
+                item.get("display_name")
+                or item.get("biz_name")
+                or item.get("name")
+                or f"{asset_type}:{asset_id}"
+            )
+            result[group].append(
+                {
+                    **item,
+                    "ref": str(item.get("ref") or f"{asset_type}:{asset_id}:{model_id}"),
+                    "asset_type": asset_type,
+                    "asset_id": asset_id,
+                    "model_id": model_id,
+                    "display_name": display_name,
+                    "biz_name": str(item.get("biz_name") or display_name),
+                }
+            )
     return result
 
 

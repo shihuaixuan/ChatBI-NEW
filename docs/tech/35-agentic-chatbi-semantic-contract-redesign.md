@@ -755,7 +755,7 @@ class SemanticRuntimeViewSnapshot:
 
 ### R1 提及契约（2-3 周）——目标：理解输出携带跨度与表达，检索消费 mention
 
-**R1 当前实现状态（2026-08-18，按当前代码复核）**：R1 提及契约已接入现有公共 Agent 主路径，由 `QuestionUnderstandingService` 产出 MentionGraph，再由 `AgentLoop` 进入 FAST/PLAN 的检索、编译、执行和回答阶段；不存在独立的 `QuestionRuntimeService` 公共生产入口。已完成 SemanticMention/AnalysisExpression 契约、跨度和字段级结构归一化、完整指标短语保真、过滤值与维度分离、多时间表达、HAVING/排序/预聚合编译等改动。结构与业务门禁仍需通过现有 Agent 公共入口重新跑批确认，不能把旁路运行时的历史结果当作 P1 验收结果。
+**R1 当前实现状态（2026-08-18，按当前代码复核）**：R1 提及契约已接入现有公共 Agent 主路径，由 `QuestionUnderstandingService` 产出 MentionGraph，再由 `RunOrchestrator` 进入 FAST/PLAN 的检索、编译、执行和回答阶段；不存在独立的 `QuestionRuntimeService` 公共生产入口。已完成 SemanticMention/AnalysisExpression 契约、跨度和字段级结构归一化、完整指标短语保真、过滤值与维度分离、多时间表达、HAVING/排序/预聚合编译等改动。结构与业务门禁仍需通过现有 Agent 公共入口重新跑批确认，不能把旁路运行时的历史结果当作 P1 验收结果。
 
 | # | 事项 | 文件 |
 |---|------|------|

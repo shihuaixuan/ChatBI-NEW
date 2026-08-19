@@ -17,6 +17,10 @@ from apps.chatbi.models.dto.analysis_plan import (
     ResultSetKind,
     ResultSetRef,
 )
+from apps.chatbi.models.dto.execution_requirement import (
+    ExecutionRequirement,
+    execution_requirement_from_state,
+)
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tool_results import ChatBIToolResultProcessor
@@ -83,6 +87,14 @@ def _task_time_range(task_spec: Any, time_dimension_id: int | None) -> dict[str,
     return None
 
 
+def _time_ranges_equal(left: Any, right: Any) -> bool:
+    """比较规范化后的时间范围，避免同口径的 current/previous 选错计划。"""
+
+    if left is None or right is None:
+        return left is None and right is None
+    return _canonical_time_range(left) == _canonical_time_range(right)
+
+
 class PlanPipelineError(RuntimeError):
     """PLAN 模式无法安全进入下一阶段。"""
 
@@ -137,24 +149,24 @@ class PlanPipeline:
             self._metrics.record_run(mode="plan", status="started")
         understanding = state.context.state.get("question_understanding")
         if not isinstance(understanding, dict):
-            raise PlanPipelineError("PLAN_QUESTION_UNDERSTANDING_REQUIRED")
-        if state.context.semantic_asset_scope is None:
-            self._call_tool(state, "search_semantic_assets", {})
+            understanding = {}
+        execution_requirement = self._load_execution_requirement(state)
+        try:
+            execution_requirement.require_ready("plan")
+        except ValueError as exc:
+            raise PlanPipelineError(str(exc)) from exc
         plan_id = f"plan-{run_id}"
-        if self._is_ambiguous(state):
-            yield from self._suspend_semantic_clarification(state, plan_id)
-            return
-        patched_payload = understanding.get("patched_analysis_plan")
-        if isinstance(patched_payload, dict):
-            # 补丁计划已经在问题理解阶段完成服务端校验，换用当前 Run 的计划编号。
-            patched = AnalysisPlan.model_validate(patched_payload)
-            plan = patched.model_copy(update={"id": plan_id})
-        else:
-            plan = self._planner.plan_from_semantic_state(
+        dataset_id = execution_requirement.runtime.get("dataset_id")
+        if not isinstance(dataset_id, int) or isinstance(dataset_id, bool):
+            dataset_id = state.context.dataset_id or 0
+        try:
+            plan = self._planner.plan_from_execution_requirement(
                 plan_id=plan_id,
-                question_understanding=understanding,
-                semantic_state=state.context.state,
+                requirement=execution_requirement,
+                dataset_id=dataset_id,
             )
+        except ValueError as exc:
+            raise PlanPipelineError(str(exc)) from exc
         yield self._events.plan_created(
             run_id,
             {
@@ -416,6 +428,15 @@ class PlanPipeline:
             and scope.decision_status.value == "ambiguous"
         )
 
+    @staticmethod
+    def _load_execution_requirement(state: AgentRuntimeState) -> ExecutionRequirement:
+        """读取路由阶段产物；Plan 不再自行检索或重新绑定语义资产。"""
+
+        try:
+            return execution_requirement_from_state(state.context.state)
+        except ValueError as exc:
+            raise PlanPipelineError(str(exc)) from exc
+
     def _compile_task(
         self,
         state: AgentRuntimeState,
@@ -445,9 +466,19 @@ class PlanPipeline:
                             item.physical_dimension_id for item in candidate.dimensions
                         }
                         == set(task_spec.dimension_ids)
+                        and _time_ranges_equal(
+                            _task_time_range(
+                                task_spec,
+                                candidate.time_binding.dimension_id,
+                            ),
+                            candidate.time_binding.time_range,
+                        )
                     ),
                     None,
                 )
+            if selected_plan is None and getattr(task, "source_requirement_id", None) is not None:
+                # 新契约节点必须按来源需求精确匹配，不能退回索引或唯一计划兜底。
+                raise PlanPipelineError("PLAN_STRICT_SOURCE_REQUIREMENT_NOT_MATCHED")
             if selected_plan is None and task_spec is None:
                 if strict_query_index < 0 or strict_query_index >= len(query_plans):
                     raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")

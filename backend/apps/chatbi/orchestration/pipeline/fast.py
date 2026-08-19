@@ -17,6 +17,12 @@ from apps.chatbi.models.dto.analysis_plan import (
     QueryTask,
     QueryTaskSpec,
 )
+from apps.chatbi.models.dto.execution_requirement import (
+    ExecutionRequirement,
+    QueryRequirement,
+    execution_requirement_from_state,
+    query_requirement_to_spec,
+)
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tool_results import ChatBIToolResultProcessor
@@ -42,7 +48,13 @@ from apps.chatbi.services.planning.confidence import (
     assess_confidence,
 )
 from apps.event import EventPublisher, RenderEvent
+from apps.semantic import (
+    SemanticQueryPlanningInput,
+    SemanticQueryPlanningService,
+    SemanticQueryValidationService,
+)
 from apps.tool import ToolCall, ToolCallContext, ToolRegistry, ToolResult, ToolStatus
+from apps.tool.tools.semantic_contracts import SemanticAssetScope
 from apps.trace import (
     AgentTraceRecorder,
     TraceNodeSpec,
@@ -101,22 +113,16 @@ class FastPipeline:
         run_id = state.require_run_id()
         if self._metrics is not None:
             self._metrics.record_run(mode="fast", status="started")
-        self._require_understanding(state)
+        execution_requirement = self._load_execution_requirement(state)
+        try:
+            execution_requirement.require_ready("fast")
+        except ValueError as exc:
+            raise FastPipelineError(str(exc)) from exc
+        if len(execution_requirement.query_requirements) != 1:
+            raise FastPipelineError("FAST_SINGLE_QUERY_REQUIRED")
+        if execution_requirement.post_calculations:
+            raise FastPipelineError("FAST_POST_CALCULATION_UNEXPECTED")
         plan_id = f"fast-{run_id}"
-
-        # bind：复用已确认的问题理解，通过现有语义检索服务产生可信范围。
-        if state.context.semantic_asset_scope is None:
-            try:
-                self._call_tool(state, "search_semantic_assets", {})
-                self._record_confidence(state)
-            except FastPipelineError as exc:
-                if self._can_use_assisted_fallback(state):
-                    yield from self._run_assisted_fallback(state, str(exc))
-                    return
-                raise
-        if self._is_ambiguous(state):
-            yield from self._suspend_semantic_clarification(state, plan_id)
-            return
 
         # 只有语义绑定完成且可以进入执行计划时，才发布 plan-created 事件。
         # 澄清分支不再留下一个实际上不存在的 DRAFT AnalysisPlan。
@@ -125,7 +131,12 @@ class FastPipeline:
             {"record_id": state.record.id, "run_id": run_id, "plan_id": plan_id, "status": "DRAFT"},
         )
         self._session.commit()
-        query_task = self._build_query_task(state, plan_id)
+        query_requirement = execution_requirement.query_requirements[0]
+        query_task = self._build_query_task_from_requirement(
+            state,
+            query_requirement,
+        )
+        self._prepare_strict_scope_from_requirement(state, query_requirement)
         draft_plan = AnalysisPlan(
             id=plan_id,
             tasks=(query_task,),
@@ -461,6 +472,198 @@ class FastPipeline:
     def _require_understanding(state: AgentRuntimeState) -> None:
         if not isinstance(state.context.state.get("question_understanding"), dict):
             raise FastPipelineError("FAST_QUESTION_UNDERSTANDING_REQUIRED")
+
+    def _prepare_strict_scope_from_requirement(
+        self,
+        state: AgentRuntimeState,
+        requirement: QueryRequirement,
+    ) -> None:
+        """把新执行需求转换为严格编译器所需的已验证查询计划。"""
+
+        scope = state.context.semantic_asset_scope
+        if scope is None or scope.semantic_enforcement != "STRICT":
+            return
+        if scope.query_plan is not None and scope.validation_report is not None:
+            return
+        if self._semantic_schema_provider is None:
+            raise FastPipelineError("FAST_SEMANTIC_SCHEMA_PROVIDER_REQUIRED")
+
+        runtime = state.context.state.get("execution_requirement")
+        runtime = runtime.get("runtime") if isinstance(runtime, dict) else {}
+        dataset_id = runtime.get("dataset_id")
+        if not isinstance(dataset_id, int) or isinstance(dataset_id, bool):
+            dataset_id = state.context.dataset_id
+        if not isinstance(dataset_id, int) or dataset_id <= 0:
+            raise FastPipelineError("FAST_EXECUTION_REQUIREMENT_DATASET_REQUIRED")
+
+        schema = self._semantic_schema_provider.build_dataset_schema(
+            state.context.workspace_id,
+            dataset_id,
+        )
+        metric_ids = tuple(
+            int(item["asset_id"])
+            for item in requirement.metrics
+            if isinstance(item.get("asset_id"), int)
+            and not isinstance(item.get("asset_id"), bool)
+        )
+        dimension_items = [*requirement.group_by, *requirement.filters]
+        physical_dimensions = {item.id: item for item in schema.dimensions}
+        logical_dimension_ids: list[int] = []
+        dimension_usages: dict[int, tuple[str, ...]] = {}
+        for item in dimension_items:
+            asset_id = item.get("asset_id")
+            physical = physical_dimensions.get(asset_id)
+            logical_id = (
+                physical.ext_info.get("logical_dimension_id")
+                if physical is not None
+                else None
+            )
+            if not isinstance(logical_id, int) or logical_id <= 0:
+                raise FastPipelineError(
+                    f"FAST_LOGICAL_DIMENSION_REQUIRED:{asset_id}"
+                )
+            if logical_id not in logical_dimension_ids:
+                logical_dimension_ids.append(logical_id)
+            usage = "GROUP_BY" if item in requirement.group_by else "FILTER"
+            previous = dimension_usages.get(logical_id, ())
+            if usage not in previous:
+                dimension_usages[logical_id] = (*previous, usage)
+
+        where_filters = tuple(
+            {
+                "physical_dimension_id": item.get("asset_id"),
+                "operator": item.get("operator") or "=",
+                "value": item.get("value"),
+                "value_source": "USER",
+            }
+            for item in requirement.filters
+            if str(item.get("stage") or "where").lower() != "having"
+        )
+        having = tuple(
+            {
+                "physical_dimension_id": item.get("asset_id"),
+                "operator": item.get("operator") or "=",
+                "value": item.get("value"),
+                "value_source": "USER",
+            }
+            for item in requirement.filters
+            if str(item.get("stage") or "where").lower() == "having"
+        )
+        time = requirement.time or {}
+        normalized_time = time.get("normalized")
+        raw_query_shape = dict(requirement.query_shape or {})
+        query_shape = {
+            "select_mode": raw_query_shape.get("select_mode") or "aggregate",
+            "needs_group_by": bool(requirement.group_by),
+            **raw_query_shape,
+        }
+        planning_input = SemanticQueryPlanningInput(
+            dataset_id=dataset_id,
+            schema_version=schema.schema_version,
+            contract_version=schema.contract_version,
+            metric_ids=metric_ids,
+            logical_dimension_ids=tuple(logical_dimension_ids),
+            dimension_usages=dimension_usages,
+            filters=where_filters,
+            time_range=(
+                normalized_time if isinstance(normalized_time, dict) else None
+            ),
+            time_dimension_id=(
+                int(time["dimension_id"])
+                if isinstance(time.get("dimension_id"), int)
+                and not isinstance(time.get("dimension_id"), bool)
+                else None
+            ),
+            time_grain=(str(time["grain"]) if time.get("grain") else None),
+            select_mode=str(query_shape.get("select_mode") or "aggregate"),
+            query_shape=query_shape,
+            having=having,
+            time_offset=requirement.time_offset,
+            order_by=requirement.order_by,
+            limit=requirement.limit,
+        )
+        plan = SemanticQueryPlanningService().plan(schema, planning_input)
+        report = SemanticQueryValidationService().validate(plan, schema)
+        if plan.validation_status.value != "PROVEN" or report.status.value != "PROVEN":
+            reasons = list(report.reason_codes or plan.validation_reason_codes)
+            raise FastPipelineError(
+                "FAST_EXECUTION_REQUIREMENT_PLAN_NOT_PROVEN"
+                + (":" + ",".join(reasons) if reasons else "")
+            )
+
+        allowed_assets = [
+            {
+                "asset_type": "METRIC",
+                "asset_id": asset_id,
+                "model_id": item.get("model_id"),
+            }
+            for item, asset_id in zip(requirement.metrics, metric_ids, strict=True)
+        ]
+        for item in [*requirement.group_by, *requirement.filters]:
+            asset_id = item.get("asset_id")
+            if not isinstance(asset_id, int) or isinstance(asset_id, bool):
+                continue
+            allowed_assets.append(
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": asset_id,
+                    "model_id": item.get("model_id"),
+                }
+            )
+        if isinstance(time.get("dimension_id"), int) and not isinstance(
+            time.get("dimension_id"), bool
+        ):
+            allowed_assets.append(
+                {
+                    "asset_type": "DIMENSION",
+                    "asset_id": time["dimension_id"],
+                    "model_id": None,
+                }
+            )
+        scope_payload = scope.model_dump(mode="json")
+        scope_payload.update(
+            {
+                "decision_status": "resolved",
+                "allowed_assets": allowed_assets,
+                "query_plan": plan.model_dump(mode="json"),
+                "query_plans": [plan.model_dump(mode="json")],
+                "validation_report": report.model_dump(mode="json"),
+                "validation_reports": [report.model_dump(mode="json")],
+            }
+        )
+        updated_scope = SemanticAssetScope.model_validate(scope_payload)
+        state.context.state["semantic_scope"] = updated_scope.model_dump(mode="json")
+
+    @staticmethod
+    def _load_execution_requirement(state: AgentRuntimeState) -> ExecutionRequirement:
+        """读取路由阶段产物；执行阶段不再自行补检索或重绑资产。"""
+
+        try:
+            return execution_requirement_from_state(state.context.state)
+        except ValueError as exc:
+            raise FastPipelineError(str(exc)) from exc
+
+    @staticmethod
+    def _build_query_task_from_requirement(
+        state: AgentRuntimeState,
+        requirement: Any,
+    ) -> QueryTask:
+        """把唯一执行需求转换为 Fast 的唯一查询节点。"""
+
+        runtime = state.context.state.get("execution_requirement")
+        runtime = runtime.get("runtime") if isinstance(runtime, dict) else {}
+        dataset_id = runtime.get("dataset_id") if isinstance(runtime, dict) else None
+        if not isinstance(dataset_id, int) or isinstance(dataset_id, bool):
+            dataset_id = state.context.dataset_id
+        try:
+            spec = query_requirement_to_spec(requirement, dataset_id=dataset_id or 0)
+        except ValueError as exc:
+            raise FastPipelineError(str(exc)) from exc
+        return QueryTask(
+            id=f"q:{requirement.id}",
+            source_requirement_id=requirement.id,
+            spec=spec,
+        )
 
     def _suspend_semantic_clarification(
         self,

@@ -61,7 +61,7 @@ class AgentToolContext:
     principal_roles: list[str] = field(default_factory=list)
     principal_role_ids: list[int] = field(default_factory=list)
     permission_version: str | None = None
-    # 循环内跨工具共享的运行时状态（语义包、执行结果标记等），由 loop 维护。
+    # 运行编排内跨工具共享的状态（语义包、执行结果标记等），由运行编排器维护。
     state: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -90,6 +90,11 @@ class AgentToolContext:
     def rewritten_question(self) -> str:
         """读取问题重写结果；候选检索请求本身不保存完整问题。"""
 
+        rewrite = self.state.get("question_rewrite")
+        if isinstance(rewrite, dict):
+            value = rewrite.get("rewrite_question")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
         understanding = self.state.get("question_understanding")
         if not isinstance(understanding, dict):
             return ""
@@ -98,6 +103,36 @@ class AgentToolContext:
     @property
     def semantic_retrieval_request(self) -> RetrievalRequest | None:
         """把 ChatBI 已确认问题投影为公共检索请求。"""
+
+        request = self.state.get("semantic_retrieval_request")
+        if isinstance(request, RetrievalRequest):
+            return request
+        if isinstance(request, dict):
+            return RetrievalRequest.model_validate(request)
+
+        rewrite = self.state.get("question_rewrite")
+        if isinstance(rewrite, dict):
+            rewrite_question = rewrite.get("rewrite_question")
+            dataset_id = self.dataset_id or self.state.get("dataset_id")
+            if (
+                isinstance(rewrite_question, str)
+                and rewrite_question.strip()
+                and isinstance(dataset_id, int)
+                and dataset_id > 0
+                and self.user_id is not None
+                and self.user_id > 0
+            ):
+                return build_retrieval_request(
+                    request_id=self.execution_id,
+                    tenant_id=self.oid,
+                    actor_id=self.user_id,
+                    dataset_id=dataset_id,
+                    metric_phrases=list(rewrite.get("metric_phrases") or []),
+                    dimension_phrases=list(rewrite.get("dimension_phrases") or []),
+                    principal_roles=self.principal_roles or None,
+                    principal_role_ids=self.principal_role_ids or None,
+                    permission_version=self.permission_version,
+                )
 
         understanding = self.state.get("question_understanding")
         if not isinstance(understanding, dict):

@@ -64,6 +64,14 @@ from apps.chatbi.models.dto.execution_binding import (
     ExecutionBinding,
     ExecutionBindingData,
 )
+from apps.chatbi.models.dto.execution_requirement import (
+    CalculationRequirement,
+    ExecutionRequirement,
+    ExecutionRoute,
+    QueryRequirement,
+    execution_requirement_from_state,
+    query_requirement_to_spec,
+)
 from apps.chatbi.models.dto.final_reply import (
     FinalReplyProjectionData,
     FinalReplyProjectionResult,
@@ -184,6 +192,12 @@ __all__ = [
     "ResultSetSnapshot",
     "ResultSetSummary",
     "build_result_set_id",
+    "CalculationRequirement",
+    "ExecutionRequirement",
+    "ExecutionRoute",
+    "QueryRequirement",
+    "execution_requirement_from_state",
+    "query_requirement_to_spec",
     "AgentClarificationRequest",
     "AgentConfig",
     "AgentQuestionRequest",

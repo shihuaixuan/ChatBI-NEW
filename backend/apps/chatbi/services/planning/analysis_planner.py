@@ -10,6 +10,7 @@ from apps.chatbi.errors import QuestionModelError
 from apps.chatbi.models.dto.analysis_plan import (
     AnalysisPlan,
     AnalysisPlanStatus,
+    ComputeDerivation,
     ComputeOperation,
     ComputeTask,
     PlanEdge,
@@ -17,6 +18,10 @@ from apps.chatbi.models.dto.analysis_plan import (
     PresentationHint,
     QueryTask,
     QueryTaskSpec,
+)
+from apps.chatbi.models.dto.execution_requirement import (
+    ExecutionRequirement,
+    query_requirement_to_spec,
 )
 from apps.chatbi.models.dto.question_model import (
     QuestionModelInvocationData,
@@ -60,6 +65,107 @@ class AnalysisPlanner:
             question_understanding=question_understanding,
             semantic_state=semantic_state,
         )
+
+    def plan_from_execution_requirement(
+        self,
+        *,
+        plan_id: str,
+        requirement: ExecutionRequirement,
+        dataset_id: int,
+    ) -> AnalysisPlan:
+        """只根据路由阶段产物生成计划，禁止规划阶段重新解释查询口径。"""
+
+        try:
+            requirement.require_ready("plan")
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        query_tasks = tuple(
+            QueryTask(
+                id=f"q:{item.id}",
+                source_requirement_id=item.id,
+                spec=query_requirement_to_spec(item, dataset_id=dataset_id),
+            )
+            for item in requirement.query_requirements
+        )
+        query_ids = {item.id: f"q:{item.id}" for item in requirement.query_requirements}
+        compute_tasks: list[ComputeTask] = []
+        for calculation in requirement.post_calculations:
+            operation = _compute_operation(calculation.type)
+            # merge 只描述多查询输入的合并关系，当前计算引擎直接按输入完成合并。
+            if operation is None:
+                if calculation.type.strip().lower() != "merge":
+                    raise ValueError(
+                        f"PLAN_CALCULATION_OPERATION_NOT_ALLOWED:{calculation.type}"
+                    )
+                continue
+            source_inputs = calculation.inputs or tuple(
+                item
+                for item in (calculation.current_input, calculation.previous_input)
+                if item
+            )
+            inputs = tuple(query_ids.get(item, item) for item in source_inputs)
+            if not inputs or any(item not in {task.id for task in query_tasks} for item in inputs):
+                raise ValueError(f"PLAN_CALCULATION_INPUT_NOT_FOUND:{calculation.id}")
+            details = dict(calculation.details)
+            join_on = calculation.join_keys or tuple(
+                str(item)
+                for item in details.get("join_keys") or []
+                if item
+            )
+            options = {
+                key: value
+                for key, value in details.items()
+                if key in {
+                    "dimensions",
+                    "value_columns",
+                    "dimension",
+                    "top_n",
+                    "limit",
+                    "index",
+                    "columns",
+                    "column",
+                }
+            }
+            derive = tuple(
+                ComputeDerivation.model_validate(item)
+                for item in details.get("derive") or []
+                if isinstance(item, dict)
+            )
+            compute_tasks.append(
+                ComputeTask(
+                    id=f"c:{calculation.id}",
+                    source_calculation_id=calculation.id,
+                    operation=operation,
+                    inputs=inputs,
+                    join_on=join_on,
+                    derive=derive,
+                    options=options,
+                )
+            )
+        tasks = (*query_tasks, *compute_tasks)
+        if not query_tasks:
+            raise ValueError("PLAN_QUERY_TASK_REQUIRED")
+        edges = tuple(
+            PlanEdge(source=input_id, target=task.id)
+            for task in compute_tasks
+            for input_id in task.inputs
+        )
+        primary = compute_tasks[-1].id if compute_tasks else query_tasks[0].id
+        plan = AnalysisPlan(
+            id=plan_id,
+            tasks=tasks,
+            edges=edges,
+            presentation=PresentationHint(primary_result=primary),
+            validation=PlanValidation(
+                status=AnalysisPlanStatus.DRAFT,
+                reports=({"planner_source": "execution_requirement"},),
+            ),
+        )
+        validation = validate_analysis_plan(
+            plan,
+            max_query_tasks=self._max_query_tasks,
+        )
+        return plan.model_copy(update={"validation": validation})
 
     def _model_or_rule_plan(
         self,
@@ -530,6 +636,24 @@ def _normalized_time_ranges(
         if isinstance(normalized, dict):
             result.append(normalized)
     return tuple(result)
+
+
+def _compute_operation(value: str) -> ComputeOperation | None:
+    """把执行需求中的计算名称映射到计算引擎白名单。"""
+
+    normalized = value.strip().lower()
+    return {
+        "difference": ComputeOperation.COMPARE,
+        "compare": ComputeOperation.COMPARE,
+        "growth": ComputeOperation.GROWTH,
+        "growth_rate": ComputeOperation.GROWTH,
+        "share": ComputeOperation.SHARE,
+        "composition": ComputeOperation.SHARE,
+        "topn_other": ComputeOperation.TOPN_OTHER,
+        "pivot": ComputeOperation.PIVOT,
+        "expr": ComputeOperation.EXPR,
+        "ratio": ComputeOperation.EXPR,
+    }.get(normalized)
 
 
 __all__ = ["AnalysisPlanner"]

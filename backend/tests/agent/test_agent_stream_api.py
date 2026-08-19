@@ -118,7 +118,7 @@ def test_unified_stream_starts_new_agent_run(monkeypatch):
     monkeypatch.setattr(service, "build_agent_trace_recorder", lambda: recorder)
     monkeypatch.setattr(
         service,
-        "build_agent_loop",
+        "build_run_orchestrator",
         lambda *args, **kwargs: FakeLoop(*args, **kwargs),
     )
 
@@ -215,7 +215,7 @@ def test_unified_stream_resumes_pending_clarification(monkeypatch):
 
     monkeypatch.setattr(
         service,
-        "build_agent_loop",
+        "build_run_orchestrator",
         lambda *args, **kwargs: FakeLoop(*args, **kwargs),
     )
 
