@@ -43,7 +43,6 @@ from apps.tool.tools.context import TrustedToolContext
 from apps.tool.tools.semantic_contracts import (
     SemanticAssetScope,
     SemanticToolContext,
-    project_semantic_compile_plan,
     project_semantic_query_plans,
 )
 
@@ -155,8 +154,8 @@ class SearchSemanticAssetsTool(
 ):
     name = "search_semantic_assets"
     description = (
-        "按上游已确认的问题理解检索候选指标、维度、术语与数据表，无需传入参数。回答问数问题前必须先调用，"
-        "返回的语义包（asset_id、口径、置信度、歧义提示）是后续编译 SQL 的唯一合法依据。"
+        "按问题重写模型输出的指标短语和维度短语检索候选资产，无需传入参数。"
+        "该工具只返回候选指标和维度，返回候选结果后结束。"
     )
     args_model = SearchSemanticAssetsArgs
     result_model = SearchSemanticAssetsResult
@@ -280,34 +279,17 @@ class SearchSemanticAssetsTool(
             )
 
         package = project_semantic_package(retrieval.payload, authorized)
-        package_keys = {
-            (item.asset_type, item.asset_id) for item in package.allowed_asset_ids
-        }
-        allowed_assets = tuple(
-            item
-            for item in retrieval.bundle.decision.allowed_asset_ids
-            if (item.asset_type, item.asset_id) in package_keys
-        )
-        time_range = request.intent.time_range
-        normalized_time_range = (
-            time_range.get("normalized")
-            if isinstance(time_range.get("normalized"), dict)
-            else None
-        )
         scope = SemanticAssetScope(
             workspace_id=ctx.workspace_id,
             user_id=ctx.user_id,
             datasource_id=ctx.datasource_id,
             dataset_id=ctx.dataset_id,
-            retrieval_id=retrieval.bundle.request_id,
-            decision_status=retrieval.bundle.decision.status,
-            allowed_assets=allowed_assets,
+            retrieval_id=request.request_id,
+            decision_status=None,
+            allowed_assets=(),
             authorized_tables=tuple(retrieved_tables),
-            normalized_time_range=normalized_time_range,
-            compile_plan=project_semantic_compile_plan(
-                package.slot_bindings,
-                request.intent.model_dump(mode="json"),
-            ),
+            normalized_time_range=None,
+            compile_plan=None,
             semantic_enforcement=_semantic_enforcement(
                 self._schema_provider,
                 ctx.workspace_id,
@@ -315,58 +297,12 @@ class SearchSemanticAssetsTool(
             ),
             permission_version=request.scope.permission_version,
         )
-        schema = None
-        if self._schema_provider is not None:
-            # 并发时间解析完成后需要用同一份 Schema 重新绑定默认时间维度。
-            schema = self._schema_provider.build_dataset_schema(
-                ctx.workspace_id,
-                ctx.dataset_id,
-            )
-        # 语义决策尚未完成时只能保留候选和歧义快照，不能提前投影严格计划。
-        # 否则会把“需要澄清”误报成“严格计划生成失败”，上层也就无法进入澄清流程。
-        if (
-            scope.semantic_enforcement == "STRICT"
-            and is_compilation_decision_executable(retrieval.bundle.decision.status)
-        ):
-            if schema is None:
-                return ToolResult.rejected(
-                    "严格语义数据集缺少运行时 Schema，禁止进入 Agent 编译链路。",
-                    error_code="semantic_schema_provider_required",
-                    error_category=ToolErrorCategory.CONFIGURATION,
-                )
-            try:
-                intent_payload = request.intent.model_dump(mode="json")
-                query_plans = _project_strict_query_plans(
-                    schema,
-                    package,
-                    intent_payload,
-                )
-            except (SemanticValidationError, ValueError) as exc:
-                return ToolResult.rejected(
-                    "严格语义资产未能形成完整查询计划，禁止回退到物理表查询。",
-                    error_code=str(exc),
-                    error_category=ToolErrorCategory.BUSINESS_RULE,
-                )
-            scope = scope.model_copy(
-                update={
-                    "query_plan": query_plans[0][0],
-                    "query_plans": tuple(item[0] for item in query_plans),
-                    "validation_report": query_plans[0][1],
-                    "validation_reports": tuple(item[1] for item in query_plans),
-                }
-            )
         data = SearchSemanticAssetsResult(package=package, scope=scope)
         metadata = {
             "semantic_payload": retrieval.payload,
             "semantic_retrieval_request": request.model_dump(mode="json"),
             "semantic_retrieval_filters": getattr(retrieval, "filters", {}),
         }
-        bundle_dump = getattr(retrieval.bundle, "model_dump", None)
-        if callable(bundle_dump):
-            metadata["semantic_bundle"] = bundle_dump(mode="json")
-        if schema is not None:
-            # 时间工具可能与语义检索并行；结果投影阶段用该快照重建含时间的计划。
-            metadata["semantic_schema"] = schema.model_dump(mode="json")
         return ToolResult.succeeded(
             json_summary(package.model_dump(mode="json"), ctx.summary_max_chars),
             data,
@@ -576,7 +512,11 @@ class CompileSemanticSqlTool(
                 error_code="semantic_decision_not_executable",
                 error_category=ToolErrorCategory.BUSINESS_RULE,
                 details={
-                    "decision_status": scope.decision_status.value,
+                    "decision_status": (
+                        scope.decision_status.value
+                        if scope.decision_status is not None
+                        else "candidate_only"
+                    ),
                     "retry_action": "clarify_semantic_binding",
                 },
             )
@@ -689,11 +629,8 @@ class CompileSemanticSqlTool(
                 SemanticQueryCompileRequest(
                     workspace_id=ctx.workspace_id,
                     dataset_id=scope.dataset_id,
-                    question=(
-                        ctx.semantic_retrieval_request.rewritten_question
-                        if ctx.semantic_retrieval_request
-                        else ""
-                    ),
+                    # 候选检索请求只保存短语；完整重写问题从可信上下文读取。
+                    question=ctx.rewritten_question,
                     slots=slots,
                     order_by=[
                         item.model_dump(mode="json")

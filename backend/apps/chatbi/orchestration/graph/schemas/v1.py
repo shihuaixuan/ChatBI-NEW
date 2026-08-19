@@ -99,8 +99,8 @@ class IntentValidationOutput(BaseModel):
 class KnowledgeRetrieveInput(BaseModel):
     """知识检索节点输入。"""
 
-    rewrite_question: str
-    intent: dict[str, Any]
+    metric_phrases: list[str]
+    dimension_phrases: list[str]
     tenant_id: int
     dataset_id: int
 

@@ -1,4 +1,4 @@
-"""semantic-binding 的独立执行入口。"""
+"""semantic-binding 候选资产检索的独立执行入口。"""
 
 from __future__ import annotations
 
@@ -21,10 +21,12 @@ from apps.retrieval.errors import RetrievalConfigurationError
 from apps.retrieval.models.dto import (
     CompositeMetricResolution,
     RatioSpec,
+    RetrievalBindingRequest,
     RetrievalBundle,
     RetrievalDecisionStatus,
     RetrievalHit,
     RetrievalProfileName,
+    RetrievalPurpose,
     RetrievalRequest,
     RetrievalResourceType,
     RetrievalScores,
@@ -33,6 +35,7 @@ from apps.retrieval.models.dto import (
 from apps.retrieval.models.orm import RetrievalQueryTraceModel
 from apps.retrieval.projection.payload import bundle_to_semantic_payload
 from apps.retrieval.query.hybrid import (
+    HybridRecallResult,
     HybridRetrievalConfig,
     SemanticBindingHybridRetriever,
 )
@@ -41,10 +44,7 @@ from apps.retrieval.query.policy import (
     bind_default_time_dimensions,
 )
 from apps.retrieval.query.profiles import get_retrieval_profile
-from apps.retrieval.query.ratio_resolution import (
-    CompositeResolutionReport,
-    resolve_composite_metrics,
-)
+from apps.retrieval.query.ratio_resolution import CompositeResolutionReport
 from apps.retrieval.query.semantic_runtime import (
     ObservedEmbeddingProvider,
     RetrievalEmbeddingRuntimeConfig,
@@ -76,8 +76,18 @@ class SemanticBindingExecutionResult(BaseModel):
     composite_resolutions: tuple[CompositeMetricResolution, ...] = ()
 
 
+class CandidateRetrievalExecutionResult(BaseModel):
+    """二期候选资产检索结果，不包含资产绑定决策。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    recall: HybridRecallResult
+    payload: dict[str, Any]
+    filters: dict[str, Any] = Field(default_factory=dict)
+
+
 class SemanticBindingRunner:
-    """在调用方提供的 session 内执行语义绑定，并投影为现有业务契约。"""
+    """在调用方提供的 session 内执行指标和维度候选召回。"""
 
     def __init__(
         self,
@@ -140,13 +150,15 @@ class SemanticBindingRunner:
             else exemplar_context_enabled
         )
 
-    def run(
+    def retrieve_candidates(
         self,
         session: Any,
         request: RetrievalRequest,
         strategy_version: str,
         timeout_ms: int,
-    ) -> SemanticBindingExecutionResult:
+    ) -> CandidateRetrievalExecutionResult:
+        """只执行指标和维度短语的多路召回，不执行绑定和语义解析。"""
+
         if request.profiles != [RetrievalProfileName.SEMANTIC_BINDING]:
             raise ValueError("SEMANTIC_BINDING_PROFILE_MISMATCH")
         profile = get_retrieval_profile(RetrievalProfileName.SEMANTIC_BINDING)
@@ -166,8 +178,40 @@ class SemanticBindingRunner:
             embedding_provider=provider,
             config=self._hybrid_config,
         )
-        policy = self._semantic_binding_policy(timeout_ms)
         recall = retriever.retrieve(strategy_request)
+        payload = _candidate_payload(recall)
+        initial_subqueries = [
+            item.model_dump(mode="json") for item in recall.plan.subqueries
+        ]
+        return CandidateRetrievalExecutionResult(
+            recall=recall,
+            payload=payload,
+            filters={
+                "plan_fingerprint": recall.plan.fingerprint,
+                "subqueries": initial_subqueries,
+                "stages": [{"stage": "candidate_retrieval", "subqueries": initial_subqueries}],
+                "elapsed_ms": (perf_counter() - started) * 1000,
+            },
+        )
+
+    def bind(
+        self,
+        session: Any,
+        request: RetrievalBindingRequest,
+        recall: HybridRecallResult,
+        timeout_ms: int,
+    ) -> SemanticBindingExecutionResult:
+        if request.profiles != [RetrievalProfileName.SEMANTIC_BINDING]:
+            raise ValueError("SEMANTIC_BINDING_PROFILE_MISMATCH")
+        profile = get_retrieval_profile(RetrievalProfileName.SEMANTIC_BINDING)
+        if request.strategy_version != profile.version:
+            raise ValueError("SEMANTIC_BINDING_STRATEGY_VERSION_MISMATCH")
+        if len(request.scope.dataset_ids) != 1:
+            raise ValueError("SEMANTIC_BINDING_DATASET_SCOPE_REQUIRED")
+
+        started = perf_counter()
+        self._set_database_timeout(session, timeout_ms)
+        policy = self._semantic_binding_policy(timeout_ms)
         policy_result = policy.apply(recall)
         schema_provider = self._schema_provider or build_semantic_schema_service(
             session
@@ -177,44 +221,14 @@ class SemanticBindingRunner:
             request.scope.dataset_ids[0],
         )
         bundle = bind_default_time_dimensions(
-            strategy_request,
+            request,
             policy_result.bundle,
             schema,
         )
         composite_report = CompositeResolutionReport((), ())
-        decomposition_recall: Any | None = None
-        if settings.CHATBI_MENTION_CONTRACT_ENABLED:
-            decomposition_queries = _decomposition_queries_for_request(
-                strategy_request,
-                bundle,
-            )
-            decomposition_bundle: RetrievalBundle | None = None
-            if decomposition_queries:
-                decomposition_request = strategy_request.model_copy(
-                    update={
-                        "intent": strategy_request.intent.model_copy(
-                            update={"decomposition_queries": decomposition_queries}
-                        )
-                    }
-                )
-                decomposition_recall = retriever.retrieve(decomposition_request)
-                decomposition_bundle = policy.apply(decomposition_recall).bundle
-            composite_report = resolve_composite_metrics(
-                strategy_request,
-                bundle,
-                decomposition_bundle,
-                schema,
-            )
-            if composite_report.resolutions:
-                bundle = _merge_composite_bundle(
-                    bundle,
-                    decomposition_bundle,
-                    composite_report,
-                    strategy_request,
-                )
-        bundle = self._attach_verified_exemplars(session, strategy_request, bundle)
+        bundle = self._attach_verified_exemplars(session, request, bundle)
         payload = bundle_to_semantic_payload(
-            strategy_request,
+            request,
             bundle,
             schema,
             ratio_specs=composite_report.ratio_specs,
@@ -222,10 +236,9 @@ class SemanticBindingRunner:
         )
         self._persist_query_trace(
             session,
-            strategy_request,
+            request,
             recall,
             bundle,
-            decomposition_recall=decomposition_recall,
             elapsed_ms=(perf_counter() - started) * 1000,
         )
         initial_subqueries = [
@@ -238,33 +251,14 @@ class SemanticBindingRunner:
             }
             for item in recall.plan.subqueries
         ]
-        decomposition_subqueries = (
-            [
-                {
-                    "subquery_id": item.subquery_id,
-                    "purpose": item.purpose.value,
-                    "text": item.text,
-                    "required": item.required,
-                    "stage": "decomposition",
-                }
-                for item in decomposition_recall.plan.subqueries
-            ]
-            if decomposition_recall is not None
-            else []
-        )
         return SemanticBindingExecutionResult(
             bundle=bundle,
             payload=payload,
             filters={
                 "plan_fingerprint": recall.plan.fingerprint,
-                "subqueries": [*initial_subqueries, *decomposition_subqueries],
+                "subqueries": initial_subqueries,
                 "stages": [
-                    {"stage": "initial", "subqueries": initial_subqueries},
-                    *(
-                        [{"stage": "decomposition", "subqueries": decomposition_subqueries}]
-                        if decomposition_subqueries
-                        else []
-                    ),
+                    {"stage": "candidate_retrieval", "subqueries": initial_subqueries},
                 ],
             },
             ratio_specs=composite_report.ratio_specs,
@@ -274,11 +268,10 @@ class SemanticBindingRunner:
     @staticmethod
     def _persist_query_trace(
         session: Any,
-        request: RetrievalRequest,
-        recall: Any,
+        request: RetrievalBindingRequest,
+        recall: HybridRecallResult,
         bundle: RetrievalBundle,
         *,
-        decomposition_recall: Any | None = None,
         elapsed_ms: float,
     ) -> None:
         """把可复现的检索诊断写入既有 retrieval_query_trace 表。"""
@@ -318,7 +311,9 @@ class SemanticBindingRunner:
             json.dumps(
                 {
                     "original_question": request.original_question,
-                    "rewritten_question": request.rewritten_question,
+                    "rewrite_question": request.rewrite_question,
+                    "metric_phrases": request.metric_phrases,
+                    "dimension_phrases": request.dimension_phrases,
                     "intent": request.intent.model_dump(mode="json"),
                 },
                 ensure_ascii=False,
@@ -328,14 +323,6 @@ class SemanticBindingRunner:
         initial_subqueries = [
             item.model_dump(mode="json") for item in recall.plan.subqueries
         ]
-        decomposition_subqueries = (
-            [
-                item.model_dump(mode="json")
-                for item in decomposition_recall.plan.subqueries
-            ]
-            if decomposition_recall is not None
-            else []
-        )
         trace = RetrievalQueryTraceModel(
             tenant_id=request.tenant_id,
             actor_id=request.actor_id,
@@ -345,14 +332,9 @@ class SemanticBindingRunner:
             permission_version=request.scope.permission_version,
             scope_filters=request.scope.model_dump(mode="json"),
             filters={
-                "subqueries": [*initial_subqueries, *decomposition_subqueries],
+                "subqueries": initial_subqueries,
                 "stages": [
-                    {"stage": "initial", "subqueries": initial_subqueries},
-                    *(
-                        [{"stage": "decomposition", "subqueries": decomposition_subqueries}]
-                        if decomposition_subqueries
-                        else []
-                    ),
+                    {"stage": "candidate_retrieval", "subqueries": initial_subqueries},
                 ],
             },
             channels=[item.model_dump(mode="json") for item in bundle.diagnostics.channels],
@@ -372,7 +354,7 @@ class SemanticBindingRunner:
     def _attach_verified_exemplars(
         self,
         session: Any,
-        request: RetrievalRequest,
+        request: RetrievalBindingRequest,
         bundle: RetrievalBundle,
     ) -> RetrievalBundle:
         """相似 verified SQL 示例进语义包上下文；关闭开关时明确跳过。"""
@@ -382,7 +364,7 @@ class SemanticBindingRunner:
         exemplar_profile = get_retrieval_profile(RetrievalProfileName.SQL_EXEMPLAR)
         payloads = SQLExampleSearchStore(session).search_exemplar_hits_by_dataset(
             request.tenant_id,
-            request.rewritten_question,
+            request.rewrite_question,
             dataset_id=request.scope.dataset_ids[0],
             limit=exemplar_profile.result_limit,
         )
@@ -487,14 +469,89 @@ class SemanticBindingRunner:
 
 
 __all__ = [
+    "CandidateRetrievalExecutionResult",
     "SEMANTIC_BINDING_STRATEGY_VERSION",
     "SemanticBindingExecutionResult",
     "SemanticBindingRunner",
 ]
 
 
+def _candidate_payload(recall: HybridRecallResult) -> dict[str, Any]:
+    """把召回事实投影为候选资产包，不生成 selected_assets 或 decision。"""
+
+    groups: dict[str, list[dict[str, Any]]] = {"metrics": [], "dimensions": []}
+    positions: dict[tuple[str, str], dict[str, Any]] = {}
+    for slot in recall.slots:
+        if slot.subquery.purpose == RetrievalPurpose.METRIC:
+            group = "metrics"
+        elif slot.subquery.purpose == RetrievalPurpose.DIMENSION:
+            group = "dimensions"
+        else:
+            continue
+        for hit in slot.hits:
+            if hit.asset_ref is None:
+                continue
+            asset_type = hit.asset_ref.asset_type.value
+            model_suffix = (
+                str(hit.asset_ref.model_id)
+                if hit.asset_ref.model_id is not None
+                else ""
+            )
+            ref = f"{asset_type}:{hit.asset_ref.asset_id}:{model_suffix}"
+            key = (group, ref)
+            candidate = positions.get(key)
+            if candidate is None:
+                candidate = {
+                    # ref 是候选绑定模型唯一允许引用的稳定资产标识。
+                    "ref": ref,
+                    "asset_type": asset_type,
+                    "asset_id": hit.asset_ref.asset_id,
+                    "model_id": hit.asset_ref.model_id,
+                    "display_name": hit.title,
+                    "biz_name": hit.metadata.get("biz_name") or hit.title,
+                    "description": hit.snippet,
+                    "matched_text": hit.matched_text,
+                    "matched_field": hit.matched_field,
+                    "score": hit.scores.final,
+                    "retrieval_scores": hit.scores.model_dump(mode="json"),
+                    "retrieval_ranks": {
+                        channel.value: rank
+                        for channel, rank in hit.ranks_by_channel.items()
+                    },
+                    "source": "semantic_candidate_retrieval",
+                    "source_resource_id": hit.source_resource_id,
+                    "subquery_id": slot.subquery.subquery_id,
+                    "matched_phrase": slot.subquery.text,
+                    "matched_phrases": [slot.subquery.text],
+                }
+                positions[key] = candidate
+                groups[group].append(candidate)
+                continue
+            if slot.subquery.text not in candidate["matched_phrases"]:
+                candidate["matched_phrases"].append(slot.subquery.text)
+            if hit.scores.final is not None and (
+                candidate["score"] is None or hit.scores.final > candidate["score"]
+            ):
+                candidate["score"] = hit.scores.final
+    return {
+        "hit": any(groups.values()),
+        "status": "candidates_available" if any(groups.values()) else "missed",
+        "candidate_groups": groups,
+        "selected_assets": {},
+        "slot_bindings": {},
+        "decision": {},
+        "ambiguities": [],
+        "allowed_asset_ids": [],
+        "retrieval_strategy_version": SEMANTIC_BINDING_STRATEGY_VERSION,
+        "retrieval_diagnostics": {
+            "index_generations": list(recall.index_generations),
+            "total_latency_ms": recall.total_latency_ms,
+        },
+    }
+
+
 def _decomposition_queries_for_request(
-    request: RetrievalRequest,
+    request: RetrievalBindingRequest,
     bundle: RetrievalBundle,
 ) -> list[dict[str, str]]:
     """只为整体短语未收敛的 composite mention 建立二阶段检索文本。"""
@@ -537,7 +594,7 @@ def _merge_composite_bundle(
     base: RetrievalBundle,
     decomposition: RetrievalBundle | None,
     report: CompositeResolutionReport,
-    request: RetrievalRequest,
+    request: RetrievalBindingRequest,
 ) -> RetrievalBundle:
     """把二阶段操作数候选合入统一 Bundle，同时禁止失败进入澄清状态。"""
 

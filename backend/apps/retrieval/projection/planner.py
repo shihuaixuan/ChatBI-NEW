@@ -15,7 +15,6 @@ from apps.retrieval.models.dto import (
     RetrievalResourceType,
     RetrievalSubQuery,
 )
-from common.core.config import settings
 
 
 class RetrievalQueryPlan(BaseModel):
@@ -37,58 +36,30 @@ class RetrievalQueryPlan(BaseModel):
 
 
 class SemanticBindingQueryPlanner:
-    """只读取已确认意图，不调用模型、不猜测资产 ID。"""
+    """只读取指标和维度短语，不调用模型、不猜测资产 ID。"""
 
     def plan(self, request: RetrievalRequest) -> RetrievalQueryPlan:
         if request.profiles != [RetrievalProfileName.SEMANTIC_BINDING]:
             raise ValueError("SEMANTIC_BINDING_QUERY_PLANNER_PROFILE_MISMATCH")
 
         subqueries: list[RetrievalSubQuery] = []
-        metric_mentions = _metric_mentions(request)
-        for index, mention in enumerate(metric_mentions, start=1):
-            retrieval_text = (
-                mention
-                if request.intent.mention_graph is not None
-                else _legacy_metric_retrieval_text(mention, request.rewritten_question)
-            )
+        for index, phrase in enumerate(request.metric_phrases, start=1):
             subqueries.append(
                 self._subquery(
                     request,
                     subquery_id=f"metric:{index}",
                     purpose=RetrievalPurpose.METRIC,
-                    text=retrieval_text,
+                    text=phrase,
                     resource_types=(RetrievalResourceType.METRIC,),
                 )
             )
 
-        # 复合指标只在第一阶段整体短语未收敛后由 Runner 注入这些内部查询。
-        # 它们不来自模型直接的指标槽，也不会被展示为用户澄清选项。
-        for item in request.intent.decomposition_queries:
-            mention_id = _clean_text(item.get("mention_id"))
-            role = _clean_text(item.get("role"))
-            text = _clean_text(item.get("text"))
-            if not mention_id or role not in {"numerator", "denominator"} or not text:
-                continue
-            subqueries.append(
-                self._subquery(
-                    request,
-                    subquery_id=f"ratio:{mention_id}:{role}",
-                    purpose=RetrievalPurpose.METRIC,
-                    text=text,
-                    resource_types=(RetrievalResourceType.METRIC,),
-                )
-            )
-
-        # 上游已经确定维度名称和维度值；这里检索具体维度资产，重复名称由指标模型关系消歧。
-        seen_dimensions: set[tuple[str, str]] = set()
+        # 二期只检索问题重写模型输出的维度短语。
+        seen_dimensions: set[str] = set()
         dimension_index = 0
-        for slot in request.intent.dimension_slots:
-            name = _clean_text(slot.name)
-            # MentionGraph 保留“各店铺/每个店铺”的原文跨度，但检索槽只需
-            # 业务对象本身。量词不是语义资产名称，直接送入召回会降低精确
-            # 别名命中率，也不能依赖某个具体题目的固定文本。
-            name = _dimension_asset_text(name)
-            identity = (name.casefold(), slot.role)
+        for phrase in request.dimension_phrases:
+            name = _clean_text(phrase)
+            identity = name.casefold()
             if not name or identity in seen_dimensions:
                 continue
             seen_dimensions.add(identity)
@@ -100,42 +71,8 @@ class SemanticBindingQueryPlanner:
                     purpose=RetrievalPurpose.DIMENSION,
                     text=name,
                     resource_types=(RetrievalResourceType.DIMENSION,),
-                    role=slot.role,
                 )
             )
-
-        for index, term in enumerate(
-            _subject_terms(request.intent.subject_domain), start=1
-        ):
-            subqueries.append(
-                self._subquery(
-                    request,
-                    subquery_id=f"term:{index}",
-                    purpose=RetrievalPurpose.TERM,
-                    text=term,
-                    resource_types=(RetrievalResourceType.TERM,),
-                    required=False,
-                )
-            )
-
-        # 筛选值归一：把用户原话中的筛选值送去维值字典检索；未命中不阻断主链路。
-        if settings.CHATBI_VALUE_BINDING_ENABLED:
-            for index, (dimension_name, value_text) in enumerate(
-                value_lookup_slots(request.intent.model_dump(mode="json")),
-                start=1,
-            ):
-                subqueries.append(
-                    self._subquery(
-                        request,
-                        subquery_id=f"value:{index}",
-                        purpose=RetrievalPurpose.VALUE,
-                        text=value_text,
-                        resource_types=(RetrievalResourceType.VALUE,),
-                        role="filter",
-                        required=False,
-                        extra_filters={"dimension_name": dimension_name},
-                    )
-                )
 
         fingerprint_payload = [item.model_dump(mode="json") for item in subqueries]
         encoded = json.dumps(
@@ -185,65 +122,6 @@ class SemanticBindingQueryPlanner:
 
 
 
-def _metric_mentions(request: RetrievalRequest) -> list[str]:
-    """优先消费 R1 MentionGraph，computed 提及不生成 METRIC 检索槽。"""
-
-    graph = request.intent.mention_graph
-    if isinstance(graph, dict):
-        mentions = graph.get("mentions")
-        if isinstance(mentions, list):
-            return _unique_texts(
-                [
-                    item.get("text")
-                    for item in mentions
-                    if isinstance(item, dict)
-                    and item.get("kind") == "metric_phrase"
-                    and item.get("metric_role") != "computed"
-                ]
-            )
-    return _unique_texts(request.intent.metric_mentions)
-
-
-def _legacy_metric_retrieval_text(mention: str, question: str) -> str:
-    """R0 回滚路径保留旧的限定词兜底；R1 MentionGraph 不调用此函数。"""
-
-    normalized_mention = _clean_text(mention)
-    normalized_question = _clean_text(question)
-    if not normalized_mention or not normalized_question:
-        return normalized_mention
-    position = normalized_question.find(normalized_mention)
-    if position < 0:
-        return normalized_mention
-    before = normalized_question[position - 1] if position > 0 else ""
-    end = position + len(normalized_mention)
-    after = normalized_question[end] if end < len(normalized_question) else ""
-    separators = {"的", "与", "和", "及", "、", ",", "，", ":", "：", " ", "（", "("}
-    question_suffixes = {"是", "有", "为", "多少", "吗", "呢", "占", "比", "趋势"}
-    has_prefix_qualifier = _is_cjk_text(before) and before not in separators
-    has_suffix_qualifier = (
-        _is_cjk_text(after)
-        and after not in separators
-        and after not in question_suffixes
-    )
-    if has_prefix_qualifier or has_suffix_qualifier:
-        return normalized_question
-    return normalized_mention
-
-
-def _is_cjk_text(value: str) -> bool:
-    return "\u4e00" <= value <= "\u9fff"
-
-
-def _dimension_asset_text(value: str) -> str:
-    """移除不属于维度名称的通用数量/分组量词。"""
-
-    text = _clean_text(value)
-    for prefix in ("每一个", "每个", "各个", "各"):
-        if text.startswith(prefix) and len(text) > len(prefix):
-            return text[len(prefix) :].strip()
-    return text
-
-
 def value_lookup_slots(intent: dict[str, Any]) -> list[tuple[str, str]]:
     """推导需要维值归一的 (维度名, 原始筛选值) 列表。
 
@@ -289,26 +167,6 @@ def _is_lookup_worthy_value(text: str) -> bool:
     return True
 
 
-def _subject_terms(subject_domain: dict[str, Any]) -> list[str]:
-    terms = subject_domain.get("terms") or []
-    if not isinstance(terms, list):
-        return []
-    return _unique_texts(terms)
-
-
-def _unique_texts(values: list[Any]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        text = _clean_text(value)
-        key = text.casefold()
-        if not text or key in seen:
-            continue
-        seen.add(key)
-        result.append(text)
-    return result
-
-
 def _clean_text(value: Any) -> str:
     if value is None:
         return ""
@@ -318,5 +176,4 @@ def _clean_text(value: Any) -> str:
 __all__ = [
     "RetrievalQueryPlan",
     "SemanticBindingQueryPlanner",
-    "value_lookup_slots",
 ]

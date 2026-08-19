@@ -109,8 +109,10 @@ def _ctx(
 ):
     values = {
         "question_understanding": {
-            "rewritten_question": "本月销售额",
-            "intent": {"intent_type": "metric_query", "metric_mentions": ["销售额"]},
+            "rewrite_question": "本月销售额",
+            "metric_phrases": ["销售额"],
+            "dimension_phrases": [],
+            "intent": {"intent_type": "metric_query"},
             "validation": {"status": "valid"},
         }
     }
@@ -1449,7 +1451,9 @@ def test_search_result_processor_collects_asset_ids_and_tables():
     ctx = _ctx(
         dataset_id=3,
         question_understanding={
-            "rewritten_question": "按城市看 gmv",
+            "rewrite_question": "按城市看 gmv",
+            "metric_phrases": ["gmv"],
+            "dimension_phrases": ["城市"],
             "intent": intent,
             "validation": {"status": "valid"},
         },
@@ -1460,15 +1464,16 @@ def test_search_result_processor_collects_asset_ids_and_tables():
     ).execute(ctx, SearchSemanticAssetsArgs())
     assert _succeeded(output)
     request = service.calls[0][0]
-    assert request.rewritten_question == "按城市看 gmv"
-    assert request.intent.metric_mentions == ["gmv"]
+    assert request.metric_phrases == ["gmv"]
+    assert request.dimension_phrases == ["城市"]
+    assert "rewrite_question" not in request.model_dump(mode="json")
     assert "semantic_asset_ids" not in ctx.state
     projection = ChatBIToolResultProcessor().process(
         ctx,
         "search_semantic_assets",
         output,
     )
-    assert projection.state_patch["semantic_asset_ids"] == [7, 8]
+    assert projection.state_patch["semantic_asset_ids"] == []
     assert projection.state_patch["allowed_tables"] == ["dws_sales"]
     assert projection.state_patch["semantic_package"]["dataset_id"] == 3
     assert (
@@ -1478,19 +1483,7 @@ def test_search_result_processor_collects_asset_ids_and_tables():
         ][1]
     )
     assert projection.state_patch["semantic_scope"]["retrieval_id"]
-    assert projection.state_patch["semantic_scope"]["compile_plan"] == {
-        "metric_asset_ids": [7],
-        "dimension_asset_ids": [8],
-        "filters": [],
-        "temporal_plan": {
-            "filters": [],
-            "time_bucket": None,
-        },
-        "order_by": [],
-        "limit": None,
-        "intent_type": "metric_query",
-        "query_shape": {},
-    }
+    assert projection.state_patch["semantic_scope"]["compile_plan"] is None
 
 
 def test_search_maps_dimension_ambiguity_for_agent_flow():
@@ -1527,8 +1520,8 @@ def test_search_does_not_build_strict_plan_before_ambiguous_binding_is_clarified
     assert _succeeded(output)
     assert output.data is not None
     assert output.data.scope.semantic_enforcement == "STRICT"
-    assert output.data.scope.decision_status == RetrievalDecisionStatus.AMBIGUOUS
-    # 歧义结果必须保留给上层澄清，不能提前生成空指标的严格查询计划。
+    assert output.data.scope.decision_status is None
+    # 候选结果必须保留给后续绑定模型，不能提前生成严格查询计划。
     assert output.data.scope.query_plan is None
 
 

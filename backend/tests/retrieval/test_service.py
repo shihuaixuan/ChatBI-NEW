@@ -1,8 +1,9 @@
-"""RetrievalService 的唯一入口一致性测试。"""
+"""候选资产检索服务的边界测试。"""
 
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from apps.chatbi.orchestration.graph.capabilities.adapters.knowledge import (
     SemanticKnowledgeAdapter,
@@ -10,31 +11,31 @@ from apps.chatbi.orchestration.graph.capabilities.adapters.knowledge import (
 from apps.retrieval import filter_semantic_payload_tables
 from apps.retrieval.errors import RetrievalQueryError
 from apps.retrieval.models.dto import (
-    RetrievalBindings,
-    RetrievalBundle,
-    RetrievalDecision,
-    RetrievalDecisionStatus,
-    RetrievalDiagnostics,
+    RetrievalIntent,
+    RetrievalProfileName,
+    RetrievalRequest,
+    RetrievalScope,
 )
+from apps.retrieval.projection.planner import SemanticBindingQueryPlanner
+from apps.retrieval.query.hybrid import HybridRecallResult
 from apps.retrieval.query.semantic_binding import (
     SEMANTIC_BINDING_STRATEGY_VERSION,
-    SemanticBindingExecutionResult,
+    CandidateRetrievalExecutionResult,
 )
 from apps.retrieval.query.service import (
     RetrievalService,
-    build_semantic_binding_request,
+    build_retrieval_request,
 )
 
 
-def _request(strategy_version: str | None = None):
-    return build_semantic_binding_request(
+def _request(strategy_version: str | None = None) -> RetrievalRequest:
+    return build_retrieval_request(
         request_id="request-1",
         tenant_id=1,
         actor_id=2,
         dataset_id=20,
-        original_question="GMV",
-        rewritten_question="GMV",
-        intent={"intent_type": "metric_query", "metric_mentions": ["GMV"]},
+        metric_phrases=["GMV"],
+        dimension_phrases=[],
         principal_roles=["analyst"],
         principal_role_ids=[10],
         permission_version="permission-3",
@@ -43,38 +44,24 @@ def _request(strategy_version: str | None = None):
     )
 
 
-def _execution(request_id: str = "request-1") -> SemanticBindingExecutionResult:
-    bundle = RetrievalBundle(
-        request_id=request_id,
-        bindings=RetrievalBindings(),
-        decision=RetrievalDecision(status=RetrievalDecisionStatus.MISSED),
-        diagnostics=RetrievalDiagnostics(
-            strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
-            index_generation="generation-2",
-        ),
+def _execution(request: RetrievalRequest) -> CandidateRetrievalExecutionResult:
+    plan = SemanticBindingQueryPlanner().plan(request)
+    recall = HybridRecallResult(
+        request_id=request.request_id,
+        plan=plan,
+        slots=(),
     )
-    return SemanticBindingExecutionResult(
-        bundle=bundle,
+    return CandidateRetrievalExecutionResult(
+        recall=recall,
         payload={
             "hit": False,
             "status": "missed",
-            "decision": {"status": "missed", "strategy": "semantic_binding"},
-            "candidate_groups": {
-                "metrics": [],
-                "dimensions": [],
-                "values": [],
-                "terms": [],
-            },
-            "selected_assets": {
-                "metrics": [],
-                "dimensions": [],
-                "values": [],
-                "terms": [],
-            },
+            "candidate_groups": {"metrics": [], "dimensions": []},
+            "selected_assets": {},
+            "decision": {},
             "retrieval_strategy_version": SEMANTIC_BINDING_STRATEGY_VERSION,
-            "retrieval_diagnostics": bundle.diagnostics.model_dump(mode="json"),
         },
-        filters={"plan_fingerprint": "plan-1"},
+        filters={"plan_fingerprint": plan.fingerprint},
     )
 
 
@@ -82,12 +69,12 @@ class _Runner:
     def __init__(self) -> None:
         self.calls = []
 
-    def run(self, session, request, strategy_version, timeout_ms):
+    def retrieve_candidates(self, session, request, strategy_version, timeout_ms):
         self.calls.append((session, request, strategy_version, timeout_ms))
-        return _execution(request.request_id)
+        return _execution(request)
 
 
-def test_request_factory_defaults_to_semantic_binding_and_carries_acl_context():
+def test_request_factory_contains_only_candidate_retrieval_fields():
     request = _request()
 
     assert request.strategy_version == SEMANTIC_BINDING_STRATEGY_VERSION
@@ -95,115 +82,49 @@ def test_request_factory_defaults_to_semantic_binding_and_carries_acl_context():
     assert request.scope.principal_role_ids == [10]
     assert request.scope.permission_version == "permission-3"
     assert request.scope.source_ids == ["dataset:20"]
+    assert "intent" not in request.model_dump()
+    assert "rewrite_question" not in request.model_dump()
 
 
-def test_request_factory_projects_question_understanding_dimension_slot():
-    request = build_semantic_binding_request(
-        request_id="request-dimension-slot",
-        tenant_id=1,
-        actor_id=2,
-        dataset_id=20,
-        original_question="按店铺看 GMV",
-        rewritten_question="按店铺看 GMV",
-        intent={
-            "intent_type": "metric_query",
-            "metric_mentions": ["GMV"],
-            "dimension_slots": [
-                {
-                    "name": "店铺",
-                    "role": "group_by",
-                    "value": None,
-                    "value_status": "not_provided",
-                    "value_confidence": 0.0,
-                }
-            ],
-        },
-    )
-
-    assert request.intent.dimension_slots[0].model_dump() == {
-        "name": "店铺",
-        "role": "group_by",
-        "value": None,
-        "value_status": "not_provided",
-    }
-
-
-def test_request_factory_normalizes_nullable_understanding_fields():
-    request = build_semantic_binding_request(
-        request_id="request-nullable-understanding",
-        tenant_id=1,
-        actor_id=2,
-        dataset_id=20,
-        original_question="比较 GMV",
-        rewritten_question="比较 GMV",
-        intent={
-            "intent_type": "metric_query",
-            "metric_mentions": ["GMV"],
-            "comparison": None,
-            "query_shape": None,
-            "filter_mentions": None,
-        },
-    )
-
-    assert request.intent.comparison == {}
-    assert request.intent.query_shape == {}
-    assert request.intent.filter_mentions == []
-
-
-def test_request_factory_rejects_unknown_dimension_slot_fields():
-    with pytest.raises(RetrievalQueryError) as exc_info:
-        build_semantic_binding_request(
-            request_id="request-invalid-dimension-slot",
+def test_retrieval_request_rejects_binding_fields():
+    with pytest.raises(ValidationError):
+        RetrievalRequest(
+            request_id="request-1",
             tenant_id=1,
             actor_id=2,
-            dataset_id=20,
-            original_question="按店铺看 GMV",
-            rewritten_question="按店铺看 GMV",
-            intent={
-                "intent_type": "metric_query",
-                "dimension_slots": [
-                    {
-                        "name": "店铺",
-                        "role": "group_by",
-                        "unexpected_field": "unexpected",
-                    }
-                ],
-            },
+            rewrite_question="GMV",
+            metric_phrases=["GMV"],
+            dimension_phrases=[],
+            intent=RetrievalIntent(intent_type="metric_query"),
+            scope=RetrievalScope(dataset_ids=[20]),
+            profiles=[RetrievalProfileName.SEMANTIC_BINDING],
+            strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
         )
 
-    assert exc_info.value.details == {
-        "reason_code": "DIMENSION_SLOT_FIELDS_UNSUPPORTED",
-        "slot_index": 0,
-        "fields": ["unexpected_field"],
-    }
 
-
-def test_v1_request_is_rejected_instead_of_falling_back():
+def test_request_factory_rejects_invalid_strategy_version():
     service = RetrievalService(object(), semantic_binding_runner=_Runner())
 
     with pytest.raises(RetrievalQueryError, match="仅支持 semantic-binding"):
         service.retrieve(_request("semantic-binding-v1"))
 
 
-def test_service_executes_semantic_binding_as_the_only_strategy():
+def test_service_executes_candidate_retrieval_only():
     session = object()
     runner = _Runner()
-    service = RetrievalService(
-        session,
-        semantic_binding_runner=runner,
-        query_timeout_ms=1200,
-    )
+    service = RetrievalService(session, semantic_binding_runner=runner, query_timeout_ms=1200)
 
     result = service.retrieve(_request())
 
-    assert result.payload["decision"]["strategy"] == "semantic_binding"
-    assert result.filters == {"plan_fingerprint": "plan-1"}
+    assert result.payload["status"] == "missed"
+    assert result.payload["decision"] == {}
+    assert result.filters == {"plan_fingerprint": result.recall.plan.fingerprint}
     assert runner.calls == [
         (session, _request(), SEMANTIC_BINDING_STRATEGY_VERSION, 1200)
     ]
 
 
-def test_graph_consumes_the_retrieval_service_payload_directly():
+def test_graph_consumes_candidate_retrieval_payload_directly():
     service = RetrievalService(object(), semantic_binding_runner=_Runner())
     graph = SemanticKnowledgeAdapter(retrieval_service=service).retrieve(
         {
@@ -215,14 +136,18 @@ def test_graph_consumes_the_retrieval_service_payload_directly():
                 "user_id": 2,
             },
             "variables": {
-                "intent": {"intent_type": "metric_query", "metric_mentions": ["GMV"]}
+                "rewrite": {
+                    "rewrite_question": "GMV",
+                    "metric_phrases": ["GMV"],
+                    "dimension_phrases": [],
+                },
             },
         }
     )
     direct = service.retrieve(_request()).payload
 
     assert graph["status"] == direct["status"] == "missed"
-    assert graph["decision"] == direct["decision"]
+    assert graph["decision"] == direct["decision"] == {}
     assert graph["retrieval_strategy_version"] == SEMANTIC_BINDING_STRATEGY_VERSION
 
 

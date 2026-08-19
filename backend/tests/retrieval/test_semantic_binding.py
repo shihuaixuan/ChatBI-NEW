@@ -10,6 +10,7 @@ from apps.retrieval.errors import (
     RetrievalProviderUnavailableError,
 )
 from apps.retrieval.models.dto import (
+    RetrievalBindingRequest,
     RetrievalBindings,
     RetrievalBundle,
     RetrievalDecision,
@@ -21,6 +22,8 @@ from apps.retrieval.models.dto import (
     RetrievalScope,
 )
 from apps.retrieval.projection.payload import bundle_to_semantic_payload
+from apps.retrieval.projection.planner import SemanticBindingQueryPlanner
+from apps.retrieval.query.hybrid import HybridRecallResult
 from apps.retrieval.query.policy import RerankCandidate
 from apps.retrieval.query.semantic_binding import (
     SEMANTIC_BINDING_STRATEGY_VERSION,
@@ -40,12 +43,24 @@ def _request() -> RetrievalRequest:
         request_id="semantic-binding-runner",
         tenant_id=1,
         actor_id=2,
-        original_question="销售额",
-        rewritten_question="销售额",
-        intent=RetrievalIntent(intent_type="metric_query", metric_mentions=["销售额"]),
+        metric_phrases=["销售额"],
+        dimension_phrases=[],
         scope=RetrievalScope(dataset_ids=[20]),
         profiles=[RetrievalProfileName.SEMANTIC_BINDING],
         strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
+    )
+
+
+def _binding_request() -> RetrievalBindingRequest:
+    request = _request()
+    return RetrievalBindingRequest(
+        request_id=request.request_id,
+        tenant_id=request.tenant_id,
+        actor_id=request.actor_id,
+        original_question="销售额",
+        rewrite_question="销售额",
+        candidate_request=request,
+        intent=RetrievalIntent(intent_type="metric_query"),
     )
 
 
@@ -63,17 +78,8 @@ def _schema() -> DatasetSchema:
     )
 
 
-def test_semantic_binding_connects_recall_policy_schema_and_payload_projection(monkeypatch):
+def test_candidate_retrieval_connects_recall_to_phrase_only_payload(monkeypatch):
     request = _request()
-    bundle = RetrievalBundle(
-        request_id=request.request_id,
-        bindings=RetrievalBindings(),
-        decision=RetrievalDecision(status=RetrievalDecisionStatus.MISSED),
-        diagnostics=RetrievalDiagnostics(
-            strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
-            index_generation="generation-2",
-        ),
-    )
     observed = {}
 
     class _HybridRetriever:
@@ -85,28 +91,15 @@ def test_semantic_binding_connects_recall_policy_schema_and_payload_projection(m
 
         def retrieve(self, strategy_request):
             observed["strategy_version"] = strategy_request.strategy_version
-            return SimpleNamespace(
-                plan=SimpleNamespace(fingerprint="plan-1", subqueries=()),
+            return HybridRecallResult(
+                request_id=strategy_request.request_id,
+                plan=SemanticBindingQueryPlanner().plan(strategy_request),
+                slots=(),
             )
-
-    class _Policy:
-        def apply(self, _recall):
-            return SimpleNamespace(bundle=bundle)
-
-    class _SchemaBuilder:
-        def build_dataset_schema(self, tenant_id, dataset_id):
-            observed["schema_scope"] = (tenant_id, dataset_id)
-            return _schema()
 
     monkeypatch.setattr(
         "apps.retrieval.query.semantic_binding.SemanticBindingHybridRetriever",
         _HybridRetriever,
-    )
-    monkeypatch.setattr(
-        "apps.retrieval.query.semantic_binding.build_semantic_schema_service",
-        lambda session: (
-            observed.__setitem__("schema_session", session) or _SchemaBuilder()
-        ),
     )
     config = RetrievalEmbeddingRuntimeConfig(
         enabled=True,
@@ -119,12 +112,11 @@ def test_semantic_binding_connects_recall_policy_schema_and_payload_projection(m
     )
     runner = SemanticBindingRunner(
         embedding_config=config,
-        policy=_Policy(),
         exemplar_context_enabled=False,
     )
     session = object()
 
-    result = runner.run(
+    result = runner.retrieve_candidates(
         session,
         request,
         SEMANTIC_BINDING_STRATEGY_VERSION,
@@ -132,20 +124,18 @@ def test_semantic_binding_connects_recall_policy_schema_and_payload_projection(m
     )
 
     assert result.payload["status"] == "missed"
-    assert result.filters["plan_fingerprint"] == "plan-1"
+    assert result.filters["plan_fingerprint"] == result.recall.plan.fingerprint
     assert observed == {
         "session": session,
         "provider": None,
         "dense_enabled": True,
         "dense_error_code": "EMBEDDING_API_KEY_MISSING",
         "strategy_version": SEMANTIC_BINDING_STRATEGY_VERSION,
-        "schema_session": session,
-        "schema_scope": (1, 20),
     }
 
 
 def test_verified_exemplar_enters_bundle_and_semantic_payload_without_raw_sql(monkeypatch):
-    request = _request()
+    request = _binding_request()
     bundle = RetrievalBundle(
         request_id=request.request_id,
         bindings=RetrievalBindings(),
@@ -212,7 +202,7 @@ def test_exemplar_context_switch_skips_store(monkeypatch):
         "apps.retrieval.query.semantic_binding.SQLExampleSearchStore",
         _UnexpectedStore,
     )
-    request = _request()
+    request = _binding_request()
     bundle = RetrievalBundle(
         request_id=request.request_id,
         bindings=RetrievalBindings(),

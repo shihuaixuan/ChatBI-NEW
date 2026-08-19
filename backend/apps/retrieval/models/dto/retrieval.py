@@ -103,25 +103,19 @@ class RetrievalDimensionSlot(_StrictModel):
 
 
 class RetrievalIntent(_StrictModel):
-    """检索所需的问题理解子集，不包含资产 ID。"""
+    """候选资产返回后，由模型完成语义解析的结果。"""
 
     intent_type: str = Field(min_length=1)
-    metric_mentions: list[str] = Field(default_factory=list)
-    dimension_mentions: list[str] = Field(default_factory=list)
     dimension_slots: list[RetrievalDimensionSlot] = Field(default_factory=list)
-    time_mentions: list[str] = Field(default_factory=list)
     time_range: dict[str, Any] = Field(default_factory=dict)
     time_ranges: list[dict[str, Any]] = Field(default_factory=list)
-    comparison: dict[str, Any] = Field(default_factory=dict)
     filter_mentions: list[dict[str, Any]] = Field(default_factory=list)
     required_slot_types: list[str] = Field(default_factory=list)
     query_shape: dict[str, Any] = Field(default_factory=dict)
-    ambiguous_slots: list[str] = Field(default_factory=list)
-    conflict_slots: list[str] = Field(default_factory=list)
     subject_domain: dict[str, Any] = Field(default_factory=dict)
-    # R1 提及契约透传；旧调用方缺失时继续使用兼容字段。
+    # 复合指标二阶段解析仍需要保留结构化提及关系，但它不参与首轮短语检索。
     mention_graph: dict[str, Any] | None = None
-    # R1 复合指标二阶段检索使用的内部查询，不属于模型理解输出。
+    # 复合指标二阶段检索使用的内部查询，不属于问题重写模型输出。
     decomposition_queries: list[dict[str, str]] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -163,15 +157,13 @@ class RetrievalScope(_StrictModel):
 
 
 class RetrievalRequest(_StrictModel):
-    """Graph 与 Agent 共用的统一检索请求。"""
+    """候选资产检索请求。"""
 
     request_id: str = Field(min_length=1)
     tenant_id: int = Field(gt=0)
     actor_id: int = Field(gt=0)
-    original_question: str = Field(min_length=1)
-    rewritten_question: str = Field(min_length=1)
-    intent: RetrievalIntent
-    inherited_context: dict[str, Any] = Field(default_factory=dict)
+    metric_phrases: list[str]
+    dimension_phrases: list[str]
     scope: RetrievalScope = Field(default_factory=RetrievalScope)
     profiles: list[RetrievalProfileName] = Field(min_length=1)
     strategy_version: str = Field(min_length=1)
@@ -181,6 +173,58 @@ class RetrievalRequest(_StrictModel):
         if len(self.profiles) != len(set(self.profiles)):
             raise ValueError("检索 profile 不允许重复")
         return self
+
+    @model_validator(mode="after")
+    def validate_phrases(self) -> RetrievalRequest:
+        phrases = [*self.metric_phrases, *self.dimension_phrases]
+        normalized = [phrase.strip().casefold() for phrase in phrases]
+        if any(not phrase for phrase in normalized):
+            raise ValueError("检索短语不能为空")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("指标短语和维度短语不能重复")
+        return self
+
+
+class RetrievalBindingRequest(_StrictModel):
+    """候选资产返回后的绑定与语义解析请求。"""
+
+    request_id: str = Field(min_length=1)
+    tenant_id: int = Field(gt=0)
+    actor_id: int = Field(gt=0)
+    original_question: str = Field(min_length=1)
+    rewrite_question: str = Field(min_length=1)
+    candidate_request: RetrievalRequest
+    intent: RetrievalIntent
+
+    @model_validator(mode="after")
+    def validate_request_identity(self) -> RetrievalBindingRequest:
+        if self.request_id != self.candidate_request.request_id:
+            raise ValueError("绑定请求与候选检索请求的 request_id 不一致")
+        if self.tenant_id != self.candidate_request.tenant_id:
+            raise ValueError("绑定请求与候选检索请求的 tenant_id 不一致")
+        if self.actor_id != self.candidate_request.actor_id:
+            raise ValueError("绑定请求与候选检索请求的 actor_id 不一致")
+        return self
+
+    @property
+    def metric_phrases(self) -> list[str]:
+        return self.candidate_request.metric_phrases
+
+    @property
+    def dimension_phrases(self) -> list[str]:
+        return self.candidate_request.dimension_phrases
+
+    @property
+    def scope(self) -> RetrievalScope:
+        return self.candidate_request.scope
+
+    @property
+    def profiles(self) -> list[RetrievalProfileName]:
+        return self.candidate_request.profiles
+
+    @property
+    def strategy_version(self) -> str:
+        return self.candidate_request.strategy_version
 
 
 class RetrievalSubQuery(_StrictModel):

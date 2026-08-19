@@ -5,70 +5,77 @@
       "request_id": "gold-sales-customer-by-stall-today",
       "tenant_id": 1,
       "actor_id": 1,
-      "original_question": "今天各档口的销售下单客户数",
-      "rewritten_question": "今天各档口的销售下单客户数",
-      "intent": {
-        "intent_type": "metric_query",
-        "metric_mentions": ["销售下单客户数"],
-        "dimension_mentions": ["档口"],
-        "dimension_slots": [
-          {
-            "name": "档口",
-            "role": "group_by",
-            "value": null,
-            "value_status": "not_provided"
-          }
-        ],
-        "time_mentions": ["今天"],
-        "time_range": {
-          "raw": "今天",
-          "value_status": "provided",
-          "normalized": {
-            "kind": "single_date",
-            "anchor": "today",
-            "offset_days": 0,
-            "timezone": "Asia/Shanghai"
-          }
-        },
-        "filter_mentions": [],
-        "required_slot_types": ["metric", "dimension", "time_dimension", "time_range"],
-        "query_shape": {},
-        "ambiguous_slots": [],
-        "conflict_slots": []
-      },
+      "metric_phrases": [
+        "销售下单客户数"
+      ],
+      "dimension_phrases": [
+        "档口"
+      ],
       "scope": {
-        "dataset_ids": [243]
+        "dataset_ids": [
+          243
+        ]
       },
-      "profiles": ["semantic_binding"],
+      "profiles": [
+        "semantic_binding"
+      ],
       "strategy_version": "semantic-binding"
     },
     "expected_status": "resolved",
     "expected_allowed_assets": [
-      {"asset_type": "METRIC", "asset_id": 272, "model_id": 246},
-      {"asset_type": "DIMENSION", "asset_id": 278, "model_id": 246},
-      {"asset_type": "DIMENSION", "asset_id": 276, "model_id": 246}
+      {
+        "asset_type": "METRIC",
+        "asset_id": 272,
+        "model_id": 246
+      },
+      {
+        "asset_type": "DIMENSION",
+        "asset_id": 278,
+        "model_id": 246
+      },
+      {
+        "asset_type": "DIMENSION",
+        "asset_id": 276,
+        "model_id": 246
+      }
     ],
     "slots": [
       {
-        "subquery_id": "metric:0",
+        "subquery_id": "metric:1",
         "purpose": "metric",
         "expected_status": "resolved",
         "relevant_assets": [
-          {"asset_type": "METRIC", "asset_id": 272, "model_id": 246}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 272,
+            "model_id": 246
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "METRIC", "asset_id": 272, "model_id": 246}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 272,
+            "model_id": 246
+          }
         ]
       },
       {
-        "subquery_id": "dimension:0",
+        "subquery_id": "dimension:1",
         "purpose": "dimension",
         "expected_status": "resolved",
         "relevant_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 278, "model_id": 246}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 278,
+            "model_id": 246
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 278, "model_id": 246}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 278,
+            "model_id": 246
+          }
         ]
       },
       {
@@ -76,14 +83,27 @@
         "purpose": "dimension",
         "expected_status": "resolved",
         "relevant_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 276, "model_id": 246}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 276,
+            "model_id": 246
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 276, "model_id": 246}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 276,
+            "model_id": 246
+          }
         ]
       }
     ],
-    "tags": ["resolved", "metric", "dimension", "time"],
+    "tags": [
+      "resolved",
+      "metric",
+      "dimension",
+      "time"
+    ],
     "note": "验证指标、分组维度和时间维度的完整槽位覆盖。"
   },
   {
@@ -92,55 +112,65 @@
       "request_id": "gold-ambiguous-customer-count",
       "tenant_id": 1,
       "actor_id": 1,
-      "original_question": "今天各档口的客户数",
-      "rewritten_question": "今天各档口的客户数",
-      "intent": {
-        "intent_type": "metric_query",
-        "metric_mentions": ["客户数"],
-        "dimension_mentions": ["档口"],
-        "dimension_slots": [
-          {
-            "name": "档口",
-            "role": "group_by",
-            "value": null,
-            "value_status": "not_provided"
-          }
-        ],
-        "time_mentions": ["今天"],
-        "time_range": {"raw": "今天", "value_status": "provided"},
-        "filter_mentions": [],
-        "required_slot_types": ["metric", "dimension", "time_dimension", "time_range"],
-        "query_shape": {},
-        "ambiguous_slots": ["metric"],
-        "conflict_slots": []
+      "metric_phrases": [
+        "客户数"
+      ],
+      "dimension_phrases": [
+        "档口"
+      ],
+      "scope": {
+        "dataset_ids": [
+          243
+        ]
       },
-      "scope": {"dataset_ids": [243]},
-      "profiles": ["semantic_binding"],
+      "profiles": [
+        "semantic_binding"
+      ],
       "strategy_version": "semantic-binding"
     },
     "expected_status": "ambiguous",
     "expected_allowed_assets": [],
     "slots": [
       {
-        "subquery_id": "metric:0",
+        "subquery_id": "metric:1",
         "purpose": "metric",
         "expected_status": "ambiguous",
         "relevant_assets": [
-          {"asset_type": "METRIC", "asset_id": 272, "model_id": 246},
-          {"asset_type": "METRIC", "asset_id": 273, "model_id": 246},
-          {"asset_type": "METRIC", "asset_id": 274, "model_id": 246}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 272,
+            "model_id": 246
+          },
+          {
+            "asset_type": "METRIC",
+            "asset_id": 273,
+            "model_id": 246
+          },
+          {
+            "asset_type": "METRIC",
+            "asset_id": 274,
+            "model_id": 246
+          }
         ],
         "expected_selected_assets": []
       },
       {
-        "subquery_id": "dimension:0",
+        "subquery_id": "dimension:1",
         "purpose": "dimension",
         "expected_status": "resolved",
         "relevant_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 278, "model_id": 246}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 278,
+            "model_id": 246
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 278, "model_id": 246}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 278,
+            "model_id": 246
+          }
         ]
       },
       {
@@ -148,14 +178,26 @@
         "purpose": "dimension",
         "expected_status": "resolved",
         "relevant_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 276, "model_id": 246}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 276,
+            "model_id": 246
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 276, "model_id": 246}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 276,
+            "model_id": 246
+          }
         ]
       }
     ],
-    "tags": ["ambiguous", "clarification", "metric"],
+    "tags": [
+      "ambiguous",
+      "clarification",
+      "metric"
+    ],
     "note": "客户数没有销售、订货或总口径，禁止自动选择。"
   },
   {
@@ -164,34 +206,54 @@
       "request_id": "gold-inventory-alias-exact",
       "tenant_id": 1,
       "actor_id": 1,
-      "original_question": "当前库存总量是多少",
-      "rewritten_question": "当前库存总量是多少",
-      "intent": {
-        "intent_type": "metric_query",
-        "metric_mentions": ["库存总量"]
+      "metric_phrases": [
+        "库存总量"
+      ],
+      "dimension_phrases": [],
+      "scope": {
+        "dataset_ids": [
+          243
+        ]
       },
-      "scope": {"dataset_ids": [243]},
-      "profiles": ["semantic_binding"],
+      "profiles": [
+        "semantic_binding"
+      ],
       "strategy_version": "semantic-binding"
     },
     "expected_status": "resolved",
     "expected_allowed_assets": [
-      {"asset_type": "METRIC", "asset_id": 280, "model_id": 248}
+      {
+        "asset_type": "METRIC",
+        "asset_id": 280,
+        "model_id": 248
+      }
     ],
     "slots": [
       {
-        "subquery_id": "metric:0",
+        "subquery_id": "metric:1",
         "purpose": "metric",
         "expected_status": "resolved",
         "relevant_assets": [
-          {"asset_type": "METRIC", "asset_id": 280, "model_id": 248}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 280,
+            "model_id": 248
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "METRIC", "asset_id": 280, "model_id": 248}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 280,
+            "model_id": 248
+          }
         ]
       }
     ],
-    "tags": ["resolved", "alias", "exact"],
+    "tags": [
+      "resolved",
+      "alias",
+      "exact"
+    ],
     "note": "库存总量是当前库存件数的治理别名。"
   },
   {
@@ -200,34 +262,54 @@
       "request_id": "gold-customer-arrears-alias-exact",
       "tenant_id": 1,
       "actor_id": 1,
-      "original_question": "当前客户欠款总金额是多少",
-      "rewritten_question": "当前客户欠款总金额是多少",
-      "intent": {
-        "intent_type": "metric_query",
-        "metric_mentions": ["客户欠款总金额"]
+      "metric_phrases": [
+        "客户欠款总金额"
+      ],
+      "dimension_phrases": [],
+      "scope": {
+        "dataset_ids": [
+          243
+        ]
       },
-      "scope": {"dataset_ids": [243]},
-      "profiles": ["semantic_binding"],
+      "profiles": [
+        "semantic_binding"
+      ],
       "strategy_version": "semantic-binding"
     },
     "expected_status": "resolved",
     "expected_allowed_assets": [
-      {"asset_type": "METRIC", "asset_id": 291, "model_id": 250}
+      {
+        "asset_type": "METRIC",
+        "asset_id": 291,
+        "model_id": 250
+      }
     ],
     "slots": [
       {
-        "subquery_id": "metric:0",
+        "subquery_id": "metric:1",
         "purpose": "metric",
         "expected_status": "resolved",
         "relevant_assets": [
-          {"asset_type": "METRIC", "asset_id": 291, "model_id": 250}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 291,
+            "model_id": 250
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "METRIC", "asset_id": 291, "model_id": 250}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 291,
+            "model_id": 250
+          }
         ]
       }
     ],
-    "tags": ["resolved", "alias", "finance"],
+    "tags": [
+      "resolved",
+      "alias",
+      "finance"
+    ],
     "note": "客户欠款总金额是当前欠款余额的治理别名。"
   },
   {
@@ -236,31 +318,35 @@
       "request_id": "gold-refund-rate-missed",
       "tenant_id": 1,
       "actor_id": 1,
-      "original_question": "本月退款率是多少",
-      "rewritten_question": "本月退款率是多少",
-      "intent": {
-        "intent_type": "metric_query",
-        "metric_mentions": ["退款率"],
-        "time_mentions": ["本月"],
-        "time_range": {"raw": "本月", "value_status": "provided"},
-        "required_slot_types": ["metric", "time_range"]
+      "metric_phrases": [
+        "退款率"
+      ],
+      "dimension_phrases": [],
+      "scope": {
+        "dataset_ids": [
+          243
+        ]
       },
-      "scope": {"dataset_ids": [243]},
-      "profiles": ["semantic_binding"],
+      "profiles": [
+        "semantic_binding"
+      ],
       "strategy_version": "semantic-binding"
     },
     "expected_status": "missed",
     "expected_allowed_assets": [],
     "slots": [
       {
-        "subquery_id": "metric:0",
+        "subquery_id": "metric:1",
         "purpose": "metric",
         "expected_status": "missed",
         "relevant_assets": [],
         "expected_selected_assets": []
       }
     ],
-    "tags": ["missed", "unknown_metric"],
+    "tags": [
+      "missed",
+      "unknown_metric"
+    ],
     "note": "数据集没有退款率指标，不能用相似指标代替。"
   },
   {
@@ -269,71 +355,120 @@
       "request_id": "gold-cross-model-sales-and-arrears",
       "tenant_id": 1,
       "actor_id": 1,
-      "original_question": "各档口的销售订单数和当前欠款余额",
-      "rewritten_question": "各档口的销售订单数和当前欠款余额",
-      "intent": {
-        "intent_type": "metric_query",
-        "metric_mentions": ["销售订单数", "当前欠款余额"],
-        "dimension_mentions": ["档口"],
-        "dimension_slots": [
-          {
-            "name": "档口",
-            "role": "group_by",
-            "value": null,
-            "value_status": "not_provided"
-          }
-        ],
-        "required_slot_types": ["metric", "dimension"]
+      "metric_phrases": [
+        "销售订单数",
+        "当前欠款余额"
+      ],
+      "dimension_phrases": [
+        "档口"
+      ],
+      "scope": {
+        "dataset_ids": [
+          243
+        ]
       },
-      "scope": {"dataset_ids": [243]},
-      "profiles": ["semantic_binding"],
+      "profiles": [
+        "semantic_binding"
+      ],
       "strategy_version": "semantic-binding"
     },
     "expected_status": "cross_model",
     "expected_allowed_assets": [
-      {"asset_type": "METRIC", "asset_id": 263, "model_id": 246},
-      {"asset_type": "METRIC", "asset_id": 291, "model_id": 250},
-      {"asset_type": "DIMENSION", "asset_id": 278, "model_id": 246},
-      {"asset_type": "DIMENSION", "asset_id": 315, "model_id": 250}
+      {
+        "asset_type": "METRIC",
+        "asset_id": 263,
+        "model_id": 246
+      },
+      {
+        "asset_type": "METRIC",
+        "asset_id": 291,
+        "model_id": 250
+      },
+      {
+        "asset_type": "DIMENSION",
+        "asset_id": 278,
+        "model_id": 246
+      },
+      {
+        "asset_type": "DIMENSION",
+        "asset_id": 315,
+        "model_id": 250
+      }
     ],
     "slots": [
-      {
-        "subquery_id": "metric:0",
-        "purpose": "metric",
-        "expected_status": "resolved",
-        "relevant_assets": [
-          {"asset_type": "METRIC", "asset_id": 263, "model_id": 246}
-        ],
-        "expected_selected_assets": [
-          {"asset_type": "METRIC", "asset_id": 263, "model_id": 246}
-        ]
-      },
       {
         "subquery_id": "metric:1",
         "purpose": "metric",
         "expected_status": "resolved",
         "relevant_assets": [
-          {"asset_type": "METRIC", "asset_id": 291, "model_id": 250}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 263,
+            "model_id": 246
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "METRIC", "asset_id": 291, "model_id": 250}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 263,
+            "model_id": 246
+          }
         ]
       },
       {
-        "subquery_id": "dimension:0",
+        "subquery_id": "metric:2",
+        "purpose": "metric",
+        "expected_status": "resolved",
+        "relevant_assets": [
+          {
+            "asset_type": "METRIC",
+            "asset_id": 291,
+            "model_id": 250
+          }
+        ],
+        "expected_selected_assets": [
+          {
+            "asset_type": "METRIC",
+            "asset_id": 291,
+            "model_id": 250
+          }
+        ]
+      },
+      {
+        "subquery_id": "dimension:1",
         "purpose": "dimension",
         "expected_status": "cross_model",
         "relevant_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 278, "model_id": 246},
-          {"asset_type": "DIMENSION", "asset_id": 315, "model_id": 250}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 278,
+            "model_id": 246
+          },
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 315,
+            "model_id": 250
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 278, "model_id": 246},
-          {"asset_type": "DIMENSION", "asset_id": 315, "model_id": 250}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 278,
+            "model_id": 246
+          },
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 315,
+            "model_id": 250
+          }
         ]
       }
     ],
-    "tags": ["cross_model", "multi_metric", "dimension"],
+    "tags": [
+      "cross_model",
+      "multi_metric",
+      "dimension"
+    ],
     "note": "两个指标属于销售日表与欠款快照表，需要拆分计划。"
   },
   {
@@ -342,68 +477,105 @@
       "request_id": "gold-channel-context-resolves-customer-metrics",
       "tenant_id": 1,
       "actor_id": 1,
-      "original_question": "按交易渠道看客户GMV和客户订单数",
-      "rewritten_question": "按交易渠道看客户GMV和客户订单数",
-      "intent": {
-        "intent_type": "comparison_analysis",
-        "metric_mentions": ["客户GMV", "客户订单数"],
-        "dimension_mentions": ["交易渠道"],
-        "dimension_slots": [
-          {
-            "name": "交易渠道",
-            "role": "group_by",
-            "value": null,
-            "value_status": "not_provided"
-          }
-        ],
-        "required_slot_types": ["metric", "dimension"]
+      "metric_phrases": [
+        "客户GMV",
+        "客户订单数"
+      ],
+      "dimension_phrases": [
+        "交易渠道"
+      ],
+      "scope": {
+        "dataset_ids": [
+          243
+        ]
       },
-      "scope": {"dataset_ids": [243]},
-      "profiles": ["semantic_binding"],
+      "profiles": [
+        "semantic_binding"
+      ],
       "strategy_version": "semantic-binding"
     },
     "expected_status": "resolved",
     "expected_allowed_assets": [
-      {"asset_type": "METRIC", "asset_id": 286, "model_id": 249},
-      {"asset_type": "METRIC", "asset_id": 287, "model_id": 249},
-      {"asset_type": "DIMENSION", "asset_id": 309, "model_id": 249}
+      {
+        "asset_type": "METRIC",
+        "asset_id": 286,
+        "model_id": 249
+      },
+      {
+        "asset_type": "METRIC",
+        "asset_id": 287,
+        "model_id": 249
+      },
+      {
+        "asset_type": "DIMENSION",
+        "asset_id": 309,
+        "model_id": 249
+      }
     ],
     "slots": [
-      {
-        "subquery_id": "metric:0",
-        "purpose": "metric",
-        "expected_status": "resolved",
-        "relevant_assets": [
-          {"asset_type": "METRIC", "asset_id": 286, "model_id": 249}
-        ],
-        "expected_selected_assets": [
-          {"asset_type": "METRIC", "asset_id": 286, "model_id": 249}
-        ]
-      },
       {
         "subquery_id": "metric:1",
         "purpose": "metric",
         "expected_status": "resolved",
         "relevant_assets": [
-          {"asset_type": "METRIC", "asset_id": 287, "model_id": 249}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 286,
+            "model_id": 249
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "METRIC", "asset_id": 287, "model_id": 249}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 286,
+            "model_id": 249
+          }
         ]
       },
       {
-        "subquery_id": "dimension:0",
+        "subquery_id": "metric:2",
+        "purpose": "metric",
+        "expected_status": "resolved",
+        "relevant_assets": [
+          {
+            "asset_type": "METRIC",
+            "asset_id": 287,
+            "model_id": 249
+          }
+        ],
+        "expected_selected_assets": [
+          {
+            "asset_type": "METRIC",
+            "asset_id": 287,
+            "model_id": 249
+          }
+        ]
+      },
+      {
+        "subquery_id": "dimension:1",
         "purpose": "dimension",
         "expected_status": "resolved",
         "relevant_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 309, "model_id": 249}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 309,
+            "model_id": 249
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "DIMENSION", "asset_id": 309, "model_id": 249}
+          {
+            "asset_type": "DIMENSION",
+            "asset_id": 309,
+            "model_id": 249
+          }
         ]
       }
     ],
-    "tags": ["resolved", "multi_metric", "context"],
+    "tags": [
+      "resolved",
+      "multi_metric",
+      "context"
+    ],
     "note": "维度上下文应把通用 GMV/订单数约束到客户交易模型。"
   },
   {
@@ -412,34 +584,54 @@
       "request_id": "gold-overtime-order-alias-exact",
       "tenant_id": 1,
       "actor_id": 1,
-      "original_question": "当前超时订单数是多少",
-      "rewritten_question": "当前超时订单数是多少",
-      "intent": {
-        "intent_type": "metric_query",
-        "metric_mentions": ["超时订单数"]
+      "metric_phrases": [
+        "超时订单数"
+      ],
+      "dimension_phrases": [],
+      "scope": {
+        "dataset_ids": [
+          243
+        ]
       },
-      "scope": {"dataset_ids": [243]},
-      "profiles": ["semantic_binding"],
+      "profiles": [
+        "semantic_binding"
+      ],
       "strategy_version": "semantic-binding"
     },
     "expected_status": "resolved",
     "expected_allowed_assets": [
-      {"asset_type": "METRIC", "asset_id": 311, "model_id": 247}
+      {
+        "asset_type": "METRIC",
+        "asset_id": 311,
+        "model_id": 247
+      }
     ],
     "slots": [
       {
-        "subquery_id": "metric:0",
+        "subquery_id": "metric:1",
         "purpose": "metric",
         "expected_status": "resolved",
         "relevant_assets": [
-          {"asset_type": "METRIC", "asset_id": 311, "model_id": 247}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 311,
+            "model_id": 247
+          }
         ],
         "expected_selected_assets": [
-          {"asset_type": "METRIC", "asset_id": 311, "model_id": 247}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 311,
+            "model_id": 247
+          }
         ]
       }
     ],
-    "tags": ["resolved", "alias", "orders"],
+    "tags": [
+      "resolved",
+      "alias",
+      "orders"
+    ],
     "note": "超时订单数是超时未发订单数的治理别名。"
   },
   {
@@ -448,47 +640,86 @@
       "request_id": "gold-generic-gmv-and-order-count-ambiguous",
       "tenant_id": 1,
       "actor_id": 1,
-      "original_question": "GMV和订单数分别是多少",
-      "rewritten_question": "GMV和订单数分别是多少",
-      "intent": {
-        "intent_type": "metric_query",
-        "metric_mentions": ["GMV", "订单数"],
-        "required_slot_types": ["metric"],
-        "ambiguous_slots": ["metric"]
+      "metric_phrases": [
+        "GMV",
+        "订单数"
+      ],
+      "dimension_phrases": [],
+      "scope": {
+        "dataset_ids": [
+          243
+        ]
       },
-      "scope": {"dataset_ids": [243]},
-      "profiles": ["semantic_binding"],
+      "profiles": [
+        "semantic_binding"
+      ],
       "strategy_version": "semantic-binding"
     },
     "expected_status": "ambiguous",
     "expected_allowed_assets": [],
     "slots": [
       {
-        "subquery_id": "metric:0",
-        "purpose": "metric",
-        "expected_status": "ambiguous",
-        "relevant_assets": [
-          {"asset_type": "METRIC", "asset_id": 269, "model_id": 246},
-          {"asset_type": "METRIC", "asset_id": 270, "model_id": 246},
-          {"asset_type": "METRIC", "asset_id": 271, "model_id": 246},
-          {"asset_type": "METRIC", "asset_id": 286, "model_id": 249}
-        ],
-        "expected_selected_assets": []
-      },
-      {
         "subquery_id": "metric:1",
         "purpose": "metric",
         "expected_status": "ambiguous",
         "relevant_assets": [
-          {"asset_type": "METRIC", "asset_id": 263, "model_id": 246},
-          {"asset_type": "METRIC", "asset_id": 264, "model_id": 246},
-          {"asset_type": "METRIC", "asset_id": 265, "model_id": 246},
-          {"asset_type": "METRIC", "asset_id": 287, "model_id": 249}
+          {
+            "asset_type": "METRIC",
+            "asset_id": 269,
+            "model_id": 246
+          },
+          {
+            "asset_type": "METRIC",
+            "asset_id": 270,
+            "model_id": 246
+          },
+          {
+            "asset_type": "METRIC",
+            "asset_id": 271,
+            "model_id": 246
+          },
+          {
+            "asset_type": "METRIC",
+            "asset_id": 286,
+            "model_id": 249
+          }
+        ],
+        "expected_selected_assets": []
+      },
+      {
+        "subquery_id": "metric:2",
+        "purpose": "metric",
+        "expected_status": "ambiguous",
+        "relevant_assets": [
+          {
+            "asset_type": "METRIC",
+            "asset_id": 263,
+            "model_id": 246
+          },
+          {
+            "asset_type": "METRIC",
+            "asset_id": 264,
+            "model_id": 246
+          },
+          {
+            "asset_type": "METRIC",
+            "asset_id": 265,
+            "model_id": 246
+          },
+          {
+            "asset_type": "METRIC",
+            "asset_id": 287,
+            "model_id": 249
+          }
         ],
         "expected_selected_assets": []
       }
     ],
-    "tags": ["ambiguous", "multi_metric", "generic_name"],
+    "tags": [
+      "ambiguous",
+      "multi_metric",
+      "generic_name"
+    ],
     "note": "缺少销售、订货、总计或客户模型上下文，禁止自动选口径。"
   }
 ]

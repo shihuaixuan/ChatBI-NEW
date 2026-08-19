@@ -101,7 +101,8 @@ class SemanticAssetScope(BaseModel):
     datasource_id: int = Field(gt=0)
     dataset_id: int = Field(gt=0)
     retrieval_id: str = Field(min_length=1)
-    decision_status: RetrievalDecisionStatus
+    # 候选资产检索阶段尚未生成绑定决策；绑定模型完成后才写入该字段。
+    decision_status: RetrievalDecisionStatus | None = None
     allowed_assets: tuple[ExecutableAssetReference, ...] = ()
     authorized_tables: tuple[str, ...] = ()
     normalized_time_range: dict[str, Any] | None = None

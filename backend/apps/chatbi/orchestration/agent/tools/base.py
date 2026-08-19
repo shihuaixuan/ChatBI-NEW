@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from apps.retrieval import RetrievalRequest, build_semantic_binding_request
+from apps.retrieval import RetrievalRequest, build_retrieval_request
 from apps.temporal import TemporalContext
 from apps.tool import Tool
 from apps.tool.tools.semantic_contracts import SemanticAssetScope
@@ -87,6 +87,15 @@ class AgentToolContext:
         return int(getattr(self.config, "default_limit", 100) or 100)
 
     @property
+    def rewritten_question(self) -> str:
+        """读取问题重写结果；候选检索请求本身不保存完整问题。"""
+
+        understanding = self.state.get("question_understanding")
+        if not isinstance(understanding, dict):
+            return ""
+        return str(understanding.get("rewrite_question") or "").strip()
+
+    @property
     def semantic_retrieval_request(self) -> RetrievalRequest | None:
         """把 ChatBI 已确认问题投影为公共检索请求。"""
 
@@ -94,36 +103,23 @@ class AgentToolContext:
         if not isinstance(understanding, dict):
             return None
         rewrite_question = understanding.get("rewrite_question")
-        intent = understanding.get("intent")
-        if isinstance(intent, dict) and isinstance(understanding.get("mention_graph"), dict):
-            # R1 图结构与旧 intent 投影同时传入，检索规划器优先消费图结构。
-            intent = {
-                **intent,
-                "mention_graph": understanding["mention_graph"],
-            }
         dataset_id = self.dataset_id or self.state.get("dataset_id")
         if (
             not isinstance(rewrite_question, str)
             or not rewrite_question.strip()
-            or not isinstance(intent, dict)
             or not isinstance(dataset_id, int)
             or dataset_id <= 0
             or self.user_id is None
             or self.user_id <= 0
         ):
             return None
-        return build_semantic_binding_request(
+        return build_retrieval_request(
             request_id=self.execution_id,
             tenant_id=self.oid,
             actor_id=self.user_id,
             dataset_id=dataset_id,
-            original_question=str(
-                self.state.get("original_question")
-                or self.state.get("question")
-                or rewrite_question
-            ),
-            rewritten_question=rewrite_question,
-            intent=intent,
+            metric_phrases=list(understanding.get("metric_phrases") or []),
+            dimension_phrases=list(understanding.get("dimension_phrases") or []),
             principal_roles=self.principal_roles or None,
             principal_role_ids=self.principal_role_ids or None,
             permission_version=self.permission_version,

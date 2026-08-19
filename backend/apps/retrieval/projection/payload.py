@@ -11,6 +11,7 @@ from apps.retrieval.models.dto import (
     CompositeMetricResolution,
     ExecutableAssetReference,
     RatioSpec,
+    RetrievalBindingRequest,
     RetrievalBindings,
     RetrievalBundle,
     RetrievalChannel,
@@ -21,7 +22,6 @@ from apps.retrieval.models.dto import (
     RetrievalDiagnostics,
     RetrievalHit,
     RetrievalPurpose,
-    RetrievalRequest,
     RetrievalResourceType,
     RetrievalScores,
     RetrievalSlotDecision,
@@ -46,7 +46,7 @@ _EXECUTABLE_GROUP_TYPES: dict[
 
 
 def semantic_payload_to_bundle(
-    request: RetrievalRequest,
+    request: RetrievalBindingRequest,
     raw: dict[str, Any],
     *,
     dense_status: RetrievalChannelStatus,
@@ -134,7 +134,7 @@ def semantic_payload_to_bundle(
 
 
 def bundle_to_semantic_payload(
-    request: RetrievalRequest,
+    request: RetrievalBindingRequest,
     bundle: RetrievalBundle,
     schema: DatasetSchema,
     *,
@@ -280,7 +280,7 @@ def bundle_to_semantic_payload(
 
 
 def apply_decision_to_semantic_payload(
-    request: RetrievalRequest,
+    request: RetrievalBindingRequest,
     raw: dict[str, Any],
     bundle: RetrievalBundle,
 ) -> dict[str, Any]:
@@ -662,7 +662,7 @@ def _dimension_filter_bindings(
 
 
 def _value_resolutions(
-    request: RetrievalRequest,
+    request: RetrievalBindingRequest,
     bundle: RetrievalBundle,
 ) -> dict[tuple[int, str], dict[str, str]]:
     """从已收敛的 VALUE 槽决策构建 (维度资产, 原值) → canonical 归一映射。
@@ -1167,7 +1167,7 @@ def _uses_dense_channel(item: dict[str, Any]) -> bool:
 
 
 def _slot_decisions(
-    request: RetrievalRequest,
+    request: RetrievalBindingRequest,
     candidates: dict[str, list[dict[str, Any]]],
     raw: dict[str, Any],
     global_status: RetrievalDecisionStatus,
@@ -1175,24 +1175,24 @@ def _slot_decisions(
     selected_groups = _dict_value(raw, "selected_assets")
     result: list[RetrievalSlotDecision] = []
 
-    for index, mention in enumerate(request.intent.metric_mentions):
+    for index, phrase in enumerate(request.metric_phrases, start=1):
         result.append(
             _slot_decision(
                 subquery_id=f"metric:{index}",
                 purpose=RetrievalPurpose.METRIC,
-                mention=mention,
+                mention=phrase,
                 candidate_items=candidates["metrics"],
                 selected_items=_dict_items(selected_groups, "metrics"),
                 global_status=global_status,
             )
         )
 
-    for index, slot in enumerate(request.intent.dimension_slots):
+    for index, phrase in enumerate(request.dimension_phrases, start=1):
         result.append(
             _slot_decision(
                 subquery_id=f"dimension:{index}",
                 purpose=RetrievalPurpose.DIMENSION,
-                mention=slot.name,
+                mention=phrase,
                 candidate_items=candidates["dimensions"],
                 selected_items=_dict_items(selected_groups, "dimensions"),
                 global_status=global_status,

@@ -184,13 +184,8 @@ class ChatBIToolResultProcessor:
     ) -> ToolResultProjection:
         package = payload.get("package") or {}
         scope = payload.get("scope") or {}
-        asset_ids = sorted(
-            {
-                int(item["asset_id"])
-                for item in scope.get("allowed_assets") or []
-                if isinstance(item, dict) and isinstance(item.get("asset_id"), int)
-            }
-        )
+        # 候选检索阶段没有绑定白名单；资产 ID 只能在后续模型绑定并校验后写入。
+        asset_ids: list[int] = []
         state_patch = {
             "semantic_package": package,
             "semantic_scope": scope,

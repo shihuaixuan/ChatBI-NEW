@@ -50,7 +50,7 @@ from apps.retrieval.query.policy import (
 from apps.retrieval.query.service import (
     RetrievalService,
     RetrievalServiceResult,
-    build_semantic_binding_request,
+    build_retrieval_request,
 )
 
 __all__ = [
@@ -82,7 +82,7 @@ __all__ = [
     "apply_decision_to_semantic_payload",
     "bind_default_time_dimensions",
     "bundle_to_semantic_payload",
-    "build_semantic_binding_request",
+    "build_retrieval_request",
     "filter_semantic_payload_tables",
     "is_compilation_decision_executable",
 ]

@@ -54,7 +54,7 @@ def _bundle(**updates) -> RetrievalBundle:
             status=RetrievalDecisionStatus.RESOLVED,
             slot_decisions=[
                 RetrievalSlotDecision(
-                    subquery_id="metric:0",
+                    subquery_id="metric:1",
                     purpose=RetrievalPurpose.METRIC,
                     status=RetrievalDecisionStatus.RESOLVED,
                     candidate_assets=[
@@ -104,7 +104,7 @@ def test_allowed_assets_must_come_from_binding_candidates():
                 status=RetrievalDecisionStatus.RESOLVED,
                 slot_decisions=[
                     RetrievalSlotDecision(
-                        subquery_id="metric:0",
+                        subquery_id="metric:1",
                         purpose=RetrievalPurpose.METRIC,
                         status=RetrievalDecisionStatus.RESOLVED,
                         candidate_assets=[

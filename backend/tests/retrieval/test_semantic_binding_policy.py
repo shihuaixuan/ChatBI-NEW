@@ -13,6 +13,7 @@ from apps.retrieval.errors import (
 )
 from apps.retrieval.models.dto import (
     AssetReference,
+    RetrievalBindingRequest,
     RetrievalChannel,
     RetrievalChannelDiagnostic,
     RetrievalChannelStatus,
@@ -130,7 +131,7 @@ def _recall(*slots: SubQueryRecallResult) -> HybridRecallResult:
     )
 
 
-def _time_request(*, include_normalized: bool = True) -> RetrievalRequest:
+def _time_request(*, include_normalized: bool = True) -> RetrievalBindingRequest:
     time_range: dict[str, Any] = {
         "raw": "今天",
         "value_status": "provided",
@@ -143,21 +144,24 @@ def _time_request(*, include_normalized: bool = True) -> RetrievalRequest:
             "timezone": "Asia/Shanghai",
             "source_raw": "今天",
         }
-    return RetrievalRequest(
+    candidate_request = RetrievalRequest(
         request_id="time-binding",
         tenant_id=1,
         actor_id=2,
-        original_question="今天的销售额",
-        rewritten_question="今天的销售额",
-        intent=RetrievalIntent(
-            intent_type="metric_query",
-            metric_mentions=["销售额"],
-            time_mentions=["今天"],
-            time_range=time_range,
-        ),
+        metric_phrases=["销售额"],
+        dimension_phrases=[],
         scope=RetrievalScope(dataset_ids=[20]),
         profiles=[RetrievalProfileName.SEMANTIC_BINDING],
         strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
+    )
+    return RetrievalBindingRequest(
+        request_id=candidate_request.request_id,
+        tenant_id=candidate_request.tenant_id,
+        actor_id=candidate_request.actor_id,
+        original_question="今天的销售额",
+        rewrite_question="今天的销售额",
+        candidate_request=candidate_request,
+        intent=RetrievalIntent(intent_type="metric_query", time_range=time_range),
     )
 
 

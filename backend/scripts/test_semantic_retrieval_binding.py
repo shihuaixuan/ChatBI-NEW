@@ -30,7 +30,6 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-
 # 允许从仓库根目录直接运行脚本时导入 backend 下的项目模块。
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
@@ -38,20 +37,19 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from sqlmodel import Session  # noqa: E402
 
-from apps.retrieval.models.dto import RetrievalPurpose, RetrievalSubQuery  # noqa: E402
 from apps.retrieval.embedding import OpenAICompatibleEmbeddingProvider  # noqa: E402
+from apps.retrieval.models.dto import RetrievalPurpose, RetrievalSubQuery  # noqa: E402
 from apps.retrieval.query.hybrid import (  # noqa: E402
     HybridRetrievalConfig,
     SemanticBindingSearchStore,
 )
-from apps.retrieval.query.service import build_semantic_binding_request  # noqa: E402
 from apps.retrieval.query.semantic_runtime import (  # noqa: E402
     RetrievalEmbeddingRuntimeConfig,
 )
+from apps.retrieval.query.service import build_retrieval_request  # noqa: E402
 from apps.semantic.composition import build_semantic_schema_service  # noqa: E402
 from common.core.config import settings  # noqa: E402
 from common.core.db import engine  # noqa: E402
-
 
 API_URL = "https://api.deepseek.com/v1/chat/completions"
 MODEL = "deepseek-v4-flash"
@@ -78,6 +76,8 @@ TEST_CASES: list[dict[str, Any]] = [
     {
         "name": "fast_metric_group_time",
         "question": "2026年6月各店铺的总GMV是多少？",
+        "metric_phrases": ["总GMV"],
+        "dimension_phrases": ["店铺"],
         "expected": {
             "measures": {"gmv_total"},
             "group_by": {"stall_id"},
@@ -87,6 +87,8 @@ TEST_CASES: list[dict[str, Any]] = [
     {
         "name": "plan_metric_having_top_n",
         "question": "查询2026年6月总GMV高于10000元的店铺，并按GMV降序取前10名。",
+        "metric_phrases": ["总GMV"],
+        "dimension_phrases": ["店铺"],
         "expected": {
             "measures": {"gmv_total"},
             "group_by": {"stall_id"},
@@ -96,6 +98,8 @@ TEST_CASES: list[dict[str, Any]] = [
     {
         "name": "plan_multi_metric_filter_value",
         "question": "2026年6月店铺100023的总GMV和订单数是多少？",
+        "metric_phrases": ["总GMV", "订单数"],
+        "dimension_phrases": ["店铺"],
         "expected": {
             "measures": {"gmv_total", "order_cnt_total"},
             "filters": {"stall_id"},
@@ -105,6 +109,8 @@ TEST_CASES: list[dict[str, Any]] = [
     {
         "name": "research_period_comparison",
         "question": "店铺100023在2026年6月相比5月的总GMV变化量和增长率是多少？",
+        "metric_phrases": ["总GMV"],
+        "dimension_phrases": ["店铺"],
         "expected": {
             "measures": {"gmv_total"},
             "filters": {"stall_id"},
@@ -254,19 +260,19 @@ def retrieve_by_raw_question(
     tenant_id: int,
     actor_id: int,
     dataset_id: int,
-    question: str,
+    metric_phrases: list[str],
+    dimension_phrases: list[str],
     schema: Any,
 ) -> dict[str, Any]:
-    """直接使用自然语言问题检索各类语义资产，不经过 intent_hints。"""
+    """使用显式指标和维度短语检索语义资产，不经过问题理解模型。"""
 
-    # 这里只用 request 携带数据集、租户和权限范围；intent 不参与检索查询规划。
-    request = build_semantic_binding_request(
+    # 候选检索请求只携带短语、数据集和权限范围；完整问题不参与检索规划。
+    request = build_retrieval_request(
         tenant_id=tenant_id,
         actor_id=actor_id,
         dataset_id=dataset_id,
-        original_question=question,
-        rewritten_question=question,
-        intent={"intent_type": "raw_question"},
+        metric_phrases=metric_phrases,
+        dimension_phrases=dimension_phrases,
     )
     embedding_config = RetrievalEmbeddingRuntimeConfig.from_settings(settings)
     embedding_api_key = (
@@ -281,19 +287,13 @@ def retrieve_by_raw_question(
             model=embedding_config.model,
             dimension=embedding_config.dimension,
         )
-    # exact、alias、lexical 始终使用真实语义索引；有 embedding key 时增加 dense，
-    # 这样完整自然语言问题可以通过语义相似度召回资产，而不是依赖 intent_hints。
+    # exact、alias、lexical 始终使用真实语义索引；有 embedding key 时对每个短语增加 dense。
     store = SemanticBindingSearchStore(
         session,
         HybridRetrievalConfig(
             embedding_dimension=embedding_config.dimension,
             dense_enabled=embedding_provider is not None,
         ),
-    )
-    query_vector = (
-        embedding_provider.embed_query(question)
-        if embedding_provider is not None
-        else None
     )
     definitions: dict[tuple[str, int], dict[str, Any]] = {}
     for asset_type, elements in (
@@ -312,49 +312,55 @@ def retrieve_by_raw_question(
         "terms": [],
     }
     search_targets = {
-        "metrics": RetrievalPurpose.METRIC,
-        "dimensions": RetrievalPurpose.DIMENSION,
-        "values": RetrievalPurpose.VALUE,
-        "terms": RetrievalPurpose.TERM,
+        "metrics": (RetrievalPurpose.METRIC, metric_phrases),
+        "dimensions": (RetrievalPurpose.DIMENSION, dimension_phrases),
     }
-    for group, purpose in search_targets.items():
-        subquery = RetrievalSubQuery(
-            subquery_id=f"raw:{group}",
-            purpose=purpose,
-            text=question,
-            required=False,
-        )
+    for group, (purpose, phrases) in search_targets.items():
         by_ref: dict[tuple[str, int, int | None], dict[str, Any]] = {}
-        recalls = [
-            recall
-            for search in (store.search_exact, store.search_alias, store.search_lexical)
-            for recall in search(request, subquery, limit=20)
-        ]
-        if query_vector is not None:
-            recalls.extend(store.search_dense(request, subquery, query_vector, limit=20))
-        for recall in recalls:
-            candidate = _raw_candidate_from_hit(
-                recall.hit,
-                definitions,
-                recall_score=getattr(recall, "score", None),
+        for phrase_index, phrase in enumerate(phrases, start=1):
+            subquery = RetrievalSubQuery(
+                subquery_id=f"{group}:{phrase_index}",
+                purpose=purpose,
+                text=phrase,
+                required=True,
             )
-            if candidate is None:
-                continue
-            key = (
-                str(candidate["asset_type"]),
-                int(candidate["asset_id"]),
-                candidate.get("model_id"),
-            )
-            existing = by_ref.get(key)
-            if existing is None:
-                by_ref[key] = candidate
-                continue
-            existing["score"] = max(existing["score"], candidate["score"])
-            existing["retrieval_scores"].update(candidate["retrieval_scores"])
-            if candidate.get("matched_text"):
-                existing["matched_text"] = candidate["matched_text"]
-            if candidate.get("matched_field"):
-                existing["matched_field"] = candidate["matched_field"]
+            recalls = [
+                recall
+                for search in (store.search_exact, store.search_alias, store.search_lexical)
+                for recall in search(request, subquery, limit=20)
+            ]
+            if embedding_provider is not None:
+                recalls.extend(
+                    store.search_dense(
+                        request,
+                        subquery,
+                        embedding_provider.embed_query(phrase),
+                        limit=20,
+                    )
+                )
+            for recall in recalls:
+                candidate = _raw_candidate_from_hit(
+                    recall.hit,
+                    definitions,
+                    recall_score=getattr(recall, "score", None),
+                )
+                if candidate is None:
+                    continue
+                key = (
+                    str(candidate["asset_type"]),
+                    int(candidate["asset_id"]),
+                    candidate.get("model_id"),
+                )
+                existing = by_ref.get(key)
+                if existing is None:
+                    by_ref[key] = candidate
+                    continue
+                existing["score"] = max(existing["score"], candidate["score"])
+                existing["retrieval_scores"].update(candidate["retrieval_scores"])
+                if candidate.get("matched_text"):
+                    existing["matched_text"] = candidate["matched_text"]
+                if candidate.get("matched_field"):
+                    existing["matched_field"] = candidate["matched_field"]
         groups[group] = sorted(
             by_ref.values(),
             key=lambda item: (-float(item["score"]), int(item["asset_id"])),
@@ -842,7 +848,8 @@ def run_case(
             tenant_id=tenant_id,
             actor_id=actor_id,
             dataset_id=dataset_id,
-            question=case["question"],
+            metric_phrases=case["metric_phrases"],
+            dimension_phrases=case["dimension_phrases"],
             schema=schema,
         )
 

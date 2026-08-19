@@ -1,73 +1,47 @@
-"""采集当前 Graph/Agent Semantic 检索基线，不调用问题理解模型。"""
+"""采集当前 Graph/Agent 候选资产检索基线，不调用候选绑定模型。"""
 
 from __future__ import annotations
 
 import argparse
 import json
-import time
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from sqlmodel import Session
 
-from apps.chatbi.models import SemanticRetrievalData
-from apps.chatbi.services.planning import SemanticRetrievalService
 from apps.retrieval.query.evaluation import (
-    RecordedRetrievalResult,
-    RetrievalBaseline,
     RetrievalGoldenCase,
     load_gold_set,
 )
-from apps.retrieval.models.dto import RetrievalChannel, RetrievalChannelStatus
-from apps.retrieval.projection.payload import semantic_payload_to_bundle
 from apps.retrieval.query.service import build_retrieval_service
 from common.core.db import engine
 
 
-def _graph_result(session: Session, case: RetrievalGoldenCase) -> RecordedRetrievalResult:
+def _candidate_result(session: Session, case: RetrievalGoldenCase) -> dict[str, Any]:
+    """记录候选分组和召回诊断，不把候选伪装成最终绑定结果。"""
+
     result = build_retrieval_service(session).retrieve(case.request)
-    return RecordedRetrievalResult(case_id=case.case_id, bundle=result.bundle)
+    return {
+        "case_id": case.case_id,
+        "request_id": case.request.request_id,
+        "payload": result.payload,
+        "filters": result.filters,
+    }
 
 
-def _agent_result(session: Session, case: RetrievalGoldenCase) -> RecordedRetrievalResult:
-    service = build_retrieval_service(session)
-    started = time.perf_counter()
-    raw = SemanticRetrievalService(service).retrieve_for_agent(
-        SemanticRetrievalData(
-            workspace_id=case.request.tenant_id,
-            user_id=case.request.actor_id,
-            dataset_id=case.request.scope.dataset_ids[0],
-            original_question=case.request.original_question,
-            rewritten_question=case.request.rewritten_question,
-            intent=case.request.intent.model_dump(mode="json"),
-            request_id=case.request.request_id,
-        )
-    )
-    latency_ms = (time.perf_counter() - started) * 1000
-    dense = _channel_diagnostic(raw, RetrievalChannel.DENSE)
-    bundle = semantic_payload_to_bundle(
-        case.request,
-        raw,
-        dense_status=RetrievalChannelStatus(dense.get("status") or RetrievalChannelStatus.SKIPPED),
-        dense_error_code=dense.get("error_code"),
-        dense_latency_ms=float(dense.get("latency_ms") or 0),
-        latency_ms=latency_ms,
-    )
-    return RecordedRetrievalResult(case_id=case.case_id, bundle=bundle)
-
-
-def _channel_diagnostic(raw: dict[str, Any], channel: RetrievalChannel) -> dict[str, Any]:
-    diagnostics = raw.get("retrieval_diagnostics") or {}
-    for item in diagnostics.get("channels") or []:
-        if isinstance(item, dict) and item.get("channel") == channel.value:
-            return cast(dict[str, Any], item)
-    return {"status": RetrievalChannelStatus.SKIPPED.value}
-
-
-def _write_baseline(path: Path, baseline: RetrievalBaseline) -> None:
+def _write_baseline(path: Path, implementation: str, results: list[dict[str, Any]]) -> None:
     path.write_text(
-        json.dumps(baseline.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
+        json.dumps(
+            {
+                "implementation": implementation,
+                "stage": "candidate_retrieval",
+                "strategy_version": "semantic-binding",
+                "results": results,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -80,29 +54,10 @@ def main() -> None:
 
     cases = load_gold_set(args.gold_set)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    captured_at = datetime.now(timezone.utc)
     with Session(engine) as session:
-        graph_results = [_graph_result(session, case) for case in cases]
-        agent_results = [_agent_result(session, case) for case in cases]
+        results = [_candidate_result(session, case) for case in cases]
 
-    _write_baseline(
-        args.output_dir / "graph_baseline.json",
-        RetrievalBaseline(
-            implementation="graph",
-            captured_at=captured_at,
-            strategy_version="semantic-binding",
-            results=graph_results,
-        ),
-    )
-    _write_baseline(
-        args.output_dir / "agent_baseline.json",
-        RetrievalBaseline(
-            implementation="agent",
-            captured_at=captured_at,
-            strategy_version="semantic-binding",
-            results=agent_results,
-        ),
-    )
+    _write_baseline(args.output_dir / "candidate_retrieval.json", "shared", results)
 
 
 if __name__ == "__main__":

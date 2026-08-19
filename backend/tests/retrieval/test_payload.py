@@ -3,6 +3,7 @@
 from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,
+    RetrievalBindingRequest,
     RetrievalBindings,
     RetrievalBundle,
     RetrievalDecision,
@@ -42,16 +43,24 @@ def test_bundle_uses_semantic_schema_as_execution_fact():
         data_set=_element("DATASET", 20, "经营分析", "business"),
         metrics=[metric],
     )
-    request = RetrievalRequest(
+    candidate_request = RetrievalRequest(
         request_id="semantic-binding-contract",
         tenant_id=1,
         actor_id=2,
-        original_question="销售额",
-        rewritten_question="销售额",
-        intent=RetrievalIntent(intent_type="metric_query", metric_mentions=["销售额"]),
+        metric_phrases=["销售额"],
+        dimension_phrases=[],
         scope=RetrievalScope(dataset_ids=[20]),
         profiles=[RetrievalProfileName.SEMANTIC_BINDING],
         strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
+    )
+    request = RetrievalBindingRequest(
+        request_id=candidate_request.request_id,
+        tenant_id=candidate_request.tenant_id,
+        actor_id=candidate_request.actor_id,
+        original_question="销售额",
+        rewrite_question="销售额",
+        candidate_request=candidate_request,
+        intent=RetrievalIntent(intent_type="metric_query"),
     )
     asset = AssetReference(
         asset_type=RetrievalResourceType.METRIC,
@@ -119,16 +128,25 @@ def test_bundle_keeps_literal_dimension_value_as_filter_without_value_asset():
         metrics=[metric],
         dimensions=[dimension],
     )
-    request = RetrievalRequest(
+    candidate_request = RetrievalRequest(
         request_id="literal-dimension-filter",
         tenant_id=1,
         actor_id=2,
+        metric_phrases=["总下单客户数"],
+        dimension_phrases=["店铺"],
+        scope=RetrievalScope(dataset_ids=[20]),
+        profiles=[RetrievalProfileName.SEMANTIC_BINDING],
+        strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
+    )
+    request = RetrievalBindingRequest(
+        request_id=candidate_request.request_id,
+        tenant_id=candidate_request.tenant_id,
+        actor_id=candidate_request.actor_id,
         original_question="店铺100011的总下单客户数",
-        rewritten_question="店铺100011的总下单客户数",
+        rewrite_question="店铺100011的总下单客户数",
+        candidate_request=candidate_request,
         intent=RetrievalIntent(
             intent_type="metric_query",
-            metric_mentions=["总下单客户数"],
-            dimension_mentions=["店铺"],
             dimension_slots=[
                 RetrievalDimensionSlot(
                     name="店铺",
@@ -138,9 +156,6 @@ def test_bundle_keeps_literal_dimension_value_as_filter_without_value_asset():
                 )
             ],
         ),
-        scope=RetrievalScope(dataset_ids=[20]),
-        profiles=[RetrievalProfileName.SEMANTIC_BINDING],
-        strategy_version=SEMANTIC_BINDING_STRATEGY_VERSION,
     )
     metric_asset = AssetReference(
         asset_type=RetrievalResourceType.METRIC,
@@ -240,12 +255,17 @@ def test_bundle_keeps_literal_dimension_value_as_filter_without_value_asset():
         }
     ]
 
+    multi_candidate_request = request.candidate_request.model_copy(
+        update={
+            "metric_phrases": ["总下单客户数"],
+            "dimension_phrases": ["店铺"],
+        }
+    )
     multi_value_request = request.model_copy(
         update={
+            "candidate_request": multi_candidate_request,
             "intent": RetrievalIntent(
                 intent_type="comparison_analysis",
-                metric_mentions=["总下单客户数"],
-                dimension_mentions=["店铺"],
                 dimension_slots=[
                     RetrievalDimensionSlot(
                         name="店铺",
@@ -254,7 +274,7 @@ def test_bundle_keeps_literal_dimension_value_as_filter_without_value_asset():
                         value_status="provided",
                     )
                 ],
-            )
+            ),
         }
     )
 
@@ -282,7 +302,7 @@ def test_bundle_keeps_literal_dimension_value_as_filter_without_value_asset():
         }
     ]
 
-    share_request = request.model_copy(
+    share_request = multi_value_request.model_copy(
         update={
             "intent": multi_value_request.intent.model_copy(
                 update={"intent_type": "share_analysis"}

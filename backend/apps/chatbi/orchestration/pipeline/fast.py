@@ -496,7 +496,11 @@ class FastPipeline:
     @staticmethod
     def _is_ambiguous(state: AgentRuntimeState) -> bool:
         scope = state.context.semantic_asset_scope
-        return bool(scope is not None and scope.decision_status.value == "ambiguous")
+        return bool(
+            scope is not None
+            and scope.decision_status is not None
+            and scope.decision_status.value == "ambiguous"
+        )
 
     @staticmethod
     def _plan_fingerprint(state: AgentRuntimeState) -> str:

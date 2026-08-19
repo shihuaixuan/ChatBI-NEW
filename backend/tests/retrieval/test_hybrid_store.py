@@ -15,7 +15,6 @@ from apps.retrieval.indexing.service import (
 from apps.retrieval.models.dto import (
     RetrievalChannel,
     RetrievalChannelStatus,
-    RetrievalIntent,
     RetrievalProfileName,
     RetrievalPurpose,
     RetrievalRequest,
@@ -176,9 +175,8 @@ def _request(text: str) -> RetrievalRequest:
         request_id=f"hybrid-store-{text}",
         tenant_id=9_930_001,
         actor_id=88,
-        original_question=text,
-        rewritten_question=text,
-        intent=RetrievalIntent(intent_type="metric_query", metric_mentions=[text]),
+        metric_phrases=[text],
+        dimension_phrases=[],
         scope=RetrievalScope(
             dataset_ids=[20],
             principal_roles=["analyst"],

@@ -14,7 +14,7 @@ from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
 def _understanding() -> dict:
     return {
-        "rewritten_question": "本月销售额",
+        "rewrite_question": "本月销售额",
         "intent": {"intent_type": "metric_query", "metric_mentions": ["销售额"]},
     }
 

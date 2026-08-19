@@ -5,15 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from apps.chatbi.orchestration.graph.capabilities.context import ChatBIRunContext
-from apps.chatbi.orchestration.graph.capabilities.interactions import (
-    apply_slot_response_to_intent,
-)
 from apps.datasource import DatasourceQueryService, DatasourceQuerySubject
 from apps.retrieval import (
     RetrievalConfigurationError,
     RetrievalQueryError,
     RetrievalService,
-    build_semantic_binding_request,
+    build_retrieval_request,
     filter_semantic_payload_tables,
 )
 from apps.semantic.services.dataset_binding_service import (
@@ -38,7 +35,6 @@ class SemanticKnowledgeAdapter:
 
     def retrieve(self, request: dict[str, Any]) -> dict[str, Any]:
         ctx = ChatBIRunContext(request)
-        intent = apply_slot_response_to_intent(ctx.intent, ctx.slot_response)
         if self._retrieval_service is None:
             raise RetrievalConfigurationError(
                 "Workflow 未配置统一检索服务",
@@ -49,13 +45,12 @@ class SemanticKnowledgeAdapter:
                 "语义检索缺少问题或数据集",
                 details={"reason_code": "SEMANTIC_BINDING_REQUEST_INCOMPLETE"},
             )
-        retrieval_request = build_semantic_binding_request(
+        retrieval_request = build_retrieval_request(
             tenant_id=ctx.tenant_id,
             actor_id=ctx.user_id or 1,
             dataset_id=ctx.dataset_id,
-            original_question=ctx.raw_question or ctx.question,
-            rewritten_question=ctx.question,
-            intent=intent,
+            metric_phrases=list(ctx.rewrite.get("metric_phrases") or []),
+            dimension_phrases=list(ctx.rewrite.get("dimension_phrases") or []),
             request_id=ctx.run_id or None,
         )
         package = self._retrieval_service.retrieve(retrieval_request).payload

@@ -89,11 +89,11 @@ def _ambiguous_store_understanding_state():
         "question_understanding": {
             "original_question": "今天店铺的客户数",
             "rewrite_question": "今天店铺的客户数",
+            "metric_phrases": ["客户数"],
+            "dimension_phrases": ["店铺"],
             "intent": {
                 "intent_type": "metric_query",
                 "confidence": 0.95,
-                "metric_mentions": ["客户数"],
-                "dimension_mentions": ["店铺"],
                 "dimension_slots": [
                     {
                         "name": "店铺",
@@ -436,13 +436,12 @@ def test_resume_applies_structured_semantic_clarification_to_trusted_scope():
         tenant_id=1,
         actor_id=1,
         original_question="今天店铺的客户数",
-        rewritten_question="今天店铺的客户数",
+        rewrite_question="今天店铺的客户数",
+        metric_phrases=["客户数"],
+        dimension_phrases=["店铺"],
         intent=RetrievalIntent(
             intent_type="metric_query",
-            metric_mentions=["客户数"],
-            dimension_mentions=["店铺"],
             dimension_slots=[{"name": "店铺", "role": "group_by"}],
-            time_mentions=["今天"],
             time_range={
                 "raw": "今天",
                 "value_status": "provided",

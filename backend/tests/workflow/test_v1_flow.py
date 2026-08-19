@@ -61,18 +61,6 @@ class FakeRetrievalService:
 
     def retrieve(self, request):
         self.requests.append(request)
-        dimension_filters = [
-            {
-                "asset_type": "DIMENSION",
-                "asset_id": 200,
-                "name": slot.name,
-                "biz_name": "stall_id",
-                "operator": "=",
-                "value": slot.value,
-            }
-            for slot in request.intent.dimension_slots
-            if slot.role == "filter" and slot.value_status == "provided"
-        ]
         metric = {
             "asset_type": "METRIC",
             "asset_id": 100,
@@ -92,15 +80,15 @@ class FakeRetrievalService:
                     "terms": [],
                 },
                 "selected_assets": {
-                    "metrics": [metric],
+                    "metrics": [],
                     "dimensions": [],
                     "values": [],
                     "terms": [],
                 },
                 "slot_bindings": {
-                    "metrics": [metric],
+                    "metrics": [],
                     "group_dimensions": [],
-                    "dimension_filters": dimension_filters,
+                    "dimension_filters": [],
                     "value_filters": [],
                     "time_filters": [],
                 },
@@ -682,10 +670,16 @@ def test_chatbi_v1_slot_clarification_filter_response_feeds_knowledge_and_plan()
         "店铺": "店铺为1"
     }
     assert outcome.context.variables["intent"]["dimension_slots"][0]["value"] is None
-    request_intent = retrieval_service.requests[0].intent
-    assert request_intent.dimension_slots[0].value == "1"
-    assert outcome.context.variables["knowledge"]["slot_bindings"]["dimension_filters"][0]["value"] == "1"
-    assert any(item.get("value") == "1" for item in outcome.context.variables["plan"]["filters"])
+    request = retrieval_service.requests[0]
+    assert request.metric_phrases == ["访问人数"]
+    assert request.dimension_phrases == []
+    assert "intent" not in request.model_dump(mode="json")
+    assert outcome.context.variables["knowledge"]["selected_assets"] == {
+        "metrics": [],
+        "dimensions": [],
+        "values": [],
+        "terms": [],
+    }
 
 
 def test_chatbi_v1_subject_domain_clarification_can_resume_to_knowledge():
@@ -992,11 +986,16 @@ def test_chatbi_v1_graph_passes_user_question_to_unified_retrieval_node():
         "intent.recognize",
         "knowledge.retrieve",
     ]
-    assert retrieval_service.requests[0].original_question == "今日店铺流量"
+    assert retrieval_service.requests[0].metric_phrases == []
+    assert retrieval_service.requests[0].dimension_phrases == []
     assert retrieval_service.requests[0].scope.dataset_ids == [20]
     assert knowledge["status"] == "hit"
-    assert knowledge["selected_assets"]["metrics"][0]["asset_id"] == 100
-    assert knowledge["selected_assets"]["metrics"][0]["biz_name"] == "visit_uv"
+    assert knowledge["selected_assets"] == {
+        "metrics": [],
+        "dimensions": [],
+        "values": [],
+        "terms": [],
+    }
     assert knowledge["candidate_groups"]["metrics"][0]["source"] == "semantic_binding"
     assert "sql.generate" in gateway.calls
 

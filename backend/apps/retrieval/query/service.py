@@ -9,15 +9,15 @@ from uuid import uuid4
 from apps.retrieval.embedding import EmbeddingProvider
 from apps.retrieval.errors import RetrievalQueryError
 from apps.retrieval.models.dto import (
-    RetrievalBundle,
-    RetrievalDimensionSlot,
-    RetrievalIntent,
     RetrievalProfileName,
     RetrievalRequest,
     RetrievalScope,
 )
+from apps.retrieval.query.hybrid import HybridRecallResult
 from apps.retrieval.query.profiles import get_retrieval_profile
-from apps.retrieval.query.semantic_binding import SemanticBindingRunner
+from apps.retrieval.query.semantic_binding import (
+    SemanticBindingRunner,
+)
 from apps.retrieval.query.semantic_runtime import RetrievalEmbeddingRuntimeConfig
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from common.core.config import settings
@@ -25,15 +25,15 @@ from common.core.config import settings
 
 @dataclass(frozen=True, slots=True)
 class RetrievalServiceResult:
-    """同时承载统一契约与现有调用方兼容结果。"""
+    """候选资产检索结果。"""
 
     payload: dict[str, Any]
-    bundle: RetrievalBundle
+    recall: HybridRecallResult
     filters: dict[str, Any]
 
 
 class RetrievalService:
-    """统一执行 semantic-binding，不保留旧策略运行分支。"""
+    """统一执行语义资产候选检索，不进入候选绑定。"""
 
     def __init__(
         self,
@@ -65,7 +65,7 @@ class RetrievalService:
         *,
         timeout_ms: int | None = None,
     ) -> RetrievalServiceResult:
-        """执行语义绑定策略，并返回 Graph/Agent 可直接消费的 payload。"""
+        """只根据指标和维度短语召回候选资产。"""
 
         self._validate_request(request)
         effective_timeout_ms = min(
@@ -74,7 +74,7 @@ class RetrievalService:
         )
         if effective_timeout_ms <= 0:
             raise TimeoutError("RETRIEVAL_DEADLINE_EXCEEDED")
-        execution = self._runner.run(
+        execution = self._runner.retrieve_candidates(
             self._session,
             request,
             request.strategy_version,
@@ -82,7 +82,7 @@ class RetrievalService:
         )
         return RetrievalServiceResult(
             payload=execution.payload,
-            bundle=execution.bundle,
+            recall=execution.recall,
             filters=execution.filters,
         )
 
@@ -103,14 +103,13 @@ class RetrievalService:
             raise RetrievalQueryError("semantic_binding 检索必须且只能指定一个 dataset_id")
 
 
-def build_semantic_binding_request(
+def build_retrieval_request(
     *,
     tenant_id: int,
     actor_id: int,
     dataset_id: int,
-    original_question: str,
-    rewritten_question: str,
-    intent: dict[str, Any] | None,
+    metric_phrases: list[str],
+    dimension_phrases: list[str],
     request_id: str | None = None,
     principal_roles: list[str] | None = None,
     principal_role_ids: list[int] | None = None,
@@ -118,74 +117,15 @@ def build_semantic_binding_request(
     source_ids: list[str] | None = None,
     strategy_version: str | None = None,
 ) -> RetrievalRequest:
-    """把已确认问题理解投影为语义绑定检索请求。"""
+    """把问题重写模型输出的短语投影为候选资产检索请求。"""
 
-    source_intent = intent or {}
-    intent_fields = RetrievalIntent.model_fields
-    intent_payload = {
-        key: value for key, value in source_intent.items() if key in intent_fields
-    }
-    # 问题理解模型会把未使用的可选对象输出为 null；检索边界 DTO 的默认值
-    # 表示“未提供”，因此在统一入口把 null 归一为对应的空集合，避免请求
-    # 在进入 semantic-binding 前因类型校验失败。
-    for field_name in (
-        "time_range",
-        "comparison",
-        "query_shape",
-        "subject_domain",
-    ):
-        if intent_payload.get(field_name) is None:
-            intent_payload[field_name] = {}
-    for field_name in (
-        "metric_mentions",
-        "dimension_mentions",
-        "time_mentions",
-        "time_ranges",
-        "filter_mentions",
-        "required_slot_types",
-        "ambiguous_slots",
-        "conflict_slots",
-    ):
-        if intent_payload.get(field_name) is None:
-            intent_payload[field_name] = []
-    raw_dimension_slots = source_intent.get("dimension_slots")
-    if isinstance(raw_dimension_slots, list):
-        retrieval_slot_fields = set(RetrievalDimensionSlot.model_fields)
-        source_slot_fields = retrieval_slot_fields | {"value_confidence"}
-        projected_slots: list[dict[str, Any]] = []
-        for index, slot in enumerate(raw_dimension_slots):
-            if not isinstance(slot, dict):
-                raise RetrievalQueryError(
-                    "dimension_slots 必须包含对象",
-                    details={"reason_code": "DIMENSION_SLOT_INVALID", "slot_index": index},
-                )
-            unknown_fields = set(slot) - source_slot_fields
-            if unknown_fields:
-                raise RetrievalQueryError(
-                    "dimension_slots 包含检索边界未定义的字段",
-                    details={
-                        "reason_code": "DIMENSION_SLOT_FIELDS_UNSUPPORTED",
-                        "slot_index": index,
-                        "fields": sorted(unknown_fields),
-                    },
-                )
-            # value_confidence 属于问题理解诊断，不参与检索规划和门控。
-            projected_slots.append(
-                {key: value for key, value in slot.items() if key in retrieval_slot_fields}
-            )
-        intent_payload["dimension_slots"] = projected_slots
-    intent_payload.setdefault(
-        "intent_type",
-        str(source_intent.get("intent_type") or "metric_query"),
-    )
     profile = get_retrieval_profile(RetrievalProfileName.SEMANTIC_BINDING)
     return RetrievalRequest(
         request_id=request_id or f"retrieval-{uuid4().hex}",
         tenant_id=tenant_id,
         actor_id=actor_id,
-        original_question=original_question,
-        rewritten_question=rewritten_question,
-        intent=RetrievalIntent.model_validate(intent_payload),
+        metric_phrases=metric_phrases,
+        dimension_phrases=dimension_phrases,
         scope=RetrievalScope(
             dataset_ids=[dataset_id],
             source_ids=source_ids or [],
@@ -219,5 +159,5 @@ __all__ = [
     "RetrievalService",
     "RetrievalServiceResult",
     "build_retrieval_service",
-    "build_semantic_binding_request",
+    "build_retrieval_request",
 ]

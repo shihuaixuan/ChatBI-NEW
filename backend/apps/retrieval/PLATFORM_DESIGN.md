@@ -151,27 +151,18 @@ SQL 和 Join 条件均不进入这两类文本。
 
 ### 4.1 唯一输入事实源
 
-检索层接收 `QuestionUnderstandingOutput`，不在 Graph 节点、Agent 工具和各检索器中重复改写问题。现有问题理解已经给出：
-
-- `original_question` 与 `rewritten_question`
-- `intent_type`、`metric_mentions`
-- `dimension_slots` 及其 `group_by/filter/ambiguous` 角色
-- `time_range`、`filter_mentions`
-- `required_slot_types`、`query_shape`
-- 歧义与冲突槽位
-
-检索层只做确定性的 `QueryPlanner` 投影，不让 LLM 在检索阶段生成资产 ID。
+检索层接收问题重写阶段产出的指标短语和维度短语，不在检索器中重新理解问题。
+完整问题、时间、维度值和计算关系不属于当前候选检索输入。
 
 ### 4.2 统一查询契约
 
 ```text
 RetrievalRequest
   request_id / tenant_id / actor_id
-  original_question / rewritten_question
-  intent / inherited_context
+  metric_phrases / dimension_phrases
   scopes: dataset_ids / knowledge_base_ids / source_ids
   permissions
-  profiles: [semantic_binding, sql_exemplar, knowledge_evidence]
+  profiles: [semantic_binding]
   strategy_version
 
 RetrievalSubQuery
@@ -183,22 +174,17 @@ RetrievalSubQuery
   filters
 ```
 
-`QueryPlanner` 对不同用途生成不同子查询：
+二期 `QueryPlanner` 只生成两类子查询：
 
 | 用途 | 查询文本 | 约束 |
 | --- | --- | --- |
-| 指标绑定 | 每个完整 `metric_mention`，辅以整句上下文 | `asset_type=METRIC`、数据集/领域范围 |
-| 维度绑定 | 每个 `dimension_slot.name` | `asset_type=DIMENSION`，保留角色 |
-| 维值绑定 | `slot.name + provided value` | 先精确/别名，再选择性向量 |
-| 术语解释 | 原业务短语 | `asset_type=TERM` |
-| SQL 示例 | 规范化问题 + `intent_type/query_shape` | 只返回已验证、模型兼容的示例 |
-| 知识证据 | 完整 `rewritten_question` | 知识库、文件、ACL 和有效期过滤 |
+| 指标候选 | `metric_phrases` 中的单个短语 | `asset_type=METRIC`、数据集/权限范围 |
+| 维度候选 | `dimension_phrases` 中的单个短语 | `asset_type=DIMENSION`、数据集/权限范围 |
 
 不要把所有槽位和历史上下文拼成一个超长向量查询。它会让指标和维度互相稀释，也无法判断哪个必填槽位未命中。
 
-P1-4 的实现只读取 `RetrievalRequest.intent`：每个显式指标、维度槽位和已提供维值形成独立
-required subquery，术语只接受 `subject_domain.terms` 中的显式输入；缺少 mention 时不会用整句
-猜测资产。计划包含稳定 fingerprint，便于结果复现和问题定位。
+候选检索不读取 `RetrievalIntent`，也不使用整句替代缺失短语。计划包含稳定 fingerprint，
+便于结果复现和问题定位。当前链路在候选结果返回后结束，不进入绑定和执行规划。
 
 ### 4.3 Graph 与 Agent 的使用方式
 
@@ -208,15 +194,13 @@ flowchart LR
     U --> R["RetrievalService.retrieve"]
     G["Graph 检索节点"] --> R
     A["Agent 检索工具"] --> R
-    R --> P["RetrievalBundle"]
-    P --> C["SQL 编译器"]
-    P --> AN["回答生成器"]
+    R --> CAND["候选结果"]
 ```
 
-- Graph 在问题理解/澄清完成后，用确定性节点调用统一服务。
+- Graph 和 Agent 都用确定性节点调用候选检索服务，并消费同一份候选结果。
 - Agent 工具继续采用“无自由文本参数”，从共享 state 读取已经确认的问题理解，防止 Agent 私自改变检索意图。
 - 两个入口只负责传递运行上下文，不注入不同的向量会话或检索器实现。
-- 检索结果以同一个 `RetrievalBundle` 返回，Graph/Agent 只选择消费其中哪些分组。
+- 当前阶段只返回候选分组，不产生 `selected_assets`、执行白名单和查询计划。
 
 ## 5. 检索策略
 

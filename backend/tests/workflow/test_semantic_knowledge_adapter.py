@@ -79,10 +79,13 @@ def test_adapter_projects_workflow_context_to_semantic_binding_request():
                 "user_id": 30,
             },
             "variables": {
-                "rewrite": {"rewrite_question": "改写后的销售额"},
+                "rewrite": {
+                    "rewrite_question": "改写后的销售额",
+                    "metric_phrases": ["销售额"],
+                    "dimension_phrases": [],
+                },
                 "intent": {
                     "intent_type": "metric_query",
-                    "metric_mentions": ["销售额"],
                 },
             },
         }
@@ -93,14 +96,23 @@ def test_adapter_projects_workflow_context_to_semantic_binding_request():
     assert request.request_id == "run-42"
     assert request.tenant_id == 10
     assert request.actor_id == 30
-    assert request.original_question == "原始问题"
-    assert request.rewritten_question == "改写后的销售额"
+    assert request.metric_phrases == ["销售额"]
+    assert request.dimension_phrases == []
     assert request.scope.dataset_ids == [20]
-    assert request.intent.metric_mentions == ["销售额"]
     assert request.strategy_version == SEMANTIC_BINDING_STRATEGY_VERSION
+    assert set(request.model_dump(mode="json")) == {
+        "request_id",
+        "tenant_id",
+        "actor_id",
+        "metric_phrases",
+        "dimension_phrases",
+        "scope",
+        "profiles",
+        "strategy_version",
+    }
 
 
-def test_adapter_applies_clarification_response_before_retrieval():
+def test_adapter_does_not_read_intent_or_clarification_before_retrieval():
     service = _RecordingRetrievalService()
     adapter = _adapter(service)
 
@@ -113,9 +125,12 @@ def test_adapter_applies_clarification_response_before_retrieval():
                 "user_id": 30,
             },
             "variables": {
+                "rewrite": {
+                    "metric_phrases": ["访问人数"],
+                    "dimension_phrases": ["店铺"],
+                },
                 "intent": {
                     "intent_type": "metric_query",
-                    "dimension_mentions": ["店铺"],
                     "dimension_slots": [
                         {
                             "name": "店铺",
@@ -138,11 +153,10 @@ def test_adapter_applies_clarification_response_before_retrieval():
         }
     )
 
-    intent = service.requests[0].intent
-    assert intent.ambiguous_slots == []
-    assert intent.dimension_slots[0].role == "filter"
-    assert intent.dimension_slots[0].value == "1"
-    assert intent.dimension_slots[0].value_status == "provided"
+    request = service.requests[0]
+    assert request.metric_phrases == ["访问人数"]
+    assert request.dimension_phrases == ["店铺"]
+    assert "intent" not in request.model_dump(mode="json")
 
 
 def test_adapter_requires_unified_retrieval_service():

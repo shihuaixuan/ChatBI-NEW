@@ -48,9 +48,8 @@ def _request() -> RetrievalRequest:
         request_id="case-1",
         tenant_id=1,
         actor_id=1,
-        original_question="销售额",
-        rewritten_question="销售额",
-        intent=RetrievalIntent(intent_type="metric_query", metric_mentions=["销售额"]),
+        metric_phrases=["销售额"],
+        dimension_phrases=[],
         scope=RetrievalScope(dataset_ids=[3]),
         profiles=[RetrievalProfileName.SEMANTIC_BINDING],
         strategy_version="semantic-binding",
@@ -92,7 +91,7 @@ def _case(expected_status: RetrievalDecisionStatus = RetrievalDecisionStatus.RES
         expected_allowed_assets=expected_allowed,
         slots=[
             GoldenSlotExpectation(
-                subquery_id="metric:0",
+                subquery_id="metric:1",
                 purpose=RetrievalPurpose.METRIC,
                 expected_status=expected_status,
                 relevant_assets=[_asset(7), _asset(8)],
@@ -123,7 +122,7 @@ def _bundle(status: RetrievalDecisionStatus = RetrievalDecisionStatus.RESOLVED) 
             status=status,
             slot_decisions=[
                 RetrievalSlotDecision(
-                    subquery_id="metric:0",
+                    subquery_id="metric:1",
                     purpose=RetrievalPurpose.METRIC,
                     status=status,
                     candidate_assets=[_asset(7), _asset(8)],
@@ -207,10 +206,10 @@ def test_real_semantic_binding_gold_set_is_valid_and_covers_core_states():
 def test_payload_converter_does_not_assign_all_selected_metrics_to_each_slot():
     request = _request().model_copy(
         update={
-            "rewritten_question": "客户GMV和客户订单数",
+            "rewrite_question": "客户GMV和客户订单数",
+            "metric_phrases": ["客户GMV", "客户订单数"],
             "intent": RetrievalIntent(
                 intent_type="metric_query",
-                metric_mentions=["客户GMV", "客户订单数"],
             ),
         }
     )
@@ -271,5 +270,5 @@ def test_payload_converter_does_not_assign_all_selected_metrics_to_each_slot():
     )
 
     slots = {item.subquery_id: item for item in bundle.decision.slot_decisions}
-    assert [item.asset_id for item in slots["metric:0"].selected_assets] == [7]
-    assert [item.asset_id for item in slots["metric:1"].selected_assets] == [8]
+    assert [item.asset_id for item in slots["metric:1"].selected_assets] == [7]
+    assert [item.asset_id for item in slots["metric:2"].selected_assets] == [8]

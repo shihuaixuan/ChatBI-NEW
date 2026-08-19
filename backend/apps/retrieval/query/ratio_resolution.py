@@ -14,9 +14,9 @@ from apps.retrieval.models.dto import (
     CompositeMetricResolution,
     RatioOperand,
     RatioSpec,
+    RetrievalBindingRequest,
     RetrievalBundle,
     RetrievalDecisionStatus,
-    RetrievalRequest,
 )
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 
@@ -122,7 +122,7 @@ def validate_ratio_direction(
 
 
 def resolve_composite_metrics(
-    request: RetrievalRequest,
+    request: RetrievalBindingRequest,
     initial_bundle: RetrievalBundle,
     decomposition_bundle: RetrievalBundle | None,
     schema: DatasetSchema,

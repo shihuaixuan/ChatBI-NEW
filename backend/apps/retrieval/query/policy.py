@@ -15,6 +15,7 @@ from apps.retrieval.models.dto import (
     AssetReference,
     ExecutableAssetReference,
     RetrievalAmbiguity,
+    RetrievalBindingRequest,
     RetrievalBindings,
     RetrievalBundle,
     RetrievalChannel,
@@ -26,7 +27,6 @@ from apps.retrieval.models.dto import (
     RetrievalHit,
     RetrievalProfileName,
     RetrievalPurpose,
-    RetrievalRequest,
     RetrievalResourceType,
     RetrievalScores,
     RetrievalSlotDecision,
@@ -952,7 +952,7 @@ def _skipped_rerank_diagnostic() -> RetrievalChannelDiagnostic:
 
 
 def bind_default_time_dimensions(
-    request: RetrievalRequest,
+    request: RetrievalBindingRequest,
     bundle: RetrievalBundle,
     schema: DatasetSchema,
 ) -> RetrievalBundle:

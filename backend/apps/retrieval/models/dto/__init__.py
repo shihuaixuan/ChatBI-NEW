@@ -1,9 +1,16 @@
 """Retrieval 请求、结果和诊断 DTO 公开入口。"""
 
+from apps.retrieval.models.dto.resolution import (
+    CompositeMetricResolution,
+    EvidenceLevel,
+    RatioOperand,
+    RatioSpec,
+)
 from apps.retrieval.models.dto.retrieval import (
     AssetReference,
     ExecutableAssetReference,
     RetrievalAmbiguity,
+    RetrievalBindingRequest,
     RetrievalBindings,
     RetrievalBundle,
     RetrievalChannel,
@@ -26,12 +33,6 @@ from apps.retrieval.models.dto.retrieval import (
     RetrievalSubQuery,
     SemanticClarificationBinding,
 )
-from apps.retrieval.models.dto.resolution import (
-    CompositeMetricResolution,
-    EvidenceLevel,
-    RatioOperand,
-    RatioSpec,
-)
 
 __all__ = [
     "AssetReference",
@@ -47,6 +48,7 @@ __all__ = [
     "RetrievalDiagnostics",
     "RetrievalDimensionSlot",
     "RetrievalHit",
+    "RetrievalBindingRequest",
     "RetrievalIntent",
     "RetrievalProfileName",
     "RetrievalPurpose",

@@ -977,7 +977,7 @@ def test_graph_semantic_retrieval_uses_public_retrieval_service():
 
     assert "apps.retrieval" in imports
     assert "apps.chatbi.services.planning" not in imports
-    assert "build_semantic_binding_request" in source
+    assert "build_retrieval_request" in source
     assert "self._retrieval_service.retrieve" in source
 
 
