@@ -61,7 +61,8 @@ class AgentConfig(BaseModel):
     context_fold_chars: int = 30000
     # 默认只启用 P1 的确定性 FAST/PLAN 管道，避免新请求回退到 ReAct。
     execution_modes: tuple[str, ...] = ("fast", "plan")
-    plan_max_query_tasks: int = 5
+    plan_max_query_tasks: int = Field(default=5, gt=0)
+    plan_query_concurrency: int = Field(default=4, gt=0)
     compute_enabled: bool = True
     answer_citation_enforced: bool = True
     assisted_fallback_enabled: bool = False

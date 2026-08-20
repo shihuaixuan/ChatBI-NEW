@@ -174,6 +174,7 @@ class ResultSetRef(BaseModel):
     artifact_ref: ChatBIResultArtifactRef
     fields: tuple[str, ...] = ()
     row_count: int = Field(ge=0)
+    attempt: int = Field(default=1, ge=1)
     source_sql: str | None = None
     semantic_refs: tuple[dict[str, Any], ...] = ()
     created_at: datetime | None = None

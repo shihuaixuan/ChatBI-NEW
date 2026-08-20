@@ -18,6 +18,11 @@ from apps.chatbi.services.planning.datasource_selection import (
     DatasourceSelectionError,
     DatasourceSelectionService,
 )
+from apps.chatbi.services.planning.dag_scheduler import (
+    AnalysisTaskExecutionStatus,
+    build_execution_batches,
+    task_dependencies,
+)
 from apps.chatbi.services.planning.execution_binding import (
     ExecutionBindingError,
     resolve_execution_binding,
@@ -60,4 +65,7 @@ __all__ = [
     "PlanPatchError",
     "PlanPatchResult",
     "apply_plan_patch",
+    "AnalysisTaskExecutionStatus",
+    "build_execution_batches",
+    "task_dependencies",
 ]

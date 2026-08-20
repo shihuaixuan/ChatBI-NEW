@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -30,7 +32,13 @@ from apps.chatbi.models.dto.result_artifact import ChatBIResultArtifactRef
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
 from apps.chatbi.orchestration.pipeline.mode_router import ModeRouteInput, ModeRouter
 from apps.chatbi.services.computation import ComputeEngine
+from apps.chatbi.services.execution import (
+    QueryTaskExecutionRequest,
+    QueryTaskExecutionStatus,
+    QueryTaskExecutor,
+)
 from apps.chatbi.services.planning.analysis_planner import AnalysisPlanner
+from apps.chatbi.services.planning.dag_scheduler import build_execution_batches
 from apps.chatbi.services.planning.plan_validation import validate_analysis_plan
 from apps.datasource.models.dto.query import (
     DatasourceQueryRequest,
@@ -44,6 +52,7 @@ from apps.semantic.composition import (
 )
 from apps.semantic.models.dto import DatasetSchema, SemanticPlanStatus
 from apps.temporal import build_temporal_context
+from apps.tool import NeverCancelled
 from common.core.db import engine
 
 
@@ -201,6 +210,8 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--timezone", default="Asia/Shanghai")
     parser.add_argument("--sample-rows", type=int, default=5)
+    parser.add_argument("--concurrency", type=int, default=4, help="批次并发上限")
+    parser.add_argument("--task-timeout", type=float, default=60.0, help="单批查询超时秒数")
     parser.add_argument(
         "--plan-only",
         action="store_true",
@@ -427,6 +438,7 @@ def _run_case(
     schema_provider: Any,
     sql_compilation_service: Any,
     query_service: Any,
+    query_task_executor: QueryTaskExecutor,
     schema: DatasetSchema,
     temporal_context: Any,
 ) -> None:
@@ -559,56 +571,97 @@ def _run_case(
         print(f"\n[{case.name}] Plan-only 验证通过。")
         return
 
+    batches = build_execution_batches(proven_plan)
+    _print_stage(
+        case,
+        "8. DAG 拓扑批次",
+        {"batches": [list(batch) for batch in batches]},
+    )
+    tasks = {task.id: task for task in proven_plan.tasks}
     snapshots: dict[str, ResultSetSnapshot] = {}
-    for task in proven_plan.tasks:
-        if not isinstance(task, QueryTask):
-            continue
-        if task.compiled is None:
-            raise PlanCaseError("PLAN_CASE_QUERY_NOT_COMPILED")
-        result = query_service.execute(
-            DatasourceQueryRequest(
-                sql=task.compiled.sql,
-                datasource_id=args.datasource_id,
-                subject=DatasourceQuerySubject(
-                    user_id=args.user_id,
-                    workspace_id=args.tenant_id,
-                ),
-                selected_tables=selected_tables[task.id],
-            )
-        )
-        if result.status is not DatasourceQueryStatus.SUCCEEDED or result.data is None:
-            raise PlanCaseError(f"PLAN_CASE_QUERY_FAILED:{result.error_code}")
-        snapshots[task.id] = _snapshot(
-            plan_id=plan_id,
-            node_id=task.id,
-            kind=ResultSetKind.QUERY,
-            fields=result.data.fields,
-            rows=result.data.full_data,
-            source_sql=result.data.sql,
-        )
-        _print_stage(
-            case,
-            f"8. QueryTask {task.id} 执行结果",
-            {
-                "result_set_ref": snapshots[task.id].ref.model_dump(mode="json"),
-                "execution_ms": result.data.execution_ms,
-                "sample_rows": result.data.full_data[: args.sample_rows],
-            },
-        )
-
-    pending = [task for task in proven_plan.tasks if isinstance(task, ComputeTask)]
     compute_engine = ComputeEngine()
-    while pending:
-        ready = [
-            task for task in pending if all(item in snapshots for item in task.inputs)
+    for batch_index, batch in enumerate(batches, start=1):
+        query_tasks = [
+            tasks[task_id]
+            for task_id in batch
+            if isinstance(tasks[task_id], QueryTask)
         ]
-        if not ready:
-            raise PlanCaseError("PLAN_CASE_COMPUTE_DAG_UNRESOLVED")
-        for task in ready:
-            computed = compute_engine.execute(
-                task,
-                {input_id: snapshots[input_id] for input_id in task.inputs},
-            )
+        if query_tasks:
+            requests = []
+            for task in query_tasks:
+                if task.compiled is None:
+                    raise PlanCaseError("PLAN_CASE_QUERY_NOT_COMPILED")
+                requests.append(
+                    QueryTaskExecutionRequest(
+                        task_id=task.id,
+                        attempt=1,
+                        sql=task.compiled.sql,
+                        datasource_id=args.datasource_id,
+                        workspace_id=args.tenant_id,
+                        user_id=args.user_id,
+                        selected_tables=tuple(selected_tables[task.id]),
+                        deadline_monotonic=time.monotonic() + args.task_timeout,
+                        cancellation=NeverCancelled(),
+                    )
+                )
+            with ThreadPoolExecutor(
+                max_workers=min(args.concurrency, len(requests))
+            ) as pool:
+                results = list(pool.map(query_task_executor.execute, requests))
+            for result in results:
+                if (
+                    result.status is not QueryTaskExecutionStatus.SUCCEEDED
+                    or result.data is None
+                ):
+                    raise PlanCaseError(
+                        f"PLAN_CASE_QUERY_FAILED:{result.task_id}:{result.error_code}"
+                    )
+                snapshots[result.task_id] = _snapshot(
+                    plan_id=plan_id,
+                    node_id=result.task_id,
+                    kind=ResultSetKind.QUERY,
+                    fields=result.data.fields,
+                    rows=result.data.full_data,
+                    source_sql=result.data.sql,
+                )
+                _print_stage(
+                    case,
+                    f"9.{batch_index} QueryTask {result.task_id} 执行结果",
+                    {
+                        "batch": batch_index,
+                        "attempt": result.attempt,
+                        "result_set_ref": snapshots[
+                            result.task_id
+                        ].ref.model_dump(mode="json"),
+                        "execution_ms": result.data.execution_ms,
+                        "sample_rows": result.data.full_data[: args.sample_rows],
+                    },
+                )
+
+        compute_tasks = [
+            tasks[task_id]
+            for task_id in batch
+            if isinstance(tasks[task_id], ComputeTask)
+        ]
+        if compute_tasks:
+            with ThreadPoolExecutor(
+                max_workers=min(args.concurrency, len(compute_tasks))
+            ) as pool:
+                futures = [
+                    pool.submit(
+                        compute_engine.execute,
+                        task,
+                        {
+                            input_id: snapshots[input_id]
+                            for input_id in task.inputs
+                        },
+                    )
+                    for task in compute_tasks
+                ]
+                computed_results = [future.result() for future in futures]
+        else:
+            computed_results = []
+        for task, computed in zip(compute_tasks, computed_results, strict=True):
             snapshots[task.id] = _snapshot(
                 plan_id=plan_id,
                 node_id=task.id,
@@ -619,8 +672,10 @@ def _run_case(
             )
             _print_stage(
                 case,
-                f"9. ComputeTask {task.id} 执行结果",
+                f"9.{batch_index} ComputeTask {task.id} 执行结果",
                 {
+                    "batch": batch_index,
+                    "attempt": 1,
                     "operation": task.operation.value,
                     "inputs": list(task.inputs),
                     "sql": computed.sql,
@@ -628,7 +683,6 @@ def _run_case(
                     "sample_rows": list(computed.rows[: args.sample_rows]),
                 },
             )
-        pending = [task for task in pending if task not in ready]
 
     primary_id = proven_plan.presentation.primary_result
     primary = snapshots.get(primary_id)
@@ -657,6 +711,8 @@ def main() -> int:
         raise PlanCaseError("租户、用户、数据集和数据源 ID 必须为正整数")
     if args.sample_rows < 0:
         raise PlanCaseError("sample-rows 不能小于 0")
+    if args.concurrency <= 0 or args.task_timeout <= 0:
+        raise PlanCaseError("concurrency 和 task-timeout 必须大于 0")
     try:
         reference_at = datetime.fromisoformat(args.reference_at)
     except ValueError as exc:
@@ -681,6 +737,14 @@ def main() -> int:
             default_limit=1000,
             sample_rows=max(args.sample_rows, 10),
         )
+        query_task_executor = QueryTaskExecutor(
+            lambda: Session(engine),
+            lambda worker_session: build_query_service(
+                worker_session,
+                default_limit=1000,
+                sample_rows=max(args.sample_rows, 10),
+            ),
+        )
         print("\n=== 测试环境 ===")
         print(
             json.dumps(
@@ -694,6 +758,8 @@ def main() -> int:
                     "schema_fingerprint": schema.schema_fingerprint,
                     "case_count": len(selected_cases),
                     "plan_only": args.plan_only,
+                    "concurrency": args.concurrency,
+                    "task_timeout": args.task_timeout,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -706,6 +772,7 @@ def main() -> int:
                 schema_provider=schema_provider,
                 sql_compilation_service=sql_compilation_service,
                 query_service=query_service,
+                query_task_executor=query_task_executor,
                 schema=schema,
                 temporal_context=temporal_context,
             )

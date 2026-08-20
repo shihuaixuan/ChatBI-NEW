@@ -162,6 +162,7 @@ class Settings(BaseSettings):
     # P1 验收默认启用确定性 FAST/PLAN；旧链路仍可通过环境变量显式恢复。
     CHAT_AGENT_EXECUTION_MODES: str = "fast,plan"
     CHATBI_PLAN_MAX_QUERY_TASKS: int = 5
+    CHATBI_PLAN_QUERY_CONCURRENCY: int = 4
     CHATBI_PLANNER_TIMEOUT_MS: int = 60000
     CHATBI_COMPUTE_ENABLED: bool = True
     CHATBI_ANSWER_CITATION_ENFORCED: bool = True

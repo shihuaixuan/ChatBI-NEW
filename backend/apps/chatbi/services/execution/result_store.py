@@ -53,9 +53,12 @@ class ResultStore:
         fields: list[str],
         rows: list[dict[str, Any]],
         row_count: int,
+        attempt: int = 1,
         source_sql: str | None = None,
         semantic_refs: list[dict[str, Any]] | None = None,
     ) -> ResultSetRef:
+        if attempt <= 0:
+            raise ValueError("RESULT_SET_ATTEMPT_INVALID")
         result_set_id = build_result_set_id(plan_id, node_id)
         normalized_fields = [str(field) for field in fields]
         json_rows = [_json_row(row) for row in rows]
@@ -77,6 +80,7 @@ class ResultStore:
                     "fields": normalized_fields,
                     "rows": json_rows,
                     "row_count": row_count,
+                    "attempt": attempt,
                 },
                 metadata={
                     "result_set_id": result_set_id,
@@ -85,6 +89,7 @@ class ResultStore:
                     "query_id": node_id,
                     "result_kind": kind.value,
                     "row_count": row_count,
+                    "attempt": attempt,
                     "source_sql": source_sql,
                     "semantic_refs": normalized_semantic_refs,
                     "created_at": created_at.isoformat(),
@@ -100,6 +105,7 @@ class ResultStore:
             artifact_ref=artifact_ref,
             fields=tuple(normalized_fields),
             row_count=row_count,
+            attempt=attempt,
             source_sql=source_sql,
             semantic_refs=tuple(normalized_semantic_refs),
             created_at=created_at,
@@ -128,6 +134,7 @@ class ResultStore:
                     "node_id": ref.node_id,
                     "result_kind": ref.kind.value,
                     "row_count": ref.row_count,
+                    "attempt": ref.attempt,
                 },
             )
         )

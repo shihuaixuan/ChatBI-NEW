@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from sqlmodel import Session
+
 from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.composition import (
     build_agent_event_publisher,
@@ -35,7 +37,11 @@ from apps.chatbi.orchestration.pipeline.plan_mode import (
     PlanPipelineDependencies,
 )
 from apps.chatbi.services.computation import ComputeEngine
-from apps.chatbi.services.execution import ResultArtifactService, ResultStore
+from apps.chatbi.services.execution import (
+    QueryTaskExecutor,
+    ResultArtifactService,
+    ResultStore,
+)
 from apps.chatbi.services.generation.agent_finalization import AgentFinalizationService
 from apps.chatbi.services.generation.answer_composer import AnswerComposer
 from apps.chatbi.services.generation.fallback_sql import AssistedFallbackSQLService
@@ -126,6 +132,7 @@ def build_run_orchestrator(
     recorder: AgentTraceRecorder | None = None,
     input_preparer: AgentInputPreparer | None = None,
     cancellation_signal_factory: Callable[[int], CancellationSignal] | None = None,
+    query_task_executor: QueryTaskExecutor | None = None,
     finalization_service: AgentFinalizationService | None = None,
     answer_composer: AnswerComposer | None = None,
     assisted_fallback_service: AssistedFallbackSQLService | None = None,
@@ -232,6 +239,20 @@ def build_run_orchestrator(
         tool_services,
         cancellation_signal_factory,
     )
+    if query_task_executor is None:
+        session_bind = session.get_bind()
+        worker_engine = getattr(session_bind, "engine", session_bind)
+        resolved_query_task_executor = QueryTaskExecutor(
+            lambda: Session(worker_engine),
+            lambda worker_session: build_query_service(
+                worker_session,
+                default_limit=resolved_config.default_limit,
+                sample_rows=resolved_config.sample_rows,
+                max_transient_retries=resolved_config.query_transient_retries,
+            ),
+        )
+    else:
+        resolved_query_task_executor = query_task_executor
     return RunOrchestrator(
         session,
         event_publisher=resolved_publisher,
@@ -265,6 +286,9 @@ def build_run_orchestrator(
                 event_publisher=resolved_publisher,
                 session=session,
                 max_query_tasks=resolved_config.plan_max_query_tasks,
+                query_task_executor=resolved_query_task_executor,
+                query_concurrency=resolved_config.plan_query_concurrency,
+                query_timeout_seconds=resolved_config.tool_timeout_seconds,
                 compute_engine=ComputeEngine(),
                 compute_enabled=resolved_config.compute_enabled,
                 answer_composer=resolved_answer_composer,

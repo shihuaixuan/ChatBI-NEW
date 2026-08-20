@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
@@ -29,7 +31,17 @@ from apps.chatbi.orchestration.agent.tools.interaction import (
 )
 from apps.chatbi.orchestration.pipeline.events import PipelineEvents
 from apps.chatbi.repository.sqlmodel import agent_run_repository
-from apps.chatbi.services.computation import ComputeEngine, ComputeEngineError
+from apps.chatbi.services.computation import (
+    ComputeEngine,
+    ComputeEngineError,
+    ComputeExecution,
+)
+from apps.chatbi.services.execution import (
+    QueryTaskExecutionRequest,
+    QueryTaskExecutionResult,
+    QueryTaskExecutionStatus,
+    QueryTaskExecutor,
+)
 from apps.chatbi.services.generation.agent_finalization import (
     AgentFinalizationInput,
     AgentFinalizationService,
@@ -39,6 +51,11 @@ from apps.chatbi.services.generation.answer_composer import (
     AnswerComposerInput,
 )
 from apps.chatbi.services.planning.analysis_planner import AnalysisPlanner
+from apps.chatbi.services.planning.dag_scheduler import (
+    AnalysisTaskExecutionStatus,
+    build_execution_batches,
+    task_dependencies,
+)
 from apps.chatbi.services.planning.plan_validation import validate_analysis_plan
 from apps.conversation import ChatRecordExecutionType
 from apps.event import EventPublisher, RenderEvent
@@ -113,7 +130,10 @@ class PlanPipelineDependencies:
     lifecycle: AgentLifecycle
     event_publisher: EventPublisher
     session: Any
+    query_task_executor: QueryTaskExecutor
     max_query_tasks: int = 5
+    query_concurrency: int = 4
+    query_timeout_seconds: float = 60.0
     compute_engine: ComputeEngine | None = None
     compute_enabled: bool = True
     answer_composer: AnswerComposer | None = None
@@ -126,6 +146,10 @@ class PlanPipeline:
     """PLAN 的规则规划和多查询执行通道。"""
 
     def __init__(self, dependencies: PlanPipelineDependencies) -> None:
+        if dependencies.query_concurrency <= 0:
+            raise ValueError("PLAN_QUERY_CONCURRENCY_INVALID")
+        if dependencies.query_timeout_seconds <= 0:
+            raise ValueError("PLAN_QUERY_TIMEOUT_INVALID")
         self._registry = dependencies.registry
         self._result_processor = dependencies.result_processor
         self._finalization_service = dependencies.finalization_service
@@ -134,6 +158,9 @@ class PlanPipeline:
         self._session = dependencies.session
         self._planner = AnalysisPlanner(max_query_tasks=dependencies.max_query_tasks)
         self._max_query_tasks = dependencies.max_query_tasks
+        self._query_task_executor = dependencies.query_task_executor
+        self._query_concurrency = dependencies.query_concurrency
+        self._query_timeout_seconds = dependencies.query_timeout_seconds
         self._compute_engine = dependencies.compute_engine
         self._compute_enabled = dependencies.compute_enabled
         self._answer_composer = dependencies.answer_composer
@@ -232,105 +259,14 @@ class PlanPipeline:
 
         execution_records: dict[str, dict[str, Any]] = {}
         full_data_records: dict[str, list[dict[str, Any]]] = {}
-        for task in query_tasks:
-            yield self._events.task_started(
-                run_id,
-                {
-                    "record_id": state.record.id,
-                    "run_id": run_id,
-                    "plan_id": plan_id,
-                    "task_id": task.id,
-                    "status": "running",
-                },
-            )
-            proven_compiled = completed_tasks[task.id].compiled
-            if proven_compiled is None:
-                raise PlanPipelineError("PLAN_QUERY_TASK_NOT_PROVEN")
-            state.context.state["result_node_id"] = task.id
-            self._call_tool(state, "execute_sql", {"sql": proven_compiled.sql})
-            self._persist_state(state)
-            execution = state.context.state.get("last_execution")
-            execution_records[task.id] = (
-                execution if isinstance(execution, dict) else {}
-            )
-            full_data = state.context.state.get("full_data")
-            if isinstance(full_data, list):
-                full_data_records[task.id] = [
-                    row for row in full_data if isinstance(row, dict)
-                ]
-            yield self._events.task_finished(
-                run_id,
-                {
-                    "record_id": state.record.id,
-                    "run_id": run_id,
-                    "plan_id": plan_id,
-                    "task_id": task.id,
-                    "result_set_id": (execution or {}).get("result_set_id"),
-                    "status": "succeeded",
-                },
-            )
-
-        compute_tasks = [task for task in plan.tasks if isinstance(task, ComputeTask)]
-        pending_compute_tasks = list(compute_tasks)
-        while pending_compute_tasks:
-            result_sets = state.context.state.get("result_sets")
-            available_nodes = {
-                payload.get("node_id")
-                for payload in (
-                    result_sets.values() if isinstance(result_sets, dict) else ()
-                )
-                if isinstance(payload, dict)
-            }
-            ready_tasks = [
-                task
-                for task in pending_compute_tasks
-                if all(input_id in available_nodes for input_id in task.inputs)
-            ]
-            if not ready_tasks:
-                raise PlanPipelineError("PLAN_COMPUTE_DAG_UNRESOLVED")
-            for compute_task in ready_tasks:
-                yield self._events.task_started(
-                    run_id,
-                    {
-                        "record_id": state.record.id,
-                        "run_id": run_id,
-                        "plan_id": plan_id,
-                        "task_id": compute_task.id,
-                        "status": "running",
-                    },
-                )
-                execution = self._execute_compute_task(state, compute_task)
-                execution_records[compute_task.id] = execution
-                full_data = state.context.state.get("full_data")
-                if isinstance(full_data, list):
-                    full_data_records[compute_task.id] = [
-                        row for row in full_data if isinstance(row, dict)
-                    ]
-                yield self._events.compute_finished(
-                    run_id,
-                    {
-                        "record_id": state.record.id,
-                        "run_id": run_id,
-                        "plan_id": plan_id,
-                        "task_id": compute_task.id,
-                        "result_set_id": execution.get("result_set_id"),
-                        "status": "succeeded",
-                    },
-                )
-                yield self._events.task_finished(
-                    run_id,
-                    {
-                        "record_id": state.record.id,
-                        "run_id": run_id,
-                        "plan_id": plan_id,
-                        "task_id": compute_task.id,
-                        "result_set_id": execution.get("result_set_id"),
-                        "status": "succeeded",
-                    },
-                )
-            pending_compute_tasks = [
-                task for task in pending_compute_tasks if task not in ready_tasks
-            ]
+        cancelled = yield from self._execute_plan_batches(
+            state,
+            proven_plan,
+            execution_records,
+            full_data_records,
+        )
+        if cancelled:
+            return
 
         primary_result_id = proven_plan.presentation.primary_result
         primary_execution = execution_records.get(primary_result_id)
@@ -393,6 +329,532 @@ class PlanPipeline:
             caliber_card=dict(getattr(final, "caliber_card", {}) or {}),
             chart_spec=dict(getattr(final, "chart_spec", {}) or {}),
         )
+
+    def _execute_plan_batches(
+        self,
+        state: AgentRuntimeState,
+        plan: AnalysisPlan,
+        execution_records: dict[str, dict[str, Any]],
+        full_data_records: dict[str, list[dict[str, Any]]],
+    ) -> Iterator[RenderEvent]:
+        """按拓扑批次并行执行，所有共享状态只在主线程更新。"""
+
+        try:
+            batches = build_execution_batches(plan)
+        except ValueError as exc:
+            raise PlanPipelineError(str(exc)) from exc
+        tasks = {task.id: task for task in plan.tasks}
+        dependencies = task_dependencies(plan)
+        task_states = {
+            task.id: {
+                "status": AnalysisTaskExecutionStatus.PENDING.value,
+                "attempt": 0,
+                "error_code": None,
+            }
+            for task in plan.tasks
+        }
+        state.context.state["plan_execution_batches"] = [list(batch) for batch in batches]
+        state.context.state["plan_task_states"] = task_states
+        self._persist_state(state)
+
+        terminal_dependency_states = {
+            AnalysisTaskExecutionStatus.FAILED.value,
+            AnalysisTaskExecutionStatus.SKIPPED_DEPENDENCY.value,
+            AnalysisTaskExecutionStatus.CANCELLED.value,
+        }
+        for batch_index, batch in enumerate(batches, start=1):
+            if state.cancellation.is_cancelled():
+                for task_id, task_state in task_states.items():
+                    if task_state["status"] not in {
+                        AnalysisTaskExecutionStatus.SUCCEEDED.value,
+                        *terminal_dependency_states,
+                    }:
+                        self._set_task_state(
+                            task_states,
+                            task_id,
+                            AnalysisTaskExecutionStatus.CANCELLED,
+                            error_code="query_cancelled",
+                        )
+                self._persist_state(state)
+                yield from self._lifecycle.cancel(
+                    state,
+                    "用户在计划批次执行前请求取消运行",
+                )
+                return True
+
+            executable_ids: list[str] = []
+            for task_id in batch:
+                failed_dependencies = [
+                    dependency_id
+                    for dependency_id in dependencies[task_id]
+                    if task_states[dependency_id]["status"]
+                    in terminal_dependency_states
+                ]
+                if failed_dependencies:
+                    self._set_task_state(
+                        task_states,
+                        task_id,
+                        AnalysisTaskExecutionStatus.SKIPPED_DEPENDENCY,
+                        error_code="PLAN_DEPENDENCY_FAILED",
+                        failed_dependencies=failed_dependencies,
+                    )
+                    yield self._events.task_finished(
+                        state.require_run_id(),
+                        self._task_event_payload(
+                            state,
+                            plan.id,
+                            task_id,
+                            AnalysisTaskExecutionStatus.SKIPPED_DEPENDENCY,
+                            batch_index=batch_index,
+                            error_code="PLAN_DEPENDENCY_FAILED",
+                        ),
+                    )
+                    continue
+                self._set_task_state(
+                    task_states,
+                    task_id,
+                    AnalysisTaskExecutionStatus.READY,
+                )
+                executable_ids.append(task_id)
+
+            for task_id in executable_ids:
+                self._set_task_state(
+                    task_states,
+                    task_id,
+                    AnalysisTaskExecutionStatus.RUNNING,
+                    increment_attempt=True,
+                )
+                yield self._events.task_started(
+                    state.require_run_id(),
+                    self._task_event_payload(
+                        state,
+                        plan.id,
+                        task_id,
+                        AnalysisTaskExecutionStatus.RUNNING,
+                        batch_index=batch_index,
+                        attempt=task_states[task_id]["attempt"],
+                    ),
+                )
+            self._persist_state(state)
+
+            query_tasks = [
+                tasks[task_id]
+                for task_id in executable_ids
+                if isinstance(tasks[task_id], QueryTask)
+            ]
+            compute_tasks = [
+                tasks[task_id]
+                for task_id in executable_ids
+                if isinstance(tasks[task_id], ComputeTask)
+            ]
+            query_results = self._run_query_batch(state, query_tasks, task_states)
+            compute_results = self._run_compute_batch(state, compute_tasks)
+
+            for task_id in executable_ids:
+                task = tasks[task_id]
+                if isinstance(task, QueryTask):
+                    result = query_results[task_id]
+                    if result.status is QueryTaskExecutionStatus.SUCCEEDED:
+                        if result.data is None:
+                            raise PlanPipelineError("PLAN_QUERY_RESULT_MISSING")
+                        execution, rows = self._register_query_result(
+                            state,
+                            plan.id,
+                            task,
+                            result,
+                        )
+                    else:
+                        status = (
+                            AnalysisTaskExecutionStatus.CANCELLED
+                            if result.status is QueryTaskExecutionStatus.CANCELLED
+                            else AnalysisTaskExecutionStatus.FAILED
+                        )
+                        self._set_task_state(
+                            task_states,
+                            task_id,
+                            status,
+                            error_code=result.error_code,
+                            message=result.message,
+                        )
+                        yield self._events.task_finished(
+                            state.require_run_id(),
+                            self._task_event_payload(
+                                state,
+                                plan.id,
+                                task_id,
+                                status,
+                                batch_index=batch_index,
+                                error_code=result.error_code,
+                            ),
+                        )
+                        continue
+                else:
+                    computed = compute_results[task_id]
+                    if isinstance(computed, ComputeEngineError):
+                        self._set_task_state(
+                            task_states,
+                            task_id,
+                            AnalysisTaskExecutionStatus.FAILED,
+                            error_code=computed.code,
+                            message=str(computed),
+                        )
+                        yield self._events.task_finished(
+                            state.require_run_id(),
+                            self._task_event_payload(
+                                state,
+                                plan.id,
+                                task_id,
+                                AnalysisTaskExecutionStatus.FAILED,
+                                batch_index=batch_index,
+                                error_code=computed.code,
+                            ),
+                        )
+                        continue
+                    execution, rows = self._register_compute_result(
+                        state,
+                        plan.id,
+                        task,
+                        computed,
+                        attempt=int(task_states[task_id]["attempt"]),
+                    )
+                    yield self._events.compute_finished(
+                        state.require_run_id(),
+                        self._task_event_payload(
+                            state,
+                            plan.id,
+                            task_id,
+                            AnalysisTaskExecutionStatus.SUCCEEDED,
+                            batch_index=batch_index,
+                            result_set_id=execution.get("result_set_id"),
+                        ),
+                    )
+
+                execution_records[task_id] = execution
+                full_data_records[task_id] = rows
+                self._set_task_state(
+                    task_states,
+                    task_id,
+                    AnalysisTaskExecutionStatus.SUCCEEDED,
+                    result_set_id=execution.get("result_set_id"),
+                )
+                yield self._events.task_finished(
+                    state.require_run_id(),
+                    self._task_event_payload(
+                        state,
+                        plan.id,
+                        task_id,
+                        AnalysisTaskExecutionStatus.SUCCEEDED,
+                        batch_index=batch_index,
+                        result_set_id=execution.get("result_set_id"),
+                    ),
+                )
+            self._persist_state(state)
+
+            if state.cancellation.is_cancelled():
+                for task_id, task_state in task_states.items():
+                    if task_state["status"] in {
+                        AnalysisTaskExecutionStatus.PENDING.value,
+                        AnalysisTaskExecutionStatus.READY.value,
+                        AnalysisTaskExecutionStatus.RUNNING.value,
+                    }:
+                        self._set_task_state(
+                            task_states,
+                            task_id,
+                            AnalysisTaskExecutionStatus.CANCELLED,
+                            error_code="query_cancelled",
+                        )
+                self._persist_state(state)
+                yield from self._lifecycle.cancel(
+                    state,
+                    "用户在计划批次执行期间请求取消运行",
+                )
+                return True
+
+        primary_state = task_states[plan.presentation.primary_result]
+        if primary_state["status"] != AnalysisTaskExecutionStatus.SUCCEEDED.value:
+            raise PlanPipelineError(
+                str(primary_state.get("error_code") or "PLAN_PRIMARY_RESULT_FAILED")
+            )
+        return False
+
+    def _run_query_batch(
+        self,
+        state: AgentRuntimeState,
+        tasks: list[QueryTask],
+        task_states: dict[str, dict[str, Any]],
+    ) -> dict[str, QueryTaskExecutionResult]:
+        if not tasks:
+            return {}
+        context = state.context
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value > 0
+            for value in (context.datasource_id, context.oid, context.user_id)
+        ):
+            raise PlanPipelineError("PLAN_QUERY_OWNERSHIP_REQUIRED")
+        deadline = time.monotonic() + min(
+            self._query_timeout_seconds,
+            state.budget.remaining_seconds(),
+        )
+        requests: list[QueryTaskExecutionRequest] = []
+        for task in tasks:
+            compiled = task.compiled
+            if compiled is None:
+                raise PlanPipelineError("PLAN_QUERY_TASK_NOT_PROVEN")
+            requests.append(
+                QueryTaskExecutionRequest(
+                    task_id=task.id,
+                    attempt=int(task_states[task.id]["attempt"]),
+                    sql=compiled.sql,
+                    datasource_id=context.datasource_id,
+                    workspace_id=context.oid,
+                    user_id=context.user_id,
+                    selected_tables=compiled.tables,
+                    deadline_monotonic=deadline,
+                    cancellation=state.cancellation,
+                )
+            )
+        results: dict[str, QueryTaskExecutionResult] = {}
+        with ThreadPoolExecutor(
+            max_workers=min(self._query_concurrency, len(requests)),
+            thread_name_prefix="chatbi-plan-query",
+        ) as pool:
+            futures = [
+                pool.submit(self._query_task_executor.execute, item)
+                for item in requests
+            ]
+            for request, future in zip(requests, futures, strict=True):
+                try:
+                    results[request.task_id] = future.result()
+                except Exception as exc:
+                    # 工作线程异常必须显式进入节点失败态，不能丢失失败归属。
+                    results[request.task_id] = QueryTaskExecutionResult(
+                        task_id=request.task_id,
+                        attempt=request.attempt,
+                        status=QueryTaskExecutionStatus.FAILED,
+                        error_code="query_worker_failed",
+                        message=str(exc),
+                    )
+        return results
+
+    def _run_compute_batch(
+        self,
+        state: AgentRuntimeState,
+        tasks: list[ComputeTask],
+    ) -> dict[str, ComputeExecution | ComputeEngineError]:
+        if not tasks:
+            return {}
+        if not self._compute_enabled:
+            raise PlanPipelineError("PLAN_COMPUTE_DISABLED")
+        if self._compute_engine is None:
+            raise PlanPipelineError("PLAN_COMPUTE_ENGINE_REQUIRED")
+        prepared = {
+            task.id: self._load_compute_inputs(state, task) for task in tasks
+        }
+        results: dict[str, ComputeExecution | ComputeEngineError] = {}
+        with ThreadPoolExecutor(
+            max_workers=min(self._query_concurrency, len(tasks)),
+            thread_name_prefix="chatbi-plan-compute",
+        ) as pool:
+            futures = [
+                pool.submit(self._compute_engine.execute, task, prepared[task.id])
+                for task in tasks
+            ]
+            for task, future in zip(tasks, futures, strict=True):
+                try:
+                    results[task.id] = future.result()
+                except ComputeEngineError as exc:
+                    results[task.id] = exc
+                except Exception as exc:
+                    # 非预期工作线程异常同样必须归属到具体计算节点。
+                    results[task.id] = ComputeEngineError(
+                        "COMPUTE_WORKER_FAILED",
+                        str(exc) or exc.__class__.__name__,
+                    )
+        return results
+
+    def _load_compute_inputs(
+        self,
+        state: AgentRuntimeState,
+        task: ComputeTask,
+    ) -> dict[str, Any]:
+        result_store = state.context.result_store
+        result_sets = state.context.state.get("result_sets")
+        if result_store is None or not isinstance(result_sets, dict):
+            raise PlanPipelineError("PLAN_INPUT_RESULT_SETS_MISSING")
+        snapshots = {}
+        for input_id in task.inputs:
+            result_set_id = self._result_set_id_for_node(result_sets, input_id)
+            payload = result_sets.get(result_set_id) if result_set_id else None
+            if not isinstance(payload, dict):
+                raise PlanPipelineError("PLAN_INPUT_RESULT_SET_MISSING")
+            snapshots[input_id] = result_store.read(
+                ResultSetRef.model_validate(payload),
+                execution_id=self._required_execution_id(state),
+                execution_type=ChatRecordExecutionType.AGENT,
+                chat_id=self._required_chat_id(state),
+                record_id=self._required_record_id(state),
+            )
+        return snapshots
+
+    def _register_query_result(
+        self,
+        state: AgentRuntimeState,
+        plan_id: str,
+        task: QueryTask,
+        result: QueryTaskExecutionResult,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        if result.data is None or state.context.result_store is None:
+            raise PlanPipelineError("PLAN_QUERY_RESULT_STORE_REQUIRED")
+        data = result.data
+        rows = [dict(row) for row in data.full_data]
+        result_ref = state.context.result_store.register(
+            execution_id=self._required_execution_id(state),
+            execution_type=ChatRecordExecutionType.AGENT,
+            chat_id=self._required_chat_id(state),
+            record_id=self._required_record_id(state),
+            plan_id=plan_id,
+            node_id=task.id,
+            kind=ResultSetKind.QUERY,
+            fields=list(data.fields),
+            rows=rows,
+            row_count=data.row_count,
+            attempt=result.attempt,
+            source_sql=data.sql,
+            semantic_refs=self._semantic_refs(state),
+        )
+        self._merge_result_ref(state, result_ref)
+        return (
+            {
+                "sql": data.sql,
+                "fields": list(data.fields),
+                "row_count": data.row_count,
+                "sample_rows": [dict(row) for row in data.sample_rows],
+                "artifact_ref": result_ref.artifact_ref.model_dump(mode="json"),
+                "result_set_id": result_ref.result_set_id,
+                "sql_source": "semantic",
+                "execution_ms": data.execution_ms,
+                "attempt": result.attempt,
+            },
+            rows,
+        )
+
+    def _register_compute_result(
+        self,
+        state: AgentRuntimeState,
+        plan_id: str,
+        task: ComputeTask,
+        computed: ComputeExecution,
+        *,
+        attempt: int,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        result_store = state.context.result_store
+        if result_store is None:
+            raise PlanPipelineError("PLAN_RESULT_STORE_REQUIRED")
+        rows = [dict(row) for row in computed.rows]
+        result_ref = result_store.register(
+            execution_id=self._required_execution_id(state),
+            execution_type=ChatRecordExecutionType.AGENT,
+            chat_id=self._required_chat_id(state),
+            record_id=self._required_record_id(state),
+            plan_id=plan_id,
+            node_id=task.id,
+            kind=ResultSetKind.COMPUTE,
+            fields=list(computed.fields),
+            rows=rows,
+            row_count=computed.row_count,
+            attempt=attempt,
+            source_sql=computed.sql,
+        )
+        self._merge_result_ref(state, result_ref)
+        return (
+            {
+                "sql": computed.sql,
+                "fields": list(computed.fields),
+                "row_count": computed.row_count,
+                "sample_rows": rows[:10],
+                "artifact_ref": result_ref.artifact_ref.model_dump(mode="json"),
+                "result_set_id": result_ref.result_set_id,
+                "sql_source": "computed",
+                "attempt": attempt,
+            },
+            rows,
+        )
+
+    @staticmethod
+    def _merge_result_ref(state: AgentRuntimeState, result_ref: ResultSetRef) -> None:
+        result_sets = state.context.state.get("result_sets")
+        if not isinstance(result_sets, dict):
+            result_sets = {}
+        state.context.state["result_sets"] = {
+            **result_sets,
+            result_ref.result_set_id: result_ref.model_dump(mode="json"),
+        }
+
+    @staticmethod
+    def _set_task_state(
+        states: dict[str, dict[str, Any]],
+        task_id: str,
+        status: AnalysisTaskExecutionStatus,
+        *,
+        increment_attempt: bool = False,
+        **details: Any,
+    ) -> None:
+        current = states[task_id]
+        states[task_id] = {
+            **current,
+            "status": status.value,
+            "attempt": int(current.get("attempt") or 0) + int(increment_attempt),
+            **details,
+        }
+
+    @staticmethod
+    def _task_event_payload(
+        state: AgentRuntimeState,
+        plan_id: str,
+        task_id: str,
+        status: AnalysisTaskExecutionStatus,
+        **details: Any,
+    ) -> dict[str, Any]:
+        return {
+            "record_id": state.record.id,
+            "run_id": state.require_run_id(),
+            "plan_id": plan_id,
+            "task_id": task_id,
+            "status": status.value,
+            **details,
+        }
+
+    @staticmethod
+    def _semantic_refs(state: AgentRuntimeState) -> list[dict[str, Any]]:
+        scope = state.context.state.get("semantic_scope")
+        if not isinstance(scope, dict):
+            return []
+        return [
+            dict(item)
+            for item in scope.get("allowed_assets") or []
+            if isinstance(item, dict)
+        ]
+
+    @staticmethod
+    def _required_execution_id(state: AgentRuntimeState) -> str:
+        value = state.context.execution_id
+        if not isinstance(value, str) or not value:
+            raise PlanPipelineError("PLAN_EXECUTION_ID_REQUIRED")
+        return value
+
+    @staticmethod
+    def _required_chat_id(state: AgentRuntimeState) -> int:
+        value = state.context.chat_id
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise PlanPipelineError("PLAN_RESULT_OWNERSHIP_REQUIRED")
+        return value
+
+    @staticmethod
+    def _required_record_id(state: AgentRuntimeState) -> int:
+        value = state.context.record_id
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise PlanPipelineError("PLAN_RESULT_OWNERSHIP_REQUIRED")
+        return value
 
     def _suspend_semantic_clarification(
         self,
@@ -634,86 +1096,6 @@ class PlanPipeline:
             raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
         if any(plan.validation_status.value != "PROVEN" for plan in strict_query_plans):
             raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_NOT_PROVEN")
-
-    def _execute_compute_task(
-        self,
-        state: AgentRuntimeState,
-        task: ComputeTask,
-    ) -> dict[str, Any]:
-        if not self._compute_enabled:
-            raise PlanPipelineError(
-                "PLAN_COMPUTE_DISABLED",
-                "CHATBI_COMPUTE_ENABLED 未启用。",
-            )
-        if self._compute_engine is None:
-            raise PlanPipelineError("PLAN_COMPUTE_ENGINE_REQUIRED")
-        result_store = state.context.result_store
-        if result_store is None:
-            raise PlanPipelineError("PLAN_RESULT_STORE_REQUIRED")
-        result_sets = state.context.state.get("result_sets")
-        if not isinstance(result_sets, dict):
-            raise PlanPipelineError("PLAN_INPUT_RESULT_SETS_MISSING")
-        execution_id = state.context.execution_id
-        chat_id = state.context.chat_id
-        record_id = state.context.record_id
-        if not isinstance(execution_id, str) or not execution_id:
-            raise PlanPipelineError("PLAN_EXECUTION_ID_REQUIRED")
-        if not isinstance(chat_id, int) or not isinstance(record_id, int):
-            raise PlanPipelineError("PLAN_RESULT_OWNERSHIP_REQUIRED")
-        snapshots = {}
-        for input_id in task.inputs:
-            result_set_id = self._result_set_id_for_node(result_sets, input_id)
-            payload = result_sets.get(result_set_id) if result_set_id else None
-            if not isinstance(payload, dict):
-                raise PlanPipelineError("PLAN_INPUT_RESULT_SET_MISSING")
-            ref = ResultSetRef.model_validate(payload)
-            snapshots[input_id] = result_store.read(
-                ref,
-                execution_id=execution_id,
-                execution_type=ChatRecordExecutionType.AGENT,
-                chat_id=chat_id,
-                record_id=record_id,
-            )
-        try:
-            computed = self._compute_engine.execute(task, snapshots)
-        except ComputeEngineError as exc:
-            raise PlanPipelineError(exc.code, str(exc)) from exc
-        result_ref = result_store.register(
-            execution_id=execution_id,
-            execution_type=ChatRecordExecutionType.AGENT,
-            chat_id=chat_id,
-            record_id=record_id,
-            plan_id=str(
-                (state.context.state.get("analysis_plan") or {}).get("id") or ""
-            ),
-            node_id=task.id,
-            kind=ResultSetKind.COMPUTE,
-            fields=list(computed.fields),
-            rows=[dict(row) for row in computed.rows],
-            row_count=computed.row_count,
-            source_sql=computed.sql,
-        )
-        result_payload = result_ref.model_dump(mode="json")
-        existing_result_sets = state.context.state.get("result_sets")
-        if not isinstance(existing_result_sets, dict):
-            existing_result_sets = {}
-        state.context.state["result_sets"] = {
-            **existing_result_sets,
-            result_ref.result_set_id: result_payload,
-        }
-        execution = {
-            "sql": computed.sql,
-            "fields": list(computed.fields),
-            "row_count": computed.row_count,
-            "sample_rows": [dict(row) for row in computed.rows[:10]],
-            "artifact_ref": result_ref.artifact_ref.model_dump(mode="json"),
-            "result_set_id": result_ref.result_set_id,
-            "sql_source": "computed",
-        }
-        state.context.state["last_execution"] = execution
-        state.context.state["full_data"] = [dict(row) for row in computed.rows]
-        self._persist_state(state)
-        return execution
 
     @staticmethod
     def _result_set_id_for_node(

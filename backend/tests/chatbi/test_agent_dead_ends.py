@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from threading import Lock
+from time import sleep
 from types import SimpleNamespace
 from typing import Any
 
@@ -9,7 +11,16 @@ import pytest
 
 from apps.chatbi.errors import AgentFinalizationError
 from apps.chatbi.models import AgentErrorClass
-from apps.chatbi.models.dto.analysis_plan import CompiledQuery
+from apps.chatbi.models.dto.analysis_plan import (
+    AnalysisPlan,
+    CompiledQuery,
+    ComputeOperation,
+    ComputeTask,
+    PlanEdge,
+    PresentationHint,
+    QueryTask,
+    QueryTaskSpec,
+)
 from apps.chatbi.orchestration.agent.messages import AgentMessage
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
@@ -18,13 +29,25 @@ from apps.chatbi.orchestration.agent.tool_visibility import visible_tool_names
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.core import FinishTool
 from apps.chatbi.orchestration.pipeline.plan_mode import PlanPipeline, PlanPipelineError
+from apps.chatbi.services.execution import (
+    QueryTaskExecutionRequest,
+    QueryTaskExecutionResult,
+    QueryTaskExecutionStatus,
+    QueryTaskExecutor,
+)
 from apps.chatbi.services.generation.agent_finalization import (
     AgentFinalizationInput,
     AgentFinalizationResult,
     build_partial_finalization,
 )
 from apps.chatbi.services.planning.analysis_planner import AnalysisPlanner
-from apps.tool import BudgetGuard, ToolStatus
+from apps.chatbi.services.planning.dag_scheduler import build_execution_batches
+from apps.datasource.models.dto.query import (
+    DatasourceQueryData,
+    DatasourceQueryResult,
+)
+from apps.tool import BudgetGuard, NeverCancelled, ToolStatus
+from apps.tool.context import current_tool_call_context
 
 REGISTERED_TOOLS = [
     "parse_time_range",
@@ -252,6 +275,223 @@ def test_plan_proves_all_queries_before_any_execution() -> None:
     assert tool_calls == ["validate_sql"]
     assert len(saved_plans) == 1
     assert saved_plans[0].validation.status.value == "DRAFT"
+
+
+def test_plan_dag_builds_deterministic_parallel_batches() -> None:
+    """无依赖查询同批执行，计算节点只能进入后续依赖已完成的批次。"""
+
+    plan = AnalysisPlan(
+        id="plan-1",
+        tasks=(
+            QueryTask(id="current", spec=QueryTaskSpec(dataset_id=1)),
+            QueryTask(id="previous", spec=QueryTaskSpec(dataset_id=1)),
+            ComputeTask(
+                id="growth",
+                operation=ComputeOperation.GROWTH_RATE,
+                inputs=("current", "previous"),
+            ),
+            ComputeTask(
+                id="share",
+                operation=ComputeOperation.SHARE,
+                inputs=("growth",),
+            ),
+        ),
+        edges=(
+            PlanEdge(source="current", target="growth"),
+            PlanEdge(source="previous", target="growth"),
+            PlanEdge(source="growth", target="share"),
+        ),
+        presentation=PresentationHint(primary_result="share"),
+    )
+
+    assert build_execution_batches(plan) == (
+        ("current", "previous"),
+        ("growth",),
+        ("share",),
+    )
+
+
+def test_plan_query_batch_executes_tasks_in_parallel() -> None:
+    """同一拓扑批次的 QueryTask 必须真正并行，而不是仅分组后顺序执行。"""
+
+    class RecordingExecutor:
+        def __init__(self) -> None:
+            self.active = 0
+            self.max_active = 0
+            self.lock = Lock()
+
+        def execute(self, request):
+            with self.lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            sleep(0.05)
+            with self.lock:
+                self.active -= 1
+            return QueryTaskExecutionResult(
+                task_id=request.task_id,
+                attempt=request.attempt,
+                status=QueryTaskExecutionStatus.FAILED,
+                error_code="expected_test_failure",
+            )
+
+    executor = RecordingExecutor()
+    pipeline = object.__new__(PlanPipeline)
+    pipeline._query_task_executor = executor
+    pipeline._query_concurrency = 2
+    pipeline._query_timeout_seconds = 10.0
+    state = SimpleNamespace(
+        context=SimpleNamespace(datasource_id=1, oid=1, user_id=1),
+        cancellation=NeverCancelled(),
+        budget=BudgetGuard(timeout_seconds=10),
+    )
+    tasks = [
+        QueryTask(
+            id=task_id,
+            spec=QueryTaskSpec(dataset_id=1),
+            compiled=CompiledQuery(
+                plan_fingerprint=f"proof:{task_id}",
+                sql="SELECT 1",
+                tables=("orders",),
+            ),
+        )
+        for task_id in ("query-a", "query-b")
+    ]
+    states = {
+        task.id: {"status": "RUNNING", "attempt": 1, "error_code": None}
+        for task in tasks
+    }
+
+    results = pipeline._run_query_batch(state, tasks, states)
+
+    assert set(results) == {"query-a", "query-b"}
+    assert executor.max_active == 2
+
+
+def test_query_task_executor_uses_independent_session_and_call_context() -> None:
+    """每个 QueryTask 都创建并关闭自己的 Session，同时绑定独立调用上下文。"""
+
+    sessions = []
+    call_ids = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.closed = True
+
+    class QueryService:
+        def execute(self, request):
+            context = current_tool_call_context()
+            assert context is not None
+            call_ids.append(context.tool_call_id)
+            return DatasourceQueryResult.succeeded(
+                DatasourceQueryData(
+                    sql=request.sql,
+                    fields=["value"],
+                    sample_rows=[{"value": 1}],
+                    full_data=[{"value": 1}],
+                    row_count=1,
+                )
+            )
+
+    def session_factory():
+        session = FakeSession()
+        sessions.append(session)
+        return session
+
+    executor = QueryTaskExecutor(session_factory, lambda _session: QueryService())
+    for task_id in ("query-a", "query-b"):
+        result = executor.execute(
+            QueryTaskExecutionRequest(
+                task_id=task_id,
+                attempt=1,
+                sql="SELECT 1",
+                datasource_id=1,
+                workspace_id=1,
+                user_id=1,
+                selected_tables=("orders",),
+                deadline_monotonic=None,
+                cancellation=NeverCancelled(),
+            )
+        )
+        assert result.status is QueryTaskExecutionStatus.SUCCEEDED
+
+    assert len(sessions) == 2
+    assert sessions[0] is not sessions[1]
+    assert all(session.closed for session in sessions)
+    assert call_ids == ["plan-query:query-a:1", "plan-query:query-b:1"]
+
+
+def test_plan_failed_dependency_is_skipped_after_parallel_batch() -> None:
+    """一个查询失败后，无依赖的同批查询仍成功，下游计算明确标记为跳过。"""
+
+    plan = AnalysisPlan(
+        id="plan-failure",
+        tasks=(
+            QueryTask(id="query-a", spec=QueryTaskSpec(dataset_id=1)),
+            QueryTask(id="query-b", spec=QueryTaskSpec(dataset_id=1)),
+            ComputeTask(
+                id="merge",
+                operation=ComputeOperation.MERGE,
+                inputs=("query-a", "query-b"),
+            ),
+        ),
+        edges=(
+            PlanEdge(source="query-a", target="merge"),
+            PlanEdge(source="query-b", target="merge"),
+        ),
+        presentation=PresentationHint(primary_result="merge"),
+    )
+    pipeline = object.__new__(PlanPipeline)
+    pipeline._query_task_executor = object()
+    pipeline._events = SimpleNamespace(
+        task_started=lambda *_args: "task-started",
+        task_finished=lambda *_args: "task-finished",
+        compute_finished=lambda *_args: "compute-finished",
+    )
+    pipeline._persist_state = lambda _state: None
+    pipeline._run_query_batch = lambda *_args: {
+        "query-a": QueryTaskExecutionResult(
+            task_id="query-a",
+            attempt=1,
+            status=QueryTaskExecutionStatus.FAILED,
+            error_code="query_failed",
+        ),
+        "query-b": QueryTaskExecutionResult(
+            task_id="query-b",
+            attempt=1,
+            status=QueryTaskExecutionStatus.SUCCEEDED,
+            data=DatasourceQueryData(sql="SELECT 1"),
+        ),
+    }
+    pipeline._register_query_result = lambda *_args: (
+        {"result_set_id": "result:plan-failure:query-b"},
+        [],
+    )
+    def run_compute_batch(_state, tasks):
+        if tasks:
+            pytest.fail("依赖失败的 ComputeTask 不应执行")
+        return {}
+
+    pipeline._run_compute_batch = run_compute_batch
+    state = SimpleNamespace(
+        context=SimpleNamespace(state={}),
+        record=SimpleNamespace(id=1),
+        cancellation=NeverCancelled(),
+        require_run_id=lambda: 1,
+    )
+
+    with pytest.raises(PlanPipelineError, match="PLAN_DEPENDENCY_FAILED"):
+        list(pipeline._execute_plan_batches(state, plan, {}, {}))
+
+    task_states = state.context.state["plan_task_states"]
+    assert task_states["query-a"]["status"] == "FAILED"
+    assert task_states["query-b"]["status"] == "SUCCEEDED"
+    assert task_states["merge"]["status"] == "SKIPPED_DEPENDENCY"
 
 
 def test_semantic_clarification_resume_only_reparses_candidates() -> None:
