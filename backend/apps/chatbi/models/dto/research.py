@@ -103,6 +103,17 @@ class ResearchFilterBinding(BaseModel):
     stage: Literal["where", "having"] = "where"
 
 
+class ResearchAppliedFilter(BaseModel):
+    """Research 动作链中已经由服务端确定的动态筛选。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    target_ref: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=32)
+    value: Any
+    stage: Literal["where", "having"] = "where"
+
+
 class ResearchTimeBinding(BaseModel):
     """进入研究前已经绑定并归一化的时间条件。"""
 
@@ -138,15 +149,47 @@ class ResearchHierarchy(BaseModel):
         return self
 
 
+class ResearchDriverRelationship(BaseModel):
+    """目标指标与驱动指标之间的已治理分析关系。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    target_metric_ref: str = Field(min_length=1)
+    driver_metric_ref: str = Field(min_length=1)
+    relationship_type: Literal[
+        "formula_component",
+        "certified_driver",
+        "governed_analysis_relation",
+    ]
+    dimension_refs: tuple[str, ...] = ()
+    time_roles: tuple[str, ...] = Field(min_length=1)
+    relationship_fingerprint: str = Field(min_length=1)
+    status: Literal["CERTIFIED"] = "CERTIFIED"
+
+    @model_validator(mode="after")
+    def validate_relationship(self) -> ResearchDriverRelationship:
+        if self.target_metric_ref == self.driver_metric_ref:
+            raise ValueError("RESEARCH_DRIVER_RELATIONSHIP_SELF_REFERENCE")
+        if len(self.dimension_refs) != len(set(self.dimension_refs)):
+            raise ValueError("RESEARCH_DRIVER_RELATIONSHIP_DIMENSION_DUPLICATED")
+        if len(self.time_roles) != len(set(self.time_roles)):
+            raise ValueError("RESEARCH_DRIVER_RELATIONSHIP_TIME_ROLE_DUPLICATED")
+        return self
+
+
 class ResearchScope(BaseModel):
     """Research 运行期间不可扩大的授权资产范围。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     dimension_refs: tuple[str, ...] = ()
+    target_metric_refs: tuple[str, ...] = ()
     driver_metric_refs: tuple[str, ...] = ()
     hierarchies: tuple[ResearchHierarchy, ...] = ()
+    driver_relationships: tuple[ResearchDriverRelationship, ...] = ()
     allowed_filter_refs: tuple[str, ...] = ()
+    contribution_metric_refs: tuple[str, ...] = ()
+    contribution_dimension_refs: tuple[str, ...] = ()
     excluded_asset_refs: tuple[str, ...] = ()
 
     @model_validator(mode="after")
@@ -155,15 +198,22 @@ class ResearchScope(BaseModel):
 
         for name, values in (
             ("dimension_refs", self.dimension_refs),
+            ("target_metric_refs", self.target_metric_refs),
             ("driver_metric_refs", self.driver_metric_refs),
+            ("contribution_metric_refs", self.contribution_metric_refs),
+            ("contribution_dimension_refs", self.contribution_dimension_refs),
             ("allowed_filter_refs", self.allowed_filter_refs),
             ("excluded_asset_refs", self.excluded_asset_refs),
         ):
             if len(values) != len(set(values)):
                 raise ValueError(f"RESEARCH_SCOPE_{name.upper()}_DUPLICATED")
         dimensions = set(self.dimension_refs)
+        targets = set(self.target_metric_refs)
+        drivers = set(self.driver_metric_refs)
         if not set(self.allowed_filter_refs) <= dimensions:
             raise ValueError("RESEARCH_SCOPE_FILTER_DIMENSION_UNKNOWN")
+        if not set(self.contribution_dimension_refs) <= dimensions:
+            raise ValueError("RESEARCH_SCOPE_CONTRIBUTION_DIMENSION_UNKNOWN")
         hierarchy_ids = [item.id for item in self.hierarchies]
         if len(hierarchy_ids) != len(set(hierarchy_ids)):
             raise ValueError("RESEARCH_SCOPE_HIERARCHY_ID_DUPLICATED")
@@ -172,6 +222,23 @@ class ResearchScope(BaseModel):
             for hierarchy in self.hierarchies
         ):
             raise ValueError("RESEARCH_SCOPE_HIERARCHY_DIMENSION_UNKNOWN")
+        relationship_ids = {
+            item.relationship_fingerprint for item in self.driver_relationships
+        }
+        if len(relationship_ids) != len(self.driver_relationships):
+            raise ValueError("RESEARCH_SCOPE_DRIVER_RELATIONSHIP_DUPLICATED")
+        if any(
+            item.target_metric_ref not in targets
+            for item in self.driver_relationships
+        ):
+            raise ValueError("RESEARCH_SCOPE_DRIVER_TARGET_UNKNOWN")
+        if any(item.driver_metric_ref not in drivers for item in self.driver_relationships):
+            raise ValueError("RESEARCH_SCOPE_DRIVER_METRIC_UNKNOWN")
+        if any(
+            not set(item.dimension_refs) <= dimensions
+            for item in self.driver_relationships
+        ):
+            raise ValueError("RESEARCH_SCOPE_DRIVER_DIMENSION_UNKNOWN")
         included = dimensions | set(self.driver_metric_refs)
         if included & set(self.excluded_asset_refs):
             raise ValueError("RESEARCH_SCOPE_INCLUDED_ASSET_EXCLUDED")
@@ -255,17 +322,6 @@ class ResearchBreakdownAction(BaseModel):
     time_roles: tuple[str, ...] = Field(min_length=1)
 
 
-class ResearchDrilldownAction(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    type: Literal[ResearchActionType.DRILLDOWN] = ResearchActionType.DRILLDOWN
-    hierarchy_id: str = Field(min_length=1)
-    source_result_id: str = Field(min_length=1)
-    current_dimension_ref: str = Field(min_length=1)
-    next_dimension_ref: str = Field(min_length=1)
-    metric_refs: tuple[str, ...] = Field(min_length=1)
-
-
 class ResearchRowOrder(BaseModel):
     """使用逻辑血缘声明结果内的排序列。"""
 
@@ -281,6 +337,18 @@ class ResearchRowSelector(BaseModel):
     rank: int = Field(gt=0)
     order_by: ResearchRowOrder
     direction: Literal["asc", "desc"]
+
+
+class ResearchDrilldownAction(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal[ResearchActionType.DRILLDOWN] = ResearchActionType.DRILLDOWN
+    hierarchy_id: str = Field(min_length=1)
+    source_result_id: str = Field(min_length=1)
+    current_dimension_ref: str = Field(min_length=1)
+    next_dimension_ref: str = Field(min_length=1)
+    metric_refs: tuple[str, ...] = Field(min_length=1)
+    row_selector: ResearchRowSelector
 
 
 class ResearchFocusedAnalysis(BaseModel):
@@ -518,6 +586,10 @@ class EvidenceSnapshot(BaseModel):
     top_rows: tuple[EvidenceRow, ...] = ()
     bottom_rows: tuple[EvidenceRow, ...] = ()
     lineage: EvidenceLineage
+    applied_filters: tuple[ResearchAppliedFilter, ...] = ()
+    hypothesis_ids: tuple[str, ...] = ()
+    batch_id: str | None = None
+    limitations: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_row_column_indexes(self) -> EvidenceSnapshot:
@@ -534,6 +606,83 @@ class EvidenceSnapshot(BaseModel):
             for column in self.logical_columns
         ):
             raise ValueError("RESEARCH_EVIDENCE_ROW_ORDER_COLUMN_UNKNOWN")
+        return self
+
+
+class ResearchActionFailure(BaseModel):
+    """单个 Research 动作失败时保留的结构化归属。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    action_fingerprint: str = Field(min_length=1)
+    error_code: str = Field(min_length=1)
+
+
+class ResearchIterationRecord(BaseModel):
+    """一轮 Research 的追加式审计记录。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    iteration: int = Field(ge=0)
+    policy_decision_fingerprint: str = Field(min_length=1)
+    action_fingerprints: tuple[str, ...] = ()
+    plan_ids: tuple[str, ...] = ()
+    result_ids: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+    failed_actions: tuple[ResearchActionFailure, ...] = ()
+
+
+class ResearchReportCitation(BaseModel):
+    """研究报告可引用的结果证据。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    evidence_id: str = Field(min_length=1)
+    result_id: str = Field(min_length=1)
+    purpose: str = Field(min_length=1, max_length=1000)
+
+
+class ResearchReportFinding(BaseModel):
+    """研究报告中的一条有证据约束的发现。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    statement: str = Field(min_length=1, max_length=2000)
+    evidence_ids: tuple[str, ...] = Field(min_length=1)
+    confidence: Literal["high", "medium", "low"] = "medium"
+    claim_level: Literal[
+        "contribution",
+        "common_change",
+        "correlation_clue",
+        "limitation",
+    ] = "correlation_clue"
+
+
+class ResearchReport(BaseModel):
+    """第三阶段最终输出的结构化研究报告。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    goal: str = Field(min_length=1, max_length=1000)
+    summary: str = Field(min_length=1, max_length=4000)
+    termination_reason: ResearchTerminationReason
+    findings: tuple[ResearchReportFinding, ...] = ()
+    supported_hypotheses: tuple[ResearchHypothesis, ...] = ()
+    weakened_hypotheses: tuple[ResearchHypothesis, ...] = ()
+    inconclusive_hypotheses: tuple[ResearchHypothesis, ...] = ()
+    unverified_hypotheses: tuple[ResearchHypothesis, ...] = ()
+    limitations: tuple[str, ...] = ()
+    citations: tuple[ResearchReportCitation, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_citations(self) -> ResearchReport:
+        citation_ids = {item.evidence_id for item in self.citations}
+        if any(
+            evidence_id not in citation_ids
+            for finding in self.findings
+            for evidence_id in finding.evidence_ids
+        ):
+            raise ValueError("RESEARCH_REPORT_FINDING_CITATION_MISSING")
         return self
 
 
@@ -557,9 +706,16 @@ class ResearchState(BaseModel):
     iteration: int = Field(default=0, ge=0)
     evidence_ids: tuple[str, ...] = ()
     hypotheses: tuple[ResearchHypothesis, ...] = ()
+    iteration_records: tuple[ResearchIterationRecord, ...] = ()
+    assessment_summaries: tuple[str, ...] = ()
+    covered_dimension_refs: tuple[str, ...] = ()
+    covered_driver_metric_refs: tuple[str, ...] = ()
+    consecutive_no_new_direction: int = Field(default=0, ge=0)
+    premise_supported: bool | None = None
     executed_action_fingerprints: tuple[str, ...] = ()
     remaining_budget: ResearchRemainingBudget
     finish_reason: ResearchTerminationReason | None = None
+    report: ResearchReport | None = None
 
     @model_validator(mode="after")
     def validate_state(self) -> ResearchState:
@@ -614,18 +770,38 @@ class ResearchState(BaseModel):
 
 __all__ = [
     "EvidenceSnapshot",
+    "ResearchAppliedFilter",
+    "ResearchActionFailure",
     "ResearchAction",
     "ResearchActionType",
     "ResearchBudget",
+    "ResearchBreakdownAction",
+    "ResearchCompareAction",
+    "ResearchContributionAction",
     "ResearchDecision",
+    "ResearchDrilldownAction",
+    "ResearchFilterFromResultAction",
+    "ResearchFinishAction",
     "ResearchFinishReason",
+    "ResearchFinishDecision",
+    "ResearchFocusedAnalysis",
     "ResearchHypothesis",
     "ResearchHypothesisStatus",
+    "ResearchDriverRelationship",
+    "ResearchHierarchy",
+    "ResearchIterationRecord",
     "ResearchPolicyDecision",
     "ResearchReason",
     "ResearchRequirement",
+    "ResearchRemainingBudget",
+    "ResearchReport",
+    "ResearchReportCitation",
+    "ResearchReportFinding",
+    "ResearchRowOrder",
+    "ResearchRowSelector",
     "ResearchRunStatus",
     "ResearchScope",
     "ResearchState",
     "ResearchTerminationReason",
+    "ResearchValidateHypothesisAction",
 ]

@@ -168,6 +168,13 @@ class SemanticSchemaBuilder:
                 _metric_dimension_capability_runtime(item)
                 for item in metric_dimension_capabilities or []
             ],
+            # 治理配置暂存于数据集 query_config，并通过公共 Schema 冻结给 Research。
+            dimension_hierarchies=_research_contracts(
+                dataset.query_config or {}, "dimension_hierarchies"
+            ),
+            research_relationships=_research_contracts(
+                dataset.query_config or {}, "research_relationships"
+            ),
             model_contracts=[_model_contract_runtime(item) for item in selected_models],
             relation_contracts=[_relation_contract_runtime(item) for item in model_relations or []],
             metric_contracts=[_metric_contract_runtime(item) for item in exposed_metrics],
@@ -526,6 +533,22 @@ def _asset_versions(
         **{f"logical_dimension:{item.id}": item.version for item in logical_dimensions},
         **{f"capability:{item.id}": item.version for item in capabilities},
     }
+
+
+def _research_contracts(
+    query_config: dict[str, Any],
+    key: str,
+) -> list[dict[str, Any]]:
+    """只投影结构化的 Research 治理契约，不把任意配置暴露给运行时。"""
+
+    values = query_config.get(key)
+    if values is None:
+        return []
+    if not isinstance(values, list) or any(
+        not isinstance(item, dict) for item in values
+    ):
+        raise ValueError(f"SEMANTIC_RESEARCH_CONTRACT_INVALID:{key}")
+    return [dict(item) for item in values]
 
 
 def _schema_fingerprint(schema: DatasetSchema) -> str:

@@ -21,15 +21,18 @@ from apps.chatbi.models.dto.research import (
 from apps.chatbi.services.research.ports import ResearchPolicyPromptBuilder
 from apps.chatbi.services.understanding.model_invocation import StructuredModelService
 
-_PHASE2_POLICY_ACTIONS = {
+_RESEARCH_POLICY_ACTIONS = {
     ResearchActionType.BREAKDOWN,
     ResearchActionType.FILTER_FROM_RESULT,
+    ResearchActionType.DRILLDOWN,
+    ResearchActionType.CONTRIBUTION,
+    ResearchActionType.VALIDATE_HYPOTHESIS,
     ResearchActionType.FINISH,
 }
 
 
 class ResearchPolicy:
-    """调用一次模型并校验第二阶段允许的决策边界。"""
+    """调用一次模型并校验第三阶段允许的决策边界。"""
 
     def __init__(
         self,
@@ -56,7 +59,7 @@ class ResearchPolicy:
         available_actions = tuple(
             item
             for item in requirement.allowed_actions
-            if item in _PHASE2_POLICY_ACTIONS
+            if item in _RESEARCH_POLICY_ACTIONS
         )
         context = {
             "requirement": requirement.model_dump(mode="json"),
@@ -87,11 +90,6 @@ class ResearchPolicy:
                 ResearchExecutionError.POLICY_OUTPUT_INVALID,
                 details={"errors": exc.errors(include_url=False)},
             ) from exc
-        if decision.hypothesis_updates or decision.new_hypotheses:
-            raise ResearchExecutionError(
-                ResearchExecutionError.POLICY_OUTPUT_INVALID,
-                details={"reason": "RESEARCH_PHASE2_HYPOTHESIS_NOT_ALLOWED"},
-            )
         if decision.decision.type == "execute":
             actions = decision.decision.actions
             if len(actions) > requirement.budget.max_actions_per_iteration:

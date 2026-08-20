@@ -29,6 +29,9 @@ def project_evidence_snapshot(
     evidence_index: int,
     max_rows: int,
     max_chars: int,
+    hypothesis_ids: tuple[str, ...] = (),
+    batch_id: str | None = None,
+    limitations: tuple[str, ...] = (),
 ) -> EvidenceSnapshot:
     """按固定排序采样，不把 SQL、物理字段或完整结果交给模型。"""
 
@@ -111,6 +114,10 @@ def project_evidence_snapshot(
             task_id=task_id,
             action_fingerprint=materialized.fingerprint,
         ),
+        applied_filters=materialized.applied_filters,
+        hypothesis_ids=hypothesis_ids,
+        batch_id=batch_id,
+        limitations=limitations,
     )
 
 

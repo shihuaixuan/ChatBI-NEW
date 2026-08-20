@@ -20,10 +20,16 @@ from apps.chatbi.models.dto.research import (
     EvidenceLogicalColumn,
     EvidenceSnapshot,
     ResearchAction,
+    ResearchAppliedFilter,
     ResearchBreakdownAction,
     ResearchCompareAction,
+    ResearchContributionAction,
+    ResearchDrilldownAction,
     ResearchFilterFromResultAction,
+    ResearchFocusedAnalysis,
+    ResearchHypothesis,
     ResearchRequirement,
+    ResearchValidateHypothesisAction,
 )
 
 
@@ -40,12 +46,16 @@ class MaterializedResearchAction:
     """一个通过范围校验且可交给 Plan 证明的 Research 动作。"""
 
     fingerprint: str
+    action: ResearchAction
     requirement: ExecutionRequirement
     purpose: str
     metric_refs: tuple[str, ...]
     dimension_refs: tuple[str, ...]
     time_roles: tuple[str, ...]
     columns: tuple[EvidenceColumnProjection, ...]
+    primary_requirement_id: str
+    hypothesis_ids: tuple[str, ...] = ()
+    applied_filters: tuple[ResearchAppliedFilter, ...] = ()
 
 
 def initial_compare_action(requirement: ResearchRequirement) -> ResearchCompareAction:
@@ -70,6 +80,7 @@ def materialize_research_action(
     runtime: dict[str, Any],
     asset_snapshot: dict[str, Any],
     evidence_by_result: dict[str, EvidenceSnapshot],
+    hypotheses: tuple[ResearchHypothesis, ...] | None = None,
 ) -> MaterializedResearchAction:
     """把模型动作转换成完整 Plan 执行需求，不读取自然语言补充语义。"""
 
@@ -103,7 +114,10 @@ def materialize_research_action(
             purpose="确认研究目标指标的当前期与对比期变化",
         )
     if isinstance(action, ResearchBreakdownAction):
-        if action.metric_ref not in research_requirement.target_metric_refs:
+        if action.metric_ref not in {
+            *research_requirement.target_metric_refs,
+            *research_requirement.scope.driver_metric_refs,
+        }:
             raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
         if action.dimension_ref not in research_requirement.scope.dimension_refs:
             raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
@@ -126,6 +140,7 @@ def materialize_research_action(
             dimension_ref=action.dimension_ref,
             calculation=action.calculation,
             purpose=f"按 {action.dimension_ref} 分解 {action.metric_ref} 的变化",
+            source_action=action,
         )
     if isinstance(action, ResearchFilterFromResultAction):
         return _materialize_filter_from_result(
@@ -136,6 +151,36 @@ def materialize_research_action(
             assets=assets,
             evidence_by_result=evidence_by_result,
             fingerprint=fingerprint,
+        )
+    if isinstance(action, ResearchDrilldownAction):
+        return _materialize_drilldown(
+            action=action,
+            research_requirement=research_requirement,
+            runtime=runtime,
+            asset_snapshot=asset_snapshot,
+            assets=assets,
+            evidence_by_result=evidence_by_result,
+            fingerprint=fingerprint,
+        )
+    if isinstance(action, ResearchContributionAction):
+        return _materialize_contribution(
+            action=action,
+            research_requirement=research_requirement,
+            runtime=runtime,
+            asset_snapshot=asset_snapshot,
+            assets=assets,
+            fingerprint=fingerprint,
+        )
+    if isinstance(action, ResearchValidateHypothesisAction):
+        return _materialize_validate_hypothesis(
+            action=action,
+            research_requirement=research_requirement,
+            runtime=runtime,
+            asset_snapshot=asset_snapshot,
+            assets=assets,
+            evidence_by_result=evidence_by_result,
+            fingerprint=fingerprint,
+            hypotheses=hypotheses,
         )
     raise ResearchExecutionError(ResearchExecutionError.ACTION_NOT_ALLOWED)
 
@@ -229,13 +274,17 @@ def _materialize_filter_from_result(
         asset_snapshot=asset_snapshot,
         assets=assets,
         fingerprint=fingerprint,
-        extra_filters=(dynamic_filter,),
+        extra_filters=(
+            *(_filter_tuple(item) for item in source.applied_filters),
+            dynamic_filter,
+        ),
         dimension_ref=analysis.dimension_ref,
         calculation="difference",
         purpose=(
             f"使用 {source.evidence_id} 选中的 {action.target_dimension_ref} 对象"
             f"继续执行 {analysis.type} 分析"
         ),
+        source_action=action,
     )
 
 
@@ -267,6 +316,317 @@ def _selected_evidence_row(
     return rows[index]
 
 
+def _materialize_drilldown(
+    *,
+    action: ResearchDrilldownAction,
+    research_requirement: ResearchRequirement,
+    runtime: dict[str, Any],
+    asset_snapshot: dict[str, Any],
+    assets: dict[str, dict[str, Any]],
+    evidence_by_result: dict[str, EvidenceSnapshot],
+    fingerprint: str,
+) -> MaterializedResearchAction:
+    """按治理层级和已有结果行生成下一层下钻查询。"""
+
+    if not set(action.metric_refs) <= {
+        *research_requirement.target_metric_refs,
+        *research_requirement.scope.driver_metric_refs,
+    }:
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
+    hierarchy = next(
+        (
+            item
+            for item in research_requirement.scope.hierarchies
+            if item.id == action.hierarchy_id
+        ),
+        None,
+    )
+    if hierarchy is None:
+        raise ResearchExecutionError(ResearchExecutionError.HIERARCHY_NOT_AVAILABLE)
+    try:
+        current_index = hierarchy.dimension_refs.index(action.current_dimension_ref)
+        next_index = hierarchy.dimension_refs.index(action.next_dimension_ref)
+    except ValueError as exc:
+        raise ResearchExecutionError(
+            ResearchExecutionError.ACTION_SCOPE_INVALID
+        ) from exc
+    if next_index != current_index + 1:
+        raise ResearchExecutionError(
+            ResearchExecutionError.ACTION_SCOPE_INVALID
+        )
+    source = evidence_by_result.get(action.source_result_id)
+    if source is None:
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SOURCE_UNKNOWN)
+    if action.current_dimension_ref not in source.dimension_refs:
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SOURCE_COLUMN_UNKNOWN)
+    row = _selected_evidence_row(
+        source,
+        ResearchFilterFromResultAction(
+            source_result_id=action.source_result_id,
+            row_selector=action.row_selector,
+            target_dimension_ref=action.current_dimension_ref,
+            analysis=ResearchFocusedAnalysis(
+                type="compare",
+                metric_refs=action.metric_refs,
+                time_roles=source.time_roles,
+            ),
+        ),
+    )
+    dimension_index = next(
+        (
+            index
+            for index, column in enumerate(source.logical_columns)
+            if column.dimension_ref == action.current_dimension_ref
+            and column.value_role == "group_key"
+        ),
+        None,
+    )
+    if dimension_index is None:
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SOURCE_COLUMN_UNKNOWN)
+    selected_value = next(
+        (
+            item.value
+            for item in row.values
+            if item.logical_column_index == dimension_index
+        ),
+        None,
+    )
+    if selected_value is None:
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SOURCE_ROW_UNKNOWN)
+    dynamic_filter: tuple[str, str, Any, Literal["where", "having"]] = (
+        action.current_dimension_ref,
+        "eq",
+        selected_value,
+        "where",
+    )
+    return _materialize_comparison(
+        action=ResearchCompareAction(
+            metric_refs=action.metric_refs,
+            time_roles=source.time_roles or ("single",),
+        ),
+        research_requirement=research_requirement,
+        runtime=runtime,
+        asset_snapshot=asset_snapshot,
+        assets=assets,
+        fingerprint=fingerprint,
+        extra_filters=(
+            *(_filter_tuple(item) for item in source.applied_filters),
+            dynamic_filter,
+        ),
+        purpose=(
+            f"沿 {action.hierarchy_id} 从 {action.current_dimension_ref} "
+            f"下钻到 {action.next_dimension_ref}"
+        ),
+        dimension_ref=action.next_dimension_ref,
+        calculation=(
+            "difference"
+            if tuple(source.time_roles) == ("current", "previous")
+            else "value"
+        ),
+        source_action=action,
+    )
+
+
+def _materialize_contribution(
+    *,
+    action: ResearchContributionAction,
+    research_requirement: ResearchRequirement,
+    runtime: dict[str, Any],
+    asset_snapshot: dict[str, Any],
+    assets: dict[str, dict[str, Any]],
+    fingerprint: str,
+) -> MaterializedResearchAction:
+    """把贡献度动作展开为四查询、两差值和一次贡献度计算。"""
+
+    if action.metric_ref not in research_requirement.scope.contribution_metric_refs:
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
+    if action.dimension_ref not in research_requirement.scope.contribution_dimension_refs:
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
+    if tuple(action.time_roles) != ("current", "previous"):
+        raise ResearchExecutionError(ResearchExecutionError.COMPARISON_REQUIRED)
+    metric = _required_asset(assets, action.metric_ref, "METRIC")
+    dimension = _required_asset(assets, action.dimension_ref, "DIMENSION")
+    if int(metric["model_id"]) != int(dimension["model_id"]):
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
+    model_id = int(metric["model_id"])
+    bindings = {item.role: item for item in research_requirement.time_bindings}
+    filters = _filters(research_requirement, assets, ())
+    metric_field = str(metric["biz_name"])
+    dimension_field = str(dimension["column"])
+    suffix = fingerprint[:12]
+    query_requirements: list[QueryRequirement] = []
+    for scope_name, group_by in (("total", ()), ("breakdown", (dimension,))):
+        for role in action.time_roles:
+            binding = bindings.get(role)
+            if binding is None:
+                raise ResearchExecutionError(ResearchExecutionError.COMPARISON_REQUIRED)
+            time_asset = _required_asset(assets, binding.dimension_ref, "DIMENSION")
+            query_requirements.append(
+                QueryRequirement(
+                    id=f"research_{suffix}_{scope_name}_{role}",
+                    model_ref=f"MODEL:{model_id}",
+                    metrics=(metric,),
+                    group_by=group_by,
+                    filters=filters,
+                    time={
+                        **binding.model_dump(mode="json"),
+                        "column": time_asset["column"],
+                    },
+                    query_shape={"shape": "research_contribution", "scope": scope_name},
+                )
+            )
+    current_role, previous_role = action.time_roles
+    total_current = f"research_{suffix}_total_{current_role}"
+    total_previous = f"research_{suffix}_total_{previous_role}"
+    breakdown_current = f"research_{suffix}_breakdown_{current_role}"
+    breakdown_previous = f"research_{suffix}_breakdown_{previous_role}"
+    total_difference = f"research_{suffix}_total_difference"
+    breakdown_difference = f"research_{suffix}_breakdown_difference"
+    contribution_id = f"research_{suffix}_contribution"
+    calculations = (
+        CalculationRequirement(
+            id=total_difference,
+            type=CalculationOperation.DIFFERENCE,
+            inputs=(total_current, total_previous),
+            value_columns=(metric_field,),
+        ),
+        CalculationRequirement(
+            id=breakdown_difference,
+            type=CalculationOperation.DIFFERENCE,
+            inputs=(breakdown_current, breakdown_previous),
+            join_keys=(dimension_field,),
+            value_columns=(metric_field,),
+        ),
+        CalculationRequirement(
+            id=contribution_id,
+            type=CalculationOperation.CONTRIBUTION,
+            inputs=(breakdown_difference, total_difference),
+            options={
+                "dimensions": [dimension_field],
+                "difference_column": f"{metric_field}_difference",
+                "total_difference_column": f"{metric_field}_difference",
+                "output_column": f"{metric_field}_contribution",
+                "reconciliation_tolerance": 1e-6,
+            },
+        ),
+    )
+    columns = (
+        EvidenceColumnProjection(
+            field=dimension_field,
+            logical_column=EvidenceLogicalColumn(
+                dimension_ref=action.dimension_ref,
+                value_role="group_key",
+            ),
+        ),
+        EvidenceColumnProjection(
+            field=f"{metric_field}_difference",
+            logical_column=EvidenceLogicalColumn(
+                metric_ref=action.metric_ref,
+                value_role="difference",
+            ),
+        ),
+        EvidenceColumnProjection(
+            field=f"{metric_field}_contribution",
+            logical_column=EvidenceLogicalColumn(
+                metric_ref=action.metric_ref,
+                value_role="contribution",
+            ),
+        ),
+    )
+    requirement = ExecutionRequirement(
+        status="ready",
+        route=ExecutionRoute(
+            mode="plan",
+            origin="research_action",
+            reasons=("research_action", "contribution"),
+        ),
+        query_requirements=tuple(query_requirements),
+        post_calculations=calculations,
+        result_contract=ExecutionResultContract(
+            primary_requirement_id=contribution_id,
+            ordered_requirement_ids=(contribution_id,),
+        ),
+        runtime={**runtime, "research_action_fingerprint": fingerprint},
+        asset_snapshot=asset_snapshot,
+    )
+    return MaterializedResearchAction(
+        fingerprint=fingerprint,
+        action=action,
+        requirement=requirement,
+        purpose=f"计算 {action.dimension_ref} 对 {action.metric_ref} 变化的贡献度",
+        metric_refs=(action.metric_ref,),
+        dimension_refs=(action.dimension_ref,),
+        time_roles=action.time_roles,
+        columns=columns,
+        primary_requirement_id=contribution_id,
+    )
+
+
+def _materialize_validate_hypothesis(
+    *,
+    action: ResearchValidateHypothesisAction,
+    research_requirement: ResearchRequirement,
+    runtime: dict[str, Any],
+    asset_snapshot: dict[str, Any],
+    assets: dict[str, dict[str, Any]],
+    evidence_by_result: dict[str, EvidenceSnapshot],
+    fingerprint: str,
+    hypotheses: tuple[ResearchHypothesis, ...] | None,
+) -> MaterializedResearchAction:
+    """只按已治理驱动关系生成假设验证查询，不接受自由公式。"""
+
+    if not action.evidence_ids:
+        raise ResearchExecutionError(ResearchExecutionError.HYPOTHESIS_EVIDENCE_REQUIRED)
+    hypothesis = next(
+        (item for item in hypotheses or () if item.id == action.hypothesis_id),
+        None,
+    )
+    if hypothesis is None or hypothesis.status.value not in {"pending", "inconclusive"}:
+        raise ResearchExecutionError(ResearchExecutionError.HYPOTHESIS_INVALID)
+    known_evidence_ids = {item.evidence_id for item in evidence_by_result.values()}
+    if not set(action.evidence_ids) <= known_evidence_ids:
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SOURCE_UNKNOWN)
+    allowed_metrics = {
+        *research_requirement.target_metric_refs,
+        *research_requirement.scope.driver_metric_refs,
+    }
+    if not set(action.metric_refs) <= allowed_metrics:
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
+    relationships = research_requirement.scope.driver_relationships
+    if not any(
+        set(action.metric_refs)
+        == {item.target_metric_ref, item.driver_metric_ref}
+        and set(action.dimension_refs) <= set(item.dimension_refs)
+        and set(research_requirement.time_roles) <= set(item.time_roles)
+        for item in relationships
+    ):
+        raise ResearchExecutionError(ResearchExecutionError.HYPOTHESIS_INVALID)
+    if not set(action.dimension_refs) <= set(research_requirement.scope.dimension_refs):
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
+    time_roles = research_requirement.time_roles
+    return _materialize_comparison(
+        action=ResearchCompareAction(
+            metric_refs=action.metric_refs,
+            time_roles=time_roles,
+        ),
+        research_requirement=research_requirement,
+        runtime=runtime,
+        asset_snapshot=asset_snapshot,
+        assets=assets,
+        fingerprint=fingerprint,
+        extra_filters=(),
+        dimension_refs=action.dimension_refs,
+        purpose=f"验证假设 {action.hypothesis_id} 的驱动指标变化",
+        calculation=(
+            "difference"
+            if tuple(time_roles) == ("current", "previous")
+            else "value"
+        ),
+        source_action=action,
+        hypothesis_ids=(action.hypothesis_id,),
+    )
+
+
 def _materialize_comparison(
     *,
     action: ResearchCompareAction,
@@ -280,7 +640,10 @@ def _materialize_comparison(
     ],
     purpose: str,
     dimension_ref: str | None = None,
+    dimension_refs: tuple[str, ...] = (),
     calculation: str = "difference",
+    source_action: ResearchAction | None = None,
+    hypothesis_ids: tuple[str, ...] = (),
 ) -> MaterializedResearchAction:
     allowed_metrics = {
         *research_requirement.target_metric_refs,
@@ -291,14 +654,26 @@ def _materialize_comparison(
     if tuple(action.time_roles) not in {("current", "previous"), ("single",)}:
         raise ResearchExecutionError(ResearchExecutionError.COMPARISON_REQUIRED)
     metric_assets = [_required_asset(assets, ref, "METRIC") for ref in action.metric_refs]
-    dimension_asset = (
-        _required_asset(assets, dimension_ref, "DIMENSION")
-        if dimension_ref is not None
-        else None
+    selected_dimension_refs = tuple(
+        dict.fromkeys(
+            (
+                *((dimension_ref,) if dimension_ref is not None else ()),
+                *dimension_refs,
+            )
+        )
+    )
+    _validate_driver_metric_scope(
+        metric_refs=action.metric_refs,
+        dimension_refs=selected_dimension_refs,
+        time_roles=action.time_roles,
+        requirement=research_requirement,
+    )
+    dimension_assets = tuple(
+        _required_asset(assets, ref, "DIMENSION") for ref in selected_dimension_refs
     )
     model_ids = {
         int(item["model_id"])
-        for item in (*metric_assets, *((dimension_asset,) if dimension_asset else ()))
+        for item in (*metric_assets, *dimension_assets)
     }
     if len(model_ids) != 1:
         raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
@@ -323,7 +698,7 @@ def _materialize_comparison(
                 id=f"research_{suffix}_{role}",
                 model_ref=f"MODEL:{model_id}",
                 metrics=tuple(metric_assets),
-                group_by=(dimension_asset,) if dimension_asset is not None else (),
+                group_by=dimension_assets,
                 filters=filters,
                 time=time_requirement,
                 query_shape={"shape": "research_action"},
@@ -332,16 +707,16 @@ def _materialize_comparison(
     if action.time_roles == ("single",):
         query = query_requirements[0]
         columns: list[EvidenceColumnProjection] = []
-        if dimension_asset is not None and dimension_ref is not None:
-            columns.append(
-                EvidenceColumnProjection(
-                    field=str(dimension_asset["column"]),
-                    logical_column=EvidenceLogicalColumn(
-                        dimension_ref=dimension_ref,
-                        value_role="group_key",
-                    ),
-                )
+        columns.extend(
+            EvidenceColumnProjection(
+                field=str(asset["column"]),
+                logical_column=EvidenceLogicalColumn(
+                    dimension_ref=ref,
+                    value_role="group_key",
+                ),
             )
+            for ref, asset in zip(selected_dimension_refs, dimension_assets, strict=True)
+        )
         columns.extend(
             EvidenceColumnProjection(
                 field=str(asset["biz_name"]),
@@ -373,12 +748,24 @@ def _materialize_comparison(
         )
         return MaterializedResearchAction(
             fingerprint=fingerprint,
+            action=source_action or action,
             requirement=requirement,
             purpose=purpose,
             metric_refs=action.metric_refs,
-            dimension_refs=(dimension_ref,) if dimension_ref is not None else (),
+            dimension_refs=selected_dimension_refs,
             time_roles=action.time_roles,
             columns=tuple(columns),
+            primary_requirement_id=query.id,
+            hypothesis_ids=hypothesis_ids,
+            applied_filters=tuple(
+                ResearchAppliedFilter(
+                    target_ref=target_ref,
+                    operator=operator,
+                    value=value,
+                    stage=stage,
+                )
+                for target_ref, operator, value, stage in extra_filters
+            ),
         )
 
     operation = (
@@ -388,11 +775,7 @@ def _materialize_comparison(
     )
     calculation_id = f"research_{suffix}_{operation.value}"
     metric_fields = tuple(str(item["biz_name"]) for item in metric_assets)
-    join_keys = (
-        (str(dimension_asset["column"]),)
-        if dimension_asset is not None
-        else ()
-    )
+    join_keys = tuple(str(item["column"]) for item in dimension_assets)
     calc = CalculationRequirement(
         id=calculation_id,
         type=operation,
@@ -401,16 +784,16 @@ def _materialize_comparison(
         value_columns=metric_fields,
     )
     columns = []
-    if dimension_asset is not None and dimension_ref is not None:
-        columns.append(
-            EvidenceColumnProjection(
-                field=str(dimension_asset["column"]),
-                logical_column=EvidenceLogicalColumn(
-                    dimension_ref=dimension_ref,
-                    value_role="group_key",
-                ),
-            )
+    columns.extend(
+        EvidenceColumnProjection(
+            field=str(asset["column"]),
+            logical_column=EvidenceLogicalColumn(
+                dimension_ref=ref,
+                value_role="group_key",
+            ),
         )
+        for ref, asset in zip(selected_dimension_refs, dimension_assets, strict=True)
+    )
     result_role: Literal["growth_rate", "difference"] = (
         "growth_rate"
         if operation is CalculationOperation.GROWTH_RATE
@@ -460,12 +843,24 @@ def _materialize_comparison(
     )
     return MaterializedResearchAction(
         fingerprint=fingerprint,
+        action=source_action or action,
         requirement=requirement,
         purpose=purpose,
         metric_refs=action.metric_refs,
-        dimension_refs=(dimension_ref,) if dimension_ref is not None else (),
+        dimension_refs=selected_dimension_refs,
         time_roles=action.time_roles,
         columns=tuple(columns),
+        primary_requirement_id=calculation_id,
+        hypothesis_ids=hypothesis_ids,
+        applied_filters=tuple(
+            ResearchAppliedFilter(
+                target_ref=target_ref,
+                operator=operator,
+                value=value,
+                stage=stage,
+            )
+            for target_ref, operator, value, stage in extra_filters
+        ),
     )
 
 
@@ -497,6 +892,33 @@ def _filters(
     return tuple(result)
 
 
+def _validate_driver_metric_scope(
+    *,
+    metric_refs: tuple[str, ...],
+    dimension_refs: tuple[str, ...],
+    time_roles: tuple[str, ...],
+    requirement: ResearchRequirement,
+) -> None:
+    """驱动指标只能在治理关系明确支持的共同维度和时间角色下查询。"""
+
+    driver_refs = set(requirement.scope.driver_metric_refs)
+    relationships = requirement.scope.driver_relationships
+    for metric_ref in set(metric_refs) & driver_refs:
+        if not any(
+            item.driver_metric_ref == metric_ref
+            and set(dimension_refs) <= set(item.dimension_refs)
+            and set(time_roles) <= set(item.time_roles)
+            for item in relationships
+        ):
+            raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
+
+
+def _filter_tuple(
+    item: ResearchAppliedFilter,
+) -> tuple[str, str, Any, Literal["where", "having"]]:
+    return item.target_ref, item.operator, item.value, item.stage
+
+
 def _required_asset(
     assets: dict[str, dict[str, Any]],
     ref: str | None,
@@ -511,10 +933,52 @@ def _required_asset(
     return asset
 
 
+def merge_research_action_requirements(
+    actions: tuple[MaterializedResearchAction, ...],
+) -> ExecutionRequirement:
+    """把同轮独立动作合并为一个 Plan，让现有 DAG 执行器负责并行。"""
+
+    if not actions:
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_MATERIALIZATION_FAILED)
+    if len(actions) == 1:
+        return actions[0].requirement
+    primary_ids = tuple(item.primary_requirement_id for item in actions)
+    if len(primary_ids) != len(set(primary_ids)):
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_MATERIALIZATION_FAILED)
+    first, *supporting = primary_ids
+    fingerprints = tuple(item.fingerprint for item in actions)
+    base = actions[0].requirement
+    return ExecutionRequirement(
+        status="ready",
+        route=base.route,
+        query_requirements=tuple(
+            query
+            for item in actions
+            for query in item.requirement.query_requirements
+        ),
+        post_calculations=tuple(
+            calculation
+            for item in actions
+            for calculation in item.requirement.post_calculations
+        ),
+        result_contract=ExecutionResultContract(
+            primary_requirement_id=first,
+            supporting_requirement_ids=tuple(supporting),
+            ordered_requirement_ids=primary_ids,
+        ),
+        runtime={
+            **base.runtime,
+            "research_action_fingerprints": fingerprints,
+        },
+        asset_snapshot=base.asset_snapshot,
+    )
+
+
 __all__ = [
     "EvidenceColumnProjection",
     "MaterializedResearchAction",
     "initial_compare_action",
+    "merge_research_action_requirements",
     "materialize_research_action",
     "research_action_fingerprint",
 ]

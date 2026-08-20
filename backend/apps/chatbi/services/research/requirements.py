@@ -11,7 +11,9 @@ from apps.chatbi.errors import ResearchRequirementError
 from apps.chatbi.models.dto.research import (
     ResearchActionType,
     ResearchBudget,
+    ResearchDriverRelationship,
     ResearchFilterBinding,
+    ResearchHierarchy,
     ResearchReason,
     ResearchRequirement,
     ResearchScope,
@@ -96,17 +98,58 @@ def build_research_requirement(
         target_metrics,
         dimensions,
     )
+    time_roles, time_bindings = _time_bindings(
+        semantic_parse,
+        schema,
+        target_model_id,
+        temporal_context,
+    )
+    hierarchies = _governed_hierarchies(
+        schema,
+        dimensions,
+        target_model_id,
+        candidate_dimension_refs={*explicit_dimension_refs, *governed_dimensions},
+    )
     scope_dimension_refs = tuple(
-        dict.fromkeys((*explicit_dimension_refs, *governed_dimensions))
+        dict.fromkeys(
+            (
+                *explicit_dimension_refs,
+                *governed_dimensions,
+                *(ref for hierarchy in hierarchies for ref in hierarchy.dimension_refs),
+            )
+        )
     )[:_MAX_SCOPE_DIMENSIONS]
+    hierarchies = tuple(
+        item
+        for item in hierarchies
+        if set(item.dimension_refs) <= set(scope_dimension_refs)
+    )
     allowed_filter_refs = tuple(
         ref
         for ref in scope_dimension_refs
         if ref in set(explicit_dimension_refs) | set(filter_dimensions)
     )
-    driver_metric_refs = _driver_metric_refs(target_metrics, metrics)[
-        :_MAX_SCOPE_DRIVER_METRICS
-    ]
+    driver_relationships = _driver_relationships(
+        schema=schema,
+        target_metrics=target_metrics,
+        metrics=metrics,
+        dimension_refs=scope_dimension_refs,
+        time_roles=time_roles,
+    )
+    driver_metric_refs = tuple(
+        dict.fromkeys(
+            (
+                *_driver_metric_refs(target_metrics, metrics),
+                *(item.driver_metric_ref for item in driver_relationships),
+            )
+        )
+    )[:_MAX_SCOPE_DRIVER_METRICS]
+    allowed_driver_refs = set(driver_metric_refs)
+    driver_relationships = tuple(
+        item
+        for item in driver_relationships
+        if item.driver_metric_ref in allowed_driver_refs
+    )
     if not scope_dimension_refs and not driver_metric_refs:
         raise ResearchRequirementError(ResearchRequirementError.SCOPE_EMPTY)
 
@@ -128,12 +171,6 @@ def build_research_requirement(
         ),
     }
     excluded_asset_refs = tuple(sorted(eligible_refs - included_refs))
-    time_roles, time_bindings = _time_bindings(
-        semantic_parse,
-        schema,
-        target_model_id,
-        temporal_context,
-    )
     immutable_filters = tuple(
         ResearchFilterBinding(
             target_ref=item.target_ref,
@@ -149,12 +186,30 @@ def build_research_requirement(
         scope_dimension_refs,
         driver_metric_refs,
         time_roles,
+        hierarchies=hierarchies,
+        driver_relationships=driver_relationships,
+    )
+    contribution_dimension_refs = tuple(
+        item
+        for item in scope_dimension_refs
+        if item in set(governed_dimensions) | set(explicit_dimension_refs)
+    )
+    contribution_metric_refs = (
+        target_metric_refs
+        if set(time_roles) == {"current", "previous"}
+        and target_metrics
+        and all(_metric_additivity(schema, item.id) == "FULL" for item in target_metrics)
+        else ()
     )
     scope = ResearchScope(
         dimension_refs=scope_dimension_refs,
+        target_metric_refs=target_metric_refs,
         driver_metric_refs=driver_metric_refs,
-        hierarchies=(),
+        hierarchies=hierarchies,
+        driver_relationships=driver_relationships,
         allowed_filter_refs=allowed_filter_refs,
+        contribution_metric_refs=contribution_metric_refs,
+        contribution_dimension_refs=contribution_dimension_refs,
         excluded_asset_refs=excluded_asset_refs,
     )
     if not schema.schema_fingerprint:
@@ -261,6 +316,222 @@ def _driver_metric_refs(
     return tuple(dict.fromkeys(refs))
 
 
+def _governed_hierarchies(
+    schema: DatasetSchema,
+    dimensions: Mapping[str, _ResearchSchemaElement],
+    target_model_id: int,
+    *,
+    candidate_dimension_refs: set[str],
+) -> tuple[ResearchHierarchy, ...]:
+    """只接受 Schema 中标记为 CERTIFIED 且可安全查询的相邻层级。"""
+
+    result: list[ResearchHierarchy] = []
+    for raw in schema.dimension_hierarchies:
+        if not isinstance(raw, dict):
+            raise ResearchRequirementError(
+                ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            )
+        if str(raw.get("status") or "").upper() != "CERTIFIED":
+            continue
+        hierarchy_id = raw.get("id")
+        refs = raw.get("dimension_refs")
+        if (
+            not isinstance(hierarchy_id, str)
+            or not hierarchy_id
+            or not isinstance(refs, list)
+            or len(refs) < 2
+            or any(not isinstance(ref, str) for ref in refs)
+        ):
+            raise ResearchRequirementError(
+                ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            )
+        normalized_refs = tuple(dict.fromkeys(refs))
+        if len(normalized_refs) != len(refs):
+            raise ResearchRequirementError(
+                ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            )
+        for ref in normalized_refs:
+            dimension = dimensions.get(ref)
+            if dimension is None or dimension.model != target_model_id:
+                raise ResearchRequirementError(
+                    ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+                )
+        # 层级契约可以属于数据集中的其他指标；对当前目标不可用时不授权即可。
+        if not set(normalized_refs) <= candidate_dimension_refs:
+            continue
+        result.append(
+            ResearchHierarchy(id=hierarchy_id, dimension_refs=normalized_refs)
+        )
+    return tuple(result)
+
+
+def _driver_relationships(
+    *,
+    schema: DatasetSchema,
+    target_metrics: Sequence[_ResearchSchemaElement],
+    metrics: Mapping[str, _ResearchSchemaElement],
+    dimension_refs: tuple[str, ...],
+    time_roles: tuple[str, ...],
+) -> tuple[ResearchDriverRelationship, ...]:
+    """把公式组成和已认证分析关系统一成 Research 的驱动关系。"""
+
+    target_refs = {_metric_ref(item) for item in target_metrics}
+    metric_by_ref = dict(metrics)
+    target_model_id = next(iter({item.model for item in target_metrics}), None)
+    relationships: list[ResearchDriverRelationship] = []
+    for metric in target_metrics:
+        raw_refs = metric.ext_info.get("metric_refs")
+        for metric_id in raw_refs if isinstance(raw_refs, list) else []:
+            driver_ref = next(
+                (ref for ref, item in metric_by_ref.items() if item.id == metric_id),
+                None,
+            )
+            if driver_ref is None or driver_ref in target_refs:
+                continue
+            if metric_by_ref[driver_ref].model != target_model_id:
+                raise ResearchRequirementError(
+                    ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+                )
+            relationships.append(
+                ResearchDriverRelationship(
+                    target_metric_ref=_metric_ref(metric),
+                    driver_metric_ref=driver_ref,
+                    relationship_type="formula_component",
+                    dimension_refs=_formula_relationship_dimensions(
+                        schema,
+                        target_metric_id=metric.id,
+                        driver_metric_id=metric_by_ref[driver_ref].id,
+                        scope_dimension_refs=dimension_refs,
+                    ),
+                    time_roles=time_roles,
+                    relationship_fingerprint=_fingerprint(
+                        {
+                            "type": "formula_component",
+                            "target": _metric_ref(metric),
+                            "driver": driver_ref,
+                            "dimensions": _formula_relationship_dimensions(
+                                schema,
+                                target_metric_id=metric.id,
+                                driver_metric_id=metric_by_ref[driver_ref].id,
+                                scope_dimension_refs=dimension_refs,
+                            ),
+                            "time_roles": time_roles,
+                        }
+                    ),
+                )
+            )
+
+    for raw in schema.research_relationships:
+        if not isinstance(raw, dict):
+            raise ResearchRequirementError(
+                ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            )
+        target_ref = raw.get("target_metric_ref")
+        driver_ref = raw.get("driver_metric_ref")
+        if target_ref not in target_refs:
+            continue
+        if not isinstance(driver_ref, str) or driver_ref not in metric_by_ref:
+            raise ResearchRequirementError(
+                ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            )
+        if metric_by_ref[driver_ref].model != target_model_id:
+            raise ResearchRequirementError(
+                ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            )
+        status = raw.get("status")
+        if not isinstance(status, str):
+            raise ResearchRequirementError(
+                ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            )
+        if status.upper() != "CERTIFIED":
+            continue
+        relationship_type = raw.get("relationship_type")
+        if relationship_type not in {
+            "formula_component",
+            "certified_driver",
+            "governed_analysis_relation",
+        }:
+            raise ResearchRequirementError(
+                ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            )
+        raw_dimensions = raw.get("dimension_refs", raw.get("supported_dimension_refs"))
+        raw_time_roles = raw.get("time_roles", raw.get("supported_time_roles"))
+        fingerprint = raw.get("relationship_fingerprint")
+        if (
+            not isinstance(raw_dimensions, list)
+            or not isinstance(raw_time_roles, list)
+            or not isinstance(fingerprint, str)
+            or not fingerprint
+        ):
+            raise ResearchRequirementError(
+                ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            )
+        normalized_dimensions = tuple(dict.fromkeys(raw_dimensions))
+        normalized_time_roles = tuple(dict.fromkeys(raw_time_roles))
+        if (
+            any(not isinstance(item, str) for item in normalized_dimensions)
+            or any(not isinstance(item, str) for item in normalized_time_roles)
+            or not set(normalized_dimensions) <= set(dimension_refs)
+            or not set(normalized_time_roles) <= set(time_roles)
+        ):
+            raise ResearchRequirementError(
+                ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            )
+        relationships.append(
+            ResearchDriverRelationship(
+                target_metric_ref=target_ref,
+                driver_metric_ref=driver_ref,
+                relationship_type=relationship_type,
+                dimension_refs=normalized_dimensions,
+                time_roles=normalized_time_roles,
+                relationship_fingerprint=fingerprint,
+            )
+        )
+    unique: dict[str, ResearchDriverRelationship] = {}
+    for relationship in relationships:
+        unique[relationship.relationship_fingerprint] = relationship
+    return tuple(unique.values())
+
+
+def _formula_relationship_dimensions(
+    schema: DatasetSchema,
+    *,
+    target_metric_id: int,
+    driver_metric_id: int,
+    scope_dimension_refs: tuple[str, ...],
+) -> tuple[str, ...]:
+    """公式组成关系只授权目标与驱动指标共同支持的分组维度。"""
+
+    dimension_ref_by_id = {
+        item.id: _dimension_ref(item)
+        for item in schema.dimensions
+        if item.model is not None
+    }
+    supported_by_metric: dict[int, set[str]] = {
+        target_metric_id: set(),
+        driver_metric_id: set(),
+    }
+    for capability in schema.metric_dimension_capabilities:
+        if not isinstance(capability, dict):
+            continue
+        metric_id = capability.get("metric_id")
+        if metric_id not in supported_by_metric:
+            continue
+        if str(capability.get("aggregation_safety") or "").upper() not in {
+            "SAFE",
+            "PRE_AGGREGATE_REQUIRED",
+        }:
+            continue
+        usages = {str(item).upper() for item in capability.get("usages") or []}
+        if "GROUP_BY" not in usages:
+            continue
+        physical_id = capability.get("physical_dimension_id")
+        if isinstance(physical_id, int) and physical_id in dimension_ref_by_id:
+            supported_by_metric[metric_id].add(dimension_ref_by_id[physical_id])
+    common = supported_by_metric[target_metric_id] & supported_by_metric[driver_metric_id]
+    return tuple(ref for ref in scope_dimension_refs if ref in common)
+
+
 def _time_bindings(
     semantic_parse: SemanticParseOutput,
     schema: DatasetSchema,
@@ -315,6 +586,9 @@ def _allowed_actions(
     dimension_refs: tuple[str, ...],
     driver_metric_refs: tuple[str, ...],
     time_roles: tuple[str, ...],
+    *,
+    hierarchies: tuple[ResearchHierarchy, ...],
+    driver_relationships: tuple[ResearchDriverRelationship, ...],
 ) -> tuple[ResearchActionType, ...]:
     actions = [ResearchActionType.COMPARE]
     if dimension_refs:
@@ -333,7 +607,9 @@ def _allowed_actions(
         )
     ):
         actions.append(ResearchActionType.CONTRIBUTION)
-    if driver_metric_refs:
+    if hierarchies:
+        actions.append(ResearchActionType.DRILLDOWN)
+    if driver_metric_refs and driver_relationships:
         actions.append(ResearchActionType.VALIDATE_HYPOTHESIS)
     actions.append(ResearchActionType.FINISH)
     return tuple(actions)

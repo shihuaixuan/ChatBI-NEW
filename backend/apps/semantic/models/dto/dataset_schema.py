@@ -61,6 +61,9 @@ class DatasetSchema(SemanticBaseDTO):
     business_entities: list[dict[str, Any]] = Field(default_factory=list)
     logical_dimensions: list[dict[str, Any]] = Field(default_factory=list)
     metric_dimension_capabilities: list[dict[str, Any]] = Field(default_factory=list)
+    # Research 只消费已治理的层级和驱动关系，不能运行时自行推断。
+    dimension_hierarchies: list[dict[str, Any]] = Field(default_factory=list)
+    research_relationships: list[dict[str, Any]] = Field(default_factory=list)
     model_contracts: list[dict[str, Any]] = Field(default_factory=list)
     relation_contracts: list[dict[str, Any]] = Field(default_factory=list)
     metric_contracts: list[dict[str, Any]] = Field(default_factory=list)
