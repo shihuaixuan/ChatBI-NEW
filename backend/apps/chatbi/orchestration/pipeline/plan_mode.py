@@ -276,6 +276,7 @@ class PlanPipeline:
         primary_full_data = full_data_records.get(primary_result_id, primary_rows)
         answer_execution = {
             **primary_execution,
+            "result_contract": proven_plan.presentation.model_dump(mode="json"),
             "result_sets": {
                 str(execution.get("result_set_id") or task_id): {
                     **execution,

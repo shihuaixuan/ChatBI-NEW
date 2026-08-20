@@ -30,6 +30,21 @@ class CalculationOperation(StrEnum):
     TOPN_OTHER = "topn_other"
     PIVOT = "pivot"
     EXPR = "expr"
+    CONTRIBUTION = "contribution"
+
+
+class ExecutionResultContract(BaseModel):
+    """声明主要结果、辅助结果和回答展示顺序。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    primary_requirement_id: str = Field(min_length=1, max_length=128)
+    supporting_requirement_ids: tuple[str, ...] = ()
+    ordered_requirement_ids: tuple[str, ...] = ()
+    completion_policy: Literal["require_primary"] = "require_primary"
+    analysis_type: Literal[
+        "standard", "fixed_drilldown", "fixed_attribution"
+    ] = "standard"
 
 
 class QueryRequirement(BaseModel):
@@ -83,6 +98,8 @@ class CalculationRequirement(BaseModel):
             raise ValueError("EXECUTION_REQUIREMENT_CALCULATION_TWO_INPUTS_REQUIRED")
         if self.type is CalculationOperation.MERGE and len(self.inputs) < 2:
             raise ValueError("EXECUTION_REQUIREMENT_MERGE_INPUTS_REQUIRED")
+        if self.type is CalculationOperation.CONTRIBUTION and len(self.inputs) != 2:
+            raise ValueError("EXECUTION_REQUIREMENT_CONTRIBUTION_TWO_INPUTS_REQUIRED")
         if (
             self.type
             in {
@@ -108,6 +125,7 @@ class ExecutionRequirement(BaseModel):
     route: ExecutionRoute
     query_requirements: tuple[QueryRequirement, ...] = ()
     post_calculations: tuple[CalculationRequirement, ...] = ()
+    result_contract: ExecutionResultContract | None = None
     runtime: dict[str, Any] = Field(default_factory=dict)
     asset_snapshot: dict[str, Any] = Field(default_factory=dict)
     unresolved: tuple[dict[str, Any], ...] = ()
@@ -132,16 +150,46 @@ class ExecutionRequirement(BaseModel):
             if any(input_id not in known_ids for input_id in item.inputs):
                 raise ValueError("EXECUTION_REQUIREMENT_CALCULATION_INPUT_UNKNOWN")
         _validate_acyclic_dependencies(dependencies)
-        if self.status == "ready" and not self.query_requirements:
+        if (
+            self.status == "ready"
+            and self.route.mode in {"fast", "plan"}
+            and not self.query_requirements
+        ):
             raise ValueError("EXECUTION_REQUIREMENT_QUERY_REQUIRED")
         if self.route.mode == "fast" and (
             len(self.query_requirements) != 1 or self.post_calculations
         ):
             raise ValueError("EXECUTION_REQUIREMENT_FAST_SHAPE_INVALID")
+        if self.result_contract is not None:
+            declared = {
+                self.result_contract.primary_requirement_id,
+                *self.result_contract.supporting_requirement_ids,
+            }
+            if len(declared) != 1 + len(
+                self.result_contract.supporting_requirement_ids
+            ):
+                raise ValueError("EXECUTION_REQUIREMENT_RESULT_ID_DUPLICATED")
+            if not declared <= known_ids:
+                raise ValueError("EXECUTION_REQUIREMENT_RESULT_ID_UNKNOWN")
+            ordered = self.result_contract.ordered_requirement_ids
+            if ordered and (len(ordered) != len(set(ordered)) or set(ordered) != declared):
+                raise ValueError("EXECUTION_REQUIREMENT_RESULT_ORDER_INVALID")
+            consumed = {
+                input_id
+                for item in self.post_calculations
+                for input_id in item.inputs
+            }
+            leaves = known_ids - consumed
+            if declared != leaves:
+                raise ValueError("EXECUTION_REQUIREMENT_RESULT_LEAVES_MISMATCH")
         if self.route.mode == "plan":
             if len(self.query_requirements) == 1 and not self.post_calculations:
                 raise ValueError("EXECUTION_REQUIREMENT_PLAN_SHAPE_INVALID")
-            if len(self.query_requirements) > 1 and not self.post_calculations:
+            if (
+                len(self.query_requirements) > 1
+                and not self.post_calculations
+                and self.result_contract is None
+            ):
                 raise ValueError("EXECUTION_REQUIREMENT_MULTI_QUERY_RESULT_UNRESOLVED")
         return self
 
@@ -264,6 +312,7 @@ __all__ = [
     "CalculationRequirement",
     "CalculationOperation",
     "ExecutionRequirement",
+    "ExecutionResultContract",
     "ExecutionRoute",
     "QueryRequirement",
     "execution_requirement_from_state",

@@ -211,6 +211,9 @@ def _build_context(data: AnswerComposerInput, card: CaliberCard) -> dict[str, An
         ],
         "caliber_card": card.model_dump(mode="json", exclude_none=True),
     }
+    result_contract = execution.get("result_contract")
+    if isinstance(result_contract, dict):
+        context["result_contract"] = result_contract
     result_sets = _result_set_context(execution)
     if result_sets:
         context["result_sets"] = result_sets

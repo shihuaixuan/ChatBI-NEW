@@ -76,6 +76,7 @@ def _semantic_parse(
     group_by: tuple[str, ...] = (),
     time_filters: tuple[dict[str, str], ...] = (),
     calculations: tuple[dict[str, Any], ...] = (),
+    multi_step: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """构造内置用例使用的已完成语义解析结果。"""
 
@@ -87,6 +88,7 @@ def _semantic_parse(
         "time_filters": list(time_filters),
         "order_by": [],
         "calculations": list(calculations),
+        "multi_step": multi_step,
         "unresolved": [],
     }
 
@@ -179,6 +181,49 @@ CASES = (
         expected_operations=("topn_other",),
     ),
     PlanCase(
+        name="fixed_drilldown",
+        description="总量与档口层级的固定下钻结果",
+        semantic_parse=_semantic_parse(
+            measures=("METRIC:271:246",),
+            time_filters=({"expression": "2026年6月30日", "role": "single"},),
+            multi_step={
+                "type": "fixed_drilldown",
+                "metric_refs": ["METRIC:271:246"],
+                "levels": [
+                    {
+                        "id": "stall",
+                        "dimension_refs": ["DIMENSION:278:246"],
+                    }
+                ],
+                "include_total": True,
+                "primary_level": "stall",
+            },
+        ),
+        expected_query_count=2,
+        expected_operations=(),
+    ),
+    PlanCase(
+        name="fixed_attribution",
+        description="总 GMV 日变化按档口进行固定贡献归因",
+        semantic_parse=_semantic_parse(
+            measures=("METRIC:271:246",),
+            time_filters=(
+                {"expression": "2026年6月30日", "role": "current"},
+                {"expression": "2026年6月29日", "role": "previous"},
+            ),
+            multi_step={
+                "type": "fixed_attribution",
+                "metric_ref": "METRIC:271:246",
+                "dimension_ref": "DIMENSION:278:246",
+                "current_time_role": "current",
+                "previous_time_role": "previous",
+                "method": "additive_change_contribution",
+            },
+        ),
+        expected_query_count=4,
+        expected_operations=("difference", "difference", "contribution"),
+    ),
+    PlanCase(
         name="fast_boundary",
         description="单模型单查询必须停留在 Fast，不允许进入 Plan",
         semantic_parse=_semantic_parse(measures=("METRIC:271:246",)),
@@ -237,6 +282,21 @@ def _candidate_groups(
             *(item.target_ref for item in semantic_parse.order_by),
         ]
     )
+    multi_step = semantic_parse.multi_step
+    if multi_step is not None and multi_step.type == "fixed_drilldown":
+        refs.update(dict.fromkeys(multi_step.metric_refs))
+        refs.update(
+            dict.fromkeys(
+                ref for level in multi_step.levels for ref in level.dimension_refs
+            )
+        )
+    elif multi_step is not None and multi_step.type == "fixed_attribution":
+        refs.update(
+            {
+                multi_step.metric_ref: None,
+                multi_step.dimension_ref: None,
+            }
+        )
     return {
         "metrics": [{"ref": ref} for ref in refs if ref.startswith("METRIC:")],
         "dimensions": [{"ref": ref} for ref in refs if ref.startswith("DIMENSION:")],
@@ -429,6 +489,35 @@ def _assert_primary_result(case: PlanCase, snapshot: ResultSetSnapshot) -> None:
             raise PlanCaseError("PLAN_CASE_TOPN_RESULT_INVALID")
         if not any(str(row.get("dimension_value")) == "OTHER" for row in rows):
             raise PlanCaseError("PLAN_CASE_TOPN_OTHER_ROW_MISSING")
+        return
+    if case.name == "fixed_drilldown":
+        if not rows or not {"stall_id", "gmv_total"} <= fields:
+            raise PlanCaseError("PLAN_CASE_DRILLDOWN_RESULT_INVALID")
+        return
+    if case.name == "fixed_attribution":
+        required = {
+            "stall_id",
+            "gmv_total_difference",
+            "total_difference",
+            "gmv_total_contribution",
+            "reconciliation_difference",
+        }
+        if not rows or not required <= fields:
+            raise PlanCaseError("PLAN_CASE_ATTRIBUTION_RESULT_INVALID")
+        if any(
+            not math.isclose(
+                _number(row, "reconciliation_difference"),
+                0.0,
+                abs_tol=1e-6,
+            )
+            for row in rows
+        ):
+            raise PlanCaseError("PLAN_CASE_ATTRIBUTION_RECONCILIATION_FAILED")
+        contribution_total = sum(
+            _number(row, "gmv_total_contribution") for row in rows
+        )
+        if not math.isclose(contribution_total, 1.0, abs_tol=1e-6):
+            raise PlanCaseError("PLAN_CASE_ATTRIBUTION_TOTAL_INVALID")
 
 
 def _run_case(

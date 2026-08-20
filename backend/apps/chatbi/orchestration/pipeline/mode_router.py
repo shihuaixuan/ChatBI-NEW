@@ -58,6 +58,35 @@ class ModeRouter:
             request.tenant_id,
             request.dataset_id,
         )
+        if (
+            semantic_parse.multi_step is not None
+            and semantic_parse.multi_step.type == "dynamic_research"
+        ):
+            if AgentExecutionMode.RESEARCH.value not in enabled:
+                raise ModeRoutingError("EXECUTION_MODE_NOT_AVAILABLE:research")
+            return ExecutionRequirement(
+                status="ready",
+                route=ExecutionRoute(
+                    mode=AgentExecutionMode.RESEARCH.value,
+                    reasons=(
+                        "dynamic_research",
+                        semantic_parse.multi_step.reason,
+                    ),
+                ),
+                runtime={
+                    "tenant_id": request.tenant_id,
+                    "datasource_id": request.datasource_id,
+                    "dataset_id": request.dataset_id,
+                    "schema_version": schema.schema_version,
+                    "contract_version": schema.contract_version,
+                    "research_goal": semantic_parse.multi_step.goal,
+                },
+                asset_snapshot={
+                    "schema_version": schema.schema_version,
+                    "contract_version": schema.contract_version,
+                    "schema_fingerprint": schema.schema_fingerprint,
+                },
+            ).model_dump(mode="json")
         selected_refs = _selected_refs(semantic_parse)
         candidates = self._resolve_candidates(request, schema, set(selected_refs))
         missing_refs = sorted(set(selected_refs) - set(candidates))
@@ -132,6 +161,12 @@ class ModeRouter:
         """按模型和时间角色拆分查询，并生成查询后计算要求。"""
 
         semantic_parse = request.semantic_parse
+        if semantic_parse.multi_step is not None:
+            return self._build_multi_step_requirements(
+                request,
+                schema,
+                candidates,
+            )
         metric_refs = [item.ref for item in semantic_parse.measures]
         dimension_refs = [item.ref for item in semantic_parse.group_by]
         selected_refs = _selected_refs(semantic_parse)
@@ -229,6 +264,31 @@ class ModeRouter:
             "post_calculations": post_calculations,
         }
 
+    def _build_multi_step_requirements(
+        self,
+        request: ModeRouteInput,
+        schema: DatasetSchema,
+        candidates: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """把固定多步语义确定性展开为完整查询和计算需求。"""
+
+        multi_step = request.semantic_parse.multi_step
+        if multi_step is None:
+            raise ModeRoutingError("SEMANTIC_MULTI_STEP_REQUIRED")
+        if multi_step.type == "fixed_drilldown":
+            return _build_fixed_drilldown_requirements(
+                request,
+                schema,
+                candidates,
+            )
+        if multi_step.type == "fixed_attribution":
+            return _build_fixed_attribution_requirements(
+                request,
+                schema,
+                candidates,
+            )
+        raise ModeRoutingError("SEMANTIC_MULTI_STEP_TYPE_UNSUPPORTED")
+
     @staticmethod
     def _select_mode(execution: dict[str, Any]) -> tuple[AgentExecutionMode, list[str]]:
         """只依据已生成的执行需求选择模式。"""
@@ -243,18 +303,259 @@ class ModeRouter:
             reasons.append("multiple_queries")
         if calculations:
             reasons.append("post_query_calculation")
+        result_contract = execution.get("result_contract")
+        if isinstance(result_contract, dict):
+            analysis_type = result_contract.get("analysis_type")
+            if analysis_type == "fixed_attribution" or (
+                analysis_type == "fixed_drilldown"
+                and (len(queries) > 1 or calculations)
+            ):
+                reasons.append(str(analysis_type))
         if not reasons:
             return AgentExecutionMode.FAST, ["single_model", "single_query"]
         return AgentExecutionMode.PLAN, reasons
 
 
 def _selected_refs(semantic_parse: SemanticParseOutput) -> list[str]:
-    return [
+    refs = [
         *(item.ref for item in semantic_parse.measures),
         *(item.ref for item in semantic_parse.group_by),
         *(item.target_ref for item in semantic_parse.filters),
         *(item.target_ref for item in semantic_parse.order_by),
     ]
+    multi_step = semantic_parse.multi_step
+    if multi_step is not None and multi_step.type == "fixed_drilldown":
+        refs.extend(multi_step.metric_refs)
+        refs.extend(
+            ref for level in multi_step.levels for ref in level.dimension_refs
+        )
+    elif multi_step is not None and multi_step.type == "fixed_attribution":
+        refs.extend((multi_step.metric_ref, multi_step.dimension_ref))
+    return list(dict.fromkeys(refs))
+
+
+def _build_fixed_drilldown_requirements(
+    request: ModeRouteInput,
+    schema: DatasetSchema,
+    candidates: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """展开固定下钻；层级结果保持独立，不使用 merge 混合粒度。"""
+
+    spec = request.semantic_parse.multi_step
+    if spec is None or spec.type != "fixed_drilldown":
+        raise ModeRoutingError("SEMANTIC_FIXED_DRILLDOWN_REQUIRED")
+    if spec.primary_level not in {level.id for level in spec.levels}:
+        raise ModeRoutingError("SEMANTIC_DRILLDOWN_PRIMARY_LEVEL_UNKNOWN")
+    metric_defs = [candidates[ref] for ref in spec.metric_refs]
+    model_ids = {item["model_id"] for item in metric_defs}
+    if len(model_ids) != 1:
+        raise ModeRoutingError("SEMANTIC_DRILLDOWN_SINGLE_MODEL_REQUIRED")
+    model_id = next(iter(model_ids))
+    previous_dimensions: tuple[str, ...] = ()
+    for level in spec.levels:
+        if level.dimension_refs[: len(previous_dimensions)] != previous_dimensions:
+            raise ModeRoutingError("SEMANTIC_DRILLDOWN_LEVEL_ORDER_INVALID")
+        if any(candidates[ref]["model_id"] != model_id for ref in level.dimension_refs):
+            raise ModeRoutingError("SEMANTIC_DRILLDOWN_DIMENSION_MODEL_MISMATCH")
+        previous_dimensions = level.dimension_refs
+
+    time_filters = list(request.semantic_parse.time_filters) or [None]
+    if len(time_filters) not in {1, 2}:
+        raise ModeRoutingError("SEMANTIC_DRILLDOWN_TIME_COUNT_UNSUPPORTED")
+    if len(time_filters) == 2 and {item.role for item in time_filters} != {
+        "current",
+        "previous",
+    }:
+        raise ModeRoutingError("SEMANTIC_DRILLDOWN_TIME_ROLES_INVALID")
+    common_filters = [
+        _filter_requirement(item, candidates[item.target_ref])
+        for item in request.semantic_parse.filters
+        if candidates[item.target_ref]["model_id"] == model_id
+    ]
+    query_requirements: list[dict[str, Any]] = []
+    level_ids = ["total"] if spec.include_total else []
+    level_ids.extend(level.id for level in spec.levels)
+    dimensions_by_level = {
+        "total": [],
+        **{
+            level.id: [candidates[ref] for ref in level.dimension_refs]
+            for level in spec.levels
+        },
+    }
+    for level_id in level_ids:
+        for time_filter in time_filters:
+            role = time_filter.role if time_filter is not None else "single"
+            query_requirements.append(
+                {
+                    "id": f"drilldown_{level_id}_{role}",
+                    "model_ref": f"MODEL:{model_id}",
+                    "metrics": metric_defs,
+                    "group_by": dimensions_by_level[level_id],
+                    "filters": common_filters,
+                    "time": _time_requirement(
+                        schema,
+                        model_id,
+                        time_filter,
+                        request.temporal_context,
+                    ),
+                    "order_by": [],
+                    "limit": request.semantic_parse.limit,
+                    "query_shape": {
+                        "shape": "fixed_drilldown",
+                        "level_id": level_id,
+                    },
+                }
+            )
+
+    result_ids: list[str] = []
+    calculations: list[dict[str, Any]] = []
+    if len(time_filters) == 2:
+        metric_names = [item["biz_name"] for item in metric_defs]
+        for level_id in level_ids:
+            result_id = f"drilldown_{level_id}_difference"
+            result_ids.append(result_id)
+            level_queries = [
+                item
+                for item in query_requirements
+                if item["id"].startswith(f"drilldown_{level_id}_")
+            ]
+            calculations.append(
+                {
+                    "id": result_id,
+                    "type": CalculationOperation.DIFFERENCE.value,
+                    "inputs": [item["id"] for item in level_queries],
+                    "join_keys": list(_common_group_columns(level_queries)),
+                    "value_columns": metric_names,
+                }
+            )
+    else:
+        result_ids = [item["id"] for item in query_requirements]
+
+    primary_result_id = (
+        f"drilldown_{spec.primary_level}_difference"
+        if len(time_filters) == 2
+        else f"drilldown_{spec.primary_level}_single"
+    )
+    supporting = [item for item in result_ids if item != primary_result_id]
+    return {
+        "query_requirements": query_requirements,
+        "post_calculations": calculations,
+        "result_contract": {
+            "primary_requirement_id": primary_result_id,
+            "supporting_requirement_ids": supporting,
+            "ordered_requirement_ids": result_ids,
+            "completion_policy": "require_primary",
+            "analysis_type": "fixed_drilldown",
+        },
+    }
+
+
+def _build_fixed_attribution_requirements(
+    request: ModeRouteInput,
+    schema: DatasetSchema,
+    candidates: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """展开加法指标的固定变化贡献归因。"""
+
+    spec = request.semantic_parse.multi_step
+    if spec is None or spec.type != "fixed_attribution":
+        raise ModeRoutingError("SEMANTIC_FIXED_ATTRIBUTION_REQUIRED")
+    metric = candidates[spec.metric_ref]
+    dimension = candidates[spec.dimension_ref]
+    if metric["model_id"] != dimension["model_id"]:
+        raise ModeRoutingError("SEMANTIC_ATTRIBUTION_DIMENSION_MODEL_MISMATCH")
+    metric_contract = next(
+        (
+            item
+            for item in schema.metric_contracts
+            if item.get("metric_id") == metric["asset_id"]
+        ),
+        None,
+    )
+    if not isinstance(metric_contract, dict) or metric_contract.get("additivity") != "FULL":
+        raise ModeRoutingError("SEMANTIC_ATTRIBUTION_FULL_ADDITIVITY_REQUIRED")
+    time_by_role = {item.role: item for item in request.semantic_parse.time_filters}
+    if spec.current_time_role not in time_by_role or spec.previous_time_role not in time_by_role:
+        raise ModeRoutingError("SEMANTIC_ATTRIBUTION_TIME_ROLES_REQUIRED")
+    model_id = metric["model_id"]
+    common_filters = [
+        _filter_requirement(item, candidates[item.target_ref])
+        for item in request.semantic_parse.filters
+        if candidates[item.target_ref]["model_id"] == model_id
+    ]
+    query_requirements = []
+    for scope_id, group_by in (("total", []), ("breakdown", [dimension])):
+        for role in (spec.current_time_role, spec.previous_time_role):
+            query_requirements.append(
+                {
+                    "id": f"attribution_{scope_id}_{role}",
+                    "model_ref": f"MODEL:{model_id}",
+                    "metrics": [metric],
+                    "group_by": group_by,
+                    "filters": common_filters,
+                    "time": _time_requirement(
+                        schema,
+                        model_id,
+                        time_by_role[role],
+                        request.temporal_context,
+                    ),
+                    "order_by": [],
+                    "limit": None,
+                    "query_shape": {
+                        "shape": "fixed_attribution",
+                        "scope": scope_id,
+                    },
+                }
+            )
+    metric_name = metric["biz_name"]
+    difference_column = f"{metric_name}_difference"
+    calculations = [
+        {
+            "id": "attribution_total_difference",
+            "type": CalculationOperation.DIFFERENCE.value,
+            "inputs": [
+                f"attribution_total_{spec.current_time_role}",
+                f"attribution_total_{spec.previous_time_role}",
+            ],
+            "value_columns": [metric_name],
+        },
+        {
+            "id": "attribution_breakdown_difference",
+            "type": CalculationOperation.DIFFERENCE.value,
+            "inputs": [
+                f"attribution_breakdown_{spec.current_time_role}",
+                f"attribution_breakdown_{spec.previous_time_role}",
+            ],
+            "join_keys": [dimension["column"]],
+            "value_columns": [metric_name],
+        },
+        {
+            "id": "attribution_contribution",
+            "type": CalculationOperation.CONTRIBUTION.value,
+            "inputs": [
+                "attribution_breakdown_difference",
+                "attribution_total_difference",
+            ],
+            "options": {
+                "dimensions": [dimension["column"]],
+                "difference_column": difference_column,
+                "total_difference_column": difference_column,
+                "output_column": f"{metric_name}_contribution",
+                "reconciliation_tolerance": 1e-6,
+            },
+        },
+    ]
+    return {
+        "query_requirements": query_requirements,
+        "post_calculations": calculations,
+        "result_contract": {
+            "primary_requirement_id": "attribution_contribution",
+            "supporting_requirement_ids": [],
+            "ordered_requirement_ids": ["attribution_contribution"],
+            "completion_policy": "require_primary",
+            "analysis_type": "fixed_attribution",
+        },
+    }
 
 
 def _asset_definition(element: SchemaElement) -> dict[str, Any]:
@@ -543,6 +844,7 @@ def _normalize_mode(value: str | None) -> str | None:
     if normalized not in {
         AgentExecutionMode.FAST.value,
         AgentExecutionMode.PLAN.value,
+        AgentExecutionMode.RESEARCH.value,
     }:
         raise ModeRoutingError(f"EXECUTION_MODE_INVALID:{normalized}")
     return normalized

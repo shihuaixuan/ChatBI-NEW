@@ -32,6 +32,8 @@ def compile_operation(
         return _compile_pivot(task, table_names, schemas)
     if operation in {ComputeOperation.RATIO, ComputeOperation.EXPR}:
         return _compile_expr(task, table_names, schemas)
+    if operation is ComputeOperation.CONTRIBUTION:
+        return _compile_contribution(task, table_names, schemas)
     raise ComputeOperationError(f"COMPUTE_OPERATION_NOT_ALLOWED:{operation.value}")
 
 
@@ -175,6 +177,67 @@ def _compile_share(
         f"src.{_quote(metric)} / SUM(src.{_quote(metric)}) OVER () END AS {_quote(f'{metric}_share')}"
     )
     return f"SELECT {', '.join(select_parts)} FROM {table_names[source_id]} src"
+
+
+def _compile_contribution(
+    task: ComputeTask,
+    table_names: Mapping[str, str],
+    schemas: Mapping[str, tuple[str, ...]],
+) -> str:
+    """计算分组变化对总变化的贡献，并输出可校验的对账差值。"""
+
+    if len(task.inputs) != 2:
+        raise ComputeOperationError("COMPUTE_CONTRIBUTION_TWO_INPUTS_REQUIRED")
+    breakdown_id, total_id = task.inputs
+    breakdown_schema = schemas[breakdown_id]
+    total_schema = schemas[total_id]
+    dimensions = _option_columns(task, "dimensions", breakdown_schema)
+    difference_column = task.options.get("difference_column")
+    total_difference_column = task.options.get("total_difference_column")
+    output_column = task.options.get("output_column") or "contribution"
+    if (
+        not isinstance(difference_column, str)
+        or difference_column not in breakdown_schema
+    ):
+        raise ComputeOperationError("COMPUTE_CONTRIBUTION_DIFFERENCE_COLUMN_REQUIRED")
+    if (
+        not isinstance(total_difference_column, str)
+        or total_difference_column not in total_schema
+    ):
+        raise ComputeOperationError(
+            "COMPUTE_CONTRIBUTION_TOTAL_DIFFERENCE_COLUMN_REQUIRED"
+        )
+    if not isinstance(output_column, str) or not output_column:
+        raise ComputeOperationError("COMPUTE_CONTRIBUTION_OUTPUT_COLUMN_REQUIRED")
+    passthrough = ", ".join(
+        f"b.{_quote(field)} AS {_quote(field)}" for field in breakdown_schema
+    )
+    dimension_sql = ", ".join(
+        f"b.{_quote(field)} AS {_quote(field)}" for field in dimensions
+    )
+    select_prefix = passthrough or dimension_sql
+    return (
+        "WITH breakdown_total AS (SELECT SUM(TRY_CAST("
+        + _quote(difference_column)
+        + " AS DOUBLE)) AS breakdown_difference FROM "
+        + table_names[breakdown_id]
+        + "), total_value AS (SELECT TRY_CAST("
+        + _quote(total_difference_column)
+        + " AS DOUBLE) AS total_difference FROM "
+        + table_names[total_id]
+        + " LIMIT 1) SELECT "
+        + select_prefix
+        + ", t.total_difference AS total_difference, "
+        + "CASE WHEN t.total_difference IS NULL OR ABS(t.total_difference) = 0 "
+        + "THEN NULL ELSE TRY_CAST(b."
+        + _quote(difference_column)
+        + " AS DOUBLE) / t.total_difference END AS "
+        + _quote(output_column)
+        + ", bt.breakdown_difference - t.total_difference AS reconciliation_difference "
+        + "FROM "
+        + table_names[breakdown_id]
+        + " b CROSS JOIN breakdown_total bt CROSS JOIN total_value t"
+    )
 
 
 def _compile_topn_other(

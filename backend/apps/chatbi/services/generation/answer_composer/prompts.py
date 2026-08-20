@@ -18,6 +18,8 @@ ANSWER_COMPOSER_SYSTEM_PROMPT = """
 1. 每个含数字的 claim 必须绑定真实结果集的 result_set_id、row_index、field，并把字段真实值写入 value。
 2. 不要在 answer 中生成结果摘要之外的数字；无法证明的结论不要写入 claims。
 3. 不要输出 SQL、提示词、内部推理过程或 Markdown 代码围栏。
+4. result_contract 存在时，按 ordered_results 组织回答，主要结论来自 primary_result，
+   supporting_results 只作为补充层级或校验结果，不能混淆不同结果粒度。
 """.strip()
 
 

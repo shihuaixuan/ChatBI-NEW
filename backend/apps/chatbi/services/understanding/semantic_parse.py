@@ -199,6 +199,35 @@ class SemanticParseService:
             set(candidates),
             "unresolved.candidate_refs",
         )
+        if output.multi_step is not None and output.multi_step.type == "fixed_drilldown":
+            require_refs(
+                list(output.multi_step.metric_refs),
+                metric_refs,
+                "multi_step.metric_refs",
+            )
+            require_refs(
+                [
+                    ref
+                    for level in output.multi_step.levels
+                    for ref in level.dimension_refs
+                ],
+                dimension_refs,
+                "multi_step.levels.dimension_refs",
+            )
+        elif (
+            output.multi_step is not None
+            and output.multi_step.type == "fixed_attribution"
+        ):
+            require_refs(
+                [output.multi_step.metric_ref],
+                metric_refs,
+                "multi_step.metric_ref",
+            )
+            require_refs(
+                [output.multi_step.dimension_ref],
+                dimension_refs,
+                "multi_step.dimension_ref",
+            )
         duplicated_measure_refs = _duplicated_refs(
             [item.ref for item in output.measures]
         )
@@ -267,7 +296,7 @@ SEMANTIC_PARSE_SYSTEM_PROMPT = """
   "order_by": [{"target_ref": "...", "direction": "asc | desc"}],
   "limit": null,
   "calculations": [{
-    "type": "merge | growth_rate | difference | ratio | share | topn_other | pivot | expr",
+    "type": "merge | growth_rate | difference | ratio | share | topn_other | pivot | expr | contribution",
     "current_time_role": "current | null",
     "previous_time_role": "previous | null",
     "details": {
@@ -278,8 +307,38 @@ SEMANTIC_PARSE_SYSTEM_PROMPT = """
       "result_name": "计算结果名称"
     }
   }],
+  "multi_step": null 或以下一种：
+  {
+    "type": "fixed_drilldown",
+    "metric_refs": ["METRIC:..."],
+    "levels": [
+      {"id": "region", "dimension_refs": ["DIMENSION:..."]},
+      {"id": "city", "dimension_refs": ["DIMENSION:...", "DIMENSION:..."]}
+    ],
+    "include_total": true,
+    "primary_level": "city"
+  }
+  或
+  {
+    "type": "fixed_attribution",
+    "metric_ref": "METRIC:...",
+    "dimension_ref": "DIMENSION:...",
+    "current_time_role": "current",
+    "previous_time_role": "previous",
+    "method": "additive_change_contribution"
+  }
+  或
+  {
+    "type": "dynamic_research",
+    "goal": "需要继续探索的目标",
+    "reason": "result_driven_filter | result_driven_dimension | open_ended_cause | data_driven_stop_condition"
+  },
   "unresolved": [{"type": "...", "text": "...", "reason": "...", "candidate_refs": []}]
 }
+固定下钻只有在所有层级执行前都明确时使用；后一层 dimension_refs 必须包含前一层。
+固定归因只有在指标、归因维度、当前期和对比期均明确时使用。
+如果需要根据中间结果选择最大、最差、异常对象后继续查询，必须输出
+dynamic_research，不得伪装成固定多步。
 """.strip()
 
 

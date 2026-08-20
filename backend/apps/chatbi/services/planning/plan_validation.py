@@ -114,6 +114,7 @@ class AnalysisPlanValidator:
                         ComputeOperation.MERGE,
                         ComputeOperation.DIFFERENCE,
                         ComputeOperation.GROWTH_RATE,
+                        ComputeOperation.CONTRIBUTION,
                     }
                     else 1
                 )
@@ -138,17 +139,24 @@ class AnalysisPlanValidator:
 
     @staticmethod
     def _validate_primary_result(plan: AnalysisPlan) -> list[str]:
-        """所有任务必须汇聚到唯一主要叶子结果。"""
+        """所有任务必须汇聚到明确声明的主要或辅助叶子结果。"""
 
         reverse: dict[str, set[str]] = {task.id: set() for task in plan.tasks}
         outgoing: set[str] = set()
         for edge in plan.edges:
             reverse[edge.target].add(edge.source)
             outgoing.add(edge.source)
-        if plan.presentation.primary_result in outgoing:
-            return ["PLAN_PRIMARY_RESULT_NOT_LEAF"]
-        reachable = {plan.presentation.primary_result}
-        pending = [plan.presentation.primary_result]
+        declared_results = {
+            plan.presentation.primary_result,
+            *plan.presentation.supporting_results,
+        }
+        if declared_results & outgoing:
+            return ["PLAN_PRESENTATION_RESULT_NOT_LEAF"]
+        actual_leaves = set(reverse) - outgoing
+        if declared_results != actual_leaves:
+            return ["PLAN_PRESENTATION_LEAVES_MISMATCH"]
+        reachable = set(declared_results)
+        pending = list(declared_results)
         while pending:
             node_id = pending.pop()
             for source in reverse[node_id]:

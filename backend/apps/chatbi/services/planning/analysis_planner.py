@@ -57,7 +57,22 @@ class AnalysisPlanner:
             self._compute_task(item, node_ids) for item in requirement.post_calculations
         )
         tasks: tuple[AnalysisTask, ...] = (*query_tasks, *compute_tasks)
-        primary_requirement_id = _primary_requirement_id(requirement)
+        result_contract = requirement.result_contract
+        primary_requirement_id = (
+            result_contract.primary_requirement_id
+            if result_contract is not None
+            else _primary_requirement_id(requirement)
+        )
+        supporting_requirement_ids = (
+            result_contract.supporting_requirement_ids
+            if result_contract is not None
+            else ()
+        )
+        ordered_requirement_ids = (
+            result_contract.ordered_requirement_ids
+            if result_contract is not None
+            else ()
+        )
         plan = AnalysisPlan(
             id=plan_id,
             tasks=tasks,
@@ -67,7 +82,18 @@ class AnalysisPlanner:
                 for input_id in task.inputs
             ),
             presentation=PresentationHint(
-                primary_result=node_ids[primary_requirement_id]
+                primary_result=node_ids[primary_requirement_id],
+                supporting_results=tuple(
+                    node_ids[item] for item in supporting_requirement_ids
+                ),
+                ordered_results=tuple(
+                    node_ids[item] for item in ordered_requirement_ids
+                ),
+                completion_policy=(
+                    result_contract.completion_policy
+                    if result_contract is not None
+                    else "require_primary"
+                ),
             ),
             validation=PlanValidation(
                 status=AnalysisPlanStatus.DRAFT,
@@ -146,6 +172,10 @@ def _primary_requirement_id(requirement: ExecutionRequirement) -> str:
 def _template_name(requirement: ExecutionRequirement) -> str:
     """模板只用于审计，DAG 仍由统一依赖契约生成。"""
 
+    if requirement.result_contract is not None and (
+        requirement.result_contract.analysis_type != "standard"
+    ):
+        return requirement.result_contract.analysis_type
     operations = tuple(item.type for item in requirement.post_calculations)
     if len(operations) == 1:
         return {
@@ -157,6 +187,7 @@ def _template_name(requirement: ExecutionRequirement) -> str:
             CalculationOperation.TOPN_OTHER: "topn_other",
             CalculationOperation.PIVOT: "pivot",
             CalculationOperation.EXPR: "expression",
+            CalculationOperation.CONTRIBUTION: "fixed_attribution",
         }[operations[0]]
     return "composed_calculations"
 

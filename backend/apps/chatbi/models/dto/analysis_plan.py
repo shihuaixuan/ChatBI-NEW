@@ -25,6 +25,7 @@ class ComputeOperation(StrEnum):
     TOPN_OTHER = "topn_other"
     PIVOT = "pivot"
     EXPR = "expr"
+    CONTRIBUTION = "contribution"
 
 
 class AnalysisPlanStatus(StrEnum):
@@ -116,7 +117,22 @@ class PresentationHint(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     primary_result: str = Field(min_length=1, max_length=128)
+    supporting_results: tuple[str, ...] = ()
+    ordered_results: tuple[str, ...] = ()
+    completion_policy: Literal["require_primary"] = "require_primary"
     chart_hint: str | None = None
+
+    @model_validator(mode="after")
+    def validate_result_declarations(self) -> PresentationHint:
+        declared = {self.primary_result, *self.supporting_results}
+        if len(declared) != 1 + len(self.supporting_results):
+            raise ValueError("ANALYSIS_PLAN_PRESENTATION_RESULT_DUPLICATED")
+        if self.ordered_results and (
+            len(self.ordered_results) != len(set(self.ordered_results))
+            or set(self.ordered_results) != declared
+        ):
+            raise ValueError("ANALYSIS_PLAN_PRESENTATION_ORDER_INVALID")
+        return self
 
 
 class PlanValidation(BaseModel):
@@ -152,7 +168,11 @@ class AnalysisPlan(BaseModel):
                 raise ValueError("ANALYSIS_PLAN_SELF_EDGE")
             if edge.source not in known_ids or edge.target not in known_ids:
                 raise ValueError("ANALYSIS_PLAN_EDGE_NODE_UNKNOWN")
-        if self.presentation.primary_result not in known_ids:
+        presentation_results = {
+            self.presentation.primary_result,
+            *self.presentation.supporting_results,
+        }
+        if not presentation_results <= known_ids:
             raise ValueError("ANALYSIS_PLAN_PRIMARY_RESULT_UNKNOWN")
         for task in self.tasks:
             if isinstance(task, ComputeTask) and any(

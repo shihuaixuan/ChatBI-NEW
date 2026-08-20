@@ -68,6 +68,8 @@ class ComputeEngine:
                 }
                 for row in values
             )
+            if task.operation.value == "contribution":
+                self._validate_contribution(task, rows)
             return ComputeExecution(sql=sql, fields=fields, rows=rows)
         finally:
             connection.close()
@@ -118,6 +120,26 @@ class ComputeEngine:
             raise ComputeEngineError("COMPUTE_INPUT_RESULT_SET_INVALID") from exc
 
     @staticmethod
+    def _validate_contribution(
+        task: ComputeTask,
+        rows: tuple[dict[str, Any], ...],
+    ) -> None:
+        """归因结果必须与总变化对账，不能带着不一致结果进入回答。"""
+
+        tolerance = task.options.get("reconciliation_tolerance", 1e-6)
+        if isinstance(tolerance, bool) or not isinstance(tolerance, int | float):
+            raise ComputeEngineError("COMPUTE_CONTRIBUTION_TOLERANCE_INVALID")
+        if tolerance < 0:
+            raise ComputeEngineError("COMPUTE_CONTRIBUTION_TOLERANCE_INVALID")
+        differences = [
+            row.get("reconciliation_difference")
+            for row in rows
+            if row.get("reconciliation_difference") is not None
+        ]
+        if any(abs(float(value)) > float(tolerance) for value in differences):
+            raise ComputeEngineError("COMPUTE_CONTRIBUTION_RECONCILIATION_FAILED")
+
+    @staticmethod
     def _empty_output_fields(
         task: ComputeTask,
         schemas: dict[str, tuple[str, ...]],
@@ -136,6 +158,9 @@ class ComputeEngine:
             if isinstance(index, list):
                 return tuple(str(item) for item in index if isinstance(item, str))
             return ()
+        if task.operation.value == "contribution":
+            output = task.options.get("output_column") or "contribution"
+            return (*schema, "total_difference", str(output), "reconciliation_difference")
         return (*schema, *(item.name for item in task.derive))
 
 

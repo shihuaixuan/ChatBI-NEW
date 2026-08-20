@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -57,6 +57,65 @@ class SemanticParseCalculation(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class SemanticParseDrilldownLevel(BaseModel):
+    """固定下钻的一层，维度引用按从粗到细的顺序累积。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(min_length=1, max_length=128)
+    dimension_refs: tuple[str, ...] = Field(min_length=1)
+
+
+class SemanticParseFixedDrilldown(BaseModel):
+    """执行前即可完整确定的固定下钻。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal["fixed_drilldown"] = "fixed_drilldown"
+    metric_refs: tuple[str, ...] = Field(min_length=1)
+    levels: tuple[SemanticParseDrilldownLevel, ...] = Field(min_length=1)
+    include_total: bool = False
+    primary_level: str = Field(min_length=1, max_length=128)
+
+
+class SemanticParseFixedAttribution(BaseModel):
+    """加法指标在两个明确时间范围之间的固定维度贡献归因。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal["fixed_attribution"] = "fixed_attribution"
+    metric_ref: str = Field(min_length=1)
+    dimension_ref: str = Field(min_length=1)
+    current_time_role: str = Field(default="current", min_length=1)
+    previous_time_role: str = Field(default="previous", min_length=1)
+    method: Literal["additive_change_contribution"] = (
+        "additive_change_contribution"
+    )
+
+
+class SemanticParseDynamicResearch(BaseModel):
+    """后续查询方向依赖中间结果的动态分析目标。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal["dynamic_research"] = "dynamic_research"
+    goal: str = Field(min_length=1)
+    reason: Literal[
+        "result_driven_filter",
+        "result_driven_dimension",
+        "open_ended_cause",
+        "data_driven_stop_condition",
+    ]
+
+
+SemanticParseMultiStep = Annotated[
+    SemanticParseFixedDrilldown
+    | SemanticParseFixedAttribution
+    | SemanticParseDynamicResearch,
+    Field(discriminator="type"),
+]
+
+
 class SemanticParseUnresolved(BaseModel):
     """需要后续澄清或无法安全确定的语义内容。"""
 
@@ -81,6 +140,7 @@ class SemanticParseOutput(BaseModel):
     order_by: list[SemanticParseOrderBy] = Field(default_factory=list)
     limit: int | None = Field(default=None, gt=0)
     calculations: list[SemanticParseCalculation] = Field(default_factory=list)
+    multi_step: SemanticParseMultiStep | None = None
     unresolved: list[SemanticParseUnresolved] = Field(default_factory=list)
 
 
@@ -88,6 +148,11 @@ __all__ = [
     "SemanticParseAssetRef",
     "SemanticParseCalculation",
     "SemanticParseFilter",
+    "SemanticParseFixedAttribution",
+    "SemanticParseFixedDrilldown",
+    "SemanticParseDrilldownLevel",
+    "SemanticParseDynamicResearch",
+    "SemanticParseMultiStep",
     "SemanticParseOrderBy",
     "SemanticParseOutput",
     "SemanticParseTimeFilter",
