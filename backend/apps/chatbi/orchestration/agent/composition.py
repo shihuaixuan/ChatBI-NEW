@@ -10,6 +10,9 @@ from sqlmodel import Session
 from apps.chatbi.adapters.prompts.limited_multistep import (
     DefaultLimitedMultiStepPromptBuilder,
 )
+from apps.chatbi.adapters.prompts.research_policy import (
+    DefaultResearchPolicyPromptBuilder,
+)
 from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.composition import (
     build_agent_event_publisher,
@@ -39,6 +42,10 @@ from apps.chatbi.orchestration.pipeline.plan_mode import (
     PlanPipeline,
     PlanPipelineDependencies,
 )
+from apps.chatbi.orchestration.pipeline.research import (
+    ResearchPipeline,
+    ResearchPipelineDependencies,
+)
 from apps.chatbi.services.computation import ComputeEngine
 from apps.chatbi.services.execution import (
     QueryTaskExecutor,
@@ -52,6 +59,7 @@ from apps.chatbi.services.planning import (
     LimitedMultiStepDecomposer,
     PhysicalSchemaService,
 )
+from apps.chatbi.services.research.policy import ResearchPolicy
 from apps.chatbi.services.understanding import SemanticParseService
 from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
@@ -267,6 +275,25 @@ def build_run_orchestrator(
         )
     else:
         resolved_query_task_executor = query_task_executor
+    resolved_plan_pipeline = PlanPipeline(
+        PlanPipelineDependencies(
+            registry=resolved_registry,
+            result_processor=result_processor,
+            finalization_service=resolved_finalization_service,
+            lifecycle=lifecycle,
+            event_publisher=resolved_publisher,
+            session=session,
+            max_query_tasks=resolved_config.plan_max_query_tasks,
+            query_task_executor=resolved_query_task_executor,
+            query_concurrency=resolved_config.plan_query_concurrency,
+            query_timeout_seconds=resolved_config.tool_timeout_seconds,
+            compute_engine=ComputeEngine(),
+            compute_enabled=resolved_config.compute_enabled,
+            answer_composer=resolved_answer_composer,
+            metrics=metrics_recorder,
+            trace_recorder=resolved_recorder,
+        )
+    )
     return RunOrchestrator(
         session,
         event_publisher=resolved_publisher,
@@ -294,23 +321,16 @@ def build_run_orchestrator(
                 trace_recorder=resolved_recorder,
             )
         ),
-        plan_pipeline=PlanPipeline(
-            PlanPipelineDependencies(
-                registry=resolved_registry,
-                result_processor=result_processor,
-                finalization_service=resolved_finalization_service,
+        plan_pipeline=resolved_plan_pipeline,
+        research_pipeline=ResearchPipeline(
+            ResearchPipelineDependencies(
+                policy=ResearchPolicy(
+                    model_service,
+                    DefaultResearchPolicyPromptBuilder(),
+                ),
+                plan_pipeline=resolved_plan_pipeline,
                 lifecycle=lifecycle,
-                event_publisher=resolved_publisher,
                 session=session,
-                max_query_tasks=resolved_config.plan_max_query_tasks,
-                query_task_executor=resolved_query_task_executor,
-                query_concurrency=resolved_config.plan_query_concurrency,
-                query_timeout_seconds=resolved_config.tool_timeout_seconds,
-                compute_engine=ComputeEngine(),
-                compute_enabled=resolved_config.compute_enabled,
-                answer_composer=resolved_answer_composer,
-                metrics=metrics_recorder,
-                trace_recorder=resolved_recorder,
             )
         ),
     )

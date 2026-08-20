@@ -551,7 +551,7 @@ def _run_case(
     schema: DatasetSchema,
     temporal_context: Any,
     requirement_override: ExecutionRequirement | None = None,
-) -> None:
+) -> ResultSetSnapshot | None:
     print(f"\n{'=' * 80}\n用例：{case.name}｜{case.description}\n{'=' * 80}")
     semantic_parse = SemanticParseOutput.model_validate(case.semantic_parse)
     candidates = _candidate_groups(semantic_parse)
@@ -588,7 +588,7 @@ def _run_case(
         raise PlanCaseError("PLAN_CASE_OPERATIONS_MISMATCH")
     if case.expected_route == "fast":
         print(f"\n[{case.name}] 边界验证通过：该用例没有错误进入 Plan。")
-        return
+        return None
     requirement.require_ready("plan")
 
     plan_id = f"manual-{case.name}"
@@ -682,7 +682,7 @@ def _run_case(
     _print_stage(case, "7. AnalysisPlan PROVEN", proven_plan.model_dump(mode="json"))
     if args.plan_only:
         print(f"\n[{case.name}] Plan-only 验证通过。")
-        return
+        return None
 
     batches = build_execution_batches(proven_plan)
     _print_stage(
@@ -812,6 +812,7 @@ def _run_case(
         },
     )
     print(f"\n[{case.name}] 完整 Plan 验证通过。")
+    return primary
 
 
 def main() -> int:

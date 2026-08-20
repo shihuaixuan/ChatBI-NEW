@@ -17,6 +17,7 @@ class ExecutionRoute(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     mode: Literal["fast", "plan", "research"]
+    origin: Literal["request", "research_action"] = "request"
     reasons: tuple[str, ...] = ()
 
 
@@ -337,7 +338,11 @@ class ExecutionRequirement(BaseModel):
             if declared != leaves:
                 raise ValueError("EXECUTION_REQUIREMENT_RESULT_LEAVES_MISMATCH")
         if self.route.mode == "plan":
-            if len(self.query_requirements) == 1 and not self.post_calculations:
+            if (
+                len(self.query_requirements) == 1
+                and not self.post_calculations
+                and self.route.origin != "research_action"
+            ):
                 raise ValueError("EXECUTION_REQUIREMENT_PLAN_SHAPE_INVALID")
             if (
                 len(self.query_requirements) > 1

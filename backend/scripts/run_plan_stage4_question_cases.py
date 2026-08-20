@@ -18,9 +18,20 @@ from apps.chatbi.adapters.prompts.limited_multistep import (
 from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.composition import build_query_service, build_semantic_parse_service
 from apps.chatbi.models.dto.execution_requirement import ExecutionRequirement
+from apps.chatbi.models.dto.research import (
+    ResearchBreakdownAction,
+    ResearchFilterFromResultAction,
+    ResearchFocusedAnalysis,
+    ResearchRowSelector,
+)
 from apps.chatbi.orchestration.pipeline.mode_router import ModeRouteInput, ModeRouter
 from apps.chatbi.services.execution import QueryTaskExecutor
 from apps.chatbi.services.planning.limited_multistep import LimitedMultiStepDecomposer
+from apps.chatbi.services.research.actions import (
+    initial_compare_action,
+    materialize_research_action,
+)
+from apps.chatbi.services.research.evidence import project_evidence_snapshot
 from apps.semantic.composition import (
     build_semantic_schema_service,
     build_semantic_sql_compilation_service,
@@ -252,6 +263,165 @@ def main() -> int:
                     "3. ResearchRequirement",
                     requirement.research_requirement.model_dump(mode="json"),
                 )
+                if case.execute:
+                    research = requirement.research_requirement
+                    initial = materialize_research_action(
+                        action=initial_compare_action(research),
+                        research_requirement=research,
+                        runtime=requirement.runtime,
+                        asset_snapshot=requirement.asset_snapshot,
+                        evidence_by_result={},
+                    )
+                    initial_result = _run_case(
+                        PlanCase(
+                            name="research_premise",
+                            description="Research 规则生成的现象确认",
+                            semantic_parse=semantic_parse.model_dump(mode="json"),
+                            expected_query_count=len(
+                                initial.requirement.query_requirements
+                            ),
+                            expected_operations=tuple(
+                                item.type.value
+                                for item in initial.requirement.post_calculations
+                            ),
+                            expected_route="plan",
+                        ),
+                        args,
+                        schema_provider=schema_provider,
+                        sql_compilation_service=sql_compilation_service,
+                        query_service=query_service,
+                        query_task_executor=query_task_executor,
+                        schema=schema,
+                        temporal_context=temporal_context,
+                        requirement_override=initial.requirement,
+                    )
+                    if args.plan_only:
+                        print(f"\n[{case.name}] Research 初始子计划证明通过。")
+                        continue
+                    if initial_result is None:
+                        raise PlanCaseError("RESEARCH_INITIAL_RESULT_REQUIRED")
+                    initial_evidence = project_evidence_snapshot(
+                        materialized=initial,
+                        plan_id=initial_result.ref.plan_id,
+                        task_id=initial_result.ref.node_id,
+                        result_id=initial_result.ref.result_set_id,
+                        rows=[dict(row) for row in initial_result.rows],
+                        fields=list(initial_result.ref.fields),
+                        evidence_index=1,
+                        max_rows=research.budget.max_evidence_rows,
+                        max_chars=research.budget.max_evidence_chars,
+                    )
+                    _print_stage(
+                        case,
+                        "4. 现象确认 EvidenceSnapshot",
+                        initial_evidence.model_dump(mode="json"),
+                    )
+
+                    target_dimension_ref = case.dimension_refs[0]
+                    breakdown_action = ResearchBreakdownAction(
+                        metric_ref=research.target_metric_refs[0],
+                        dimension_ref=target_dimension_ref,
+                        calculation="difference",
+                        time_roles=("current", "previous"),
+                    )
+                    breakdown = materialize_research_action(
+                        action=breakdown_action,
+                        research_requirement=research,
+                        runtime=requirement.runtime,
+                        asset_snapshot=requirement.asset_snapshot,
+                        evidence_by_result={
+                            initial_evidence.result_id: initial_evidence
+                        },
+                    )
+                    breakdown_result = _run_case(
+                        PlanCase(
+                            name="research_breakdown",
+                            description="Research 按用户目标维度拆分变化",
+                            semantic_parse=semantic_parse.model_dump(mode="json"),
+                            expected_query_count=2,
+                            expected_operations=("difference",),
+                            expected_route="plan",
+                        ),
+                        args,
+                        schema_provider=schema_provider,
+                        sql_compilation_service=sql_compilation_service,
+                        query_service=query_service,
+                        query_task_executor=query_task_executor,
+                        schema=schema,
+                        temporal_context=temporal_context,
+                        requirement_override=breakdown.requirement,
+                    )
+                    if breakdown_result is None:
+                        raise PlanCaseError("RESEARCH_BREAKDOWN_RESULT_REQUIRED")
+                    breakdown_evidence = project_evidence_snapshot(
+                        materialized=breakdown,
+                        plan_id=breakdown_result.ref.plan_id,
+                        task_id=breakdown_result.ref.node_id,
+                        result_id=breakdown_result.ref.result_set_id,
+                        rows=[dict(row) for row in breakdown_result.rows],
+                        fields=list(breakdown_result.ref.fields),
+                        evidence_index=2,
+                        max_rows=research.budget.max_evidence_rows,
+                        max_chars=research.budget.max_evidence_chars,
+                    )
+                    _print_stage(
+                        case,
+                        "5. Breakdown EvidenceSnapshot",
+                        breakdown_evidence.model_dump(mode="json"),
+                    )
+                    next_dimension_ref = next(
+                        (
+                            ref
+                            for ref in research.scope.dimension_refs
+                            if ref != target_dimension_ref
+                        ),
+                        None,
+                    )
+                    focused = ResearchFocusedAnalysis(
+                        type="breakdown" if next_dimension_ref else "compare",
+                        metric_refs=research.target_metric_refs,
+                        time_roles=("current", "previous"),
+                        dimension_ref=next_dimension_ref,
+                    )
+                    follow_up_action = ResearchFilterFromResultAction(
+                        source_result_id=breakdown_evidence.result_id,
+                        row_selector=ResearchRowSelector(
+                            rank=1,
+                            order_by=breakdown_evidence.row_order,
+                            direction="asc",
+                        ),
+                        target_dimension_ref=target_dimension_ref,
+                        analysis=focused,
+                    )
+                    follow_up = materialize_research_action(
+                        action=follow_up_action,
+                        research_requirement=research,
+                        runtime=requirement.runtime,
+                        asset_snapshot=requirement.asset_snapshot,
+                        evidence_by_result={
+                            breakdown_evidence.result_id: breakdown_evidence
+                        },
+                    )
+                    _run_case(
+                        PlanCase(
+                            name="research_filter_follow_up",
+                            description="从 Breakdown 结果选择下降最大对象继续分析",
+                            semantic_parse=semantic_parse.model_dump(mode="json"),
+                            expected_query_count=2,
+                            expected_operations=("difference",),
+                            expected_route="plan",
+                        ),
+                        args,
+                        schema_provider=schema_provider,
+                        sql_compilation_service=sql_compilation_service,
+                        query_service=query_service,
+                        query_task_executor=query_task_executor,
+                        schema=schema,
+                        temporal_context=temporal_context,
+                        requirement_override=follow_up.requirement,
+                    )
+                    print(f"\n[{case.name}] Research 第二阶段真实动态链路通过。")
+                    continue
             elif requirement.research_requirement is not None:
                 raise PlanCaseError("RESEARCH_REQUIREMENT_MODE_MISMATCH")
             if not case.execute:

@@ -41,7 +41,7 @@
     "expected_mode": "research",
     "expected_query_count": 0,
     "expected_operations": [],
-    "execute": false
+    "execute": true
   },
   {
     "name": "fast_rule_boundary",

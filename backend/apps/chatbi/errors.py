@@ -67,6 +67,33 @@ class ResearchRequirementError(ChatBIError, ValueError):
         super().__init__(code)
 
 
+class ResearchExecutionError(ChatBIError, RuntimeError):
+    """Research 动态循环的模型决策、动作或预算不满足执行条件。"""
+
+    MODEL_CALL_FAILED = "RESEARCH_MODEL_CALL_FAILED"
+    POLICY_OUTPUT_INVALID = "RESEARCH_POLICY_OUTPUT_INVALID"
+    ACTION_NOT_ALLOWED = "RESEARCH_ACTION_NOT_ALLOWED"
+    ACTION_SCOPE_INVALID = "RESEARCH_ACTION_SCOPE_INVALID"
+    ACTION_DUPLICATED = "RESEARCH_ACTION_DUPLICATED"
+    ACTION_SOURCE_UNKNOWN = "RESEARCH_ACTION_SOURCE_UNKNOWN"
+    ACTION_SOURCE_COLUMN_UNKNOWN = "RESEARCH_ACTION_SOURCE_COLUMN_UNKNOWN"
+    ACTION_SOURCE_ROW_UNKNOWN = "RESEARCH_ACTION_SOURCE_ROW_UNKNOWN"
+    ACTION_MATERIALIZATION_FAILED = "RESEARCH_ACTION_MATERIALIZATION_FAILED"
+    BUDGET_EXHAUSTED = "RESEARCH_BUDGET_EXHAUSTED"
+    COMPARISON_REQUIRED = "RESEARCH_COMPARISON_REQUIRED"
+    EVIDENCE_RESULT_INVALID = "RESEARCH_EVIDENCE_RESULT_INVALID"
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.code = code
+        self.details = dict(details or {})
+        super().__init__(code)
+
+
 class AgentActionError(ChatBIError, ValueError):
     """Agent 提出的动作不满足当前可信进展。"""
 
@@ -214,6 +241,7 @@ __all__ = [
     "ExecutionBindingError",
     "FinalReplyProjectionError",
     "LimitedMultiStepDecompositionError",
+    "ResearchExecutionError",
     "ResearchRequirementError",
     "PermissionSQLGenerationError",
     "QueryResultProjectionError",

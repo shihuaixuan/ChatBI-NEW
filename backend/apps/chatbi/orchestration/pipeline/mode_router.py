@@ -103,6 +103,44 @@ class ModeRouter:
                 )
             except ResearchRequirementError as exc:
                 raise ModeRoutingError(exc.code) from exc
+            research_refs = {
+                *research_requirement.target_metric_refs,
+                *research_requirement.scope.dimension_refs,
+                *research_requirement.scope.driver_metric_refs,
+                *(item.target_ref for item in research_requirement.immutable_filters),
+            }
+            schema_elements = {
+                **{f"METRIC:{item.id}:{item.model}": item for item in schema.metrics},
+                **{
+                    f"DIMENSION:{item.id}:{item.model}": item
+                    for item in schema.dimensions
+                },
+            }
+            research_assets = {
+                ref: {
+                    **_asset_definition(schema_elements[ref]),
+                    "description": str(schema_elements[ref].description or ""),
+                }
+                for ref in sorted(research_refs)
+                if ref in schema_elements
+            }
+            missing_research_assets = sorted(research_refs - set(research_assets))
+            if missing_research_assets:
+                raise ModeRoutingError(
+                    "RESEARCH_ASSET_SNAPSHOT_INCOMPLETE:"
+                    + ",".join(missing_research_assets)
+                )
+            time_assets = {
+                item.dimension_ref: {
+                    **_asset_definition(schema_elements[item.dimension_ref]),
+                    "description": str(
+                        schema_elements[item.dimension_ref].description or ""
+                    ),
+                }
+                for item in research_requirement.time_bindings
+                if item.dimension_ref in schema_elements
+            }
+            research_assets.update(time_assets)
             return ExecutionRequirement(
                 status="ready",
                 route=ExecutionRoute(
@@ -123,6 +161,8 @@ class ModeRouter:
                     "schema_version": schema.schema_version,
                     "contract_version": schema.contract_version,
                     "schema_fingerprint": schema.schema_fingerprint,
+                    # 执行资产保留在服务端快照中，Research Policy 只读取清理后的逻辑目录。
+                    "research_assets": research_assets,
                 },
                 research_requirement=research_requirement,
             ).model_dump(mode="json")

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -94,7 +94,8 @@ def _task_time_range(
 
     direct_range = getattr(task_spec, "time_range", None)
     if isinstance(direct_range, dict):
-        return _canonical_time_range(direct_range)
+        canonical = _canonical_time_range(direct_range)
+        return canonical if isinstance(canonical, dict) else None
     for raw_filter in getattr(task_spec, "filters", ()) or ():
         if not isinstance(raw_filter, dict):
             continue
@@ -102,7 +103,8 @@ def _task_time_range(
             continue
         value = raw_filter.get("value")
         if isinstance(value, dict) and (value.get("kind") or value.get("start")):
-            return _canonical_time_range(value)
+            canonical = _canonical_time_range(value)
+            return canonical if isinstance(canonical, dict) else None
     return None
 
 
@@ -111,7 +113,7 @@ def _time_ranges_equal(left: Any, right: Any) -> bool:
 
     if left is None or right is None:
         return left is None and right is None
-    return _canonical_time_range(left) == _canonical_time_range(right)
+    return bool(_canonical_time_range(left) == _canonical_time_range(right))
 
 
 class PlanPipelineError(RuntimeError):
@@ -140,6 +142,17 @@ class PlanPipelineDependencies:
     metrics: MetricsRecorder | None = None
     # 直接规划流水线也必须写入同一棵 Agent Trace 调用树。
     trace_recorder: AgentTraceRecorder | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PlanExecutionOutcome:
+    """完成证明和执行后的计划结果，供 Plan 回答与 Research 证据投影复用。"""
+
+    plan: AnalysisPlan
+    execution_records: dict[str, dict[str, Any]]
+    full_data_records: dict[str, list[dict[str, Any]]]
+    primary_execution: dict[str, Any]
+    primary_rows: list[dict[str, Any]]
 
 
 class PlanPipeline:
@@ -176,11 +189,103 @@ class PlanPipeline:
         if not isinstance(understanding, dict):
             understanding = {}
         execution_requirement = self._load_execution_requirement(state)
+        plan_id = f"plan-{run_id}"
+        outcome = yield from self.execute_requirement(
+            state,
+            execution_requirement,
+            plan_id=plan_id,
+        )
+        if outcome is None:
+            return
+        proven_plan = outcome.plan
+        execution_records = outcome.execution_records
+        full_data_records = outcome.full_data_records
+        primary_execution = outcome.primary_execution
+        primary_rows = primary_execution.get("sample_rows") or []
+        primary_full_data = outcome.primary_rows
+        answer_execution = {
+            **primary_execution,
+            "result_contract": proven_plan.presentation.model_dump(mode="json"),
+            "result_sets": {
+                str(execution.get("result_set_id") or task_id): {
+                    **execution,
+                    "rows": full_data_records.get(
+                        task_id,
+                        execution.get("sample_rows") or [],
+                    ),
+                }
+                for task_id, execution in execution_records.items()
+            },
+        }
+        state.context.state["last_execution"] = primary_execution
+        state.context.state["full_data"] = primary_full_data
+        intent = understanding.get("intent")
+        question = str(
+            state.context.state.get("question") or state.record.question or ""
+        )
+        if self._answer_composer is not None:
+            plan_payload = state.context.state.get("analysis_plan")
+            semantic_payload = state.context.state.get("semantic_scope")
+            composed = self._answer_composer.compose(
+                AnswerComposerInput(
+                    question=question,
+                    intent=intent if isinstance(intent, dict) else {},
+                    execution=answer_execution,
+                    rows=primary_full_data,
+                    plan=dict(plan_payload) if isinstance(plan_payload, dict) else {},
+                    semantic_context=(
+                        dict(semantic_payload)
+                        if isinstance(semantic_payload, dict)
+                        else {}
+                    ),
+                    mode="plan",
+                )
+            )
+            answer = composed.answer
+            chart = composed.chart
+            claims = list(getattr(composed, "claims", []) or [])
+            caliber_card = dict(getattr(composed, "caliber_card", {}) or {})
+            chart_spec = dict(getattr(composed, "chart_spec", {}) or {})
+        else:
+            generated = self._finalization_service.generate(
+                AgentFinalizationInput(
+                    question=question,
+                    intent=intent if isinstance(intent, dict) else {},
+                    execution=primary_execution,
+                    rows=primary_rows,
+                )
+            )
+            answer = generated.answer
+            chart = generated.chart
+            claims = list(getattr(generated, "claims", []) or [])
+            caliber_card = dict(getattr(generated, "caliber_card", {}) or {})
+            chart_spec = dict(getattr(generated, "chart_spec", {}) or {})
+        yield from self._lifecycle.finish(
+            state,
+            answer=answer,
+            chart=chart,
+            sql=primary_execution.get("sql"),
+            full_data=primary_full_data,
+            execution=primary_execution,
+            claims=claims,
+            caliber_card=caliber_card,
+            chart_spec=chart_spec,
+        )
+
+    def execute_requirement(
+        self,
+        state: AgentRuntimeState,
+        execution_requirement: ExecutionRequirement,
+        *,
+        plan_id: str,
+    ) -> Generator[RenderEvent, None, PlanExecutionOutcome | None]:
+        """生成、证明并执行一个完整 Plan 需求，但不生成最终回答。"""
+
+        run_id = state.require_run_id()
         try:
             execution_requirement.require_ready("plan")
         except ValueError as exc:
             raise PlanPipelineError(str(exc)) from exc
-        plan_id = f"plan-{run_id}"
         dataset_id = execution_requirement.runtime.get("dataset_id")
         if not isinstance(dataset_id, int) or isinstance(dataset_id, bool):
             dataset_id = state.context.dataset_id or 0
@@ -205,7 +310,6 @@ class PlanPipeline:
         self._session.commit()
         if plan.validation.status is AnalysisPlanStatus.REJECTED:
             if "PLAN_QUERY_GROUP_LIMIT_EXCEEDED" in plan.validation.reason_codes:
-                # 预算超限是内部计划复杂度错误，不能转换为用户信息不足澄清。
                 raise PlanPipelineError(
                     "PLAN_QUERY_GROUP_LIMIT_EXCEEDED",
                     "查询组数量超过系统计划上限，请拆分为多个问题",
@@ -221,7 +325,7 @@ class PlanPipeline:
         if scope is not None and scope.semantic_enforcement == "STRICT":
             self._ensure_strict_query_plans_ready(scope, query_tasks)
 
-        # 整个计划先完成编译和 SQL 校验，任何查询都不能在计划整体证明前执行。
+        # 完整子计划必须先全部编译和校验，达到 PROVEN 后才允许执行任何查询。
         completed_tasks: dict[str, QueryTask] = {}
         for query_index, task in enumerate(query_tasks):
             compiled = self._compile_task(state, task, strict_query_index=query_index)
@@ -256,7 +360,6 @@ class PlanPipeline:
                 "status": AnalysisPlanStatus.PROVEN.value,
             },
         )
-
         execution_records: dict[str, dict[str, Any]] = {}
         full_data_records: dict[str, list[dict[str, Any]]] = {}
         cancelled = yield from self._execute_plan_batches(
@@ -266,69 +369,21 @@ class PlanPipeline:
             full_data_records,
         )
         if cancelled:
-            return
-
+            return None
         primary_result_id = proven_plan.presentation.primary_result
         primary_execution = execution_records.get(primary_result_id)
         if primary_execution is None:
             raise PlanPipelineError("PLAN_PRIMARY_RESULT_MISSING")
-        primary_rows = primary_execution.get("sample_rows") or []
-        primary_full_data = full_data_records.get(primary_result_id, primary_rows)
-        answer_execution = {
-            **primary_execution,
-            "result_contract": proven_plan.presentation.model_dump(mode="json"),
-            "result_sets": {
-                str(execution.get("result_set_id") or task_id): {
-                    **execution,
-                    "rows": full_data_records.get(
-                        task_id,
-                        execution.get("sample_rows") or [],
-                    ),
-                }
-                for task_id, execution in execution_records.items()
-            },
-        }
-        state.context.state["last_execution"] = primary_execution
-        state.context.state["full_data"] = primary_full_data
-        intent = understanding.get("intent")
-        question = str(
-            state.context.state.get("question") or state.record.question or ""
+        primary_rows = full_data_records.get(
+            primary_result_id,
+            primary_execution.get("sample_rows") or [],
         )
-        if self._answer_composer is not None:
-            final = self._answer_composer.compose(
-                AnswerComposerInput(
-                    question=question,
-                    intent=intent if isinstance(intent, dict) else {},
-                    execution=answer_execution,
-                    rows=primary_full_data,
-                    plan=state.context.state.get("analysis_plan")
-                    if isinstance(state.context.state.get("analysis_plan"), dict)
-                    else {},
-                    semantic_context=state.context.state.get("semantic_scope")
-                    if isinstance(state.context.state.get("semantic_scope"), dict)
-                    else {},
-                    mode="plan",
-                )
-            )
-        else:
-            final = self._finalization_service.generate(
-                AgentFinalizationInput(
-                    question=question,
-                    intent=intent if isinstance(intent, dict) else {},
-                    execution=primary_execution,
-                    rows=primary_rows,
-                )
-            )
-        yield from self._lifecycle.finish(
-            state,
-            answer=final.answer,
-            chart=final.chart,
-            sql=primary_execution.get("sql"),
-            full_data=primary_full_data,
-            execution=primary_execution,
-            claims=list(getattr(final, "claims", []) or []),
-            caliber_card=dict(getattr(final, "caliber_card", {}) or {}),
-            chart_spec=dict(getattr(final, "chart_spec", {}) or {}),
+        return PlanExecutionOutcome(
+            plan=proven_plan,
+            execution_records=execution_records,
+            full_data_records=full_data_records,
+            primary_execution=primary_execution,
+            primary_rows=primary_rows,
         )
 
     def _execute_plan_batches(
@@ -337,7 +392,7 @@ class PlanPipeline:
         plan: AnalysisPlan,
         execution_records: dict[str, dict[str, Any]],
         full_data_records: dict[str, list[dict[str, Any]]],
-    ) -> Iterator[RenderEvent]:
+    ) -> Generator[RenderEvent, None, bool]:
         """按拓扑批次并行执行，所有共享状态只在主线程更新。"""
 
         try:
@@ -438,16 +493,14 @@ class PlanPipeline:
                 )
             self._persist_state(state)
 
-            query_tasks = [
-                tasks[task_id]
-                for task_id in executable_ids
-                if isinstance(tasks[task_id], QueryTask)
-            ]
-            compute_tasks = [
-                tasks[task_id]
-                for task_id in executable_ids
-                if isinstance(tasks[task_id], ComputeTask)
-            ]
+            query_tasks: list[QueryTask] = []
+            compute_tasks: list[ComputeTask] = []
+            for task_id in executable_ids:
+                executable_task = tasks[task_id]
+                if isinstance(executable_task, QueryTask):
+                    query_tasks.append(executable_task)
+                else:
+                    compute_tasks.append(executable_task)
             query_results = self._run_query_batch(state, query_tasks, task_states)
             compute_results = self._run_compute_batch(state, compute_tasks)
 
@@ -511,12 +564,15 @@ class PlanPipeline:
                             ),
                         )
                         continue
+                    attempt_value = task_states[task_id]["attempt"]
+                    if not isinstance(attempt_value, int):
+                        raise PlanPipelineError("PLAN_TASK_ATTEMPT_INVALID")
                     execution, rows = self._register_compute_result(
                         state,
                         plan.id,
                         task,
                         computed,
-                        attempt=int(task_states[task_id]["attempt"]),
+                        attempt=attempt_value,
                     )
                     yield self._events.compute_finished(
                         state.require_run_id(),
@@ -592,6 +648,15 @@ class PlanPipeline:
             for value in (context.datasource_id, context.oid, context.user_id)
         ):
             raise PlanPipelineError("PLAN_QUERY_OWNERSHIP_REQUIRED")
+        datasource_id = context.datasource_id
+        workspace_id = context.oid
+        user_id = context.user_id
+        if not isinstance(datasource_id, int) or isinstance(datasource_id, bool):
+            raise PlanPipelineError("PLAN_QUERY_OWNERSHIP_REQUIRED")
+        if not isinstance(workspace_id, int) or isinstance(workspace_id, bool):
+            raise PlanPipelineError("PLAN_QUERY_OWNERSHIP_REQUIRED")
+        if not isinstance(user_id, int) or isinstance(user_id, bool):
+            raise PlanPipelineError("PLAN_QUERY_OWNERSHIP_REQUIRED")
         deadline = time.monotonic() + min(
             self._query_timeout_seconds,
             state.budget.remaining_seconds(),
@@ -606,9 +671,9 @@ class PlanPipeline:
                     task_id=task.id,
                     attempt=int(task_states[task.id]["attempt"]),
                     sql=compiled.sql,
-                    datasource_id=context.datasource_id,
-                    workspace_id=context.oid,
-                    user_id=context.user_id,
+                    datasource_id=datasource_id,
+                    workspace_id=workspace_id,
+                    user_id=user_id,
                     selected_tables=compiled.tables,
                     deadline_monotonic=deadline,
                     cancellation=state.cancellation,
@@ -1233,7 +1298,12 @@ class PlanPipeline:
         state.context.session.commit()
 
 
-__all__ = ["PlanPipeline", "PlanPipelineDependencies", "PlanPipelineError"]
+__all__ = [
+    "PlanExecutionOutcome",
+    "PlanPipeline",
+    "PlanPipelineDependencies",
+    "PlanPipelineError",
+]
 
 
 def _pipeline_trace_node_type(name: str) -> TraceNodeType:

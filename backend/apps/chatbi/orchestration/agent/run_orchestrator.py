@@ -28,6 +28,10 @@ from apps.chatbi.orchestration.pipeline.mode_router import (
     ModeRoutingError,
 )
 from apps.chatbi.orchestration.pipeline.plan_mode import PlanPipeline, PlanPipelineError
+from apps.chatbi.orchestration.pipeline.research import (
+    ResearchPipeline,
+    ResearchPipelineError,
+)
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.event import EventPublisher, RenderEvent
 from apps.trace import (
@@ -54,6 +58,7 @@ class RunOrchestrator:
         state_factory: AgentRuntimeStateFactory,
         fast_pipeline: FastPipeline | None = None,
         plan_pipeline: PlanPipeline | None = None,
+        research_pipeline: ResearchPipeline | None = None,
         mode_router: ModeRouter | None = None,
     ) -> None:
         self.session = session
@@ -64,6 +69,7 @@ class RunOrchestrator:
         self.state_factory = state_factory
         self.fast_pipeline = fast_pipeline
         self.plan_pipeline = plan_pipeline
+        self.research_pipeline = research_pipeline
         if mode_router is None:
             raise ValueError("AGENT_MODE_ROUTER_REQUIRED")
         self.mode_router = mode_router
@@ -159,6 +165,16 @@ class RunOrchestrator:
                     try:
                         yield from self.plan_pipeline.run(state)
                     except PlanPipelineError as exc:
+                        yield from self.lifecycle.fail(
+                            state,
+                            str(exc),
+                            AgentErrorClass.PLAN_INVALID.value,
+                            error_details={"code": exc.code},
+                        )
+                elif selected_mode == "research" and self.research_pipeline is not None:
+                    try:
+                        yield from self.research_pipeline.run(state)
+                    except ResearchPipelineError as exc:
                         yield from self.lifecycle.fail(
                             state,
                             str(exc),

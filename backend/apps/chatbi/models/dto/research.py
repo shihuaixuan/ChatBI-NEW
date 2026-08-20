@@ -466,6 +466,7 @@ class EvidenceStatistics(BaseModel):
     positive_count: int | None = Field(default=None, ge=0)
     negative_count: int | None = Field(default=None, ge=0)
     null_count: int | None = Field(default=None, ge=0)
+    truncated: bool = False
 
     @model_validator(mode="after")
     def validate_counts(self) -> EvidenceStatistics:
@@ -497,6 +498,7 @@ class EvidenceLineage(BaseModel):
 
     plan_id: str = Field(min_length=1)
     task_id: str = Field(min_length=1)
+    action_fingerprint: str = Field(min_length=1)
 
 
 class EvidenceSnapshot(BaseModel):
@@ -511,6 +513,7 @@ class EvidenceSnapshot(BaseModel):
     dimension_refs: tuple[str, ...] = ()
     time_roles: tuple[str, ...] = ()
     logical_columns: tuple[EvidenceLogicalColumn, ...] = Field(min_length=1)
+    row_order: ResearchRowOrder
     statistics: EvidenceStatistics
     top_rows: tuple[EvidenceRow, ...] = ()
     bottom_rows: tuple[EvidenceRow, ...] = ()
@@ -525,6 +528,12 @@ class EvidenceSnapshot(BaseModel):
             for value in row.values
         ):
             raise ValueError("RESEARCH_EVIDENCE_COLUMN_INDEX_UNKNOWN")
+        if not any(
+            column.metric_ref == self.row_order.metric_ref
+            and column.value_role == self.row_order.value_role
+            for column in self.logical_columns
+        ):
+            raise ValueError("RESEARCH_EVIDENCE_ROW_ORDER_COLUMN_UNKNOWN")
         return self
 
 
