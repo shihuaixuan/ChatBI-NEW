@@ -13,6 +13,7 @@ from apps.chatbi.models import (
     ChatbiAgentClarification,
     ChatbiAgentRun,
 )
+from apps.chatbi.models.dto.research import ResearchBudget
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
@@ -257,6 +258,8 @@ class RunOrchestrator:
             semantic_parse = SemanticParseOutput.model_validate(semantic_parse_payload)
         except ValueError as exc:
             raise ModeRoutingError("SEMANTIC_PARSE_STATE_INVALID") from exc
+        research_defaults = ResearchBudget()
+        config = state.context.config
         result = self.mode_router.route(
             ModeRouteInput(
                 semantic_parse=semantic_parse,
@@ -269,6 +272,49 @@ class RunOrchestrator:
                 ),
                 temporal_context=state.temporal_context,
                 datasource_id=state.context.datasource_id,
+                research_budget=ResearchBudget(
+                    max_iterations=getattr(
+                        config,
+                        "research_max_iterations",
+                        research_defaults.max_iterations,
+                    ),
+                    max_queries=getattr(
+                        config,
+                        "research_max_queries",
+                        research_defaults.max_queries,
+                    ),
+                    max_model_calls=getattr(
+                        config,
+                        "research_max_model_calls",
+                        research_defaults.max_model_calls,
+                    ),
+                    max_actions_per_iteration=(
+                        getattr(
+                            config,
+                            "research_max_actions_per_iteration",
+                            research_defaults.max_actions_per_iteration,
+                        )
+                    ),
+                    max_duration_seconds=(
+                        getattr(
+                            config,
+                            "research_max_duration_seconds",
+                            research_defaults.max_duration_seconds,
+                        )
+                    ),
+                    max_evidence_rows=getattr(
+                        config,
+                        "research_max_evidence_rows",
+                        research_defaults.max_evidence_rows,
+                    ),
+                    max_evidence_chars=(
+                        getattr(
+                            config,
+                            "research_max_evidence_chars",
+                            research_defaults.max_evidence_chars,
+                        )
+                    ),
+                ),
             )
         )
         state.context.state["execution_requirement"] = result

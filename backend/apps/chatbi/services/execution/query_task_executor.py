@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from apps.datasource.models.dto.query import (
+from apps.datasource import (
     DatasourceQueryData,
     DatasourceQueryRequest,
+    DatasourceQueryService,
     DatasourceQueryStatus,
     DatasourceQuerySubject,
 )
-from apps.datasource.services import DatasourceQueryService
 from apps.tool.context import (
     CancellationSignal,
     ToolCallContext,

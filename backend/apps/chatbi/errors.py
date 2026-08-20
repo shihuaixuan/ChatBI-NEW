@@ -45,6 +45,28 @@ class LimitedMultiStepDecompositionError(ChatBIError, RuntimeError):
         super().__init__(code)
 
 
+class ResearchRequirementError(ChatBIError, ValueError):
+    """Research 执行范围无法形成完整、可信的需求。"""
+
+    TARGET_METRIC_REQUIRED = "RESEARCH_TARGET_METRIC_REQUIRED"
+    TARGET_METRIC_SINGLE_MODEL_REQUIRED = (
+        "RESEARCH_TARGET_METRIC_SINGLE_MODEL_REQUIRED"
+    )
+    TARGET_METRIC_NOT_FOUND = "RESEARCH_TARGET_METRIC_NOT_FOUND"
+    DIMENSION_NOT_FOUND = "RESEARCH_DIMENSION_NOT_FOUND"
+    DIMENSION_MODEL_MISMATCH = "RESEARCH_DIMENSION_MODEL_MISMATCH"
+    TIME_ROLE_DUPLICATED = "RESEARCH_TIME_ROLE_DUPLICATED"
+    TIME_CONTEXT_REQUIRED = "RESEARCH_TIME_CONTEXT_REQUIRED"
+    TIME_DIMENSION_REQUIRED = "RESEARCH_TIME_DIMENSION_REQUIRED"
+    TIME_RANGE_UNRESOLVED = "RESEARCH_TIME_RANGE_UNRESOLVED"
+    SCHEMA_FINGERPRINT_REQUIRED = "RESEARCH_SCHEMA_FINGERPRINT_REQUIRED"
+    SCOPE_EMPTY = "RESEARCH_SCOPE_EMPTY"
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
 class AgentActionError(ChatBIError, ValueError):
     """Agent 提出的动作不满足当前可信进展。"""
 
@@ -192,6 +214,7 @@ __all__ = [
     "ExecutionBindingError",
     "FinalReplyProjectionError",
     "LimitedMultiStepDecompositionError",
+    "ResearchRequirementError",
     "PermissionSQLGenerationError",
     "QueryResultProjectionError",
     "SQLGenerationError",

@@ -99,7 +99,7 @@ class SemanticParseDynamicResearch(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     type: Literal["dynamic_research"] = "dynamic_research"
-    goal: str = Field(min_length=1)
+    goal: str = Field(min_length=1, max_length=1000)
     reason: Literal[
         "result_driven_filter",
         "result_driven_dimension",

@@ -63,6 +63,13 @@ class AgentConfig(BaseModel):
     execution_modes: tuple[str, ...] = ("fast", "plan")
     plan_max_query_tasks: int = Field(default=5, gt=0)
     plan_query_concurrency: int = Field(default=4, gt=0)
+    research_max_iterations: int = Field(default=6, gt=0, le=20)
+    research_max_queries: int = Field(default=8, gt=0, le=50)
+    research_max_model_calls: int = Field(default=8, gt=1, le=50)
+    research_max_actions_per_iteration: int = Field(default=3, gt=0, le=10)
+    research_max_duration_seconds: int = Field(default=300, gt=0, le=1800)
+    research_max_evidence_rows: int = Field(default=20, gt=0, le=100)
+    research_max_evidence_chars: int = Field(default=12_000, gt=0, le=100_000)
     compute_enabled: bool = True
     answer_citation_enforced: bool = True
     assisted_fallback_enabled: bool = False

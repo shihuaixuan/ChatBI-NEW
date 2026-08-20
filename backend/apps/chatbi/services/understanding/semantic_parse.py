@@ -386,6 +386,10 @@ calculations 中平铺多个互相没有输入关系的计算。
 dynamic_research，不得伪装成固定多步。
 dynamic_research 只表示后续查询方向依赖中间结果。如果当前指标和维度已经由候选唯一
 确定，status 仍然返回 resolved，measures 和 group_by 保留这些 ref，unresolved 返回 []。
+用户只说“深入分析”不能单独触发 dynamic_research。如果全部查询、计算和依赖在执行前
+可以确定，仍应使用普通 calculations、fixed_drilldown、fixed_attribution 或
+limited_multistep。只有筛选值、分析对象、维度、验证方向或停止条件必须依赖中间结果时，
+才能使用 dynamic_research。
 """.strip()
 
 

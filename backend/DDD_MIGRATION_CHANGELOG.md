@@ -2812,3 +2812,16 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
 4. 新增真实问题集和 `scripts/run_plan_stage4_question_cases.py`。使用数据集 243、数据源 13
    验证差值或增长率后继续 Top 3 + 其他的完整三批 DAG，并验证固定归因不调用模型、动态
    任务进入 Research、单查询保持 Fast。
+
+## Agentic ChatBI Research 第一阶段（2026-08-20）
+
+1. 新增 ResearchRequirement、ResearchScope、ResearchBudget、ResearchAction、Hypothesis、
+   EvidenceSnapshot、ResearchPolicyDecision 和 ResearchState 严格契约；Research 路由不能再
+   使用 runtime 中的 goal 临时载荷。
+2. 新增确定性研究范围构建：只使用已绑定目标、用户明确维度、指标-维度能力契约和派生指标
+   显式引用，冻结时间、筛选、动作、预算、Schema 版本与范围指纹；范围为空或契约不完整时
+   明确失败。
+3. ExecutionRequirement 增加 Research 专属形状校验，Fast/Plan 不得携带 Research 契约；
+   AgentConfig 增加研究预算配置，但默认仍不启用 Research 执行器，不兼容旧链路。
+4. 契约、路由和 Fast 回归测试通过；使用数据集 243 的真实动态问题验证语义解析与完整
+   ResearchRequirement 输出，未执行第二阶段研究循环。

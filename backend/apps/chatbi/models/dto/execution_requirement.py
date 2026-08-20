@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from apps.chatbi.models.dto.analysis_plan import QueryTaskSpec
+from apps.chatbi.models.dto.research import ResearchRequirement
 
 
 class ExecutionRoute(BaseModel):
@@ -256,7 +257,7 @@ class CalculationRequirement(BaseModel):
 
 
 class ExecutionRequirement(BaseModel):
-    """Fast/Plan 执行阶段的唯一业务输入。"""
+    """Fast、Plan 和 Research 执行阶段的唯一业务输入。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -266,6 +267,7 @@ class ExecutionRequirement(BaseModel):
     post_calculations: tuple[CalculationRequirement, ...] = ()
     result_contract: ExecutionResultContract | None = None
     decomposition: ExecutionDecompositionAudit | None = None
+    research_requirement: ResearchRequirement | None = None
     runtime: dict[str, Any] = Field(default_factory=dict)
     asset_snapshot: dict[str, Any] = Field(default_factory=dict)
     unresolved: tuple[dict[str, Any], ...] = ()
@@ -300,6 +302,18 @@ class ExecutionRequirement(BaseModel):
             len(self.query_requirements) != 1 or self.post_calculations
         ):
             raise ValueError("EXECUTION_REQUIREMENT_FAST_SHAPE_INVALID")
+        if self.route.mode == "research":
+            if self.research_requirement is None:
+                raise ValueError("EXECUTION_REQUIREMENT_RESEARCH_REQUIRED")
+            if (
+                self.query_requirements
+                or self.post_calculations
+                or self.result_contract is not None
+                or self.decomposition is not None
+            ):
+                raise ValueError("EXECUTION_REQUIREMENT_RESEARCH_SHAPE_INVALID")
+        elif self.research_requirement is not None:
+            raise ValueError("EXECUTION_REQUIREMENT_RESEARCH_NOT_ALLOWED")
         if self.result_contract is not None:
             declared = {
                 self.result_contract.primary_requirement_id,

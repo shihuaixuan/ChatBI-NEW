@@ -151,6 +151,14 @@ from apps.chatbi.models.dto.recommended_question import (
     RecommendedQuestionGenerationData,
     RecommendedQuestionGenerationEvent,
 )
+from apps.chatbi.models.dto.research import (
+    EvidenceSnapshot,
+    ResearchAction,
+    ResearchPolicyDecision,
+    ResearchRequirement,
+    ResearchScope,
+    ResearchState,
+)
 from apps.chatbi.models.dto.result_artifact import (
     ChatBIResultArtifactRef,
     ResultArtifactReadInput,
@@ -198,6 +206,12 @@ __all__ = [
     "ExecutionRequirement",
     "ExecutionRoute",
     "QueryRequirement",
+    "ResearchAction",
+    "ResearchPolicyDecision",
+    "ResearchRequirement",
+    "ResearchScope",
+    "ResearchState",
+    "EvidenceSnapshot",
     "execution_requirement_from_state",
     "query_requirement_to_spec",
     "AgentClarificationRequest",

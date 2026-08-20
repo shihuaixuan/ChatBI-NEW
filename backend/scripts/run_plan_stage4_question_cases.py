@@ -244,6 +244,16 @@ def main() -> int:
                     raise PlanCaseError("STAGE4_DECOMPOSITION_AUDIT_REQUIRED")
             elif requirement.decomposition is not None:
                 raise PlanCaseError("STAGE4_RULE_CASE_CALLED_DECOMPOSER")
+            if case.expected_mode == "research":
+                if requirement.research_requirement is None:
+                    raise PlanCaseError("RESEARCH_REQUIREMENT_REQUIRED")
+                _print_stage(
+                    case,
+                    "3. ResearchRequirement",
+                    requirement.research_requirement.model_dump(mode="json"),
+                )
+            elif requirement.research_requirement is not None:
+                raise PlanCaseError("RESEARCH_REQUIREMENT_MODE_MISMATCH")
             if not case.execute:
                 print(f"\n[{case.name}] 语义与路由边界验证通过。")
                 continue

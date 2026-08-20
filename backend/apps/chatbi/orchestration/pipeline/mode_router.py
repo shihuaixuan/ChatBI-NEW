@@ -5,19 +5,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from apps.chatbi.errors import LimitedMultiStepDecompositionError
+from apps.chatbi.errors import (
+    LimitedMultiStepDecompositionError,
+    ResearchRequirementError,
+)
 from apps.chatbi.models.dto.execution_requirement import (
     CalculationOperation,
     DecompositionCalculationDraft,
     ExecutionRequirement,
     ExecutionRoute,
 )
+from apps.chatbi.models.dto.research import ResearchBudget
 from apps.chatbi.models.dto.semantic_parse import (
     SemanticParseOutput,
     SemanticParseTimeFilter,
 )
 from apps.chatbi.models.orm.agent_run import AgentExecutionMode
 from apps.chatbi.services.planning.limited_multistep import LimitedMultiStepDecomposer
+from apps.chatbi.services.research import build_research_requirement
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.temporal import TemporalContext
@@ -42,6 +47,7 @@ class ModeRouteInput:
     )
     temporal_context: TemporalContext | None = None
     datasource_id: int | None = None
+    research_budget: ResearchBudget | None = None
 
 
 class ModeRouter:
@@ -69,19 +75,41 @@ class ModeRouter:
             request.tenant_id,
             request.dataset_id,
         )
-        if (
-            semantic_parse.multi_step is not None
+        dynamic_research = (
+            semantic_parse.multi_step
+            if semantic_parse.multi_step is not None
             and semantic_parse.multi_step.type == "dynamic_research"
+            else None
+        )
+        if (
+            dynamic_research is not None
+            and AgentExecutionMode.RESEARCH.value not in enabled
         ):
-            if AgentExecutionMode.RESEARCH.value not in enabled:
-                raise ModeRoutingError("EXECUTION_MODE_NOT_AVAILABLE:research")
+            raise ModeRoutingError("EXECUTION_MODE_NOT_AVAILABLE:research")
+        selected_refs = _selected_refs(semantic_parse)
+        candidates = self._resolve_candidates(request, schema, set(selected_refs))
+        missing_refs = sorted(set(selected_refs) - set(candidates))
+        if missing_refs:
+            raise ModeRoutingError(
+                "SEMANTIC_PARSE_CANDIDATE_NOT_FOUND:" + ",".join(missing_refs)
+            )
+        if dynamic_research is not None:
+            try:
+                research_requirement = build_research_requirement(
+                    semantic_parse=semantic_parse,
+                    schema=schema,
+                    temporal_context=request.temporal_context,
+                    budget=request.research_budget,
+                )
+            except ResearchRequirementError as exc:
+                raise ModeRoutingError(exc.code) from exc
             return ExecutionRequirement(
                 status="ready",
                 route=ExecutionRoute(
                     mode=AgentExecutionMode.RESEARCH.value,
                     reasons=(
                         "dynamic_research",
-                        semantic_parse.multi_step.reason,
+                        dynamic_research.reason,
                     ),
                 ),
                 runtime={
@@ -90,21 +118,14 @@ class ModeRouter:
                     "dataset_id": request.dataset_id,
                     "schema_version": schema.schema_version,
                     "contract_version": schema.contract_version,
-                    "research_goal": semantic_parse.multi_step.goal,
                 },
                 asset_snapshot={
                     "schema_version": schema.schema_version,
                     "contract_version": schema.contract_version,
                     "schema_fingerprint": schema.schema_fingerprint,
                 },
+                research_requirement=research_requirement,
             ).model_dump(mode="json")
-        selected_refs = _selected_refs(semantic_parse)
-        candidates = self._resolve_candidates(request, schema, set(selected_refs))
-        missing_refs = sorted(set(selected_refs) - set(candidates))
-        if missing_refs:
-            raise ModeRoutingError(
-                "SEMANTIC_PARSE_CANDIDATE_NOT_FOUND:" + ",".join(missing_refs)
-            )
 
         execution = self._build_execution_requirements(request, schema, candidates)
         mode, reasons = self._select_mode(execution)
