@@ -1,0 +1,57 @@
+[
+  {
+    "name": "limited_difference_top3_other",
+    "question": "对比2026年6月30日和2026年6月29日各档口的总GMV，先计算每个档口的差值，再输出增长最大的3个档口，并把其余档口汇总为其他。",
+    "metric_refs": ["METRIC:271:246"],
+    "dimension_refs": ["DIMENSION:278:246"],
+    "expected_multi_step": "limited_multistep",
+    "expected_mode": "plan",
+    "expected_query_count": 2,
+    "expected_operations": ["difference", "topn_other"],
+    "execute": true
+  },
+  {
+    "name": "limited_growth_rate_top3_other",
+    "question": "对比2026年6月30日和2026年6月29日各档口总GMV的增长率，再输出增长率最高的3个档口，并把其余档口汇总为其他。",
+    "metric_refs": ["METRIC:271:246"],
+    "dimension_refs": ["DIMENSION:278:246"],
+    "expected_multi_step": "limited_multistep",
+    "expected_mode": "plan",
+    "expected_query_count": 2,
+    "expected_operations": ["growth_rate", "topn_other"],
+    "execute": true
+  },
+  {
+    "name": "fixed_attribution_rule_boundary",
+    "question": "对比2026年6月30日和2026年6月29日的总GMV，并按档口归因各档口对总变化的贡献。",
+    "metric_refs": ["METRIC:271:246"],
+    "dimension_refs": ["DIMENSION:278:246"],
+    "expected_multi_step": "fixed_attribution",
+    "expected_mode": "plan",
+    "expected_query_count": 4,
+    "expected_operations": ["difference", "difference", "contribution"],
+    "execute": false
+  },
+  {
+    "name": "dynamic_research_boundary",
+    "question": "先找出2026年6月30日比2026年6月29日总GMV下降最大的档口，再根据这个档口的数据继续分析下降原因。",
+    "metric_refs": ["METRIC:271:246"],
+    "dimension_refs": ["DIMENSION:278:246"],
+    "expected_multi_step": "dynamic_research",
+    "expected_mode": "research",
+    "expected_query_count": 0,
+    "expected_operations": [],
+    "execute": false
+  },
+  {
+    "name": "fast_rule_boundary",
+    "question": "查询2026年6月30日的总GMV。",
+    "metric_refs": ["METRIC:271:246"],
+    "dimension_refs": [],
+    "expected_multi_step": null,
+    "expected_mode": "fast",
+    "expected_query_count": 1,
+    "expected_operations": [],
+    "execute": false
+  }
+]

@@ -2799,3 +2799,16 @@ conversations/queries/interactions；`apps/chat/models/chat_model.py` 外部兼�
    DuckDB 确定性计算，并校验最终字段、差值、增长率、占比总和、比率和其他项结果。
 4. 脚本支持选择单个或多个用例、只运行到 PROVEN、限制输出采样行，以及列出全部用例；
    Ruff、严格 Mypy、Compileall 和 7 个真实分阶段用例通过。
+
+## Agentic ChatBI Plan 受限多步模型分解（2026-08-20）
+
+1. SemanticParse 增加 `limited_multistep`，明确区分固定规则 Plan、执行前可完整确定但规则
+   无法展开的有限多步任务，以及依赖中间结果的动态 Research。
+2. 新增受限分解服务和严格执行需求草案契约。模型只使用已绑定资产、时间角色和计算白名单，
+   正常调用一次；结构校验失败最多修复一次，不能输出 SQL、AnalysisPlan 或动态查询条件。
+3. ModeRouter 使用权威 Schema 和时间绑定物化正式执行需求，并校验资产范围、单模型查询、
+   计算输入、DAG、叶子结果、预算和加法归因条件；AnalysisPlanner 仍由规则生成计划并记录
+   分解模型审计。计算节点按 `inputs` 稳定拓扑排序，不依赖模型返回的数组顺序。
+4. 新增真实问题集和 `scripts/run_plan_stage4_question_cases.py`。使用数据集 243、数据源 13
+   验证差值或增长率后继续 Top 3 + 其他的完整三批 DAG，并验证固定归因不调用模型、动态
+   任务进入 Research、单查询保持 Fast。

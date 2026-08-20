@@ -43,8 +43,147 @@ class ExecutionResultContract(BaseModel):
     ordered_requirement_ids: tuple[str, ...] = ()
     completion_policy: Literal["require_primary"] = "require_primary"
     analysis_type: Literal[
-        "standard", "fixed_drilldown", "fixed_attribution"
+        "standard", "fixed_drilldown", "fixed_attribution", "limited_multistep"
     ] = "standard"
+
+
+class ExecutionDecompositionAudit(BaseModel):
+    """记录有限多步执行需求是否由受限模型分解。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal["llm"] = "llm"
+    model: str = Field(min_length=1)
+    prompt_version: str = Field(min_length=1)
+    attempts: int = Field(ge=1, le=2)
+    repaired: bool = False
+
+
+class DecompositionQueryDraft(BaseModel):
+    """模型只声明已绑定资产的查询组合，不包含物理字段和 SQL。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(min_length=1, max_length=128)
+    metric_refs: tuple[str, ...] = Field(min_length=1)
+    dimension_refs: tuple[str, ...] = ()
+    time_role: str = Field(min_length=1, max_length=64)
+
+
+class DecompositionCalculationDraft(BaseModel):
+    """有限多步模型可声明的白名单计算结构。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(min_length=1, max_length=128)
+    type: CalculationOperation
+    inputs: tuple[str, ...] = Field(min_length=1)
+    metric_refs: tuple[str, ...] = ()
+    dimension_refs: tuple[str, ...] = ()
+    numerator_ref: str | None = None
+    denominator_ref: str | None = None
+    result_name: str | None = Field(default=None, min_length=1, max_length=128)
+    top_n: int | None = Field(default=None, gt=0)
+    index_dimension_refs: tuple[str, ...] = ()
+    column_dimension_ref: str | None = None
+
+    @model_validator(mode="after")
+    def validate_operation_shape(self) -> DecompositionCalculationDraft:
+        """按操作限制草案字段，避免模型通过自由参数表达未授权逻辑。"""
+
+        if len(self.inputs) != len(set(self.inputs)):
+            raise ValueError("DECOMPOSITION_CALCULATION_INPUT_DUPLICATED")
+        if self.type is CalculationOperation.EXPR:
+            raise ValueError("DECOMPOSITION_EXPR_NOT_ALLOWED")
+        if self.type is CalculationOperation.MERGE and len(self.inputs) < 2:
+            raise ValueError("DECOMPOSITION_MERGE_INPUTS_REQUIRED")
+        if self.type in {
+            CalculationOperation.DIFFERENCE,
+            CalculationOperation.GROWTH_RATE,
+        } and (len(self.inputs) != 2 or not self.metric_refs):
+            raise ValueError("DECOMPOSITION_PERIOD_CALCULATION_INVALID")
+        if self.type is CalculationOperation.SHARE and (
+            len(self.inputs) != 1
+            or len(self.metric_refs) != 1
+            or not self.dimension_refs
+        ):
+            raise ValueError("DECOMPOSITION_SHARE_SHAPE_INVALID")
+        if self.type is CalculationOperation.RATIO and (
+            len(self.inputs) not in {1, 2}
+            or not self.numerator_ref
+            or not self.denominator_ref
+            or not self.result_name
+        ):
+            raise ValueError("DECOMPOSITION_RATIO_SHAPE_INVALID")
+        if self.type is CalculationOperation.TOPN_OTHER and (
+            len(self.inputs) != 1
+            or len(self.metric_refs) != 1
+            or len(self.dimension_refs) != 1
+            or self.top_n is None
+        ):
+            raise ValueError("DECOMPOSITION_TOPN_SHAPE_INVALID")
+        if self.type is CalculationOperation.PIVOT and (
+            len(self.inputs) != 1
+            or len(self.metric_refs) != 1
+            or not self.index_dimension_refs
+            or not self.column_dimension_ref
+        ):
+            raise ValueError("DECOMPOSITION_PIVOT_SHAPE_INVALID")
+        if self.type is CalculationOperation.CONTRIBUTION and (
+            len(self.inputs) != 2
+            or len(self.metric_refs) != 1
+            or not self.dimension_refs
+        ):
+            raise ValueError("DECOMPOSITION_CONTRIBUTION_SHAPE_INVALID")
+        return self
+
+
+class ExecutionRequirementDraft(BaseModel):
+    """有限多步模型的候选输出，校验通过后才能补齐为正式执行需求。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query_requirements: tuple[DecompositionQueryDraft, ...] = Field(min_length=1)
+    post_calculations: tuple[DecompositionCalculationDraft, ...] = Field(min_length=1)
+    result_contract: ExecutionResultContract
+
+    @model_validator(mode="after")
+    def validate_graph(self) -> ExecutionRequirementDraft:
+        """草案必须形成完整 DAG，且结果契约完整覆盖全部叶子。"""
+
+        query_ids = [item.id for item in self.query_requirements]
+        calculation_ids = [item.id for item in self.post_calculations]
+        if len(query_ids) != len(set(query_ids)):
+            raise ValueError("DECOMPOSITION_QUERY_ID_DUPLICATED")
+        if len(calculation_ids) != len(set(calculation_ids)):
+            raise ValueError("DECOMPOSITION_CALCULATION_ID_DUPLICATED")
+        if set(query_ids) & set(calculation_ids):
+            raise ValueError("DECOMPOSITION_ID_CONFLICT")
+        known_ids = set(query_ids) | set(calculation_ids)
+        dependencies = {item.id: item.inputs for item in self.post_calculations}
+        for item in self.post_calculations:
+            if item.id in item.inputs:
+                raise ValueError("DECOMPOSITION_SELF_DEPENDENCY")
+            if any(input_id not in known_ids for input_id in item.inputs):
+                raise ValueError("DECOMPOSITION_INPUT_UNKNOWN")
+        _validate_acyclic_dependencies(dependencies)
+        declared = {
+            self.result_contract.primary_requirement_id,
+            *self.result_contract.supporting_requirement_ids,
+        }
+        ordered = self.result_contract.ordered_requirement_ids
+        if not declared <= known_ids:
+            raise ValueError("DECOMPOSITION_RESULT_ID_UNKNOWN")
+        if ordered and (len(ordered) != len(set(ordered)) or set(ordered) != declared):
+            raise ValueError("DECOMPOSITION_RESULT_ORDER_INVALID")
+        if not ordered:
+            raise ValueError("DECOMPOSITION_RESULT_ORDER_REQUIRED")
+        consumed = {
+            input_id for item in self.post_calculations for input_id in item.inputs
+        }
+        if declared != known_ids - consumed:
+            raise ValueError("DECOMPOSITION_RESULT_LEAVES_MISMATCH")
+        return self
 
 
 class QueryRequirement(BaseModel):
@@ -126,6 +265,7 @@ class ExecutionRequirement(BaseModel):
     query_requirements: tuple[QueryRequirement, ...] = ()
     post_calculations: tuple[CalculationRequirement, ...] = ()
     result_contract: ExecutionResultContract | None = None
+    decomposition: ExecutionDecompositionAudit | None = None
     runtime: dict[str, Any] = Field(default_factory=dict)
     asset_snapshot: dict[str, Any] = Field(default_factory=dict)
     unresolved: tuple[dict[str, Any], ...] = ()
@@ -311,7 +451,11 @@ def _validate_acyclic_dependencies(
 __all__ = [
     "CalculationRequirement",
     "CalculationOperation",
+    "DecompositionCalculationDraft",
+    "DecompositionQueryDraft",
+    "ExecutionDecompositionAudit",
     "ExecutionRequirement",
+    "ExecutionRequirementDraft",
     "ExecutionResultContract",
     "ExecutionRoute",
     "QueryRequirement",

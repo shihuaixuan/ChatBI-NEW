@@ -10,6 +10,11 @@ from apps.chatbi.services.planning.confidence import (
     ConfidenceSignals,
     assess_confidence,
 )
+from apps.chatbi.services.planning.dag_scheduler import (
+    AnalysisTaskExecutionStatus,
+    build_execution_batches,
+    task_dependencies,
+)
 from apps.chatbi.services.planning.datasource_candidates import (
     DatasourceSelectionCandidateRanker,
     DatasourceSelectionCandidateService,
@@ -18,14 +23,14 @@ from apps.chatbi.services.planning.datasource_selection import (
     DatasourceSelectionError,
     DatasourceSelectionService,
 )
-from apps.chatbi.services.planning.dag_scheduler import (
-    AnalysisTaskExecutionStatus,
-    build_execution_batches,
-    task_dependencies,
-)
 from apps.chatbi.services.planning.execution_binding import (
     ExecutionBindingError,
     resolve_execution_binding,
+)
+from apps.chatbi.services.planning.limited_multistep import (
+    LimitedMultiStepBudget,
+    LimitedMultiStepDecomposer,
+    LimitedMultiStepDecompositionResult,
 )
 from apps.chatbi.services.planning.physical_schema import (
     PhysicalSchemaAccessDeniedError,
@@ -51,6 +56,9 @@ __all__ = [
     "DatasourceSelectionPromptBuilder",
     "DatasourceSelectionService",
     "ExecutionBindingError",
+    "LimitedMultiStepBudget",
+    "LimitedMultiStepDecomposer",
+    "LimitedMultiStepDecompositionResult",
     "PhysicalSchemaService",
     "PhysicalSchemaAccessDeniedError",
     "resolve_execution_binding",

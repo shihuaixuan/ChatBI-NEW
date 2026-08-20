@@ -5,13 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from apps.chatbi.errors import LimitedMultiStepDecompositionError
 from apps.chatbi.models.dto.execution_requirement import (
     CalculationOperation,
+    DecompositionCalculationDraft,
     ExecutionRequirement,
     ExecutionRoute,
 )
-from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
+from apps.chatbi.models.dto.semantic_parse import (
+    SemanticParseOutput,
+    SemanticParseTimeFilter,
+)
 from apps.chatbi.models.orm.agent_run import AgentExecutionMode
+from apps.chatbi.services.planning.limited_multistep import LimitedMultiStepDecomposer
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.temporal import TemporalContext
@@ -41,10 +47,15 @@ class ModeRouteInput:
 class ModeRouter:
     """根据语义解析结果和候选资产生成执行需求。"""
 
-    def __init__(self, schema_provider: DatasetSchemaProvider) -> None:
+    def __init__(
+        self,
+        schema_provider: DatasetSchemaProvider,
+        limited_multistep_decomposer: LimitedMultiStepDecomposer | None = None,
+    ) -> None:
         if schema_provider is None:
             raise ValueError("MODE_ROUTER_SCHEMA_PROVIDER_REQUIRED")
         self._schema_provider = schema_provider
+        self._limited_multistep_decomposer = limited_multistep_decomposer
 
     def route(self, request: ModeRouteInput) -> dict[str, Any]:
         """完成资产补充、绑定校验、执行需求分析和模式判断。"""
@@ -287,6 +298,15 @@ class ModeRouter:
                 schema,
                 candidates,
             )
+        if multi_step.type == "limited_multistep":
+            if self._limited_multistep_decomposer is None:
+                raise ModeRoutingError("LIMITED_MULTISTEP_DECOMPOSER_REQUIRED")
+            return _build_limited_multistep_requirements(
+                request,
+                schema,
+                candidates,
+                self._limited_multistep_decomposer,
+            )
         raise ModeRoutingError("SEMANTIC_MULTI_STEP_TYPE_UNSUPPORTED")
 
     @staticmethod
@@ -306,7 +326,7 @@ class ModeRouter:
         result_contract = execution.get("result_contract")
         if isinstance(result_contract, dict):
             analysis_type = result_contract.get("analysis_type")
-            if analysis_type == "fixed_attribution" or (
+            if analysis_type in {"fixed_attribution", "limited_multistep"} or (
                 analysis_type == "fixed_drilldown"
                 and (len(queries) > 1 or calculations)
             ):
@@ -331,7 +351,422 @@ def _selected_refs(semantic_parse: SemanticParseOutput) -> list[str]:
         )
     elif multi_step is not None and multi_step.type == "fixed_attribution":
         refs.extend((multi_step.metric_ref, multi_step.dimension_ref))
+    elif multi_step is not None and multi_step.type == "limited_multistep":
+        refs.extend(multi_step.metric_refs)
+        refs.extend(multi_step.dimension_refs)
     return list(dict.fromkeys(refs))
+
+
+@dataclass(frozen=True, slots=True)
+class _LimitedOutputShape:
+    """草案物化期间跟踪逻辑资产对应的实际结果字段。"""
+
+    metric_fields: dict[str, str]
+    dimension_columns: dict[str, str]
+
+
+def _build_limited_multistep_requirements(
+    request: ModeRouteInput,
+    schema: DatasetSchema,
+    candidates: dict[str, dict[str, Any]],
+    decomposer: LimitedMultiStepDecomposer,
+) -> dict[str, Any]:
+    """调用一次受限模型分解，并用权威资产补齐正式执行需求。"""
+
+    spec = request.semantic_parse.multi_step
+    if spec is None or spec.type != "limited_multistep":
+        raise ModeRoutingError("SEMANTIC_LIMITED_MULTISTEP_REQUIRED")
+    if len(spec.allowed_time_roles) != len(set(spec.allowed_time_roles)):
+        raise ModeRoutingError("SEMANTIC_LIMITED_MULTISTEP_TIME_ROLE_DUPLICATED")
+    semantic_time_roles = tuple(item.role for item in request.semantic_parse.time_filters)
+    expected_time_roles = semantic_time_roles or ("single",)
+    if set(spec.allowed_time_roles) != set(expected_time_roles):
+        raise ModeRoutingError("SEMANTIC_LIMITED_MULTISTEP_TIME_ROLES_INVALID")
+    selected_metric_refs = set(spec.metric_refs)
+    selected_dimension_refs = set(spec.dimension_refs)
+    if not selected_metric_refs <= set(candidates):
+        raise ModeRoutingError("SEMANTIC_LIMITED_MULTISTEP_METRIC_BINDING_REQUIRED")
+    if not selected_dimension_refs <= set(candidates):
+        raise ModeRoutingError("SEMANTIC_LIMITED_MULTISTEP_DIMENSION_BINDING_REQUIRED")
+
+    metric_contracts = {
+        int(item["metric_id"]): item
+        for item in schema.metric_contracts
+        if isinstance(item, dict) and isinstance(item.get("metric_id"), int)
+    }
+    available_metrics = [
+        {
+            "ref": ref,
+            "display_name": candidates[ref]["display_name"],
+            "biz_name": candidates[ref]["biz_name"],
+            "model_ref": candidates[ref]["model_ref"],
+            "additivity": metric_contracts.get(
+                int(candidates[ref]["asset_id"]), {}
+            ).get("additivity"),
+        }
+        for ref in spec.metric_refs
+    ]
+    available_dimensions = [
+        {
+            "ref": ref,
+            "display_name": candidates[ref]["display_name"],
+            "biz_name": candidates[ref]["biz_name"],
+            "model_ref": candidates[ref]["model_ref"],
+        }
+        for ref in spec.dimension_refs
+    ]
+    allowed_operations = (
+        CalculationOperation.MERGE,
+        CalculationOperation.DIFFERENCE,
+        CalculationOperation.GROWTH_RATE,
+        CalculationOperation.SHARE,
+        CalculationOperation.RATIO,
+        CalculationOperation.TOPN_OTHER,
+        CalculationOperation.PIVOT,
+        CalculationOperation.CONTRIBUTION,
+    )
+    try:
+        decomposition = decomposer.decompose(
+            objective=spec.objective,
+            available_metrics=available_metrics,
+            available_dimensions=available_dimensions,
+            time_roles=spec.allowed_time_roles,
+            requested_outputs=spec.requested_outputs,
+            allowed_operations=allowed_operations,
+        )
+    except LimitedMultiStepDecompositionError as exc:
+        raise ModeRoutingError(exc.code) from exc
+    for calculation in decomposition.draft.post_calculations:
+        if calculation.type is not CalculationOperation.CONTRIBUTION:
+            continue
+        if any(
+            metric_contracts.get(int(candidates[ref]["asset_id"]), {}).get(
+                "additivity"
+            )
+            != "FULL"
+            for ref in calculation.metric_refs
+        ):
+            raise ModeRoutingError("LIMITED_MULTISTEP_CONTRIBUTION_FULL_REQUIRED")
+    time_by_role = {
+        item.role: item for item in request.semantic_parse.time_filters
+    }
+    query_requirements: list[dict[str, Any]] = []
+    shapes: dict[str, _LimitedOutputShape] = {}
+    for query in decomposition.draft.query_requirements:
+        metric_defs = [candidates[ref] for ref in query.metric_refs]
+        dimension_defs = [candidates[ref] for ref in query.dimension_refs]
+        model_ids = {
+            item["model_id"] for item in (*metric_defs, *dimension_defs)
+        }
+        if len(model_ids) != 1:
+            raise ModeRoutingError("LIMITED_MULTISTEP_QUERY_SINGLE_MODEL_REQUIRED")
+        model_id = next(iter(model_ids))
+        time_filter = time_by_role.get(query.time_role)
+        if query.time_role != "single" and time_filter is None:
+            raise ModeRoutingError("LIMITED_MULTISTEP_TIME_ROLE_NOT_BOUND")
+        filters = [
+            _filter_requirement(item, candidates[item.target_ref])
+            for item in request.semantic_parse.filters
+            if candidates[item.target_ref]["model_id"] == model_id
+        ]
+        query_requirements.append(
+            {
+                "id": query.id,
+                "model_ref": f"MODEL:{model_id}",
+                "metrics": metric_defs,
+                "group_by": dimension_defs,
+                "filters": filters,
+                "time": _time_requirement(
+                    schema,
+                    model_id,
+                    time_filter,
+                    request.temporal_context,
+                ),
+                "order_by": [],
+                "limit": None,
+                "query_shape": {"shape": "limited_multistep"},
+            }
+        )
+        shapes[query.id] = _LimitedOutputShape(
+            metric_fields={item["ref"]: item["biz_name"] for item in metric_defs},
+            dimension_columns={
+                item["ref"]: item["column"] for item in dimension_defs
+            },
+        )
+
+    calculations: list[dict[str, Any]] = []
+    for calculation in _ordered_limited_calculations(
+        decomposition.draft.post_calculations,
+        set(shapes),
+    ):
+        requirement, shape = _materialize_limited_calculation(
+            calculation,
+            shapes,
+            candidates,
+        )
+        calculations.append(requirement)
+        shapes[calculation.id] = shape
+    return {
+        "query_requirements": query_requirements,
+        "post_calculations": calculations,
+        "result_contract": decomposition.draft.result_contract.model_dump(mode="json"),
+        "decomposition": decomposition.audit.model_dump(mode="json"),
+    }
+
+
+def _ordered_limited_calculations(
+    calculations: tuple[DecompositionCalculationDraft, ...],
+    available_ids: set[str],
+) -> tuple[DecompositionCalculationDraft, ...]:
+    """按模型原始顺序稳定生成计算节点的拓扑序。"""
+
+    pending = list(calculations)
+    ordered: list[DecompositionCalculationDraft] = []
+    resolved_ids = set(available_ids)
+    while pending:
+        ready = [item for item in pending if set(item.inputs) <= resolved_ids]
+        if not ready:
+            raise ModeRoutingError("LIMITED_MULTISTEP_CALCULATION_ORDER_INVALID")
+        for item in ready:
+            pending.remove(item)
+            ordered.append(item)
+            resolved_ids.add(item.id)
+    return tuple(ordered)
+
+
+def _materialize_limited_calculation(
+    calculation: DecompositionCalculationDraft,
+    shapes: dict[str, _LimitedOutputShape],
+    candidates: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], _LimitedOutputShape]:
+    """把模型草案计算转换为现有白名单计算契约。"""
+
+    input_shapes = [shapes[item] for item in calculation.inputs]
+    common_dimensions = _common_limited_dimensions(input_shapes)
+    requirement: dict[str, Any] = {
+        "id": calculation.id,
+        "type": calculation.type.value,
+        "inputs": list(calculation.inputs),
+        "join_keys": list(common_dimensions.values()),
+    }
+    if calculation.type is CalculationOperation.MERGE:
+        metric_fields: dict[str, str] = {}
+        for shape in input_shapes:
+            duplicated = set(metric_fields) & set(shape.metric_fields)
+            if duplicated:
+                raise ModeRoutingError("LIMITED_MULTISTEP_MERGE_METRIC_DUPLICATED")
+            metric_fields.update(shape.metric_fields)
+        return requirement, _LimitedOutputShape(metric_fields, common_dimensions)
+
+    if calculation.type in {
+        CalculationOperation.DIFFERENCE,
+        CalculationOperation.GROWTH_RATE,
+    }:
+        value_columns = [
+            _same_metric_field(input_shapes, ref) for ref in calculation.metric_refs
+        ]
+        suffix = (
+            "difference"
+            if calculation.type is CalculationOperation.DIFFERENCE
+            else "growth_rate"
+        )
+        requirement["value_columns"] = value_columns
+        return requirement, _LimitedOutputShape(
+            {
+                ref: f"{field}_{suffix}"
+                for ref, field in zip(
+                    calculation.metric_refs,
+                    value_columns,
+                    strict=True,
+                )
+            },
+            common_dimensions,
+        )
+
+    if calculation.type is CalculationOperation.SHARE:
+        metric_ref = calculation.metric_refs[0]
+        metric_field = _limited_metric_field(input_shapes[0], metric_ref)
+        dimensions = _limited_dimension_columns(
+            input_shapes[0], calculation.dimension_refs
+        )
+        requirement["value_columns"] = [metric_field]
+        requirement["options"] = {"dimensions": list(dimensions)}
+        return requirement, _LimitedOutputShape(
+            {metric_ref: f"{metric_field}_share"},
+            dict(
+                zip(
+                    calculation.dimension_refs,
+                    dimensions,
+                    strict=True,
+                )
+            ),
+        )
+
+    if calculation.type is CalculationOperation.TOPN_OTHER:
+        metric_ref = calculation.metric_refs[0]
+        dimension_ref = calculation.dimension_refs[0]
+        metric_field = _limited_metric_field(input_shapes[0], metric_ref)
+        dimension_column = _limited_dimension_column(
+            input_shapes[0], dimension_ref
+        )
+        requirement["value_columns"] = [metric_field]
+        requirement["options"] = {
+            "dimension": dimension_column,
+            "top_n": calculation.top_n,
+        }
+        return requirement, _LimitedOutputShape(
+            {metric_ref: "metric_value"},
+            {dimension_ref: "dimension_value"},
+        )
+
+    if calculation.type is CalculationOperation.RATIO:
+        if calculation.numerator_ref is None or calculation.denominator_ref is None:
+            raise ModeRoutingError("LIMITED_MULTISTEP_RATIO_REFS_REQUIRED")
+        numerator_input, numerator_field = _find_limited_metric_input(
+            calculation.inputs,
+            input_shapes,
+            calculation.numerator_ref,
+        )
+        denominator_input, denominator_field = _find_limited_metric_input(
+            calculation.inputs,
+            input_shapes,
+            calculation.denominator_ref,
+        )
+        numerator_expr = (
+            numerator_field
+            if len(calculation.inputs) == 1
+            else f'{numerator_input}."{numerator_field}"'
+        )
+        denominator_expr = (
+            denominator_field
+            if len(calculation.inputs) == 1
+            else f'{denominator_input}."{denominator_field}"'
+        )
+        requirement["derive"] = [
+            {
+                "name": calculation.result_name,
+                "expr": f"{numerator_expr} / NULLIF({denominator_expr}, 0)",
+            }
+        ]
+        return requirement, _LimitedOutputShape({}, common_dimensions)
+
+    if calculation.type is CalculationOperation.PIVOT:
+        metric_ref = calculation.metric_refs[0]
+        metric_field = _limited_metric_field(input_shapes[0], metric_ref)
+        index_columns = _limited_dimension_columns(
+            input_shapes[0], calculation.index_dimension_refs
+        )
+        if calculation.column_dimension_ref is None:
+            raise ModeRoutingError("LIMITED_MULTISTEP_PIVOT_COLUMN_REQUIRED")
+        column = _limited_dimension_column(
+            input_shapes[0], calculation.column_dimension_ref
+        )
+        requirement["value_columns"] = [metric_field]
+        requirement["options"] = {
+            "index": list(index_columns),
+            "column": column,
+        }
+        return requirement, _LimitedOutputShape({}, {})
+
+    if calculation.type is CalculationOperation.CONTRIBUTION:
+        metric_ref = calculation.metric_refs[0]
+        breakdown_shape, total_shape = input_shapes
+        difference_column = _limited_metric_field(breakdown_shape, metric_ref)
+        total_difference_column = _limited_metric_field(total_shape, metric_ref)
+        dimensions = _limited_dimension_columns(
+            breakdown_shape, calculation.dimension_refs
+        )
+        output_column = f"{candidates[metric_ref]['biz_name']}_contribution"
+        requirement["options"] = {
+            "dimensions": list(dimensions),
+            "difference_column": difference_column,
+            "total_difference_column": total_difference_column,
+            "output_column": output_column,
+            "reconciliation_tolerance": 1e-6,
+        }
+        return requirement, _LimitedOutputShape(
+            {metric_ref: output_column},
+            dict(
+                zip(
+                    calculation.dimension_refs,
+                    dimensions,
+                    strict=True,
+                )
+            ),
+        )
+    raise ModeRoutingError("LIMITED_MULTISTEP_CALCULATION_UNSUPPORTED")
+
+
+def _common_limited_dimensions(
+    shapes: list[_LimitedOutputShape],
+) -> dict[str, str]:
+    if not shapes:
+        return {}
+    common_refs = set(shapes[0].dimension_columns)
+    for shape in shapes[1:]:
+        common_refs &= set(shape.dimension_columns)
+    result: dict[str, str] = {}
+    for ref in shapes[0].dimension_columns:
+        if ref not in common_refs:
+            continue
+        columns = {shape.dimension_columns[ref] for shape in shapes}
+        if len(columns) != 1:
+            raise ModeRoutingError("LIMITED_MULTISTEP_DIMENSION_COLUMN_MISMATCH")
+        result[ref] = next(iter(columns))
+    return result
+
+
+def _same_metric_field(
+    shapes: list[_LimitedOutputShape],
+    metric_ref: str,
+) -> str:
+    fields = {_limited_metric_field(shape, metric_ref) for shape in shapes}
+    if len(fields) != 1:
+        raise ModeRoutingError("LIMITED_MULTISTEP_METRIC_FIELD_MISMATCH")
+    return next(iter(fields))
+
+
+def _limited_metric_field(shape: _LimitedOutputShape, metric_ref: str) -> str:
+    field = shape.metric_fields.get(metric_ref)
+    if not field:
+        raise ModeRoutingError(f"LIMITED_MULTISTEP_METRIC_OUTPUT_REQUIRED:{metric_ref}")
+    return field
+
+
+def _limited_dimension_column(
+    shape: _LimitedOutputShape,
+    dimension_ref: str,
+) -> str:
+    column = shape.dimension_columns.get(dimension_ref)
+    if not column:
+        raise ModeRoutingError(
+            f"LIMITED_MULTISTEP_DIMENSION_OUTPUT_REQUIRED:{dimension_ref}"
+        )
+    return column
+
+
+def _limited_dimension_columns(
+    shape: _LimitedOutputShape,
+    dimension_refs: tuple[str, ...],
+) -> tuple[str, ...]:
+    return tuple(_limited_dimension_column(shape, ref) for ref in dimension_refs)
+
+
+def _find_limited_metric_input(
+    input_ids: tuple[str, ...],
+    shapes: list[_LimitedOutputShape],
+    metric_ref: str,
+) -> tuple[str, str]:
+    matches = [
+        (input_id, shape.metric_fields[metric_ref])
+        for input_id, shape in zip(input_ids, shapes, strict=True)
+        if metric_ref in shape.metric_fields
+    ]
+    if len(matches) != 1 and len(input_ids) > 1:
+        raise ModeRoutingError(f"LIMITED_MULTISTEP_RATIO_INPUT_AMBIGUOUS:{metric_ref}")
+    if not matches:
+        raise ModeRoutingError(f"LIMITED_MULTISTEP_METRIC_OUTPUT_REQUIRED:{metric_ref}")
+    return matches[0]
 
 
 def _build_fixed_drilldown_requirements(
@@ -359,10 +794,14 @@ def _build_fixed_drilldown_requirements(
             raise ModeRoutingError("SEMANTIC_DRILLDOWN_DIMENSION_MODEL_MISMATCH")
         previous_dimensions = level.dimension_refs
 
-    time_filters = list(request.semantic_parse.time_filters) or [None]
+    time_filters: list[SemanticParseTimeFilter | None] = list(
+        request.semantic_parse.time_filters
+    ) or [None]
     if len(time_filters) not in {1, 2}:
         raise ModeRoutingError("SEMANTIC_DRILLDOWN_TIME_COUNT_UNSUPPORTED")
-    if len(time_filters) == 2 and {item.role for item in time_filters} != {
+    if len(time_filters) == 2 and {
+        item.role for item in time_filters if item is not None
+    } != {
         "current",
         "previous",
     }:

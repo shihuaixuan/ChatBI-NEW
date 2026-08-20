@@ -7,6 +7,9 @@ from typing import Any
 
 from sqlmodel import Session
 
+from apps.chatbi.adapters.prompts.limited_multistep import (
+    DefaultLimitedMultiStepPromptBuilder,
+)
 from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.composition import (
     build_agent_event_publisher,
@@ -45,7 +48,10 @@ from apps.chatbi.services.execution import (
 from apps.chatbi.services.generation.agent_finalization import AgentFinalizationService
 from apps.chatbi.services.generation.answer_composer import AnswerComposer
 from apps.chatbi.services.generation.fallback_sql import AssistedFallbackSQLService
-from apps.chatbi.services.planning import PhysicalSchemaService
+from apps.chatbi.services.planning import (
+    LimitedMultiStepDecomposer,
+    PhysicalSchemaService,
+)
 from apps.chatbi.services.understanding import SemanticParseService
 from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
@@ -137,6 +143,7 @@ def build_run_orchestrator(
     answer_composer: AnswerComposer | None = None,
     assisted_fallback_service: AssistedFallbackSQLService | None = None,
     memory_service: MemoryService | None = None,
+    limited_multistep_decomposer: LimitedMultiStepDecomposer | None = None,
 ) -> RunOrchestrator:
     """构造依赖完整的 RunOrchestrator；生产入口和测试统一使用此函数。"""
 
@@ -178,9 +185,16 @@ def build_run_orchestrator(
     )
     # 重写、语义解析、回答和计划阶段共享同一个结构化模型服务。
     model_service = build_question_model_service(enforce_json=True)
+    resolved_limited_multistep_decomposer = (
+        limited_multistep_decomposer
+        or LimitedMultiStepDecomposer(
+            model_service,
+            DefaultLimitedMultiStepPromptBuilder(),
+        )
+    )
     if finalization_service is None:
         resolved_finalization_service = AgentFinalizationService(model_service)
-        resolved_answer_composer = answer_composer or AnswerComposer(
+        resolved_answer_composer: AnswerComposer | None = answer_composer or AnswerComposer(
             model_service,
             citation_enforced=resolved_config.answer_citation_enforced,
         )
@@ -260,7 +274,10 @@ def build_run_orchestrator(
         lifecycle=lifecycle,
         input_preparer=resolved_input_preparer,
         state_factory=state_factory,
-        mode_router=ModeRouter(resolved_semantic_schema_provider),
+        mode_router=ModeRouter(
+            resolved_semantic_schema_provider,
+            resolved_limited_multistep_decomposer,
+        ),
         fast_pipeline=FastPipeline(
             FastPipelineDependencies(
                 registry=resolved_registry,

@@ -108,9 +108,23 @@ class SemanticParseDynamicResearch(BaseModel):
     ]
 
 
+class SemanticParseLimitedMultiStep(BaseModel):
+    """资产已绑定、执行前可完整确定，但固定规则无法唯一展开的有限多步任务。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal["limited_multistep"] = "limited_multistep"
+    objective: str = Field(min_length=1, max_length=1000)
+    metric_refs: tuple[str, ...] = Field(min_length=1)
+    dimension_refs: tuple[str, ...] = ()
+    allowed_time_roles: tuple[str, ...] = Field(min_length=1)
+    requested_outputs: tuple[str, ...] = Field(min_length=1)
+
+
 SemanticParseMultiStep = Annotated[
     SemanticParseFixedDrilldown
     | SemanticParseFixedAttribution
+    | SemanticParseLimitedMultiStep
     | SemanticParseDynamicResearch,
     Field(discriminator="type"),
 ]
@@ -152,6 +166,7 @@ __all__ = [
     "SemanticParseFixedDrilldown",
     "SemanticParseDrilldownLevel",
     "SemanticParseDynamicResearch",
+    "SemanticParseLimitedMultiStep",
     "SemanticParseMultiStep",
     "SemanticParseOrderBy",
     "SemanticParseOutput",

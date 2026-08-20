@@ -24,6 +24,27 @@ class DatasourceSelectionError(ChatBIError, ValueError):
     """数据源选择输入或模型结果不合法。"""
 
 
+class LimitedMultiStepDecompositionError(ChatBIError, RuntimeError):
+    """受限多步模型调用或草案校验失败。"""
+
+    MODEL_CALL_FAILED = "LIMITED_MULTISTEP_MODEL_CALL_FAILED"
+    OUTPUT_INVALID = "LIMITED_MULTISTEP_OUTPUT_INVALID"
+    ASSET_REF_NOT_ALLOWED = "LIMITED_MULTISTEP_ASSET_REF_NOT_ALLOWED"
+    TIME_ROLE_NOT_ALLOWED = "LIMITED_MULTISTEP_TIME_ROLE_NOT_ALLOWED"
+    OPERATION_NOT_ALLOWED = "LIMITED_MULTISTEP_OPERATION_NOT_ALLOWED"
+    BUDGET_EXCEEDED = "LIMITED_MULTISTEP_BUDGET_EXCEEDED"
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.code = code
+        self.details = dict(details or {})
+        super().__init__(code)
+
+
 class AgentActionError(ChatBIError, ValueError):
     """Agent 提出的动作不满足当前可信进展。"""
 
@@ -170,6 +191,7 @@ __all__ = [
     "DynamicSQLGenerationError",
     "ExecutionBindingError",
     "FinalReplyProjectionError",
+    "LimitedMultiStepDecompositionError",
     "PermissionSQLGenerationError",
     "QueryResultProjectionError",
     "SQLGenerationError",

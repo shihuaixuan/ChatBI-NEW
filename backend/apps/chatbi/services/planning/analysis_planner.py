@@ -101,6 +101,15 @@ class AnalysisPlanner:
                     {
                         "planner_source": "rule",
                         "template": _template_name(requirement),
+                        **(
+                            {
+                                "decomposer": requirement.decomposition.model_dump(
+                                    mode="json"
+                                )
+                            }
+                            if requirement.decomposition is not None
+                            else {}
+                        ),
                     },
                 ),
             ),

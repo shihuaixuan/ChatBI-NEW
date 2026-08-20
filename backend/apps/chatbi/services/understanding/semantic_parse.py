@@ -228,6 +228,20 @@ class SemanticParseService:
                 dimension_refs,
                 "multi_step.dimension_ref",
             )
+        elif (
+            output.multi_step is not None
+            and output.multi_step.type == "limited_multistep"
+        ):
+            require_refs(
+                list(output.multi_step.metric_refs),
+                metric_refs,
+                "multi_step.metric_refs",
+            )
+            require_refs(
+                list(output.multi_step.dimension_refs),
+                dimension_refs,
+                "multi_step.dimension_refs",
+            )
         duplicated_measure_refs = _duplicated_refs(
             [item.ref for item in output.measures]
         )
@@ -285,6 +299,8 @@ SEMANTIC_PARSE_SYSTEM_PROMPT = """
 6. 不生成 SQL、表名、字段名、查询计划或最终回答。
 7. status=resolved 时 unresolved 必须为空数组；无法安全确定时使用 needs_clarification。
 8. 所有没有内容的数组必须返回 []，没有明确数量时 limit 返回 null。
+9. 候选资产与用户名称唯一、明确匹配时必须直接选择对应 ref，不能仅因为任务进入
+   dynamic_research 就把已经明确的指标或维度标记为 unresolved。
 
 输出结构：
 {
@@ -320,6 +336,15 @@ SEMANTIC_PARSE_SYSTEM_PROMPT = """
   }
   或
   {
+    "type": "limited_multistep",
+    "objective": "执行前可以完整确定的有限多步分析目标",
+    "metric_refs": ["METRIC:..."],
+    "dimension_refs": ["DIMENSION:..."],
+    "allowed_time_roles": ["current", "previous"],
+    "requested_outputs": ["用户明确要求的结果"]
+  }
+  或
+  {
     "type": "fixed_attribution",
     "metric_ref": "METRIC:...",
     "dimension_ref": "DIMENSION:...",
@@ -337,8 +362,30 @@ SEMANTIC_PARSE_SYSTEM_PROMPT = """
 }
 固定下钻只有在所有层级执行前都明确时使用；后一层 dimension_refs 必须包含前一层。
 固定归因只有在指标、归因维度、当前期和对比期均明确时使用。
+当任务需要组合多个查询和白名单计算、全部节点可以在执行前确定，但固定下钻、固定归因
+以及 calculations 无法完整表达拓扑时，输出 limited_multistep。
+当一个计算结果还要作为另一个计算的输入时，必须输出 limited_multistep，不能只在
+calculations 中平铺多个互相没有输入关系的计算。
+以下组合都属于有依赖的有限多步，必须输出 limited_multistep，并将 calculations 返回 []：
+- 先 difference 或 growth_rate，再 topn_other、share 或 pivot；
+- 先 merge，再 ratio、share、topn_other 或 pivot；
+- 先计算比率，再比较该比率。
+例如“对比两个日期各档口GMV，先算差值，再取差值Top3并汇总其他”必须输出：
+{
+  "calculations": [],
+  "multi_step": {
+    "type": "limited_multistep",
+    "objective": "计算两个日期各档口GMV差值，再输出差值Top3和其他汇总",
+    "metric_refs": ["对应的指标ref"],
+    "dimension_refs": ["对应的档口维度ref"],
+    "allowed_time_roles": ["current", "previous"],
+    "requested_outputs": ["差值Top3和其他汇总"]
+  }
+}
 如果需要根据中间结果选择最大、最差、异常对象后继续查询，必须输出
 dynamic_research，不得伪装成固定多步。
+dynamic_research 只表示后续查询方向依赖中间结果。如果当前指标和维度已经由候选唯一
+确定，status 仍然返回 resolved，measures 和 group_by 保留这些 ref，unresolved 返回 []。
 """.strip()
 
 

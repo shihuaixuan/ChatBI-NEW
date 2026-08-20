@@ -490,6 +490,26 @@ def _assert_primary_result(case: PlanCase, snapshot: ResultSetSnapshot) -> None:
         if not any(str(row.get("dimension_value")) == "OTHER" for row in rows):
             raise PlanCaseError("PLAN_CASE_TOPN_OTHER_ROW_MISSING")
         return
+    if case.name == "limited_difference_top3_other":
+        if (
+            len(rows) != 4
+            or not {"dimension_value", "metric_value"} <= fields
+            or not any(
+                str(row.get("dimension_value")) == "OTHER" for row in rows
+            )
+        ):
+            raise PlanCaseError("PLAN_CASE_LIMITED_TOPN_RESULT_INVALID")
+        return
+    if case.name == "limited_growth_rate_top3_other":
+        if (
+            len(rows) != 4
+            or not {"dimension_value", "metric_value"} <= fields
+            or not any(
+                str(row.get("dimension_value")) == "OTHER" for row in rows
+            )
+        ):
+            raise PlanCaseError("PLAN_CASE_LIMITED_GROWTH_TOPN_RESULT_INVALID")
+        return
     if case.name == "fixed_drilldown":
         if not rows or not {"stall_id", "gmv_total"} <= fields:
             raise PlanCaseError("PLAN_CASE_DRILLDOWN_RESULT_INVALID")
@@ -530,6 +550,7 @@ def _run_case(
     query_task_executor: QueryTaskExecutor,
     schema: DatasetSchema,
     temporal_context: Any,
+    requirement_override: ExecutionRequirement | None = None,
 ) -> None:
     print(f"\n{'=' * 80}\n用例：{case.name}｜{case.description}\n{'=' * 80}")
     semantic_parse = SemanticParseOutput.model_validate(case.semantic_parse)
@@ -537,18 +558,21 @@ def _run_case(
     _print_stage(case, "1. SemanticParseOutput", semantic_parse.model_dump(mode="json"))
     _print_stage(case, "2. CandidateGroups", candidates)
 
-    route_payload = ModeRouter(schema_provider).route(
-        ModeRouteInput(
-            semantic_parse=semantic_parse,
-            candidate_groups=candidates,
-            dataset_id=args.dataset_id,
-            tenant_id=args.tenant_id,
-            enabled_modes=("fast", "plan"),
-            temporal_context=temporal_context,
-            datasource_id=args.datasource_id,
+    if requirement_override is None:
+        route_payload = ModeRouter(schema_provider).route(
+            ModeRouteInput(
+                semantic_parse=semantic_parse,
+                candidate_groups=candidates,
+                dataset_id=args.dataset_id,
+                tenant_id=args.tenant_id,
+                enabled_modes=("fast", "plan"),
+                temporal_context=temporal_context,
+                datasource_id=args.datasource_id,
+            )
         )
-    )
-    requirement = ExecutionRequirement.model_validate(route_payload)
+        requirement = ExecutionRequirement.model_validate(route_payload)
+    else:
+        requirement = requirement_override
     _print_stage(
         case, "3. ModeRouter 路由结果", requirement.route.model_dump(mode="json")
     )
