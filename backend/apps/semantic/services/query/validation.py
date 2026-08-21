@@ -446,7 +446,55 @@ class SemanticQueryValidationService:
     ) -> list[SemanticValidationCheck]:
         checks: list[SemanticValidationCheck] = []
         time = plan.time_binding
+        if time.grain:
+            for metric in plan.metrics:
+                if metric.comparison_grains and time.grain not in metric.comparison_grains:
+                    checks.append(
+                        _fail(
+                            "TIME_GRAIN",
+                            f"metric:{metric.metric_id}",
+                            "查询时间粒度不在指标允许比较的粒度范围内",
+                            SemanticValidationReasonCode.METRIC_TIME_GRAIN_UNSUPPORTED,
+                        )
+                    )
+        requested_timezone = (
+            time.time_range.get("timezone")
+            if isinstance(time.time_range, dict)
+            else None
+        )
+        if requested_timezone and requested_timezone != schema.calendar.default_timezone:
+            checks.append(
+                _fail(
+                    "TIMEZONE",
+                    "query:time",
+                    "查询时间范围的时区与数据集默认时区不一致",
+                    SemanticValidationReasonCode.TIME_SEMANTICS_INCOMPATIBLE,
+                )
+            )
+        policies = {
+            metric.time_alignment_policy
+            for metric in plan.metrics
+            if metric.time_alignment_policy != "NONE"
+        }
+        if len(policies) > 1:
+            checks.append(
+                _fail(
+                    "TIME_ALIGNMENT",
+                    "query:time",
+                    "多个指标的时间对齐策略不兼容",
+                    SemanticValidationReasonCode.METRIC_TIME_ALIGNMENT_CONFLICT,
+                )
+            )
         if time.semantics == "NONE":
+            if time.grain:
+                checks.append(
+                    _fail(
+                        "TIME_GRAIN",
+                        "query:time",
+                        "无时间语义的指标不能指定时间粒度",
+                        SemanticValidationReasonCode.TIME_SEMANTICS_INCOMPATIBLE,
+                    )
+                )
             if time.time_range is not None:
                 checks.append(
                     _fail(

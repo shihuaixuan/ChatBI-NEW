@@ -290,11 +290,6 @@ class SearchSemanticAssetsTool(
             authorized_tables=tuple(retrieved_tables),
             normalized_time_range=None,
             compile_plan=None,
-            semantic_enforcement=_semantic_enforcement(
-                self._schema_provider,
-                ctx.workspace_id,
-                ctx.dataset_id,
-            ),
             permission_version=request.scope.permission_version,
         )
         data = SearchSemanticAssetsResult(package=package, scope=scope)
@@ -378,6 +373,7 @@ class CompileSemanticSqlArgs(BaseModel):
     limit: int | None = Field(default=None)
     having: list[dict[str, Any]] | None = Field(default=None)
     time_offset: dict[str, Any] | None = Field(default=None)
+    output_aliases: dict[int, str] = Field(default_factory=dict)
 
     @classmethod
     def model_json_schema(
@@ -468,6 +464,7 @@ class CompileSemanticSqlTool(
                     "limit",
                     "having",
                     "time_offset",
+                    "output_aliases",
                 },
             )
             trusted_plan["filters"] = [
@@ -640,6 +637,7 @@ class CompileSemanticSqlTool(
                     time_bucket=args.time_bucket,
                     time_offset=args.time_offset,
                     having=args.having or [],
+                    output_aliases=args.output_aliases,
                 )
             )
         except (SemanticValidationError, ValueError) as exc:
@@ -1001,21 +999,3 @@ __all__ = [
     "SemanticAssetPackage",
     "TermQueryService",
 ]
-
-
-def _semantic_enforcement(
-    schema_provider: DatasetSchemaProvider | None,
-    workspace_id: int,
-    dataset_id: int,
-) -> Literal["STRICT", "ASSISTED", "LEGACY"]:
-    """读取数据集执行策略；读取失败由调用方显式处理。"""
-
-    if schema_provider is None:
-        return "LEGACY"
-    schema = schema_provider.build_dataset_schema(workspace_id, dataset_id)
-    enforcement = str(
-        (schema.query_config or {}).get("semanticEnforcement") or "LEGACY"
-    ).upper()
-    if enforcement in {"STRICT", "ASSISTED"}:
-        return enforcement  # type: ignore[return-value]
-    return "LEGACY"

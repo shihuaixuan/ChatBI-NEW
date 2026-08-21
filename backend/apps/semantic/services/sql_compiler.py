@@ -41,6 +41,7 @@ class SemanticSQLCompileRequest:
     time_offset: dict[str, Any] | None = None
     pre_aggregation: dict[str, Any] | None = None
     subplans: list[dict[str, Any]] = field(default_factory=list)
+    output_aliases: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -59,6 +60,22 @@ def _same_asset_ids(actual: list[int], expected: list[int]) -> bool:
     """比较资产集合并保留重复项检查，避免顺序差异造成误拒绝。"""
 
     return len(actual) == len(expected) and sorted(actual) == sorted(expected)
+
+
+def _quote_identifier(value: Any) -> str:
+    """只允许服务端生成的简单结果列别名进入 SQL。"""
+
+    candidate = str(value or "").strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate):
+        raise ValueError("SEMANTIC_OUTPUT_ALIAS_INVALID")
+    return f'"{candidate.replace(chr(34), chr(34) * 2)}"'
+
+
+def _render_dimension_alias(dimension: SchemaElement, aliases: dict[int, str]) -> str:
+    """普通查询沿用历史 SQL 文本，跨模型对齐时使用受控别名。"""
+
+    alias = aliases.get(dimension.id)
+    return _quote_identifier(alias) if alias else dimension.biz_name
 
 
 class SemanticSQLCompiler:
@@ -117,6 +134,7 @@ class SemanticSQLCompiler:
                 if plan.model_plan.pre_aggregation_required
                 else None,
                 subplans=list(plan.subplans),
+                output_aliases=dict(plan.output_aliases),
             )
         )
         expected_metric_ids = [item.metric_id for item in plan.metrics]
@@ -242,7 +260,7 @@ class SemanticSQLCompiler:
             )
         detail_mode = str(request.select_mode or "").strip().lower() == "detail"
         select_parts = [
-            f"{self._qualified_dimension_expr(dimension, model_by_name, model_name_by_id)} as {dimension.biz_name}"
+            f"{self._qualified_dimension_expr(dimension, model_by_name, model_name_by_id)} as {_render_dimension_alias(dimension, request.output_aliases)}"
             for dimension in dimensions
         ]
         if detail_mode:
@@ -814,6 +832,15 @@ class SemanticSQLCompiler:
 
     @staticmethod
     def _metric_reference_ids(metric: SchemaElement) -> tuple[int, ...]:
+        formula = metric.ext_info.get("formula_definition")
+        if isinstance(formula, dict):
+            return tuple(
+                item["metric_id"]
+                for item in formula.get("components") or []
+                if isinstance(item, dict)
+                and isinstance(item.get("metric_id"), int)
+                and item["metric_id"] > 0
+            )
         params = metric.type_params or {}
         metric_params = params.get("metricDefineByMetricParams") or {}
         references = metric_params.get("metrics") if isinstance(metric_params, dict) else []
@@ -829,6 +856,9 @@ class SemanticSQLCompiler:
         rendered_refs: dict[int, str],
         metric_by_id: dict[int, SchemaElement],
     ) -> str:
+        formula = metric.ext_info.get("formula_definition")
+        if isinstance(formula, dict):
+            return self._structured_metric_expression(formula, rendered_refs)
         params = metric.type_params or {}
         metric_params = params.get("metricDefineByMetricParams") or {}
         expression = str(metric_params.get("expr") or metric.ext_info.get("expr") or "").strip()
@@ -857,6 +887,47 @@ class SemanticSQLCompiler:
         if len(refs) == 2 and "/" in expression and "nullif" not in expression.lower():
             return build_ratio_expression(rendered_refs[refs[0]], rendered_refs[refs[1]])
         return expression
+
+    @staticmethod
+    def _structured_metric_expression(
+        formula: dict[str, Any], rendered_refs: dict[int, str]
+    ) -> str:
+        """按已发布公式角色生成受控指标表达式。"""
+
+        components = formula.get("components") or []
+        expressions = [
+            rendered_refs[item["metric_id"]]
+            for item in components
+            if isinstance(item, dict) and item.get("metric_id") in rendered_refs
+        ]
+        if len(expressions) != len(components):
+            raise ValueError("SEMANTIC_SQL_METRIC_FORMULA_REFERENCE_NOT_FOUND")
+        operation = formula.get("operation")
+        if operation == "RATIO":
+            by_role = {
+                item["role"]: rendered_refs[item["metric_id"]]
+                for item in components
+                if isinstance(item, dict)
+            }
+            try:
+                return build_ratio_expression(by_role["numerator"], by_role["denominator"])
+            except KeyError as error:
+                raise ValueError("SEMANTIC_SQL_METRIC_FORMULA_ROLE_INVALID") from error
+        if operation == "SUM":
+            return " + ".join(f"({item})" for item in expressions)
+        if operation == "DIFFERENCE":
+            by_role = {
+                item["role"]: rendered_refs[item["metric_id"]]
+                for item in components
+                if isinstance(item, dict)
+            }
+            try:
+                return f"({by_role['minuend']}) - ({by_role['subtrahend']})"
+            except KeyError as error:
+                raise ValueError("SEMANTIC_SQL_METRIC_FORMULA_ROLE_INVALID") from error
+        if operation == "PRODUCT":
+            return " * ".join(f"({item})" for item in expressions)
+        raise ValueError("SEMANTIC_SQL_METRIC_FORMULA_INVALID")
 
     def _append_time_offset_selects(
         self,

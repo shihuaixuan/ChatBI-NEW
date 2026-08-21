@@ -3,9 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from apps.semantic.models.orm import (
-    SemanticDataset,
-    SemanticDatasetAsset,
-    SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticDimensionValue,
     SemanticModel,
@@ -208,84 +205,6 @@ def build_dim_value_maps_from_storage(values: list[SemanticDimensionValue]) -> l
         }
         for value in values
         if value.enabled and value.status == 1
-    ]
-
-
-def dataset_model_configs_from_detail(dataset: SemanticDataset) -> list[SemanticDatasetModelConfig]:
-    configs: list[SemanticDatasetModelConfig] = []
-    for index, item in enumerate(_dataset_config_items(dataset)):
-        model_id = item.get("id") or item.get("model_id") or item.get("modelId")
-        if not isinstance(model_id, int):
-            continue
-        configs.append(
-            SemanticDatasetModelConfig(
-                oid=dataset.oid,
-                dataset_id=dataset.id or 0,
-                model_id=model_id,
-                includes_all=bool(item.get("includesAll") or item.get("includes_all")),
-                is_default=bool(item.get("isDefault") or item.get("is_default")),
-                sort_order=index,
-            )
-        )
-    return configs
-
-
-def dataset_assets_from_detail(dataset: SemanticDataset) -> list[SemanticDatasetAsset]:
-    assets: list[SemanticDatasetAsset] = []
-    for config in _dataset_config_items(dataset):
-        model_id = config.get("id") or config.get("model_id") or config.get("modelId")
-        if not isinstance(model_id, int):
-            continue
-        for asset_type, key in [("METRIC", "metrics"), ("DIMENSION", "dimensions")]:
-            for index, asset_id in enumerate(config.get(key) or []):
-                if isinstance(asset_id, int):
-                    assets.append(
-                        SemanticDatasetAsset(
-                            oid=dataset.oid,
-                            dataset_id=dataset.id or 0,
-                            model_id=model_id,
-                            asset_type=asset_type,
-                            asset_id=asset_id,
-                            sort_order=index,
-                        )
-                    )
-    return assets
-
-
-def build_dataset_detail_from_storage(
-    _dataset: SemanticDataset,
-    configs: list[SemanticDatasetModelConfig],
-    assets: list[SemanticDatasetAsset],
-) -> dict[str, Any]:
-    assets_by_model: dict[int, dict[str, list[int]]] = {}
-    for asset in assets:
-        if asset.status != 1:
-            continue
-        bucket = assets_by_model.setdefault(asset.model_id, {"metrics": [], "dimensions": []})
-        if asset.asset_type == "METRIC" and asset.asset_id not in bucket["metrics"]:
-            bucket["metrics"].append(asset.asset_id)
-        elif asset.asset_type == "DIMENSION" and asset.asset_id not in bucket["dimensions"]:
-            bucket["dimensions"].append(asset.asset_id)
-
-    return {
-        "dataSetModelConfigs": [
-            {
-                "id": config.model_id,
-                "includesAll": config.includes_all,
-                "metrics": assets_by_model.get(config.model_id, {}).get("metrics", []),
-                "dimensions": assets_by_model.get(config.model_id, {}).get("dimensions", []),
-            }
-            for config in sorted(configs, key=lambda item: item.sort_order)
-            if config.status == 1
-        ]
-    }
-
-
-def _dataset_config_items(dataset: SemanticDataset) -> list[dict[str, Any]]:
-    return [
-        item
-        for item in (dataset.data_set_detail or {}).get("dataSetModelConfigs", [])
-        if isinstance(item, dict)
     ]
 
 

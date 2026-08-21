@@ -73,6 +73,14 @@ class SemanticQueryPlanningService:
                 ),
                 additivity=(metric_contracts.get(metric_id) or {}).get("additivity"),
                 time_semantics=(metric_contracts.get(metric_id) or {}).get("time_semantics"),
+                comparison_grains=tuple(
+                    (metric_contracts.get(metric_id) or {}).get("comparison_grains") or ()
+                ),
+                time_alignment_policy=str(
+                    (metric_contracts.get(metric_id) or {}).get(
+                        "time_alignment_policy", "NONE"
+                    )
+                ),
                 metric_refs=_metric_refs(metric_elements[metric_id]),
             )
             for metric_id in metric_ids
@@ -294,6 +302,11 @@ class SemanticQueryPlanningService:
                 ),
                 None,
             ),
+            default_timezone=schema.calendar.default_timezone,
+            calendar_type=schema.calendar.calendar_type,
+            week_start_day=schema.calendar.week_start_day,
+            fiscal_year_start_month=schema.calendar.fiscal_year_start_month,
+            holiday_calendar_key=schema.calendar.holiday_calendar_key,
         )
 
     @staticmethod
@@ -326,6 +339,15 @@ def _common_result_grain(metrics: tuple[SemanticMetricBinding, ...]) -> tuple[st
 def _metric_refs(metric) -> tuple[int, ...]:
     """从运行时指标契约提取派生指标引用。"""
 
+    formula = metric.ext_info.get("formula_definition") if hasattr(metric, "ext_info") else None
+    if isinstance(formula, dict):
+        return tuple(
+            item.get("metric_id")
+            for item in formula.get("components") or []
+            if isinstance(item, dict)
+            and isinstance(item.get("metric_id"), int)
+            and item["metric_id"] > 0
+        )
     params = metric.type_params or {}
     metric_params = params.get("metricDefineByMetricParams") or {}
     references = metric_params.get("metrics") if isinstance(metric_params, dict) else []

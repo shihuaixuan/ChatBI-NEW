@@ -220,7 +220,8 @@ class ResolvedTemporalRange(BaseModel):
     timezone: str
     source_raw: str = Field(min_length=1)
     role: Literal["query_filter"] = "query_filter"
-    calendar: Literal["natural", "fiscal"] = "natural"
+    calendar: Literal["natural", "fiscal", "business"] = "natural"
+    business_calendar_id: str | None = None
     fiscal_year: int | None = None
     fiscal_quarter: int | None = None
     fiscal_year_start_month: int | None = Field(default=None, ge=1, le=12)
@@ -246,6 +247,8 @@ class ResolvedTemporalRange(BaseModel):
             or self.fiscal_year_label is None
         ):
             raise ValueError("TEMPORAL_FISCAL_RANGE_METADATA_REQUIRED")
+        if self.calendar == "business" and not self.business_calendar_id:
+            raise ValueError("TEMPORAL_BUSINESS_CALENDAR_REQUIRED")
         return self
 
 

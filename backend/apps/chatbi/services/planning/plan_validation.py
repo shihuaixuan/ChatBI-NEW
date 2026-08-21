@@ -152,9 +152,6 @@ class AnalysisPlanValidator:
         }
         if declared_results & outgoing:
             return ["PLAN_PRESENTATION_RESULT_NOT_LEAF"]
-        actual_leaves = set(reverse) - outgoing
-        if declared_results != actual_leaves:
-            return ["PLAN_PRESENTATION_LEAVES_MISMATCH"]
         reachable = set(declared_results)
         pending = list(declared_results)
         while pending:
@@ -164,7 +161,10 @@ class AnalysisPlanValidator:
                     reachable.add(source)
                     pending.append(source)
         known = {task.id for task in plan.tasks}
-        return [] if reachable == known else ["PLAN_TASK_NOT_REACH_PRIMARY"]
+        if reachable != known:
+            return ["PLAN_TASK_NOT_REACH_PRIMARY"]
+        actual_leaves = set(reverse) - outgoing
+        return [] if declared_results == actual_leaves else ["PLAN_PRESENTATION_LEAVES_MISMATCH"]
 
 
 def validate_analysis_plan(

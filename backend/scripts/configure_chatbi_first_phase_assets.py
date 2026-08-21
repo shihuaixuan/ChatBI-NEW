@@ -261,7 +261,8 @@ def _configure_metric(
         ("name", target["name"]),
         ("alias", deepcopy(target["aliases"])),
         ("define_type", "MEASURE"),
-        ("default_agg", "NONE"),
+        # 结构化公式由自身表达式完成计算，契约中的默认聚合使用 CUSTOM。
+        ("default_agg", "CUSTOM"),
         ("expr", target["expr"]),
         ("fields", _expression_fields(target["expr"])),
         ("type_params", params),

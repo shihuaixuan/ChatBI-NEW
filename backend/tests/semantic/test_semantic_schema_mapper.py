@@ -1,5 +1,6 @@
 from apps.semantic.models.orm import (
     SemanticDataset,
+    SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticMetric,
     SemanticModel,
@@ -43,6 +44,12 @@ def test_schema_mapper_matches_metric_dimension_and_dimension_value_alias():
         metrics=[metric],
         dimensions=[dimension],
         terms=[],
+        dataset_model_configs=[
+            SemanticDatasetModelConfig(
+                oid=1, dataset_id=20, model_id=10, includes_all=True
+            )
+        ],
+        dataset_assets=[],
     )
 
     map_info = SchemaElementMatcher().match("一号档口咨询UV是多少", schema)

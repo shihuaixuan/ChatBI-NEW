@@ -109,7 +109,7 @@ def load_temporal_replay_candidates(
             invalid_snapshot_count += 1
             continue
 
-        rewritten_question = understanding.rewritten_question
+        rewritten_question = understanding.rewrite_question
         if rewritten_question in seen_questions:
             duplicate_count += 1
             continue

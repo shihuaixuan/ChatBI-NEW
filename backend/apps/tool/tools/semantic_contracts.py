@@ -89,6 +89,7 @@ class SemanticCompilePlan(BaseModel):
         default=(),
         exclude_if=lambda value: not value,
     )
+    output_aliases: dict[int, str] = Field(default_factory=dict)
 
 
 class SemanticAssetScope(BaseModel):
@@ -107,8 +108,8 @@ class SemanticAssetScope(BaseModel):
     authorized_tables: tuple[str, ...] = ()
     normalized_time_range: dict[str, Any] | None = None
     compile_plan: SemanticCompilePlan | None = None
-    # 严格模式使用完整语义计划；compile_plan 仅为迁移期旧链路保留。
-    semantic_enforcement: Literal["STRICT", "ASSISTED", "LEGACY"] = "LEGACY"
+    # 运行时统一使用已发布快照和完整语义计划，不再从数据集配置选择模式。
+    semantic_enforcement: Literal["STRICT"] = "STRICT"
     query_plan: SemanticQueryPlan | None = None
     # CROSS_MODEL 严格查询按子查询分别验证；query_plan 保留首个计划供单查询兼容。
     query_plans: tuple[SemanticQueryPlan, ...] = ()
@@ -207,6 +208,7 @@ def project_semantic_compile_plan(
         having=tuple(having),
         time_offset=time_offset,
         ratio_specs=ratio_specs,
+        output_aliases={},
     )
 
 

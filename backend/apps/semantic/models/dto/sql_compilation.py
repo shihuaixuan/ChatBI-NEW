@@ -21,6 +21,7 @@ class SemanticQueryCompileRequest:
     time_offset: dict[str, Any] | None = None
     pre_aggregation: dict[str, Any] | None = None
     subplans: list[dict[str, Any]] = field(default_factory=list)
+    output_aliases: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

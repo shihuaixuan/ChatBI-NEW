@@ -31,7 +31,9 @@ class SemanticSchemaService:
         self._builder = SemanticSchemaBuilder()
 
     def build_dataset_schema(self, oid: int, dataset_id: int) -> DatasetSchema:
-        return self._builder.build(self._repository.load(oid, dataset_id))
+        return DatasetSchema.model_validate(
+            self._repository.load_published_schema(oid, dataset_id)
+        )
 
     def get_dataset_schema(self, oid: int, dataset_id: int) -> DatasetSchema:
         try:
@@ -48,7 +50,5 @@ class SemanticSchemaService:
         for dataset_id in payload.dataset_ids:
             schema = self.get_dataset_schema(oid, dataset_id)
             map_info = matcher.match(payload.query_text, schema)
-            merged.data_set_element_matches.update(
-                map_info.data_set_element_matches
-            )
+            merged.data_set_element_matches.update(map_info.data_set_element_matches)
         return merged

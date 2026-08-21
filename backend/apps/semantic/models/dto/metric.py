@@ -1,11 +1,42 @@
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field, model_validator
 
 from apps.semantic.models.dto.base import SemanticBaseDTO
 
 
+class MetricFormulaComponent(SemanticBaseDTO):
+    """结构化公式中的指标角色。"""
+
+    metric_id: int = Field(gt=0)
+    role: str = Field(min_length=1)
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+
+class MetricFormulaDefinition(SemanticBaseDTO):
+    """派生指标的唯一公式事实源。"""
+
+    operation: Literal["RATIO", "SUM", "DIFFERENCE", "PRODUCT"]
+    components: list[MetricFormulaComponent] = Field(min_length=2)
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    @model_validator(mode="after")
+    def validate_components(self):
+        roles = [item.role for item in self.components]
+        if len(roles) != len(set(roles)):
+            raise ValueError("SEMANTIC_METRIC_FORMULA_ROLE_DUPLICATED")
+        required_roles = {
+            "RATIO": {"numerator", "denominator"},
+            "DIFFERENCE": {"minuend", "subtrahend"},
+        }.get(self.operation)
+        if required_roles is not None and set(roles) != required_roles:
+            raise ValueError("SEMANTIC_METRIC_FORMULA_ROLE_INVALID")
+        return self
+
+
 class MetricPayload(SemanticBaseDTO):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
     model_id: int
     name: str
     biz_name: str
@@ -28,7 +59,11 @@ class MetricPayload(SemanticBaseDTO):
     snapshot_aggregation: Literal[
         "ENDING", "BEGINNING", "AVG", "MAX", "MIN"
     ] | None = None
-    contract_version: int | None = None
+    formula_definition: MetricFormulaDefinition | None = None
+    comparison_grains: list[Literal["day", "week", "month", "quarter", "year"]] = Field(
+        default_factory=list
+    )
+    time_alignment_policy: Literal["SAME_TIME", "AS_OF", "NONE"] = "NONE"
 
 
 class MetricBatchCreateFromMeasuresPayload(SemanticBaseDTO):

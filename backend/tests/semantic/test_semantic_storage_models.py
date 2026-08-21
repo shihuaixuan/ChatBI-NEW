@@ -6,7 +6,6 @@ from apps.semantic.models.orm import (
     LogicalDimension,
     MetricDimensionCapability,
     SemanticDataset,
-    SemanticDatasetInstruction,
     SemanticDimension,
     SemanticDimensionValue,
     SemanticDomain,
@@ -35,8 +34,12 @@ def test_semantic_orm_package_exports_and_registers_all_tables():
         "SemanticModelRelation",
         "SemanticTerm",
         "BusinessEntity",
+        "DimensionHierarchy",
+        "DimensionHierarchyLevel",
         "LogicalDimension",
         "MetricDimensionCapability",
+        "MetricRelationship",
+        "MetricRelationshipDimension",
     }
     expected_tables = {
         "headless_asset_alias",
@@ -57,6 +60,10 @@ def test_semantic_orm_package_exports_and_registers_all_tables():
         "headless_business_entity",
         "headless_logical_dimension",
         "headless_metric_dimension_capability",
+        "headless_dimension_hierarchy",
+        "headless_dimension_hierarchy_level",
+        "headless_metric_relationship",
+        "headless_metric_relationship_dimension",
     }
 
     exported_tables = {

@@ -8,11 +8,17 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from apps.semantic.models.dto import SemanticDatasetSummary
+from apps.semantic.models.dto import DatasetCalendarContract, SemanticDatasetSummary
 
 
 class DatasetSummaryReader(Protocol):
     def get_summary(self, dataset_id: int) -> SemanticDatasetSummary | None: ...
+
+    def get_calendar(
+        self,
+        workspace_id: int,
+        dataset_id: int,
+    ) -> DatasetCalendarContract | None: ...
 
     def resolve_dataset_id(
         self,
@@ -30,6 +36,15 @@ class SemanticDatasetCatalogService:
     def get_summary(self, dataset_id: int) -> SemanticDatasetSummary | None:
         return self._reader.get_summary(dataset_id)
 
+    def get_calendar(
+        self,
+        workspace_id: int,
+        dataset_id: int,
+    ) -> DatasetCalendarContract | None:
+        """读取当前工作空间内启用数据集的业务日历契约。"""
+
+        return self._reader.get_calendar(workspace_id, dataset_id)
+
     def resolve_dataset_id(
         self,
         workspace_id: int,
@@ -41,11 +56,7 @@ class SemanticDatasetCatalogService:
             workspace_id,
             dataset_or_datasource_id,
         )
-        return (
-            resolved
-            if resolved is not None
-            else dataset_or_datasource_id
-        )
+        return resolved if resolved is not None else dataset_or_datasource_id
 
 
 __all__ = ["SemanticDatasetCatalogService"]

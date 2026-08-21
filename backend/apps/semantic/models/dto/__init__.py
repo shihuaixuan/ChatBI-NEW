@@ -1,7 +1,14 @@
 """语义模块 DTO 的统一导出入口。"""
 
 from apps.semantic.models.dto.base import SemanticBaseDTO
-from apps.semantic.models.dto.dataset import DatasetPayload
+from apps.semantic.models.dto.dataset import (
+    DatasetAssetPayload,
+    DatasetAssetResponse,
+    DatasetModelConfigPayload,
+    DatasetModelConfigResponse,
+    DatasetPayload,
+    DatasetResponse,
+)
 from apps.semantic.models.dto.dataset_index import (
     DatasetIndexEnqueueResult,
     DatasetIndexRebuildResult,
@@ -13,6 +20,7 @@ from apps.semantic.models.dto.dataset_reference import (
     SemanticDatasetSummary,
 )
 from apps.semantic.models.dto.dataset_schema import (
+    DatasetCalendarContract,
     DatasetModelConfig,
     DatasetSchema,
     JoinRelation,
@@ -31,6 +39,8 @@ from apps.semantic.models.dto.instruction import (
 )
 from apps.semantic.models.dto.metric import (
     MetricBatchCreateFromMeasuresPayload,
+    MetricFormulaComponent,
+    MetricFormulaDefinition,
     MetricPayload,
 )
 from apps.semantic.models.dto.model import (
@@ -44,11 +54,22 @@ from apps.semantic.models.dto.model import (
     SemanticTableMeta,
 )
 from apps.semantic.models.dto.semantic_contract import (
+    AnalysisOperationRejection,
     BusinessEntityPayload,
+    DimensionHierarchyDTO,
+    DimensionHierarchyLevelDTO,
+    DimensionHierarchyLevelPayload,
+    DimensionHierarchyPayload,
+    DimensionHierarchyRuntimeDTO,
+    DimensionHierarchyRuntimeLevelDTO,
     LogicalDimensionPayload,
+    MetricAnalysisCapabilities,
     MetricCapabilityBuildInput,
     MetricContractBuildInput,
     MetricDimensionCapabilityPayload,
+    MetricRelationshipDTO,
+    MetricRelationshipPayload,
+    MetricRelationshipRuntimeDTO,
     PhysicalDimensionBindingInput,
     ReferencedBusinessEntityInput,
     ReferencedLogicalDimensionInput,
@@ -90,10 +111,16 @@ from apps.semantic.models.dto.term_excel import (
 __all__ = [
     "DatasetModelConfig",
     "DatasetPayload",
+    "DatasetResponse",
+    "DatasetModelConfigPayload",
+    "DatasetModelConfigResponse",
+    "DatasetAssetPayload",
+    "DatasetAssetResponse",
     "DatasetIndexEnqueueResult",
     "DatasetIndexRebuildResult",
     "DatasetIndexVersion",
     "DatasetSchema",
+    "DatasetCalendarContract",
     "DimensionPayload",
     "InstructionPayload",
     "InstructionRecord",
@@ -102,6 +129,8 @@ __all__ = [
     "JoinRelation",
     "LegacyTerminologyDTO",
     "MetricBatchCreateFromMeasuresPayload",
+    "MetricFormulaComponent",
+    "MetricFormulaDefinition",
     "MetricPayload",
     "ModelBuildField",
     "ModelBuildSchemaPayload",
@@ -136,8 +165,19 @@ __all__ = [
     "SemanticQueryPlanningInput",
     "SemanticTimeBinding",
     "BusinessEntityPayload",
+    "AnalysisOperationRejection",
+    "DimensionHierarchyDTO",
+    "DimensionHierarchyLevelDTO",
+    "DimensionHierarchyLevelPayload",
+    "DimensionHierarchyPayload",
+    "DimensionHierarchyRuntimeDTO",
+    "DimensionHierarchyRuntimeLevelDTO",
     "LogicalDimensionPayload",
     "MetricDimensionCapabilityPayload",
+    "MetricRelationshipDTO",
+    "MetricRelationshipPayload",
+    "MetricRelationshipRuntimeDTO",
+    "MetricAnalysisCapabilities",
     "MetricCapabilityBuildInput",
     "MetricContractBuildInput",
     "PhysicalDimensionBindingInput",

@@ -376,27 +376,6 @@ class FastPipeline:
                 )
             return projection.result
 
-    def _can_use_assisted_fallback(self, state: AgentRuntimeState) -> bool:
-        """兜底只在全局开关、服务装配和数据集 ASSISTED 策略同时满足时启用。"""
-
-        if (
-            not self._assisted_fallback_enabled
-            or self._assisted_fallback_service is None
-        ):
-            return False
-        if self._semantic_schema_provider is None or state.context.dataset_id is None:
-            return False
-        schema = self._semantic_schema_provider.build_dataset_schema(
-            state.context.workspace_id,
-            state.context.dataset_id,
-        )
-        return (
-            str(
-                (schema.query_config or {}).get("semanticEnforcement") or "LEGACY"
-            ).upper()
-            == "ASSISTED"
-        )
-
     def _record_confidence(self, state: AgentRuntimeState) -> None:
         """把统一四档判定写入运行态，供口径卡片和审计读取。"""
 

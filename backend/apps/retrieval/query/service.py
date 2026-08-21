@@ -9,6 +9,7 @@ from uuid import uuid4
 from apps.retrieval.embedding import EmbeddingProvider
 from apps.retrieval.errors import RetrievalQueryError
 from apps.retrieval.models.dto import (
+    RetrievalBindingRequest,
     RetrievalProfileName,
     RetrievalRequest,
     RetrievalScope,
@@ -84,6 +85,39 @@ class RetrievalService:
             payload=execution.payload,
             recall=execution.recall,
             filters=execution.filters,
+        )
+
+    def retrieve_and_bind(
+        self,
+        request: RetrievalBindingRequest,
+        *,
+        timeout_ms: int | None = None,
+    ) -> RetrievalServiceResult:
+        """执行候选召回和已治理资产绑定，供 Graph/Agent 的语义入口使用。"""
+
+        self._validate_request(request.candidate_request)
+        effective_timeout_ms = min(
+            self._query_timeout_ms,
+            timeout_ms if timeout_ms is not None else self._query_timeout_ms,
+        )
+        if effective_timeout_ms <= 0:
+            raise TimeoutError("RETRIEVAL_DEADLINE_EXCEEDED")
+        execution = self._runner.retrieve_candidates(
+            self._session,
+            request.candidate_request,
+            request.strategy_version,
+            effective_timeout_ms,
+        )
+        bound = self._runner.bind(
+            self._session,
+            request,
+            execution.recall,
+            effective_timeout_ms,
+        )
+        return RetrievalServiceResult(
+            payload=bound.payload,
+            recall=execution.recall,
+            filters=bound.filters,
         )
 
     @staticmethod

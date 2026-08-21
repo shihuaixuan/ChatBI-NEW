@@ -8,6 +8,7 @@ from typing import Any
 from apps.chatbi.errors import ResearchExecutionError
 from apps.chatbi.models.dto.research import (
     EvidenceSnapshot,
+    ResearchDriverRelationship,
     ResearchHypothesis,
     ResearchHypothesisStatus,
     ResearchPolicyDecision,
@@ -68,9 +69,9 @@ def apply_hypothesis_updates(
                 "evidence_ids": update.evidence_ids,
             }
         )
-    return tuple(result[item.id] for item in current_hypotheses if item.id in result) + tuple(
-        item for item in result.values() if item.id not in current_by_id
-    )
+    return tuple(
+        result[item.id] for item in current_hypotheses if item.id in result
+    ) + tuple(item for item in result.values() if item.id not in current_by_id)
 
 
 def evaluate_hypothesis_status(
@@ -89,7 +90,11 @@ def evaluate_hypothesis_status(
         (
             item
             for item in relationships
-            if set(metric_refs) == {item.target_metric_ref, item.driver_metric_ref}
+            if set(metric_refs)
+            == {
+                item.target_metric_ref,
+                *(item.component_metric_refs or (item.driver_metric_ref,)),
+            }
             and set(dimension_refs) <= set(item.dimension_refs)
             and set(requirement.time_roles) <= set(item.time_roles)
         ),
@@ -99,9 +104,17 @@ def evaluate_hypothesis_status(
         return ResearchHypothesisStatus.INVALID
     if evidence.statistics.truncated:
         return ResearchHypothesisStatus.INCONCLUSIVE
+    if relationship.validation_method == "FORMULA_RECONCILIATION":
+        return _evaluate_formula_reconciliation(
+            relationship=relationship,
+            materialized=materialized,
+            rows=rows,
+        )
     target_field = _difference_field(materialized, relationship.target_metric_ref)
     driver_field = _difference_field(materialized, relationship.driver_metric_ref)
     if target_field is None or driver_field is None:
+        return ResearchHypothesisStatus.INCONCLUSIVE
+    if relationship.expected_direction == "UNKNOWN":
         return ResearchHypothesisStatus.INCONCLUSIVE
     directions: list[bool] = []
     for row in rows:
@@ -109,7 +122,9 @@ def evaluate_hypothesis_status(
         driver = _decimal(row.get(driver_field))
         if target is None or driver is None or target == 0 or driver == 0:
             continue
-        directions.append((target > 0) == (driver > 0))
+        observed_same_direction = (target > 0) == (driver > 0)
+        expected_same_direction = relationship.expected_direction == "POSITIVE"
+        directions.append(observed_same_direction == expected_same_direction)
     if not directions:
         return ResearchHypothesisStatus.INCONCLUSIVE
     if all(directions):
@@ -117,6 +132,135 @@ def evaluate_hypothesis_status(
     if not any(directions):
         return ResearchHypothesisStatus.WEAKENED
     return ResearchHypothesisStatus.INCONCLUSIVE
+
+
+def _evaluate_formula_reconciliation(
+    *,
+    relationship: ResearchDriverRelationship,
+    materialized: MaterializedResearchAction,
+    rows: list[dict[str, Any]],
+) -> ResearchHypothesisStatus:
+    """仅在所有公式组成指标都出现在结果中时执行公式对账。"""
+
+    formula = relationship.formula_definition
+    if not isinstance(formula, dict):
+        return ResearchHypothesisStatus.INCONCLUSIVE
+    components = formula.get("components")
+    operation = str(formula.get("operation") or "").upper()
+    if not isinstance(components, list) or operation not in {
+        "RATIO",
+        "SUM",
+        "DIFFERENCE",
+        "PRODUCT",
+    }:
+        return ResearchHypothesisStatus.INCONCLUSIVE
+    component_refs = {
+        item.get("metric_id")
+        for item in components
+        if isinstance(item, dict) and isinstance(item.get("metric_id"), int)
+    }
+    metric_ids_by_ref = {
+        ref: int(ref.rsplit(":", 2)[1])
+        for ref in materialized.metric_refs
+        if isinstance(ref, str) and ref.count(":") == 2 and ref.startswith("METRIC:")
+    }
+    if not component_refs or not component_refs <= set(metric_ids_by_ref.values()):
+        return ResearchHypothesisStatus.INCONCLUSIVE
+    target_value_fields = {
+        role: _value_field(materialized, relationship.target_metric_ref, role)
+        for role in ("value", "current", "previous")
+    }
+    if all(value is None for value in target_value_fields.values()):
+        return ResearchHypothesisStatus.INCONCLUSIVE
+    roles = ("value",) if target_value_fields["value"] else ("current", "previous")
+    reconciled = 0
+    mismatched = 0
+    for row in rows:
+        for role in roles:
+            target_field = target_value_fields[role]
+            if target_field is None:
+                return ResearchHypothesisStatus.INCONCLUSIVE
+            values: dict[str, Decimal] = {}
+            missing = False
+            for component in components:
+                if not isinstance(component, dict):
+                    return ResearchHypothesisStatus.INCONCLUSIVE
+                metric_id = component.get("metric_id")
+                component_ref = next(
+                    (
+                        ref
+                        for ref, current_id in metric_ids_by_ref.items()
+                        if current_id == metric_id
+                    ),
+                    None,
+                )
+                field = _value_field(materialized, component_ref or "", role)
+                value = _decimal(row.get(field)) if field else None
+                if value is None:
+                    missing = True
+                    break
+                values[str(component.get("role") or metric_id)] = value
+            target = _decimal(row.get(target_field))
+            if missing or target is None:
+                continue
+            try:
+                expected = _apply_formula(operation, components, values)
+            except (ArithmeticError, KeyError, ValueError):
+                continue
+            reconciled += 1
+            if _close_enough(target, expected):
+                continue
+            mismatched += 1
+    if reconciled == 0:
+        return ResearchHypothesisStatus.INCONCLUSIVE
+    if mismatched:
+        return ResearchHypothesisStatus.WEAKENED
+    return ResearchHypothesisStatus.SUPPORTED
+
+
+def _value_field(
+    materialized: MaterializedResearchAction,
+    metric_ref: str,
+    role: str,
+) -> str | None:
+    return next(
+        (
+            item.field
+            for item in materialized.columns
+            if item.logical_column.metric_ref == metric_ref
+            and item.logical_column.value_role == role
+        ),
+        None,
+    )
+
+
+def _apply_formula(
+    operation: str,
+    components: list[Any],
+    values: dict[str, Decimal],
+) -> Decimal:
+    ordered = [
+        values[str(item.get("role") or item.get("metric_id"))] for item in components
+    ]
+    if operation == "RATIO":
+        if ordered[1] == 0:
+            raise ZeroDivisionError
+        return ordered[0] / ordered[1]
+    if operation == "SUM":
+        return sum(ordered, Decimal(0))
+    if operation == "DIFFERENCE":
+        return ordered[0] - ordered[1]
+    if operation == "PRODUCT":
+        result = Decimal(1)
+        for value in ordered:
+            result *= value
+        return result
+    raise ValueError(operation)
+
+
+def _close_enough(left: Decimal, right: Decimal) -> bool:
+    scale = max(abs(left), abs(right), Decimal(1))
+    return abs(left - right) <= Decimal("1e-6") * scale
 
 
 def apply_deterministic_hypothesis_result(

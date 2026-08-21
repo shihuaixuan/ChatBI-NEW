@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Literal, cast
+
 from sqlmodel import Session, col, select
 
-from apps.semantic.models.dto import SemanticDatasetSummary
+from apps.semantic.models.dto import DatasetCalendarContract, SemanticDatasetSummary
 from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetModelConfig,
@@ -23,6 +25,29 @@ class SQLModelDatasetCatalogRepository:
         if not isinstance(dataset, SemanticDataset) or dataset.id is None:
             return None
         return SemanticDatasetSummary(dataset_id=dataset.id, name=dataset.name)
+
+    def get_calendar(
+        self,
+        workspace_id: int,
+        dataset_id: int,
+    ) -> DatasetCalendarContract | None:
+        dataset = self._session.get(SemanticDataset, dataset_id)
+        if (
+            not isinstance(dataset, SemanticDataset)
+            or dataset.oid != workspace_id
+            or dataset.status != 1
+        ):
+            return None
+        return DatasetCalendarContract(
+            default_timezone=dataset.default_timezone,
+            calendar_type=cast(
+                Literal["NATURAL", "FISCAL", "BUSINESS"],
+                dataset.calendar_type,
+            ),
+            week_start_day=dataset.week_start_day,
+            fiscal_year_start_month=dataset.fiscal_year_start_month,
+            holiday_calendar_key=dataset.holiday_calendar_key,
+        )
 
     def resolve_dataset_id(
         self,
@@ -43,13 +68,11 @@ class SQLModelDatasetCatalogRepository:
             select(SemanticDataset.id)
             .join(
                 SemanticDatasetModelConfig,
-                col(SemanticDatasetModelConfig.dataset_id)
-                == col(SemanticDataset.id),
+                col(SemanticDatasetModelConfig.dataset_id) == col(SemanticDataset.id),
             )
             .join(
                 SemanticModel,
-                col(SemanticModel.id)
-                == col(SemanticDatasetModelConfig.model_id),
+                col(SemanticModel.id) == col(SemanticDatasetModelConfig.model_id),
             )
             .where(
                 SemanticDataset.oid == workspace_id,

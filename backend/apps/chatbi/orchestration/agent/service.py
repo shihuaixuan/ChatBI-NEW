@@ -34,6 +34,8 @@ from apps.conversation import (
     ChatRecordStatus,
 )
 from apps.event import RenderEvent
+from apps.semantic.composition import build_semantic_dataset_catalog_service
+from apps.temporal import build_dataset_temporal_context, build_run_temporal_context
 from apps.trace import TraceNodeSpec, TraceNodeType, agent_attributes
 from common.core.config import settings
 from common.core.db import engine
@@ -80,13 +82,32 @@ def create_record_and_run(
     )
     if record.id is None:
         raise RuntimeError("CHAT_RECORD_ID_MISSING")
+    workspace_id = current_user.oid if current_user.oid is not None else 1
+    if binding.dataset_id is None:
+        # 旧聊天没有绑定语义数据集时，保留原有全局时间上下文兼容行为。
+        temporal_context = build_run_temporal_context()
+    else:
+        calendar = build_semantic_dataset_catalog_service(session).get_calendar(
+            workspace_id,
+            binding.dataset_id,
+        )
+        if calendar is None:
+            raise RuntimeError("SEMANTIC_DATASET_NOT_FOUND")
+        temporal_context = build_dataset_temporal_context(
+            default_timezone=calendar.default_timezone,
+            calendar_type=calendar.calendar_type,
+            week_start_day=calendar.week_start_day,
+            fiscal_year_start_month=calendar.fiscal_year_start_month,
+            holiday_calendar_key=calendar.holiday_calendar_key,
+        )
     run = agent_run_repository.create_run(
         session,
-        oid=current_user.oid if current_user.oid is not None else 1,
+        oid=workspace_id,
         chat_id=request.chat_id,
         record_id=record.id,
         user_id=current_user.id,
         config=config,
+        temporal_context=temporal_context,
     )
     record_service.transition(
         record,
@@ -145,7 +166,9 @@ def create_agent_start_events(
         and config.datasource_allowlist
         and request.datasource_id not in config.datasource_allowlist
     ):
-        raise AgentDatasourceNotAllowedError("Datasource is not enabled for Agent ChatBI")
+        raise AgentDatasourceNotAllowedError(
+            "Datasource is not enabled for Agent ChatBI"
+        )
 
     def stream() -> Iterator[RenderEvent]:
         # 事件迭代器自己持有 session，事件生成后立即通过 SSE 推送。

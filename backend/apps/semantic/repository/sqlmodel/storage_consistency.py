@@ -3,18 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from apps.semantic.models.orm import (
-    SemanticDataset,
-    SemanticDatasetAsset,
-    SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticDimensionValue,
     SemanticModel,
     SemanticModelField,
     SemanticModelMeasure,
-)
-from apps.semantic.utils.orm_mapping import (
-    dataset_assets_from_detail,
-    dataset_model_configs_from_detail,
 )
 
 
@@ -24,9 +17,6 @@ def check_storage_consistency(
     measures: list[SemanticModelMeasure] | None = None,
     dimension: SemanticDimension | None = None,
     dimension_values: list[SemanticDimensionValue] | None = None,
-    dataset: SemanticDataset | None = None,
-    dataset_model_configs: list[SemanticDatasetModelConfig] | None = None,
-    dataset_assets: list[SemanticDatasetAsset] | None = None,
 ) -> list[dict[str, Any]]:
     """核对迁移期 JSON 明细与结构化存储是否一致。"""
     issues: list[dict[str, Any]] = []
@@ -83,41 +73,6 @@ def check_storage_consistency(
                 }
             )
 
-    if dataset is not None:
-        json_model_ids = {
-            item.model_id for item in dataset_model_configs_from_detail(dataset)
-        }
-        storage_model_ids = {
-            item.model_id
-            for item in dataset_model_configs or []
-            if item.status == 1
-        }
-        if json_model_ids != storage_model_ids:
-            issues.append(
-                {
-                    "type": "DATASET_MODEL_CONFIG_MISMATCH",
-                    "json": sorted(json_model_ids),
-                    "storage": sorted(storage_model_ids),
-                }
-            )
-
-        json_assets = {
-            (item.asset_type, item.asset_id)
-            for item in dataset_assets_from_detail(dataset)
-        }
-        storage_asset_keys = {
-            (item.asset_type, item.asset_id)
-            for item in dataset_assets or []
-            if item.status == 1
-        }
-        if json_assets != storage_asset_keys:
-            issues.append(
-                {
-                    "type": "DATASET_ASSET_MISMATCH",
-                    "json": sorted(json_assets),
-                    "storage": sorted(storage_asset_keys),
-                }
-            )
     return issues
 
 

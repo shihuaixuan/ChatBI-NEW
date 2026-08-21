@@ -82,7 +82,10 @@ class SQLModelDatasetBindingRepository:
             .limit(1)
         )
         model = self._session.exec(statement).first()
-        return model if isinstance(model, SemanticModel) else None
+        if isinstance(model, SemanticModel):
+            return model
+
+        return None
 
 
 __all__ = ["SQLModelDatasetBindingRepository"]

@@ -10,6 +10,7 @@ from apps.temporal.extractor import is_time_expression
 from apps.temporal.models import (
     TemporalContext,
     WeekStart,
+    build_dataset_temporal_context,
     build_run_temporal_context,
     build_temporal_context,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "TemporalSQLRenderError",
     "WeekStart",
     "build_run_temporal_context",
+    "build_dataset_temporal_context",
     "build_temporal_context",
     "derive_time_bucket",
     "derive_time_buckets",

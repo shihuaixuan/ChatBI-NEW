@@ -14,9 +14,14 @@ import {
   View,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus-secondary'
-import { semanticApi } from '@/api/semantic'
+import {
+  semanticApi,
+  type DimensionHierarchyPayload,
+  type MetricDimensionCapabilityPayload,
+  type MetricRelationshipPayload,
+} from '@/api/semantic'
 
-type ActiveTab = 'domains' | 'models' | 'metrics' | 'dimensions' | 'datasets' | 'terms' | 'runtime'
+type ActiveTab = 'domains' | 'models' | 'metrics' | 'dimensions' | 'datasets' | 'terms' | 'governance' | 'runtime'
 type RuntimeTab = 'schema' | 'mapper'
 type SimpleDialogType = 'domain' | 'metric' | 'dimension' | 'term'
 
@@ -47,6 +52,9 @@ const saveLoading = ref(false)
 const schemaLoading = ref(false)
 const mapperLoading = ref(false)
 const datasetIndexRebuildLoading = ref(false)
+const governanceLoading = ref(false)
+const governanceSaveLoading = ref(false)
+const contractLoading = ref(false)
 const tablesLoading = ref(false)
 const fieldsLoading = ref(false)
 
@@ -62,6 +70,14 @@ const tableColumns = ref<any[]>([])
 const fieldRows = ref<any[]>([])
 const datasetSchema = ref<any>(null)
 const mapResult = ref<any>(null)
+const logicalDimensions = ref<any[]>([])
+const dimensionHierarchies = ref<any[]>([])
+const metricRelationships = ref<any[]>([])
+const metricCapabilities = ref<any[]>([])
+const contractReport = ref<any>(null)
+const analysisCapabilities = ref<any[]>([])
+const contractVersions = ref<any>(null)
+const contractImpact = ref<any>(null)
 const selectedDomainId = ref<number | string>('')
 const selectedModelId = ref<number | string>('')
 const selectedDatasetId = ref<number | string>('')
@@ -77,6 +93,13 @@ const modelEditingId = ref<number | string>('')
 const datasetEditingId = ref<number | string>('')
 const measureInitModelId = ref<number | string>('')
 const measureInitSelected = ref<Array<string>>([])
+const governanceTab = ref<'hierarchies' | 'relationships' | 'capabilities' | 'contract'>('hierarchies')
+const hierarchyDialogVisible = ref(false)
+const relationshipDialogVisible = ref(false)
+const capabilityDialogVisible = ref(false)
+const hierarchyEditingId = ref<number | string>('')
+const relationshipEditingId = ref<number | string>('')
+const capabilityEditingId = ref<number | string>('')
 
 const simpleForm = reactive({
   domain_id: '',
@@ -118,11 +141,45 @@ const datasetForm = reactive({
   description: '',
   alias_text: '',
   model_ids: [] as Array<number | string>,
+  dimension_hierarchy_ids: [] as Array<number | string>,
+  metric_relationship_ids: [] as Array<number | string>,
 })
 
 const datasetConfigs = reactive<Record<string, any>>({})
 const datasetMetricOptions = reactive<Record<string, any[]>>({})
 const datasetDimensionOptions = reactive<Record<string, any[]>>({})
+
+const hierarchyForm = reactive({
+  domain_id: '',
+  name: '',
+  biz_name: '',
+  description: '',
+  levels: [] as Array<{ logical_dimension_id: number | string; level_order: number }>,
+})
+const relationshipForm = reactive({
+  domain_id: '',
+  target_metric_id: '',
+  driver_metric_id: '',
+  relationship_type: 'CERTIFIED_DRIVER',
+  validation_method: 'SAME_DIRECTION',
+  expected_direction: 'UNKNOWN',
+  supported_time_roles: 'current,previous',
+  logical_dimension_ids: [] as Array<number | string>,
+  relation_path: '',
+})
+const capabilityForm = reactive({
+  metric_id: '',
+  logical_dimension_id: '',
+  usages: ['GROUP_BY'] as string[],
+  binding_strategy: 'SAME_MODEL',
+  relation_path: '',
+  target_model_id: '',
+  physical_dimension_id: '',
+  aggregation_safety: 'SAFE',
+  pre_aggregation_grain: '',
+  time_alignment_policy: 'NONE',
+  contribution_tolerance: 0.000001,
+})
 
 const currentDomain = computed(() => domains.value.find((item) => `${item.id}` === `${selectedDomainId.value}`))
 const currentDataset = computed(() => datasets.value.find((item) => `${item.id}` === `${selectedDatasetId.value}`))
@@ -236,7 +293,7 @@ const loadScopedAssets = async () => {
   if (!datasets.value.some((item) => `${item.id}` === `${selectedDatasetId.value}`)) {
     selectedDatasetId.value = datasets.value[0]?.id || ''
   }
-  await loadModelAssets()
+  await Promise.all([loadModelAssets(), loadGovernance()])
 }
 
 const loadModelAssets = async () => {
@@ -244,6 +301,46 @@ const loadModelAssets = async () => {
   const scopedModelIds = new Set(models.value.map((item) => String(item.id)))
   metrics.value = Array.isArray(metricRes) ? metricRes.filter((item) => scopedModelIds.has(String(item.model_id))) : []
   dimensions.value = Array.isArray(dimensionRes) ? dimensionRes.filter((item) => scopedModelIds.has(String(item.model_id))) : []
+}
+
+const loadGovernance = async () => {
+  governanceLoading.value = true
+  try {
+    const domainParams = selectedDomainId.value ? { domain_id: selectedDomainId.value } : undefined
+    const [logicalRes, hierarchyRes, relationshipRes, capabilityRes] = await Promise.all([
+      semanticApi.logicalDimensionList(domainParams),
+      semanticApi.dimensionHierarchyList(domainParams),
+      semanticApi.metricRelationshipList(domainParams),
+      semanticApi.metricDimensionCapabilityList(),
+    ])
+    logicalDimensions.value = Array.isArray(logicalRes) ? logicalRes : []
+    dimensionHierarchies.value = Array.isArray(hierarchyRes) ? hierarchyRes : []
+    metricRelationships.value = Array.isArray(relationshipRes) ? relationshipRes : []
+    metricCapabilities.value = Array.isArray(capabilityRes)
+      ? capabilityRes.filter((item) => metrics.value.some((metric) => `${metric.id}` === `${item.metric_id}`))
+      : []
+  } finally {
+    governanceLoading.value = false
+  }
+}
+
+const loadContractGovernance = async () => {
+  if (!selectedDatasetId.value) return
+  contractLoading.value = true
+  try {
+    const [report, capabilities, versions, impact] = await Promise.all([
+      semanticApi.datasetContractReport(selectedDatasetId.value),
+      semanticApi.datasetAnalysisCapabilities(selectedDatasetId.value),
+      semanticApi.datasetContractVersions(selectedDatasetId.value),
+      semanticApi.datasetContractImpact(selectedDatasetId.value),
+    ])
+    contractReport.value = report
+    analysisCapabilities.value = Array.isArray(capabilities) ? capabilities : []
+    contractVersions.value = versions
+    contractImpact.value = impact
+  } finally {
+    contractLoading.value = false
+  }
 }
 
 const handleDomainChange = async () => {
@@ -928,6 +1025,8 @@ const openDatasetDialog = () => {
     description: '',
     alias_text: '',
     model_ids: models.value.map((item) => item.id),
+    dimension_hierarchy_ids: [],
+    metric_relationship_ids: [],
   })
   Object.keys(datasetConfigs).forEach((key) => delete datasetConfigs[key])
   Object.keys(datasetMetricOptions).forEach((key) => delete datasetMetricOptions[key])
@@ -947,23 +1046,43 @@ const resetDatasetAssetCaches = () => {
 
 const openDatasetEditDialog = (row: any) => {
   datasetEditingId.value = row.id
-  const configs = row.data_set_detail?.dataSetModelConfigs || []
+  const configs = row.model_configs || []
+  const assets = row.assets || []
+  const metricsByModel = assets.reduce((result: Record<string, number[]>, asset: any) => {
+    if (asset.asset_type !== 'METRIC' || asset.model_id == null) return result
+    const key = String(asset.model_id)
+    result[key] = [...(result[key] || []), Number(asset.asset_id)]
+    return result
+  }, {})
+  const dimensionsByModel = assets.reduce((result: Record<string, number[]>, asset: any) => {
+    if (asset.asset_type !== 'DIMENSION' || asset.model_id == null) return result
+    const key = String(asset.model_id)
+    result[key] = [...(result[key] || []), Number(asset.asset_id)]
+    return result
+  }, {})
   Object.assign(datasetForm, {
     domain_id: row.domain_id || selectedDomainId.value,
     name: row.name || '',
     biz_name: row.biz_name || '',
     description: row.description || '',
     alias_text: (row.alias || []).join('，'),
-    model_ids: configs.map((item: any) => item.id),
+    model_ids: configs.map((item: any) => Number(item.model_id)),
+    dimension_hierarchy_ids: assets
+      .filter((item: any) => item.asset_type === 'DIMENSION_HIERARCHY')
+      .map((item: any) => Number(item.asset_id)),
+    metric_relationship_ids: assets
+      .filter((item: any) => item.asset_type === 'METRIC_RELATIONSHIP')
+      .map((item: any) => Number(item.asset_id)),
   })
   resetDatasetAssetCaches()
   configs.forEach((config: any) => {
-    datasetConfigs[String(config.id)] = {
-      includesAll: config.includesAll !== false,
-      metrics: config.metrics || [],
-      dimensions: config.dimensions || [],
+    const modelId = Number(config.model_id)
+    datasetConfigs[String(modelId)] = {
+      includesAll: config.includes_all !== false,
+      metrics: metricsByModel[String(modelId)] || [],
+      dimensions: dimensionsByModel[String(modelId)] || [],
     }
-    loadDatasetModelAssets(config.id)
+    loadDatasetModelAssets(modelId)
   })
   datasetDialogVisible.value = true
 }
@@ -1010,18 +1129,40 @@ const saveDatasetDialog = async () => {
       biz_name: datasetForm.biz_name,
       description: datasetForm.description,
       alias: splitText(datasetForm.alias_text),
-      data_set_detail: {
-        dataSetModelConfigs: datasetForm.model_ids.map((id) => {
-          const config = datasetConfigs[String(id)] || {}
-          return {
-            id: Number(id),
-            includesAll: !!config.includesAll,
-            metrics: config.includesAll ? [] : (config.metrics || []).map(Number),
-            dimensions: config.includesAll ? [] : (config.dimensions || []).map(Number),
-            tagIds: [],
-          }
-        }),
-      },
+      modelConfigs: datasetForm.model_ids.map((id, index) => {
+        const config = datasetConfigs[String(id)] || {}
+        return {
+          modelId: Number(id),
+          includesAll: !!config.includesAll,
+          isDefault: index === 0,
+          sortOrder: index,
+        }
+      }),
+      assets: datasetForm.model_ids.flatMap((id) => {
+        const config = datasetConfigs[String(id)] || {}
+        if (config.includesAll) return []
+        return [
+          ...(config.metrics || []).map((assetId: number | string) => ({
+            assetType: 'METRIC',
+            assetId: Number(assetId),
+            modelId: Number(id),
+          })),
+          ...(config.dimensions || []).map((assetId: number | string) => ({
+            assetType: 'DIMENSION',
+            assetId: Number(assetId),
+            modelId: Number(id),
+          })),
+        ]
+      }).concat(
+        datasetForm.dimension_hierarchy_ids.map((assetId) => ({
+          assetType: 'DIMENSION_HIERARCHY',
+          assetId: Number(assetId),
+        })),
+        datasetForm.metric_relationship_ids.map((assetId) => ({
+          assetType: 'METRIC_RELATIONSHIP',
+          assetId: Number(assetId),
+        })),
+      ),
       query_config: {},
     }
     if (datasetEditingId.value) {
@@ -1129,6 +1270,208 @@ const aliasText = (row: any) => (row.alias || []).join('、') || '-'
 const datasourceName = (id: number | string) => datasources.value.find((item) => `${item.id}` === `${id}`)?.name || id
 const modelName = (id: number | string) => models.value.find((item) => `${item.id}` === `${id}`)?.name || id
 const modelBizName = (id: number | string) => models.value.find((item) => `${item.id}` === `${id}`)?.biz_name || '-'
+const logicalDimensionName = (id: number | string) =>
+  logicalDimensions.value.find((item) => `${item.id}` === `${id}`)?.name || id
+const metricLabel = (id: number | string) => metrics.value.find((item) => `${item.id}` === `${id}`)?.name || id
+
+const resetHierarchyForm = () => {
+  Object.assign(hierarchyForm, {
+    domain_id: selectedDomainId.value,
+    name: '',
+    biz_name: '',
+    description: '',
+    levels: logicalDimensions.value.slice(0, 2).map((item, index) => ({
+      logical_dimension_id: item.id,
+      level_order: index + 1,
+    })),
+  })
+}
+
+const addHierarchyLevel = () => {
+  hierarchyForm.levels.push({ logical_dimension_id: '', level_order: hierarchyForm.levels.length + 1 })
+}
+
+const removeHierarchyLevel = (index: number) => {
+  hierarchyForm.levels.splice(index, 1)
+  hierarchyForm.levels.forEach((item, levelIndex) => {
+    item.level_order = levelIndex + 1
+  })
+}
+
+const openHierarchyDialog = (row?: any) => {
+  hierarchyEditingId.value = row?.id || ''
+  if (row) {
+    Object.assign(hierarchyForm, {
+      domain_id: row.domain_id,
+      name: row.name,
+      biz_name: row.biz_name,
+      description: row.description || '',
+      levels: (row.levels || []).map((item: any) => ({
+        logical_dimension_id: item.logical_dimension_id,
+        level_order: item.level_order,
+      })),
+    })
+  } else {
+    resetHierarchyForm()
+  }
+  hierarchyDialogVisible.value = true
+}
+
+const saveHierarchy = async () => {
+  if (!validateRequired([
+    { label: '主题域', value: hierarchyForm.domain_id, type: 'select' },
+    { label: '名称', value: hierarchyForm.name },
+    { label: '英文标识', value: hierarchyForm.biz_name },
+    { label: '层级节点', value: hierarchyForm.levels, type: 'select' },
+  ])) return
+  governanceSaveLoading.value = true
+  try {
+    const payload: DimensionHierarchyPayload = {
+      domain_id: Number(hierarchyForm.domain_id),
+      name: hierarchyForm.name,
+      biz_name: hierarchyForm.biz_name,
+      description: hierarchyForm.description,
+      hierarchy_type: 'FIXED_LEVEL' as const,
+      levels: hierarchyForm.levels.map((item) => ({
+        logical_dimension_id: Number(item.logical_dimension_id),
+        level_order: item.level_order,
+      })),
+    }
+    if (hierarchyEditingId.value) await semanticApi.dimensionHierarchyUpdate(hierarchyEditingId.value, payload)
+    else await semanticApi.dimensionHierarchyCreate(payload)
+    ElMessage.success('维度层级已保存为草稿')
+    hierarchyDialogVisible.value = false
+    await loadGovernance()
+  } finally {
+    governanceSaveLoading.value = false
+  }
+}
+
+const openRelationshipDialog = (row?: any) => {
+  relationshipEditingId.value = row?.id || ''
+  Object.assign(relationshipForm, {
+    domain_id: row?.domain_id || selectedDomainId.value,
+    target_metric_id: row?.target_metric_id || '',
+    driver_metric_id: row?.driver_metric_id || '',
+    relationship_type: row?.relationship_type || 'CERTIFIED_DRIVER',
+    validation_method: row?.validation_method || 'SAME_DIRECTION',
+    expected_direction: row?.expected_direction || 'UNKNOWN',
+    supported_time_roles: (row?.supported_time_roles || ['current', 'previous']).join(','),
+    logical_dimension_ids: row?.logical_dimension_ids || [],
+    relation_path: (row?.relation_path || []).join(','),
+  })
+  relationshipDialogVisible.value = true
+}
+
+const saveRelationship = async () => {
+  if (!validateRequired([
+    { label: '主题域', value: relationshipForm.domain_id, type: 'select' },
+    { label: '目标指标', value: relationshipForm.target_metric_id, type: 'select' },
+    { label: '驱动指标', value: relationshipForm.driver_metric_id, type: 'select' },
+  ])) return
+  governanceSaveLoading.value = true
+  try {
+    const payload: MetricRelationshipPayload = {
+      domain_id: Number(relationshipForm.domain_id),
+      target_metric_id: Number(relationshipForm.target_metric_id),
+      driver_metric_id: Number(relationshipForm.driver_metric_id),
+      relationship_type: relationshipForm.relationship_type as MetricRelationshipPayload['relationship_type'],
+      validation_method: relationshipForm.validation_method as MetricRelationshipPayload['validation_method'],
+      expected_direction: relationshipForm.expected_direction as MetricRelationshipPayload['expected_direction'],
+      supported_time_roles: splitText(relationshipForm.supported_time_roles),
+      logical_dimension_ids: relationshipForm.logical_dimension_ids.map(Number),
+      relation_path: splitText(relationshipForm.relation_path).map(Number),
+    }
+    if (relationshipEditingId.value) await semanticApi.metricRelationshipUpdate(relationshipEditingId.value, payload)
+    else await semanticApi.metricRelationshipCreate(payload)
+    ElMessage.success('指标关系已保存为草稿')
+    relationshipDialogVisible.value = false
+    await loadGovernance()
+  } finally {
+    governanceSaveLoading.value = false
+  }
+}
+
+const openCapabilityDialog = (row?: any) => {
+  capabilityEditingId.value = row?.id || ''
+  Object.assign(capabilityForm, {
+    metric_id: row?.metric_id || '',
+    logical_dimension_id: row?.logical_dimension_id || '',
+    usages: row?.usages || ['GROUP_BY'],
+    binding_strategy: row?.binding_strategy || 'SAME_MODEL',
+    relation_path: (row?.relation_path || []).join(','),
+    target_model_id: row?.target_model_id || '',
+    physical_dimension_id: row?.physical_dimension_id || '',
+    aggregation_safety: row?.aggregation_safety || 'SAFE',
+    pre_aggregation_grain: (row?.pre_aggregation_grain || []).join(','),
+    time_alignment_policy: row?.time_alignment_policy || 'NONE',
+    contribution_tolerance: row?.contribution_tolerance ?? 0.000001,
+  })
+  capabilityDialogVisible.value = true
+}
+
+const saveCapability = async () => {
+  if (!validateRequired([
+    { label: '指标', value: capabilityForm.metric_id, type: 'select' },
+    { label: '逻辑维度', value: capabilityForm.logical_dimension_id, type: 'select' },
+    { label: '目标模型', value: capabilityForm.target_model_id, type: 'select' },
+  ])) return
+  governanceSaveLoading.value = true
+  try {
+    const payload: MetricDimensionCapabilityPayload = {
+      metric_id: Number(capabilityForm.metric_id),
+      logical_dimension_id: Number(capabilityForm.logical_dimension_id),
+      usages: capabilityForm.usages as MetricDimensionCapabilityPayload['usages'],
+      binding_strategy: capabilityForm.binding_strategy as MetricDimensionCapabilityPayload['binding_strategy'],
+      relation_path: splitText(capabilityForm.relation_path).map(Number),
+      target_model_id: Number(capabilityForm.target_model_id),
+      physical_dimension_id: capabilityForm.physical_dimension_id ? Number(capabilityForm.physical_dimension_id) : undefined,
+      aggregation_safety: capabilityForm.aggregation_safety as MetricDimensionCapabilityPayload['aggregation_safety'],
+      pre_aggregation_grain: splitText(capabilityForm.pre_aggregation_grain),
+      time_alignment_policy: capabilityForm.time_alignment_policy as MetricDimensionCapabilityPayload['time_alignment_policy'],
+      contribution_tolerance: Number(capabilityForm.contribution_tolerance),
+    }
+    if (capabilityEditingId.value) await semanticApi.metricDimensionCapabilityUpdate(capabilityEditingId.value, payload)
+    else await semanticApi.metricDimensionCapabilityCreate(payload)
+    ElMessage.success('指标维度能力已保存')
+    capabilityDialogVisible.value = false
+    await loadGovernance()
+  } finally {
+    governanceSaveLoading.value = false
+  }
+}
+
+const deleteGovernanceAsset = async (type: 'hierarchy' | 'relationship' | 'capability', row: any) => {
+  const confirmed = await ElMessageBox.confirm('删除前请确认该资产没有被已发布数据集引用。', '删除治理资产', {
+    confirmButtonText: '删除',
+    cancelButtonText: '取消',
+    confirmButtonType: 'danger',
+  }).catch(() => null)
+  if (confirmed !== 'confirm') return
+  if (type === 'hierarchy') await semanticApi.dimensionHierarchyDelete(row.id)
+  else if (type === 'relationship') await semanticApi.metricRelationshipDelete(row.id)
+  else await semanticApi.metricDimensionCapabilityDelete(row.id)
+  ElMessage.success('治理资产已删除')
+  await loadGovernance()
+}
+
+const publishDatasetContract = async () => {
+  if (!selectedDatasetId.value) return
+  contractLoading.value = true
+  try {
+    contractReport.value = await semanticApi.datasetPublishContract(selectedDatasetId.value)
+    const [versions, impact] = await Promise.all([
+      semanticApi.datasetContractVersions(selectedDatasetId.value),
+      semanticApi.datasetContractImpact(selectedDatasetId.value),
+    ])
+    contractVersions.value = versions
+    contractImpact.value = impact
+    ElMessage.success('数据集契约已发布')
+    await previewSchema()
+  } finally {
+    contractLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -1168,6 +1511,7 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
           <el-tab-pane label="维度" name="dimensions" />
           <el-tab-pane label="数据集" name="datasets" />
           <el-tab-pane label="术语" name="terms" />
+          <el-tab-pane label="治理契约" name="governance" />
           <el-tab-pane label="运行时验证" name="runtime" />
         </el-tabs>
       </div>
@@ -1307,8 +1651,8 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
           <el-table-column prop="biz_name" label="英文标识" min-width="180" />
           <el-table-column label="模型配置" min-width="220">
             <template #default="{ row }">
-              <el-tag v-for="item in row.data_set_detail?.dataSetModelConfigs || []" :key="item.id" class="tag-gap">
-                {{ modelName(item.id) }} {{ item.includesAll ? '全部' : '部分' }}
+              <el-tag v-for="item in row.model_configs || []" :key="item.model_id" class="tag-gap">
+                {{ modelName(item.model_id) }} {{ item.includes_all ? '全部' : '部分' }}
               </el-tag>
             </template>
           </el-table-column>
@@ -1352,6 +1696,69 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
             </template>
           </el-table-column>
         </el-table>
+      </div>
+
+      <div v-if="activeTab === 'governance'" class="table-area">
+        <div class="runtime-header">
+          <el-segmented
+            v-model="governanceTab"
+            :options="[
+              { label: '维度层级', value: 'hierarchies' },
+              { label: '指标关系', value: 'relationships' },
+              { label: '指标维度能力', value: 'capabilities' },
+              { label: '数据集契约', value: 'contract' },
+            ]"
+          />
+          <el-button :icon="Refresh" :loading="governanceLoading" @click="loadGovernance">刷新</el-button>
+        </div>
+        <div v-if="governanceTab === 'hierarchies'">
+          <div class="toolbar"><span class="toolbar-meta">层级必须逐级配置，发布后才进入运行时 Schema。</span><el-button type="primary" :icon="Plus" @click="openHierarchyDialog()">新建层级</el-button></div>
+          <el-table :data="dimensionHierarchies" height="calc(100vh - 430px)">
+            <el-table-column prop="name" label="层级" min-width="180" />
+            <el-table-column prop="biz_name" label="英文标识" min-width="180" />
+            <el-table-column label="节点" min-width="260"><template #default="{ row }">{{ (row.levels || []).map((item: any) => logicalDimensionName(item.logical_dimension_id)).join(' → ') }}</template></el-table-column>
+            <el-table-column prop="contract_status" label="契约状态" width="120" />
+            <el-table-column prop="version" label="版本" width="80" />
+            <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openHierarchyDialog(row)">编辑</el-button><el-button link type="danger" @click="deleteGovernanceAsset('hierarchy', row)">删除</el-button></template></el-table-column>
+          </el-table>
+        </div>
+        <div v-else-if="governanceTab === 'relationships'">
+          <div class="toolbar"><span class="toolbar-meta">跨模型关系必须配置关系路径和共同逻辑维度。</span><el-button type="primary" :icon="Plus" @click="openRelationshipDialog()">新建关系</el-button></div>
+          <el-table :data="metricRelationships" height="calc(100vh - 430px)">
+            <el-table-column label="目标指标" min-width="180"><template #default="{ row }">{{ metricLabel(row.target_metric_id) }}</template></el-table-column>
+            <el-table-column label="驱动指标" min-width="180"><template #default="{ row }">{{ metricLabel(row.driver_metric_id) }}</template></el-table-column>
+            <el-table-column prop="relationship_type" label="关系类型" min-width="190" />
+            <el-table-column prop="validation_method" label="验证方式" min-width="170" />
+            <el-table-column prop="expected_direction" label="方向" width="100" />
+            <el-table-column prop="contract_status" label="契约状态" width="120" />
+            <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openRelationshipDialog(row)">编辑</el-button><el-button link type="danger" @click="deleteGovernanceAsset('relationship', row)">删除</el-button></template></el-table-column>
+          </el-table>
+        </div>
+        <div v-else-if="governanceTab === 'capabilities'">
+          <div class="toolbar"><span class="toolbar-meta">指标能力决定可分组、筛选、明细和贡献度分析范围。</span><el-button type="primary" :icon="Plus" @click="openCapabilityDialog()">新增能力</el-button></div>
+          <el-table :data="metricCapabilities" height="calc(100vh - 430px)">
+            <el-table-column label="指标" min-width="180"><template #default="{ row }">{{ metricLabel(row.metric_id) }}</template></el-table-column>
+            <el-table-column label="逻辑维度" min-width="180"><template #default="{ row }">{{ logicalDimensionName(row.logical_dimension_id) }}</template></el-table-column>
+            <el-table-column label="用途" min-width="220"><template #default="{ row }">{{ (row.usages || []).join('、') }}</template></el-table-column>
+            <el-table-column prop="aggregation_safety" label="聚合安全" width="150" />
+            <el-table-column prop="version" label="版本" width="80" />
+            <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openCapabilityDialog(row)">编辑</el-button><el-button link type="danger" @click="deleteGovernanceAsset('capability', row)">删除</el-button></template></el-table-column>
+          </el-table>
+        </div>
+        <div v-else>
+          <div class="toolbar">
+            <el-select v-model="selectedDatasetId" class="wide-select" clearable placeholder="选择数据集">
+              <el-option v-for="item in datasets" :key="item.id" :label="item.name" :value="item.id" />
+            </el-select>
+            <div class="toolbar-actions"><el-button :loading="contractLoading" @click="loadContractGovernance">查看报告</el-button><el-button type="primary" :loading="contractLoading" @click="publishDatasetContract">发布契约</el-button></div>
+          </div>
+          <div class="schema-grid">
+            <section class="schema-section"><div class="section-title"><Finished /><span>契约报告</span></div><pre class="json-preview governance-json">{{ formatJson(contractReport) }}</pre></section>
+            <section class="schema-section"><div class="section-title"><DataAnalysis /><span>可执行分析能力</span></div><pre class="json-preview governance-json">{{ formatJson(analysisCapabilities) }}</pre></section>
+            <section class="schema-section"><div class="section-title"><Finished /><span>发布历史</span></div><pre class="json-preview governance-json">{{ formatJson(contractVersions) }}</pre></section>
+            <section class="schema-section"><div class="section-title"><DataAnalysis /><span>变更影响分析</span></div><pre class="json-preview governance-json">{{ formatJson(contractImpact) }}</pre></section>
+          </div>
+        </div>
       </div>
 
       <div v-if="activeTab === 'runtime'" class="schema-area">
@@ -1405,6 +1812,62 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
         </div>
       </div>
     </div>
+
+    <el-dialog v-model="hierarchyDialogVisible" :title="hierarchyEditingId ? '编辑维度层级' : '新建维度层级'" width="760px">
+      <el-form label-position="top">
+        <el-row :gutter="12">
+          <el-col :span="8"><el-form-item class="required-item" label="主题域"><el-select v-model="hierarchyForm.domain_id"><el-option v-for="item in domains" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></el-col>
+          <el-col :span="8"><el-form-item class="required-item" label="名称"><el-input v-model="hierarchyForm.name" /></el-form-item></el-col>
+          <el-col :span="8"><el-form-item class="required-item" label="英文标识"><el-input v-model="hierarchyForm.biz_name" /></el-form-item></el-col>
+        </el-row>
+        <el-form-item label="描述"><el-input v-model="hierarchyForm.description" type="textarea" :rows="2" /></el-form-item>
+        <div class="toolbar"><span class="toolbar-meta">只允许相邻层级下钻。</span><el-button :icon="Plus" @click="addHierarchyLevel">添加层级</el-button></div>
+        <el-table :data="hierarchyForm.levels" border>
+          <el-table-column prop="level_order" label="顺序" width="80" />
+          <el-table-column label="逻辑维度">
+            <template #default="{ row }"><el-select v-model="row.logical_dimension_id" filterable><el-option v-for="item in logicalDimensions" :key="item.id" :label="item.name" :value="item.id" /></el-select></template>
+          </el-table-column>
+          <el-table-column label="操作" width="90"><template #default="{ $index }"><el-button link type="danger" @click="removeHierarchyLevel($index)">删除</el-button></template></el-table-column>
+        </el-table>
+      </el-form>
+      <template #footer><el-button @click="hierarchyDialogVisible = false">取消</el-button><el-button type="primary" :loading="governanceSaveLoading" @click="saveHierarchy">保存草稿</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="relationshipDialogVisible" :title="relationshipEditingId ? '编辑指标关系' : '新建指标关系'" width="760px">
+      <el-form label-position="top">
+        <el-row :gutter="12">
+          <el-col :span="8"><el-form-item class="required-item" label="主题域"><el-select v-model="relationshipForm.domain_id"><el-option v-for="item in domains" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></el-col>
+          <el-col :span="8"><el-form-item class="required-item" label="目标指标"><el-select v-model="relationshipForm.target_metric_id" filterable><el-option v-for="item in metrics" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></el-col>
+          <el-col :span="8"><el-form-item class="required-item" label="驱动指标"><el-select v-model="relationshipForm.driver_metric_id" filterable><el-option v-for="item in metrics" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></el-col>
+        </el-row>
+        <el-row :gutter="12">
+          <el-col :span="8"><el-form-item label="关系类型"><el-select v-model="relationshipForm.relationship_type"><el-option label="认证驱动" value="CERTIFIED_DRIVER" /><el-option label="治理分析关系" value="GOVERNED_ANALYSIS_RELATION" /><el-option label="公式组成" value="FORMULA_COMPONENT" /></el-select></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="验证方式"><el-select v-model="relationshipForm.validation_method"><el-option label="同向" value="SAME_DIRECTION" /><el-option label="反向" value="OPPOSITE_DIRECTION" /><el-option label="公式对账" value="FORMULA_RECONCILIATION" /></el-select></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="预期方向"><el-select v-model="relationshipForm.expected_direction"><el-option label="正向" value="POSITIVE" /><el-option label="负向" value="NEGATIVE" /><el-option label="未知" value="UNKNOWN" /></el-select></el-form-item></el-col>
+        </el-row>
+        <el-form-item label="共同逻辑维度"><el-select v-model="relationshipForm.logical_dimension_ids" multiple filterable><el-option v-for="item in logicalDimensions" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+        <el-row :gutter="12"><el-col :span="12"><el-form-item label="支持时间角色"><el-input v-model="relationshipForm.supported_time_roles" placeholder="current,previous" /></el-form-item></el-col><el-col :span="12"><el-form-item label="关系路径"><el-input v-model="relationshipForm.relation_path" placeholder="跨模型必填，例如 12,13" /></el-form-item></el-col></el-row>
+      </el-form>
+      <template #footer><el-button @click="relationshipDialogVisible = false">取消</el-button><el-button type="primary" :loading="governanceSaveLoading" @click="saveRelationship">保存草稿</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="capabilityDialogVisible" :title="capabilityEditingId ? '编辑指标维度能力' : '新增指标维度能力'" width="760px">
+      <el-form label-position="top">
+        <el-row :gutter="12">
+          <el-col :span="8"><el-form-item class="required-item" label="指标"><el-select v-model="capabilityForm.metric_id" filterable><el-option v-for="item in metrics" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></el-col>
+          <el-col :span="8"><el-form-item class="required-item" label="逻辑维度"><el-select v-model="capabilityForm.logical_dimension_id" filterable><el-option v-for="item in logicalDimensions" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></el-col>
+          <el-col :span="8"><el-form-item class="required-item" label="目标模型"><el-select v-model="capabilityForm.target_model_id" filterable><el-option v-for="item in models" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></el-col>
+        </el-row>
+        <el-form-item label="用途"><el-checkbox-group v-model="capabilityForm.usages"><el-checkbox label="GROUP_BY">分组</el-checkbox><el-checkbox label="FILTER">筛选</el-checkbox><el-checkbox label="DETAIL">明细</el-checkbox><el-checkbox label="CONTRIBUTION">贡献度</el-checkbox></el-checkbox-group></el-form-item>
+        <el-row :gutter="12">
+          <el-col :span="8"><el-form-item label="绑定策略"><el-select v-model="capabilityForm.binding_strategy"><el-option label="同模型" value="SAME_MODEL" /><el-option label="关系路径" value="RELATION_PATH" /></el-select></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="物理维度"><el-select v-model="capabilityForm.physical_dimension_id" filterable clearable><el-option v-for="item in dimensions" :key="item.id" :label="item.name + ' / ' + modelName(item.model_id)" :value="item.id" /></el-select></el-form-item></el-col>
+          <el-col :span="8"><el-form-item label="聚合安全"><el-select v-model="capabilityForm.aggregation_safety"><el-option label="安全" value="SAFE" /><el-option label="需要预聚合" value="PRE_AGGREGATE_REQUIRED" /><el-option label="禁止" value="FORBIDDEN" /></el-select></el-form-item></el-col>
+        </el-row>
+        <el-row :gutter="12"><el-col :span="8"><el-form-item label="关系路径"><el-input v-model="capabilityForm.relation_path" placeholder="跨模型必填" /></el-form-item></el-col><el-col :span="8"><el-form-item label="预聚合粒度"><el-input v-model="capabilityForm.pre_aggregation_grain" placeholder="day,model" /></el-form-item></el-col><el-col :span="8"><el-form-item label="贡献度容差"><el-input-number v-model="capabilityForm.contribution_tolerance" :min="0" :step="0.000001" /></el-form-item></el-col></el-row>
+      </el-form>
+      <template #footer><el-button @click="capabilityDialogVisible = false">取消</el-button><el-button type="primary" :loading="governanceSaveLoading" @click="saveCapability">保存</el-button></template>
+    </el-dialog>
 
     <el-dialog v-model="modelDialogVisible" :title="modelDialogTitle" width="1180px" top="5vh">
       <div class="model-builder">
@@ -1565,6 +2028,27 @@ const modelBizName = (id: number | string) => models.value.find((item) => `${ite
             <el-option v-for="item in models" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
         </el-form-item>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="维度层级">
+              <el-select v-model="datasetForm.dimension_hierarchy_ids" multiple filterable clearable>
+                <el-option v-for="item in dimensionHierarchies" :key="item.id" :label="item.name" :value="item.id" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="指标关系">
+              <el-select v-model="datasetForm.metric_relationship_ids" multiple filterable clearable>
+                <el-option
+                  v-for="item in metricRelationships"
+                  :key="item.id"
+                  :label="`${metricLabel(item.target_metric_id)} → ${metricLabel(item.driver_metric_id)}`"
+                  :value="item.id"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
       </el-form>
       <div class="dataset-configs">
         <section v-for="modelId in datasetForm.model_ids" :key="modelId" class="dataset-config">

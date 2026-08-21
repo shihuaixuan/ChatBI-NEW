@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Identity,
     Index,
+    String,
     Text,
     text,
 )
@@ -44,6 +45,35 @@ class SemanticDataset(SQLModel, table=True):
         sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
     )
     schema_version: int = Field(default=1, sa_column=Column(BigInteger, nullable=False, server_default=text("1")))
+    contract_version: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, server_default=text("0")))
+    default_timezone: str = Field(
+        default="UTC",
+        sa_column=Column(
+            String(length=64),
+            nullable=False,
+            server_default=text("'UTC'"),
+        ),
+    )
+    calendar_type: str = Field(
+        default="NATURAL",
+        sa_column=Column(
+            String(length=32),
+            nullable=False,
+            server_default=text("'NATURAL'"),
+        ),
+    )
+    week_start_day: int = Field(
+        default=1,
+        sa_column=Column(BigInteger, nullable=False, server_default=text("1")),
+    )
+    fiscal_year_start_month: int = Field(
+        default=1,
+        sa_column=Column(BigInteger, nullable=False, server_default=text("1")),
+    )
+    holiday_calendar_key: str | None = Field(
+        default=None,
+        sa_column=Column(String(length=128), nullable=True),
+    )
     index_version: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, server_default=text("0")))
     default_model_id: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     default_time_dimension_id: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
@@ -78,7 +108,8 @@ class SemanticDatasetAsset(SQLModel, table=True):
     id: int | None = Field(default=None, sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
     oid: int = Field(sa_column=Column(BigInteger, nullable=False))
     dataset_id: int = Field(sa_column=Column(BigInteger, nullable=False))
-    model_id: int = Field(sa_column=Column(BigInteger, nullable=False))
+    # 层级和指标关系属于数据集级资产，不绑定具体模型。
+    model_id: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     asset_type: str = Field(max_length=32, nullable=False)
     asset_id: int = Field(sa_column=Column(BigInteger, nullable=False))
     is_default: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, server_default=text("false")))

@@ -1,13 +1,19 @@
 """完整语义契约的持久化端口。"""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from apps.semantic.models.orm import (
     BusinessEntity,
+    DimensionHierarchy,
+    DimensionHierarchyLevel,
     LogicalDimension,
     MetricDimensionCapability,
+    MetricRelationship,
+    MetricRelationshipDimension,
 )
+from apps.semantic.models.orm.contract_version import SemanticContractVersion
 from apps.semantic.repository.model_repository import SemanticModelAssetBundle
 from apps.semantic.repository.schema_repository import DatasetSchemaAssets
 
@@ -35,6 +41,7 @@ class PendingMetricCapability:
     aggregation_safety: str
     pre_aggregation_grain: list[str]
     time_alignment_policy: str
+    contribution_tolerance: float
 
 
 @dataclass
@@ -86,7 +93,9 @@ class SemanticContractRepository(Protocol):
 
     def list_business_entities(self, oid: int) -> list[BusinessEntity]: ...
 
-    def get_business_entity(self, oid: int, entity_id: int) -> BusinessEntity | None: ...
+    def get_business_entity(
+        self, oid: int, entity_id: int
+    ) -> BusinessEntity | None: ...
 
     def create_business_entity(self, entity: BusinessEntity) -> BusinessEntity: ...
 
@@ -94,13 +103,21 @@ class SemanticContractRepository(Protocol):
 
     def delete_business_entity(self, entity: BusinessEntity) -> None: ...
 
-    def list_logical_dimensions(self, oid: int, domain_id: int | None = None) -> list[LogicalDimension]: ...
+    def list_logical_dimensions(
+        self, oid: int, domain_id: int | None = None
+    ) -> list[LogicalDimension]: ...
 
-    def get_logical_dimension(self, oid: int, dimension_id: int) -> LogicalDimension | None: ...
+    def get_logical_dimension(
+        self, oid: int, dimension_id: int
+    ) -> LogicalDimension | None: ...
 
-    def create_logical_dimension(self, dimension: LogicalDimension) -> LogicalDimension: ...
+    def create_logical_dimension(
+        self, dimension: LogicalDimension
+    ) -> LogicalDimension: ...
 
-    def update_logical_dimension(self, dimension: LogicalDimension) -> LogicalDimension: ...
+    def update_logical_dimension(
+        self, dimension: LogicalDimension
+    ) -> LogicalDimension: ...
 
     def delete_logical_dimension(self, dimension: LogicalDimension) -> None: ...
 
@@ -131,6 +148,18 @@ class SemanticContractRepository(Protocol):
         capability: MetricDimensionCapability,
     ) -> None: ...
 
+    def metric_dimension_capability_is_referenced(
+        self,
+        oid: int,
+        capability_id: int,
+    ) -> bool: ...
+
+    def invalidate_published_contracts_for_capability(
+        self,
+        oid: int,
+        capability: MetricDimensionCapability,
+    ) -> None: ...
+
     def create_contract_assets(
         self,
         bundle: SemanticContractAssetBundle,
@@ -155,5 +184,83 @@ class SemanticContractRepository(Protocol):
     def publish_contract(
         self,
         assets: DatasetSchemaAssets,
-        contract_version: int,
-    ) -> None: ...
+        *,
+        contract_version: int | None = None,
+        schema_fingerprint: str = "",
+        asset_snapshot: dict[str, object] | None = None,
+        published_by: int | None = None,
+        build_snapshot: Callable[[int], tuple[str, dict[str, object]]] | None = None,
+    ) -> int: ...
+
+    def list_contract_versions(
+        self, oid: int, dataset_id: int
+    ) -> list[SemanticContractVersion]: ...
+
+    def list_workspace_contract_versions(
+        self,
+        oid: int,
+    ) -> list[SemanticContractVersion]: ...
+
+    def list_dimension_hierarchies(
+        self, oid: int, domain_id: int | None = None
+    ) -> list[DimensionHierarchy]: ...
+
+    def get_dimension_hierarchy(
+        self, oid: int, hierarchy_id: int
+    ) -> DimensionHierarchy | None: ...
+
+    def list_dimension_hierarchy_levels(
+        self, oid: int, hierarchy_id: int
+    ) -> list[DimensionHierarchyLevel]: ...
+
+    def create_dimension_hierarchy(
+        self,
+        hierarchy: DimensionHierarchy,
+        levels: list[DimensionHierarchyLevel],
+    ) -> DimensionHierarchy: ...
+
+    def update_dimension_hierarchy(
+        self,
+        hierarchy: DimensionHierarchy,
+        levels: list[DimensionHierarchyLevel],
+    ) -> DimensionHierarchy: ...
+
+    def delete_dimension_hierarchy(self, hierarchy: DimensionHierarchy) -> None: ...
+
+    def dimension_hierarchy_is_referenced(
+        self, oid: int, hierarchy_id: int
+    ) -> bool: ...
+
+    def list_metric_relationships(
+        self, oid: int, domain_id: int | None = None
+    ) -> list[MetricRelationship]: ...
+
+    def get_metric_relationship(
+        self, oid: int, relationship_id: int
+    ) -> MetricRelationship | None: ...
+
+    def list_metric_relationship_dimensions(
+        self, oid: int, relationship_id: int
+    ) -> list[MetricRelationshipDimension]: ...
+
+    def create_metric_relationship(
+        self,
+        relationship: MetricRelationship,
+        dimensions: list[MetricRelationshipDimension],
+    ) -> MetricRelationship: ...
+
+    def update_metric_relationship(
+        self,
+        relationship: MetricRelationship,
+        dimensions: list[MetricRelationshipDimension],
+    ) -> MetricRelationship: ...
+
+    def delete_metric_relationship(self, relationship: MetricRelationship) -> None: ...
+
+    def metric_relationship_is_referenced(
+        self, oid: int, relationship_id: int
+    ) -> bool: ...
+
+    def metric_reference(self, oid: int, metric_id: int) -> tuple[int, int] | None: ...
+
+    def relation_ids_exist(self, oid: int, relation_ids: list[int]) -> bool: ...

@@ -44,7 +44,17 @@ def build_metric_relations(metric: SemanticMetric) -> list[SemanticAssetRelation
         relations.append(_relation(metric.oid, "METRIC", metric.id, "DEFINED_BY_MEASURE", "MEASURE", metric.measure_id))
     if metric.field_id is not None:
         relations.append(_relation(metric.oid, "METRIC", metric.id, "USES_FIELD", "FIELD", metric.field_id))
-    for metric_ref in metric.metric_refs or []:
+    formula_components = (metric.formula_definition or {}).get("components")
+    metric_refs = (
+        [
+            item["metric_id"]
+            for item in formula_components
+            if isinstance(item, dict) and isinstance(item.get("metric_id"), int)
+        ]
+        if isinstance(formula_components, list)
+        else list(metric.metric_refs or [])
+    )
+    for metric_ref in metric_refs:
         relations.append(_relation(metric.oid, "METRIC", metric.id, "DEFINED_BY_METRIC", "METRIC", metric_ref))
     for item in metric.relate_dimensions or []:
         dimension_id = _relation_asset_id(item)

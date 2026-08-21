@@ -121,6 +121,10 @@ def patch_from_understanding(understanding: dict[str, Any]) -> PlanPatch | None:
 
     payload = understanding.get("plan_patch")
     if not isinstance(payload, dict):
+        inherited_context = understanding.get("inherited_context")
+        if isinstance(inherited_context, dict):
+            payload = inherited_context.get("plan_patch")
+    if not isinstance(payload, dict):
         return None
     try:
         return PlanPatch.model_validate(deepcopy(payload))

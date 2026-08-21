@@ -1,5 +1,6 @@
 from apps.semantic.models.orm import (
     SemanticDataset,
+    SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticDimensionValue,
     SemanticDomain,
@@ -89,6 +90,12 @@ def test_schema_builder_prefers_storage_dimension_values():
         dimensions=[dimension],
         terms=[],
         dimension_values=[value],
+        dataset_model_configs=[
+            SemanticDatasetModelConfig(
+                oid=1, dataset_id=40, model_id=9, includes_all=True
+            )
+        ],
+        dataset_assets=[],
     )
 
     assert schema.dimension_values[0].alias == ["女性", "女士", "female"]

@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Identity,
     Index,
+    String,
     Text,
     text,
 )
@@ -71,6 +72,24 @@ class SemanticMetric(SQLModel, table=True):
     metric_refs: list[int] = Field(
         default_factory=list,
         sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+    # 派生指标的结构化公式；metric_refs 仅作为存量兼容字段保留。
+    formula_definition: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    )
+    # 允许比较的时间粒度和跨指标时间对齐策略属于已发布指标契约。
+    comparison_grains: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    )
+    time_alignment_policy: str = Field(
+        default="NONE",
+        sa_column=Column(
+            String(length=32),
+            nullable=False,
+            server_default=text("'NONE'"),
+        ),
     )
     version: int = Field(default=1, sa_column=Column(BigInteger, nullable=False, server_default=text("1")))
     quality_status: str | None = Field(default=None, max_length=32)

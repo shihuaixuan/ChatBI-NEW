@@ -35,6 +35,14 @@ class MetricRepository(Protocol):
         metric: SemanticMetric,
     ) -> MetricDependencyFacts: ...
 
+    def metric_is_referenced(self, oid: int, metric_id: int) -> bool: ...
+
+    def invalidate_published_contracts_for_metric(
+        self,
+        oid: int,
+        metric_id: int,
+    ) -> None: ...
+
     def create(
         self,
         metric: SemanticMetric,

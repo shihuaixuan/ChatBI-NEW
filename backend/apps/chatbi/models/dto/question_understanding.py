@@ -349,6 +349,23 @@ class QuestionUnderstandingOutput(BaseModel):
     # R1 新契约；旧快照没有此字段时保持 None，继续使用 intent 兼容投影。
     mention_graph: MentionGraph | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_snapshot(cls, value: Any) -> Any:
+        """读取历史 Run 快照时兼容旧字段名和已移除的上下文字段。"""
+
+        if not isinstance(value, dict):
+            return value
+        if "rewrite_question" in value:
+            return value
+        legacy = dict(value)
+        rewritten_question = legacy.pop("rewritten_question", None)
+        if isinstance(rewritten_question, str):
+            legacy["rewrite_question"] = rewritten_question
+        legacy.pop("message_type", None)
+        legacy.pop("inherited_context", None)
+        return legacy
+
 
 @dataclass(frozen=True)
 class QuestionUnderstandingOutcome:

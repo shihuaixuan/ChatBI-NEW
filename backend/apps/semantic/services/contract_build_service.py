@@ -210,6 +210,13 @@ class SemanticContractBuildService:
             metric.distinct_keys = item.distinct_keys
             metric.time_semantics = item.time_semantics
             metric.snapshot_aggregation = item.snapshot_aggregation
+            metric.formula_definition = (
+                item.formula_definition.model_dump(mode="json")
+                if item.formula_definition is not None
+                else {}
+            )
+            metric.comparison_grains = list(item.comparison_grains)
+            metric.time_alignment_policy = item.time_alignment_policy
             self._validate_metric_contract(item, dimensions_by_biz_name)
             if item.default_time_dimension_biz_name:
                 if (
@@ -266,6 +273,7 @@ class SemanticContractBuildService:
                     aggregation_safety=item.aggregation_safety,
                     pre_aggregation_grain=item.pre_aggregation_grain,
                     time_alignment_policy=item.time_alignment_policy,
+                    contribution_tolerance=item.contribution_tolerance,
                 )
             )
 

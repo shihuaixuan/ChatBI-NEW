@@ -12,7 +12,8 @@ components.d.ts
 extra
 .env
 # docs are part of the implementation plan and must be versioned.
-docs
+docs/tech
+docs/test-results
 backend/logs
 backend/data/workflow_artifacts/
 backend/tests

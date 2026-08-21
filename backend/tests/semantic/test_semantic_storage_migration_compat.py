@@ -1,7 +1,5 @@
 from apps.semantic.models.orm import (
     SemanticDataset,
-    SemanticDatasetAsset,
-    SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticDimensionValue,
     SemanticMetric,
@@ -51,7 +49,7 @@ class _QueuedSession:
         self.added.append(item)
 
 
-def test_storage_consistency_reports_json_and_storage_mismatches():
+def test_storage_consistency_reports_model_and_dimension_mismatches():
     model = SemanticModel(
         id=1,
         oid=1,
@@ -72,19 +70,6 @@ def test_storage_consistency_reports_json_and_storage_mismatches():
         biz_name="gender",
         dim_value_maps=[{"value": "女"}],
     )
-    dataset = SemanticDataset(
-        id=3,
-        oid=1,
-        domain_id=1,
-        name="数据集",
-        biz_name="dataset",
-        data_set_detail={
-            "dataSetModelConfigs": [
-                {"id": 1, "includesAll": False, "metrics": [10], "dimensions": [2]}
-            ]
-        },
-    )
-
     issues = check_storage_consistency(
         model=model,
         fields=[
@@ -106,23 +91,12 @@ def test_storage_consistency_reports_json_and_storage_mismatches():
         dimension_values=[
             SemanticDimensionValue(oid=1, dimension_id=2, model_id=1, value="男")
         ],
-        dataset=dataset,
-        dataset_model_configs=[
-            SemanticDatasetModelConfig(oid=1, dataset_id=3, model_id=2)
-        ],
-        dataset_assets=[
-            SemanticDatasetAsset(
-                oid=1, dataset_id=3, model_id=1, asset_type="METRIC", asset_id=11
-            )
-        ],
     )
 
     assert {item["type"] for item in issues} == {
         "MODEL_FIELD_MISMATCH",
         "MODEL_MEASURE_MISMATCH",
         "DIMENSION_VALUE_MISMATCH",
-        "DATASET_MODEL_CONFIG_MISMATCH",
-        "DATASET_ASSET_MISMATCH",
     }
 
 

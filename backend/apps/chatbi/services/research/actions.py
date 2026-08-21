@@ -298,8 +298,7 @@ def _selected_evidence_row(
             ResearchExecutionError.ACTION_SOURCE_COLUMN_UNKNOWN
         )
     if not any(
-        column.metric_ref == order.metric_ref
-        and column.value_role == order.value_role
+        column.metric_ref == order.metric_ref and column.value_role == order.value_role
         for column in source.logical_columns
     ):
         raise ResearchExecutionError(
@@ -351,14 +350,14 @@ def _materialize_drilldown(
             ResearchExecutionError.ACTION_SCOPE_INVALID
         ) from exc
     if next_index != current_index + 1:
-        raise ResearchExecutionError(
-            ResearchExecutionError.ACTION_SCOPE_INVALID
-        )
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
     source = evidence_by_result.get(action.source_result_id)
     if source is None:
         raise ResearchExecutionError(ResearchExecutionError.ACTION_SOURCE_UNKNOWN)
     if action.current_dimension_ref not in source.dimension_refs:
-        raise ResearchExecutionError(ResearchExecutionError.ACTION_SOURCE_COLUMN_UNKNOWN)
+        raise ResearchExecutionError(
+            ResearchExecutionError.ACTION_SOURCE_COLUMN_UNKNOWN
+        )
     row = _selected_evidence_row(
         source,
         ResearchFilterFromResultAction(
@@ -382,7 +381,9 @@ def _materialize_drilldown(
         None,
     )
     if dimension_index is None:
-        raise ResearchExecutionError(ResearchExecutionError.ACTION_SOURCE_COLUMN_UNKNOWN)
+        raise ResearchExecutionError(
+            ResearchExecutionError.ACTION_SOURCE_COLUMN_UNKNOWN
+        )
     selected_value = next(
         (
             item.value
@@ -440,7 +441,10 @@ def _materialize_contribution(
 
     if action.metric_ref not in research_requirement.scope.contribution_metric_refs:
         raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
-    if action.dimension_ref not in research_requirement.scope.contribution_dimension_refs:
+    if (
+        action.dimension_ref
+        not in research_requirement.scope.contribution_dimension_refs
+    ):
         raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
     if tuple(action.time_roles) != ("current", "previous"):
         raise ResearchExecutionError(ResearchExecutionError.COMPARISON_REQUIRED)
@@ -506,7 +510,7 @@ def _materialize_contribution(
                 "difference_column": f"{metric_field}_difference",
                 "total_difference_column": f"{metric_field}_difference",
                 "output_column": f"{metric_field}_contribution",
-                "reconciliation_tolerance": 1e-6,
+                "reconciliation_tolerance": research_requirement.scope.contribution_tolerance,
             },
         ),
     )
@@ -576,7 +580,9 @@ def _materialize_validate_hypothesis(
     """只按已治理驱动关系生成假设验证查询，不接受自由公式。"""
 
     if not action.evidence_ids:
-        raise ResearchExecutionError(ResearchExecutionError.HYPOTHESIS_EVIDENCE_REQUIRED)
+        raise ResearchExecutionError(
+            ResearchExecutionError.HYPOTHESIS_EVIDENCE_REQUIRED
+        )
     hypothesis = next(
         (item for item in hypotheses or () if item.id == action.hypothesis_id),
         None,
@@ -594,8 +600,7 @@ def _materialize_validate_hypothesis(
         raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
     relationships = research_requirement.scope.driver_relationships
     if not any(
-        set(action.metric_refs)
-        == {item.target_metric_ref, item.driver_metric_ref}
+        set(action.metric_refs) == _relationship_metric_refs(item)
         and set(action.dimension_refs) <= set(item.dimension_refs)
         and set(research_requirement.time_roles) <= set(item.time_roles)
         for item in relationships
@@ -618,9 +623,7 @@ def _materialize_validate_hypothesis(
         dimension_refs=action.dimension_refs,
         purpose=f"验证假设 {action.hypothesis_id} 的驱动指标变化",
         calculation=(
-            "difference"
-            if tuple(time_roles) == ("current", "previous")
-            else "value"
+            "difference" if tuple(time_roles) == ("current", "previous") else "value"
         ),
         source_action=action,
         hypothesis_ids=(action.hypothesis_id,),
@@ -635,9 +638,7 @@ def _materialize_comparison(
     asset_snapshot: dict[str, Any],
     assets: dict[str, dict[str, Any]],
     fingerprint: str,
-    extra_filters: tuple[
-        tuple[str, str, Any, Literal["where", "having"]], ...
-    ],
+    extra_filters: tuple[tuple[str, str, Any, Literal["where", "having"]], ...],
     purpose: str,
     dimension_ref: str | None = None,
     dimension_refs: tuple[str, ...] = (),
@@ -653,7 +654,9 @@ def _materialize_comparison(
         raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
     if tuple(action.time_roles) not in {("current", "previous"), ("single",)}:
         raise ResearchExecutionError(ResearchExecutionError.COMPARISON_REQUIRED)
-    metric_assets = [_required_asset(assets, ref, "METRIC") for ref in action.metric_refs]
+    metric_assets = [
+        _required_asset(assets, ref, "METRIC") for ref in action.metric_refs
+    ]
     selected_dimension_refs = tuple(
         dict.fromkeys(
             (
@@ -662,6 +665,26 @@ def _materialize_comparison(
             )
         )
     )
+    cross_model_relationship = _cross_model_relationship(
+        action.metric_refs,
+        research_requirement,
+    )
+    if cross_model_relationship is not None:
+        return _materialize_cross_model_comparison(
+            action=action,
+            research_requirement=research_requirement,
+            runtime=runtime,
+            asset_snapshot=asset_snapshot,
+            assets=assets,
+            fingerprint=fingerprint,
+            extra_filters=extra_filters,
+            purpose=purpose,
+            dimension_refs=selected_dimension_refs,
+            calculation=calculation,
+            source_action=source_action,
+            hypothesis_ids=hypothesis_ids,
+            relationship=cross_model_relationship,
+        )
     _validate_driver_metric_scope(
         metric_refs=action.metric_refs,
         dimension_refs=selected_dimension_refs,
@@ -671,10 +694,7 @@ def _materialize_comparison(
     dimension_assets = tuple(
         _required_asset(assets, ref, "DIMENSION") for ref in selected_dimension_refs
     )
-    model_ids = {
-        int(item["model_id"])
-        for item in (*metric_assets, *dimension_assets)
-    }
+    model_ids = {int(item["model_id"]) for item in (*metric_assets, *dimension_assets)}
     if len(model_ids) != 1:
         raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
     model_id = next(iter(model_ids))
@@ -715,7 +735,9 @@ def _materialize_comparison(
                     value_role="group_key",
                 ),
             )
-            for ref, asset in zip(selected_dimension_refs, dimension_assets, strict=True)
+            for ref, asset in zip(
+                selected_dimension_refs, dimension_assets, strict=True
+            )
         )
         columns.extend(
             EvidenceColumnProjection(
@@ -795,9 +817,7 @@ def _materialize_comparison(
         for ref, asset in zip(selected_dimension_refs, dimension_assets, strict=True)
     )
     result_role: Literal["growth_rate", "difference"] = (
-        "growth_rate"
-        if operation is CalculationOperation.GROWTH_RATE
-        else "difference"
+        "growth_rate" if operation is CalculationOperation.GROWTH_RATE else "difference"
     )
     for metric_ref, field in zip(action.metric_refs, metric_fields, strict=True):
         columns.extend(
@@ -867,9 +887,7 @@ def _materialize_comparison(
 def _filters(
     requirement: ResearchRequirement,
     assets: dict[str, dict[str, Any]],
-    extra_filters: tuple[
-        tuple[str, str, Any, Literal["where", "having"]], ...
-    ],
+    extra_filters: tuple[tuple[str, str, Any, Literal["where", "having"]], ...],
 ) -> tuple[dict[str, Any], ...]:
     bindings = [
         (item.target_ref, item.operator, item.value, item.stage)
@@ -892,6 +910,328 @@ def _filters(
     return tuple(result)
 
 
+def _cross_model_relationship(
+    metric_refs: tuple[str, ...],
+    requirement: ResearchRequirement,
+) -> Any | None:
+    """查找当前动作唯一对应的跨模型治理关系。"""
+
+    if len(metric_refs) != 2:
+        return None
+    for relationship in requirement.scope.driver_relationships:
+        if relationship.relationship_type == "formula_component":
+            continue
+        if {relationship.target_metric_ref, relationship.driver_metric_ref} != set(
+            metric_refs
+        ):
+            continue
+        target_model = _asset_model_id(relationship.target_metric_ref)
+        driver_model = _asset_model_id(relationship.driver_metric_ref)
+        if (
+            target_model is not None
+            and driver_model is not None
+            and target_model != driver_model
+        ):
+            return relationship
+    return None
+
+
+def _materialize_cross_model_comparison(
+    *,
+    action: ResearchCompareAction,
+    research_requirement: ResearchRequirement,
+    runtime: dict[str, Any],
+    asset_snapshot: dict[str, Any],
+    assets: dict[str, dict[str, Any]],
+    fingerprint: str,
+    extra_filters: tuple[tuple[str, str, Any, Literal["where", "having"]], ...],
+    purpose: str,
+    dimension_refs: tuple[str, ...],
+    calculation: str,
+    source_action: ResearchAction | None,
+    hypothesis_ids: tuple[str, ...],
+    relationship: Any,
+) -> MaterializedResearchAction:
+    """按模型拆分跨模型驱动验证，再用显式 MERGE 对齐结果。"""
+
+    target_ref = relationship.target_metric_ref
+    driver_ref = relationship.driver_metric_ref
+    target_model = _asset_model_id(target_ref)
+    driver_model = _asset_model_id(driver_ref)
+    if target_model is None or driver_model is None or target_model == driver_model:
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
+    if not set(dimension_refs) <= set(relationship.dimension_refs):
+        raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
+
+    target_dimensions = tuple(
+        relationship.dimension_refs_by_model.get(str(target_model), ())
+    )
+    driver_dimensions = tuple(
+        relationship.dimension_refs_by_model.get(str(driver_model), ())
+    )
+    if len(target_dimensions) != len(driver_dimensions):
+        raise ResearchExecutionError(
+            ResearchExecutionError.ACTION_MATERIALIZATION_FAILED,
+            details={"reason": "CROSS_MODEL_DIMENSION_ALIGNMENT_INVALID"},
+        )
+    selected = set(dimension_refs)
+    selected_indexes = tuple(
+        index
+        for index, (left, right) in enumerate(
+            zip(target_dimensions, driver_dimensions, strict=True)
+        )
+        if not selected or left in selected or right in selected
+    )
+    selected_pairs = tuple(
+        (target_dimensions[index], driver_dimensions[index])
+        for index in selected_indexes
+    )
+    model_dimension_refs = {
+        target_model: tuple(left for left, _ in selected_pairs),
+        driver_model: tuple(right for _, right in selected_pairs),
+    }
+    aliases_by_model: dict[int, dict[int, str]] = {target_model: {}, driver_model: {}}
+    for index, (left, right) in enumerate(selected_pairs):
+        alias = f"research_dimension_{index}"
+        for model_id, ref in ((target_model, left), (driver_model, right)):
+            asset = _required_asset(assets, ref, "DIMENSION")
+            aliases_by_model[model_id][int(asset["asset_id"])] = alias
+
+    metric_assets = {
+        target_model: _required_asset(assets, target_ref, "METRIC"),
+        driver_model: _required_asset(assets, driver_ref, "METRIC"),
+    }
+    query_requirements: list[QueryRequirement] = []
+    suffix = fingerprint[:12]
+    for model_id, _metric_ref in (
+        (target_model, target_ref),
+        (driver_model, driver_ref),
+    ):
+        bindings = _model_time_bindings(research_requirement, model_id)
+        roles = action.time_roles
+        if roles != ("single",) and set(bindings) != set(roles):
+            raise ResearchExecutionError(ResearchExecutionError.COMPARISON_REQUIRED)
+        group_by = tuple(
+            {
+                **_required_asset(assets, ref, "DIMENSION"),
+                "result_name": aliases_by_model[model_id][
+                    int(_required_asset(assets, ref, "DIMENSION")["asset_id"])
+                ],
+            }
+            for ref in model_dimension_refs[model_id]
+        )
+        filters = _filters_for_model(
+            research_requirement,
+            assets,
+            extra_filters,
+            model_id,
+        )
+        for role in roles:
+            binding = bindings.get(role)
+            time_requirement = None
+            if binding is not None:
+                time_asset = _required_asset(assets, binding.dimension_ref, "DIMENSION")
+                time_requirement = {
+                    **binding.model_dump(mode="json"),
+                    "column": time_asset["column"],
+                }
+            query_requirements.append(
+                QueryRequirement(
+                    id=f"research_{suffix}_{model_id}_{role}",
+                    model_ref=f"MODEL:{model_id}",
+                    metrics=(metric_assets[model_id],),
+                    group_by=group_by,
+                    filters=filters,
+                    time=time_requirement,
+                    query_shape={"shape": "research_cross_model"},
+                    output_aliases=aliases_by_model[model_id],
+                )
+            )
+
+    calculations: list[CalculationRequirement] = []
+    result_roles: dict[
+        str,
+        Literal["value", "growth_rate", "difference"],
+    ]
+    if action.time_roles == ("single",):
+        target_input = query_requirements[0].id
+        driver_input = query_requirements[1].id
+        target_output = target_input
+        driver_output = driver_input
+        result_roles = {target_ref: "value", driver_ref: "value"}
+    else:
+        target_current, target_previous = (
+            query_requirements[0].id,
+            query_requirements[1].id,
+        )
+        driver_current, driver_previous = (
+            query_requirements[2].id,
+            query_requirements[3].id,
+        )
+        target_output = f"research_{suffix}_target_{calculation}"
+        driver_output = f"research_{suffix}_driver_{calculation}"
+        result_operation = (
+            CalculationOperation.GROWTH_RATE
+            if calculation == "growth_rate"
+            else CalculationOperation.DIFFERENCE
+        )
+        calculations.extend(
+            (
+                CalculationRequirement(
+                    id=target_output,
+                    type=result_operation,
+                    inputs=(target_current, target_previous),
+                    join_keys=tuple(
+                        f"research_dimension_{index}"
+                        for index in range(len(selected_pairs))
+                    ),
+                    value_columns=(str(metric_assets[target_model]["biz_name"]),),
+                ),
+                CalculationRequirement(
+                    id=driver_output,
+                    type=result_operation,
+                    inputs=(driver_current, driver_previous),
+                    join_keys=tuple(
+                        f"research_dimension_{index}"
+                        for index in range(len(selected_pairs))
+                    ),
+                    value_columns=(str(metric_assets[driver_model]["biz_name"]),),
+                ),
+            )
+        )
+        result_roles = {
+            target_ref: "growth_rate"
+            if result_operation is CalculationOperation.GROWTH_RATE
+            else "difference",
+            driver_ref: "growth_rate"
+            if result_operation is CalculationOperation.GROWTH_RATE
+            else "difference",
+        }
+    merge_id = f"research_{suffix}_cross_model_merge"
+    join_keys = tuple(
+        f"research_dimension_{index}" for index in range(len(selected_pairs))
+    )
+    calculations.append(
+        CalculationRequirement(
+            id=merge_id,
+            type=CalculationOperation.MERGE,
+            inputs=(target_output, driver_output),
+            join_keys=join_keys,
+        )
+    )
+    columns: list[EvidenceColumnProjection] = []
+    for index in range(len(selected_pairs)):
+        columns.append(
+            EvidenceColumnProjection(
+                field=f"research_dimension_{index}",
+                logical_column=EvidenceLogicalColumn(
+                    dimension_ref=selected_pairs[index][0],
+                    value_role="group_key",
+                ),
+            )
+        )
+    for metric_ref in (target_ref, driver_ref):
+        field = str(
+            metric_assets[target_model if metric_ref == target_ref else driver_model][
+                "biz_name"
+            ]
+        )
+        role = result_roles[metric_ref]
+        columns.append(
+            EvidenceColumnProjection(
+                field=field if role == "value" else f"{field}_{role}",
+                logical_column=EvidenceLogicalColumn(
+                    metric_ref=metric_ref,
+                    value_role=role,
+                ),
+            )
+        )
+    requirement = ExecutionRequirement(
+        status="ready",
+        route=ExecutionRoute(
+            mode="plan",
+            origin="research_action",
+            reasons=("research_action", "cross_model_relation", "explicit_merge"),
+        ),
+        query_requirements=tuple(query_requirements),
+        post_calculations=tuple(calculations),
+        result_contract=ExecutionResultContract(
+            primary_requirement_id=merge_id,
+            ordered_requirement_ids=(merge_id,),
+        ),
+        runtime={
+            **runtime,
+            "research_action_fingerprint": fingerprint,
+            "cross_model_relation_path": list(relationship.relation_path),
+            "cross_model_dimension_refs_by_model": {
+                str(model_id): list(refs)
+                for model_id, refs in model_dimension_refs.items()
+            },
+        },
+        asset_snapshot=asset_snapshot,
+    )
+    return MaterializedResearchAction(
+        fingerprint=fingerprint,
+        action=source_action or action,
+        requirement=requirement,
+        purpose=purpose,
+        metric_refs=(target_ref, driver_ref),
+        dimension_refs=tuple(ref for pair in selected_pairs for ref in pair),
+        time_roles=action.time_roles,
+        columns=tuple(columns),
+        primary_requirement_id=merge_id,
+        hypothesis_ids=hypothesis_ids,
+        applied_filters=tuple(
+            ResearchAppliedFilter(
+                target_ref=target_ref,
+                operator=operator,
+                value=value,
+                stage=stage,
+            )
+            for target_ref, operator, value, stage in extra_filters
+        ),
+    )
+
+
+def _filters_for_model(
+    requirement: ResearchRequirement,
+    assets: dict[str, dict[str, Any]],
+    extra_filters: tuple[tuple[str, str, Any, Literal["where", "having"]], ...],
+    model_id: int,
+) -> tuple[dict[str, Any], ...]:
+    """只把属于当前模型的筛选条件放入该模型的独立查询。"""
+
+    filters = _filters(requirement, assets, extra_filters)
+    return tuple(
+        item
+        for item in filters
+        if int(assets[str(item["target_ref"])]["model_id"]) == model_id
+    )
+
+
+def _model_time_bindings(
+    requirement: ResearchRequirement,
+    model_id: int,
+) -> dict[str, Any]:
+    bindings = requirement.time_bindings_by_model.get(str(model_id))
+    if bindings:
+        return {item.role: item for item in bindings}
+    return {
+        item.role: item
+        for item in requirement.time_bindings
+        if _asset_model_id(item.dimension_ref) == model_id
+    }
+
+
+def _asset_model_id(ref: str) -> int | None:
+    """从受控资产引用读取模型 ID。"""
+
+    parts = ref.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        return None
+    return int(parts[2])
+
+
 def _validate_driver_metric_scope(
     *,
     metric_refs: tuple[str, ...],
@@ -905,12 +1245,21 @@ def _validate_driver_metric_scope(
     relationships = requirement.scope.driver_relationships
     for metric_ref in set(metric_refs) & driver_refs:
         if not any(
-            item.driver_metric_ref == metric_ref
+            metric_ref in (item.component_metric_refs or (item.driver_metric_ref,))
             and set(dimension_refs) <= set(item.dimension_refs)
             and set(time_roles) <= set(item.time_roles)
             for item in relationships
         ):
             raise ResearchExecutionError(ResearchExecutionError.ACTION_SCOPE_INVALID)
+
+
+def _relationship_metric_refs(relationship: Any) -> set[str]:
+    """返回一次关系验证必须同时查询的完整指标集合。"""
+
+    return {
+        relationship.target_metric_ref,
+        *(relationship.component_metric_refs or (relationship.driver_metric_ref,)),
+    }
 
 
 def _filter_tuple(
@@ -939,12 +1288,16 @@ def merge_research_action_requirements(
     """把同轮独立动作合并为一个 Plan，让现有 DAG 执行器负责并行。"""
 
     if not actions:
-        raise ResearchExecutionError(ResearchExecutionError.ACTION_MATERIALIZATION_FAILED)
+        raise ResearchExecutionError(
+            ResearchExecutionError.ACTION_MATERIALIZATION_FAILED
+        )
     if len(actions) == 1:
         return actions[0].requirement
     primary_ids = tuple(item.primary_requirement_id for item in actions)
     if len(primary_ids) != len(set(primary_ids)):
-        raise ResearchExecutionError(ResearchExecutionError.ACTION_MATERIALIZATION_FAILED)
+        raise ResearchExecutionError(
+            ResearchExecutionError.ACTION_MATERIALIZATION_FAILED
+        )
     first, *supporting = primary_ids
     fingerprints = tuple(item.fingerprint for item in actions)
     base = actions[0].requirement
@@ -952,9 +1305,7 @@ def merge_research_action_requirements(
         status="ready",
         route=base.route,
         query_requirements=tuple(
-            query
-            for item in actions
-            for query in item.requirement.query_requirements
+            query for item in actions for query in item.requirement.query_requirements
         ),
         post_calculations=tuple(
             calculation

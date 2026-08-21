@@ -27,6 +27,7 @@ class TemporalContext(BaseModel):
     reference_at: datetime
     timezone: str = "Asia/Shanghai"
     locale: str = "zh-CN"
+    calendar_type: Literal["NATURAL", "FISCAL", "BUSINESS"] = "NATURAL"
     week_start: WeekStart = "monday"
     fiscal_year_start_month: int = Field(default=1, ge=1, le=12)
     fiscal_year_label: Literal["start_year", "end_year"] = "start_year"
@@ -63,6 +64,7 @@ def build_temporal_context(
     reference_at: datetime | None = None,
     timezone: str = "Asia/Shanghai",
     locale: str = "zh-CN",
+    calendar_type: Literal["NATURAL", "FISCAL", "BUSINESS"] = "NATURAL",
     week_start: WeekStart = "monday",
     fiscal_year_start_month: int = 1,
     fiscal_year_label: Literal["start_year", "end_year"] = "start_year",
@@ -81,6 +83,7 @@ def build_temporal_context(
         reference_at=fixed_reference_at.astimezone(zone),
         timezone=timezone,
         locale=locale,
+        calendar_type=calendar_type,
         week_start=week_start,
         fiscal_year_start_month=fiscal_year_start_month,
         fiscal_year_label=fiscal_year_label,
@@ -100,6 +103,7 @@ def build_run_temporal_context(
         reference_at=reference_at,
         timezone=settings.TEMPORAL_TIMEZONE,
         locale=settings.TEMPORAL_LOCALE,
+        calendar_type="NATURAL",
         week_start=settings.TEMPORAL_WEEK_START,
         fiscal_year_start_month=settings.TEMPORAL_FISCAL_YEAR_START_MONTH,
         fiscal_year_label=settings.TEMPORAL_FISCAL_YEAR_LABEL,
@@ -107,9 +111,46 @@ def build_run_temporal_context(
     )
 
 
+def build_dataset_temporal_context(
+    *,
+    reference_at: datetime | None = None,
+    default_timezone: str,
+    calendar_type: Literal["NATURAL", "FISCAL", "BUSINESS"],
+    week_start_day: int,
+    fiscal_year_start_month: int,
+    holiday_calendar_key: str | None,
+    locale: str = "zh-CN",
+) -> TemporalContext:
+    """按已发布数据集日历契约创建 Run 的时间上下文。"""
+
+    week_starts: tuple[WeekStart, ...] = (
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    )
+    if week_start_day < 1 or week_start_day > 7:
+        raise ValueError("SEMANTIC_DATASET_WEEK_START_INVALID")
+    if calendar_type == "BUSINESS" and not holiday_calendar_key:
+        raise ValueError("SEMANTIC_BUSINESS_CALENDAR_KEY_REQUIRED")
+    return build_temporal_context(
+        reference_at=reference_at,
+        timezone=default_timezone,
+        locale=locale,
+        calendar_type=calendar_type,
+        week_start=week_starts[week_start_day - 1],
+        fiscal_year_start_month=fiscal_year_start_month,
+        business_calendar_id=holiday_calendar_key,
+    )
+
+
 __all__ = [
     "TemporalContext",
     "WeekStart",
     "build_run_temporal_context",
+    "build_dataset_temporal_context",
     "build_temporal_context",
 ]

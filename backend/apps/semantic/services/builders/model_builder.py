@@ -152,8 +152,9 @@ def build_model_with_assets(
         row_description=payload.row_description,
         event_time_field=payload.event_time_field,
         snapshot_time_field=payload.snapshot_time_field,
-        contract_status=payload.contract_status,
-        contract_version=payload.contract_version,
+        # 契约状态和版本只能由发布服务写入，客户端创建的模型一律从草稿开始。
+        contract_status="DRAFT",
+        contract_version=None,
     )
     normalize_model_source(model)
     dimensions = [

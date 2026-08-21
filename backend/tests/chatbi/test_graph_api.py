@@ -40,7 +40,12 @@ from apps.semantic.models.orm import (
     SemanticMetric,
     SemanticModel,
 )
+from apps.semantic.models.orm.contract_version import SemanticContractVersion
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
+from apps.semantic.repository.sqlmodel.semantic_contract_repository import (
+    SqlModelSemanticContractRepository,
+)
+from apps.semantic.services.builders.schema_builder import SemanticSchemaBuilder
 from apps.semantic.services.schema_service import SemanticSchemaService
 from common.core.db import engine
 from common.core.deps import get_current_user
@@ -79,13 +84,19 @@ def _fake_chatbi_v1_sql_execute_tool(monkeypatch):
         def execute(self, datasource_id: int, sql: str):
             return SimpleNamespace(
                 succeeded=True,
-                payload={"fields": [], "data": [{"placeholder_value": 1}], "execution_ms": 1},
+                payload={
+                    "fields": [],
+                    "data": [{"placeholder_value": 1}],
+                    "execution_ms": 1,
+                },
                 error_code=None,
                 message="",
                 transient=False,
             )
 
-    monkeypatch.setattr(chatbi_runtime, "SessionSqlExecutionGateway", FakeDatasourceQueryExecutor)
+    monkeypatch.setattr(
+        chatbi_runtime, "SessionSqlExecutionGateway", FakeDatasourceQueryExecutor
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -221,32 +232,70 @@ def _cleanup(session: Session) -> None:
     if chat_ids:
         session.execute(delete(ChatRecord).where(ChatRecord.chat_id.in_(chat_ids)))
         session.execute(delete(Chat).where(Chat.id.in_(chat_ids)))
-    session.execute(delete(WorkflowArtifactModel).where(WorkflowArtifactModel.run_id.like("api-%")))
-    session.execute(delete(InteractionRequestModel).where(InteractionRequestModel.run_id.like("api-%")))
-    session.execute(delete(NodeExecutionModel).where(NodeExecutionModel.run_id.like("api-%")))
-    session.execute(delete(WorkflowEventModel).where(WorkflowEventModel.run_id.like("api-%")))
-    session.execute(delete(WorkflowRunModel).where(WorkflowRunModel.run_id.like("api-%")))
+    session.execute(
+        delete(WorkflowArtifactModel).where(WorkflowArtifactModel.run_id.like("api-%"))
+    )
+    session.execute(
+        delete(InteractionRequestModel).where(
+            InteractionRequestModel.run_id.like("api-%")
+        )
+    )
+    session.execute(
+        delete(NodeExecutionModel).where(NodeExecutionModel.run_id.like("api-%"))
+    )
+    session.execute(
+        delete(WorkflowEventModel).where(WorkflowEventModel.run_id.like("api-%"))
+    )
+    session.execute(
+        delete(WorkflowRunModel).where(WorkflowRunModel.run_id.like("api-%"))
+    )
     _cleanup_semantic_fixture(session)
     session.commit()
 
 
 def _cleanup_semantic_fixture(session: Session, oid: int = 9501) -> None:
     dataset_ids = session.exec(
-        select(SemanticDataset.id).where(SemanticDataset.oid == oid, SemanticDataset.biz_name == "api_stall_dataset")
+        select(SemanticDataset.id).where(
+            SemanticDataset.oid == oid, SemanticDataset.biz_name == "api_stall_dataset"
+        )
     ).all()
     model_ids = session.exec(
-        select(SemanticModel.id).where(SemanticModel.oid == oid, SemanticModel.biz_name == "api_stall_traffic_model")
+        select(SemanticModel.id).where(
+            SemanticModel.oid == oid,
+            SemanticModel.biz_name == "api_stall_traffic_model",
+        )
     ).all()
     domain_ids = session.exec(
-        select(SemanticDomain.id).where(SemanticDomain.oid == oid, SemanticDomain.biz_name == "api_graph_v1_domain")
+        select(SemanticDomain.id).where(
+            SemanticDomain.oid == oid, SemanticDomain.biz_name == "api_graph_v1_domain"
+        )
     ).all()
     if dataset_ids:
-        session.execute(delete(SemanticDatasetAsset).where(SemanticDatasetAsset.dataset_id.in_(dataset_ids)))
-        session.execute(delete(SemanticDatasetModelConfig).where(SemanticDatasetModelConfig.dataset_id.in_(dataset_ids)))
-        session.execute(delete(SemanticDataset).where(SemanticDataset.id.in_(dataset_ids)))
+        session.execute(
+            delete(SemanticContractVersion).where(
+                SemanticContractVersion.dataset_id.in_(dataset_ids)
+            )
+        )
+        session.execute(
+            delete(SemanticDatasetAsset).where(
+                SemanticDatasetAsset.dataset_id.in_(dataset_ids)
+            )
+        )
+        session.execute(
+            delete(SemanticDatasetModelConfig).where(
+                SemanticDatasetModelConfig.dataset_id.in_(dataset_ids)
+            )
+        )
+        session.execute(
+            delete(SemanticDataset).where(SemanticDataset.id.in_(dataset_ids))
+        )
     if model_ids:
-        session.execute(delete(SemanticMetric).where(SemanticMetric.model_id.in_(model_ids)))
-        session.execute(delete(SemanticDimension).where(SemanticDimension.model_id.in_(model_ids)))
+        session.execute(
+            delete(SemanticMetric).where(SemanticMetric.model_id.in_(model_ids))
+        )
+        session.execute(
+            delete(SemanticDimension).where(SemanticDimension.model_id.in_(model_ids))
+        )
         session.execute(delete(SemanticModel).where(SemanticModel.id.in_(model_ids)))
     if domain_ids:
         session.execute(delete(SemanticDomain).where(SemanticDomain.id.in_(domain_ids)))
@@ -281,7 +330,14 @@ def _seed_v1_semantic_dataset(session: Session, oid: int = 9501) -> int:
                     "type": "partition_time",
                 }
             ],
-            "measures": [{"name": "访问人数", "bizName": "visit_uv", "expr": "visit_uv", "agg": "SUM"}],
+            "measures": [
+                {
+                    "name": "访问人数",
+                    "bizName": "visit_uv",
+                    "expr": "visit_uv",
+                    "agg": "SUM",
+                }
+            ],
         },
     )
     session.add(model)
@@ -340,9 +396,22 @@ def _seed_v1_semantic_dataset(session: Session, oid: int = 9501) -> int:
     session.add(dataset)
     session.flush()
     profile = build_semantic_index_profile()
-    schema = SemanticSchemaService(SemanticSchemaLoader(session)).build_dataset_schema(
-        oid, dataset.id or 0
+    dataset.contract_version = 1
+    model.contract_status = "READY"
+    model.contract_version = 1
+    metric.contract_version = 1
+    dimension.contract_version = 1
+    time_dimension.contract_version = 1
+    loader = SemanticSchemaLoader(session)
+    assets = loader.load(oid, dataset.id or 0, include_drafts=True)
+    schema = SemanticSchemaBuilder().build(assets)
+    SqlModelSemanticContractRepository(session).publish_contract(
+        assets,
+        1,
+        schema_fingerprint=schema.schema_fingerprint,
+        asset_snapshot={"schema": schema.model_dump(mode="json")},
     )
+    schema = SemanticSchemaService(loader).build_dataset_schema(oid, dataset.id or 0)
     queued = SemanticIndexCoordinator(session, profile).enqueue_dataset_rebuild(
         tenant_id=oid,
         version=DatasetIndexVersion(
@@ -419,7 +488,10 @@ def test_graph_routes_are_registered_and_included_by_apps_api():
 
     api_py = Path(__file__).parents[2] / "apps" / "api.py"
     source = api_py.read_text()
-    assert "from sqlbot_platform.workflow_engine.api import router as graph_workflow" in source
+    assert (
+        "from sqlbot_platform.workflow_engine.api import router as graph_workflow"
+        in source
+    )
     assert "graph_router=graph_workflow.router" in source
     assert "api_router.include_router(chatbi_router)" in source
     assert "api_router.include_router(agent.router)" not in source
@@ -465,10 +537,15 @@ def test_graph_query_creates_run_and_executes_placeholder_chatbi_graph():
     assert body["run_id"] == "api-run-1"
     assert body["status"] == "succeeded"
     assert body["current_node"] == "finish"
-    assert body["context_summary"]["variables"]["answer"]["answer"] == "这是图工作流占位回答：最近 7 天销售额"
+    assert (
+        body["context_summary"]["variables"]["answer"]["answer"]
+        == "这是图工作流占位回答：最近 7 天销售额"
+    )
 
     with Session(engine) as session:
-        stored = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-run-1")).one()
+        stored = session.exec(
+            select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-run-1")
+        ).one()
         events = session.exec(
             select(WorkflowEventModel)
             .where(WorkflowEventModel.run_id == "api-run-1")
@@ -498,7 +575,10 @@ def test_graph_query_creates_run_and_executes_placeholder_chatbi_graph():
         assert "node.started" in event_types
         assert "node.succeeded" in event_types
         assert event_types[-1] == "run.succeeded"
-        assert events[0].public_payload == {"status": "created", "question": "最近 7 天销售额"}
+        assert events[0].public_payload == {
+            "status": "created",
+            "question": "最近 7 天销售额",
+        }
         _cleanup(session)
 
 
@@ -520,7 +600,11 @@ def test_graph_chat_history_survives_reload_boundary():
     assert body["record_id"] is not None
 
     with Session(engine) as session:
-        run = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-owned-run")).one()
+        run = session.exec(
+            select(WorkflowRunModel).where(
+                WorkflowRunModel.run_id == "api-chat-owned-run"
+            )
+        ).one()
         record = session.get(ChatRecord, body["record_id"])
         assert record is not None
         assert run.chat_id == chat_id
@@ -551,12 +635,18 @@ def test_standalone_graph_query_rejects_body_chat_id():
     with Session(engine) as session:
         assert (
             session.exec(
-            select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-standalone-body-chat-run")
+                select(WorkflowRunModel).where(
+                    WorkflowRunModel.run_id == "api-standalone-body-chat-run"
+                )
             ).one_or_none()
             is None
         )
         assert (
-            session.exec(select(ChatRecord).where(ChatRecord.run_id == "api-standalone-body-chat-run")).one_or_none()
+            session.exec(
+                select(ChatRecord).where(
+                    ChatRecord.run_id == "api-standalone-body-chat-run"
+                )
+            ).one_or_none()
             is None
         )
         _cleanup(session)
@@ -580,12 +670,17 @@ def test_graph_chat_query_rejects_unowned_chat_without_creating_history():
     with Session(engine) as session:
         assert (
             session.exec(
-                select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-unowned-run")
+                select(WorkflowRunModel).where(
+                    WorkflowRunModel.run_id == "api-chat-unowned-run"
+                )
             ).one_or_none()
             is None
         )
         assert (
-            session.exec(select(ChatRecord).where(ChatRecord.run_id == "api-chat-unowned-run")).one_or_none() is None
+            session.exec(
+                select(ChatRecord).where(ChatRecord.run_id == "api-chat-unowned-run")
+            ).one_or_none()
+            is None
         )
         _cleanup(session)
 
@@ -608,12 +703,18 @@ def test_graph_chat_query_rejects_dataset_mismatch_without_creating_history():
     with Session(engine) as session:
         assert (
             session.exec(
-                select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-dataset-mismatch-run")
+                select(WorkflowRunModel).where(
+                    WorkflowRunModel.run_id == "api-chat-dataset-mismatch-run"
+                )
             ).one_or_none()
             is None
         )
         assert (
-            session.exec(select(ChatRecord).where(ChatRecord.run_id == "api-chat-dataset-mismatch-run")).one_or_none()
+            session.exec(
+                select(ChatRecord).where(
+                    ChatRecord.run_id == "api-chat-dataset-mismatch-run"
+                )
+            ).one_or_none()
             is None
         )
         _cleanup(session)
@@ -637,7 +738,9 @@ def test_graph_chat_stream_rejects_unowned_chat_before_starting_sse():
     with Session(engine) as session:
         assert (
             session.exec(
-                select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-stream-unowned-run")
+                select(WorkflowRunModel).where(
+                    WorkflowRunModel.run_id == "api-chat-stream-unowned-run"
+                )
             ).one_or_none()
             is None
         )
@@ -690,7 +793,11 @@ def test_graph_chat_query_stream_creates_owned_record_and_run():
     assert "event: run.created\n" in text
     assert "event: run.succeeded\n" in text
     with Session(engine) as session:
-        run = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-owned-stream-run")).one()
+        run = session.exec(
+            select(WorkflowRunModel).where(
+                WorkflowRunModel.run_id == "api-chat-owned-stream-run"
+            )
+        ).one()
         assert run.chat_id == chat_id
         assert run.record_id is not None
         record = session.get(ChatRecord, run.record_id)
@@ -790,7 +897,9 @@ def test_graph_chat_retry_reuses_record_and_clears_error():
     assert created.status_code == 200
     record_id = created.json()["record_id"]
     with Session(engine) as session:
-        run = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-retry")).one()
+        run = session.exec(
+            select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-chat-retry")
+        ).one()
         record = session.get(ChatRecord, record_id)
         assert record is not None
         run.status = "failed"
@@ -918,7 +1027,9 @@ def test_stream_run_events_waits_for_resume_worker_before_closing_on_old_waiting
     def resume_later():
         time.sleep(0.1)
         with Session(engine) as worker_session:
-            run = worker_session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == run_id)).one()
+            run = worker_session.exec(
+                select(WorkflowRunModel).where(WorkflowRunModel.run_id == run_id)
+            ).one()
             run.status = "succeeded"
             run.current_node = "finish"
             run.updated_at = datetime.now(timezone.utc)
@@ -1004,7 +1115,10 @@ def test_graph_query_can_execute_chatbi_v1_graph():
     assert body["status"] == "succeeded"
     assert body["current_node"] == "finish"
     assert body["context_summary"]["variables"]["knowledge"]["metrics"] == ["visit_uv"]
-    assert body["context_summary"]["variables"]["final_reply"]["final_answer"] == "暂时无法生成完整回答，请稍后重试。"
+    assert (
+        body["context_summary"]["variables"]["final_reply"]["final_answer"]
+        == "暂时无法生成完整回答，请稍后重试。"
+    )
 
     with Session(engine) as session:
         events = session.exec(
@@ -1016,8 +1130,7 @@ def test_graph_query_can_execute_chatbi_v1_graph():
         execute_event = next(
             event
             for event in events
-            if event.event_type == "node.succeeded"
-            and event.node_name == "execute_sql"
+            if event.event_type == "node.succeeded" and event.node_name == "execute_sql"
         )
         public_summary = json.dumps(
             execute_event.public_payload,
@@ -1198,8 +1311,12 @@ def test_graph_chat_query_loads_previous_semantic_context():
     assert response.status_code == 200
 
     with Session(engine) as session:
-        stored = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-context-run")).one()
-        record = session.exec(select(ChatRecord).where(ChatRecord.run_id == "api-context-run")).one()
+        stored = session.exec(
+            select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-context-run")
+        ).one()
+        record = session.exec(
+            select(ChatRecord).where(ChatRecord.run_id == "api-context-run")
+        ).one()
         context = stored.context
         assert stored.request["chat_id"] == chat_id
         assert stored.request["record_id"] == record.id
@@ -1208,7 +1325,9 @@ def test_graph_chat_query_loads_previous_semantic_context():
         assert record.finish is True
         assert context["conversation"]["question"] == "那订单数呢"
         assert context["conversation"]["last_question"] == "今天店铺的访问人数"
-        assert context["conversation"]["last_rewrite_question"] == "查询今天店铺的访问人数"
+        assert (
+            context["conversation"]["last_rewrite_question"] == "查询今天店铺的访问人数"
+        )
         assert context["conversation"]["last_intent"]["metric_mentions"] == ["访问人数"]
         assert context["conversation"]["last_intent"]["time_range"] == {
             "raw": "今天",
@@ -1217,7 +1336,9 @@ def test_graph_chat_query_loads_previous_semantic_context():
         _cleanup(session)
 
 
-def test_graph_v1_classification_model_failure_degrades_to_explanatory_answer(monkeypatch):
+def test_graph_v1_classification_model_failure_degrades_to_explanatory_answer(
+    monkeypatch,
+):
     class FailingQuestionModelClient:
         def __call__(self, prompt):
             raise RuntimeError("model unavailable")
@@ -1326,8 +1447,13 @@ def test_graph_trace_returns_node_status_route_reason_and_outputs():
     assert nodes["execute_sql"]["output"]["artifact_refs"][0]["artifact_id"].startswith(
         "artifact-"
     )
-    assert nodes["execute_sql"]["output"]["results"][0]["sample_rows"] == [{"placeholder_value": 1}]
-    assert nodes["compose_final_reply"]["output"]["final_answer"] == "暂时无法生成完整回答，请稍后重试。"
+    assert nodes["execute_sql"]["output"]["results"][0]["sample_rows"] == [
+        {"placeholder_value": 1}
+    ]
+    assert (
+        nodes["compose_final_reply"]["output"]["final_answer"]
+        == "暂时无法生成完整回答，请稍后重试。"
+    )
 
     with Session(engine) as session:
         _cleanup(session)
@@ -1405,7 +1531,11 @@ def test_graph_node_events_use_v1_metadata_projection_for_public_summary():
                 "artifact_ref": None,
             },
         }
-        assert generate_sql_event.public_payload["summary"]["sql"].lower().startswith("select ")
+        assert (
+            generate_sql_event.public_payload["summary"]["sql"]
+            .lower()
+            .startswith("select ")
+        )
         _cleanup(session)
 
 
@@ -1519,7 +1649,10 @@ def test_graph_query_persists_node_execution_summaries_for_trace_and_retry():
         assert classify.status == "succeeded"
         assert classify.node_type == "capability"
         assert classify.handler == "question.classify"
-        assert classify.input_summary == {"question": "今日访问人数", "dataset_id": dataset_id}
+        assert classify.input_summary == {
+            "question": "今日访问人数",
+            "dataset_id": dataset_id,
+        }
         assert classify.output_summary == {
             "category": "data",
             "reason": "测试模型分类为数据问题",
@@ -1547,7 +1680,11 @@ def test_graph_v1_retry_resumes_from_latest_context_without_clearing_variables()
     )
 
     with Session(engine) as session:
-        run = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-run-v1-retry")).one()
+        run = session.exec(
+            select(WorkflowRunModel).where(
+                WorkflowRunModel.run_id == "api-run-v1-retry"
+            )
+        ).one()
         run.status = "failed"
         run.current_node = "generate_question_answer"
         context = copy.deepcopy(run.context)
@@ -1568,7 +1705,10 @@ def test_graph_v1_retry_resumes_from_latest_context_without_clearing_variables()
     assert body["status"] == "succeeded"
     assert body["current_node"] == "finish"
     assert body["context_summary"]["variables"]["retry_marker"] == "preserve-me"
-    assert body["context_summary"]["variables"]["final_reply"]["final_answer"] == "暂时无法生成完整回答，请稍后重试。"
+    assert (
+        body["context_summary"]["variables"]["final_reply"]["final_answer"]
+        == "暂时无法生成完整回答，请稍后重试。"
+    )
 
     with Session(engine) as session:
         node_names = session.exec(
@@ -1582,7 +1722,12 @@ def test_graph_v1_retry_resumes_from_latest_context_without_clearing_variables()
             .order_by(WorkflowEventModel.sequence)
         ).all()
         assert node_names.count("classify_question") == 1
-        assert node_names[-4:] == ["generate_question_answer", "recommend_questions", "compose_final_reply", "finish"]
+        assert node_names[-4:] == [
+            "generate_question_answer",
+            "recommend_questions",
+            "compose_final_reply",
+            "finish",
+        ]
         assert "run.retry_requested" in [event.event_type for event in events]
         assert events[-1].event_type == "run.succeeded"
         _cleanup(session)
@@ -1667,14 +1812,18 @@ def test_graph_run_query_and_events_are_scoped_to_current_user():
         )
 
         run_response = _client().get("/graph/runs/api-run-2")
-        event_response = _client().get("/graph/runs/api-run-2/events", params={"after_sequence": 0})
+        event_response = _client().get(
+            "/graph/runs/api-run-2/events", params={"after_sequence": 0}
+        )
         forbidden = _client(_user(user_id=999, oid=9501)).get("/graph/runs/api-run-2")
 
         assert run_response.status_code == 200
         summary = run_response.json()["context_summary"]
         assert summary["question"] == "销售额"
         assert summary["dataset_id"] == 7001
-        assert summary["variables"]["answer"]["answer"] == "这是图工作流占位回答：销售额"
+        assert (
+            summary["variables"]["answer"]["answer"] == "这是图工作流占位回答：销售额"
+        )
         assert event_response.status_code == 200
         assert [event["sequence"] for event in event_response.json()["events"]] == list(
             range(1, len(event_response.json()["events"]) + 1)
@@ -1696,7 +1845,9 @@ def test_graph_interaction_response_cancel_and_retry_validate_ownership_and_stat
                 "run_id": "api-run-3",
             },
         )
-        run = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-run-3")).one()
+        run = session.exec(
+            select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-run-3")
+        ).one()
         run.status = "waiting_input"
         session.add(
             InteractionRequestModel(
@@ -1721,17 +1872,23 @@ def test_graph_interaction_response_cancel_and_retry_validate_ownership_and_stat
 
     with Session(engine) as session:
         interaction = session.exec(
-            select(InteractionRequestModel).where(InteractionRequestModel.interaction_id == "api-interaction-1")
+            select(InteractionRequestModel).where(
+                InteractionRequestModel.interaction_id == "api-interaction-1"
+            )
         ).one()
         interaction_response = interaction.response
-        run = session.exec(select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-run-3")).one()
+        run = session.exec(
+            select(WorkflowRunModel).where(WorkflowRunModel.run_id == "api-run-3")
+        ).one()
         run.status = "failed"
         run.error_code = "TEST_FAILURE"
         session.add(run)
         session.commit()
 
     retry = _client().post("/graph/runs/api-run-3/retry")
-    forbidden = _client(_user(user_id=999, oid=9501)).post("/graph/runs/api-run-3/cancel")
+    forbidden = _client(_user(user_id=999, oid=9501)).post(
+        "/graph/runs/api-run-3/cancel"
+    )
 
     assert answer.status_code == 200
     assert answer.json()["status"] == "answered"

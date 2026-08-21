@@ -66,6 +66,8 @@ class SemanticModelRelationService:
         relation = self._repository.get_active(oid, relation_id)
         if relation is None:
             raise SemanticNotFoundError("SEMANTIC_MODEL_RELATION_NOT_FOUND")
+        if self._repository.model_relation_is_referenced(oid, relation_id):
+            raise SemanticValidationError("SEMANTIC_MODEL_RELATION_IN_USE")
         self._repository.delete(relation)
         return {"id": relation_id, "deleted": True}
 

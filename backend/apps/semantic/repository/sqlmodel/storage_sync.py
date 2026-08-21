@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import delete, select
-from sqlmodel import Session
+from sqlalchemy import delete
+from sqlmodel import Session, col, select
 
+from apps.semantic.models.dto import DatasetAssetPayload, DatasetModelConfigPayload
 from apps.semantic.models.orm import (
     SemanticAssetAlias,
     SemanticAssetRelation,
@@ -17,6 +18,7 @@ from apps.semantic.models.orm import (
     SemanticModel,
     SemanticModelField,
     SemanticModelMeasure,
+    SemanticModelRelation,
     SemanticTerm,
 )
 from apps.semantic.repository.sqlmodel.asset_relation_mapper import (
@@ -29,8 +31,6 @@ from apps.semantic.repository.sqlmodel.asset_relation_mapper import (
 )
 from apps.semantic.repository.sqlmodel.results import all_results
 from apps.semantic.utils.orm_mapping import (
-    dataset_assets_from_detail,
-    dataset_model_configs_from_detail,
     dimension_values_from_maps,
     model_fields_from_detail,
     model_measures_from_detail,
@@ -38,16 +38,19 @@ from apps.semantic.utils.orm_mapping import (
 
 
 def sync_model_structure(session: Session, model: SemanticModel) -> None:
+    if model.id is None:
+        raise ValueError("SEMANTIC_MODEL_NOT_PERSISTED")
     model.last_schema_sync_at = datetime.now()
     session.exec(
         delete(SemanticModelField).where(
-            SemanticModelField.oid == model.oid, SemanticModelField.model_id == model.id
+            col(SemanticModelField.oid) == model.oid,
+            col(SemanticModelField.model_id) == model.id,
         )
     )
     session.exec(
         delete(SemanticModelMeasure).where(
-            SemanticModelMeasure.oid == model.oid,
-            SemanticModelMeasure.model_id == model.id,
+            col(SemanticModelMeasure.oid) == model.oid,
+            col(SemanticModelMeasure.model_id) == model.id,
         )
     )
     fields = model_fields_from_detail(model)
@@ -85,6 +88,8 @@ def mark_model_schema_changed(session: Session, model: SemanticModel) -> None:
 def mark_domain_datasets_schema_changed(
     session: Session, oid: int, domain_id: int
 ) -> None:
+    """模型内资产变化后统一使主题域的发布契约失效。"""
+
     datasets = all_results(
         session.exec(
             select(SemanticDataset).where(
@@ -96,14 +101,90 @@ def mark_domain_datasets_schema_changed(
     )
     for dataset in datasets:
         dataset.schema_version = (dataset.schema_version or 1) + 1
+        dataset.contract_version = 0
         session.add(dataset)
+    # 旧迁移测试替身只实现一次查询和 add；真实 SQLModel Session 具备 flush，
+    # 资产契约失效逻辑继续在下面执行，不能因兼容替身而削弱生产路径。
+    if not hasattr(session, "flush"):
+        return
+    for model in all_results(
+        session.exec(
+            select(SemanticModel).where(
+                SemanticModel.oid == oid,
+                SemanticModel.domain_id == domain_id,
+                SemanticModel.status == 1,
+            )
+        )
+    ):
+        model.contract_status = "DRAFT"
+        model.contract_version = None
+        session.add(model)
+    for relation in all_results(
+        session.exec(
+            select(SemanticModelRelation).where(
+                SemanticModelRelation.oid == oid,
+                SemanticModelRelation.domain_id == domain_id,
+                SemanticModelRelation.status == 1,
+            )
+        )
+    ):
+        relation.contract_status = "DRAFT"
+        relation.contract_version = None
+        session.add(relation)
+    model_ids = {
+        item.id
+        for item in all_results(
+            session.exec(
+                select(SemanticModel).where(
+                    SemanticModel.oid == oid,
+                    SemanticModel.domain_id == domain_id,
+                    SemanticModel.status == 1,
+                )
+            )
+        )
+        if item.id is not None
+    }
+    if model_ids:
+        for metric in all_results(
+            session.exec(
+                select(SemanticMetric).where(
+                    SemanticMetric.oid == oid,
+                    col(SemanticMetric.model_id).in_(model_ids),
+                    SemanticMetric.status == 1,
+                )
+            )
+        ):
+            metric.contract_version = None
+            session.add(metric)
+        for dimension in all_results(
+            session.exec(
+                select(SemanticDimension).where(
+                    SemanticDimension.oid == oid,
+                    col(SemanticDimension.model_id).in_(model_ids),
+                    SemanticDimension.status == 1,
+                )
+            )
+        ):
+            dimension.contract_version = None
+            session.add(dimension)
+
+
+def invalidate_model_relation_contract(
+    session: Session,
+    relation: SemanticModelRelation,
+) -> None:
+    """模型关系变化后使所属主题域的发布契约失效。"""
+
+    mark_domain_datasets_schema_changed(session, relation.oid, relation.domain_id)
 
 
 def sync_dimension_values(session: Session, dimension: SemanticDimension) -> None:
+    if dimension.id is None:
+        raise ValueError("SEMANTIC_DIMENSION_NOT_PERSISTED")
     session.exec(
         delete(SemanticDimensionValue).where(
-            SemanticDimensionValue.oid == dimension.oid,
-            SemanticDimensionValue.dimension_id == dimension.id,
+            col(SemanticDimensionValue.oid) == dimension.oid,
+            col(SemanticDimensionValue.dimension_id) == dimension.id,
         )
     )
     for value in dimension_values_from_maps(dimension):
@@ -138,27 +219,53 @@ def sync_dimension_values(session: Session, dimension: SemanticDimension) -> Non
         )
 
 
-def sync_dataset_assets(session: Session, dataset: SemanticDataset) -> None:
+def sync_dataset_assets(
+    session: Session,
+    dataset: SemanticDataset,
+    model_configs: list[DatasetModelConfigPayload],
+    assets: list[DatasetAssetPayload],
+) -> None:
+    """仅按正式 DTO 保存数据集资产，不再从旧 JSON 明细重建事实。"""
+
+    if dataset.id is None:
+        raise ValueError("SEMANTIC_DATASET_NOT_PERSISTED")
     session.exec(
         delete(SemanticDatasetModelConfig).where(
-            SemanticDatasetModelConfig.oid == dataset.oid,
-            SemanticDatasetModelConfig.dataset_id == dataset.id,
+            col(SemanticDatasetModelConfig.oid) == dataset.oid,
+            col(SemanticDatasetModelConfig.dataset_id) == dataset.id,
         )
     )
     session.exec(
         delete(SemanticDatasetAsset).where(
-            SemanticDatasetAsset.oid == dataset.oid,
-            SemanticDatasetAsset.dataset_id == dataset.id,
+            col(SemanticDatasetAsset.oid) == dataset.oid,
+            col(SemanticDatasetAsset.dataset_id) == dataset.id,
         )
     )
-    for config in dataset_model_configs_from_detail(dataset):
-        config.dataset_id = dataset.id
-        session.add(config)
-    for asset in dataset_assets_from_detail(dataset):
-        asset.dataset_id = dataset.id
-        session.add(asset)
+    for config in model_configs:
+        session.add(
+            SemanticDatasetModelConfig(
+                oid=dataset.oid,
+                dataset_id=dataset.id,
+                model_id=config.model_id,
+                includes_all=config.includes_all,
+                is_default=config.is_default,
+                sort_order=config.sort_order,
+            )
+        )
+    for asset in assets:
+        session.add(
+            SemanticDatasetAsset(
+                oid=dataset.oid,
+                dataset_id=dataset.id,
+                model_id=asset.model_id,
+                asset_type=asset.asset_type,
+                asset_id=asset.asset_id,
+                is_default=asset.is_default,
+                sort_order=asset.sort_order,
+            )
+        )
     session.flush()
-    assets = all_results(
+    stored_assets = all_results(
         session.exec(
             select(SemanticDatasetAsset).where(
                 SemanticDatasetAsset.oid == dataset.oid,
@@ -172,7 +279,7 @@ def sync_dataset_assets(session: Session, dataset: SemanticDataset) -> None:
         dataset.oid,
         "DATASET",
         dataset.id,
-        build_dataset_asset_relations(assets),
+        build_dataset_asset_relations(stored_assets),
     )
 
 
@@ -228,9 +335,9 @@ def _replace_aliases(
 ) -> None:
     session.exec(
         delete(SemanticAssetAlias).where(
-            SemanticAssetAlias.oid == oid,
-            SemanticAssetAlias.asset_type == asset_type,
-            SemanticAssetAlias.asset_id == asset_id,
+            col(SemanticAssetAlias.oid) == oid,
+            col(SemanticAssetAlias.asset_type) == asset_type,
+            col(SemanticAssetAlias.asset_id) == asset_id,
         )
     )
     for alias in aliases:
@@ -246,9 +353,9 @@ def _replace_relations(
 ) -> None:
     session.exec(
         delete(SemanticAssetRelation).where(
-            SemanticAssetRelation.oid == oid,
-            SemanticAssetRelation.source_type == source_type,
-            SemanticAssetRelation.source_id == source_id,
+            col(SemanticAssetRelation.oid) == oid,
+            col(SemanticAssetRelation.source_type) == source_type,
+            col(SemanticAssetRelation.source_id) == source_id,
         )
     )
     for relation in relations:

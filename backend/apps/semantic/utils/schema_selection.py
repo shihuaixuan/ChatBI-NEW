@@ -1,6 +1,5 @@
 from typing import Any
 
-from apps.semantic.models.dto import DatasetModelConfig
 from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetModelConfig,
@@ -29,22 +28,14 @@ def selected_model_domain_ids(models: list[SemanticModel]) -> list[int]:
     return domain_ids
 
 
-def dataset_model_configs(dataset: SemanticDataset) -> list[DatasetModelConfig]:
-    raw_configs = (dataset.data_set_detail or {}).get("dataSetModelConfigs") or []
-    return [DatasetModelConfig.model_validate(raw) for raw in raw_configs]
-
-
 def runtime_dataset_configs(
-    dataset: SemanticDataset,
+    _dataset: SemanticDataset,
     storage_configs: list[SemanticDatasetModelConfig] | None = None,
 ) -> list[dict[str, Any]]:
+    if storage_configs is None:
+        raise ValueError("SEMANTIC_DATASET_MODEL_CONFIG_MISSING")
     active_configs = [item for item in storage_configs or [] if item.status == 1]
-    if active_configs:
-        return [
-            {"id": item.model_id, "includes_all": item.includes_all}
-            for item in sorted(active_configs, key=lambda config: config.sort_order)
-        ]
     return [
-        {"id": item.id, "includes_all": item.includes_all}
-        for item in dataset_model_configs(dataset)
+        {"id": item.model_id, "includes_all": item.includes_all}
+        for item in sorted(active_configs, key=lambda config: config.sort_order)
     ]

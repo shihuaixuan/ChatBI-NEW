@@ -13,6 +13,7 @@ from apps.retrieval import (
     build_retrieval_request,
     filter_semantic_payload_tables,
 )
+from apps.retrieval.models.dto import RetrievalBindingRequest, RetrievalIntent
 from apps.semantic.services.dataset_binding_service import (
     SemanticDatasetBindingService,
 )
@@ -45,15 +46,48 @@ class SemanticKnowledgeAdapter:
                 "语义检索缺少问题或数据集",
                 details={"reason_code": "SEMANTIC_BINDING_REQUEST_INCOMPLETE"},
             )
+        rewrite = ctx.rewrite
+        # 兼容旧重写模型只返回原问题的结果，指标短语退回已校验的意图提及。
+        metric_phrases = list(rewrite.get("metric_phrases") or [])
+        if not metric_phrases:
+            metric_phrases = [
+                str(item)
+                for item in list(ctx.intent.get("metric_mentions") or [])
+                if str(item).strip()
+            ]
         retrieval_request = build_retrieval_request(
             tenant_id=ctx.tenant_id,
             actor_id=ctx.user_id or 1,
             dataset_id=ctx.dataset_id,
-            metric_phrases=list(ctx.rewrite.get("metric_phrases") or []),
-            dimension_phrases=list(ctx.rewrite.get("dimension_phrases") or []),
+            metric_phrases=metric_phrases,
+            dimension_phrases=list(rewrite.get("dimension_phrases") or []),
             request_id=ctx.run_id or None,
         )
-        package = self._retrieval_service.retrieve(retrieval_request).payload
+        intent_payload = ctx.intent
+        intent = RetrievalIntent.model_validate(
+            {
+                "intent_type": str(intent_payload.get("intent_type") or "metric_query"),
+                "dimension_slots": intent_payload.get("dimension_slots") or [],
+                "time_range": intent_payload.get("time_range") or {},
+                "time_ranges": intent_payload.get("time_ranges") or [],
+                "filter_mentions": intent_payload.get("filter_mentions") or [],
+                "required_slot_types": intent_payload.get("required_slot_types") or [],
+                "query_shape": intent_payload.get("query_shape") or {},
+                "subject_domain": intent_payload.get("subject_domain") or {},
+                "mention_graph": intent_payload.get("mention_graph"),
+                "decomposition_queries": intent_payload.get("decomposition_queries") or [],
+            }
+        )
+        binding_request = RetrievalBindingRequest(
+            request_id=retrieval_request.request_id,
+            tenant_id=retrieval_request.tenant_id,
+            actor_id=retrieval_request.actor_id,
+            original_question=ctx.raw_question,
+            rewrite_question=ctx.question,
+            candidate_request=retrieval_request,
+            intent=intent,
+        )
+        package = self._retrieval_service.retrieve_and_bind(binding_request).payload
         if self._dataset_binding_service is None or self._query_service is None:
             return package
         binding = self._dataset_binding_service.resolve_execution_binding(

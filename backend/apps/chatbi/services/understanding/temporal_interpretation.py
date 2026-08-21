@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
-import re
 from typing import Any, Literal
 
 import orjson
@@ -762,7 +762,7 @@ def _is_explicit_calendar_mention(raw: str) -> bool:
 
 
 def _normalize_custom_comparison_order(plan: TemporalPlan) -> TemporalPlan:
-    """按原文查询时间顺序统一自定义比较的基期与对比期。"""
+    """只补齐缺失的自定义比较区间，不覆盖时间模型已经确认的方向。"""
 
     if plan.comparison is None or plan.comparison.method != "custom":
         return plan
@@ -772,6 +772,8 @@ def _normalize_custom_comparison_order(plan: TemporalPlan) -> TemporalPlan:
         if expression.role == "query_filter"
     ]
     if len(query_filters) < 2:
+        return plan
+    if plan.comparison.base and plan.comparison.compare:
         return plan
     return plan.model_copy(
         update={

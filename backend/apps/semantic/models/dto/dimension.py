@@ -1,11 +1,13 @@
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from apps.semantic.models.dto.base import SemanticBaseDTO
 
 
 class DimensionPayload(SemanticBaseDTO):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
     model_id: int
     name: str
     biz_name: str
@@ -21,4 +23,3 @@ class DimensionPayload(SemanticBaseDTO):
     logical_dimension_id: int | None = None
     binding_role: Literal["KEY", "ATTRIBUTE", "TIME"] | None = None
     binding_priority: int | None = None
-    contract_version: int | None = None

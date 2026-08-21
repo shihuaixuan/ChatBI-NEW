@@ -17,7 +17,7 @@ from apps.semantic.models.orm import (
     SemanticTerm,
 )
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
-from apps.semantic.services.schema_service import SemanticSchemaService
+from apps.semantic.services.builders.schema_builder import SemanticSchemaBuilder
 
 
 class _Result:
@@ -44,6 +44,15 @@ class _DatasetSchemaSession:
         self.metrics = metrics
         self.dimensions = dimensions
         self.configs = configs
+        self.assets = [
+            SemanticDatasetAsset(
+                oid=dataset.oid,
+                dataset_id=dataset.id or 0,
+                model_id=models[0].id,
+                asset_type="METRIC",
+                asset_id=metrics[0].id or 0,
+            )
+        ]
 
     def get(self, entity: type[Any], entity_id: int) -> Any:
         if entity is SemanticDataset and entity_id == self.dataset.id:
@@ -58,11 +67,17 @@ class _DatasetSchemaSession:
         if entity is SemanticDatasetModelConfig:
             return _Result(self.configs)
         if entity is SemanticDatasetAsset:
-            return _Result([])
+            return _Result(self.assets)
         if entity is SemanticModel:
             if "headless_model.id IN" in statement_text:
                 return _Result(self.models)
-            return _Result([model for model in self.models if model.domain_id == self.dataset.domain_id])
+            return _Result(
+                [
+                    model
+                    for model in self.models
+                    if model.domain_id == self.dataset.domain_id
+                ]
+            )
         if entity is SemanticMetric:
             return _Result(self.metrics)
         if entity is SemanticDimension:
@@ -93,7 +108,9 @@ def test_schema_service_uses_dataset_model_configs_across_domains():
         biz_name="product",
         description="商品经营主题",
     )
-    dataset = SemanticDataset(id=20, oid=1, domain_id=1, name="经营分析", biz_name="business_bi")
+    dataset = SemanticDataset(
+        id=20, oid=1, domain_id=1, name="经营分析", biz_name="business_bi"
+    )
     shop_model = SemanticModel(
         id=10,
         oid=1,
@@ -152,12 +169,17 @@ def test_schema_service_uses_dataset_model_configs_across_domains():
         ],
     )
 
-    schema = SemanticSchemaService(SemanticSchemaLoader(session)).build_dataset_schema(
-        oid=1, dataset_id=20
+    # 草稿加载只供治理和发布流程使用，运行时 Schema 必须来自发布快照。
+    assets = SemanticSchemaLoader(session).load(
+        oid=1, dataset_id=20, include_drafts=True
     )
+    schema = SemanticSchemaBuilder().build(assets)
 
     assert [model["id"] for model in schema.models] == [10, 11]
-    assert [metric.biz_name for metric in schema.metrics] == ["shop_visit_uv", "product_visit_uv"]
+    assert [metric.biz_name for metric in schema.metrics] == [
+        "shop_visit_uv",
+        "product_visit_uv",
+    ]
     assert schema.subject_domains == [
         {
             "domain_id": 1,

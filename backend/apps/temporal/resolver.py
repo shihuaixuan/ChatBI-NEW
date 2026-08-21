@@ -60,8 +60,17 @@ def resolve_time_range(
                 "week",
                 temporal_context.week_start,
             )
-        return _absolute_range(start, end_exclusive, temporal_context.timezone, raw)
-    return parse_jionlp_time(raw, temporal_context)
+        return _absolute_range(
+            start,
+            end_exclusive,
+            temporal_context.timezone,
+            raw,
+            metadata=_calendar_metadata(temporal_context),
+        )
+    parsed = parse_jionlp_time(raw, temporal_context)
+    if parsed is None:
+        return None
+    return {**parsed, **_calendar_metadata(temporal_context)}
 
 
 def resolve_time_range_payload(
@@ -496,12 +505,24 @@ def _resolved_temporal_range(
     fiscal_quarter: int | None = None,
 ) -> ResolvedTemporalRange:
     fiscal = calendar == "fiscal"
+    effective_calendar: Literal["natural", "fiscal", "business"] = (
+        "fiscal"
+        if fiscal
+        else "business"
+        if temporal_context.calendar_type == "BUSINESS"
+        else "natural"
+    )
     return ResolvedTemporalRange(
         start=start,
         end_exclusive=end_exclusive,
         timezone=temporal_context.timezone,
         source_raw=expression.raw,
-        calendar=calendar,
+        calendar=effective_calendar,
+        business_calendar_id=(
+            temporal_context.business_calendar_id
+            if effective_calendar == "business"
+            else None
+        ),
         fiscal_year=fiscal_year,
         fiscal_quarter=fiscal_quarter,
         fiscal_year_start_month=(
@@ -509,6 +530,17 @@ def _resolved_temporal_range(
         ),
         fiscal_year_label=temporal_context.fiscal_year_label if fiscal else None,
     )
+
+
+def _calendar_metadata(temporal_context: TemporalContext) -> dict[str, Any]:
+    """把数据集日历身份写入绝对范围，供恢复和审计继续使用。"""
+
+    if temporal_context.calendar_type != "BUSINESS":
+        return {}
+    return {
+        "calendar_type": temporal_context.calendar_type,
+        "holiday_calendar_key": temporal_context.business_calendar_id,
+    }
 
 
 __all__ = [

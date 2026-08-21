@@ -30,7 +30,7 @@ from apps.conversation import (
 )
 from apps.conversation.composition import build_conversation_service
 from apps.semantic.composition import build_semantic_dataset_catalog_service
-from apps.temporal import build_run_temporal_context
+from apps.temporal import build_dataset_temporal_context, build_run_temporal_context
 from sqlbot_platform.workflow_engine.api.extension import (
     ChatQueryPreparation,
     WorkflowApiRequestError,
@@ -197,9 +197,42 @@ class ChatBIWorkflowApiExtension:
     ) -> dict[str, Any]:
         """在 Graph Run 创建前固定时间上下文，恢复时直接复用持久化请求。"""
 
+        if isinstance(request_context.get("temporal_context"), dict):
+            return dict(request_context)
+        dataset_id = request_context.get("dataset_id")
+        if dataset_id is None:
+            temporal_context = build_run_temporal_context()
+        else:
+            try:
+                normalized_dataset_id = int(dataset_id)
+            except (TypeError, ValueError) as error:
+                raise WorkflowApiRequestError(400, "CHAT_DATASET_REQUIRED") from error
+            workspace_id = int(
+                request_context.get("tenant_id") or request_context.get("oid") or 1
+            )
+            calendar = build_semantic_dataset_catalog_service(
+                self._session
+            ).get_calendar(
+                workspace_id,
+                normalized_dataset_id,
+            )
+            if calendar is None:
+                if "chat_id" not in request_context:
+                    # 独立 Graph 仍兼容历史数据源 ID；聊天 Graph 已在绑定阶段严格校验。
+                    temporal_context = build_run_temporal_context()
+                else:
+                    raise WorkflowApiRequestError(404, "SEMANTIC_DATASET_NOT_FOUND")
+            else:
+                temporal_context = build_dataset_temporal_context(
+                    default_timezone=calendar.default_timezone,
+                    calendar_type=calendar.calendar_type,
+                    week_start_day=calendar.week_start_day,
+                    fiscal_year_start_month=calendar.fiscal_year_start_month,
+                    holiday_calendar_key=calendar.holiday_calendar_key,
+                )
         return {
             **request_context,
-            "temporal_context": build_run_temporal_context().model_dump(mode="json"),
+            "temporal_context": temporal_context.model_dump(mode="json"),
         }
 
     def resolve_dataset_id(
@@ -207,9 +240,7 @@ class ChatBIWorkflowApiExtension:
         workspace_id: int,
         dataset_or_datasource_id: int,
     ) -> int:
-        return build_semantic_dataset_catalog_service(
-            self._session
-        ).resolve_dataset_id(
+        return build_semantic_dataset_catalog_service(self._session).resolve_dataset_id(
             workspace_id,
             dataset_or_datasource_id,
         )
@@ -379,9 +410,7 @@ class ChatBIWorkflowApiExtension:
         dataset_id: int,
         chat_record: Any,
     ) -> dict[str, Any]:
-        records = build_chat_record_service(
-            self._session
-        ).list_recent_successful_graph(
+        records = build_chat_record_service(self._session).list_recent_successful_graph(
             chat_id=chat_record.chat_id,
             exclude_record_id=chat_record.id,
             user_id=user_id,
@@ -401,9 +430,7 @@ class ChatBIWorkflowApiExtension:
             if run is None:
                 continue
             run_request = (
-                run.context.get("request")
-                if isinstance(run.context, dict)
-                else {}
+                run.context.get("request") if isinstance(run.context, dict) else {}
             )
             if (
                 isinstance(run_request, dict)
@@ -430,9 +457,7 @@ class ChatBIWorkflowApiExtension:
             rewrite_value if isinstance(rewrite_value, dict) else {}
         )
         intent_value = variables.get("intent")
-        intent: dict[str, Any] = (
-            intent_value if isinstance(intent_value, dict) else {}
-        )
+        intent: dict[str, Any] = intent_value if isinstance(intent_value, dict) else {}
         projected_intent = self._project_intent_context(intent)
         projected: dict[str, Any] = {
             "last_record_id": record.id,

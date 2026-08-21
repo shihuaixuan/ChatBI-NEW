@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from apps.semantic.api.error_mapping import map_semantic_errors_to_http
-from apps.semantic.models.dto import DatasetPayload
+from apps.semantic.models.dto import DatasetPayload, DatasetResponse
 from apps.semantic.models.orm import SemanticDataset
 from apps.semantic.repository.sqlmodel.dataset_repository import (
     SqlModelDatasetRepository,
@@ -18,7 +18,7 @@ router = APIRouter(tags=["Semantic"], prefix="/semantic")
 @router.get("/datasets")
 async def list_datasets(
     session: SessionDep, current_user: CurrentUser, domain_id: int | None = None
-) -> list[SemanticDataset]:
+) -> list[DatasetResponse]:
     with map_semantic_errors_to_http():
         return SemanticDatasetService(
             SqlModelDatasetRepository(session),

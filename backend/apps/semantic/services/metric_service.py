@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from apps.semantic.errors import SemanticNotFoundError
+from apps.semantic.errors import SemanticNotFoundError, SemanticValidationError
 from apps.semantic.models.dto import MetricBatchCreateFromMeasuresPayload, MetricPayload
 from apps.semantic.models.orm import SemanticMetric, SemanticModel
 from apps.semantic.repository.metric_repository import MetricRepository
@@ -74,7 +74,10 @@ class SemanticMetricService:
         source_model = self._model_reader.get_active(oid, metric.model_id)
         target_model = self._require_model(oid, payload.model_id)
         assign_values(metric, payload.model_dump())
+        metric.contract_version = None
         self._validate_metric(metric)
+        # 更新后的口径必须重新审核并发布，旧版本不能继续进入严格运行时。
+        self._repository.invalidate_published_contracts_for_metric(oid, metric_id)
         return self._repository.update(
             metric,
             [model for model in (source_model, target_model) if model is not None],
@@ -84,11 +87,22 @@ class SemanticMetricService:
         metric = self._repository.get_active(oid, metric_id)
         if metric is None:
             raise SemanticNotFoundError("SEMANTIC_METRIC_NOT_FOUND")
+        if self._repository.metric_is_referenced(oid, metric_id):
+            raise SemanticValidationError("SEMANTIC_METRIC_IN_USE")
         model = self._model_reader.get_active(oid, metric.model_id)
         self._repository.delete(metric, model)
         return {"id": metric_id, "deleted": True}
 
     def _validate_metric(self, metric: SemanticMetric) -> None:
+        if metric.formula_definition:
+            metric.define_type = "METRIC"
+            components = metric.formula_definition.get("components")
+            if isinstance(components, list):
+                metric.metric_refs = [
+                    item["metric_id"]
+                    for item in components
+                    if isinstance(item, dict) and isinstance(item.get("metric_id"), int)
+                ]
         normalize_metric_storage_fields(metric)
         validate_metric_dependencies(
             metric,

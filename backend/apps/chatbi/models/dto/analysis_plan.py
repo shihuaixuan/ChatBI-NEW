@@ -57,6 +57,8 @@ class QueryTaskSpec(BaseModel):
     limit: int | None = Field(default=None, gt=0)
     having: tuple[dict[str, Any], ...] = ()
     time_offset: dict[str, Any] | None = None
+    # 结果列别名用于跨模型按共同逻辑维度对齐，不改变物理资产 ID。
+    output_aliases: dict[int, str] = Field(default_factory=dict)
 
 
 class CompiledQuery(BaseModel):

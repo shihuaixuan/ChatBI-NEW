@@ -1037,6 +1037,10 @@ class PlanPipeline:
                         )
                     }
                 )
+            if getattr(task_spec, "output_aliases", None):
+                selected_plan = selected_plan.model_copy(
+                    update={"output_aliases": dict(task_spec.output_aliases)}
+                )
             state.context.state["semantic_scope"] = scope.model_copy(
                 update={"query_plan": selected_plan}
             ).model_dump(mode="json")
@@ -1100,6 +1104,7 @@ class PlanPipeline:
                 "limit": task.spec.limit or compile_plan.limit,
                 "having": task.spec.having or compile_plan.having,
                 "time_offset": task.spec.time_offset or compile_plan.time_offset,
+                "output_aliases": dict(task.spec.output_aliases),
                 "temporal_plan": temporal_plan,
             }
         )

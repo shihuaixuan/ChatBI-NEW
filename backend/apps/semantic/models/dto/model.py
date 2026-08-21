@@ -1,11 +1,13 @@
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from apps.semantic.models.dto.base import SemanticBaseDTO
 
 
 class ModelPayload(SemanticBaseDTO):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
     domain_id: int
     datasource_id: int
     name: str
@@ -27,11 +29,11 @@ class ModelPayload(SemanticBaseDTO):
     row_description: str | None = None
     event_time_field: str | None = None
     snapshot_time_field: str | None = None
-    contract_status: Literal["DRAFT"] | None = None
-    contract_version: int | None = None
 
 
 class ModelRelationPayload(SemanticBaseDTO):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
     domain_id: int
     left_model_id: int
     right_model_id: int
@@ -48,8 +50,6 @@ class ModelRelationPayload(SemanticBaseDTO):
         "SAFE", "PRE_AGGREGATE_REQUIRED", "FORBIDDEN"
     ] | None = None
     valid_time_condition: dict[str, Any] | None = None
-    contract_status: Literal["DRAFT"] | None = None
-    contract_version: int | None = None
 
 
 class SemanticTableMeta(SemanticBaseDTO):

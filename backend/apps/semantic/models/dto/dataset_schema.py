@@ -1,8 +1,13 @@
-from typing import Any
+from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, field_validator
 
 from apps.semantic.models.dto.base import SemanticBaseDTO
+from apps.semantic.models.dto.semantic_contract import (
+    DimensionHierarchyRuntimeDTO,
+    MetricRelationshipRuntimeDTO,
+)
 
 
 class DatasetModelConfig(SemanticBaseDTO):
@@ -44,10 +49,33 @@ class JoinRelation(SemanticBaseDTO):
     join_condition: list[list[str]] = Field(default_factory=list)
 
 
+class DatasetCalendarContract(SemanticBaseDTO):
+    """运行时冻结的数据集业务日历契约。"""
+
+    # 仅用于未携带日历字段的旧内存 Schema；持久化数据集始终覆盖此默认值。
+    default_timezone: str = "Asia/Shanghai"
+    calendar_type: Literal["NATURAL", "FISCAL", "BUSINESS"] = "NATURAL"
+    week_start_day: int = Field(default=1, ge=1, le=7)
+    fiscal_year_start_month: int = Field(default=1, ge=1, le=12)
+    holiday_calendar_key: str | None = None
+
+    @field_validator("default_timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        """确保运行时 Schema 不携带无法解释的时区。"""
+
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as error:
+            raise ValueError("SEMANTIC_DATASET_TIMEZONE_INVALID") from error
+        return value
+
+
 class DatasetSchema(SemanticBaseDTO):
     database_type: str | None = None
     database_version: str | None = None
     data_set: SchemaElement
+    calendar: DatasetCalendarContract = Field(default_factory=DatasetCalendarContract)
     subject_domains: list[dict[str, Any]] = Field(default_factory=list)
     models: list[dict[str, Any]] = Field(default_factory=list)
     model_relations: list[JoinRelation] = Field(default_factory=list)
@@ -62,8 +90,8 @@ class DatasetSchema(SemanticBaseDTO):
     logical_dimensions: list[dict[str, Any]] = Field(default_factory=list)
     metric_dimension_capabilities: list[dict[str, Any]] = Field(default_factory=list)
     # Research 只消费已治理的层级和驱动关系，不能运行时自行推断。
-    dimension_hierarchies: list[dict[str, Any]] = Field(default_factory=list)
-    research_relationships: list[dict[str, Any]] = Field(default_factory=list)
+    dimension_hierarchies: list[DimensionHierarchyRuntimeDTO] = Field(default_factory=list)
+    research_relationships: list[MetricRelationshipRuntimeDTO] = Field(default_factory=list)
     model_contracts: list[dict[str, Any]] = Field(default_factory=list)
     relation_contracts: list[dict[str, Any]] = Field(default_factory=list)
     metric_contracts: list[dict[str, Any]] = Field(default_factory=list)

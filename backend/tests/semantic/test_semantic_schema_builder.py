@@ -1,6 +1,8 @@
 from apps.datasource import DatasourceRecord
 from apps.semantic.models.orm import (
     SemanticDataset,
+    SemanticDatasetAsset,
+    SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticDomain,
     SemanticMetric,
@@ -80,6 +82,19 @@ def test_schema_builder_exposes_dataset_selected_metrics_and_dimensions():
         metrics=[metric],
         dimensions=[dimension],
         terms=[term],
+        dataset_model_configs=[
+            SemanticDatasetModelConfig(
+                oid=1, dataset_id=20, model_id=10, includes_all=False
+            )
+        ],
+        dataset_assets=[
+            SemanticDatasetAsset(
+                oid=1, dataset_id=20, model_id=10, asset_type="METRIC", asset_id=100
+            ),
+            SemanticDatasetAsset(
+                oid=1, dataset_id=20, model_id=10, asset_type="DIMENSION", asset_id=200
+            ),
+        ],
     )
 
     assert schema.data_set.name == "档口经营分析"
@@ -147,6 +162,8 @@ def test_schema_builder_only_exposes_terms_in_dataset_scope():
         metrics=[],
         dimensions=[],
         terms=[global_term, scoped_term, other_term],
+        dataset_model_configs=[],
+        dataset_assets=[],
     )
 
     assert [term.id for term in schema.terms] == [100, 101]
@@ -254,6 +271,15 @@ def test_schema_builder_adds_database_and_model_relations_for_runtime_assets():
         terms=[],
         datasources=[datasource],
         model_relations=[relation],
+        dataset_model_configs=[
+            SemanticDatasetModelConfig(
+                oid=1, dataset_id=20, model_id=10, includes_all=True
+            ),
+            SemanticDatasetModelConfig(
+                oid=1, dataset_id=20, model_id=11, includes_all=True
+            ),
+        ],
+        dataset_assets=[],
     )
     ontology = build_ontology_from_schema(schema)
 
@@ -310,6 +336,12 @@ def test_schema_builder_skips_inactive_assets():
         metrics=[inactive_metric],
         dimensions=[inactive_dimension],
         terms=[inactive_term],
+        dataset_model_configs=[
+            SemanticDatasetModelConfig(
+                oid=1, dataset_id=20, model_id=10, includes_all=True
+            )
+        ],
+        dataset_assets=[],
     )
 
     assert schema.metrics == []

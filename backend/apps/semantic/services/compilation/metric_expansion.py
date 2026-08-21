@@ -47,6 +47,9 @@ def expand_metric_expression(
         )
         for ref in refs
     }
+    formula = _metric_formula_definition(metric)
+    if isinstance(formula, Mapping):
+        return _render_structured_formula(formula, rendered)
     raw_expression = _metric_expression(metric)
     if not raw_expression:
         if len(refs) != 2:
@@ -61,7 +64,14 @@ def expand_metric_expression(
 
 
 def _metric_refs(metric: Mapping[str, Any]) -> tuple[int, ...]:
+    formula = _metric_formula_definition(metric)
     refs = metric.get("metric_refs")
+    if isinstance(formula, Mapping):
+        refs = [
+            item.get("metric_id")
+            for item in formula.get("components") or []
+            if isinstance(item, Mapping)
+        ]
     if not isinstance(refs, list):
         params = metric.get("type_params")
         params = params if isinstance(params, Mapping) else {}
@@ -76,6 +86,56 @@ def _metric_refs(metric: Mapping[str, Any]) -> tuple[int, ...]:
     if len(result) != len(set(result)):
         raise MetricExpansionError("METRIC_REFERENCE_DUPLICATED")
     return result
+
+
+def _metric_formula_definition(metric: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """统一读取运行时 Schema 中的结构化公式。"""
+
+    formula = metric.get("formula_definition")
+    if isinstance(formula, Mapping):
+        return formula
+    ext_info = metric.get("ext_info")
+    if isinstance(ext_info, Mapping) and isinstance(
+        ext_info.get("formula_definition"), Mapping
+    ):
+        return ext_info["formula_definition"]
+    return None
+
+
+def _render_structured_formula(
+    formula: Mapping[str, Any],
+    rendered: Mapping[int, str],
+) -> str:
+    """将已校验的结构化公式编译为受控表达式。"""
+
+    operation = formula.get("operation")
+    components = formula.get("components") or []
+    expressions = [
+        rendered[item["metric_id"]]
+        for item in components
+        if isinstance(item, Mapping) and item.get("metric_id") in rendered
+    ]
+    if len(expressions) != len(components):
+        raise MetricExpansionError("METRIC_REFERENCE_NOT_FOUND")
+    if operation == "RATIO":
+        by_role = {
+            item["role"]: rendered[item["metric_id"]]
+            for item in components
+            if isinstance(item, Mapping)
+        }
+        return build_ratio_expression(by_role["numerator"], by_role["denominator"])
+    if operation == "SUM":
+        return " + ".join(f"({item})" for item in expressions)
+    if operation == "DIFFERENCE":
+        by_role = {
+            item["role"]: rendered[item["metric_id"]]
+            for item in components
+            if isinstance(item, Mapping)
+        }
+        return f"({by_role['minuend']}) - ({by_role['subtrahend']})"
+    if operation == "PRODUCT":
+        return " * ".join(f"({item})" for item in expressions)
+    raise MetricExpansionError("METRIC_FORMULA_INVALID")
 
 
 def _metric_expression(metric: Mapping[str, Any]) -> str:

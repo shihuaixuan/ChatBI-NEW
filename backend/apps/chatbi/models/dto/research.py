@@ -8,6 +8,15 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+def _asset_model_id(ref: str) -> int | None:
+    """从受控资产引用读取模型 ID，避免依赖自然语言模型名。"""
+
+    parts = ref.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        return None
+    return int(parts[2])
+
+
 class ResearchReason(StrEnum):
     """进入动态研究模式的结构化原因。"""
 
@@ -156,12 +165,22 @@ class ResearchDriverRelationship(BaseModel):
 
     target_metric_ref: str = Field(min_length=1)
     driver_metric_ref: str = Field(min_length=1)
+    component_metric_refs: tuple[str, ...] = ()
     relationship_type: Literal[
         "formula_component",
         "certified_driver",
         "governed_analysis_relation",
     ]
+    validation_method: Literal[
+        "SAME_DIRECTION",
+        "OPPOSITE_DIRECTION",
+        "FORMULA_RECONCILIATION",
+    ] = "SAME_DIRECTION"
+    expected_direction: Literal["POSITIVE", "NEGATIVE", "UNKNOWN"] = "UNKNOWN"
+    formula_definition: dict[str, Any] | None = None
     dimension_refs: tuple[str, ...] = ()
+    dimension_refs_by_model: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    relation_path: tuple[int, ...] = ()
     time_roles: tuple[str, ...] = Field(min_length=1)
     relationship_fingerprint: str = Field(min_length=1)
     status: Literal["CERTIFIED"] = "CERTIFIED"
@@ -172,6 +191,51 @@ class ResearchDriverRelationship(BaseModel):
             raise ValueError("RESEARCH_DRIVER_RELATIONSHIP_SELF_REFERENCE")
         if len(self.dimension_refs) != len(set(self.dimension_refs)):
             raise ValueError("RESEARCH_DRIVER_RELATIONSHIP_DIMENSION_DUPLICATED")
+        if self.relationship_type == "formula_component":
+            if not self.component_metric_refs:
+                raise ValueError("RESEARCH_FORMULA_COMPONENT_METRICS_REQUIRED")
+            if self.driver_metric_ref not in self.component_metric_refs:
+                raise ValueError("RESEARCH_FORMULA_DRIVER_NOT_IN_COMPONENTS")
+        elif self.component_metric_refs:
+            raise ValueError("RESEARCH_NON_FORMULA_COMPONENT_METRICS_FORBIDDEN")
+        if len(self.component_metric_refs) != len(set(self.component_metric_refs)):
+            raise ValueError("RESEARCH_FORMULA_COMPONENT_METRICS_DUPLICATED")
+        if self.validation_method == "FORMULA_RECONCILIATION":
+            if self.expected_direction != "UNKNOWN":
+                raise ValueError("RESEARCH_FORMULA_DIRECTION_MUST_BE_UNKNOWN")
+        elif (
+            self.validation_method == "SAME_DIRECTION"
+            and self.expected_direction == "NEGATIVE"
+        ) or (
+            self.validation_method == "OPPOSITE_DIRECTION"
+            and self.expected_direction == "POSITIVE"
+        ):
+            raise ValueError("RESEARCH_DRIVER_RELATIONSHIP_DIRECTION_CONFLICT")
+        for model_id, refs in self.dimension_refs_by_model.items():
+            if not str(model_id).isdigit() or len(refs) != len(set(refs)):
+                raise ValueError(
+                    "RESEARCH_DRIVER_RELATIONSHIP_MODEL_DIMENSIONS_INVALID"
+                )
+            if any(not ref.startswith("DIMENSION:") for ref in refs):
+                raise ValueError(
+                    "RESEARCH_DRIVER_RELATIONSHIP_MODEL_DIMENSIONS_INVALID"
+                )
+        if any(item <= 0 for item in self.relation_path):
+            raise ValueError("RESEARCH_DRIVER_RELATIONSHIP_PATH_INVALID")
+        target_model = _asset_model_id(self.target_metric_ref)
+        driver_model = _asset_model_id(self.driver_metric_ref)
+        if (
+            target_model is not None
+            and driver_model is not None
+            and target_model != driver_model
+        ):
+            if self.relationship_type == "formula_component" or not self.relation_path:
+                raise ValueError("RESEARCH_CROSS_MODEL_RELATION_PATH_REQUIRED")
+            if set(self.dimension_refs_by_model) != {
+                str(target_model),
+                str(driver_model),
+            }:
+                raise ValueError("RESEARCH_CROSS_MODEL_DIMENSION_MAPPING_REQUIRED")
         if len(self.time_roles) != len(set(self.time_roles)):
             raise ValueError("RESEARCH_DRIVER_RELATIONSHIP_TIME_ROLE_DUPLICATED")
         return self
@@ -190,6 +254,7 @@ class ResearchScope(BaseModel):
     allowed_filter_refs: tuple[str, ...] = ()
     contribution_metric_refs: tuple[str, ...] = ()
     contribution_dimension_refs: tuple[str, ...] = ()
+    contribution_tolerance: float = Field(default=1e-6, ge=0)
     excluded_asset_refs: tuple[str, ...] = ()
 
     @model_validator(mode="after")
@@ -228,17 +293,25 @@ class ResearchScope(BaseModel):
         if len(relationship_ids) != len(self.driver_relationships):
             raise ValueError("RESEARCH_SCOPE_DRIVER_RELATIONSHIP_DUPLICATED")
         if any(
-            item.target_metric_ref not in targets
-            for item in self.driver_relationships
+            item.target_metric_ref not in targets for item in self.driver_relationships
         ):
             raise ValueError("RESEARCH_SCOPE_DRIVER_TARGET_UNKNOWN")
-        if any(item.driver_metric_ref not in drivers for item in self.driver_relationships):
+        if any(
+            not {item.driver_metric_ref, *item.component_metric_refs} <= drivers
+            for item in self.driver_relationships
+        ):
             raise ValueError("RESEARCH_SCOPE_DRIVER_METRIC_UNKNOWN")
         if any(
             not set(item.dimension_refs) <= dimensions
             for item in self.driver_relationships
         ):
             raise ValueError("RESEARCH_SCOPE_DRIVER_DIMENSION_UNKNOWN")
+        if any(
+            not {ref for refs in item.dimension_refs_by_model.values() for ref in refs}
+            <= dimensions
+            for item in self.driver_relationships
+        ):
+            raise ValueError("RESEARCH_SCOPE_DRIVER_MODEL_DIMENSION_UNKNOWN")
         included = dimensions | set(self.driver_metric_refs)
         if included & set(self.excluded_asset_refs):
             raise ValueError("RESEARCH_SCOPE_INCLUDED_ASSET_EXCLUDED")
@@ -266,6 +339,10 @@ class ResearchRequirement(BaseModel):
     target_metric_refs: tuple[str, ...] = Field(min_length=1)
     time_roles: tuple[str, ...] = Field(min_length=1)
     time_bindings: tuple[ResearchTimeBinding, ...] = ()
+    # 跨模型驱动关系按模型保存时间维度绑定，避免复用目标模型的物理时间列。
+    time_bindings_by_model: dict[str, tuple[ResearchTimeBinding, ...]] = Field(
+        default_factory=dict
+    )
     immutable_filters: tuple[ResearchFilterBinding, ...] = ()
     scope: ResearchScope
     allowed_actions: tuple[ResearchActionType, ...] = Field(min_length=1)
@@ -288,13 +365,18 @@ class ResearchRequirement(BaseModel):
             raise ValueError("RESEARCH_TIME_BINDING_ROLE_DUPLICATED")
         if self.time_bindings and set(binding_roles) != set(self.time_roles):
             raise ValueError("RESEARCH_TIME_BINDING_ROLE_MISMATCH")
+        for model_id, bindings in self.time_bindings_by_model.items():
+            if not str(model_id).isdigit():
+                raise ValueError("RESEARCH_TIME_BINDING_MODEL_INVALID")
+            roles = tuple(item.role for item in bindings)
+            if len(roles) != len(set(roles)) or set(roles) != set(self.time_roles):
+                raise ValueError("RESEARCH_TIME_BINDING_MODEL_ROLE_MISMATCH")
         if not self.time_bindings and self.time_roles != ("single",):
             raise ValueError("RESEARCH_TIME_BINDING_REQUIRED")
         if ResearchActionType.FINISH not in self.allowed_actions:
             raise ValueError("RESEARCH_FINISH_ACTION_REQUIRED")
         if not any(
-            action is not ResearchActionType.FINISH
-            for action in self.allowed_actions
+            action is not ResearchActionType.FINISH for action in self.allowed_actions
         ):
             raise ValueError("RESEARCH_EXECUTION_ACTION_REQUIRED")
         if not self.scope.dimension_refs and not self.scope.driver_metric_refs:

@@ -51,6 +51,8 @@ class SemanticMetricBinding(SemanticBaseDTO):
     result_grain: tuple[str, ...] = ()
     additivity: str | None = None
     time_semantics: str | None = None
+    comparison_grains: tuple[str, ...] = ()
+    time_alignment_policy: str = "NONE"
     metric_refs: tuple[int, ...] = ()
 
 
@@ -89,6 +91,11 @@ class SemanticTimeBinding(SemanticBaseDTO):
     time_range: dict[str, Any] | None = None
     grain: str | None = None
     snapshot_aggregation: str | None = None
+    default_timezone: str = "UTC"
+    calendar_type: str = "NATURAL"
+    week_start_day: int = Field(default=1, ge=1, le=7)
+    fiscal_year_start_month: int = Field(default=1, ge=1, le=12)
+    holiday_calendar_key: str | None = None
 
 
 class SemanticModelPlan(SemanticBaseDTO):
@@ -137,6 +144,8 @@ class SemanticQueryPlan(SemanticBaseDTO):
     subplans: tuple[dict[str, Any], ...] = ()
     order_by: tuple[dict[str, Any], ...] = ()
     limit: int | None = Field(default=None, gt=0, le=1000)
+    # 仅规范查询结果列名，资产绑定仍由 dimensions 保持不变。
+    output_aliases: dict[int, str] = Field(default_factory=dict)
     fingerprint: str = Field(min_length=1)
 
 

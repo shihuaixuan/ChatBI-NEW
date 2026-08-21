@@ -204,6 +204,8 @@ class QueryRequirement(BaseModel):
     having: tuple[dict[str, Any], ...] = ()
     query_shape: dict[str, Any] = Field(default_factory=dict)
     time_offset: dict[str, Any] | None = None
+    # 跨模型对齐时把各模型物理维度投影为同一结果列名。
+    output_aliases: dict[int, str] = Field(default_factory=dict)
 
 
 class CalculationRequirement(BaseModel):
@@ -427,6 +429,7 @@ def query_requirement_to_spec(
         limit=requirement.limit,
         having=having,
         time_offset=requirement.time_offset,
+        output_aliases=requirement.output_aliases,
     )
 
 

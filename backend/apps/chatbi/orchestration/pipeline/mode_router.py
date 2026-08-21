@@ -141,6 +141,16 @@ class ModeRouter:
                 if item.dimension_ref in schema_elements
             }
             research_assets.update(time_assets)
+            for bindings in research_requirement.time_bindings_by_model.values():
+                for item in bindings:
+                    if item.dimension_ref not in schema_elements:
+                        continue
+                    research_assets[item.dimension_ref] = {
+                        **_asset_definition(schema_elements[item.dimension_ref]),
+                        "description": str(
+                            schema_elements[item.dimension_ref].description or ""
+                        ),
+                    }
             return ExecutionRequirement(
                 status="ready",
                 route=ExecutionRoute(

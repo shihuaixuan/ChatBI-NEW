@@ -1,8 +1,8 @@
 from apps.semantic.models.orm import (
     SemanticDataset,
     SemanticDatasetAsset,
-    SemanticDatasetModelConfig,
     SemanticDatasetInstruction,
+    SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticDomain,
     SemanticMetric,

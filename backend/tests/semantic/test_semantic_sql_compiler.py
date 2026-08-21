@@ -389,6 +389,81 @@ def test_semantic_sql_compiler_renders_derived_metric_order_and_limit():
     assert legacy_result.sql.endswith("order by aov_sale asc limit 3")
 
 
+def test_semantic_sql_compiler_renders_structured_formula_from_runtime_schema():
+    schema = DatasetSchema(
+        data_set=SchemaElement(
+            data_set_id=20,
+            data_set_name="档口经营分析",
+            id=20,
+            name="档口经营分析",
+            biz_name="stall_bi",
+            type="DATASET",
+        ),
+        models=[
+            {
+                "id": 10,
+                "name": "档口订单",
+                "biz_name": "stall_order",
+                "tableQuery": "fct_stall_order_daily",
+                "measures": [
+                    {"name": "销售GMV", "bizName": "gmv_sale", "expr": "gmv_sale", "agg": "SUM"},
+                    {"name": "销售订单数", "bizName": "order_cnt_sale", "expr": "order_cnt_sale", "agg": "SUM"},
+                ],
+            }
+        ],
+        metrics=[
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=101,
+                name="销售GMV",
+                biz_name="gmv_sale",
+                type="METRIC",
+                default_agg="SUM",
+                fields=["gmv_sale"],
+            ),
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=102,
+                name="销售订单数",
+                biz_name="order_cnt_sale",
+                type="METRIC",
+                default_agg="SUM",
+                fields=["order_cnt_sale"],
+            ),
+            SchemaElement(
+                data_set_id=20,
+                data_set_name="档口经营分析",
+                model=10,
+                id=103,
+                name="销售客单价",
+                biz_name="aov_sale",
+                type="METRIC",
+                default_agg="NONE",
+                ext_info={
+                    "formula_definition": {
+                        "operation": "RATIO",
+                        "components": [
+                            {"metric_id": 101, "role": "numerator"},
+                            {"metric_id": 102, "role": "denominator"},
+                        ],
+                    }
+                },
+            ),
+        ],
+    )
+
+    result = SemanticSQLCompiler().compile(
+        SemanticSQLCompileRequest(schema=schema, metric_ids=[103])
+    )
+
+    assert "sum(stall_order.gmv_sale)" in result.sql
+    assert "NULLIF((sum(stall_order.order_cnt_sale)), 0)" in result.sql
+
+
 def test_semantic_sql_compiler_detail_mode_projects_metric_without_aggregation():
     schema = DatasetSchema(
         data_set=SchemaElement(data_set_id=20, data_set_name="档口经营分析", id=20, name="档口经营分析", biz_name="stall_bi", type="DATASET"),

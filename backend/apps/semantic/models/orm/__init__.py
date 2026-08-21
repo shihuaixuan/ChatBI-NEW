@@ -21,8 +21,12 @@ from apps.semantic.models.orm.model import (
 )
 from apps.semantic.models.orm.semantic_contract import (
     BusinessEntity,
+    DimensionHierarchy,
+    DimensionHierarchyLevel,
     LogicalDimension,
     MetricDimensionCapability,
+    MetricRelationship,
+    MetricRelationshipDimension,
 )
 
 __all__ = [
@@ -41,7 +45,11 @@ __all__ = [
     "SemanticModelRelation",
     "SemanticTerm",
     "BusinessEntity",
+    "DimensionHierarchy",
+    "DimensionHierarchyLevel",
     "LogicalDimension",
     "MetricDimensionCapability",
+    "MetricRelationship",
+    "MetricRelationshipDimension",
     "SemanticDatasetInstruction",
 ]
