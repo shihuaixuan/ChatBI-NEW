@@ -392,6 +392,11 @@ ChatBI 不负责判断一组维度是否构成业务层级，也不负责判断�
 7. Research 改为只消费正式公开契约；
 8. 删除 `query_config` 中两个临时配置入口。
 
+实施状态（2026-08-21）：已完成。维度层级、指标关系及关系维度已建立正式持久化、
+严格 DTO、引用校验、数据集资产选择、发布版本和运行时 Schema 投影链路。
+`DatasetSchema.dimension_hierarchies` 和 `DatasetSchema.research_relationships` 由正式语义
+资产构建，Research 不再把临时 `query_config` 字典作为长期事实源。
+
 ### 第二阶段：完善分析契约
 
 1. 将派生指标依赖重构为结构化公式；
@@ -400,6 +405,11 @@ ChatBI 不负责判断一组维度是否构成业务层级，也不负责判断�
 4. 增加业务日历和指标时间对齐能力；
 5. 增加能力解释和变更影响分析；
 6. 在治理关系证明充分后支持跨模型驱动验证。
+
+实施状态（2026-08-21）：已完成。指标结构化依赖、驱动关系方向和验证方式、
+显式 `CONTRIBUTION` 能力、对账容差、业务日历和时间对齐均已进入正式契约与
+发布 Schema。平台能力完成不等于所有数据集已完成配置；具体数据集仍必须由
+配置人员选择、确认并发布相应的层级、指标关系和贡献度能力。
 
 ### 第三阶段：高级分析语义
 
@@ -1407,6 +1417,55 @@ Research：
 执行需求分析不直接生成最终 SQL。SQL 由后续查询编译阶段根据执行需求和完整
 语义资产定义生成。
 
+## 6.7 严格语义查询计划准备入口
+
+Fast、Plan 和 Research 虽然具有不同的外层控制流程，但查询执行前必须遵守同一个
+语义不变量：
+
+> 每个 `QueryRequirement` 必须在 SQL 编译前生成一个独立、已校验且状态为
+> `PROVEN` 的 `SemanticQueryPlan`。
+
+该过程不是 Plan 模型调用，也不是 Research Policy 的一部分，而是服务端确定性
+语义计划和校验阶段。统一入口的职责为：
+
+1. 从 `ExecutionRequirement.query_requirements` 按稳定顺序读取每个查询需求；
+2. 使用已发布的 `DatasetSchema` 构造 `SemanticQueryPlanningInput`；
+3. 保留指标、维度、WHERE、HAVING、时间、排序、LIMIT、查询形状和输出别名；
+4. 分别执行 `SemanticQueryPlanningService` 和 `SemanticQueryValidationService`；
+5. 任一计划未达到 `PROVEN` 时立即失败，不允许关闭严格校验或静默回退；
+6. 将计划、验证报告和实际允许使用的资产写回 `SemanticAssetScope`；
+7. 在计划的受控 `query_shape` 元数据中冻结 `source_requirement_id`，用于和
+   `QueryTask.source_requirement_id` 精确关联。
+
+完整关系为：
+
+~~~text
+ExecutionRequirement.query_requirements
+  -> prepare_strict_query_scope
+  -> QueryRequirement[0] -> PROVEN SemanticQueryPlan[0]
+  -> QueryRequirement[1] -> PROVEN SemanticQueryPlan[1]
+  -> ...
+  -> SemanticAssetScope.query_plans
+  -> QueryTask.source_requirement_id 精确选择计划
+  -> compile_semantic_sql
+~~~
+
+带有 `source_requirement_id` 的新契约节点必须按该 ID 选择计划。即使两个查询使用相同
+指标、维度和时间，也可能具有不同的筛选、HAVING、排序或 LIMIT，因此禁止退回为
+“指标 + 维度 + 时间”的模糊匹配。未找到来源计划时明确返回
+`PLAN_STRICT_SOURCE_REQUIREMENT_NOT_MATCHED`。
+
+三种模式的使用方式如下：
+
+- Fast 为唯一 `QueryRequirement` 调用统一入口，然后生成并执行单节点计划；
+- Plan 在 `AnalysisPlan` 进入整体证明前，为全部 `QueryTask` 准备独立严格计划；
+- Research 每轮将 `ResearchAction` 物化为 `ExecutionRequirement`，再通过
+  `PlanPipeline.execute_requirement` 复用同一入口。
+
+Research 复用 Plan 的是“子计划证明和执行能力”，不表示 Research 和 Plan 是同一模式。
+Research 仍由外层有界循环负责根据证据选择下一步，Plan 只执行当前轮已经物化且
+不可变的子计划。
+
 # 7. Fast 模式
 
 ## 7.1 设计目标
@@ -1477,7 +1536,8 @@ Fast 计划不允许新增指标、维度、过滤值、时间条件或物理字
 ## 7.4 校验、编译和执行
 
 1. 校验 `source_requirement_id` 存在且只引用第 5 步输出；
-2. 将 `query_requirement` 转换为现有 `SemanticQueryPlan`；
+2. 通过统一的 `prepare_strict_query_scope` 将 `query_requirement` 转换为独立
+   `SemanticQueryPlan`；
 3. 执行指标、维度、模型、粒度、时间和关系契约校验；
 4. 通过 `PROVEN` 校验后生成 SQL 和计划指纹；
 5. 通过数据权限、行列权限和 SQL 安全校验；
@@ -1486,6 +1546,11 @@ Fast 计划不允许新增指标、维度、过滤值、时间条件或物理字
 8. 将结果摘要和口径元数据交给 `AnswerComposer`。
 
 SQL 由语义编译器生成，Fast 不允许模型直接生成 SQL。
+
+实施状态（2026-08-21）：Fast 原有的单查询严格计划准备逻辑已迁移到统一服务，
+不再由 FastPipeline 单独维护 `QueryRequirement -> SemanticQueryPlanningInput ->
+SemanticQueryPlan` 转换。迁移后使用 dataset `243`、datasource `13` 重新执行 5 个真实
+Fast 问题，问题重写、检索、语义解析、严格计划、SQL 执行和答案生成均通过。
 
 ## 7.5 失败处理
 
@@ -2028,6 +2093,42 @@ Plan 按以下顺序落地：
 topn_other；最终返回 3 个档口及
 一条 `OTHER` 汇总。五个真实问题的语义类型、模式边界、模型调用审计、SQL 编译和需要
 执行的真实结果均通过验证。
+
+### 生产严格语义计划链路接通
+
+实施状态（2026-08-21）：已完成。
+
+修复前，生产编排能正确生成 `ExecutionRequirement` 和 `AnalysisPlan`，但
+`SearchSemanticAssets` 只保存候选资产范围，PlanPipeline 没有根据最终
+`query_requirements` 生成独立的严格 `SemanticQueryPlan`，因此在整体证明前返回：
+
+~~~text
+PLAN_STRICT_QUERY_PLAN_MISSING
+~~~
+
+内部阶段脚本能执行，是因为脚本提前构造了严格计划；生产编排器没有执行相同准备步骤。
+该问题不能通过关闭 STRICT 校验、放宽 `PROVEN` 要求或增加静默回退解决。
+
+最终实现如下：
+
+1. 新增 `semantic_query_preparation.py`，统一负责严格查询计划的生成、校验和冻结；
+2. Fast 和 Plan 共用该入口，不再分别维护两套转换逻辑；
+3. 生产组合根向 PlanPipeline 注入统一 `semantic_schema_provider`；
+4. PlanPipeline 按 `QueryTask.source_requirement_id` 取回原始 `QueryRequirement`，为每个
+   QueryTask 生成独立计划；
+5. `source_requirement_id` 写入计划的受控元数据，编译时必须精确命中；
+6. HAVING 同时支持显式 `QueryRequirement.having` 和 `filters(stage=having)` 契约，
+   HAVING 条件不会被错误放入 WHERE；
+7. 全部查询先完成计划、验证、SQL 编译和整体 `PROVEN` 证明，再进入 DAG 执行。
+
+生产真实问题回归结果：
+
+- “对比 2026 年 6 月 30 日和 6 月 29 日的总 GMV，计算差值”正确路由到 Plan，
+  生成两个独立 `PROVEN` 计划，完成差值计算和答案生成；
+- 最终回归 Run `1122` 状态为 `finished`，执行模式为 `plan`，无错误分类；
+- Fast 共享逻辑迁移后的 5 个真实问题全部通过；
+- Fast、Plan、Research、Semantic Query Planning 和 Query Plan Binding 相关回归共
+  `78 passed`，相关 Ruff 检查通过。
 
 P1 完成后，Plan 至少覆盖多时间范围、同比、环比、差值、增长率、跨模型合并、
 跨结果集占比和比率、Top N + 其他、透视、固定下钻和固定归因。开放式原因探索、
@@ -2703,9 +2804,36 @@ ResearchPipeline
 `PROVEN` 并成功执行。脚本继续逐段输出 ResearchRequirement、子计划、查询/计算结果和
 EvidenceSnapshot。
 
+生产编排回归（2026-08-21）：Research 每轮子计划复用的
+`PlanPipeline.execute_requirement` 已接通统一严格语义计划准备入口。真实问题
+“先找出 2026 年 6 月 30 日比 6 月 29 日总 GMV 下降最大的档口，再根据该档口
+的数据继续分析下降原因”正确路由到 Research，完成子计划证明、SQL 执行和答案
+生成。最终回归 Run `1123` 状态为 `finished`，执行模式为 `research`，不再出现
+`PLAN_STRICT_QUERY_PLAN_MISSING`。
+
+这里的共用关系仅位于子计划执行边界：Research Policy 仍然负责根据 Evidence 选择
+下一个动作，PlanPipeline 不参与研究方向决策，也不将 Research Run 转换为 Plan Run。
+
 ### 第三阶段：开放原因探索
 
-实施状态：方案已明确，代码尚未开始。
+实施状态（2026-08-21）：代码实现已完成，真实治理资产验收尚未完成。
+
+当前已实现：
+
+1. `ResearchScope` 从正式 `dimension_hierarchies`、`research_relationships` 和
+   `metric_dimension_capabilities` 投影可用分析范围；
+2. `drilldown`、`contribution` 和 `validate_hypothesis` 动作的严格校验与
+   `ExecutionRequirement` 物化；
+3. `hypotheses.py` 统一负责假设创建、状态更新和 Evidence 引用不变量；
+4. `action_batches.py` 根据显式结果依赖生成受控动作批次；
+5. `ResearchIterationRecord` 记录每轮决策、动作、Plan、Result、Evidence 和失败归属；
+6. `ResearchReport`、受控发现类型和 Evidence 引用校验；
+7. `ResearchPipeline` 已接入动作批次、假设更新、轮次记录和报告收口；
+8. Research 第一至第三阶段相关契约和动作回归当前为 `23 passed`。
+
+当前未完成的不是动作代码，而是“真实已发布治理资产 + 真实数据 + 真实 Policy”
+的端到端验收。在该验收完成前，第三阶段状态不得标记为“已全面完成”，也不应
+直接进入第四阶段的可靠性收尾。
 
 第三阶段的目标是在第二阶段最小动态闭环上增加受治理的开放原因探索。它不改变
 Research 的外层范式：每轮仍由一次 `ResearchPolicy` 调用完成证据评估、假设变化和下一步
@@ -3046,13 +3174,36 @@ class ResearchIterationRecord(BaseModel):
 
 #### 推荐实施顺序
 
-1. 先在 Semantic 公共 Schema 中补齐维度层级和指标驱动关系；
-2. 扩展 ResearchScope 和 Scope 构建测试；
-3. 实现 drilldown 和 contribution；
-4. 实现假设状态归并和 validate_hypothesis；
-5. 实现同轮独立动作批次；
-6. 实现结构化报告和引用校验；
-7. 使用真实问题集完成端到端执行、边界和报告评测。
+前 6 项代码实现已完成。当前顺序调整为真实资产配置和验收：
+
+1. 为验收数据集配置并发布至少一套可执行维度层级；
+2. 为目标指标配置并发布至少两个可验证驱动指标关系；
+3. 为目标指标和指定维度显式授予 `CONTRIBUTION` 能力并配置对账容差；
+4. 重新发布数据集，确认 Schema 版本、Contract 版本和指纹发生预期变化；
+5. 使用真实 Policy、真实数据源和第三阶段真实问题集完成端到端执行；
+6. 同时验证治理能力不足、跳级下钻、Scope 外资产和无效 Evidence 等拒绝路径；
+7. 通过全部验收后，将 Research 第三阶段标记为完成，再进入第四阶段。
+
+#### 当前验收数据集状态
+
+2026-08-21 读取 tenant `1`、dataset `243` 的已发布 `DatasetSchema`，结果为：
+
+~~~text
+schema_version                  = 12
+contract_version                = 1
+dimension_hierarchies           = 0
+research_relationships          = 0
+metric_dimension_capabilities  = 306
+CONTRIBUTION capabilities       = 0
+~~~
+
+因此 dataset `243` 当前可以继续验证现象确认、`breakdown`、`filter_from_result`
+和 `finish`，但不能作为第三阶段 `drilldown`、`contribution` 和
+`validate_hypothesis` 的完整真实验收数据集。这是数据集治理资产尚未配置，
+不是运行时根据名称自动生成层级或驱动关系的理由。
+
+第三阶段的下一步工作不是继续增加新动作，而是为 dataset `243` 或专用验收数据集
+配置、选择和发布真实治理资产，然后完成第三阶段全部真实问题和边界验收。
 
 ### 第四阶段：可靠性和恢复
 

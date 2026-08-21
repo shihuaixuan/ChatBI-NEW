@@ -57,6 +57,9 @@ from apps.chatbi.services.planning.dag_scheduler import (
     task_dependencies,
 )
 from apps.chatbi.services.planning.plan_validation import validate_analysis_plan
+from apps.chatbi.services.planning.semantic_query_preparation import (
+    prepare_strict_query_scope,
+)
 from apps.conversation import ChatRecordExecutionType
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import ToolCall, ToolCallContext, ToolRegistry, ToolResult, ToolStatus
@@ -142,6 +145,7 @@ class PlanPipelineDependencies:
     metrics: MetricsRecorder | None = None
     # 直接规划流水线也必须写入同一棵 Agent Trace 调用树。
     trace_recorder: AgentTraceRecorder | None = None
+    semantic_schema_provider: Any | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +183,7 @@ class PlanPipeline:
         self._answer_composer = dependencies.answer_composer
         self._metrics = dependencies.metrics
         self._trace_recorder = dependencies.trace_recorder
+        self._semantic_schema_provider = dependencies.semantic_schema_provider
         self._plan_snapshot_counts: dict[int, int] = {}
 
     def run(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
@@ -323,6 +328,32 @@ class PlanPipeline:
             raise PlanPipelineError("PLAN_QUERY_TASK_REQUIRED")
         scope = state.context.semantic_asset_scope
         if scope is not None and scope.semantic_enforcement == "STRICT":
+            try:
+                requirement_by_id = {
+                    item.id: item for item in execution_requirement.query_requirements
+                }
+                query_requirements = tuple(
+                    requirement_by_id[task.source_requirement_id]
+                    for task in query_tasks
+                    if task.source_requirement_id in requirement_by_id
+                )
+                if len(query_requirements) != len(query_tasks):
+                    raise ValueError("PLAN_STRICT_SOURCE_REQUIREMENT_NOT_MATCHED")
+                dataset_id_value = execution_requirement.runtime.get("dataset_id")
+                if not isinstance(dataset_id_value, int) or isinstance(
+                    dataset_id_value, bool
+                ):
+                    dataset_id_value = state.context.dataset_id or 0
+                scope = prepare_strict_query_scope(
+                    scope,
+                    query_requirements,
+                    schema_provider=self._semantic_schema_provider,
+                    workspace_id=state.context.workspace_id,
+                    dataset_id=dataset_id_value,
+                )
+                state.context.state["semantic_scope"] = scope.model_dump(mode="json")
+            except ValueError as exc:
+                raise PlanPipelineError(str(exc)) from exc
             self._ensure_strict_query_plans_ready(scope, query_tasks)
 
         # 完整子计划必须先全部编译和校验，达到 PROVEN 后才允许执行任何查询。
@@ -989,8 +1020,22 @@ class PlanPipeline:
                 raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
             task_spec = getattr(task, "spec", None)
             selected_plan = None
-            if task_spec is not None:
+            source_requirement_id = getattr(task, "source_requirement_id", None)
+            if source_requirement_id is not None:
                 selected_plan = next(
+                    (
+                        candidate
+                        for candidate in query_plans
+                        if candidate.query_shape.get("source_requirement_id")
+                        == source_requirement_id
+                    ),
+                    None,
+                )
+                if selected_plan is None:
+                    # 带来源 ID 的新契约节点禁止退回资产签名或索引匹配。
+                    raise PlanPipelineError("PLAN_STRICT_SOURCE_REQUIREMENT_NOT_MATCHED")
+            if task_spec is not None:
+                selected_plan = selected_plan or next(
                     (
                         candidate
                         for candidate in query_plans

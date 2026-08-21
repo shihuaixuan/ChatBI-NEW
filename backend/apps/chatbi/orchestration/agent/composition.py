@@ -292,6 +292,7 @@ def build_run_orchestrator(
             answer_composer=resolved_answer_composer,
             metrics=metrics_recorder,
             trace_recorder=resolved_recorder,
+            semantic_schema_provider=resolved_semantic_schema_provider,
         )
     )
     return RunOrchestrator(
