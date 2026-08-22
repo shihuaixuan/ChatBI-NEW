@@ -524,6 +524,26 @@ class ResearchPipeline:
                             batch_id=plan_id,
                         )
                         evidence.append(snapshot)
+                        # 阶段 0 评测需要知道引用型动作依赖的 Evidence 是否来自前一轮。
+                        # 该元数据只用于审计，不改变旧 ResearchAction 的决策逻辑。
+                        dependency_ids = _action_dependency_evidence_ids(
+                            item.action,
+                            evidence_by_result,
+                        )
+                        dependencies = state.context.state.setdefault(
+                            "research_evidence_dependencies",
+                            {},
+                        )
+                        source_result_id = getattr(item.action, "source_result_id", None)
+                        declared_evidence_ids = getattr(item.action, "evidence_ids", ())
+                        dependencies[snapshot.evidence_id] = {
+                            "source_evidence_ids": list(dependency_ids),
+                            "requires_dependency": bool(
+                                source_result_id
+                                or declared_evidence_ids
+                            ),
+                            "iteration": current_state.iteration,
+                        }
                         pending_fingerprints.add(item.fingerprint)
                         evidence_by_result[snapshot.result_id] = snapshot
                         iteration_result_ids.append(snapshot.result_id)
@@ -882,6 +902,12 @@ class ResearchPipeline:
         state.context.state["research_evidence"] = [
             item.model_dump(mode="json") for item in evidence
         ]
+        state.context.state.setdefault("research_evidence_dependencies", {})
+        # Evidence 快照本身不携带运行归属，持久化层补充所有权事实，防止跨 Run 引用被同名 ID 掩盖。
+        run_id = state.require_run_id()
+        state.context.state["research_evidence_ownership"] = {
+            item.evidence_id: run_id for item in evidence
+        }
         agent_run_repository.update_run(
             self._session,
             state.run,
@@ -1298,6 +1324,24 @@ def _action_metric_refs(action: ResearchAction) -> tuple[str, ...]:
     analysis_metrics = getattr(analysis, "metric_refs", ())
     refs.extend(item for item in analysis_metrics if isinstance(item, str))
     return tuple(dict.fromkeys(refs))
+
+
+def _action_dependency_evidence_ids(
+    action: ResearchAction,
+    evidence_by_result: dict[str, EvidenceSnapshot],
+) -> tuple[str, ...]:
+    """把动作引用的 result/evidence 统一投影为当前 Run 的 Evidence ID。"""
+
+    result_id = getattr(action, "source_result_id", None)
+    dependencies: list[str] = []
+    if isinstance(result_id, str):
+        source = evidence_by_result.get(result_id)
+        if source is not None:
+            dependencies.append(source.evidence_id)
+    evidence_ids = getattr(action, "evidence_ids", ())
+    if isinstance(evidence_ids, (tuple, list)):
+        dependencies.extend(item for item in evidence_ids if isinstance(item, str))
+    return tuple(dict.fromkeys(dependencies))
 
 
 __all__ = [

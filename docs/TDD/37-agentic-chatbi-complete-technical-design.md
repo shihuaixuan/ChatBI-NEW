@@ -2481,7 +2481,546 @@ P1 完成后，Plan 至少覆盖多时间范围、同比、环比、差值、增
 
 # 9. Research 模式
 
-## 9.1 设计目标与职责
+## 9.1 目标架构结论
+
+Research 的目标架构不是在现有 `ResearchAction` 白名单上继续增加动作，而是：
+
+~~~text
+Research Agent
+  -> 读取冻结目标、当前状态和证据摘要
+  -> 选择少量稳定工具
+  -> 工具进入受治理的 Semantic Query Runtime 或计算引擎
+  -> 返回结果、证据或结构化错误
+  -> 根据真实观察继续查询、调整假设或结束
+~~~
+
+模型负责：
+
+1. 判断当前证据距离研究目标还缺什么；
+2. 提出可验证假设；
+3. 选择下一次查询、证据计算或结束；
+4. 根据执行结果修正后续研究方向；
+5. 生成带 Evidence 引用的结论草案。
+
+服务端负责：
+
+1. 冻结用户已确认的指标、时间、筛选、权限和资产版本；
+2. 提供稳定、可执行的工具协议；
+3. 完成语义计划、结构证明、SQL 编译、权限和资源控制；
+4. 保存不可变的工具调用、执行结果、证据和依赖关系；
+5. 控制预算、停止、恢复和报告引用；
+6. 阻止模型修改已确认的用户意图或绕过语义治理。
+
+迁移成本只影响实施顺序，不决定目标架构。现有 `ResearchAction`、
+`materialize_research_action()` 和动作专用校验不作为长期兼容层保留。
+
+## 9.2 业务不变量
+
+无论实现是否重写，Research 必须保持以下不变量：
+
+1. **目标不可漂移**：目标指标、用户已确认的筛选、时间范围和分析问题不能在 replan 中被
+   模型替换；模型可以改变查询方式和调查方向，不能改变用户在问什么。
+2. **Scope 不扩大**：运行时只能使用启动时冻结且已授权的语义资产；需要新增资产时结束当前
+   Run 并重新绑定，不能在研究中静默扩大范围。
+3. **语义契约唯一**：指标定义、维度绑定、层级、驱动关系、时间语义、聚合安全和权限只来自
+   已发布 `DatasetSchema`，不能复制到 Prompt 或 Research 专用规则中形成第二事实源。
+4. **证据不可变**：模型不能修改查询结果、血缘、统计量和 Evidence 内容，只能引用它们并
+   提出判断。
+5. **结论必须有来源**：所有数据结论必须引用当前 Run 的 Evidence；没有证据的内容只能标记
+   为假设、限制或后续建议。
+6. **失败必须明确**：语义不支持、权限不足、执行失败、空结果、对账失败和预算耗尽必须形成
+   可观察状态，不能使用静默 fallback 掩盖。
+7. **执行必须有界**：查询数、模型调用数、持续时间、结果大小、直接 SQL 次数和高风险候选
+   生成次数均由服务端控制。
+8. **确定性规则只表达通用不变量**：不能为某个问题增加专用 Validator；新业务知识应进入
+   语义资产、能力或评测集。
+
+## 9.3 与 Fast、Plan 的边界
+
+三种模式仍按“执行信息在什么时候能够确定”划分：
+
+| 模式 | 执行前可确定的信息 | 控制方式 |
+| --- | --- | --- |
+| Fast | 单个查询的完整语义 | 确定性单查询 Workflow |
+| Plan | 全部查询、计算和依赖拓扑 | 冻结完整 `AnalysisPlan` 后按 DAG 执行 |
+| Research | 目标和 Scope 可确定，但后续查询取决于中间结果 | Agent 根据工具 Observation 动态循环 |
+
+边界示例：
+
+- “计算同比，再取同比最低的 3 个档口”属于 Plan，因为完整依赖可以在执行前确定；
+- “找出下降最大的档口，再分析该档口下降原因”属于 Research，因为第二阶段的对象来自查询结果；
+- “按档口、品类、区域分别分析变化”属于 Plan，因为三个方向已明确；
+- “先判断哪个维度最能解释变化，再继续下钻”属于 Research；
+- “深入分析同比变化”不自动进入 Research，固定有限拓扑能够完成时仍使用 Plan。
+
+Research 不能作为 Plan 校验失败后的回退。语义不明确时进入澄清，能力不支持时返回明确错误
+或建议拆分问题。
+
+## 9.4 控制循环与 DAG 边界
+
+### 9.4.1 Research 全局不使用固定计划 DAG
+
+Research 启动时只建立：
+
+- 研究目标；
+- 可选的待验证前提；
+- 冻结 Scope；
+- 初始候选假设；
+- 证据完成要求；
+- 服务端预算。
+
+不在开始时生成完整查询 DAG。控制循环为：
+
+~~~text
+加载冻结目标和当前状态
+  -> Agent 判断证据缺口
+  -> 调用一个或一组相互独立的工具
+  -> 工具返回 ToolObservation
+  -> 保存结果和 Evidence
+  -> 更新假设判断与完成度
+  -> 继续、调整查询方式或结束
+~~~
+
+replan 不单独维护一套可执行计划对象。每轮工具结果、结构化错误、空结果和数据限制就是下一轮
+Observation，模型据此重新选择下一工具。
+
+### 9.4.2 单次工具调用保留执行 DAG
+
+Agent 请求一次复杂语义查询后，Semantic Query Runtime 可以将其编译为确定性执行 DAG：
+
+~~~text
+当前期渠道 GMV ─┐
+                  ├─ 差值计算 ─ 贡献度计算 ─ 总量对账
+上期渠道 GMV ────┘
+~~~
+
+该 DAG 由服务端根据查询协议和语义契约生成，模型不能输出 SQL、物理字段或 DAG Edge。
+现有 Plan 的查询、计算、依赖证明、批次执行和 ResultStore 能力可以作为 Semantic Query Runtime
+的执行后端，但不是所有 Research 工具都必须先适配成旧 `ResearchAction`。
+
+### 9.4.3 执行后形成证据依赖 DAG
+
+Evidence 之间保留显式依赖，例如：
+
+~~~text
+E1：确认 GMV 环比下降
+  -> E2：华东贡献了主要下降
+       -> E3：华东订单量下降
+       -> E4：华东客单价基本稳定
+            -> C1：主要影响来自华东订单量下降
+~~~
+
+证据依赖 DAG 用于：
+
+- 结果驱动筛选和后续查询；
+- 防止引用不存在或不属于当前 Run 的结果；
+- 判断结论是否有证据覆盖；
+- 报告引用和审计；
+- 恢复执行和识别重复方向。
+
+因此 Research 的 DAG 结论是：
+
+| DAG 类型 | 是否保留 | 生成时机 |
+| --- | --- | --- |
+| Research 全局计划 DAG | 否 | 不生成 |
+| 单次工具执行 DAG | 是 | 工具参数通过语义证明后由服务端生成 |
+| 证据依赖 DAG | 是 | 工具执行和 Evidence 引用后逐步形成 |
+
+## 9.5 Research 输入契约
+
+`ResearchRequirement` 应描述目标和边界，不再描述允许的业务动作类型：
+
+~~~json
+{
+  "goal": "分析总 GMV 下降的主要影响因素",
+  "reason": "open_ended_cause",
+  "target_metric_refs": ["METRIC:271:246"],
+  "premise_to_verify": {
+    "type": "metric_change",
+    "metric_ref": "METRIC:271:246",
+    "expected_direction": "decrease"
+  },
+  "time_bindings": [],
+  "immutable_filters": [],
+  "scope": {},
+  "evidence_requirements": [
+    "确认问题中的变化是否成立",
+    "定位主要影响维度或驱动指标",
+    "核心结论必须至少有一个可追溯 Evidence"
+  ],
+  "budget": {},
+  "version_snapshot": {}
+}
+~~~
+
+需要删除 `allowed_actions`。`required_dimension_refs`、`required_driver_metric_refs` 等字段如果
+继续存在，应表达必须覆盖的证据要求，而不是要求 Agent 必须调用某一种动作。
+
+`premise_to_verify` 是可选字段。只有用户问题包含“下降、增长、异常、主要由某因素导致”等
+事实前提时，才执行确定性前提确认；开放式趋势发现、异常发现或探索问题不能无条件执行
+`initial_compare_action()`。
+
+## 9.6 Agent 工具协议
+
+第一版目标工具控制在以下范围：
+
+### 9.6.1 `query_semantic_data`
+
+主查询工具，使用声明式语义参数：
+
+~~~json
+{
+  "metrics": ["METRIC:271:246"],
+  "dimensions": ["LOGICAL_DIMENSION:2"],
+  "time_ranges": ["current", "previous"],
+  "filters": [],
+  "comparison": "difference",
+  "order": [{"ref": "METRIC:271:246", "role": "difference", "direction": "asc"}],
+  "limit": 10,
+  "purpose": "定位 GMV 下降最大的商家"
+}
+~~~
+
+比较、分解、下钻和结果驱动筛选通过参数组合表达，不再定义独立 Action：
+
+| 分析方式 | 查询协议表达 |
+| --- | --- |
+| compare | 指标 + 多个时间范围 |
+| breakdown | 指标 + 维度 |
+| drilldown | 将维度替换为已治理层级的下一节点 |
+| filter_from_result | Filter Value 引用已有 Evidence 的行和值 |
+| contribution | 查询结果进入受控贡献度计算和对账 |
+| validate_hypothesis | 发起能够支持或反对某假设的语义查询 |
+
+Evidence 驱动筛选使用受控引用，服务端解析真实值：
+
+~~~json
+{
+  "target_ref": "LOGICAL_DIMENSION:2",
+  "operator": "equals",
+  "value": {
+    "type": "evidence_value",
+    "evidence_id": "evidence:2",
+    "row_selector": {"rank": 1, "direction": "asc"},
+    "column_ref": "LOGICAL_DIMENSION:2"
+  }
+}
+~~~
+
+### 9.6.2 `inspect_evidence`
+
+按 Evidence ID 读取受预算控制的字段、采样行、统计信息、限制和依赖。完整结果继续保存在
+ResultStore，模型不能直接读取其他 Run 或未经授权的结果。
+
+### 9.6.3 `compute_evidence`
+
+只开放已有确定性计算引擎支持的操作，例如差值、增长率、占比、贡献度、排名、合并和对账。
+计算操作属于有限查询代数，不允许模型提交任意 Python 或任意表达式。
+
+### 9.6.4 `finish_research`
+
+模型提交结束原因、结论草案、Evidence 引用、未解决问题和限制。服务端完成引用、状态和证据
+覆盖校验后才能结束。
+
+### 9.6.5 `query_readonly_sql`
+
+直接 SQL 不是默认同级工具，只在 Semantic Query Runtime 明确返回
+`UNSUPPORTED_CAPABILITY` 后，按配置允许升级调用。具体边界见 9.9。
+
+## 9.7 ToolObservation 与动态 replan
+
+所有工具使用统一 Observation，不再使用只包含动作指纹和错误码的失败对象：
+
+~~~json
+{
+  "tool_call_id": "tool-call:8",
+  "tool_name": "query_semantic_data",
+  "status": "succeeded",
+  "failure_stage": null,
+  "error_code": null,
+  "retryable": false,
+  "semantic_plan_id": "semantic-plan:8",
+  "result_ids": ["result:11"],
+  "evidence_ids": ["evidence:4"],
+  "statistics": {},
+  "sample_rows": [],
+  "limitations": [],
+  "suggested_corrections": []
+}
+~~~
+
+失败 Observation 至少区分：
+
+- 参数或引用无效；
+- Scope 或权限拒绝；
+- 语义能力不支持；
+- 语义计划证明失败；
+- SQL 编译失败；
+- 执行报错或超时；
+- 空结果；
+- 结果结构异常；
+- fanout、唯一性或对账失败；
+- 预算不足。
+
+`suggested_corrections` 只能提供受治理的可选修正，例如允许的时间粒度、可用维度、层级下一
+节点或明确的不支持原因，不能通过自然语言建议扩大 Scope 或改变用户已确认的筛选。
+
+动态 replan 的允许范围：
+
+| 可以改变 HOW | 不能改变 WHAT |
+| --- | --- |
+| 查询维度、排序、限制、查询拆分方式 | 目标指标口径 |
+| 选择 Scope 内的驱动指标 | 用户已确认的时间范围 |
+| 根据 Evidence 选择后续分析对象 | 用户已确认的筛选 |
+| 在语义查询不支持时申请受限 SQL | 租户、权限和冻结资产版本 |
+| 因空结果调整查询粒度 | 将开放探索改写成另一个业务问题 |
+
+## 9.8 Semantic Query Runtime
+
+`query_semantic_data` 统一进入以下执行入口：
+
+~~~text
+SemanticQueryRequest
+  -> Scope / Permission Validation
+  -> Semantic Query Planning
+  -> Semantic / Structural Proof
+  -> SQL Compilation
+  -> Resource Guard
+  -> DAG Execution
+  -> ResultStore
+  -> Evidence Projection
+  -> ToolObservation
+~~~
+
+应复用现有能力，但不保留错误中间状态：
+
+1. 查询计划创建时为 `UNVALIDATED`；
+2. 无法绑定时返回明确错误，不能使用虚假 ID 占位；
+3. 完整证明通过后才能变为 `PROVEN`；
+4. 只有 `PROVEN` 计划能够编译和执行；
+5. 所有执行结果保留冻结版本、查询血缘和权限上下文；
+6. PlanPipeline 可以作为实现后端，但其公共入口需要接受稳定语义查询协议，而不是要求
+   Research 先构造旧 Action。
+
+## 9.9 直接 SQL 的受限边界
+
+不能采用“模型自由生成 SQL，只校验是否只读”的方案。`query_readonly_sql` 必须满足：
+
+1. Semantic Query Runtime 已明确返回 `UNSUPPORTED_CAPABILITY`，而不是普通绑定错误；
+2. 当前数据集和租户显式开启 Research SQL 能力；
+3. SQL 只能引用冻结 Scope 内允许的表、列和行权限；
+4. 使用独立只读账号，并进行 AST 单语句、只读类型、危险函数、租户权限、超时、行数、成本
+   和并发限制；
+5. 执行前进行 dry-plan 或等价逻辑计划检查；
+6. SQL 工具返回结构化错误，允许模型修改 HOW 后重试；
+7. 结果默认标记为 `EXPLORATORY`，不能直接支撑高置信度核心结论；
+8. 核心结论使用该结果时必须完成语义总量对账、结构检查、第二候选验证或人工确认；
+9. SQL 不得自行重新定义已有指标公式或绕开已发布指标口径；
+10. SQL 调用次数、多候选数和修复轮数使用独立预算。
+
+直接 SQL 的开放顺序必须晚于 Semantic Agent 主路径和评测体系，不能作为新 Research 的第一阶段
+能力。
+
+## 9.10 校验边界
+
+校验按错误是否可确定、是否能形成通用不变量划分：
+
+| 类别 | 内容 | 执行策略 |
+| --- | --- | --- |
+| 安全和权限 | 只读、租户、行列权限、超时、行数、成本、并发 | 永久硬门禁 |
+| 语义和结构 | ref、能力、Join、粒度、时间、聚合安全、fanout、唯一性、对账 | Semantic Runtime 永久硬门禁 |
+| Research 质量 | 假设覆盖、反例、解释完整性、结论强度 | Evidence 规则、评测和必要的模型评价 |
+
+不得把以下内容继续加入通用 Validator：
+
+- 某行业问题必须先查某个维度；
+- 某句话出现时必须执行某个动作；
+- 某个客户的某个问题必须按固定顺序查询；
+- 为修复一个失败样例而新增长期业务分支。
+
+这类知识应进入：
+
+- 已发布语义资产和能力；
+- 受治理的分析关系或层级；
+- Verified Query 提炼出的通用定义；
+- Prompt 和工具说明；
+- 真实问题评测集。
+
+## 9.11 假设、证据与报告
+
+模型可以提出假设和支持程度，但不能修改事实证据。建议保留以下状态：
+
+~~~text
+PENDING
+SUPPORTED
+WEAKENED
+INCONCLUSIVE
+INVALID
+~~~
+
+服务端只接受满足以下条件的状态更新：
+
+1. Hypothesis 属于当前 Run；
+2. 引用的 Evidence 存在且属于当前 Run；
+3. Evidence 的指标、维度、时间和筛选与假设相关；
+4. `SUPPORTED` 或 `INVALID` 至少引用一个有效证据；
+5. 对账失败、数据截断或样本不足时不能输出确定状态；
+6. 模型判断与确定性 Evidence 检查冲突时，以确定性检查为准并形成 Observation。
+
+最终报告至少包含：
+
+- 研究目标和前提确认结果；
+- 核心发现及 Evidence 引用；
+- 支持、削弱、否定和未确认的假设；
+- 使用受限 SQL 时的披露；
+- 数据范围、截断、空值和其他限制；
+- 标准结束原因。
+
+报告模型只能生成草案。服务端必须检查引用存在、数字来源、假设状态和结论强度，不能在引用
+失败后删除引用并继续输出无来源结论。
+
+## 9.12 ResearchState、恢复与审计
+
+ResearchState 继续保存当前快照，同时为每轮保留追加式记录：
+
+~~~text
+ResearchStarted
+PremiseObserved
+ToolCalled
+ToolObserved
+EvidenceCreated
+HypothesisProposed
+HypothesisAssessed
+ConclusionProposed
+ResearchFinished
+~~~
+
+至少持久化：
+
+- 冻结 Requirement 和版本指纹；
+- Tool Call 参数和指纹；
+- ToolObservation；
+- Query Plan、Result 和 Evidence 映射；
+- Evidence 依赖；
+- 假设状态变化及引用；
+- 预算预留和实际消耗；
+- 结束原因和报告。
+
+Harness 崩溃后，从最后一个已提交 Observation 恢复。已经成功并持久化的工具调用不得重复执行；
+只有明确标记为未完成或可重试的调用可以继续。
+
+## 9.13 当前实现处置
+
+| 当前组件 | 目标处置 | 说明 |
+| --- | --- | --- |
+| `ResearchRequirement` | 保留语义并重组 | 保留目标、冻结时间筛选、Scope、预算和版本；删除动作白名单 |
+| `ResearchActionType` 及 Action DTO | 删除 | 分析方式改由查询协议参数表达 |
+| `materialize_research_action()` | 删除 | 不再维护 Action 到 ExecutionRequirement 的扩展分支 |
+| `ResearchPolicy` | 替换 | 改为工具调用 Agent，每轮基于 Observation 决策 |
+| `ResearchPipeline` | 重写为薄 Harness | 负责状态、预算、工具路由、持久化、停止和恢复 |
+| `PlanPipeline` | 保留执行能力并调整入口 | 作为 Semantic Query Runtime 后端，不作为旧 Action 兼容层 |
+| `EvidenceSnapshot` | 保留概念并扩展 | 增加工具来源、依赖、结构化错误、限制和证据级别 |
+| `ResearchActionFailure` | 替换 | 使用统一 `ToolObservation` |
+| 首次现象确认 | 条件保留 | 仅存在 `premise_to_verify` 时执行 |
+| 假设状态 | 保留并收紧 | 模型提出判断，服务端验证 Evidence 引用和状态转换 |
+| 结构化报告 | 保留并重写完成度校验 | 所有数据结论必须有 Evidence |
+
+新的实现不得增加以下兼容链：
+
+~~~text
+旧 ResearchAction -> 新通用 Action -> 新工具协议
+~~~
+
+Shadow 阶段由旧路径和新路径分别消费同一份冻结目标与 Scope，不让新 Harness 依赖旧动作物化器。
+
+## 9.14 迁移与验收顺序
+
+### 第一阶段：建立评测基线
+
+1. 使用真实问数问题建立 Research 评测集；
+2. 保存预期指标口径、关键中间证据、允许结论和禁止结论；
+3. 记录当前实现的完成率、静默错误率、查询数、模型调用数、延迟和成本；
+4. 单独统计语义能力不足、执行失败和报告无证据三类问题。
+
+### 第二阶段：建立新工具协议和 Harness
+
+1. 定义 `SemanticQueryRequest`、Evidence 引用和 `ToolObservation`；
+2. 建立新的 Research Agent Harness；
+3. 接入 `query_semantic_data`、`inspect_evidence`、`compute_evidence` 和
+   `finish_research`；
+4. 保留当前只读生产路径，新 Harness 先进行 Shadow 执行；
+5. 不接入直接 SQL。
+
+### 第三阶段：双跑与切流
+
+1. 旧 Action 路径和新工具路径使用相同输入双跑；
+2. 对比语义绑定、关键查询、Evidence 覆盖、停止质量和最终结论；
+3. 新路径达到预设门槛后按数据集或问题类型切流；
+4. 停止新增旧 ResearchAction 和动作专用 Validator；
+5. 切流完成后删除旧 Action DTO、物化器和对应 Prompt。
+
+### 第四阶段：受限 SQL 和高风险候选选择
+
+1. 统计 Semantic Runtime 的真实 `UNSUPPORTED_CAPABILITY`；
+2. 只针对无法由语义查询表达但业务价值明确的问题开放 SQL；
+3. 关键 SQL 生成 2 至 3 个候选，执行结构检查并使用选择器或对账选择；
+4. SQL 结果默认是探索证据，单独统计其静默错误率；
+5. 高频且经人工确认的 SQL 模式提炼为正式语义资产或能力。
+
+### 验收指标
+
+不能只使用 SQL 执行成功率。至少包含：
+
+- 目标指标和筛选保持率；
+- Scope 越界率；
+- 关键 Evidence 命中率；
+- 结论引用完整率；
+- 静默错误率；
+- 正确拒绝和澄清率；
+- 重复查询率；
+- 平均查询数、模型调用数、延迟和成本；
+- 预算耗尽时的部分报告质量；
+- 受限 SQL 的使用率和回流资产比例。
+
+## 9.15 设计来源与采用理由
+
+| 设计选择 | 参考来源 | 采用理由 | 不直接照搬的部分 |
+| --- | --- | --- | --- |
+| Fast、Plan 使用 Workflow，Research 使用 Agent | [Anthropic: Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) | 只有 Research 的后续步骤必须依赖运行结果 | 不把所有模式统一改成 Agent |
+| 使用少量稳定工具和持久状态 | [Anthropic: Scaling Managed Agents](https://www.anthropic.com/engineering/managed-agents) | Harness 中针对模型能力的假设会过时，稳定接口应独立于具体循环实现 | 不复制其通用 Sandbox 架构，本项目只抽取 Session、Tool、Observation 边界 |
+| Observation 驱动下一轮决策 | [ReAct](https://arxiv.org/abs/2210.03629) | 外部环境结果可以更新计划并处理异常 | ReAct 不定义 BI 语义正确性，仍需 Semantic Runtime |
+| 语义查询作为主路径 | [Cube Query Format](https://docs.cube.dev/reference/core-data-apis/rest-api/query-format)、[dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) | 指标、维度、筛选和时间可以形成稳定声明式查询入口 | 不直接采用其数据模型，实现继续使用本项目 Semantic 契约 |
+| 受治理上下文而非裸 Schema | [Snowflake Cortex Analyst](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst)、[Databricks Genie](https://docs.databricks.com/aws/en/genie/) | 商业指标、规则和权限必须进入统一语义环境 | 两者主要解决问数，不是完整动态 Research 控制器 |
+| Agent 编排，执行原语负责正确性 | [WrenAI](https://github.com/Canner/WrenAI) | MDL planning、dry-plan、结构化错误和行数限制说明 Agent SQL 不能只做只读检查 | 不直接复制 Wren MDL，继续使用本项目 DatasetSchema |
+| SQL 执行错误进入修正循环 | [MAC-SQL](https://arxiv.org/abs/2312.11242) | 外部工具和错误修正能改善复杂 Text-to-SQL | 执行成功不等于指标口径正确，不能据此删除结构不变量 |
+| Schema 和数据库值检索 | [CHESS](https://arxiv.org/abs/2405.16755) | 大 Schema 缩减、相关数据检索和候选修正能提升上下文质量 | 主要用于 SQL 上下文构造，不决定 Research 状态机 |
+| 高风险节点使用多候选和选择器 | [XiYan-SQL](https://arxiv.org/abs/2507.04701) | 多生成器和选择器能提高复杂 SQL 准确率 | 不在每轮默认生成多个候选，避免不可控成本 |
+| Verified Query 反哺语义资产 | [Snowflake Verified Query Optimization](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst/analyst-optimization) | 从人工确认 SQL 提炼可复用语义概念，比长期积累补丁规则更可维护 | 不直接复用历史裸 SQL 绕过当前语义契约 |
+
+上述来源分别支持控制循环、工具边界、语义执行、错误反馈和评测策略，没有任何单一论文或产品
+能够直接证明本项目的完整架构。目标方案是结合本项目业务不变量后的设计结果。
+
+## 9.16 旧 ResearchAction 实现与阶段执行记录
+
+以下内容记录 2026-08-21 前已实现的 ResearchAction 方案、第三阶段治理资产和验收准备，供迁移、
+回归和删除旧实现时追溯。它不再表示目标架构，其中关于“模型不选择工具”“ResearchAction
+作为长期公共契约”“保留动作物化器”的结论均已被 9.1 至 9.15 覆盖。
+
+维护状态（2026-08-22）：按第 38 号文档阶段 0，本节所述旧 `ResearchAction` 实现进入
+冻结维护——不再新增动作类型、动作专用 Prompt 规则或 Validator，只允许阻断性修复；
+第三阶段剩余的真实资产端到端验收并入新评测基线建设，不再单独推进。
+
+冻结由可执行守卫配合文档约束：运行
+`backend/.venv/bin/python backend/scripts/check_research_action_freeze.py --check`，其会读取
+`backend/scripts/data/research_action_freeze_manifest.json`，检查 `ResearchActionType` 和动作
+DTO 集合是否新增。守卫失败时不得合并旧 ResearchAction 扩展；它不解析 Prompt 或 Validator
+的业务实现，这两类变更仍由代码评审和冻结规则约束。评测器异常隔离、判分反例和 Evidence
+所有权/依赖顺序测试位于 `backend/tests/chatbi/test_research_agent_eval.py`。
+
+<details>
+<summary>展开旧 ResearchAction 设计与执行记录</summary>
+
+### 历史设计目标与职责
 
 Research 是面向动态多步分析的有界执行模式。它解决的问题不是“查询很多”，而是
 “下一步查询什么必须观察当前结果后才能确定”。Research 允许根据证据动态选择分析
@@ -2506,7 +3045,7 @@ Research 不负责：
 - 自动扩大查询数、模型调用数、Token、时间和结果大小预算；
 - 将数据贡献、共同变化或相关性表述为严格因果关系。
 
-## 9.2 与 Fast、Plan 的边界
+### 历史 9.2 与 Fast、Plan 的边界
 
 三种模式使用同一条判断原则：执行所需信息在什么时候才能确定。
 
@@ -2529,7 +3068,7 @@ Research 不负责：
 Research 不能作为 Plan 校验失败后的回退模式。只有第 5 步明确形成动态研究需求时才能
 进入 Research；信息不足进入澄清，能力或预算不足进入拒答或问题拆分。
 
-## 9.3 Agent 范式
+### 历史 9.3 Agent 范式
 
 Research 采用单 Agent、假设驱动、结构化动作、服务端控制的有界循环：
 
@@ -2560,7 +3099,7 @@ Research 采用单 Agent、假设驱动、结构化动作、服务端控制的�
 确定性组件负责，不再增加 SQL Agent、执行 Agent、批判 Agent 或独立报告 Agent。一次
 Research Policy 调用同时完成证据评估、假设更新和下一步动作选择。
 
-## 9.4 ResearchRequirement
+### 历史 9.4 ResearchRequirement
 
 Research 不能只依赖当前 `dynamic_research.goal` 和 `reason` 运行。第 5 步需要生成独立
 `ResearchRequirement`，明确目标、研究范围、允许动作和硬预算。推荐契约如下：
@@ -2638,7 +3177,7 @@ Research 不能只依赖当前 `dynamic_research.goal` 和 `reason` 运行。第
 - 查询、迭代、模型调用、单轮动作数、Token、时间和结果大小预算；
 - schema、contract、权限和研究范围版本快照。
 
-## 9.5 ResearchScope 构建
+### 历史 9.5 ResearchScope 构建
 
 Research Scope 在进入循环前由服务端构建并冻结。它不是把整个数据集资产列表交给模型，
 而是根据用户目标、已绑定资产和治理契约形成一个受限候选集合。
@@ -2670,17 +3209,17 @@ DatasetSchema 的不可变快照中确定性投影合格维度和驱动指标，
 研究循环运行期间 `ResearchScope` 不可扩大。确实需要范围外资产时必须暂停并进入澄清，
 得到用户确认后创建新的 Research Run；不得在原 Run 中静默追加资产。
 
-## 9.6 ResearchAction 契约
+### 历史 9.6 ResearchAction 契约
 
 模型每轮只能返回白名单内的结构化动作，不能直接返回 `QueryTask`、`AnalysisPlan`、SQL
 或工具调用。第一版支持以下动作。
 
-### 9.6.1 compare
+#### 历史 9.6.1 compare
 
 确认研究前提，例如目标指标是否确实下降、变化幅度和发生时间。目标指标和时间角色必须
 来自 `ResearchRequirement`。
 
-### 9.6.2 breakdown
+#### 历史 9.6.2 breakdown
 
 按研究范围中的一个明确维度分解目标指标或变化值：
 
@@ -2694,12 +3233,12 @@ DatasetSchema 的不可变快照中确定性投影合格维度和驱动指标，
 }
 ~~~
 
-### 9.6.3 drilldown
+#### 历史 9.6.3 drilldown
 
 沿 `ResearchScope.hierarchies` 中已治理的下一层继续分析。模型不能跳过层级、创建新层级
 或自行推断维度关系。
 
-### 9.6.4 filter_from_result
+#### 历史 9.6.4 filter_from_result
 
 根据已有结果选择分析对象，再生成后续查询条件：
 
@@ -2732,22 +3271,22 @@ DatasetSchema 的不可变快照中确定性投影合格维度和驱动指标，
 资产和时间角色仍必须属于 Research Scope。`row_selector.order_by` 使用逻辑指标引用和
 结果值角色，服务端根据结果血缘解析实际列；模型不能填写物理结果列名。
 
-### 9.6.5 contribution
+#### 历史 9.6.5 contribution
 
 对明确的维度执行确定性贡献度计算，复用 Plan 的 `contribution` 操作及可加性、对账和
 除零规则。模型不能自由定义贡献公式。
 
-### 9.6.6 validate_hypothesis
+#### 历史 9.6.6 validate_hypothesis
 
 验证一个结构化假设，例如目标变化是否主要来自订单量、客单价或某个已授权维度。假设只
 能引用研究范围中的指标、维度和已有结果，不能使用自由计算表达式。
 
-### 9.6.7 finish
+#### 历史 9.6.7 finish
 
 结束研究并声明标准原因：`sufficient_evidence`、`premise_not_supported`、
 `no_new_direction`、`data_insufficient`、`needs_clarification` 或 `budget_exhausted`。
 
-## 9.7 模型决策输出
+### 历史 9.7 模型决策输出
 
 Research Policy 每轮只输出一个结构化决策，包含证据评估、假设变化和执行或结束决定：
 
@@ -2808,7 +3347,7 @@ Research Policy 每轮只输出一个结构化决策，包含证据评估、假�
 修改研究目标、扩大范围或降低语义。第二次仍失败则按已有证据生成部分报告或明确失败，不能
 无限重试。
 
-## 9.8 确定性初始步骤
+### 历史 9.8 确定性初始步骤
 
 Research 开始时不立即让模型自由选择方向。服务端先根据研究目标生成现象确认子计划：
 
@@ -2822,7 +3361,7 @@ Research 开始时不立即让模型自由选择方向。服务端先根据研�
 `premise_not_supported` 结束并报告实际结果，不能继续寻找下降原因。没有对比目标的开放
 探索可以使用对应的确定性基线查询，但基线规则仍由服务端生成。
 
-## 9.9 每轮执行和子计划
+### 历史 9.9 每轮执行和子计划
 
 每一轮遵循固定流程：
 
@@ -2858,7 +3397,7 @@ Research Run 不是一个不断修改的全局 `AnalysisPlan`。每轮生成独�
 任一子计划未达到 `PROVEN` 不能执行。Research 不能以“探索”为理由降低 Plan 的证明
 标准，也不能让模型直接修复 SQL 或切换资产。
 
-## 9.10 EvidenceSnapshot
+### 历史 9.10 EvidenceSnapshot
 
 Research Policy 只能读取受控证据摘要，不能读取全部结果行。推荐结构如下：
 
@@ -2900,7 +3439,7 @@ Evidence 由服务端根据结果 schema 和动作目的投影，采样和统计
 模型生成的假设文本不是证据。只有来自成功 QueryTask 或 ComputeTask、通过结果校验且具有
 完整血缘的 EvidenceSnapshot 才能支持最终发现。
 
-## 9.11 ResearchState 与恢复
+### 历史 9.11 ResearchState 与恢复
 
 Research 使用显式、可持久化、追加式状态，不能依赖模型上下文记忆：
 
@@ -2947,7 +3486,7 @@ INITIALIZING -> RUNNING -> CONCLUDING -> SUCCEEDED
 子计划 ID、结果 ID、假设变化和继续或结束原因。恢复时从最后一个完整提交的轮次继续；已经
 成功的动作不能重复执行。
 
-## 9.12 预算、去重和停止条件
+### 历史 9.12 预算、去重和停止条件
 
 Research 预算由服务端配置并在每次动作物化前预留。模型调用预算覆盖 Research Policy、
 结构修复和最终报告生成；Controller 必须为最终报告预留一次调用，不能在动作循环中耗尽
@@ -2980,7 +3519,7 @@ Research 预算由服务端配置并在每次动作物化前预留。模型调�
 结果的结论。若 ResearchRequirement 声明了必查维度、必验假设或最低覆盖数，还必须完成
 这些要求；否则将 `finish` 判为不满足条件，并在剩余预算内要求模型选择下一步动作。
 
-## 9.13 失败与部分结果
+### 历史 9.13 失败与部分结果
 
 单个动作失败时：
 
@@ -2995,7 +3534,7 @@ Research 预算由服务端配置并在每次动作物化前预留。模型调�
 Research 不得静默降级为 Plan 或 Fast。某轮动作本身通过 Plan 执行，不代表整个 Research
 Run 变成 Plan。
 
-## 9.14 最终报告与引用
+### 历史 9.14 最终报告与引用
 
 Research 最终输出结构化研究报告，至少包含：
 
@@ -3017,7 +3556,7 @@ ResearchState 和 EvidenceSnapshot 生成，不能重新查询或补充未执行
 - **相关线索**：现有结果支持继续验证，但不能确认因果；
 - **严格因果**：第一版不支持，不能输出因果确认结论。
 
-## 9.15 组件职责
+### 历史 9.15 组件职责
 
 推荐的逻辑组件为：
 
@@ -3047,7 +3586,7 @@ ResearchPipeline
 - `EvidenceProjector`：从 ResultStore 生成可回放的受控证据摘要；
 - `ResearchReportComposer`：生成并校验带引用的结构化报告。
 
-## 9.16 第一版能力范围
+### 历史 9.16 第一版能力范围
 
 第一版支持：
 
@@ -3069,7 +3608,7 @@ ResearchPipeline
 - 自动写回业务系统；
 - 多 Agent 自由协作。
 
-## 9.17 分阶段实施
+### 历史 9.17 分阶段实施
 
 ### 第一阶段：契约和路由边界
 
@@ -3571,6 +4110,8 @@ dataset `243` 现在满足第三阶段 `drilldown`、`contribution` 和
 3. 支持预算耗尽报告、Trace 回放和成本统计；
 4. 增加真实问题跑批、结果引用判分、动作重复率和研究停止质量评测；
 5. 评测通过后再按数据集配置默认启用 Research。
+
+</details>
 
 # 10. 查询编译与执行
 

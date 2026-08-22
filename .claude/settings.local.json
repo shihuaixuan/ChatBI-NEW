@@ -43,7 +43,11 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:docs.databricks.com)",
       "Bash(curl -s -L --max-time 30 \"https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-analyst/semantic-model-spec\" -H \"User-Agent: Mozilla/5.0 \\(Macintosh; Intel Mac OS X 10_15_7\\) AppleWebKit/537.36 \\(KHTML, like Gecko\\) Chrome/120.0 Safari/537.36\")",
-      "Bash(curl -sL --max-time 30 https://raw.githubusercontent.com/tencentmusic/supersonic/master/README.md)"
+      "Bash(curl -sL --max-time 30 https://raw.githubusercontent.com/tencentmusic/supersonic/master/README.md)",
+      "Bash(python -m json.tool data/research_agent_eval_cases.json)",
+      "Bash(python -m py_compile scripts/run_research_agent_eval.py)",
+      "Bash(python *)",
+      "Bash(ruff check *)"
     ]
   }
 }
