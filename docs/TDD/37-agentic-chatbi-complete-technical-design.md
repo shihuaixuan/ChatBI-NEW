@@ -15,158 +15,461 @@
 9. 答案生成；
 10. 澄清、失败和状态恢复。
 
-# 1. 支撑问数分析的语义资产设计
+# 1. 面向问数的语义层重构设计
 
 ## 1.1 设计结论
 
-后续问数分析不能只依赖指标、维度的名称、别名、英文标识和类型。指标和维度描述的是
-“业务资产是什么”，维度层级、指标维度能力、指标公式和指标关系描述的是“这些资产允许
-怎样组合分析”。Fast、Plan 和 Research 只能执行已经人工配置、服务端校验并正式发布的
-语义组合，不能由 LLM 在运行时根据名称自行推断并直接生效。
+本项目中的语义层不是只面向报表工具的指标目录，而是问数模型获取可靠业务上下文、形成
+确定资产绑定并生成可执行查询的统一基础。它需要同时完成两类职责：
 
-维度下钻和指标驱动关系与现有指标、维度一样，属于需要人工维护的语义资产。LLM 可以在
-配置阶段提出候选建议，但候选只能进入草稿状态，必须经过人工确认和契约发布后才能进入
-运行时 Schema。
+1. 查询前，根据用户问题发现相关指标、维度、维度值、时间语义和分析能力，为模型提供
+   有限、可解释的候选上下文；
+2. 查询后，对模型选择的资产组合执行确定性绑定、权限检查、契约验证、查询编译和版本冻结，
+   禁止模型通过名称相似或物理字段绕过治理口径。
 
-当前第三阶段为了验证 Research 动作，暂时从数据集 `query_config` 读取
-`dimension_hierarchies` 和 `research_relationships`。该方式缺少独立持久化、引用保护、
-统一校验、发布状态、资产版本、影响分析和配置界面，只能作为开发阶段临时入口，不能作为
-正式语义资产设计。
+因此，可靠语义上下文不能等同于向量检索 TopK。检索结果只是候选；只有候选经过权威
+`DatasetSchema` 补充定义、模型完成意图选择、服务端完成绑定和可执行性证明后，才能成为
+Fast、Plan 和 Research 共同消费的执行上下文。
 
-## 1.2 现有语义资产基础
+目标链路如下：
 
-当前 Semantic 模块已经具备以下基础：
+~~~text
+用户问题
+  -> 问题重写并输出指标、维度短语
+  -> 分槽混合召回候选资产
+  -> 使用已发布 DatasetSchema 补充候选权威定义和能力
+  -> 模型完成语义解析，只能引用候选 ref
+  -> 服务端确认绑定、歧义、权限和组合可执行性
+  -> 生成 ExecutionRequirement 并路由 Fast / Plan / Research
+  -> 生成 UNVALIDATED SemanticQueryPlan
+  -> 契约验证通过后变为 PROVEN
+  -> 编译 SQL、执行、结果检查和必要的 replan
+~~~
 
-1. 物理模型、模型字段和模型度量；
-2. 指标和物理维度；
-3. 业务实体和逻辑维度；
-4. 物理维度到逻辑维度的绑定；
-5. 指标结果粒度、可加性、默认聚合、去重键和时间语义；
-6. 指标使用逻辑维度时的分组、筛选和明细能力；
-7. 模型关系、关系基数、指标传播方向和聚合安全性；
-8. 数据集契约完整度校验、发布、版本和 Schema 指纹。
+本次重构不推翻现有 Semantic 契约、Retrieval 混合召回和查询编译器，也不引入第二套语义
+事实源。重构重点是把已经存在但分散的能力连接成一条统一链路，解决“检索已经完成、契约
+已经完善，但模型实际看到的上下文仍然主要是名称和别名”的问题。
 
-后续设计应扩展这套正式契约，不在 `query_config`、指标 `ext` 或维度 `ext` 中另建一套
-长期运行事实源。所有关系型语义资产由 Semantic 模块唯一写入和校验，ChatBI 只消费
-Semantic 公开的严格 DTO，不读取 Semantic ORM，也不解释任意配置字典。
+## 1.2 当前实现事实
 
-目标关系如下：
+### 1.2.1 当前问数主链路
+
+当前新 Agent 主链路已经按以下方式运行：
+
+1. `AgentInputPreparer` 调用问题重写模型，生成 `metric_phrases` 和
+   `dimension_phrases`；
+2. `SearchSemanticAssetsTool` 调用 `RetrievalService.retrieve()` 获取候选资产；
+3. `SemanticParseService` 将重写问题和候选列表交给模型，模型输出指标、维度、筛选、时间、
+   计算和多步分析结构；
+4. `ModeRouter` 从发布 `DatasetSchema` 补充被选资产的执行定义，生成
+   `ExecutionRequirement` 并选择 Fast、Plan 或 Research；
+5. Fast 和 Plan 通过 `prepare_strict_query_scope()` 生成并验证
+   `SemanticQueryPlan`；
+6. Research 只使用启动时冻结的已发布资产快照，把受控 `ResearchAction` 物化为 Plan 子计划。
+
+对应实现入口：
+
+~~~text
+backend/apps/chatbi/orchestration/agent/preparation.py
+backend/apps/tool/tools/semantic.py
+backend/apps/retrieval/query/service.py
+backend/apps/retrieval/query/hybrid.py
+backend/apps/chatbi/services/understanding/semantic_parse.py
+backend/apps/chatbi/orchestration/pipeline/mode_router.py
+backend/apps/chatbi/services/planning/semantic_query_preparation.py
+backend/apps/semantic/services/query/planning.py
+backend/apps/semantic/services/query/validation.py
+~~~
+
+### 1.2.2 已具备的语义契约
+
+Semantic 模块已经具备：
+
+1. 物理模型、模型字段、模型度量、指标和物理维度；
+2. 业务实体、逻辑维度和物理维度绑定；
+3. 指标默认聚合、结果粒度、可加性、去重键和时间语义；
+4. `EVENT`、`SNAPSHOT`、`PERIODIC_SNAPSHOT` 及快照聚合策略；
+5. 指标对逻辑维度的 `GROUP_BY`、`FILTER`、`DETAIL`、`CONTRIBUTION` 能力；
+6. 模型关系、关系基数、唯一性、指标传播方向和聚合安全性；
+7. `SAFE`、`PRE_AGGREGATE_REQUIRED`、`FORBIDDEN`；
+8. 结构化派生指标公式、维度层级、指标驱动关系和方向验证；
+9. 业务日历、比较粒度和时间对齐；
+10. 契约校验、发布、版本、Schema 快照、指纹和影响分析；
+11. 不可变 `SemanticQueryPlan` 和编译前 `PROVEN` 门禁。
+
+这些契约继续作为唯一业务事实源。不得在 ChatBI Prompt、`query_config`、指标 `ext`、维度
+`ext` 或 Research Action 中复制一份长期运行规则。
+
+### 1.2.3 已具备的检索能力
+
+Retrieval 模块已经具备：
+
+- 指标槽位和维度槽位分开检索；
+- 精确匹配、别名匹配、`pg_trgm` 词法匹配和 Dense embedding；
+- RRF 融合，当前 `rrf_k=60`；
+- 可选 BGE Reranker；
+- Dataset、租户、身份、角色、ACL、版本和资源类型硬过滤；
+- 单通道召回上限 20、融合结果上限 5；
+- 指标、维度、维度值和术语的独立绝对阈值与 Top1/Top2 gap；
+- `RESOLVED`、`AMBIGUOUS`、`MISSED`、`CROSS_MODEL` 决策；
+- 指标和维度模型兼容性判断、默认时间维度补充和维度值归一基础；
+- 检索通道诊断、策略版本和离线评测 DTO。
+
+因此后续不重新实现一套相似度检索，不新增另一套候选评分公式。后续工作是修正检索结果如何
+进入新 Agent 主链路、如何补充权威语义定义，以及如何统一模型选择和服务端绑定。
+
+### 1.2.4 已完成的关系型语义资产正式化
+
+实施状态（2026-08-21）：维度层级、指标关系、关系支持维度、结构化指标公式、显式贡献度
+能力、业务日历和时间对齐已经进入正式持久化、严格 DTO、引用校验、数据集资产选择、发布
+版本和运行时 Schema 投影链路。
+
+现有业务不变量继续保持：
+
+- 层级节点引用稳定 `logical_dimension_id`，运行时再解析为物理维度；
+- Research 下钻只能沿已认证的相邻层级；
+- 指标关系必须声明关系类型、验证方式、方向、共同维度和时间角色；
+- `FORMULA_COMPONENT` 只能由结构化公式确定性投影；
+- 贡献度必须有显式 `CONTRIBUTION` 能力并通过总量对账；
+- 运行中的 Research 使用冻结 Schema，不跟随后续配置发布扩大 Scope。
+
+## 1.3 当前核心问题
+
+### 1.3.1 新 Agent 主链路只使用候选召回，没有复用完整绑定决策
+
+`RetrievalService` 当前存在两个入口：
+
+~~~text
+retrieve()           -> 只召回候选
+retrieve_and_bind()  -> 召回、重排、门控、歧义判断和服务端绑定
+~~~
+
+Graph 的 Knowledge Adapter 使用 `retrieve_and_bind()`，新 Agent 的
+`SearchSemanticAssetsTool` 使用 `retrieve()`，随后由 `SemanticParseService` 让模型从 TopK
+候选中选择资产。这使项目同时存在两条绑定路径：
+
+| 消费入口 | 当前绑定方式 |
+| --- | --- |
+| Graph | Retrieval Policy 生成绑定决策 |
+| 新 Agent | 模型从候选中选择 ref |
+| 执行阶段 | SemanticQuery Validator 再做完整证明 |
+
+模型主动选择候选的能力需要保留，但模型选择之后必须经过统一的服务端绑定确认。Graph 和新
+Agent 不应长期维护不同的 `selected_assets`、`decision`、`allowed_asset_ids` 和歧义规则。
+
+### 1.3.2 指标检索上下文过于单薄
+
+当前 `SemanticSourceProjector._project_metric()` 主要投影指标名称、别名和业务名，没有把
+指标描述、结果粒度、可加性、时间语义、默认时间维度、公式和指标维度能力作为模型选择时的
+权威上下文。
+
+`SemanticParseCandidate` 当前接收：
+
+~~~text
+ref / asset_type / asset_id / model_id
+display_name / biz_name / description
+matched_phrases / score
+~~~
+
+其中 `description` 来自召回命中的 snippet。对于指标，snippet 经常仍然只是名称或别名。
+当“收入”同时召回确认收入、GMV、支付金额和回款金额时，模型没有足够信息判断业务口径，
+完整指标契约直到生成严格查询计划时才发挥作用，导致错误发现过晚。
+
+### 1.3.3 分槽检索证据在投影给模型时被削弱
+
+内部候选已经保留 `subquery_id`、`matched_phrase`、`matched_phrases`、`matched_text`、
+`matched_field`、各通道分数和排名，但 `project_semantic_package()` 对模型公开候选时没有
+完整保留分槽归属。
+
+多指标、多维度问题中，模型应知道某候选由哪个用户短语召回。例如“订单金额”和“退款
+金额”各自召回的候选不能在统一列表中失去短语归属，否则前面的分槽检索价值无法传递到
+语义解析阶段。
+
+### 1.3.4 RRF 分数被作为普通 score 暴露
+
+当前候选 `score` 主要是 RRF 排名融合值：
+
+~~~text
+RRF = sum(1 / (k + rank_channel))
+~~~
+
+它用于融合排序，不是绑定置信度，也不能和 Dense、词法或 Reranker 的绝对阈值直接比较。
+模型只看到一个没有量纲说明的 `score`，容易把它误解成概率或统一相似度。
+
+### 1.3.5 维度值检索基础存在，但新 Agent 主链路未接入
+
+Retrieval 已经定义 `RetrievalPurpose.VALUE`、维度值门控、值归一和歧义处理，但当前
+`SemanticBindingQueryPlanner` 只根据 `metric_phrases` 和 `dimension_phrases` 生成指标、
+维度子查询；SemanticParse 也明确保留用户原始值，不检索维度值资产。
+
+同时新建 Retrieval Source 默认 `configured_value_dimension_ids=[]`。因此“华东”“已完成”
+等业务值通常直接作为原始筛选值进入后续计划，尚未稳定绑定到受治理维度值。
+
+### 1.3.6 组合正确性检查发生得偏晚
+
+`ModeRouter` 会检查被选 ref 是否来自候选、是否存在于发布 Schema、是否能补充执行定义，
+但指标维度能力、关系路径、聚合安全和时间语义主要在 `prepare_strict_query_scope()` 之后由
+完整 Validator 证明。
+
+完整证明必须保留，但在模型选择完成、模式路由之前应增加一次轻量组合检查，尽早区分：
+
+~~~text
+RESOLVED          已经能够形成执行需求
+AMBIGUOUS         多个口径或绑定都合理，需要澄清
+INCOMPATIBLE      指标、维度、时间或分析操作不能组合
+MISSING_BINDING   资产存在，但缺少唯一物理绑定或关系路径
+~~~
+
+### 1.3.7 查询计划存在不干净的中间状态
+
+当前 `SemanticQueryPlanningService` 在部分无法绑定的维度或筛选上使用
+`physical_dimension_id=1` 作为占位，依赖后续 Validator 拒绝；同时计划在验证前先初始化为
+`PROVEN`，再用验证报告覆盖状态。
+
+这两种实现最终可能仍然失败，但违反了计划对象的业务含义。无法绑定应直接返回明确错误，
+未验证计划应显式为 `UNVALIDATED`，不能构造形式合法但语义无效的资产引用。
+
+## 1.4 重构后的职责和边界
+
+### 1.4.1 Semantic Catalog 和发布 Schema
+
+Semantic 模块继续作为以下内容的唯一事实源：
 
 ~~~text
 BusinessEntity
   -> LogicalDimension
        -> PhysicalDimensionBinding
-       -> DimensionHierarchyLevel -> DimensionHierarchy
+       -> DimensionHierarchy
 
 Metric
   -> MetricContract
-  -> MetricDimensionCapability -> LogicalDimension
+  -> MetricDimensionCapability
   -> MetricFormulaDefinition
-  -> MetricRelationship -> Driver Metric
+  -> MetricRelationship
 
 Dataset
-  -> 选择模型、指标、维度和关系资产
-  -> 校验并发布 DatasetSchema 快照
-  -> Fast / Plan / Research 只读取已发布快照
+  -> 选择资产
+  -> 完整性和可执行性校验
+  -> 发布 DatasetSchema、contract_version 和 schema_fingerprint
 ~~~
 
-## 1.3 维度层级资产
+Retrieval、ChatBI 和模型都不能修改已发布契约，也不能从名称相似度推断新的指标关系、层级、
+时间口径或聚合规则。
 
-### 1.3.1 资产边界
+### 1.4.2 Retrieval 只负责候选发现
 
-下钻描述的是多个逻辑维度之间有顺序的关系，不是单个维度的布尔属性。禁止只在维度表中
-增加 `can_drilldown`、`next_dimension_id` 等字段，因为这些字段无法完整表达：
+Retrieval 负责：
 
-- 一个维度属于多套层级；
-- 严格的层级顺序；
-- 是否允许跳级或反向下钻；
-- 层级的认证状态和版本；
-- 同一逻辑维度在不同物理模型中的绑定；
-- 某个指标是否真的支持层级中的全部维度。
+- 将问题重写结果投影成独立指标、维度和维度值槽位；
+- 在权限和数据集范围内执行混合召回、RRF 和 Reranker；
+- 返回候选、分槽归属、命中字段、通道分数、排名和通道诊断；
+- 使用版本化阈值给出候选证据等级；
+- 不生成 SQL，不修改业务契约，不把 Top1 自动等同于最终业务含义。
 
-第一版新增正式资产：
+### 1.4.3 Semantic Context Builder 补充权威上下文
+
+在 TopK 召回之后新增统一的上下文构造步骤。该步骤根据候选 `asset_id/model_id` 从本次发布
+`DatasetSchema` 补充权威定义，不从索引 snippet 反推业务契约。
+
+指标候选至少补充：
 
 ~~~text
-headless_dimension_hierarchy
-- id
-- oid
-- domain_id
-- name
-- biz_name
-- description
-- hierarchy_type
-- contract_status
-- version
-- status
-
-headless_dimension_hierarchy_level
-- id
-- hierarchy_id
-- logical_dimension_id
-- level_order
+description
+default_aggregation
+result_grain
+additivity
+distinct_keys
+time_semantics
+default_time_dimension
+comparison_grains
+time_alignment_policy
+formula_summary
+supported_logical_dimensions 和 usages
+aggregation_safety
 ~~~
 
-层级节点必须引用稳定的 `logical_dimension_id`，不能保存某个数据集中的物理
-`DIMENSION:<id>:<model_id>`。例如：
+维度候选至少补充：
 
 ~~~text
-区域逻辑维度 -> 城市逻辑维度 -> 档口逻辑维度
+logical_dimension_id
+semantic_type
+value_type
+model_id
+支持的 GROUP_BY / FILTER / DETAIL / CONTRIBUTION
+关联指标范围
+是否默认时间维度
+允许的时间粒度
+维度值是否启用治理检索
 ~~~
 
-运行时由 Semantic 根据目标指标的 `MetricDimensionCapability`、当前数据集包含的模型和
-经过证明的模型关系，把逻辑层级解析为当前查询可执行的物理维度。
+上下文只包含本次问题的候选资产，不向模型一次性暴露完整 DatasetSchema、物理 DDL、任意
+表字段和无关契约。
 
-### 1.3.2 第一版能力边界
-
-第一版只支持固定级别层级，并且 Research 下钻只能沿相邻层级执行：
+建议输出严格 DTO：
 
 ~~~text
-区域 -> 城市
-城市 -> 档口
+SemanticContext
+- question
+- schema_version
+- contract_version
+- metric_slots[]
+- dimension_slots[]
+- value_slots[]
+- operation_requirements[]
+- retrieval_diagnostics
 ~~~
 
-不自动授权区域直接跳到档口，不支持反向下钻。组织机构树等“同一逻辑维度内部的成员父子
-关系”属于另一类成员层级，后续单独设计，不能与第一版固定级别层级混用。
+每个槽位中的候选包含 `ref`、权威定义、匹配证据和兼容能力，不包含可由模型修改的物理表名、
+物理字段表达式和指标 SQL。
 
-层级能够进入某个指标的 Research Scope，必须同时满足：
+### 1.4.4 模型负责语义选择，不负责证明
 
-1. 层级已发布且状态为 `CERTIFIED`；
-2. 层级所有逻辑维度属于同一主题域；
-3. 数据集明确包含该层级资产；
-4. 目标指标对每一层逻辑维度具有 `GROUP_BY` 能力；
-5. 每一层都能解析到唯一物理维度；
-6. 跨模型时存在聚合安全、方向正确的关系路径；
-7. 当前时间语义和查询粒度可以在各层保持一致。
+`SemanticParseService` 继续由模型完成：
 
-## 1.4 指标关系资产
+- 判断用户真正需要的指标和维度；
+- 区分分组维度和筛选维度；
+- 保留筛选值、时间表达、排序、数量和计算要求；
+- 判断固定多步还是动态 Research；
+- 在上下文不足时输出 `needs_clarification`。
 
-### 1.4.1 正式关系模型
+模型只能引用 `SemanticContext` 中出现的 ref，不能生成资产 ID、物理字段、表名、关系路径、
+指标公式或 SQL。模型选择 Top2 而不是 Top1 是允许的，但必须提供来自问题和候选定义的选择
+依据，服务端仍需做绑定确认。
 
-目标指标与驱动指标之间的关系不能只表示“相关”，还必须明确关系来源、验证方法、变化方向、
-共同维度、时间角色和执行路径。建议新增：
+### 1.4.5 Semantic Binding 负责最终绑定
+
+模型输出后，由统一绑定服务完成：
+
+1. 校验全部 ref 来自原始候选槽位；
+2. 校验资产已发布、版本一致且当前身份有权访问；
+3. 校验指标、逻辑维度和物理维度绑定唯一；
+4. 校验请求的 `GROUP_BY`、`FILTER`、`DETAIL`、`CONTRIBUTION` usage；
+5. 校验模型关系方向、聚合安全和默认时间维度；
+6. 将无法确定的问题归类为歧义，而不是选择一个相似资产继续执行；
+7. 输出统一 `SemanticBindingResult`、`selected_assets`、`allowed_asset_ids` 和原因码。
+
+Graph 和新 Agent 最终都消费这一份绑定结果。`retrieve_and_bind()` 中已经存在的阈值、
+Reranker、gap 和兼容性逻辑应复用或拆成共享服务，不再由两个入口分别实现。
+
+### 1.4.6 Semantic Query Runtime 负责确定性执行
+
+绑定完成后，Fast、Plan 和 Research 只通过统一语义查询运行链路：
 
 ~~~text
-headless_metric_relationship
-- id
-- oid
-- domain_id
-- target_metric_id
-- driver_metric_id
-- relationship_type
-- validation_method
-- expected_direction
-- supported_time_roles
-- relation_path
-- contract_status
-- version
-- status
-
-headless_metric_relationship_dimension
-- relationship_id
-- logical_dimension_id
+ExecutionRequirement
+  -> SemanticQueryPlanningInput
+  -> UNVALIDATED SemanticQueryPlan
+  -> SemanticQueryValidationReport
+  -> PROVEN SemanticQueryPlan
+  -> Semantic SQL Compiler
+  -> Datasource 权限和只读安全检查
+  -> Query Execution
+  -> Result Validation
 ~~~
 
-允许的关系类型：
+各模式的区别只在于如何形成一个或多个 `ExecutionRequirement`，不能各自解释指标公式、权限、
+Join、时间和聚合规则。
+
+## 1.5 语义上下文输出设计
+
+### 1.5.1 候选上下文
+
+候选上下文允许存在概率性，但必须可解释。例如：
+
+~~~json
+{
+  "slot_id": "metric:1",
+  "mention": "收入",
+  "candidates": [
+    {
+      "ref": "METRIC:101:12",
+      "biz_name": "确认收入",
+      "description": "满足收入确认条件的订单金额",
+      "match": {
+        "level": "strong",
+        "exact": false,
+        "alias": true,
+        "matched_phrases": ["收入"],
+        "matched_field": "aliases",
+        "lexical_score": 0.91,
+        "dense_score": 0.78,
+        "rerank_score": 0.88,
+        "rrf_rank": 1
+      },
+      "contract": {
+        "additivity": "FULL",
+        "time_semantics": "EVENT",
+        "default_time_dimension": "收入确认时间"
+      }
+    }
+  ]
+}
+~~~
+
+RRF 值保留为内部排序和审计字段，不再使用没有语义说明的统一 `score` 让模型自行解释。
+模型侧可以只暴露 `match.level`、关键原始分数和匹配证据。
+
+### 1.5.2 已确认绑定
+
+模型完成选择且服务端通过绑定后，形成不可变绑定：
+
+~~~json
+{
+  "status": "RESOLVED",
+  "schema_version": 18,
+  "contract_version": 7,
+  "selected_metrics": ["METRIC:101:12"],
+  "selected_dimensions": ["DIMENSION:205:12"],
+  "value_bindings": [
+    {
+      "dimension_ref": "DIMENSION:205:12",
+      "raw_value": "华东",
+      "canonical_value": "EAST_CHINA"
+    }
+  ],
+  "constraints": {
+    "required_time_dimension": "DIMENSION:301:12",
+    "aggregation_safety": "SAFE"
+  }
+}
+~~~
+
+已确认绑定中的资产、不可变筛选和时间范围是后续 replan 的 `WHAT`。Research 可以调整查询
+顺序、拆分方式和 SQL 实现等 `HOW`，不能修改这些已经确认的用户语义。
+
+### 1.5.3 歧义上下文
+
+以下情况不能用 Top1 自动继续：
+
+- 多个指标代表不同业务口径；
+- 同一个维度名在多个模型中含义不同；
+- 一个维度值可以属于多个逻辑维度；
+- 默认时间维度不唯一；
+- 第一名和第二名都达到门槛但 gap 不足；
+- 模型选择与指标维度能力矩阵冲突。
+
+服务端应返回结构化候选和原因码，由澄清流程恢复到语义解析边界，不重新执行无关的检索和
+问题重写。
+
+## 1.6 保留的业务不变量
+
+### 1.6.1 维度层级
+
+下钻关系属于逻辑维度之间的正式资产，不是单个维度上的布尔属性。层级进入执行 Scope 必须
+同时满足：
+
+1. 已发布且状态为 `CERTIFIED`；
+2. 数据集明确选择该层级；
+3. 目标指标对每层逻辑维度具有 `GROUP_BY` 能力；
+4. 每层能解析到唯一物理绑定；
+5. 跨模型时关系路径聚合安全且传播方向正确；
+6. 时间语义和查询粒度能在各层保持一致。
+
+第一版继续只支持固定级别的相邻下钻，不把组织树等同一维度内部成员父子关系混入当前模型。
+
+### 1.6.2 指标关系
+
+指标关系继续使用：
 
 ~~~text
 FORMULA_COMPONENT
@@ -174,270 +477,312 @@ CERTIFIED_DRIVER
 GOVERNED_ANALYSIS_RELATION
 ~~~
 
-第一版允许的确定性验证方式：
+并明确 `validation_method`、`expected_direction`、共同逻辑维度、时间角色和执行路径。没有
+明确方向时只能报告共同变化线索，不能陈述支持、削弱或因果关系。
 
-~~~text
-SAME_DIRECTION
-OPPOSITE_DIRECTION
-FORMULA_RECONCILIATION
-~~~
+跨模型驱动验证继续采用“分别查询、按共同逻辑维度对齐、服务端计算”的 Plan，不允许仅因
+关系已配置就直接生成跨粒度 Join SQL。
 
-`expected_direction` 至少支持 `POSITIVE`、`NEGATIVE` 和 `UNKNOWN`。例如订单量增加通常与
-GMV 同向，退款增加可能与净 GMV 反向。没有明确方向时只能生成“共同变化线索”，不能把
-同向或反向变化直接判定为支持、削弱，更不能陈述因果关系。
+### 1.6.3 指标公式、贡献度和时间
 
-### 1.4.2 共同分析能力
+- 结构化公式是派生指标组成关系的唯一事实源；
+- `FORMULA_COMPONENT` 不重复人工配置；
+- 贡献度要求 `FULL` 可加性、显式 `CONTRIBUTION` 能力和总量对账；
+- 同比、环比和时间偏移只能使用已发布日历和指标时间契约；
+- 快照指标必须使用已发布的期初、期末或区间聚合策略。
 
-关系中的支持维度必须引用逻辑维度。发布时需要证明目标指标和驱动指标在每个支持维度上都
-具有可执行能力，并检查：
+### 1.6.4 发布和版本冻结
 
-- 双方结果粒度是否兼容；
-- 时间语义和时间对齐策略是否兼容；
-- 是否需要预聚合；
-- 跨模型关系路径是否会导致指标重复；
-- 关系路径的指标传播方向是否正确；
-- 当前验证方式是否有确定性执行结构。
-
-第一版可先限制目标指标和驱动指标属于同一模型。跨模型驱动验证不能只因为关系已配置就直接
-执行；后续需要由 Plan 生成“分别查询、按共同逻辑维度对齐、再计算”的完整子计划，并对
-模型关系、粒度和时间对齐完成 `PROVEN` 证明。
-
-## 1.5 指标公式和分析能力重构
-
-### 1.5.1 结构化指标公式
-
-现有 `metric_refs` 只能说明派生指标依赖了哪些指标，不能说明分子、分母、加项、减项等依赖
-角色。后续应把派生指标公式收敛为结构化定义，例如：
-
-~~~json
-{
-  "operation": "RATIO",
-  "components": [
-    {"metric_id": 271, "role": "numerator"},
-    {"metric_id": 265, "role": "denominator"}
-  ]
-}
-~~~
-
-结构化公式是派生指标依赖的唯一事实源。`FORMULA_COMPONENT` 关系由该定义确定性投影，
-不能要求配置人员同时维护公式和另一份重复关系。这样服务端才能判断组成方向、执行公式对账，
-并区分公式分解与普通驱动分析。
-
-### 1.5.2 显式贡献度能力
-
-能够按某个维度分组不等于允许按该维度计算变化贡献。现有
-`MetricDimensionCapability.usages` 应扩展 `CONTRIBUTION`，贡献度动作必须同时满足：
-
-1. 指标可加性为 `FULL`；
-2. 指标与逻辑维度关系明确允许 `CONTRIBUTION`；
-3. 当前期和对比期已归一化且可比较；
-4. 维度差值合计能够与总差值对账；
-5. 使用服务端配置的确定性对账容差；
-6. 对账失败时明确失败，不生成贡献结论。
-
-第一版不再把全部 `GROUP_BY` 维度自动视为贡献度维度。
-
-### 1.5.3 业务时间语义
-
-现有指标已经具备事件、快照、默认时间维度和快照聚合策略，但完整问数还需要业务日历和比较
-规则。后续建议新增或补齐：
-
-- 数据集默认时区；
-- 自然周、自然月、自然季度和自然年；
-- 财务周、财务月和财年；
-- 工作日、节假日和营业日；
-- 指标允许比较的时间粒度；
-- 跨指标的时间对齐策略；
-- 快照指标的期初、期末和区间聚合口径。
-
-同比、环比和时间偏移继续由规则生成，但规则只能使用已发布的日历和指标时间契约，不能把
-业务日历逻辑写进 Prompt。
-
-## 1.6 语义资产管理操作
-
-维度层级和指标关系至少支持以下操作：
-
-1. 创建草稿；
-2. 编辑草稿；
-3. 停用；
-4. 查看引用；
-5. 发布前校验；
-6. 发布；
-7. 查看版本和变更记录；
-8. 删除或修改前的影响分析；
-9. 批量导入和导出；
-10. 查询某个指标当前可执行的分析能力及拒绝原因。
-
-建议公开 API：
-
-~~~text
-POST   /semantic/dimension-hierarchies
-PUT    /semantic/dimension-hierarchies/{id}
-DELETE /semantic/dimension-hierarchies/{id}
-
-POST   /semantic/metric-relationships
-PUT    /semantic/metric-relationships/{id}
-DELETE /semantic/metric-relationships/{id}
-
-GET    /semantic/datasets/{id}/analysis-capabilities
-GET    /semantic/datasets/{id}/contract-report
-POST   /semantic/datasets/{id}/publish-contract
-~~~
-
-`analysis-capabilities` 需要同时返回可执行能力和拒绝原因，例如：
-
-~~~json
-{
-  "metric_id": 271,
-  "available_operations": [
-    "breakdown",
-    "contribution",
-    "drilldown"
-  ],
-  "rejected_operations": [
-    {
-      "operation": "validate_hypothesis",
-      "reason": "METRIC_RELATIONSHIP_NOT_CERTIFIED"
-    }
-  ]
-}
-~~~
-
-删除逻辑维度、指标、模型关系、维度层级或指标关系前必须执行引用检查。已被发布数据集引用的
-资产不能直接物理删除，只能先创建新版本、完成影响分析并重新发布相关数据集。
-
-## 1.7 数据集选择、校验和发布
-
-维度层级和指标关系建议作为数据集可选择的正式资产类型，纳入现有
-`SemanticDatasetAsset`，避免同一主题域中的所有已认证关系自动进入每个数据集。数据集只有
-明确包含相关指标、逻辑维度和关系资产后，才能暴露对应分析能力。
-
-正式发布流程：
+正式发布流程继续为：
 
 ~~~text
 人工配置或确认候选资产
-  -> 保存为 DRAFT
-  -> Semantic 执行完整性和可执行性校验
-  -> 人工确认
-  -> 发布为 CERTIFIED
-  -> 增加 contract_version
+  -> DRAFT
+  -> Semantic 完整性和可执行性校验
+  -> CERTIFIED
+  -> contract_version 增加
   -> 生成 DatasetSchema 和 schema_fingerprint
   -> 重建语义检索索引
-  -> Fast / Plan / Research 冻结本次版本快照
+  -> 新 Run 使用新版本，运行中 Run 继续使用冻结快照
 ~~~
 
-维度层级、层级节点、指标关系和关系支持维度必须进入：
+Semantic Schema 与 Retrieval Index 必须记录可关联的版本。检索候选来自旧 Index、绑定使用新
+Schema，或权限版本不一致时，必须重新检索，不能静默继续。
 
-- `DatasetSchemaAssets`；
-- Schema Repository 和 Loader；
-- 集中式 `validate_semantic_contracts()`；
-- 数据集 `contract_version`；
-- `asset_versions`；
-- `schema_fingerprint`；
-- 发布完整度报告；
-- 运行 Trace 和 Research `version_snapshot`。
+## 1.7 后续实施计划
 
-运行中的 Research Scope 不跟随配置变化。配置发布新版本后，只影响新 Run；已有 Run 继续
-使用启动时冻结的 Schema、Contract 和 Scope 指纹。
+### 1.7.1 P0：补齐模型实际消费的语义上下文
 
-## 1.8 Semantic 与 ChatBI 的职责边界
+1. 新增统一 `SemanticContext` 严格 DTO；
+2. 在候选 TopK 后，从发布 `DatasetSchema` 补充指标契约、逻辑维度、默认时间维度和能力矩阵；
+3. 修改 `SemanticParseCandidate`，接收权威契约摘要和分槽匹配证据；
+4. `project_semantic_package()` 保留 `subquery_id`、`matched_phrases`、`matched_field`、
+   `matched_text`、通道分数和排名；
+5. 将普通 `score` 改为有明确含义的匹配证据结构；
+6. 不向模型暴露指标 SQL、物理字段表达式和完整 Schema。
 
-Semantic 负责：
+主要修改位置：
 
-- 保存关系资产；
-- 校验引用、主题域、粒度、时间、模型路径和聚合安全；
-- 发布和版本管理；
-- 把逻辑关系解析为当前数据集可执行的物理绑定；
-- 输出严格的公开 DTO 和能力拒绝原因。
+~~~text
+backend/apps/retrieval/sources/semantic_projector.py
+backend/apps/retrieval/query/semantic_binding.py
+backend/apps/tool/tools/semantic.py
+backend/apps/chatbi/services/understanding/semantic_parse.py
+backend/apps/chatbi/models/dto/semantic_parse.py
+~~~
 
-ChatBI 负责：
+### 1.7.2 P0：统一 Graph 和新 Agent 的绑定结果
 
-- 根据用户问题选择 Fast、Plan 或 Research；
-- 从已发布能力中冻结本次执行范围；
-- 选择允许的分析动作；
-- 把动作物化为 `ExecutionRequirement`；
-- 执行 Plan 证明、查询、计算、证据和报告流程。
+1. 把模型选择后的 ref 投影为统一绑定请求；
+2. 复用现有 `SemanticBindingPolicy`、Schema 兼容性和歧义规则；
+3. Graph 和新 Agent 统一输出 `SemanticBindingResult`；
+4. `selected_assets`、`allowed_asset_ids`、`decision`、`ambiguities` 只能由共享绑定服务生成；
+5. 澄清恢复只替换指定歧义槽位，不重新绑定已确认槽位；
+6. 删除同一状态在 Graph Adapter、Agent Tool Result Processor 和 ModeRouter 中的重复解释。
 
-ChatBI 不负责判断一组维度是否构成业务层级，也不负责判断一个指标是否是另一个指标的业务
-驱动因素。`build_research_requirement()` 只能根据 Semantic 返回的已验证契约做范围交集和
-预算裁剪，不能继续解析 `query_config` 原始字典或补充新的治理语义。
+主要修改位置：
 
-## 1.9 配置界面
+~~~text
+backend/apps/retrieval/query/service.py
+backend/apps/retrieval/query/policy.py
+backend/apps/retrieval/query/decision.py
+backend/apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py
+backend/apps/chatbi/orchestration/agent/preparation.py
+backend/apps/chatbi/orchestration/agent/tool_results.py
+~~~
 
-现有语义配置页面主要管理模型、指标、维度、数据集和术语。后续应增加“语义治理”区域：
+### 1.7.3 P0：增加模式路由前的轻量组合检查
 
-- 业务实体；
-- 逻辑维度和物理绑定；
-- 指标维度能力；
-- 维度层级编辑器；
-- 指标关系编辑器；
-- 数据集分析能力预览；
-- 契约完整度报告；
-- 发布操作和版本记录。
+1. 校验资产发布状态、版本和权限；
+2. 校验指标对逻辑维度的 usage；
+3. 校验物理绑定是否唯一；
+4. 校验默认时间维度是否唯一；
+5. 校验关系路径和聚合安全的基本条件；
+6. 输出 `RESOLVED`、`AMBIGUOUS`、`INCOMPATIBLE`、`MISSING_BINDING`；
+7. 完整的粒度、快照、时间和 SQL 证明仍由 `SemanticQueryValidationService` 负责。
 
-层级编辑器使用有序列表配置层级，不允许重复维度；指标关系编辑器必须显示目标指标、驱动
-指标、关系类型、方向、验证方式、共同维度、时间角色和认证状态。系统可以给出候选建议，
-但“确认并发布”必须是明确的人工操作。
+该步骤统一放在 Semantic Binding 与 `ModeRouter.route()` 之间，不在 Fast、Plan、Research 中
+分别增加校验。
 
-## 1.10 分阶段实施
+### 1.7.4 P0：清理查询计划中间状态
 
-### 第一阶段：关系资产正式化
+1. 增加 `UNVALIDATED` 计划状态；
+2. 删除 `physical_dimension_id=1` 占位；
+3. 无法绑定时直接返回明确错误和主体引用；
+4. `PROVEN` 只能由 Validator 产生；
+5. Compiler 继续只接受 `PROVEN` 计划；
+6. 将 filters、time range、having、order by 和 time offset 的核心自由字典逐步替换为严格 DTO。
 
-1. 新增维度层级、层级节点、指标关系和关系维度 ORM；
-2. 新增严格 DTO、Repository、Service 和 CRUD API；
-3. 所有关系引用逻辑维度 ID 和指标 ID，不保存运行时物理 Ref；
-4. 接入统一契约校验、引用保护和发布流程；
-5. 纳入数据集资产选择、Contract 版本和 Schema 指纹；
-6. 将 `DatasetSchema` 中的原始字典替换为严格公开 DTO；
-7. Research 改为只消费正式公开契约；
-8. 删除 `query_config` 中两个临时配置入口。
+主要修改位置：
 
-实施状态（2026-08-21）：已完成。维度层级、指标关系及关系维度已建立正式持久化、
-严格 DTO、引用校验、数据集资产选择、发布版本和运行时 Schema 投影链路。
-`DatasetSchema.dimension_hierarchies` 和 `DatasetSchema.research_relationships` 由正式语义
-资产构建，Research 不再把临时 `query_config` 字典作为长期事实源。
+~~~text
+backend/apps/semantic/models/dto/semantic_query.py
+backend/apps/semantic/models/dto/semantic_validation.py
+backend/apps/semantic/services/query/planning.py
+backend/apps/semantic/services/query/validation.py
+backend/apps/semantic/services/sql_compiler.py
+~~~
 
-### 第二阶段：完善分析契约
+### 1.7.5 P1：接入受治理维度值
 
-1. 将派生指标依赖重构为结构化公式；
-2. 增加指标关系方向和确定性验证方式；
-3. 增加显式贡献度能力和对账容差；
-4. 增加业务日历和指标时间对齐能力；
-5. 增加能力解释和变更影响分析；
-6. 在治理关系证明充分后支持跨模型驱动验证。
+1. 只为人工配置的低基数或治理维度启用值索引；
+2. 从问题理解的 filter slot 生成 `RetrievalPurpose.VALUE` 子查询；
+3. 值候选必须受已选维度约束，禁止在全数据集维值中无范围搜索；
+4. 数字 ID、长标识符继续直接透传，不进入向量检索；
+5. 值唯一匹配时写入 canonical value；多维度归属或多值命中时进入澄清；
+6. 高基数自由文本字段不建立全量值索引，使用数据库受限验证或专用字典。
 
-实施状态（2026-08-21）：已完成。指标结构化依赖、驱动关系方向和验证方式、
-显式 `CONTRIBUTION` 能力、对账容差、业务日历和时间对齐均已进入正式契约与
-发布 Schema。平台能力完成不等于所有数据集已完成配置；具体数据集仍必须由
-配置人员选择、确认并发布相应的层级、指标关系和贡献度能力。
+### 1.7.6 P1：建立真实问题分段评测
 
-### 第三阶段：高级分析语义
+评测至少拆分为：
 
-在真实问题集证明存在需求后，再依次设计：
+- 问题重写短语完整率；
+- 指标、维度和维度值 Recall@K；
+- 正确资产选择率；
+- 应澄清问题的澄清召回率；
+- 禁止资产泄漏率；
+- 指标维度组合通过率与错误拒绝率；
+- SemanticQueryPlan `PROVEN` 准确率；
+- SQL 和结果正确率；
+- Research replan 是否修改已确认 `WHAT`。
 
+阈值、Reranker、TopK 和 gap 只能依据真实问题集调整，不能通过单个问题增加场景特化规则。
+
+### 1.7.7 P2：Verified Query 和高频能力沉淀
+
+在基础绑定链路稳定后，将人工确认或线上验证通过的问数保存为：
+
+~~~text
+原始问题
+规范化问题
+语义槽位
+已确认资产 ref
+SemanticQueryPlan 摘要
+结果形状
+contract_version
+人工反馈
+~~~
+
+Verified Query 只作为检索和模型规划参考，执行时必须基于当前契约重新生成计划，不能直接
+复制历史 SQL。高频且稳定的 Research 查询模式经评审后沉淀为正式分析能力，而不是增加
+针对某个问题的 Validator。
+
+### 1.7.8 P2 以后再考虑的能力
+
+以下能力只在真实问题和规模证明需要后设计：
+
+- 面向消费者的精简 Semantic View；
+- 结果缓存和物化预聚合自动匹配；
 - 目标值、预算值和基准指标；
 - 异常检测策略；
 - 漏斗、留存和队列分析；
 - 同一逻辑维度内部的成员父子树；
-- 预测、模拟和 what-if。
+- 预测、模拟和 what-if；
+- Postgres-compatible Semantic SQL、GraphQL 或独立语义服务。
 
-这些能力不能提前塞进通用 `ext` 或自由 JSON 中。每类能力需要明确业务不变量、确定性执行
-方式和发布校验后再成为正式资产。
+这些能力不得提前塞入通用 `ext`、自由 JSON 或 Prompt。每类能力都需要先明确业务不变量、
+确定性执行方式、发布契约和评测标准。
 
-## 1.11 验收标准
+## 1.8 Semantic、Retrieval 与 ChatBI 的职责边界
 
-第一、二阶段完成后至少验证：
+| 模块 | 负责 | 不负责 |
+| --- | --- | --- |
+| Semantic | 资产、关系、能力、发布、版本、绑定证明、查询计划和编译 | 自然语言问题理解、模式路由 |
+| Retrieval | 候选召回、融合排序、重排、证据和诊断 | 修改语义契约、生成 SQL、证明查询正确 |
+| ChatBI Understanding | 问题重写、槽位识别、候选选择和澄清 | 自造资产、关系路径和指标公式 |
+| ModeRouter | 将已确认语义转换为 ExecutionRequirement 并选择模式 | 重新检索、重新解释语义契约 |
+| Fast / Plan / Research | 组织查询、计算、执行反馈和回答 | 绕过统一语义绑定和查询运行时 |
 
-1. 配置人员可以像配置指标、维度一样配置层级和指标关系；
-2. 未发布、已停用或引用无效的关系不会进入 `DatasetSchema`；
-3. 层级只能沿认证的相邻逻辑维度下钻；
-4. 指标关系只能在已声明的共同维度、时间角色和方向下验证；
-5. 贡献度只在显式允许的指标维度组合上执行并通过对账；
-6. 关系资产变更会增加版本并改变 Schema 指纹；
-7. 运行中的 Research 不会因配置变更扩大 Scope；
-8. 删除被引用资产时返回明确错误；
-9. 能力解释接口能说明每个动作允许或拒绝的原因；
-10. 真实问题集同时覆盖成功下钻、贡献度、驱动验证、并行分析、治理能力不足和越界拒绝。
+所有关系型语义资产由 Semantic 唯一写入和校验；ChatBI 只消费 Semantic 公开的严格 DTO，
+不读取 Semantic ORM，不解释任意配置字典。共享校验、权限、版本和状态转换必须有统一入口。
+
+## 1.9 参考方案和开源项目
+
+本节设计不是完整复制某一个产品，而是基于当前项目已经存在的业务不变量，参考以下方案的
+明确做法后进行组合。
+
+### 1.9.1 Cube Core 和 Cube Cloud
+
+参考内容：
+
+- Cube Core 以 Cube、View、Measure、Dimension、Join 和访问策略作为统一语义模型；
+- Semantic SQL 和 REST 查询使用精确成员名称，语义运行时再确定性编译；
+- Meta API 向消费者和 Agent 提供可查询成员发现能力；
+- Cube Cloud MCP 使用 `searchDataModel` 先按相似度发现 View 和成员，再用 `runQuery` 执行
+  精确 Cube SQL；
+- `description` 和 `meta.ai_context` 为 Agent 补充业务含义、同义词、指标优先级和使用限制。
+
+本项目借鉴“概率性发现和确定性执行分离”“面向 Agent 提供精简权威上下文”，不复制 Cube
+的完整 Semantic SQL、GraphQL、Cube Store 和托管 Agent。Cube 没有公开
+`searchDataModel` 的具体 embedding、融合权重和分数公式，因此本项目继续使用已实现的
+Exact、Alias、pg_trgm、Dense、RRF 和 BGE Reranker，不假设 Cube 内部算法。
+
+参考：
+
+- <https://docs.cube.dev/docs/introduction>
+- <https://docs.cube.dev/docs/data-modeling/ai-context>
+- <https://docs.cube.dev/docs/integrations/mcp-server>
+- <https://github.com/cube-js/cube>
+
+### 1.9.2 dbt Semantic Layer 和 MetricFlow
+
+参考内容：
+
+- 指标、实体、维度和时间粒度作为结构化语义契约；
+- 查询请求引用稳定语义成员，由 MetricFlow 规划数据源、Join、聚合和 SQL；
+- 指标定义和查询执行由同一语义图约束，而不是由 LLM 直接拼接物理 SQL。
+
+本项目借鉴“语义查询计划由结构化契约编译”和“指标、实体、维度关系集中表达”，保留当前更
+细的指标维度 usage、聚合安全、快照和 Research 契约。
+
+参考：
+
+- <https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl>
+- <https://github.com/dbt-labs/metricflow>
+
+### 1.9.3 Looker LookML
+
+参考内容：
+
+- 通过 LookML Model、Explore、View、Measure 和 Dimension 向消费者提供整理后的分析范围；
+- 用户和工具面向治理后的 Explore 查询，不直接面对整个仓库；
+- Join 关系和访问控制在模型层集中表达。
+
+本项目暂不立即增加完整 Semantic View，但后续在资产规模导致模型上下文过大时，可以参考
+Explore 的方式为不同业务问题发布精简可查询范围。
+
+参考：
+
+- <https://cloud.google.com/looker/docs/lookml-terms-and-concepts>
+
+### 1.9.4 Vanna
+
+参考内容：
+
+- 使用 DDL、业务文档和已验证问答或 SQL 示例为 Text-to-SQL 提供检索上下文；
+- 相似历史问题可以提高长尾查询生成质量。
+
+本项目只借鉴 Verified Query 的沉淀思路，不直接复用历史裸 SQL。历史资产必须保存语义计划
+摘要和契约版本，执行时基于当前发布 Schema 重新规划和编译。
+
+参考：
+
+- <https://github.com/vanna-ai/vanna>
+
+### 1.9.5 BGE-M3、BGE Reranker、RRF、pgvector 和 pg_trgm
+
+参考内容：
+
+- BGE-M3 支持多语言 Dense 表征；
+- BGE Reranker 对有限候选做相关性重排；
+- RRF 使用各通道排名进行稳定融合，不要求不同通道原始分数同量纲；
+- pgvector 和 pg_trgm 分别提供向量和词法相似度查询。
+
+这些方案已经进入当前 Retrieval 实现。本次重构不替换算法，重点是明确 RRF 不是业务置信度、
+保留分槽证据，并用真实问题集校准门槛。
+
+参考：
+
+- <https://github.com/FlagOpen/FlagEmbedding>
+- <https://github.com/pgvector/pgvector>
+- <https://www.postgresql.org/docs/current/pgtrgm.html>
+- <https://opensearch.org/docs/latest/search-plugins/hybrid-search/>
+
+### 1.9.6 ReAct、Plan-and-Solve 和 DIN-SQL
+
+参考内容：
+
+- ReAct 将模型推理和工具执行交替进行，执行结果进入下一轮观察；
+- Plan-and-Solve 要求先形成明确计划再逐步执行，并允许根据失败信息调整执行方式；
+- DIN-SQL 将 Text-to-SQL 拆成 Schema Linking、问题分类与分解、SQL 生成和自修正阶段。
+
+本项目借鉴“问题理解、资产绑定、计划、执行反馈分阶段”和“Research 通过观察结果继续
+replan”，但不让模型修改已经确认的指标、筛选和时间语义。执行反馈只能调整查询方式，
+不能替代 Semantic 的发布契约、权限、粒度和聚合安全门禁。
+
+参考：
+
+- <https://arxiv.org/abs/2210.03629>
+- <https://arxiv.org/abs/2305.04091>
+- <https://arxiv.org/abs/2304.11015>
+
+## 1.10 验收标准
+
+重构完成后至少验证：
+
+1. 新 Agent 和 Graph 对同一问题、同一版本 Schema 输出相同的最终绑定状态和允许资产；
+2. 模型看到的指标候选包含权威描述、时间语义、可加性和可用维度摘要；
+3. 多指标问题中每个候选保留原始短语槽位归属；
+4. RRF 值不再作为无说明的普通置信度使用；
+5. 指标口径歧义、维度歧义、维度值歧义和时间维度歧义能够在执行前进入澄清；
+6. 模型只能选择候选 ref，不能生成物理表、字段、指标公式和 Join 路径；
+7. 指标维度不兼容在模式路由前返回明确原因，不进入无效 Research 或查询编译；
+8. 未发布、越权、版本不一致和索引过期资产不会进入绑定结果；
+9. `SemanticQueryPlan` 不再使用占位资产 ID，未验证计划不再标记为 `PROVEN`；
+10. Compiler 继续拒绝非 `PROVEN` 计划；
+11. Research replan 只能调整查询方式，不能改变已确认资产、不可变筛选和时间范围；
+12. 真实问题评测能够分别定位问题重写、召回、选择、绑定、计划、SQL 和结果阶段的错误；
+13. 新场景接入优先增加语义资产、配置和评测，不在 Validator 中增加单问题特化规则。
 
 # 2. 问题重写
 
@@ -3186,24 +3531,38 @@ class ResearchIterationRecord(BaseModel):
 
 #### 当前验收数据集状态
 
-2026-08-21 读取 tenant `1`、dataset `243` 的已发布 `DatasetSchema`，结果为：
+2026-08-21 已完成 dataset `243`（tenant `1`）第三阶段治理资产的配置与发布，
+发布后 `DatasetSchema` 为：
 
 ~~~text
-schema_version                  = 12
-contract_version                = 1
-dimension_hierarchies           = 0
-research_relationships          = 0
+schema_version                  = 22
+contract_version                = 3
+schema_fingerprint              = c5da73a8229ccee7...
+dimension_hierarchies           = 1   # seller_stall_hierarchy：商家(logical dim 2) -> 档口(14)，CERTIFIED
+research_relationships          = 3   # 总GMV(271) <- 总订单数(265)/销售商品件数(266) CERTIFIED_DRIVER；
+                                      # 总GMV(271) <- 订单平均客单价(303) GOVERNED_ANALYSIS_RELATION；
+                                      # 共同维度 [档口14, 商家2]，时间角色 [current, previous]
 metric_dimension_capabilities  = 306
-CONTRIBUTION capabilities       = 0
+CONTRIBUTION capabilities       = 2   # 271x14、271x2 追加 CONTRIBUTION（tolerance 1e-6）
 ~~~
 
-因此 dataset `243` 当前可以继续验证现象确认、`breakdown`、`filter_from_result`
-和 `finish`，但不能作为第三阶段 `drilldown`、`contribution` 和
-`validate_hypothesis` 的完整真实验收数据集。这是数据集治理资产尚未配置，
-不是运行时根据名称自动生成层级或驱动关系的理由。
+配置过程说明：
 
-第三阶段的下一步工作不是继续增加新动作，而是为 dataset `243` 或专用验收数据集
-配置、选择和发布真实治理资产，然后完成第三阶段全部真实问题和边界验收。
+1. 全部通过 Semantic 服务层完成（`SemanticContractService` 创建 DRAFT ->
+   数据集资产选择 -> `publish_dataset` 校验并 CERTIFIED），无裸 ORM 插入；
+   脚本为 `backend/scripts/configure_dataset243_research_stage3_assets.py`（幂等）。
+2. 层级与驱动关系基于真实基数验证：商家->档口为严格多对一（2 商家 x 各 3 档口）；
+   货号->商品层级因 GMV 不在其模型内而未纳入验收范围。
+3. 客单价无结构化公式（SQL 表达式指标），故采用 `GOVERNED_ANALYSIS_RELATION`
+   而非 `FORMULA_COMPONENT`。
+4. 配置同时修复了数据集存量问题：移除已废弃的 `query_config.semanticEnforcement`，
+   并补齐缺失的唯一默认模型（GMV 所在事实模型 246）。
+5. 发布结果断言通过：hierarchies>0、relationships>0、CONTRIBUTION>0、
+   schema_version 递增、contract_version 1->2、fingerprint 变化。
+
+dataset `243` 现在满足第三阶段 `drilldown`、`contribution` 和
+`validate_hypothesis` 的真实验收条件。下一步是执行第三阶段全部真实问题和
+边界验收（含治理缺失时的显式拒绝路径），完成后才进入第四阶段。
 
 ### 第四阶段：可靠性和恢复
 

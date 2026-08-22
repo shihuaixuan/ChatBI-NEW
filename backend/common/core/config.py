@@ -161,6 +161,12 @@ class Settings(BaseSettings):
     CHAT_AGENT_CONTEXT_FOLD_CHARS: int = 30000
     # P1 验收默认启用确定性 FAST/PLAN；旧链路仍可通过环境变量显式恢复。
     CHAT_AGENT_EXECUTION_MODES: str = "fast,plan"
+    # Research 预算默认值与 AgentConfig.research_* 保持一致（doc §9.6 第一版建议默认）。
+    CHAT_AGENT_RESEARCH_MAX_ITERATIONS: int = 6
+    CHAT_AGENT_RESEARCH_MAX_QUERIES: int = 8
+    CHAT_AGENT_RESEARCH_MAX_MODEL_CALLS: int = 8
+    CHAT_AGENT_RESEARCH_MAX_ACTIONS_PER_ITERATION: int = 3
+    CHAT_AGENT_RESEARCH_MAX_DURATION_SECONDS: int = 300
     CHATBI_PLAN_MAX_QUERY_TASKS: int = 5
     CHATBI_PLAN_QUERY_CONCURRENCY: int = 4
     CHATBI_PLANNER_TIMEOUT_MS: int = 60000

@@ -100,12 +100,18 @@ class SemanticSQLCompilationService:
         self,
         workspace_id: int,
         plan: SemanticQueryPlan,
+        *,
+        schema_snapshot: DatasetSchema | None = None,
     ) -> SemanticQueryCompileResult:
-        """验证计划与最新 Schema 后，执行不可变资产编译。"""
+        """验证计划与指定的已发布 Schema 快照后执行不可变资产编译。"""
 
-        schema = self._schema_provider.build_dataset_schema(
-            workspace_id,
-            plan.dataset_id,
+        schema = (
+            schema_snapshot
+            if schema_snapshot is not None
+            else self._schema_provider.build_dataset_schema(
+                workspace_id,
+                plan.dataset_id,
+            )
         )
         report = self._plan_validator.validate(plan, schema)
         if report.status != SemanticPlanStatus.PROVEN:

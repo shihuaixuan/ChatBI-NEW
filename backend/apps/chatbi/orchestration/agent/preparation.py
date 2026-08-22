@@ -95,8 +95,29 @@ class AgentInputPreparer:
         )
         try:
             rewrite = QuestionRewriteOutput.model_validate(rewrite_result.payload)
-        except ValueError as exc:
-            raise QuestionUnderstandingError("QUESTION_REWRITE_OUTPUT_INVALID") from exc
+        except ValueError as first_exc:
+            # 可恢复结构错误最多修复一次：附带校验失败事实重试，仍失败才拒绝。
+            rewrite_result = self._rewrite_model_service.invoke(
+                QuestionModelInvocationData(
+                    stage="QUESTION_REWRITE",
+                    system_prompt=REWRITE_SYSTEM_PROMPT,
+                    user_prompt=(
+                        json.dumps(rewrite_input, ensure_ascii=False, sort_keys=True)
+                        + "\n\n你上一次的输出未通过 JSON 结构校验。请重新输出一个只包含 "
+                        "original_question、rewrite_question、metric_phrases、"
+                        "dimension_phrases 四个字段的合法 JSON 对象，其中 "
+                        "original_question 必须逐字保留用户本轮提交的问题原文。\n"
+                        f"上一次的具体校验错误：{first_exc}"
+                    ),
+                    json_mode=QuestionModelJSONMode.STRICT,
+                )
+            )
+            try:
+                rewrite = QuestionRewriteOutput.model_validate(rewrite_result.payload)
+            except ValueError as exc:
+                raise QuestionUnderstandingError(
+                    "QUESTION_REWRITE_OUTPUT_INVALID"
+                ) from exc
         if rewrite.original_question != original_question:
             raise QuestionUnderstandingError(
                 "QUESTION_REWRITE_ORIGINAL_QUESTION_MISMATCH"

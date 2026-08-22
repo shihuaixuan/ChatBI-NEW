@@ -1,0 +1,296 @@
+[
+  {
+    "name": "hierarchy_drilldown",
+    "ok": true,
+    "failures": [],
+    "detail": {
+      "run_id": 1194,
+      "record_id": 12579,
+      "run_status": "finished",
+      "execution_mode": "research",
+      "error": null,
+      "research_status": "succeeded",
+      "finish_reason": "no_new_direction",
+      "premise_supported": true,
+      "evidence_count": 3,
+      "hypotheses": [],
+      "iterations": 4,
+      "covered_dimension_refs": [
+        "DIMENSION:277:246",
+        "DIMENSION:278:246"
+      ],
+      "covered_driver_metric_refs": [],
+      "covered_hierarchy_ids": [
+        "1"
+      ],
+      "covered_contribution_dimension_refs": [],
+      "report_summary": "连续两轮没有获得新的研究方向，研究提前收口。",
+      "findings": [
+        {
+          "statement": "确认研究目标指标的当前期与对比期变化，结果包含 1 行变化证据。",
+          "evidence_ids": [
+            "evidence:1"
+          ],
+          "claim_level": "common_change"
+        },
+        {
+          "statement": "按 DIMENSION:277:246 分解 METRIC:271:246 的变化，结果包含 2 行变化证据。",
+          "evidence_ids": [
+            "evidence:2"
+          ],
+          "claim_level": "common_change"
+        },
+        {
+          "statement": "使用 evidence:2 选中的 DIMENSION:277:246 对象继续执行 breakdown 分析，结果包含 3 行变化证据。",
+          "evidence_ids": [
+            "evidence:3"
+          ],
+          "claim_level": "common_change"
+        }
+      ],
+      "limitations": [
+        "共有 2 个研究动作执行失败，相关方向未形成证据。"
+      ]
+    }
+  },
+  {
+    "name": "contribution",
+    "ok": true,
+    "failures": [],
+    "detail": {
+      "run_id": 1195,
+      "record_id": 12581,
+      "run_status": "finished",
+      "execution_mode": "research",
+      "error": null,
+      "research_status": "succeeded",
+      "finish_reason": "sufficient_evidence",
+      "premise_supported": true,
+      "evidence_count": 3,
+      "hypotheses": [
+        {
+          "id": "h1",
+          "status": "pending",
+          "statement": "总GMV下降主要由销售商品件数减少导致",
+          "evidence_ids": []
+        },
+        {
+          "id": "h2",
+          "status": "pending",
+          "statement": "总GMV下降主要由订单平均客单价下降导致",
+          "evidence_ids": []
+        },
+        {
+          "id": "h3",
+          "status": "pending",
+          "statement": "总GMV下降主要由总订单数减少导致",
+          "evidence_ids": []
+        }
+      ],
+      "iterations": 2,
+      "covered_dimension_refs": [
+        "DIMENSION:278:246"
+      ],
+      "covered_driver_metric_refs": [],
+      "covered_hierarchy_ids": [],
+      "covered_contribution_dimension_refs": [
+        "DIMENSION:278:246"
+      ],
+      "report_summary": "Research 已完成用户要求，并达到服务端预算上限。",
+      "findings": [
+        {
+          "statement": "确认研究目标指标的当前期与对比期变化，结果包含 1 行变化证据。",
+          "evidence_ids": [
+            "evidence:1"
+          ],
+          "claim_level": "common_change"
+        },
+        {
+          "statement": "按 DIMENSION:278:246 分解 METRIC:271:246 的变化，结果包含 6 行变化证据。",
+          "evidence_ids": [
+            "evidence:2"
+          ],
+          "claim_level": "common_change"
+        },
+        {
+          "statement": "计算 DIMENSION:278:246 对 METRIC:271:246 变化的贡献度，贡献度结果已生成并通过结果校验。",
+          "evidence_ids": [
+            "evidence:3"
+          ],
+          "claim_level": "contribution"
+        }
+      ],
+      "limitations": []
+    }
+  },
+  {
+    "name": "driver_validation",
+    "ok": true,
+    "failures": [],
+    "detail": {
+      "run_id": 1196,
+      "record_id": 12583,
+      "run_status": "finished",
+      "execution_mode": "research",
+      "error": null,
+      "research_status": "succeeded",
+      "finish_reason": "sufficient_evidence",
+      "premise_supported": true,
+      "evidence_count": 3,
+      "hypotheses": [
+        {
+          "id": "h1",
+          "status": "inconclusive",
+          "statement": "总GMV下降主要由总订单数减少导致",
+          "evidence_ids": [
+            "evidence:2"
+          ]
+        },
+        {
+          "id": "h2",
+          "status": "inconclusive",
+          "statement": "总GMV下降主要由订单平均客单价下降导致",
+          "evidence_ids": [
+            "evidence:3"
+          ]
+        }
+      ],
+      "iterations": 2,
+      "covered_dimension_refs": [
+        "DIMENSION:277:246",
+        "DIMENSION:278:246"
+      ],
+      "covered_driver_metric_refs": [
+        "METRIC:265:246",
+        "METRIC:303:246"
+      ],
+      "covered_hierarchy_ids": [],
+      "covered_contribution_dimension_refs": [],
+      "report_summary": "Research 已完成用户要求，并达到服务端预算上限。",
+      "findings": [
+        {
+          "statement": "确认研究目标指标的当前期与对比期变化，结果包含 1 行变化证据。",
+          "evidence_ids": [
+            "evidence:1"
+          ],
+          "claim_level": "common_change"
+        },
+        {
+          "statement": "验证假设 h1 的驱动指标变化，结果包含 6 行变化证据。",
+          "evidence_ids": [
+            "evidence:2"
+          ],
+          "claim_level": "common_change"
+        },
+        {
+          "statement": "验证假设 h2 的驱动指标变化，结果包含 6 行变化证据。",
+          "evidence_ids": [
+            "evidence:3"
+          ],
+          "claim_level": "common_change"
+        }
+      ],
+      "limitations": []
+    }
+  },
+  {
+    "name": "parallel_directions",
+    "ok": true,
+    "failures": [],
+    "detail": {
+      "run_id": 1197,
+      "record_id": 12585,
+      "run_status": "finished",
+      "execution_mode": "research",
+      "error": null,
+      "research_status": "succeeded",
+      "finish_reason": "sufficient_evidence",
+      "premise_supported": true,
+      "evidence_count": 3,
+      "hypotheses": [],
+      "iterations": 2,
+      "covered_dimension_refs": [
+        "DIMENSION:277:246",
+        "DIMENSION:278:246"
+      ],
+      "covered_driver_metric_refs": [],
+      "covered_hierarchy_ids": [],
+      "covered_contribution_dimension_refs": [],
+      "report_summary": "Research 已完成用户要求，并达到服务端预算上限。",
+      "findings": [
+        {
+          "statement": "确认研究目标指标的当前期与对比期变化，结果包含 1 行变化证据。",
+          "evidence_ids": [
+            "evidence:1"
+          ],
+          "claim_level": "common_change"
+        },
+        {
+          "statement": "按 DIMENSION:277:246 分解 METRIC:271:246 的变化，结果包含 2 行变化证据。",
+          "evidence_ids": [
+            "evidence:2"
+          ],
+          "claim_level": "common_change"
+        },
+        {
+          "statement": "按 DIMENSION:278:246 分解 METRIC:271:246 的变化，结果包含 6 行变化证据。",
+          "evidence_ids": [
+            "evidence:3"
+          ],
+          "claim_level": "common_change"
+        }
+      ],
+      "limitations": []
+    }
+  },
+  {
+    "name": "governance_missing_channel",
+    "ok": true,
+    "failures": [],
+    "detail": {
+      "run_id": 1198,
+      "record_id": 12587,
+      "run_status": "failed",
+      "execution_mode": "plan",
+      "error": "SEMANTIC_EXECUTION_ASSET_NOT_COVERED:DIMENSION:309:249",
+      "research_status": null,
+      "finish_reason": null,
+      "premise_supported": null,
+      "evidence_count": 0,
+      "hypotheses": null,
+      "iterations": 0,
+      "covered_dimension_refs": null,
+      "covered_driver_metric_refs": null,
+      "covered_hierarchy_ids": null,
+      "covered_contribution_dimension_refs": null,
+      "report_summary": null,
+      "findings": [],
+      "limitations": null
+    }
+  },
+  {
+    "name": "out_of_scope_goods",
+    "ok": true,
+    "failures": [],
+    "detail": {
+      "run_id": 1199,
+      "record_id": 12589,
+      "run_status": "failed",
+      "execution_mode": "research",
+      "error": "RESEARCH_DIMENSION_MODEL_MISMATCH",
+      "research_status": null,
+      "finish_reason": null,
+      "premise_supported": null,
+      "evidence_count": 0,
+      "hypotheses": null,
+      "iterations": 0,
+      "covered_dimension_refs": null,
+      "covered_driver_metric_refs": null,
+      "covered_hierarchy_ids": null,
+      "covered_contribution_dimension_refs": null,
+      "report_summary": null,
+      "findings": [],
+      "limitations": null
+    }
+  }
+]

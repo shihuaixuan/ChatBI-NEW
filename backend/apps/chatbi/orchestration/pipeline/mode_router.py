@@ -171,6 +171,8 @@ class ModeRouter:
                     "schema_version": schema.schema_version,
                     "contract_version": schema.contract_version,
                     "schema_fingerprint": schema.schema_fingerprint,
+                    # Research 子计划必须持续使用启动时已发布的不可变 Schema。
+                    "dataset_schema": schema.model_dump(mode="json"),
                     # 执行资产保留在服务端快照中，Research Policy 只读取清理后的逻辑目录。
                     "research_assets": research_assets,
                 },
@@ -425,6 +427,9 @@ def _selected_refs(semantic_parse: SemanticParseOutput) -> list[str]:
     elif multi_step is not None and multi_step.type == "limited_multistep":
         refs.extend(multi_step.metric_refs)
         refs.extend(multi_step.dimension_refs)
+    elif multi_step is not None and multi_step.type == "dynamic_research":
+        refs.extend(multi_step.required_dimension_refs)
+        refs.extend(multi_step.required_driver_metric_refs)
     return list(dict.fromkeys(refs))
 
 
@@ -1112,16 +1117,20 @@ def _metric_expression(element: SchemaElement) -> str:
         metric_params = params.get("metricDefineByMetricParams") or {}
         return str(metric_params.get("expr") or "").strip()
     measure_params = params.get("metricDefineByMeasureParams") or {}
-    raw_measures = (
-        measure_params.get("measures") if isinstance(measure_params, dict) else []
-    )
+    if not isinstance(measure_params, dict):
+        return ""
+    raw_measures = measure_params.get("measures")
     measures = raw_measures if isinstance(raw_measures, list) else []
     expressions = [
         str(item.get("expr") or "").strip()
         for item in measures
         if isinstance(item, dict) and str(item.get("expr") or "").strip()
     ]
-    return expressions[0] if len(expressions) == 1 else ""
+    if len(expressions) == 1:
+        return expressions[0]
+    # 派生指标（如客单价）只有顶层聚合表达式、无底层 measures 列表，
+    # 与 SemanticSQLCompiler._metric_measure_expr 的取数逻辑保持一致。
+    return str(measure_params.get("expr") or "").strip()
 
 
 def _filter_requirement(item: Any, target: dict[str, Any]) -> dict[str, Any]:

@@ -186,10 +186,16 @@ def materialize_research_action(
 
 
 def research_action_fingerprint(action: ResearchAction) -> str:
-    """使用完整逻辑动作生成稳定去重指纹。"""
+    """按研究方向生成稳定指纹，运行态引用不能绕过方向去重。"""
 
+    normalized = action.model_dump(mode="json")
+    if isinstance(action, ResearchValidateHypothesisAction):
+        # 假设 ID 和引用 Evidence 只是本次验证的运行态归属；目标指标、
+        # 驱动指标和维度相同即属于同一验证方向。
+        normalized.pop("hypothesis_id", None)
+        normalized.pop("evidence_ids", None)
     payload = json.dumps(
-        action.model_dump(mode="json"),
+        normalized,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

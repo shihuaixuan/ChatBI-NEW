@@ -187,13 +187,19 @@ class SemanticQueryPlanningService:
         for logical_id in request.logical_dimension_ids:
             if logical_id not in logical_dimensions:
                 raise SemanticValidationError("SEMANTIC_QUERY_LOGICAL_DIMENSION_NOT_FOUND")
-            metric_id = metrics[0].metric_id
-            candidates = [
-                item
-                for item in capabilities
-                if item.get("metric_id") == metric_id
-                and item.get("logical_dimension_id") == logical_id
-            ]
+            candidates_by_metric = {
+                metric.metric_id: sorted(
+                    (
+                        item
+                        for item in capabilities
+                        if item.get("metric_id") == metric.metric_id
+                        and item.get("logical_dimension_id") == logical_id
+                    ),
+                    key=lambda item: int(item.get("id") or 0),
+                )
+                for metric in metrics
+            }
+            candidates = candidates_by_metric[metrics[0].metric_id]
             if not candidates:
                 fallback_dimension = next(
                     (
@@ -211,11 +217,11 @@ class SemanticQueryPlanningService:
                         model_id=metrics[0].model_id,
                         usages=request.dimension_usages.get(logical_id, ()),
                         version=0,
+                        capability_versions={},
                         aggregation_safety="FORBIDDEN",
                     )
                 )
                 continue
-            candidates.sort(key=lambda item: int(item.get("id") or 0))
             capability = candidates[0]
             target_model_id = int(capability.get("target_model_id") or metrics[0].model_id)
             physical_candidates = [
@@ -234,6 +240,11 @@ class SemanticQueryPlanningService:
                     model_id=target_model_id,
                     usages=request.dimension_usages.get(logical_id, ()),
                     version=int(capability.get("version") or 0),
+                    capability_versions={
+                        metric_id: int(metric_candidates[0].get("version") or 0)
+                        for metric_id, metric_candidates in candidates_by_metric.items()
+                        if metric_candidates
+                    },
                     relation_path=tuple(capability.get("relation_path") or ()),
                     aggregation_safety=str(capability.get("aggregation_safety") or "FORBIDDEN"),
                 )

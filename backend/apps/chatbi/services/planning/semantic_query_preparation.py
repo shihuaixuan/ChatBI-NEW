@@ -7,6 +7,7 @@ from typing import Any
 
 from apps.chatbi.models.dto.execution_requirement import QueryRequirement
 from apps.semantic import (
+    DatasetSchema,
     SemanticQueryPlanningInput,
     SemanticQueryPlanningService,
     SemanticQueryValidationService,
@@ -19,6 +20,7 @@ def prepare_strict_query_scope(
     requirements: Sequence[QueryRequirement],
     *,
     schema_provider: Any,
+    schema_snapshot: Any | None = None,
     workspace_id: int,
     dataset_id: int,
 ) -> SemanticAssetScope:
@@ -26,14 +28,21 @@ def prepare_strict_query_scope(
 
     if scope.semantic_enforcement != "STRICT":
         return scope
-    if schema_provider is None:
+    if schema_provider is None and schema_snapshot is None:
         raise ValueError("SEMANTIC_SCHEMA_PROVIDER_REQUIRED")
     if not isinstance(dataset_id, int) or isinstance(dataset_id, bool) or dataset_id <= 0:
         raise ValueError("EXECUTION_REQUIREMENT_DATASET_REQUIRED")
     if not requirements:
         raise ValueError("EXECUTION_REQUIREMENT_QUERY_REQUIRED")
 
-    schema = schema_provider.build_dataset_schema(workspace_id, dataset_id)
+    try:
+        schema = (
+            DatasetSchema.model_validate(schema_snapshot)
+            if schema_snapshot is not None
+            else schema_provider.build_dataset_schema(workspace_id, dataset_id)
+        )
+    except ValueError as exc:
+        raise ValueError("SEMANTIC_SCHEMA_SNAPSHOT_INVALID") from exc
     physical_dimensions = {item.id: item for item in schema.dimensions}
     plans = []
     reports = []
@@ -59,6 +68,7 @@ def prepare_strict_query_scope(
             "query_plans": [plan.model_dump(mode="json") for plan in plans],
             "validation_report": reports[0].model_dump(mode="json"),
             "validation_reports": [report.model_dump(mode="json") for report in reports],
+            "schema_snapshot": schema.model_dump(mode="json"),
         }
     )
     return SemanticAssetScope.model_validate(scope_payload)
@@ -152,9 +162,16 @@ def _prepare_requirement_plan(
     report = SemanticQueryValidationService().validate(plan, schema)
     if plan.validation_status.value != "PROVEN" or report.status.value != "PROVEN":
         reasons = list(report.reason_codes or plan.validation_reason_codes)
+        # 附带具体失败检查，避免只有 reason code 时无法定位版本类失败。
+        detail = ";".join(
+            f"{item.check_type}:{','.join(item.subject_refs)}:{item.message}"
+            for item in (report.checks or ())
+            if item.status == "FAIL"
+        )
         raise ValueError(
             "SEMANTIC_QUERY_PLAN_NOT_PROVEN"
             + (":" + ",".join(reasons) if reasons else "")
+            + (f"|{detail}" if detail else "")
         )
 
     assets = [

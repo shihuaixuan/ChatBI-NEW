@@ -274,6 +274,23 @@ class RunOrchestrator:
             semantic_parse = SemanticParseOutput.model_validate(semantic_parse_payload)
         except ValueError as exc:
             raise ModeRoutingError("SEMANTIC_PARSE_STATE_INVALID") from exc
+        attempted_mode = None
+        if (
+            semantic_parse.multi_step is not None
+            and semantic_parse.multi_step.type == "dynamic_research"
+        ):
+            attempted_mode = "research"
+        elif semantic_parse.calculations or len(semantic_parse.time_filters) > 1:
+            attempted_mode = "plan"
+        if attempted_mode is not None:
+            # 治理校验可能在路由结果生成前明确拒绝；先记录真实尝试模式，
+            # 避免失败 Run 继续显示创建时的 react_legacy 默认值。
+            agent_run_repository.update_run(
+                self.session,
+                state.run,
+                execution_mode=attempted_mode,
+            )
+            self.session.commit()
         research_defaults = ResearchBudget()
         config = state.context.config
         result = self.mode_router.route(

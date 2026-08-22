@@ -345,6 +345,11 @@ class ResearchRequirement(BaseModel):
     )
     immutable_filters: tuple[ResearchFilterBinding, ...] = ()
     scope: ResearchScope
+    # Scope 表示允许访问的资产；以下字段单独表达本问题必须完成的目标。
+    required_dimension_refs: tuple[str, ...] = ()
+    required_driver_metric_refs: tuple[str, ...] = ()
+    required_hierarchy_ids: tuple[str, ...] = ()
+    required_contribution_dimension_refs: tuple[str, ...] = ()
     allowed_actions: tuple[ResearchActionType, ...] = Field(min_length=1)
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
     version_snapshot: ResearchVersionSnapshot
@@ -357,6 +362,13 @@ class ResearchRequirement(BaseModel):
             ("TARGET_METRIC", self.target_metric_refs),
             ("TIME_ROLE", self.time_roles),
             ("ALLOWED_ACTION", self.allowed_actions),
+            ("REQUIRED_DIMENSION", self.required_dimension_refs),
+            ("REQUIRED_DRIVER_METRIC", self.required_driver_metric_refs),
+            ("REQUIRED_HIERARCHY", self.required_hierarchy_ids),
+            (
+                "REQUIRED_CONTRIBUTION_DIMENSION",
+                self.required_contribution_dimension_refs,
+            ),
         ):
             if len(values) != len(set(values)):
                 raise ValueError(f"RESEARCH_{code}_DUPLICATED")
@@ -383,6 +395,20 @@ class ResearchRequirement(BaseModel):
             raise ValueError("RESEARCH_SCOPE_EMPTY")
         if set(self.target_metric_refs) & set(self.scope.driver_metric_refs):
             raise ValueError("RESEARCH_TARGET_DRIVER_METRIC_CONFLICT")
+        if not set(self.required_dimension_refs) <= set(self.scope.dimension_refs):
+            raise ValueError("RESEARCH_REQUIRED_DIMENSION_OUT_OF_SCOPE")
+        if not set(self.required_driver_metric_refs) <= set(
+            self.scope.driver_metric_refs
+        ):
+            raise ValueError("RESEARCH_REQUIRED_DRIVER_METRIC_OUT_OF_SCOPE")
+        if not set(self.required_hierarchy_ids) <= {
+            item.id for item in self.scope.hierarchies
+        }:
+            raise ValueError("RESEARCH_REQUIRED_HIERARCHY_OUT_OF_SCOPE")
+        if not set(self.required_contribution_dimension_refs) <= set(
+            self.scope.contribution_dimension_refs
+        ):
+            raise ValueError("RESEARCH_REQUIRED_CONTRIBUTION_OUT_OF_SCOPE")
         return self
 
 
@@ -792,6 +818,8 @@ class ResearchState(BaseModel):
     assessment_summaries: tuple[str, ...] = ()
     covered_dimension_refs: tuple[str, ...] = ()
     covered_driver_metric_refs: tuple[str, ...] = ()
+    covered_hierarchy_ids: tuple[str, ...] = ()
+    covered_contribution_dimension_refs: tuple[str, ...] = ()
     consecutive_no_new_direction: int = Field(default=0, ge=0)
     premise_supported: bool | None = None
     executed_action_fingerprints: tuple[str, ...] = ()
@@ -804,6 +832,13 @@ class ResearchState(BaseModel):
         for code, values in (
             ("EVIDENCE_ID", self.evidence_ids),
             ("ACTION_FINGERPRINT", self.executed_action_fingerprints),
+            ("COVERED_DIMENSION", self.covered_dimension_refs),
+            ("COVERED_DRIVER_METRIC", self.covered_driver_metric_refs),
+            ("COVERED_HIERARCHY", self.covered_hierarchy_ids),
+            (
+                "COVERED_CONTRIBUTION_DIMENSION",
+                self.covered_contribution_dimension_refs,
+            ),
         ):
             if len(values) != len(set(values)):
                 raise ValueError(f"RESEARCH_STATE_{code}_DUPLICATED")

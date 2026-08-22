@@ -325,10 +325,16 @@ class SemanticQueryValidationService:
                             SemanticValidationReasonCode.DIMENSION_NOT_COMPATIBLE_WITH_METRIC,
                         )
                     )
-                elif not any(
-                    int(item.get("version") or 0) == binding.version
-                    for item in metric_capabilities
-                ):
+                else:
+                    bound_version = binding.capability_versions.get(metric_id)
+                    if bound_version is None and len(metric_ids) == 1:
+                        # 兼容单指标历史计划；新计划始终写入 capability_versions。
+                        bound_version = binding.version
+                    if bound_version is not None and any(
+                        int(item.get("version") or 0) == bound_version
+                        for item in metric_capabilities
+                    ):
+                        continue
                     checks.append(
                         _fail(
                             "CAPABILITY_VERSION",

@@ -277,6 +277,12 @@ class PlanPipeline:
             chart_spec=chart_spec,
         )
 
+    @property
+    def max_query_tasks(self) -> int:
+        """单个 Plan 需求允许的最大查询组数量（与校验器上限一致）。"""
+
+        return self._max_query_tasks
+
     def execute_requirement(
         self,
         state: AgentRuntimeState,
@@ -348,6 +354,9 @@ class PlanPipeline:
                     scope,
                     query_requirements,
                     schema_provider=self._semantic_schema_provider,
+                    schema_snapshot=execution_requirement.asset_snapshot.get(
+                        "dataset_schema"
+                    ),
                     workspace_id=state.context.workspace_id,
                     dataset_id=dataset_id_value,
                 )
@@ -1188,10 +1197,21 @@ class PlanPipeline:
             if query_task_count is None:
                 raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
             query_tasks = []
+        # 严格计划覆盖 group_by、where 和 having 的全部维度（见
+        # prepare_strict_query_scope），任务签名必须使用同一口径，
+        # 否则带维度值过滤的查询会被误判为缺少计划。
+        def _task_dimension_ids(task: QueryTask) -> tuple[int, ...]:
+            filter_dim_ids = {
+                item.get("asset_id")
+                for item in (*task.spec.filters, *task.spec.having)
+                if isinstance(item.get("asset_id"), int)
+            }
+            return tuple(sorted({*task.spec.dimension_ids, *filter_dim_ids}))
+
         task_signatures = {
             (
                 tuple(sorted(task.spec.metric_ids)),
-                tuple(sorted(task.spec.dimension_ids)),
+                _task_dimension_ids(task),
             )
             for task in query_tasks
         }

@@ -58,23 +58,70 @@ class SemanticParseService:
         """调用模型并校验结果只能引用当前候选资产。"""
 
         context = self._build_context(rewrite_question, candidate_payload)
-        result = self._model_service.invoke(
-            QuestionModelInvocationData(
-                stage="semantic_parse",
-                system_prompt=SEMANTIC_PARSE_SYSTEM_PROMPT,
-                user_prompt=build_semantic_parse_user_prompt(context),
-                json_mode=QuestionModelJSONMode.STRICT,
-            )
+        invocation = QuestionModelInvocationData(
+            stage="semantic_parse",
+            system_prompt=SEMANTIC_PARSE_SYSTEM_PROMPT,
+            user_prompt=build_semantic_parse_user_prompt(context),
+            json_mode=QuestionModelJSONMode.STRICT,
         )
+        result = self._model_service.invoke(invocation)
         try:
-            output = SemanticParseOutput.model_validate(result.payload)
+            return self._validate_output(result.payload, context)
+        except QuestionUnderstandingError as first_exc:
+            repaired = self._model_service.invoke(
+                QuestionModelInvocationData(
+                    stage=invocation.stage,
+                    system_prompt=invocation.system_prompt,
+                    user_prompt=(
+                        invocation.user_prompt
+                        + "\n\n上一次输出未通过语义解析契约校验。"
+                        + f"具体错误：{first_exc}。"
+                        + "请修正后重新输出完整 JSON；不得删除用户明确提到的指标、"
+                        + "维度、时间或计算要求。"
+                    ),
+                    json_mode=invocation.json_mode,
+                )
+            )
+            return self._validate_output(repaired.payload, context)
+
+    @classmethod
+    def _validate_output(
+        cls,
+        payload: dict[str, Any],
+        context: SemanticParseCandidateContext,
+    ) -> SemanticParseOutput:
+        """统一执行 DTO、候选范围和计算输入完整性校验。"""
+
+        try:
+            output = SemanticParseOutput.model_validate(payload)
         except ValidationError as exc:
             raise QuestionUnderstandingError(
                 "SEMANTIC_PARSE_OUTPUT_INVALID",
                 details={"errors": exc.errors(include_url=False)},
             ) from exc
-        self._validate_candidate_refs(output, context)
+        cls._validate_candidate_refs(output, context)
+        cls._validate_calculation_inputs(output)
         return output
+
+    @staticmethod
+    def _validate_calculation_inputs(output: SemanticParseOutput) -> None:
+        """需要维度输入的计算不能在维度丢失后继续进入执行计划。"""
+
+        contribution_requested = any(
+            item.type.value == "contribution" for item in output.calculations
+        )
+        if not contribution_requested:
+            return
+        dimension_refs = {item.ref for item in output.group_by}
+        if (
+            output.multi_step is not None
+            and output.multi_step.type == "dynamic_research"
+        ):
+            dimension_refs.update(output.multi_step.required_dimension_refs)
+        if not dimension_refs:
+            raise QuestionUnderstandingError(
+                "SEMANTIC_PARSE_CONTRIBUTION_DIMENSION_REQUIRED"
+            )
 
     @staticmethod
     def _build_context(
@@ -242,6 +289,20 @@ class SemanticParseService:
                 dimension_refs,
                 "multi_step.dimension_refs",
             )
+        elif (
+            output.multi_step is not None
+            and output.multi_step.type == "dynamic_research"
+        ):
+            require_refs(
+                list(output.multi_step.required_dimension_refs),
+                dimension_refs,
+                "multi_step.required_dimension_refs",
+            )
+            require_refs(
+                list(output.multi_step.required_driver_metric_refs),
+                metric_refs,
+                "multi_step.required_driver_metric_refs",
+            )
         duplicated_measure_refs = _duplicated_refs(
             [item.ref for item in output.measures]
         )
@@ -291,8 +352,8 @@ SEMANTIC_PARSE_SYSTEM_PROMPT = """
 你可以从候选资产中选择用户真正需要的指标和维度，并解析时间表达、维度值、筛选、排序、数量和计算要求。
 
 严格规则：
-1. measures 只能引用 candidate_groups.metrics 中的 ref。
-2. group_by 只能引用 candidate_groups.dimensions 中的 ref。
+1. measures 和 required_driver_metric_refs 只能引用 candidate_groups.metrics 中的 ref。
+2. group_by 和 required_dimension_refs 只能引用 candidate_groups.dimensions 中的 ref。
 3. filters 和 order_by 只能引用候选资产中的 ref。
 4. 不得创建候选列表之外的 ref，不得输出 asset_id、model_id 代替 ref。
 5. 时间表达保留用户原话，不绑定时间字段；维度值保留用户原始值，不检索维度值资产。
@@ -356,7 +417,10 @@ SEMANTIC_PARSE_SYSTEM_PROMPT = """
   {
     "type": "dynamic_research",
     "goal": "需要继续探索的目标",
-    "reason": "result_driven_filter | result_driven_dimension | open_ended_cause | data_driven_stop_condition"
+    "reason": "result_driven_filter | result_driven_dimension | open_ended_cause | data_driven_stop_condition",
+    "required_dimension_refs": ["用户明确要求必须分析或下钻的 DIMENSION ref"],
+    "required_driver_metric_refs": ["用户明确要求必须验证的驱动 METRIC ref"],
+    "required_actions": ["breakdown | drilldown | contribution | validate_hypothesis"]
   },
   "unresolved": [{"type": "...", "text": "...", "reason": "...", "candidate_refs": []}]
 }
@@ -384,8 +448,24 @@ calculations 中平铺多个互相没有输入关系的计算。
 }
 如果需要根据中间结果选择最大、最差、异常对象后继续查询，必须输出
 dynamic_research，不得伪装成固定多步。
+判断目标变化主要由哪个驱动因素导致（例如“主要由销售订单数减少还是主要由客单价下降
+导致，请验证”）属于验证方向依赖证据：哪个驱动因素是主因必须用数据验证后才能确定，
+必须输出 dynamic_research（reason=open_ended_cause），不得把这类验证问题降级为普通
+比较计算或 limited_multistep。
+开放式原因探索（例如“找出主要原因”“原因是什么”“哪些对象导致下降”）没有唯一预先
+确定的归因维度或验证路径，必须输出 dynamic_research（reason=open_ended_cause）；
+只有用户已经明确指定唯一归因维度和对比期时才允许 fixed_attribution。
 dynamic_research 只表示后续查询方向依赖中间结果。如果当前指标和维度已经由候选唯一
 确定，status 仍然返回 resolved，measures 和 group_by 保留这些 ref，unresolved 返回 []。
+用户明确指定的分析维度、驱动指标和动作必须同时写入 dynamic_research.required_*；
+例如“同时从商家和档口分析”保留两个 required_dimension_refs，“下钻”写入 drilldown，
+“计算贡献”写入 contribution，“分别验证订单数和客单价”保留两个驱动 ref 并写入
+validate_hypothesis。required_* 只能引用候选资产，不能把允许探索的全部 Scope 写进去。
+required_actions 只记录用户明确要求的动作，不能把策略后续可能选择的动作写进去：
+“从两个维度分析”只要求 breakdown，不等于 drilldown 或 contribution；“找出原因”也不等于
+用户明确要求贡献度。用户明确要求 contribution 时，calculations 中还必须同时包含一条
+type=contribution，且贡献维度必须保留在 group_by 或 dynamic_research.required_dimension_refs；
+服务端只把该结构化计算要求视为必须完成的贡献度目标。
 用户只说“深入分析”不能单独触发 dynamic_research。如果全部查询、计算和依赖在执行前
 可以确定，仍应使用普通 calculations、fixed_drilldown、fixed_attribution 或
 limited_multistep。只有筛选值、分析对象、维度、验证方向或停止条件必须依赖中间结果时，

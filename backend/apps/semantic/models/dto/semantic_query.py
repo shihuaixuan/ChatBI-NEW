@@ -66,6 +66,8 @@ class SemanticDimensionBinding(SemanticBaseDTO):
     model_id: int = Field(gt=0)
     usages: tuple[str, ...] = ()
     version: int = Field(ge=0)
+    # 能力版本属于“指标 × 逻辑维度”，不能用一个维度版本代表多指标查询。
+    capability_versions: dict[int, int] = Field(default_factory=dict)
     relation_path: tuple[int, ...] = ()
     aggregation_safety: str
 

@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from apps.chatbi.errors import AgentFinalizationError
+from apps.chatbi.errors import AgentFinalizationError, QuestionUnderstandingError
 from apps.chatbi.models import AgentErrorClass
 from apps.chatbi.models.dto.analysis_plan import (
     AnalysisPlan,
@@ -537,3 +537,64 @@ def test_semantic_clarification_resume_only_reparses_candidates() -> None:
     assert state.context.state["semantic_parse"]["status"] == "resolved"
     assert len(state.messages) == 1
     assert persisted == [state]
+
+
+def test_question_rewrite_repair_receives_specific_validation_error() -> None:
+    """确定性模型重试必须知道具体契约错误，不能重复同一份无效输出。"""
+
+    prompts: list[str] = []
+    payloads = [
+        {
+            "original_question": "分析渠道贡献",
+            "rewrite_question": "分析渠道贡献",
+            "metric_phrases": ["渠道下降贡献"],
+            "dimension_phrases": ["渠道"],
+        },
+        {
+            "original_question": "分析渠道贡献",
+            "rewrite_question": "分析渠道贡献",
+            "metric_phrases": [],
+            "dimension_phrases": ["渠道"],
+        },
+    ]
+
+    def invoke(data):
+        prompts.append(data.user_prompt)
+        return SimpleNamespace(
+            payload=payloads.pop(0),
+            usage_metadata={},
+        )
+
+    preparer = object.__new__(AgentInputPreparer)
+    preparer._rewrite_model_service = SimpleNamespace(invoke=invoke)
+    preparer._semantic_parse_service = object()
+    preparer._search_tool = SimpleNamespace(
+        execute=lambda *_args, **_kwargs: SimpleNamespace(
+            status=ToolStatus.FAILED,
+            data=None,
+            error_code="STOP_AFTER_REWRITE",
+        )
+    )
+    preparer._conversation_context = lambda _state: {}
+    preparer._node_logger = None
+    state = SimpleNamespace(
+        record=SimpleNamespace(question="分析渠道贡献"),
+        context=SimpleNamespace(
+            user_id=1,
+            dataset_id=1,
+            oid=1,
+            state={},
+        ),
+        temporal_context=SimpleNamespace(
+            reference_at=SimpleNamespace(isoformat=lambda: "2026-08-21T00:00:00+08:00"),
+            timezone="Asia/Shanghai",
+        ),
+        budget=SimpleNamespace(record_llm_usage=lambda _usage: None),
+        require_run_id=lambda: 1,
+    )
+
+    with pytest.raises(QuestionUnderstandingError, match="STOP_AFTER_REWRITE"):
+        list(preparer.prepare_initial(state))
+
+    assert len(prompts) == 2
+    assert "检索短语必须来自 rewrite_question" in prompts[1]

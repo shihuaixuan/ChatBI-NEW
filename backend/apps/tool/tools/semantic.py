@@ -746,6 +746,7 @@ class CompileSemanticSqlTool(
             compiled = self._compilation_service.compile_verified_plan(
                 ctx.workspace_id,
                 plan,
+                schema_snapshot=scope.schema_snapshot,
             )
         except (SemanticValidationError, ValueError) as exc:
             # 严格入口不把编译错误转换为替换资产或改写计划的机会。
@@ -919,8 +920,38 @@ def project_semantic_package(
         for group, items in candidate_groups.items()
         if isinstance(items, list) and len(items) > 5
     }
+
+    def _score(item: Any) -> float:
+        score = item.get("score") if isinstance(item, dict) else None
+        return score if isinstance(score, (int, float)) else float("-inf")
+
+    def _bounded(items: list[Any], limit: int = 5) -> list[Any]:
+        # 检索结果按短语子查询拼接，直接截断会让第一个短语的同名跨模型变体
+        # 挤掉后续短语的唯一匹配。先按短语分组轮询，保证每个检索短语都有
+        # 候选进入截断结果，组内再按融合分数降序。
+        by_phrase: dict[str, list[dict[str, Any]]] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("matched_phrase") or item.get("subquery_id") or "")
+            by_phrase.setdefault(key, []).append(item)
+        for group_items in by_phrase.values():
+            group_items.sort(key=_score, reverse=True)
+        bounded: list[dict[str, Any]] = []
+        phrases = list(by_phrase)
+        while len(bounded) < limit and phrases:
+            for key in list(phrases):
+                bucket = by_phrase.get(key)
+                if not bucket:
+                    phrases.remove(key)
+                    continue
+                bounded.append(bucket.pop(0))
+                if len(bounded) >= limit:
+                    break
+        return bounded
+
     filtered["candidate_groups"] = {
-        group: [_public_candidate(item) for item in items[:5] if isinstance(item, dict)]
+        group: [_public_candidate(item) for item in _bounded(list(items))]
         for group, items in candidate_groups.items()
         if isinstance(items, list)
     }

@@ -116,6 +116,8 @@ class SemanticAssetScope(BaseModel):
     validation_report: SemanticPlanValidationReport | None = None
     # 多查询保留每个子计划的验证报告，供执行和审计按指纹精确选择。
     validation_reports: tuple[SemanticPlanValidationReport, ...] = ()
+    # Research 等长流程使用启动时冻结的已发布 Schema 编译已有计划。
+    schema_snapshot: DatasetSchema | None = None
     permission_version: str | None = None
 
 

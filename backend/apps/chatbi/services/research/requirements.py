@@ -84,7 +84,12 @@ def build_research_requirement(
         )
 
     explicit_dimension_refs = tuple(
-        dict.fromkeys(item.ref for item in semantic_parse.group_by)
+        dict.fromkeys(
+            (
+                *(item.ref for item in semantic_parse.group_by),
+                *dynamic.required_dimension_refs,
+            )
+        )
     )
     for ref in explicit_dimension_refs:
         dimension = dimensions.get(ref)
@@ -146,6 +151,31 @@ def build_research_requirement(
         dimension_refs=scope_dimension_refs,
         time_roles=time_roles,
     )
+    # 用户显式提到、但按治理关系属于其他目标指标驱动指标的度量（例如
+    # “验证 GMV 下降主要由订单数减少还是客单价下降导致”）归入驱动指标；
+    # 否则目标与驱动集合相交会触发 RESEARCH_TARGET_DRIVER_METRIC_CONFLICT。
+    governed_driver_refs = {
+        metric_ref
+        for item in driver_relationships
+        for metric_ref in (item.component_metric_refs or (item.driver_metric_ref,))
+    }
+    reclassified_target_refs = tuple(
+        ref for ref in target_metric_refs if ref not in governed_driver_refs
+    )
+    if not reclassified_target_refs:
+        raise ResearchRequirementError(
+            ResearchRequirementError.TARGET_METRIC_REQUIRED
+        )
+    if len(reclassified_target_refs) != len(target_metric_refs):
+        target_metric_refs = reclassified_target_refs
+        target_metrics = [metrics[ref] for ref in target_metric_refs]
+        driver_relationships = _driver_relationships(
+            schema=schema,
+            target_metrics=target_metrics,
+            metrics=metrics,
+            dimension_refs=scope_dimension_refs,
+            time_roles=time_roles,
+        )
     time_bindings_by_model = _time_bindings_by_model(
         schema=schema,
         target_model_id=target_model_id,
@@ -231,6 +261,41 @@ def build_research_requirement(
         contribution_metric_refs=contribution_metric_refs,
         contribution_dimension_refs=contribution_dimension_refs,
     )
+    explicit_driver_refs = tuple(
+        ref
+        for ref in dict.fromkeys(
+            (
+                *(item.ref for item in semantic_parse.measures),
+                *dynamic.required_driver_metric_refs,
+            )
+        )
+        if ref in governed_driver_refs
+    )
+    required_hierarchy_ids = tuple(
+        hierarchy.id
+        for hierarchy in hierarchies
+        if "drilldown" in dynamic.required_actions
+        and dynamic.reason
+        in {
+            ResearchReason.RESULT_DRIVEN_DIMENSION.value,
+            ResearchReason.RESULT_DRIVEN_FILTER.value,
+        }
+        and len(explicit_dimension_refs) >= 2
+        and set(explicit_dimension_refs) <= set(hierarchy.dimension_refs)
+    )
+    contribution_requested = any(
+        item.type.value == "contribution"
+        for item in semantic_parse.calculations
+    )
+    required_contribution_dimensions = (
+        tuple(
+            ref
+            for ref in explicit_dimension_refs
+            if ref in set(contribution_dimension_refs)
+        )
+        if contribution_requested
+        else ()
+    )
     scope = ResearchScope(
         dimension_refs=scope_dimension_refs,
         target_metric_refs=target_metric_refs,
@@ -262,6 +327,12 @@ def build_research_requirement(
                 item.model_dump(mode="json") for item in immutable_filters
             ],
             "scope": scope.model_dump(mode="json"),
+            "required_dimension_refs": explicit_dimension_refs,
+            "required_driver_metric_refs": explicit_driver_refs,
+            "required_hierarchy_ids": required_hierarchy_ids,
+            "required_contribution_dimension_refs": (
+                required_contribution_dimensions
+            ),
             "allowed_actions": allowed_actions,
             "schema_version": schema.schema_version,
             "contract_version": schema.contract_version,
@@ -277,6 +348,10 @@ def build_research_requirement(
         time_bindings_by_model=time_bindings_by_model,
         immutable_filters=immutable_filters,
         scope=scope,
+        required_dimension_refs=explicit_dimension_refs,
+        required_driver_metric_refs=explicit_driver_refs,
+        required_hierarchy_ids=required_hierarchy_ids,
+        required_contribution_dimension_refs=required_contribution_dimensions,
         allowed_actions=allowed_actions,
         budget=budget or ResearchBudget(),
         version_snapshot=ResearchVersionSnapshot(
@@ -770,7 +845,16 @@ def _contribution_tolerance(
 
 
 def _is_time_dimension(dimension: _ResearchSchemaElement) -> bool:
-    return bool(dimension.ext_info.get("is_default_time"))
+    """按发布契约识别全部时间维度，不只排除默认时间维度。"""
+
+    ext_info = dimension.ext_info
+    dimension_type = str(ext_info.get("dimension_type") or "").lower()
+    data_type = str(ext_info.get("dimension_data_type") or "").lower()
+    return bool(
+        ext_info.get("is_default_time")
+        or dimension_type in {"partition_time", "time", "datetime"}
+        or data_type in {"date", "datetime", "timestamp", "time"}
+    )
 
 
 def _metric_ref(metric: _ResearchSchemaElement) -> str:

@@ -106,6 +106,12 @@ class SemanticParseDynamicResearch(BaseModel):
         "open_ended_cause",
         "data_driven_stop_condition",
     ]
+    required_dimension_refs: tuple[str, ...] = ()
+    required_driver_metric_refs: tuple[str, ...] = ()
+    required_actions: tuple[
+        Literal["breakdown", "drilldown", "contribution", "validate_hypothesis"],
+        ...,
+    ] = ()
 
 
 class SemanticParseLimitedMultiStep(BaseModel):

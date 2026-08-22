@@ -145,6 +145,15 @@ def get_agent_config() -> AgentConfig:
         ),
         plan_max_query_tasks=settings.CHATBI_PLAN_MAX_QUERY_TASKS,
         plan_query_concurrency=settings.CHATBI_PLAN_QUERY_CONCURRENCY,
+        research_max_iterations=settings.CHAT_AGENT_RESEARCH_MAX_ITERATIONS,
+        research_max_queries=settings.CHAT_AGENT_RESEARCH_MAX_QUERIES,
+        research_max_model_calls=settings.CHAT_AGENT_RESEARCH_MAX_MODEL_CALLS,
+        research_max_actions_per_iteration=(
+            settings.CHAT_AGENT_RESEARCH_MAX_ACTIONS_PER_ITERATION
+        ),
+        research_max_duration_seconds=(
+            settings.CHAT_AGENT_RESEARCH_MAX_DURATION_SECONDS
+        ),
         compute_enabled=settings.CHATBI_COMPUTE_ENABLED,
         answer_citation_enforced=settings.CHATBI_ANSWER_CITATION_ENFORCED,
         assisted_fallback_enabled=settings.CHATBI_ASSISTED_FALLBACK_ENABLED,
