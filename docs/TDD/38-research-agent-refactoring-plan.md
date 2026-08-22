@@ -1377,6 +1377,77 @@ Evidence ID 必须稳定且属于当前 Run。指纹至少包含：
 5. 冻结 Scope 和版本在恢复中保持；
 6. Trace、Tool Call 和 Snapshot 可以互相定位。
 
+## 8.8 实施状态（2026-08-23）
+
+阶段 4 已完成。统一提交边界、快照投影、Evidence DAG 校验、恢复与取消服务均已
+落地；未新建任何数据库表，全部事实落在既有 ChatbiAgentRun.derived_state /
+ChatbiAgentStep / ChatbiAgentToolCall 上。
+
+### 落地文件
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/apps/chatbi/models/dto/research_agent.py` | 新增 `ResearchEvidenceEdge`；`ResearchRunSnapshot` 从别名升级为真实契约模型（§8.4.1 字段全集 + 校验器：scope 指纹一致、调用 ID 集合唯一且不相交、依赖边端点存在、预算 usage ≤ budget 且 remaining 精确推导、终态 ⟺ finish_reason） |
+| `backend/apps/chatbi/services/research/state_snapshot.py` | `validate_evidence_dag`（重复/跨 Run/缺失/自引用/迭代先序/Kahn 环）；`build_research_run_snapshot`（Context → 快照投影）；`ensure_snapshot_size`（400k 字符硬守卫 → `RESEARCH_SNAPSHOT_TOO_LARGE`） |
+| `backend/apps/chatbi/services/research/run_lifecycle.py` | `ResearchToolCallCommit` 统一提交边界；`recover_research_run` / `rebuild_research_context` / `load_frozen_requirement` / `ResearchRecoveryReport`；`cancel_research_run`；受控摘要 `_bounded_summary`（2000 字符截断） |
+| `backend/apps/chatbi/services/research/tool_context.py` | `bind_to_context` 把冻结 Requirement / execution_id / dataset_id 落入 research_state（恢复自包含）；`register_evidence` 登记前全图 DAG 校验；`observations()` / `record_hypothesis_assessments()` |
+| `backend/apps/chatbi/orchestration/agent/tools/research.py` | compute 指纹扩展为 `{tool, schema_fingerprint, run_id, request, inputs}`（§8.4.3）；`finish_research` 先落假设评估再完成 |
+| `backend/scripts/check_research_agent_dependencies.py` | 登记两个新模块，依赖守卫通过 |
+| `backend/tests/chatbi/test_research_state_recovery.py` | 16 项状态/恢复验收测试（FakeSession 以撤销日志模拟 commit/rollback 并保持行对象身份） |
+
+### 关键设计决策
+
+1. **规范事实源 vs 审计投影**：`state["research_state"]` 仍是规范事实源（保留全部
+   成功观察以支撑按 tool_call_id 重放）；快照是它的投影，额外携带运行中调用、失败
+   观察、依赖边和剩余预算。两者连同 `result_sets` 一起写入 `derived_state` 三个键。
+2. **提交边界事务语义**：enter 创建 RUNNING 行并立即提交（崩溃可见）；finish 写
+   终态行 + 观察 + 快照但不提交；exit 单事务一次提交。执行体抛未知异常 → 行标
+   FAILED(`tool_undeclared_exception`) 后提交并原样传播；exit 提交失败 → 回滚，
+   保持“RUNNING 行 ⇒ 无已提交终态事实”不变式（§8.7.4），Artifact 可能已写但
+   恢复流程会将其收口为 INTERRUPTED，不会当作完整成功。
+3. **合成观察**：Registry 拒绝（unknown args → EXECUTION_FAILED、白名单外工具 →
+   INVALID_REQUEST）等不产出研究观察的终态结果由边界补一条结构化失败观察，
+   保证“每个终态行都有事实”的重放/恢复不变式。
+4. **恢复只认冻结 Requirement**：从 derived_state 加载冻结 Requirement 和研究
+   事实，当前发布 Schema 不参与恢复；旧快照版本指纹与冻结不一致 →
+   `RESEARCH_RECOVERY_VERSION_CONFLICT`。RUNNING Step 收口为 CANCELLED；
+   RUNNING Tool Call 有已提交终态观察则按观察修复状态，否则 INTERRUPTED
+   （重试安全性由指纹去重保证，不重复计费）。
+5. **Evidence 同 ID 再登记 = 后写覆盖**（服务端补齐逻辑列的合法路径），但覆盖后的
+   全图必须通过 DAG 校验，且校验发生在账本变更之前，失败不留脏数据。
+6. **取消只收研究事实**：未完成调用 INTERRUPTED、已持久化证据保留、写入 cancelled
+   completion 并刷新快照；Run / ChatRecord 终态仍由通用生命周期
+   （AgentLifecycle.finalize_cancellation）负责，重复取消幂等。
+7. **摘要尺寸**：Tool Call 行的 args/result 摘要按 2000 字符有界截断；快照超 400k
+   字符直接拒绝持久化，完整正文只在 ResultStore。
+
+### 验收记录（对应 §8.5 / §8.7）
+
+| 标准 | 结果 |
+| --- | --- |
+| Tool Call 开始后进程中断 | crash 场景（仅 RUNNING 行无观察）：恢复收口 Step(CANCELLED) + 调用标 INTERRUPTED，已成功调用的事实（预算/证据/指纹）完整恢复 |
+| 查询成功、Artifact 写入失败 | Runtime 把写入失败转成 `RESULT_STORE_FAILED/PERSISTENCE` 结构化失败结果，边界落 FAILED 行，无证据登记 |
+| Artifact 成功、Snapshot 提交失败 | exit 提交失败回滚：行保持 RUNNING、快照键不存在、无已提交观察；随后恢复标 INTERRUPTED 且台账为空 |
+| 恢复后相同 Tool Call 不重复执行 | 恢复后同内容查询命中指纹（runtime 零调用，返回 `duplicate_query_reuse`）；陈旧 RUNNING 行若有已提交观察则被修复而非重跑 |
+| Evidence DAG 自引用和环 | cycle/self/cross-run/missing 四类单测（model_construct 构造绕过契约校验器的坏状态）+ 登记前校验 + 快照构建与恢复时复检 |
+| 冻结 Schema 在恢复时不被新版本替换 | 恢复断言 requirement 原样相等、schema_fingerprint 不变；篡改快照版本指纹被 VERSION_CONFLICT 拒绝；缺冻结 Requirement 报 REQUIREMENT_MISSING |
+| 取消时部分 Evidence 保留 | 取消后证据仍在、调用 INTERRUPTED、cancelled completion 入账、二次取消幂等 |
+| derived_state 只保存摘要 | 大 sample_rows 触发 `RESEARCH_SNAPSHOT_TOO_LARGE`；compute 指纹覆盖 schema_fingerprint 变更 |
+
+回归：新增 16 项测试全部通过；research + tool 六套件 109 通过；`tests/chatbi`
+全量 682 通过（16 个 `test_graph_api.py` 失败为环境性预存问题，与本阶段无关，
+Phase 3 已用 stash 对照确认）；Ruff、mypy（5 个相关文件）、依赖守卫 `--check`
+全部通过。
+
+### 遗留与移交阶段 5
+
+- `ResearchToolCallCommit` 尚无宿主调用方——Harness 循环负责每次模型工具调用的
+  enter / finish / exit 接线，以及恢复入口和取消边界的触发；
+- `premise_result` / `report_draft` / `final_report` 快照字段由阶段 6 回填；
+- `duration_seconds` / `evidence_rows` / `evidence_chars` 预算轴仍未累计
+  （沿用阶段 3 移交项）；
+- Trace Recorder 回调点已保留（`record_observation`），实际 recorder 由阶段 5 注入。
+
 # 9. 阶段 5：Research Agent Harness
 
 ## 9.1 这个阶段是干什么的
@@ -2220,7 +2291,7 @@ Research 核心重构完成需要满足：
 | 1 新契约和迁移边界 | 已完成 | 2026-08-22 | 见 5.7；30 项契约/边界测试通过，默认仍 `legacy` |
 | 2 Semantic Query Runtime | 已完成 | 2026-08-22 | 见 6.8；Dataset 243 五用例端到端验收通过，全部 `PROVEN` |
 | 3 Research 通用工具 | 已完成 | 2026-08-22 | 见 7.7；20 项工具验收测试通过，Registry 恰含四个无 SQL 工具 |
-| 4 状态、证据依赖和恢复 | 待开始 | - | - |
+| 4 状态、证据依赖和恢复 | 已完成 | 2026-08-23 | 见 8.8；16 项状态/恢复测试通过，提交边界 + 恢复 + 取消落地，无新表 |
 | 5 Research Agent Harness | 待开始 | - | - |
 | 6 假设、完成度和报告 | 待开始 | - | - |
 | 7 Shadow 双跑、评测和切流 | 待开始 | - | - |

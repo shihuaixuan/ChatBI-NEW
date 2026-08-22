@@ -16,6 +16,7 @@ Context 只在服务端 Tool 执行时使用，不向模型序列化。所有值
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -26,8 +27,10 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchBudgetUsage,
     ResearchCompletion,
     ResearchEvidence,
+    ResearchHypothesisAssessment,
     ToolObservation,
 )
+from apps.chatbi.services.research.state_snapshot import validate_evidence_dag
 
 if TYPE_CHECKING:
     from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
@@ -96,12 +99,22 @@ class ResearchToolContext:
     # ------------------------------------------------------------------ #
 
     def bind_to_context(self) -> None:
-        """把 run 身份写入底层 state，供 Runtime 边界校验读取。"""
+        """把 run 身份和冻结 Requirement 写入底层 state。
+
+        Requirement 以 JSON 形式随 research_state 一起持久化，恢复时只使用
+        这份冻结快照，不重新解析当前发布的语义 Schema。
+        """
 
         state = self.context.state
         if not state.get(_RUN_ID_KEY):
             state[_RUN_ID_KEY] = self.run_id
-        self._state()
+        research = self._state()
+        if not research.get("requirement"):
+            research["requirement"] = self.requirement.model_dump(mode="json")
+        if not research.get("execution_id") and self.context.execution_id:
+            research["execution_id"] = self.context.execution_id
+        if research.get("dataset_id") is None and self.context.dataset_id is not None:
+            research["dataset_id"] = self.context.dataset_id
 
     # ------------------------------------------------------------------ #
     # 证据台账
@@ -123,14 +136,24 @@ class ResearchToolContext:
         return tuple(self._evidence_map())
 
     def register_evidence(self, evidence: ResearchEvidence) -> None:
-        """登记当前 Run 的证据；跨 Run 登记直接拒绝。"""
+        """登记当前 Run 的证据；跨 Run 登记直接拒绝，登记前校验全图无环。
+
+        同 ID 重复登记按“后写覆盖”处理（服务端补齐列的合法路径），
+        但覆盖后的全图仍必须通过 DAG 校验。
+        """
 
         if evidence.run_id != self.run_id:
             raise ValueError("RESEARCH_AGENT_EVIDENCE_CROSS_RUN")
         if evidence.version_snapshot != self.requirement.version_snapshot:
             raise ValueError("RESEARCH_AGENT_EVIDENCE_VERSION_MISMATCH")
-        ledger = self._evidence_map()
-        ledger[evidence.evidence_id] = evidence.model_dump(mode="json")
+        candidate = [
+            item
+            for item in self.evidences()
+            if item.evidence_id != evidence.evidence_id
+        ]
+        candidate.append(evidence)
+        validate_evidence_dag(candidate)
+        self._evidence_map()[evidence.evidence_id] = evidence.model_dump(mode="json")
 
     # ------------------------------------------------------------------ #
     # Observation 重放
@@ -141,6 +164,13 @@ class ResearchToolContext:
         if raw is None:
             return None
         return ToolObservation.model_validate(raw)
+
+    def observations(self) -> list[ToolObservation]:
+        """按记录顺序返回全部终态观察（含成功与失败）。"""
+
+        return [
+            ToolObservation.model_validate(raw) for raw in self._observations().values()
+        ]
 
     def record_observation(self, observation: ToolObservation) -> None:
         if observation.run_id != self.run_id:
@@ -212,6 +242,30 @@ class ResearchToolContext:
         if completion.run_id != self.run_id:
             raise ValueError("RESEARCH_AGENT_COMPLETION_CROSS_RUN")
         self._state()["completion"] = completion.model_dump(mode="json")
+
+    def record_hypothesis_assessments(
+        self, assessments: Sequence[ResearchHypothesisAssessment]
+    ) -> None:
+        """保存 finish_research 提交的假设评估，供快照和阶段 6 报告使用。"""
+
+        existing = {item.hypothesis_id for item in self.hypothesis_assessments()}
+        merged = list(self.hypothesis_assessments())
+        for assessment in assessments:
+            if assessment.hypothesis_id in existing:
+                continue
+            merged.append(assessment)
+            existing.add(assessment.hypothesis_id)
+        self._state()["hypothesis_assessments"] = [
+            item.model_dump(mode="json") for item in merged
+        ]
+
+    def hypothesis_assessments(self) -> tuple[ResearchHypothesisAssessment, ...]:
+        raw_items = self._state().get("hypothesis_assessments")
+        if not isinstance(raw_items, list):
+            return ()
+        return tuple(
+            ResearchHypothesisAssessment.model_validate(item) for item in raw_items
+        )
 
     # ------------------------------------------------------------------ #
     # ResultStore 引用

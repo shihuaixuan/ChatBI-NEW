@@ -1165,6 +1165,115 @@ class ResearchEvidenceRef(_ContractModel):
     logical_columns: tuple[ResearchLogicalColumn, ...] = Field(min_length=1)
 
 
+class ResearchEvidenceEdge(_ContractModel):
+    """Evidence DAG 的显式依赖边，供审计和恢复时重建拓扑。"""
+
+    evidence_id: str = Field(min_length=1, max_length=128)
+    depends_on: str = Field(min_length=1, max_length=128)
+    relation: str = Field(min_length=1, max_length=128)
+    source_iteration: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_edge(self) -> ResearchEvidenceEdge:
+        _id(self.evidence_id, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        _id(self.depends_on, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        if self.evidence_id == self.depends_on:
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_SELF_DEPENDENCY")
+        return self
+
+
+class ResearchRunSnapshot(_VersionedContractModel):
+    """可持久化、可恢复的 Research Run 快照（阶段 4 §8.4.1）。
+
+    快照只保存受控摘要：完整结果在 ResultStore，样本行受 Evidence 自身
+    预算约束。``state["research_state"]`` 是规范事实源（含全部成功观察，
+    支撑同 tool_call_id 重放）；本快照是它的投影，额外携带运行中调用、
+    失败观察、依赖边和剩余预算，供审计、时间线和恢复入口使用。
+    """
+
+    run_id: str = Field(min_length=1, max_length=128)
+    goal: str = Field(min_length=1, max_length=1000)
+    status: ResearchRunStatus = ResearchRunStatus.INITIALIZING
+    finish_reason: ResearchCompletionReason | None = None
+    # 前提核验结果由阶段 6 回填；v1 固定为 None。
+    premise_result: dict[str, Any] | None = None
+    agent_run_id: int | None = Field(default=None, ge=1)
+    iteration: int = Field(default=0, ge=0)
+    version_snapshot: ResearchVersionSnapshot
+    scope_fingerprint: str = Field(min_length=1, max_length=256)
+    budget: ResearchBudget = Field(default_factory=ResearchBudget)
+    budget_usage: ResearchBudgetUsage = Field(default_factory=ResearchBudgetUsage)
+    budget_remaining: ResearchBudgetRemaining
+    evidences: tuple[ResearchEvidence, ...] = ()
+    dependency_edges: tuple[ResearchEvidenceEdge, ...] = ()
+    hypothesis_ids: tuple[str, ...] = ()
+    hypothesis_assessments: tuple[ResearchHypothesisAssessment, ...] = ()
+    completed_tool_call_ids: tuple[str, ...] = ()
+    running_tool_call_ids: tuple[str, ...] = ()
+    failed_observations: tuple[ToolObservation, ...] = ()
+    report_draft: str | None = Field(default=None, max_length=100_000)
+    final_report: str | None = Field(default=None, max_length=200_000)
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> ResearchRunSnapshot:
+        _id(self.run_id, "RESEARCH_AGENT_RUN_ID_INVALID")
+        if self.version_snapshot.scope_fingerprint != self.scope_fingerprint:
+            raise ValueError("RESEARCH_AGENT_STATE_SCOPE_FINGERPRINT_MISMATCH")
+        _unique(self.completed_tool_call_ids, "RESEARCH_AGENT_STATE_TOOL_CALL_DUPLICATED")
+        _unique(self.running_tool_call_ids, "RESEARCH_AGENT_STATE_TOOL_CALL_DUPLICATED")
+        overlap = set(self.completed_tool_call_ids) & set(self.running_tool_call_ids)
+        if overlap:
+            raise ValueError("RESEARCH_AGENT_SNAPSHOT_TOOL_CALL_STATE_CONFLICT")
+        evidence_ids = [item.evidence_id for item in self.evidences]
+        _unique(evidence_ids, "RESEARCH_AGENT_STATE_EVIDENCE_DUPLICATED")
+        known = set(evidence_ids)
+        for edge in self.dependency_edges:
+            if edge.evidence_id not in known or edge.depends_on not in known:
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
+        assessments = [item.hypothesis_id for item in self.hypothesis_assessments]
+        _unique(assessments, "RESEARCH_AGENT_FINISH_HYPOTHESIS_DUPLICATED")
+        for assessment in self.hypothesis_assessments:
+            for evidence_id in assessment.evidence_ids:
+                if evidence_id not in known:
+                    raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
+        usage_axes = (
+            (self.budget.max_queries, self.budget_usage.queries),
+            (self.budget.max_model_calls, self.budget_usage.model_calls),
+            (self.budget.max_iterations, self.iteration),
+        )
+        for limit, used in usage_axes:
+            if used > limit:
+                raise ValueError("RESEARCH_AGENT_SNAPSHOT_BUDGET_OVERRUN")
+        expected_remaining = ResearchBudgetRemaining(
+            iterations=max(self.budget.max_iterations - self.iteration, 0),
+            queries=max(self.budget.max_queries - self.budget_usage.queries, 0),
+            model_calls=max(
+                self.budget.max_model_calls - self.budget_usage.model_calls, 0
+            ),
+            duration_seconds=float(
+                max(
+                    self.budget.max_duration_seconds
+                    - self.budget_usage.duration_seconds,
+                    0,
+                )
+            ),
+        )
+        if self.budget_remaining != expected_remaining:
+            raise ValueError("RESEARCH_AGENT_SNAPSHOT_BUDGET_REMAINING_MISMATCH")
+        terminal_statuses = {
+            ResearchRunStatus.SUCCEEDED,
+            ResearchRunStatus.PARTIAL,
+            ResearchRunStatus.NEEDS_CLARIFICATION,
+            ResearchRunStatus.FAILED,
+            ResearchRunStatus.CANCELLED,
+            ResearchRunStatus.BUDGET_EXHAUSTED,
+        }
+        is_terminal = self.status in terminal_statuses
+        if is_terminal != (self.finish_reason is not None):
+            raise ValueError("RESEARCH_AGENT_STATE_COMPLETION_MISMATCH")
+        return self
+
+
 class ResearchBudgetRemaining(_ContractModel):
     iterations: int = Field(ge=0)
     queries: int = Field(ge=0)
@@ -1516,7 +1625,6 @@ def validate_research_semantic_query(
 # 阶段 1文档中的别名，保持命名向后兼容但不引入旧 Action。
 ResearchToolObservation = ToolObservation
 ResearchEvidenceRecord = ResearchEvidence
-ResearchRunSnapshot = ResearchWorkingState
 
 
 __all__ = [
@@ -1538,6 +1646,7 @@ __all__ = [
     "ResearchEvidence",
     "ResearchEvidenceCitation",
     "ResearchEvidenceDependency",
+    "ResearchEvidenceEdge",
     "ResearchEvidenceLevel",
     "ResearchEvidenceRecord",
     "ResearchEvidenceRef",
@@ -1560,6 +1669,7 @@ __all__ = [
     "ResearchReason",
     "ResearchResultRef",
     "ResearchRowSelector",
+    "ResearchRunSnapshot",
     "ResearchRunStatus",
     "ResearchScope",
     "ResearchSemanticQuery",

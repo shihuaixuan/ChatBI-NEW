@@ -802,8 +802,14 @@ class ComputeEvidenceTool(
         request: ResearchComputeRequest,
         inputs: list[ResearchEvidence],
     ) -> str:
+        """§8.4.3：指纹覆盖冻结 Schema、规范化参数、输入证据、工具与操作。"""
+
         canonical = json.dumps(
             {
+                "tool": self.name,
+                "schema_fingerprint": (
+                    ctx.requirement.version_snapshot.schema_fingerprint
+                ),
                 "run_id": ctx.run_id,
                 "request": request.model_dump(mode="json", exclude={"run_id"}),
                 "inputs": [item.result_ref.result_id for item in inputs],
@@ -1559,6 +1565,7 @@ class FinishResearchTool(
                 message=f"结束请求校验失败：{message.split('Value error, ')[-1]}",
                 details={"reason": request.reason.value, "status": status},
             ) from exc
+        ctx.record_hypothesis_assessments(request.hypothesis_assessments)
         ctx.finish(completion)
         return _success(
             ctx,

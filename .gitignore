@@ -20,6 +20,7 @@ backend/tests
 # 阶段 1契约测试需要版本化；继续忽略其它 backend/tests 内容。
 !backend/tests/
 backend/tests/*
+
 !backend/tests/chatbi/
 backend/tests/chatbi/*
 !backend/tests/chatbi/test_research_agent_contracts.py
