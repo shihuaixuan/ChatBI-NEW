@@ -949,4 +949,10 @@ class SemanticQueryRuntime:
         )
 
 
-__all__ = ["SemanticQueryRuntime"]
+def semantic_query_plan_id(query: ResearchSemanticQuery) -> str:
+    """与 Runtime 默认计划 ID 一致的确定性指纹，供工具层做去重判断。"""
+
+    return SemanticQueryRuntime._plan_id(query)
+
+
+__all__ = ["SemanticQueryRuntime", "semantic_query_plan_id"]

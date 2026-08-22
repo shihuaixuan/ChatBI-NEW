@@ -1153,6 +1153,72 @@ Tool 属性：
 - 不做 Shadow；
 - 不删除旧 Action。
 
+## 7.7 实施状态（2026-08-22）
+
+阶段 3 已完成。四个工具、Tool Context 和注册表均已落地，全部验收标准满足，
+无模型参与即可独立执行。
+
+### 落地文件
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/apps/chatbi/services/research/tool_context.py` | `ResearchToolContext` 门面：证据台账、observation 重放表、请求指纹表、预算用量、迭代号、completion，统一存放在 `state["research_state"]`（JSON dump，阶段 4 可整体持久化为 derived_state）；`result_store`/`execution_identity()` 提供 ResultStore 读写归属 |
+| `backend/apps/chatbi/orchestration/agent/tools/research.py` | 四个工具 + 模型可见 Args DTO + `build_research_tool_registry` + `RESEARCH_TOOL_NAMES`；统一 `_finalize` 入口（重放 → 执行 → 失败转换 → 记录观察） |
+| `backend/apps/chatbi/services/research/semantic_runtime.py` | 新增公开 `semantic_query_plan_id(query)`，与 Runtime 默认 plan ID 完全一致，供工具层指纹去重 |
+| `backend/tests/chatbi/test_research_tools.py` | 20 项验收测试（见下） |
+| `backend/scripts/check_research_agent_dependencies.py` | `NEW_MODULES` 登记两个新模块 |
+
+### 关键设计决策
+
+1. **参数边界**：模型可见 Args DTO 不含 run_id / scope_fingerprint / version_snapshot；
+   服务端在 execute 时从冻结 Requirement 组装完整契约对象
+   （`ResearchSemanticQuery` / `ResearchComputeRequest` / `ResearchFinishRequest`），
+   由契约自身校验器触发全部边界检查；`extra="forbid"` + 嵌套 DTO 的物理载荷守卫生效。
+   v1 参数面不含 `evidence_value_filters`（其嵌套 run_id 与注入原则冲突），
+   请求 `filter_from_result` 分析时按不支持处理。
+2. **结果统一转换**：四个工具 result_model 均为 `ToolObservation`；预期失败在工具内
+   转成结构化失败观察（稳定错误码 + failure_stage + 重试标志 + 建议），Registry 视角
+   工具总是成功产出合法观察；未知程序异常不经过 `_finalize`，直接向宿主传播。
+3. **状态边界**：同一 tool_call_id 重放直接返回已存 observation，不再写 ResultStore；
+   同内容语义查询按 plan_id 指纹去重（复用既有证据、不消耗预算），同内容计算按
+   `research-compute-{sha256}` 指纹去重；失败的查询不记指纹，允许换参重试并照常计费。
+4. **操作映射**：ComputeEngine 无原生 ranking/reconciliation——ranking 在工具内做
+   确定性排序 + 截断（NULL 最后、类型混排退化为字符串比较）；reconciliation 复用
+   CONTRIBUTION 操作的 `reconciliation_difference` 输出和 tolerance 校验，失败映射为
+   `RECONCILIATION_FAILED`（PROOF 阶段）；ratio 用 EXPR 操作 + 服务端确定性构造的
+   受限表达式（`TRY_CAST(a AS DOUBLE) / NULLIF(TRY_CAST(b AS DOUBLE), 0)`）。
+5. **派生证据**：新 Evidence 迭代号 = max(当前迭代, 输入最大迭代) + 1，保证依赖先于
+   派生；逻辑列继承输入映射，派生列（`*_current/_previous/_difference/_growth_rate/
+   _share/*_contribution/dimension_value/metric_value/ratio 列/reconciliation_difference`）
+   按后缀规则合成 asset_ref + value_role 映射。
+6. **预算口径**：query_semantic_data 每次真实执行消耗 1 个 query 名额（失败也计费）；
+   compute 本阶段不计入 max_queries（由迭代数间接约束），留给阶段 5 的预算句柄细化。
+7. **并发策略**：infra 只有 PARALLEL_SAFE/SERIAL 两档；§7.3.7 的"条件并发"落地为
+   query/inspect/compute = PARALLEL_SAFE、finish = SERIAL，输入依赖判断留给阶段 5 批次器。
+
+### 验收记录（对应 §7.5）
+
+| 标准 | 结果 |
+| --- | --- |
+| 1. 无模型独立执行 | 20 项测试全部通过（StubRuntime + 真实 ComputeEngine + 真实 ResultStore/MemoryArtifactGateway），`tests/chatbi/test_research_tools.py` |
+| 2. 真实语义查询返回 Evidence | 阶段 2 已验证 Runtime 主路径；本阶段测试验证 Runtime outcome → Evidence 台账登记链路 |
+| 3. 所有权 / Scope / 逻辑列 / 预算校验有效 | 跨 Run 证据拒绝、未知/越界逻辑列拒绝、BUDGET_EXHAUSTED 观察、inspect 按 logical_columns 冻结映射投影均有专项断言 |
+| 4. Tool 不接收 SQL 和物理字段 | filters.value 内嵌 `sql` 键被 Registry 层 `invalid_tool_args` 拒绝；顶层多余键（含 run_id）被 `extra="forbid"` 拒绝 |
+| 5. 失败不被内部吞掉 | SCOPE_DENIED/BUDGET_EXHAUSTED/EVIDENCE_REFERENCE_INVALID/RECONCILIATION_FAILED 全部转结构化观察；Runtime 未声明异常（RuntimeError）原样传播 |
+| 6. 相同 Tool Call ID 重放不重复写 | query/compute 重放测试断言 runtime 调用次数与 artifact 写入次数不变 |
+| 7. Research Tool 列表不含直接 SQL | 注册表恰好 4 个工具，`execute_sql` 等不在白名单 |
+
+回归：`tests/chatbi` + `tests/tool` 共 683 通过（16 个 `test_graph_api.py` 失败为
+环境性预存问题，与本阶段无关，已用 stash 对照确认）；Ruff、mypy（8 个相关文件）、
+依赖守卫 `--check` 全部通过。
+
+### 遗留与移交阶段 4/5
+
+- `ResearchBudgetUsage.duration_seconds/evidence_rows/evidence_chars` 尚未在工具层累计；
+- compute 消耗未计入查询预算（见决策 6）；
+- `filter_from_result` 分析与 `evidence_value_filters` 参数面暂未开放（见决策 1）；
+- Trace Recorder 回调点已留（`record_observation`），实际 recorder 由阶段 5 注入。
+
 # 8. 阶段 4：状态、证据依赖和恢复
 
 ## 8.1 这个阶段是干什么的
@@ -2153,7 +2219,7 @@ Research 核心重构完成需要满足：
 | 0 基线、冻结和评测准备 | 已完成（旧架构持续冻结直至下线） | 2026-08-22 | 见第 4 章实施状态；基线 `research_agent_eval_baseline_20260822` |
 | 1 新契约和迁移边界 | 已完成 | 2026-08-22 | 见 5.7；30 项契约/边界测试通过，默认仍 `legacy` |
 | 2 Semantic Query Runtime | 已完成 | 2026-08-22 | 见 6.8；Dataset 243 五用例端到端验收通过，全部 `PROVEN` |
-| 3 Research 通用工具 | 待开始 | - | - |
+| 3 Research 通用工具 | 已完成 | 2026-08-22 | 见 7.7；20 项工具验收测试通过，Registry 恰含四个无 SQL 工具 |
 | 4 状态、证据依赖和恢复 | 待开始 | - | - |
 | 5 Research Agent Harness | 待开始 | - | - |
 | 6 假设、完成度和报告 | 待开始 | - | - |

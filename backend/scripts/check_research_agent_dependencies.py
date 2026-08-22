@@ -16,6 +16,8 @@ NEW_MODULES = (
     BACKEND_ROOT / "apps" / "chatbi" / "services" / "execution" / "analysis_execution.py",
     BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "semantic_query_builder.py",
     BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "semantic_runtime.py",
+    BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "tool_context.py",
+    BACKEND_ROOT / "apps" / "chatbi" / "orchestration" / "agent" / "tools" / "research.py",
 )
 FORBIDDEN_MODULE_PREFIXES = (
     "apps.chatbi.services.research.actions",
