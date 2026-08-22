@@ -24,6 +24,7 @@ backend/tests/*
 backend/tests/chatbi/*
 !backend/tests/chatbi/test_research_agent_contracts.py
 !backend/tests/chatbi/test_research_agent_phase1_boundaries.py
+!backend/tests/chatbi/test_semantic_query_runtime.py
 .codex_run_logs
 .idea
 data/sqlbot

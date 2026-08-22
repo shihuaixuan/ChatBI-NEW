@@ -129,6 +129,56 @@ class ResultArtifactReadError(ResultArtifactError):
     OWNERSHIP_MISMATCH = "RESULT_ARTIFACT_OWNERSHIP_MISMATCH"
 
 
+class SemanticQueryRuntimeError(ChatBIError, RuntimeError):
+    """Semantic Query Runtime 的预期业务失败及其稳定错误元数据。"""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        failure_stage: str,
+        retryable: bool = False,
+        parameter_retryable: bool = False,
+        same_parameter_retryable: bool = False,
+        capability_gap: bool = False,
+        sql_escalation_allowed: bool = False,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.code = code
+        self.failure_stage = failure_stage
+        self.retryable = retryable
+        self.parameter_retryable = parameter_retryable
+        self.same_parameter_retryable = same_parameter_retryable
+        self.capability_gap = capability_gap
+        self.sql_escalation_allowed = sql_escalation_allowed
+        self.details = dict(details or {})
+        super().__init__(code)
+
+
+class SemanticQueryBoundaryError(ChatBIError, ValueError):
+    """Semantic Query 的冻结运行边界不满足。"""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+class SemanticQueryBuildError(ChatBIError, ValueError):
+    """Semantic Query 无法转换为受治理执行规格。"""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+class SemanticQueryProjectionError(ChatBIError, ValueError):
+    """执行结果无法投影为 Research 证据。"""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
 # --- 生成（generation） ---
 
 
@@ -262,4 +312,5 @@ __all__ = [
     "ResultArtifactError",
     "ResultArtifactReadError",
     "ResultArtifactWriteError",
+    "SemanticQueryRuntimeError",
 ]

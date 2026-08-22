@@ -89,7 +89,10 @@ class SemanticCompilePlan(BaseModel):
         default=(),
         exclude_if=lambda value: not value,
     )
-    output_aliases: dict[int, str] = Field(default_factory=dict)
+    output_aliases: dict[int, str] = Field(
+        default_factory=dict,
+        exclude_if=lambda value: not value,
+    )
 
 
 class SemanticAssetScope(BaseModel):
@@ -119,6 +122,9 @@ class SemanticAssetScope(BaseModel):
     # Research 等长流程使用启动时冻结的已发布 Schema 编译已有计划。
     schema_snapshot: DatasetSchema | None = None
     permission_version: str | None = None
+    # 运行时权限快照可选携带范围和权限指纹；缺失时由上层上下文提供。
+    scope_fingerprint: str | None = Field(default=None, min_length=1)
+    permission_fingerprint: str | None = Field(default=None, min_length=1)
 
 
 class SemanticToolContext(TrustedToolContext, Protocol):
@@ -160,11 +166,8 @@ def project_semantic_compile_plan(
     metric_asset_ids = _binding_asset_ids(metrics, "METRIC")
     dimension_asset_ids = _binding_asset_ids(dimensions, "DIMENSION")
     intent_payload = intent if isinstance(intent, dict) else {}
-    query_shape = (
-        dict(intent_payload.get("query_shape"))
-        if isinstance(intent_payload.get("query_shape"), dict)
-        else {}
-    )
+    raw_query_shape = intent_payload.get("query_shape")
+    query_shape = dict(raw_query_shape) if isinstance(raw_query_shape, dict) else {}
     time_dimension_ids = _binding_asset_ids(time_dimensions, "DIMENSION")
     if not time_dimension_ids:
         time_dimension_ids = _binding_asset_ids(time_filters, "DIMENSION")
@@ -234,7 +237,11 @@ def project_semantic_query_plan(
         if not isinstance(item, dict):
             raise ValueError("SEMANTIC_SLOT_BINDING_ITEM_INVALID")
         physical_id = item.get("asset_id")
-        dimension = physical_by_id.get(physical_id)
+        dimension = (
+            physical_by_id.get(physical_id)
+            if isinstance(physical_id, int)
+            else None
+        )
         logical_id = (
             dimension.ext_info.get("logical_dimension_id")
             if dimension is not None
@@ -362,6 +369,8 @@ def _compile_limit(query_shape: dict[str, Any]) -> int | None:
     value = query_shape.get("limit")
     if isinstance(value, bool):
         return None
+    if not isinstance(value, (int, float, str)):
+        return None
     try:
         parsed = int(value)
     except (TypeError, ValueError):
@@ -413,7 +422,7 @@ def _derive_having(intent: dict[str, Any], metrics: list[Any]) -> list[dict[str,
     query_shape = intent.get("query_shape")
     explicit = query_shape.get("having") if isinstance(query_shape, dict) else None
     if isinstance(explicit, list) and explicit:
-        result: list[dict[str, Any]] = []
+        having_result: list[dict[str, Any]] = []
         for item in explicit:
             if not isinstance(item, dict):
                 continue
@@ -450,8 +459,8 @@ def _derive_having(intent: dict[str, Any], metrics: list[Any]) -> list[dict[str,
                     normalized["asset_id"] = metric.get("asset_id")
                     normalized["asset_type"] = "METRIC"
             if normalized.get("asset_id") is not None:
-                result.append(normalized)
-        return result
+                having_result.append(normalized)
+        return having_result
     mentions = intent.get("filter_mentions")
     if not isinstance(mentions, list):
         return []

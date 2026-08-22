@@ -259,6 +259,76 @@ class CalculationRequirement(BaseModel):
         return self
 
 
+class AnalysisExecutionSpec(BaseModel):
+    """脱离根路由后仍可独立执行的一组分析需求。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query_requirements: tuple[QueryRequirement, ...] = Field(min_length=1)
+    post_calculations: tuple[CalculationRequirement, ...] = ()
+    result_contract: ExecutionResultContract | None = None
+    runtime: dict[str, Any] = Field(default_factory=dict)
+    asset_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_spec(self) -> AnalysisExecutionSpec:
+        """执行规格复用执行需求的 DAG 和结果契约不变量。"""
+
+        query_ids = [item.id for item in self.query_requirements]
+        calculation_ids = [item.id for item in self.post_calculations]
+        if len(query_ids) != len(set(query_ids)):
+            raise ValueError("ANALYSIS_EXECUTION_QUERY_ID_DUPLICATED")
+        if len(calculation_ids) != len(set(calculation_ids)):
+            raise ValueError("ANALYSIS_EXECUTION_CALCULATION_ID_DUPLICATED")
+        if set(query_ids) & set(calculation_ids):
+            raise ValueError("ANALYSIS_EXECUTION_ID_CONFLICT")
+        known_ids = set(query_ids) | set(calculation_ids)
+        dependencies = {item.id: item.inputs for item in self.post_calculations}
+        for item in self.post_calculations:
+            if item.id in item.inputs:
+                raise ValueError("ANALYSIS_EXECUTION_CALCULATION_SELF_DEPENDENCY")
+            if any(input_id not in known_ids for input_id in item.inputs):
+                raise ValueError("ANALYSIS_EXECUTION_CALCULATION_INPUT_UNKNOWN")
+        _validate_acyclic_dependencies(dependencies)
+        leaves = known_ids - {
+            input_id for item in self.post_calculations for input_id in item.inputs
+        }
+        if self.result_contract is not None:
+            declared_values = (
+                self.result_contract.primary_requirement_id,
+                *self.result_contract.supporting_requirement_ids,
+            )
+            if len(declared_values) != len(set(declared_values)):
+                raise ValueError("ANALYSIS_EXECUTION_RESULT_ID_DUPLICATED")
+            declared = set(declared_values)
+            if not declared <= known_ids:
+                raise ValueError("ANALYSIS_EXECUTION_RESULT_ID_UNKNOWN")
+            ordered = self.result_contract.ordered_requirement_ids
+            if not ordered:
+                raise ValueError("ANALYSIS_EXECUTION_RESULT_ORDER_REQUIRED")
+            if len(ordered) != len(set(ordered)) or set(ordered) != declared:
+                raise ValueError("ANALYSIS_EXECUTION_RESULT_ORDER_INVALID")
+            if declared != leaves:
+                raise ValueError("ANALYSIS_EXECUTION_RESULT_LEAVES_MISMATCH")
+        elif len(leaves) != 1:
+            raise ValueError("ANALYSIS_EXECUTION_PRIMARY_RESULT_NOT_UNIQUE")
+        return self
+
+    @classmethod
+    def from_requirement(cls, requirement: ExecutionRequirement) -> AnalysisExecutionSpec:
+        """只投影 Plan 根需求，不把根路由带入执行服务。"""
+
+        if requirement.route.mode != "plan":
+            raise ValueError("ANALYSIS_EXECUTION_ROUTE_NOT_PLAN")
+        return cls(
+            query_requirements=requirement.query_requirements,
+            post_calculations=requirement.post_calculations,
+            result_contract=requirement.result_contract,
+            runtime=dict(requirement.runtime),
+            asset_snapshot=dict(requirement.asset_snapshot),
+        )
+
+
 class ExecutionRequirement(BaseModel):
     """Fast、Plan 和 Research 执行阶段的唯一业务输入。"""
 
@@ -471,6 +541,7 @@ def _validate_acyclic_dependencies(
 
 
 __all__ = [
+    "AnalysisExecutionSpec",
     "CalculationRequirement",
     "CalculationOperation",
     "DecompositionCalculationDraft",

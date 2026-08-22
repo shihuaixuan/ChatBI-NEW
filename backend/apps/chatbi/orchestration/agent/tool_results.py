@@ -12,8 +12,8 @@ from apps.chatbi.orchestration.agent.semantic_projection import (
     refresh_semantic_projection,
 )
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
-from apps.chatbi.services.execution import ResultArtifactWriteError, ResultStore
-from apps.chatbi.services.execution.result_store import ResultArtifactStore
+from apps.chatbi.services.execution.result_artifacts import ResultArtifactWriteError
+from apps.chatbi.services.execution.result_store import ResultArtifactStore, ResultStore
 from apps.conversation import ChatRecordExecutionType
 from apps.tool import (
     RetryAdvice,

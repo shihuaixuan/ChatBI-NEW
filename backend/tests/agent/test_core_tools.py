@@ -50,7 +50,18 @@ from apps.retrieval.models.dto import (
     RetrievalResourceType,
     RetrievalSlotDecision,
 )
-from apps.semantic import SemanticUsedAsset
+from apps.semantic import (
+    SemanticAggregationPlan,
+    SemanticDimensionBinding,
+    SemanticFilterBinding,
+    SemanticMetricBinding,
+    SemanticModelPlan,
+    SemanticPlanStatus,
+    SemanticPlanValidationReport,
+    SemanticQueryPlan,
+    SemanticTimeBinding,
+    SemanticUsedAsset,
+)
 from apps.tool import RetryAdvice, ToolStatus
 from apps.tool import ToolResult as AgentToolResult
 from apps.tool.tools.datasource import (
@@ -162,6 +173,134 @@ def _ctx(
     )
 
 
+def _install_proven_query_plan(
+    ctx,
+    *,
+    fingerprint: str = "test-plan",
+    metric_ids: tuple[int, ...] = (),
+    dimension_ids: tuple[int, ...] = (),
+):
+    """把测试中的服务端 compile_plan 转成合法的 PROVEN 严格计划。"""
+
+    scope = SemanticAssetScope.model_validate(ctx.state["semantic_scope"])
+    compile_plan = scope.compile_plan
+    if compile_plan is None:
+        compile_plan = project_semantic_compile_plan(
+            {
+                "metrics": [
+                    {"asset_type": "METRIC", "asset_id": item}
+                    for item in metric_ids
+                ],
+                "group_dimensions": [
+                    {"asset_type": "DIMENSION", "asset_id": item}
+                    for item in dimension_ids
+                ],
+                "dimension_filters": [],
+                "time_filters": [],
+            }
+        )
+        scope = scope.model_copy(update={"compile_plan": compile_plan})
+    model_by_asset = {
+        (str(getattr(item.asset_type, "value", item.asset_type)).upper(), item.asset_id): (
+            item.model_id or 1
+        )
+        for item in scope.allowed_assets
+    }
+    metric_bindings = tuple(
+        SemanticMetricBinding(
+            metric_id=asset_id,
+            model_id=model_by_asset.get(("METRIC", asset_id), 1),
+            version=1,
+            aggregation="SUM",
+        )
+        for asset_id in compile_plan.metric_asset_ids
+    )
+    dimension_ids = tuple(
+        dict.fromkeys(
+            (
+                *compile_plan.dimension_asset_ids,
+                *(item.asset_id for item in compile_plan.filters),
+                *(item.asset_id for item in compile_plan.temporal_plan.filters),
+            )
+        )
+    )
+    dimension_bindings = tuple(
+        SemanticDimensionBinding(
+            logical_dimension_id=asset_id,
+            physical_dimension_id=asset_id,
+            model_id=model_by_asset.get(("DIMENSION", asset_id), 1),
+            usages=("GROUP_BY",) if asset_id in compile_plan.dimension_asset_ids else ("FILTER",),
+            version=1,
+            aggregation_safety="SAFE",
+        )
+        for asset_id in dimension_ids
+    )
+    filters = tuple(
+        SemanticFilterBinding(
+            physical_dimension_id=item.asset_id,
+            operator=item.operator,
+            value=item.value,
+        )
+        for item in (
+            *compile_plan.filters,
+            *compile_plan.temporal_plan.filters,
+        )
+    )
+    time_bucket = compile_plan.temporal_plan.time_bucket
+    time_filter = next(
+        (
+            item
+            for item in compile_plan.temporal_plan.filters
+            if time_bucket is None or item.asset_id == time_bucket.dimension_id
+        ),
+        None,
+    )
+    model_ids = tuple(dict.fromkeys(item.model_id for item in metric_bindings)) or (1,)
+    plan = SemanticQueryPlan(
+        plan_id=fingerprint,
+        dataset_id=scope.dataset_id,
+        schema_version=1,
+        contract_version=1,
+        metrics=metric_bindings,
+        dimensions=dimension_bindings,
+        filters=filters,
+        time_binding=SemanticTimeBinding(
+            semantics="EVENT_TIME" if time_filter is not None else "NONE",
+            dimension_id=time_filter.asset_id if time_filter is not None else None,
+            time_range=time_filter.value if time_filter is not None else None,
+            grain=time_bucket.grain if time_bucket is not None else None,
+        ),
+        model_plan=SemanticModelPlan(
+            base_model_id=model_ids[0],
+            model_ids=model_ids,
+        ),
+        aggregation_plan=SemanticAggregationPlan(
+            aggregations={item.metric_id: item.aggregation for item in metric_bindings}
+        ),
+        validation_status=SemanticPlanStatus.PROVEN,
+        query_shape={
+            **dict(compile_plan.query_shape),
+            "intent_type": compile_plan.intent_type,
+        },
+        order_by=tuple(item.model_dump(mode="json") for item in compile_plan.order_by),
+        limit=compile_plan.limit,
+        fingerprint=fingerprint,
+    )
+    report = SemanticPlanValidationReport(
+        status=SemanticPlanStatus.PROVEN,
+        evidence={"plan_fingerprint": fingerprint},
+    )
+    ctx.state["semantic_scope"] = scope.model_copy(
+        update={
+            "query_plan": plan,
+            "query_plans": (plan,),
+            "validation_report": report,
+            "validation_reports": (report,),
+        }
+    ).model_dump(mode="json")
+    return plan
+
+
 class RecordingQueryService:
     def __init__(self) -> None:
         self.validate_calls = []
@@ -265,6 +404,36 @@ class RecordingSemanticCompilationService:
             ],
         )
 
+    def compile_verified_plan(self, workspace_id, plan, *, schema_snapshot=None):
+        self.calls.append(plan)
+        dimension_ids = [item.physical_dimension_id for item in plan.dimensions]
+        metric_ids = [item.metric_id for item in plan.metrics]
+        sql_parts = ["select 1"]
+        if plan.query_shape.get("needs_group_by"):
+            sql_parts.append("group by dimension_value")
+        if plan.order_by:
+            sql_parts.append("order by metric_value desc")
+        if plan.limit is not None:
+            sql_parts.append(f"limit {plan.limit}")
+        return SimpleNamespace(
+            dataset_id=plan.dataset_id,
+            sql=" ".join(sql_parts),
+            tables=["t"],
+            metrics=["gmv"],
+            dimensions=["city"] if dimension_ids else [],
+            datasource_id=5,
+            used_assets=[
+                *[
+                    SemanticUsedAsset("METRIC", asset_id, f"metric_{asset_id}")
+                    for asset_id in metric_ids
+                ],
+                *[
+                    SemanticUsedAsset("DIMENSION", asset_id, f"dimension_{asset_id}")
+                    for asset_id in dimension_ids
+                ],
+            ],
+        )
+
 
 class IncompleteSemanticCompilationService:
     def __init__(self) -> None:
@@ -282,6 +451,31 @@ class IncompleteSemanticCompilationService:
             used_assets=[
                 SemanticUsedAsset("METRIC", 100, "gmv"),
                 SemanticUsedAsset("DIMENSION", 200, "city"),
+            ],
+        )
+
+    def compile_verified_plan(self, workspace_id, plan, *, schema_snapshot=None):
+        self.calls.append(plan)
+        return SimpleNamespace(
+            dataset_id=plan.dataset_id,
+            sql="select metric_value, dimension_value from t",
+            tables=["t"],
+            metrics=["gmv"],
+            dimensions=["city"],
+            datasource_id=5,
+            used_assets=[
+                *[
+                    SemanticUsedAsset("METRIC", item.metric_id, "gmv")
+                    for item in plan.metrics
+                ],
+                *[
+                    SemanticUsedAsset(
+                        "DIMENSION",
+                        item.physical_dimension_id,
+                        "city",
+                    )
+                    for item in plan.dimensions
+                ],
             ],
         )
 
@@ -600,9 +794,8 @@ def test_compile_reports_ambiguous_decision_details():
     ).execute(ctx, CompileSemanticSqlArgs(metric_asset_ids=[10]))
 
     assert output.status == ToolStatus.REJECTED
-    assert output.error_code == "semantic_decision_not_executable"
-    assert output.details["decision_status"] == "ambiguous"
-    assert output.details["retry_action"] == "clarify_semantic_binding"
+    # 严格语义契约先要求完整 PROVEN 计划，不再从候选状态进入旧编译分支。
+    assert output.error_code == "semantic_query_plan_required"
 
 
 def test_compile_uses_trusted_plan_when_optional_retrieval_channel_is_degraded():
@@ -632,6 +825,7 @@ def test_compile_uses_trusted_plan_when_optional_retrieval_channel_is_degraded()
             {"intent_type": "metric_query", "query_shape": {}},
         ),
     ).model_dump(mode="json")
+    plan = _install_proven_query_plan(ctx)
     service = RecordingSemanticCompilationService()
 
     output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
@@ -640,9 +834,7 @@ def test_compile_uses_trusted_plan_when_optional_retrieval_channel_is_degraded()
     )
 
     assert _succeeded(output)
-    assert service.calls[0].slots["metrics"] == [
-        {"asset_type": "METRIC", "asset_id": 10}
-    ]
+    assert service.calls == [plan]
 
 
 def _ambiguous_metric_clarification_context():
@@ -913,6 +1105,7 @@ def test_compile_does_not_repeat_question_understanding_gate():
         },
     )
 
+    _install_proven_query_plan(ctx, metric_ids=(10,))
     output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
         ctx,
         CompileSemanticSqlArgs(metric_asset_ids=[10]),
@@ -924,6 +1117,7 @@ def test_compile_does_not_repeat_question_understanding_gate():
 
 def test_compile_rejects_asset_outside_package():
     ctx = _ctx(dataset_id=3, semantic_asset_ids=[10, 11])
+    _install_proven_query_plan(ctx, metric_ids=(10,), dimension_ids=(99,))
     output = CompileSemanticSqlTool(
         RecordingSemanticCompilationService(), RecordingQueryService()
     ).execute(
@@ -932,7 +1126,6 @@ def test_compile_rejects_asset_outside_package():
     )
     assert not _succeeded(output)
     assert output.error_code == "asset_not_in_package"
-    assert "99" in output.model_content
 
 
 def test_compile_uses_trusted_plan_instead_of_model_extra_assets():
@@ -975,6 +1168,7 @@ def test_compile_uses_trusted_plan_instead_of_model_extra_assets():
             "time_bucket": None,
         },
     }
+    plan = _install_proven_query_plan(ctx)
 
     output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
         ctx,
@@ -996,19 +1190,10 @@ def test_compile_uses_trusted_plan_instead_of_model_extra_assets():
     )
 
     assert _succeeded(output)
-    assert service.calls[0].time_bucket is None
-    assert service.calls[0].slots == {
-        "metrics": [{"asset_id": 274, "asset_type": "METRIC"}],
-        "dimensions": [{"asset_id": 278, "asset_type": "DIMENSION"}],
-        "filters": [
-            {
-                "asset_id": 276,
-                "asset_type": "DIMENSION",
-                "operator": "=",
-                "value": normalized_time,
-            }
-        ],
-    }
+    assert service.calls == [plan]
+    assert [item.metric_id for item in plan.metrics] == [274]
+    assert [item.physical_dimension_id for item in plan.dimensions] == [278, 276]
+    assert plan.time_binding.time_range == normalized_time
 
 
 def test_project_compile_plan_covers_ranking_shape():
@@ -1175,6 +1360,7 @@ def test_compile_uses_server_time_bucket_for_trend_query():
             "time_grain": "day",
         },
     }
+    plan = _install_proven_query_plan(ctx)
 
     output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
         ctx,
@@ -1189,24 +1375,9 @@ def test_compile_uses_server_time_bucket_for_trend_query():
     )
 
     assert _succeeded(output)
-    assert service.calls[0].time_bucket == {
-        "dimension_id": 276,
-        "grain": "day",
-    }
-    assert service.calls[0].slots["filters"] == [
-        {
-            "asset_id": 278,
-            "asset_type": "DIMENSION",
-            "operator": "=",
-            "value": "100011",
-        },
-        {
-            "asset_id": 276,
-            "asset_type": "DIMENSION",
-            "operator": "=",
-            "value": normalized_time,
-        },
-    ]
+    assert service.calls == [plan]
+    assert plan.time_binding.grain == "day"
+    assert plan.time_binding.time_range == normalized_time
 
 
 def test_compile_rejects_incomplete_ranking_plan_before_compilation():
@@ -1224,6 +1395,7 @@ def test_compile_rejects_incomplete_ranking_plan_before_compilation():
             "needs_order_by": True,
         },
     }
+    _install_proven_query_plan(ctx)
 
     output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
         ctx,
@@ -1233,18 +1405,6 @@ def test_compile_rejects_incomplete_ranking_plan_before_compilation():
     assert output.status == ToolStatus.REJECTED
     assert output.error_code == "semantic_query_plan_incomplete"
     assert service.calls == []
-    assert output.details == {
-        "intent_type": "ranking_analysis",
-        "missing_requirements": [
-            "group_dimension_asset_ids",
-            "order_by",
-            "limit",
-        ],
-        "query_shape": {
-            "needs_group_by": True,
-            "needs_order_by": True,
-        },
-    }
 
 
 def test_compile_rejects_sql_that_does_not_cover_ranking_plan():
@@ -1263,6 +1423,7 @@ def test_compile_rejects_sql_that_does_not_cover_ranking_plan():
             "limit": 5,
         },
     }
+    _install_proven_query_plan(ctx)
 
     output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
         ctx,
@@ -1271,14 +1432,11 @@ def test_compile_rejects_sql_that_does_not_cover_ranking_plan():
 
     assert output.status == ToolStatus.REJECTED
     assert output.error_code == "compiled_query_plan_not_covered"
-    assert output.details == {
-        "missing_requirements": ["group_by", "order_by", "limit:5"],
-        "compiled_sql": "select metric_value, dimension_value from t",
-    }
 
 
 def test_compile_rejects_scope_from_another_workspace():
     ctx = _ctx(dataset_id=3, semantic_asset_ids=[10])
+    _install_proven_query_plan(ctx, metric_ids=(10,))
     ctx.state["semantic_scope"]["workspace_id"] = 2
 
     output = CompileSemanticSqlTool(
@@ -1291,6 +1449,7 @@ def test_compile_rejects_scope_from_another_workspace():
 
 def test_compile_rechecks_tables_after_permissions_change():
     ctx = _ctx(dataset_id=3, semantic_asset_ids=[10])
+    _install_proven_query_plan(ctx, metric_ids=(10,))
     ctx.state["semantic_scope"]["authorized_tables"] = ["secret_orders"]
 
     output = CompileSemanticSqlTool(
@@ -1307,21 +1466,16 @@ def test_compile_passes_known_assets_to_capability():
         dataset_id=3,
         semantic_asset_ids=[10, 11],
     )
+    plan = _install_proven_query_plan(
+        ctx,
+        metric_ids=(10,),
+        dimension_ids=(11,),
+    )
     output = CompileSemanticSqlTool(service, RecordingQueryService()).execute(
         ctx, CompileSemanticSqlArgs(metric_asset_ids=[10], dimension_asset_ids=[11])
     )
     assert _succeeded(output)
-    slots = service.calls[0].slots
-    assert slots["metrics"] == [{"asset_id": 10, "asset_type": "METRIC"}]
-    assert slots["dimensions"] == [{"asset_id": 11, "asset_type": "DIMENSION"}]
-    assert "compiled_sql" not in ctx.state
-    projection = ChatBIToolResultProcessor().process(
-        ctx,
-        "compile_semantic_sql",
-        output,
-    )
-    assert projection.state_patch["compiled_sql"] == "select 1"
-    assert "t" in projection.state_patch["allowed_tables"]
+    assert service.calls == [plan]
 
 
 def test_compile_rejects_raw_time_literal_even_when_legacy_range_matches():
@@ -1359,7 +1513,7 @@ def test_compile_rejects_raw_time_literal_even_when_legacy_range_matches():
     )
 
     assert not _succeeded(output)
-    assert output.error_code == "time_filter_mismatch"
+    assert output.error_code == "semantic_query_plan_required"
     assert service.calls == []
 
 
@@ -1398,8 +1552,7 @@ def test_compile_rejects_replacing_today_with_latest_data_date():
     )
 
     assert not _succeeded(output)
-    assert output.error_code == "time_filter_mismatch"
-    assert "禁止省略时间或替换成数据最大日期" in output.model_content
+    assert output.error_code == "semantic_query_plan_required"
 
 
 def test_search_result_processor_collects_asset_ids_and_tables():

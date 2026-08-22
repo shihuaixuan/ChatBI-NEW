@@ -1,5 +1,6 @@
-"""Research 模式的需求构建公共入口；运行期能力由编排层按明确模块引用。"""
+"""Research 模式和 Research Agent 的语义查询运行服务。"""
 
 from apps.chatbi.services.research.requirements import build_research_requirement
+from apps.chatbi.services.research.semantic_query_builder import SemanticQueryBuilder
 
-__all__ = ["build_research_requirement"]
+__all__ = ["SemanticQueryBuilder", "build_research_requirement"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -718,6 +719,15 @@ class CompileSemanticSqlTool(
                     "reason_codes": list(report.reason_codes),
                 },
             )
+        strict_compile_contract = _strict_plan_compile_contract(plan)
+        plan_error = _validate_compile_plan(strict_compile_contract)
+        if plan_error is not None:
+            return ToolResult.rejected(
+                "严格语义查询计划未覆盖已确认的分析形态。",
+                error_code="semantic_query_plan_incomplete",
+                error_category=ToolErrorCategory.BUSINESS_RULE,
+                details=plan_error,
+            )
         if not _scope_matches_context(ctx, scope):
             return ToolResult.rejected(
                 "语义资产范围与当前可信身份、数据源或数据集不一致。",
@@ -770,6 +780,20 @@ class CompileSemanticSqlTool(
         }
         if plan.time_binding.dimension_id is not None:
             expected_assets.add(("DIMENSION", plan.time_binding.dimension_id))
+        allowed_assets = {
+            (
+                str(getattr(item.asset_type, "value", item.asset_type)).upper(),
+                item.asset_id,
+            )
+            for item in scope.allowed_assets
+        }
+        if not expected_assets <= allowed_assets:
+            return ToolResult.rejected(
+                "严格语义计划包含当前检索范围之外的资产。",
+                error_code="asset_not_in_package",
+                error_category=ToolErrorCategory.SAFETY,
+                details={"denied_assets": sorted(expected_assets - allowed_assets)},
+            )
         actual_assets = {
             (item.asset_type.upper(), item.asset_id) for item in compiled.used_assets
         }
@@ -782,6 +806,18 @@ class CompileSemanticSqlTool(
                     "missing_assets": sorted(expected_assets - actual_assets),
                     "plan_fingerprint": plan.fingerprint,
                 },
+            )
+        coverage_error = _validate_compiled_plan_coverage(
+            compiled.sql,
+            compiled.used_assets,
+            strict_compile_contract,
+        )
+        if coverage_error is not None:
+            return ToolResult.rejected(
+                "编译产物未完整覆盖语义查询计划。",
+                error_code="compiled_query_plan_not_covered",
+                error_category=ToolErrorCategory.SAFETY,
+                details=coverage_error,
             )
         data = CompileSemanticSqlResult(
             sql=compiled.sql,
@@ -810,12 +846,12 @@ def _validation_report_for_plan(
     for report in scope.validation_reports:
         if report.evidence.get("plan_fingerprint") == plan.fingerprint:
             return report
-    report = scope.validation_report
-    if report is not None and (
-        not report.evidence
-        or report.evidence.get("plan_fingerprint") == plan.fingerprint
+    fallback_report = scope.validation_report
+    if fallback_report is not None and (
+        not fallback_report.evidence
+        or fallback_report.evidence.get("plan_fingerprint") == plan.fingerprint
     ):
-        return report
+        return fallback_report
     return None
 
 
@@ -865,6 +901,29 @@ def _validate_compile_plan(
         "missing_requirements": missing,
         "query_shape": shape,
     }
+
+
+def _strict_plan_compile_contract(plan: SemanticQueryPlan) -> Any:
+    """把严格计划投影为统一覆盖校验需要的最小只读结构。"""
+
+    time_dimension_id = plan.time_binding.dimension_id
+    return SimpleNamespace(
+        metric_asset_ids=tuple(item.metric_id for item in plan.metrics),
+        dimension_asset_ids=tuple(
+            item.physical_dimension_id for item in plan.dimensions
+        ),
+        temporal_plan=SimpleNamespace(
+            time_bucket=(
+                SimpleNamespace(dimension_id=time_dimension_id)
+                if plan.time_binding.grain and time_dimension_id is not None
+                else None
+            )
+        ),
+        query_shape=plan.query_shape,
+        intent_type=str(plan.query_shape.get("intent_type") or "metric_query"),
+        order_by=plan.order_by,
+        limit=plan.limit,
+    )
 
 
 def _validate_compiled_plan_coverage(

@@ -705,9 +705,11 @@ Args DTO 表达。跨模型驱动关系继续使用已发布 Scope 中的时间�
 
 验收结果：
 
-- 阶段 1新增测试：29 项通过；
-- 旧 Research 契约、Phase 2/3、ExecutionRequirement 和 Fast 路由回归测试：50 项通过；
-- Ruff 和依赖守卫通过；
+- 阶段 1契约和边界测试：30 项通过；本次独立复核补充了下钻来源 Evidence 必须存在且属于当前
+  Run 的回归校验；
+- 本次复核的旧 Research 契约、Phase 2/3 回归测试：31 项通过；ExecutionRequirement、Fast、
+  Plan 回归测试：25 项通过；
+- Ruff、Research Agent 依赖守卫、旧 ResearchAction 冻结守卫和 `git diff --check` 均通过；
 - 未运行真实模型评测，未执行真实语义查询，未实现工具、恢复和 Agent Harness；
 - 阶段 1完成后仍使用 `legacy`，因此可以进入阶段 2，但阶段 2必须继续消费本阶段契约，
   且不得增加旧 Action 适配链。
@@ -930,6 +932,60 @@ execute(context, query) -> ResearchSemanticQueryOutcome
 - 不改用户可见 Research；
 - 不删除旧 PlanPipeline 接口；
 - 不开放 SQL。
+
+## 6.8 实施状态（2026-08-22）
+
+> **阶段 2已完成（2026-08-22）：真实 Dataset 243 端到端验收通过，§6.6 全部满足，允许进入
+> 阶段 3。** 实现重点是消除 Research 对旧 `ResearchAction` 的执行依赖，并把跨模型、结果存储和
+> 错误边界固定为可测试契约。
+
+已落地的文件和职责：
+
+- `backend/apps/chatbi/models/dto/execution_requirement.py`：新增
+  `AnalysisExecutionSpec`，复用查询/计算 DAG、结果契约和唯一叶子校验；只允许来自受治理的
+  `route.mode="plan"` 执行需求转换。
+- `backend/apps/chatbi/services/planning/analysis_planner.py`：新增 `plan_spec()`，让无根路由的
+  分析规格直接进入计划证明；旧 `plan()` 仍作为兼容入口。
+- `backend/apps/chatbi/orchestration/pipeline/plan_mode.py`：提取独立的
+  `AnalysisExecutionService`，负责计划、严格语义证明、编译、DAG 执行、ComputeEngine 和
+  ResultStore；`PlanPipeline` 组合该服务，仅负责 Plan 根路径的回答生成和生命周期收口，并保留
+  旧的私有执行入口代理以支持迁移期测试和扩展点。
+- `backend/apps/chatbi/services/execution/analysis_execution.py`：从公开执行子域导出真正的
+  `AnalysisExecutionService`，不再使用 `AnalysisExecutionService = PlanPipeline` 类型别名。
+- `backend/apps/chatbi/services/research/semantic_query_builder.py`：把统一
+  `ResearchSemanticQuery` 编译为 `AnalysisExecutionSpec`；跨模型维度按
+  `dimension_refs_by_model` 建立同一逻辑连接列，缺失模型时间绑定、筛选映射或能力时明确返回
+  `UNSUPPORTED_CAPABILITY`；贡献度总量 Merge 不使用明细维度连接键。
+- `backend/apps/chatbi/services/research/semantic_runtime.py`：校验租户、Dataset、Schema、契约和
+  权限版本边界；仅捕获已声明的业务异常，未知程序异常继续抛出；Evidence Value 通过当前 Run
+  的 `ResultStore.read()` 读取完整结果，`sample_rows` 只作为模型上下文摘要。
+- `backend/apps/chatbi/errors.py`：增加带 `failure_stage`、重试资格和能力缺口元数据的
+  `SemanticQueryRuntimeError`；依赖守卫覆盖上述新增核心模块。
+
+关键边界：
+
+1. 跨模型查询的每个时间角色都必须为每个实际模型提供合法时间维度绑定；不能用 `time=None`、
+   目标模型时间维度或固定物理 ID 补齐。
+2. Dataset 引用按 `ASSET:dataset:<id>` 精确解析，Dataset 24 不会匹配 Dataset 243；运行时还会
+   校验 Schema fingerprint，并在上下文提供权限版本/指纹时进行一致性检查。
+3. Runtime 错误分类使用稳定异常类型和显式错误码映射，不再通过异常文本包含关系推断阶段；
+   当前 `UNSUPPORTED_CAPABILITY` 只能记录未来 SQL 申请资格，阶段 2仍不会升级为裸 SQL。
+
+本次阶段 2相关测试已覆盖单查询、current/previous、差值、跨模型逻辑连接键、缺失时间绑定、
+贡献度总量 Merge、Dataset 24/243 反例、ResultStore 完整结果读取、空结果和未知异常传播；
+Plan/Research/Fast 回归测试保持通过。2026-08-22 复核：契约与 Runtime 核心单元测试 71 项通过，
+Fast/Plan/旧 Research 回归 120 项通过、1 项跳过；相关模块的 Ruff、10 个源码模块的 mypy、
+Research Agent 依赖守卫、旧 ResearchAction 冻结守卫和 `git diff --check` 均通过。
+
+真实 Dataset 243 验收已由 `backend/scripts/run_semantic_runtime_dataset243.py` 完成（无 LLM、
+不构造 ResearchAction，直接走冻结 Requirement -> Runtime -> 严格规划 -> PROVEN -> SQL 编译 ->
+DAG 执行 -> ResultStore -> Evidence 投影）：比较、按商家分组比较、基于 Evidence 值筛选的层级
+相邻下钻、贡献度对账、驱动指标同期变化共 5 个用例全部 `succeeded` 且计划均达 `PROVEN`
+（agent run 1263，schema_version=22、contract_version=3）。比较用例 GMV 99194.88 vs
+141225.27、差值 -42030.39，与贡献度用例总量差值一致，对账残差约 -2.18e-11 在 1e-6 容差内。
+§6.6 七条全部满足：阶段 2 新模块零 `origin="research_action"` 引用（残留仅存在于冻结的旧
+`actions.py`，按计划在阶段 8 删除）；Runtime 无模型调用和自动修复。Agent Tool、恢复和用户
+可见 Research 属于阶段 3 及之后的工作，不在本阶段范围。
 
 # 7. 阶段 3：Research 通用工具
 
@@ -2094,9 +2150,9 @@ Research 核心重构完成需要满足：
 
 | 阶段 | 状态 | 完成日期 | 验收记录 |
 | --- | --- | --- | --- |
-| 0 基线、冻结和评测准备 | 进行中（2026-08-22 启动，旧架构已冻结） | - | - |
-| 1 新契约和迁移边界 | 待开始 | - | - |
-| 2 Semantic Query Runtime | 待开始 | - | - |
+| 0 基线、冻结和评测准备 | 已完成（旧架构持续冻结直至下线） | 2026-08-22 | 见第 4 章实施状态；基线 `research_agent_eval_baseline_20260822` |
+| 1 新契约和迁移边界 | 已完成 | 2026-08-22 | 见 5.7；30 项契约/边界测试通过，默认仍 `legacy` |
+| 2 Semantic Query Runtime | 已完成 | 2026-08-22 | 见 6.8；Dataset 243 五用例端到端验收通过，全部 `PROVEN` |
 | 3 Research 通用工具 | 待开始 | - | - |
 | 4 状态、证据依赖和恢复 | 待开始 | - | - |
 | 5 Research Agent Harness | 待开始 | - | - |

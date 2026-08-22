@@ -1,4 +1,16 @@
-"""执行子域：ChatBI 结果投影与 Artifact。"""
+"""执行子域：分析执行、结果投影与 Artifact。"""
+from apps.chatbi.services.execution.analysis_execution import (
+    AnalysisExecutionDependencies,
+    AnalysisExecutionService,
+    PlanExecutionOutcome,
+    PlanPipelineError,
+)
+from apps.chatbi.services.execution.query_task_executor import (
+    QueryTaskExecutionRequest,
+    QueryTaskExecutionResult,
+    QueryTaskExecutionStatus,
+    QueryTaskExecutor,
+)
 from apps.chatbi.services.execution.result_artifacts import (
     ResultArtifactError,
     ResultArtifactGateway,
@@ -11,12 +23,6 @@ from apps.chatbi.services.execution.result_projection import (
     QueryResultProjectionService,
 )
 from apps.chatbi.services.execution.result_store import ResultStore
-from apps.chatbi.services.execution.query_task_executor import (
-    QueryTaskExecutionRequest,
-    QueryTaskExecutionResult,
-    QueryTaskExecutionStatus,
-    QueryTaskExecutor,
-)
 
 __all__ = [
     "QueryResultProjectionError",
@@ -31,4 +37,8 @@ __all__ = [
     "QueryTaskExecutionResult",
     "QueryTaskExecutionStatus",
     "QueryTaskExecutor",
+    "AnalysisExecutionService",
+    "AnalysisExecutionDependencies",
+    "PlanExecutionOutcome",
+    "PlanPipelineError",
 ]

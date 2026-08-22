@@ -60,10 +60,15 @@ def prepare_strict_query_scope(
 
     # 计划按执行需求顺序保存，QueryTask 通过来源需求 ID 精确选择计划。
     scope_payload = scope.model_dump(mode="json")
+    frozen_allowed_assets = list(scope_payload.get("allowed_assets") or ())
     scope_payload.update(
         {
             "decision_status": "resolved",
-            "allowed_assets": _deduplicate_assets(allowed_assets),
+            # Research 会在同一冻结 Scope 中连续准备多轮查询。这里仅更新当前
+            # 查询计划，不能把未参与本轮的已授权资产从 Scope 中移除。
+            "allowed_assets": _deduplicate_assets(
+                [*frozen_allowed_assets, *allowed_assets]
+            ),
             "query_plan": plans[0].model_dump(mode="json"),
             "query_plans": [plan.model_dump(mode="json") for plan in plans],
             "validation_report": reports[0].model_dump(mode="json"),

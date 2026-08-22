@@ -15,8 +15,10 @@ from apps.chatbi.models.dto.analysis_plan import (
     QueryTask,
 )
 from apps.chatbi.models.dto.execution_requirement import (
+    AnalysisExecutionSpec,
     CalculationOperation,
     CalculationRequirement,
+    ExecutionDecompositionAudit,
     ExecutionRequirement,
     query_requirement_to_spec,
 )
@@ -41,27 +43,55 @@ class AnalysisPlanner:
         """把完整执行需求投影为唯一 DAG，不允许补充或修改业务语义。"""
 
         requirement.require_ready("plan")
+        spec = AnalysisExecutionSpec(
+            query_requirements=requirement.query_requirements,
+            post_calculations=requirement.post_calculations,
+            result_contract=requirement.result_contract,
+            runtime=dict(requirement.runtime),
+            asset_snapshot=dict(requirement.asset_snapshot),
+        )
+        return self.plan_spec(
+            plan_id=plan_id,
+            spec=spec,
+            dataset_id=dataset_id,
+            planner_source="requirement",
+            decomposition=requirement.decomposition,
+        )
+
+    def plan_spec(
+        self,
+        *,
+        plan_id: str,
+        spec: AnalysisExecutionSpec,
+        dataset_id: int,
+        planner_source: str = "analysis_execution_spec",
+        decomposition: ExecutionDecompositionAudit | None = None,
+    ) -> AnalysisPlan:
+        """把无根路由的分析执行规格投影为唯一 DAG。"""
+
+        if dataset_id <= 0:
+            raise ValueError("EXECUTION_REQUIREMENT_DATASET_REQUIRED")
         query_tasks = tuple(
             QueryTask(
                 id=f"q:{item.id}",
                 source_requirement_id=item.id,
                 spec=query_requirement_to_spec(item, dataset_id=dataset_id),
             )
-            for item in requirement.query_requirements
+            for item in spec.query_requirements
         )
         node_ids = {
-            **{item.id: f"q:{item.id}" for item in requirement.query_requirements},
-            **{item.id: f"c:{item.id}" for item in requirement.post_calculations},
+            **{item.id: f"q:{item.id}" for item in spec.query_requirements},
+            **{item.id: f"c:{item.id}" for item in spec.post_calculations},
         }
         compute_tasks = tuple(
-            self._compute_task(item, node_ids) for item in requirement.post_calculations
+            self._compute_task(item, node_ids) for item in spec.post_calculations
         )
         tasks: tuple[AnalysisTask, ...] = (*query_tasks, *compute_tasks)
-        result_contract = requirement.result_contract
+        result_contract = spec.result_contract
         primary_requirement_id = (
             result_contract.primary_requirement_id
             if result_contract is not None
-            else _primary_requirement_id(requirement)
+            else _primary_requirement_id(spec)
         )
         supporting_requirement_ids = (
             result_contract.supporting_requirement_ids
@@ -100,14 +130,17 @@ class AnalysisPlanner:
                 reports=(
                     {
                         "planner_source": "rule",
-                        "template": _template_name(requirement),
+                        "template": _template_name(spec),
                         **(
                             {
-                                "decomposer": requirement.decomposition.model_dump(
-                                    mode="json"
-                                )
+                                "decomposer": decomposition.model_dump(mode="json")
                             }
-                            if requirement.decomposition is not None
+                            if decomposition is not None
+                            else {}
+                        ),
+                        **(
+                            {"input_kind": planner_source}
+                            if planner_source != "requirement"
                             else {}
                         ),
                     },
@@ -162,7 +195,7 @@ class AnalysisPlanner:
         )
 
 
-def _primary_requirement_id(requirement: ExecutionRequirement) -> str:
+def _primary_requirement_id(requirement: AnalysisExecutionSpec) -> str:
     """最终结果必须是唯一叶子，禁止默认取第一个查询结果。"""
 
     all_ids = {
@@ -178,7 +211,7 @@ def _primary_requirement_id(requirement: ExecutionRequirement) -> str:
     return next(iter(leaves))
 
 
-def _template_name(requirement: ExecutionRequirement) -> str:
+def _template_name(requirement: AnalysisExecutionSpec) -> str:
     """模板只用于审计，DAG 仍由统一依赖契约生成。"""
 
     if requirement.result_contract is not None and (

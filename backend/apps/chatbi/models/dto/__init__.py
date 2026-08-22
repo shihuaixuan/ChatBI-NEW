@@ -65,6 +65,7 @@ from apps.chatbi.models.dto.execution_binding import (
     ExecutionBindingData,
 )
 from apps.chatbi.models.dto.execution_requirement import (
+    AnalysisExecutionSpec,
     CalculationOperation,
     CalculationRequirement,
     ExecutionRequirement,
@@ -177,6 +178,7 @@ from apps.chatbi.models.dto.research import (
     ResearchTerminationReason,
     ResearchValidateHypothesisAction,
 )
+from apps.chatbi.models.dto.research_agent import ResearchSemanticQueryOutcome
 from apps.chatbi.models.dto.result_artifact import (
     ChatBIResultArtifactRef,
     ResultArtifactReadInput,
@@ -221,6 +223,7 @@ __all__ = [
     "build_result_set_id",
     "CalculationRequirement",
     "CalculationOperation",
+    "AnalysisExecutionSpec",
     "ExecutionRequirement",
     "ExecutionRoute",
     "QueryRequirement",
@@ -248,6 +251,7 @@ __all__ = [
     "ResearchValidateHypothesisAction",
     "EvidenceSnapshot",
     "ResearchAppliedFilter",
+    "ResearchSemanticQueryOutcome",
     "execution_requirement_from_state",
     "query_requirement_to_spec",
     "AgentClarificationRequest",

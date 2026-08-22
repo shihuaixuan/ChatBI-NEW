@@ -405,6 +405,44 @@ def test_query_rejects_cross_run_or_unknown_evidence_value() -> None:
         query.validate_scope(_requirement().scope, (_evidence(),))
 
 
+def test_drilldown_requires_current_run_source_evidence() -> None:
+    query = ResearchSemanticQuery(
+        **{
+            **_query().model_dump(),
+            "analysis": "drilldown",
+            "dimensions": ("DIMENSION:1:21",),
+            "drilldown": {
+                "hierarchy_id": "geo",
+                "source_evidence_id": "missing-evidence",
+                "current_dimension_ref": "DIMENSION:1:20",
+                "next_dimension_ref": "DIMENSION:1:21",
+            },
+        }
+    )
+    with pytest.raises(ValueError, match="EVIDENCE_NOT_FOUND"):
+        _governed_requirement().validate_query(query)
+
+    cross_run_evidence = ResearchEvidence(
+        **{
+            **_evidence().model_dump(),
+            "run_id": "run-2",
+            "source_tool_call": {"run_id": "run-2", "tool_call_id": "tool-call-2"},
+            "result_ref": {"run_id": "run-2", "result_id": "result-2"},
+        }
+    )
+    cross_run_query = ResearchSemanticQuery(
+        **{
+            **query.model_dump(),
+            "drilldown": {
+                **query.drilldown.model_dump(),
+                "source_evidence_id": "evidence-1",
+            },
+        }
+    )
+    with pytest.raises(ValueError, match="EVIDENCE_CROSS_RUN"):
+        _governed_requirement().validate_query(cross_run_query, (cross_run_evidence,))
+
+
 def test_evidence_rejects_cross_run_and_same_round_dependencies() -> None:
     base = _evidence()
     with pytest.raises(ValueError, match="TOOL_CALL_CROSS_RUN"):

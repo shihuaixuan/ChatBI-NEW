@@ -249,6 +249,8 @@ class ResearchTimeBinding(_ContractModel):
     @model_validator(mode="after")
     def validate_time(self) -> ResearchTimeBinding:
         _ref(self.dimension_ref, "RESEARCH_AGENT_TIME_DIMENSION_REF_INVALID")
+        if not self.dimension_ref.startswith("DIMENSION:"):
+            raise ValueError("RESEARCH_AGENT_TIME_DIMENSION_REF_INVALID")
         _reject_physical_payload(self.normalized)
         if not self.normalized or self.normalized.get("kind") == "unsupported":
             raise ValueError("RESEARCH_AGENT_TIME_NOT_NORMALIZED")
@@ -679,7 +681,13 @@ class ResearchOrder(_ContractModel):
     ref: str = Field(min_length=1)
     direction: ResearchOrderDirection = ResearchOrderDirection.DESC
     value_role: Literal[
-        "value", "current", "previous", "difference", "growth_rate", "contribution"
+        "value",
+        "current",
+        "previous",
+        "difference",
+        "growth_rate",
+        "share",
+        "contribution",
     ] = "value"
 
     @model_validator(mode="after")
@@ -766,6 +774,7 @@ class ResearchSemanticQuery(_VersionedContractModel):
         evidence: Collection[ResearchEvidence] = (),
     ) -> None:
         allowed_metrics = set(scope.target_metric_refs) | set(scope.driver_metric_refs)
+        evidence_by_id = {item.evidence_id: item for item in evidence}
         if not set(self.metrics) <= allowed_metrics:
             raise ValueError("RESEARCH_AGENT_QUERY_METRIC_OUT_OF_SCOPE")
         if not set(self.dimensions) <= set(scope.dimension_refs):
@@ -806,11 +815,11 @@ class ResearchSemanticQuery(_VersionedContractModel):
                 raise ValueError("RESEARCH_AGENT_DRILLDOWN_NOT_ADJACENT")
             if self.drilldown.next_dimension_ref not in set(self.dimensions):
                 raise ValueError("RESEARCH_AGENT_DRILLDOWN_NEXT_DIMENSION_REQUIRED")
-            if evidence and self.drilldown.source_evidence_id not in {
-                item.evidence_id for item in evidence
-            }:
+            source_evidence = evidence_by_id.get(self.drilldown.source_evidence_id)
+            if source_evidence is None:
                 raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
-        evidence_by_id = {item.evidence_id: item for item in evidence}
+            if source_evidence.run_id != self.run_id:
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_CROSS_RUN")
         for value_ref in self.evidence_value_filters:
             if value_ref.run_id != self.run_id:
                 raise ValueError("RESEARCH_AGENT_EVIDENCE_CROSS_RUN")
@@ -942,6 +951,10 @@ class ToolObservation(_VersionedContractModel):
     error_code: ToolErrorCode | None = None
     error_category: str | None = Field(default=None, max_length=128)
     retryable: bool = False
+    parameter_retryable: bool = False
+    same_parameter_retryable: bool = False
+    capability_gap: bool = False
+    sql_escalation_allowed: bool = False
     message: str | None = Field(default=None, max_length=2000)
     details: dict[str, Any] = Field(default_factory=dict)
     semantic_plan_id: str | None = Field(default=None, max_length=128)
@@ -984,8 +997,22 @@ class ToolObservation(_VersionedContractModel):
             or self.error_code is not None
             or self.error_category is not None
             or self.retryable
+            or self.parameter_retryable
+            or self.same_parameter_retryable
+            or self.capability_gap
+            or self.sql_escalation_allowed
         ):
             raise ValueError("RESEARCH_AGENT_SUCCESS_OBSERVATION_ERROR_FORBIDDEN")
+        if (
+            self.capability_gap
+            and self.error_code is not ToolErrorCode.UNSUPPORTED_CAPABILITY
+        ):
+            raise ValueError("RESEARCH_AGENT_CAPABILITY_GAP_INVALID")
+        if (
+            self.sql_escalation_allowed
+            and self.error_code is not ToolErrorCode.UNSUPPORTED_CAPABILITY
+        ):
+            raise ValueError("RESEARCH_AGENT_SQL_ESCALATION_INVALID")
         return self
 
     @property
@@ -1014,8 +1041,11 @@ class ResearchLogicalColumn(_ContractModel):
         "previous",
         "difference",
         "growth_rate",
+        "share",
         "contribution",
     ]
+    # 由 Builder 冻结逻辑资产到结果字段的映射，读取 Evidence 时禁止按位置猜测。
+    result_field: str | None = Field(default=None, min_length=1, max_length=256)
 
     @model_validator(mode="after")
     def validate_column(self) -> ResearchLogicalColumn:
@@ -1415,6 +1445,64 @@ class ResearchAgentReport(_VersionedContractModel):
                 raise ValueError("RESEARCH_AGENT_EVIDENCE_CROSS_RUN")
 
 
+class ResearchSemanticQueryOutcome(_VersionedContractModel):
+    """Semantic Query Runtime 的统一成功或失败结果。"""
+
+    run_id: str = Field(min_length=1, max_length=128)
+    status: Literal["succeeded", "failed", "partial", "cancelled"]
+    plan_id: str = Field(min_length=1, max_length=128)
+    result_refs: tuple[ResearchResultRef, ...] = ()
+    evidence: tuple[ResearchEvidence, ...] = ()
+    primary_result_id: str | None = Field(default=None, min_length=1, max_length=256)
+    error_code: ToolErrorCode | None = None
+    failure_stage: ToolFailureStage | None = None
+    retryable: bool = False
+    parameter_retryable: bool = False
+    same_parameter_retryable: bool = False
+    capability_gap: bool = False
+    sql_escalation_allowed: bool = False
+    message: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> ResearchSemanticQueryOutcome:
+        _id(self.run_id, "RESEARCH_AGENT_RUN_ID_INVALID")
+        if self.status == "succeeded" and not self.result_refs:
+            raise ValueError("RESEARCH_AGENT_QUERY_RESULT_REQUIRED")
+        if self.status in {"failed", "partial", "cancelled"}:
+            if self.error_code is None:
+                raise ValueError("RESEARCH_AGENT_QUERY_ERROR_REQUIRED")
+            if self.failure_stage is None:
+                raise ValueError("RESEARCH_AGENT_QUERY_FAILURE_STAGE_REQUIRED")
+        elif (
+            self.error_code is not None
+            or self.failure_stage is not None
+            or self.retryable
+            or self.parameter_retryable
+            or self.same_parameter_retryable
+            or self.capability_gap
+            or self.sql_escalation_allowed
+            or self.message is not None
+        ):
+            raise ValueError("RESEARCH_AGENT_QUERY_SUCCESS_ERROR_FORBIDDEN")
+        for result_ref in self.result_refs:
+            if result_ref.run_id != self.run_id:
+                raise ValueError("RESEARCH_AGENT_RESULT_CROSS_RUN")
+        for evidence_item in self.evidence:
+            if evidence_item.run_id != self.run_id:
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_CROSS_RUN")
+        if (
+            self.error_code is not ToolErrorCode.UNSUPPORTED_CAPABILITY
+            and self.sql_escalation_allowed
+        ):
+            raise ValueError("RESEARCH_AGENT_SQL_ESCALATION_INVALID")
+        if (
+            self.capability_gap
+            and self.error_code is not ToolErrorCode.UNSUPPORTED_CAPABILITY
+        ):
+            raise ValueError("RESEARCH_AGENT_CAPABILITY_GAP_INVALID")
+        return self
+
+
 def validate_research_semantic_query(
     query: ResearchSemanticQuery,
     requirement: ResearchAgentRequirement,
@@ -1475,6 +1563,7 @@ __all__ = [
     "ResearchRunStatus",
     "ResearchScope",
     "ResearchSemanticQuery",
+    "ResearchSemanticQueryOutcome",
     "ResearchTimeBinding",
     "ResearchTimeRole",
     "ResearchToolCall",

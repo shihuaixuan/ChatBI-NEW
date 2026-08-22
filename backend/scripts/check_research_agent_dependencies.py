@@ -13,6 +13,9 @@ from pathlib import Path
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 NEW_MODULES = (
     BACKEND_ROOT / "apps" / "chatbi" / "models" / "dto" / "research_agent.py",
+    BACKEND_ROOT / "apps" / "chatbi" / "services" / "execution" / "analysis_execution.py",
+    BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "semantic_query_builder.py",
+    BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "semantic_runtime.py",
 )
 FORBIDDEN_MODULE_PREFIXES = (
     "apps.chatbi.services.research.actions",
@@ -78,4 +81,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

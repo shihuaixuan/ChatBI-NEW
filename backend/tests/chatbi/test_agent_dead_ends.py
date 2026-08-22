@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from apps.chatbi.errors import AgentFinalizationError, QuestionUnderstandingError
-from apps.chatbi.models import AgentErrorClass
+from apps.chatbi.models import AgentErrorClass, ExecutionRequirement
 from apps.chatbi.models.dto.analysis_plan import (
     AnalysisPlan,
     CompiledQuery,
@@ -28,8 +28,9 @@ from apps.chatbi.orchestration.agent.tool_execution import _bounded_summary
 from apps.chatbi.orchestration.agent.tool_visibility import visible_tool_names
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.core import FinishTool
-from apps.chatbi.orchestration.pipeline.plan_mode import PlanPipeline, PlanPipelineError
+from apps.chatbi.orchestration.pipeline.plan_mode import PlanPipelineError
 from apps.chatbi.services.execution import (
+    AnalysisExecutionService,
     QueryTaskExecutionRequest,
     QueryTaskExecutionResult,
     QueryTaskExecutionStatus,
@@ -205,7 +206,7 @@ def test_plan_proves_all_queries_before_any_execution() -> None:
 
     tool_calls: list[str] = []
     saved_plans = []
-    pipeline = object.__new__(PlanPipeline)
+    pipeline = object.__new__(AnalysisExecutionService)
     pipeline._metrics = None
     pipeline._planner = AnalysisPlanner(max_query_tasks=5)
     pipeline._max_query_tasks = 5
@@ -269,8 +270,17 @@ def test_plan_proves_all_queries_before_any_execution() -> None:
         require_run_id=lambda: 100,
     )
 
+    requirement = ExecutionRequirement.model_validate(
+        state.context.state["execution_requirement"]
+    )
     with pytest.raises(PlanPipelineError, match="PLAN_SECOND_QUERY_COMPILE_FAILED"):
-        list(pipeline.run(state))
+        list(
+            pipeline.execute_requirement(
+                state,
+                requirement,
+                plan_id="plan-100",
+            )
+        )
 
     assert tool_calls == ["validate_sql"]
     assert len(saved_plans) == 1
@@ -335,7 +345,7 @@ def test_plan_query_batch_executes_tasks_in_parallel() -> None:
             )
 
     executor = RecordingExecutor()
-    pipeline = object.__new__(PlanPipeline)
+    pipeline = object.__new__(AnalysisExecutionService)
     pipeline._query_task_executor = executor
     pipeline._query_concurrency = 2
     pipeline._query_timeout_seconds = 10.0
@@ -446,7 +456,7 @@ def test_plan_failed_dependency_is_skipped_after_parallel_batch() -> None:
         ),
         presentation=PresentationHint(primary_result="merge"),
     )
-    pipeline = object.__new__(PlanPipeline)
+    pipeline = object.__new__(AnalysisExecutionService)
     pipeline._query_task_executor = object()
     pipeline._events = SimpleNamespace(
         task_started=lambda *_args: "task-started",
@@ -472,7 +482,7 @@ def test_plan_failed_dependency_is_skipped_after_parallel_batch() -> None:
         {"result_set_id": "result:plan-failure:query-b"},
         [],
     )
-    def run_compute_batch(_state, tasks):
+    def run_compute_batch(_state, _plan_id, tasks):
         if tasks:
             pytest.fail("依赖失败的 ComputeTask 不应执行")
         return {}
@@ -492,6 +502,27 @@ def test_plan_failed_dependency_is_skipped_after_parallel_batch() -> None:
     assert task_states["query-a"]["status"] == "FAILED"
     assert task_states["query-b"]["status"] == "SUCCEEDED"
     assert task_states["merge"]["status"] == "SKIPPED_DEPENDENCY"
+
+
+def test_plan_compute_input_lookup_isolated_by_plan_id() -> None:
+    """不同计划可以复用节点 ID，计算输入不能串读上一计划结果。"""
+
+    result_sets = {
+        "result:plan-a:q:current": {
+            "plan_id": "plan-a",
+            "node_id": "q:current",
+        },
+        "result:plan-b:q:current": {
+            "plan_id": "plan-b",
+            "node_id": "q:current",
+        },
+    }
+
+    assert AnalysisExecutionService._result_set_id_for_node(
+        result_sets,
+        "plan-b",
+        "q:current",
+    ) == "result:plan-b:q:current"
 
 
 def test_semantic_clarification_resume_only_reparses_candidates() -> None:

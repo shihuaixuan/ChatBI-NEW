@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Any
 
 from apps.semantic.errors import SemanticValidationError
 from apps.semantic.models.dto import (
@@ -201,6 +202,10 @@ class SemanticQueryPlanningService:
             }
             candidates = candidates_by_metric[metrics[0].metric_id]
             if not candidates:
+                # 没有指标×维度能力绑定时不能猜测物理维度；虚假 ID 会让后续
+                # SQL 看似可编译，却把语义错误延迟成静默错误。若 Schema 中有
+                # 实际物理维度，则保留真实 ID 交给统一验证器产出 INFEASIBLE；
+                # 绝不使用不存在的固定 ID。
                 fallback_dimension = next(
                     (
                         item
@@ -210,10 +215,14 @@ class SemanticQueryPlanningService:
                     ),
                     None,
                 )
+                if fallback_dimension is None:
+                    raise SemanticValidationError(
+                        "SEMANTIC_QUERY_DIMENSION_CAPABILITY_NOT_FOUND"
+                    )
                 bindings.append(
                     SemanticDimensionBinding(
                         logical_dimension_id=logical_id,
-                        physical_dimension_id=int(fallback_dimension.id if fallback_dimension else 1),
+                        physical_dimension_id=fallback_dimension.id,
                         model_id=metrics[0].model_id,
                         usages=request.dimension_usages.get(logical_id, ()),
                         version=0,
@@ -233,10 +242,14 @@ class SemanticQueryPlanningService:
             physical_id = capability.get("physical_dimension_id")
             if physical_id is None and physical_candidates:
                 physical_id = physical_candidates[0].id
+            if physical_id is None:
+                raise SemanticValidationError(
+                    "SEMANTIC_QUERY_DIMENSION_PHYSICAL_BINDING_MISSING"
+                )
             bindings.append(
                 SemanticDimensionBinding(
                     logical_dimension_id=logical_id,
-                    physical_dimension_id=int(physical_id or 1),
+                    physical_dimension_id=int(physical_id),
                     model_id=target_model_id,
                     usages=request.dimension_usages.get(logical_id, ()),
                     version=int(capability.get("version") or 0),
@@ -271,7 +284,9 @@ class SemanticQueryPlanningService:
             if physical_id is None and isinstance(logical_id, int):
                 physical_id = physical_by_logical.get(logical_id)
             if not isinstance(physical_id, int) or physical_id <= 0:
-                physical_id = 1
+                raise SemanticValidationError(
+                    "SEMANTIC_QUERY_FILTER_PHYSICAL_BINDING_MISSING"
+                )
             result.append(
                 SemanticFilterBinding(
                     physical_dimension_id=physical_id,
@@ -333,7 +348,9 @@ class SemanticQueryPlanningService:
         return tuple(result)
 
 
-def _by_id(items: list[dict], key: str) -> dict[int, dict]:
+def _by_id(
+    items: list[dict[str, Any]], key: str
+) -> dict[int, dict[str, Any]]:
     return {
         int(item[key]): item
         for item in items
@@ -347,28 +364,31 @@ def _common_result_grain(metrics: tuple[SemanticMetricBinding, ...]) -> tuple[st
     return metrics[0].result_grain
 
 
-def _metric_refs(metric) -> tuple[int, ...]:
+def _metric_refs(metric: Any) -> tuple[int, ...]:
     """从运行时指标契约提取派生指标引用。"""
 
     formula = metric.ext_info.get("formula_definition") if hasattr(metric, "ext_info") else None
     if isinstance(formula, dict):
-        return tuple(
-            item.get("metric_id")
-            for item in formula.get("components") or []
-            if isinstance(item, dict)
-            and isinstance(item.get("metric_id"), int)
-            and item["metric_id"] > 0
-        )
+        return _positive_ids(formula.get("components"), "metric_id")
     params = metric.type_params or {}
     metric_params = params.get("metricDefineByMetricParams") or {}
     references = metric_params.get("metrics") if isinstance(metric_params, dict) else []
-    return tuple(
-        item.get("id")
-        for item in references or []
-        if isinstance(item, dict)
-        and isinstance(item.get("id"), int)
-        and item["id"] > 0
-    )
+    return _positive_ids(references, "id")
+
+
+def _positive_ids(items: Any, key: str) -> tuple[int, ...]:
+    """从动态契约片段中提取正整数引用，避免把 Any 传播到计划类型。"""
+
+    if not isinstance(items, list):
+        return ()
+    result: list[int] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        value = item.get(key)
+        if isinstance(value, int) and value > 0:
+            result.append(value)
+    return tuple(result)
 
 
 def _plan_fingerprint(plan: SemanticQueryPlan) -> str:
