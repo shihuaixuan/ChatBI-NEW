@@ -21,6 +21,7 @@ from apps.chatbi.models.dto.agent import (
     AgentResumeStreamRequest,
     AgentStartStreamRequest,
 )
+from apps.chatbi.models.dto.research_agent import ResearchExecutionMode
 from apps.chatbi.orchestration.agent.cancellation import (
     DatabaseRunCancellationSignal,
 )
@@ -142,6 +143,9 @@ def get_agent_config() -> AgentConfig:
             item.strip().lower()
             for item in (settings.CHAT_AGENT_EXECUTION_MODES or "fast,plan").split(",")
             if item.strip()
+        ),
+        research_execution_mode=ResearchExecutionMode(
+            settings.CHATBI_RESEARCH_EXECUTION_MODE
         ),
         plan_max_query_tasks=settings.CHATBI_PLAN_MAX_QUERY_TASKS,
         plan_query_concurrency=settings.CHATBI_PLAN_QUERY_CONCURRENCY,

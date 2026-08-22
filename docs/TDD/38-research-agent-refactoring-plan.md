@@ -634,6 +634,84 @@ agent
 - 不删除旧 DTO；
 - 不开放直接 SQL。
 
+## 5.7 实施状态（2026-08-22）
+
+> **阶段 1 已完成契约和迁移边界实现，尚未进入阶段 2。** 本阶段只增加可被后续 Runtime
+> 消费的类型和配置边界，没有把旧 `ResearchAction` 转换为新工具参数，也没有改变旧 Research
+> 的默认流量。
+
+实际文件：
+
+- `backend/apps/chatbi/models/dto/research_agent.py`：独立的新契约文件，定义
+  `ResearchAgentRequirement`、`ResearchPremise`、`ResearchEvidenceRequirement`、
+  `ResearchSemanticQuery`、`ResearchEvidenceValueRef`、`ResearchToolCall`、
+  `ResearchComputeRequest`、`ResearchInspectEvidenceRequest`、`ResearchFinishRequest`、
+  `ResearchHypothesisAssessment`、`ToolObservation`、`ResearchEvidence`、
+  `ResearchWorkingState`、`ResearchCompletion` 和 `ResearchAgentReport`，并统一使用
+  `extra="forbid"`；
+- `backend/apps/chatbi/models/dto/agent.py`、`backend/common/core/config.py` 和
+  `backend/apps/chatbi/orchestration/agent/service.py`：增加单一配置项
+  `CHATBI_RESEARCH_EXECUTION_MODE`，取值为 `legacy`、`shadow` 或 `agent`，默认值为
+  `legacy`；
+- `backend/apps/chatbi/orchestration/agent/run_orchestrator.py`：阶段 1未实现
+  `shadow`/`agent` 时返回明确的 `RESEARCH_SHADOW_MODE_NOT_READY` 或
+  `RESEARCH_AGENT_MODE_NOT_READY`，不会静默回退旧路径；
+- `backend/scripts/check_research_agent_dependencies.py`：使用 AST 检查新契约不导入
+  `research.actions`、`research.action_batches`、`ResearchActionType`、
+  `ResearchPolicyDecision` 或 `ResearchAction`；
+- `backend/tests/chatbi/test_research_agent_contracts.py` 和
+  `backend/tests/chatbi/test_research_agent_phase1_boundaries.py`：覆盖契约往返、Scope 和
+  版本边界、物理字段/SQL 载荷、Evidence 所有权、依赖轮次、Observation 错误结构、冻结
+  WHAT、报告引用、配置解析和依赖守卫。
+
+关键决策：
+
+1. 版本分为两层：Agent DTO 的协议字段固定为
+   `agent_contract_version=1`；`ResearchVersionSnapshot.schema_version` 和
+   `ResearchVersionSnapshot.contract_version` 表示已发布语义资产的版本，例如
+   `schema_version=22、contract_version=3`，两者不能混用。运行快照同时保存 Schema、Scope
+   和权限指纹；查询、Evidence 和恢复状态与快照不一致时直接失败。
+2. `ResearchSemanticQuery` 只表达逻辑指标、维度、时间角色、受控筛选、Evidence 值引用、
+   比较、排序和限制，不提供 SQL、表名、物理字段或旧 Action 联合类型。Scope 校验通过
+   `ResearchAgentRequirement.validate_query()` 和
+   `validate_research_semantic_query()` 作为统一入口完成。
+3. `ToolObservation` 的成功和失败状态互斥：失败必须包含稳定 `error_code`、阶段、类别、
+   可重试标记、消息和可供重规划使用的 `details`；成功状态不能携带错误信息。
+4. Evidence 通过 `run_id`、来源 Tool Call、Result 引用、版本、逻辑列和前序轮次依赖形成
+   当前 Run 的证据边界；`ResearchWorkingState` 只保存 Evidence 引用和逻辑列摘要，不保存
+   完整结果，并通过 `evolve()` 阻止冻结 WHAT 变化。
+5. 阶段 1没有定义通用 Action，也没有实现旧 Action 到新契约的转换器；旧 DTO 保留给旧
+   Research 路径使用。
+6. `ResearchScope` 保留阶段 0的层级、驱动关系、公式组件、方向校验、跨模型维度映射和
+   relation path 等治理事实；新 Agent 只能引用这些已发布事实，不能在查询参数中自行声明
+   关系或物理时间列。
+7. `ResearchScope.hierarchies` 是层级的唯一事实来源，元组顺序就是下钻顺序；不再额外保存
+   无序的 `hierarchy_ids`。Requirement 和 WorkingState 都保存
+   `time_bindings_by_model`，每个模型的时间角色必须与主时间绑定一致，模型 ID、时间维度和
+   发布 Scope 均由服务端校验；时间维度所属模型必须与映射键一致，不能把目标模型时间维度
+   绑定给驱动模型。
+8. Tool Args 已固定阶段 3所需的参数边界：`compute_evidence` 支持 ratio、ranking、
+   top_n_other 及受控分组、排序、limit 和 tolerance；`inspect_evidence` 支持受控排序、
+   offset、limit 和采样上限；`finish_research` 支持严格的假设评估和未回答问题，不接受
+   自由 `options`。
+
+迁移边界固定如下：旧 Requirement 中的 `goal`、目标指标、已归一化主时间绑定、旧
+`time_bindings_by_model`、不可变筛选、Scope、预算和发布版本快照，分别直接投影到新
+Requirement 的同名字段；`run_id`、Scope/权限指纹、Evidence Requirement 绑定和
+`agent_contract_version` 由服务端生成。旧 `allowed_actions` 不进入新契约，
+不得经过“旧 Action → 通用 Action → Tool 参数”的适配链；工具参数必须由各工具自己的严格
+Args DTO 表达。跨模型驱动关系继续使用已发布 Scope 中的时间维度绑定和模型维度映射，不能
+默认复用目标模型的时间维度。
+
+验收结果：
+
+- 阶段 1新增测试：29 项通过；
+- 旧 Research 契约、Phase 2/3、ExecutionRequirement 和 Fast 路由回归测试：50 项通过；
+- Ruff 和依赖守卫通过；
+- 未运行真实模型评测，未执行真实语义查询，未实现工具、恢复和 Agent Harness；
+- 阶段 1完成后仍使用 `legacy`，因此可以进入阶段 2，但阶段 2必须继续消费本阶段契约，
+  且不得增加旧 Action 适配链。
+
 # 6. 阶段 2：Semantic Query Runtime
 
 ## 6.1 这个阶段是干什么的

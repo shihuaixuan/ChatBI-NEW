@@ -4,6 +4,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from apps.chatbi.models.dto.research_agent import ResearchExecutionMode
+
 
 class AgentQuestionRequest(BaseModel):
     chat_id: int = Field(gt=0)
@@ -61,6 +63,8 @@ class AgentConfig(BaseModel):
     context_fold_chars: int = 30000
     # 默认只启用 P1 的确定性 FAST/PLAN 管道，避免新请求回退到 ReAct。
     execution_modes: tuple[str, ...] = ("fast", "plan")
+    # Research 新旧执行路径的单一配置入口；阶段 1默认保持旧路径。
+    research_execution_mode: ResearchExecutionMode = ResearchExecutionMode.LEGACY
     plan_max_query_tasks: int = Field(default=5, gt=0)
     plan_query_concurrency: int = Field(default=4, gt=0)
     research_max_iterations: int = Field(default=6, gt=0, le=20)

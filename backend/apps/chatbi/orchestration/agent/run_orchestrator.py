@@ -14,6 +14,7 @@ from apps.chatbi.models import (
     ChatbiAgentRun,
 )
 from apps.chatbi.models.dto.research import ResearchBudget
+from apps.chatbi.models.dto.research_agent import ResearchExecutionMode
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
@@ -44,6 +45,24 @@ from apps.trace import (
 )
 
 __all__ = ["RunOrchestrator"]
+
+
+def ensure_research_execution_mode_ready(
+    route_mode: str,
+    configured_mode: ResearchExecutionMode | str,
+) -> ResearchExecutionMode:
+    """校验 Research 新旧路径配置；Fast/Plan 不受该配置影响。"""
+
+    try:
+        resolved_mode = ResearchExecutionMode(configured_mode)
+    except ValueError as exc:
+        raise ModeRoutingError("RESEARCH_EXECUTION_MODE_INVALID") from exc
+    if route_mode == "research" and resolved_mode is not ResearchExecutionMode.LEGACY:
+        # 阶段 1只完成配置契约；未实现模式必须显式拒绝，不能回退旧 Research。
+        raise ModeRoutingError(
+            f"RESEARCH_{resolved_mode.value.upper()}_MODE_NOT_READY"
+        )
+    return resolved_mode
 
 
 class RunOrchestrator:
@@ -351,7 +370,18 @@ class RunOrchestrator:
             )
         )
         state.context.state["execution_requirement"] = result
-        return str(result["route"]["mode"])
+        route_mode = str(result["route"]["mode"])
+        if route_mode == "research":
+            configured_mode = getattr(
+                state.context.config,
+                "research_execution_mode",
+                None,
+            )
+            if configured_mode is None:
+                # Research 配置缺失时明确失败；Fast/Plan 不应读取该配置。
+                raise ModeRoutingError("RESEARCH_EXECUTION_MODE_CONFIG_REQUIRED")
+            ensure_research_execution_mode_ready(route_mode, configured_mode)
+        return route_mode
 
     def _semantic_parse_clarification_event(
         self,

@@ -161,6 +161,9 @@ class Settings(BaseSettings):
     CHAT_AGENT_CONTEXT_FOLD_CHARS: int = 30000
     # P1 验收默认启用确定性 FAST/PLAN；旧链路仍可通过环境变量显式恢复。
     CHAT_AGENT_EXECUTION_MODES: str = "fast,plan"
+    # Research 重构阶段 1只定义迁移配置，默认继续使用旧 Research。
+    # shadow/agent 在对应阶段实现前由入口明确拒绝，不得静默回退到 legacy。
+    CHATBI_RESEARCH_EXECUTION_MODE: Literal["legacy", "shadow", "agent"] = "legacy"
     # Research 预算默认值与 AgentConfig.research_* 保持一致（doc §9.6 第一版建议默认）。
     CHAT_AGENT_RESEARCH_MAX_ITERATIONS: int = 6
     CHAT_AGENT_RESEARCH_MAX_QUERIES: int = 8
