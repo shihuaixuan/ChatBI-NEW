@@ -162,8 +162,17 @@ class Settings(BaseSettings):
     # P1 验收默认启用确定性 FAST/PLAN；旧链路仍可通过环境变量显式恢复。
     CHAT_AGENT_EXECUTION_MODES: str = "fast,plan"
     # Research 重构阶段 1只定义迁移配置，默认继续使用旧 Research。
-    # shadow/agent 在对应阶段实现前由入口明确拒绝，不得静默回退到 legacy。
+    # shadow 在阶段 7 起可用：用户可见路径仍是 legacy，仅按下列白名单和
+    # 采样比例附带后台双跑；agent 就绪前仍由入口明确拒绝。
     CHATBI_RESEARCH_EXECUTION_MODE: Literal["legacy", "shadow", "agent"] = "legacy"
+    # 阶段 7 切流配置：确定性采样（sha256(run_key) 分桶）与白名单，
+    # 全部为 0/空时 shadow 配置等价于 legacy。
+    CHATBI_RESEARCH_SHADOW_SAMPLE_RATE: float = 0.0
+    CHATBI_RESEARCH_SHADOW_DATASET_ALLOWLIST: str = ""
+    CHATBI_RESEARCH_SHADOW_TENANT_ALLOWLIST: str = ""
+    # 质量切流门槛（§11.3.4）的评测配置 JSON 路径；空表示未配置，
+    # 未配置时切流判定一律阻断，不得在没有基线数据时发明阈值。
+    CHATBI_RESEARCH_EVAL_CONFIG: str = ""
     # Research 预算默认值与 AgentConfig.research_* 保持一致（doc §9.6 第一版建议默认）。
     CHAT_AGENT_RESEARCH_MAX_ITERATIONS: int = 6
     CHAT_AGENT_RESEARCH_MAX_QUERIES: int = 8

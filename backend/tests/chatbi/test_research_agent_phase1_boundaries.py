@@ -62,8 +62,12 @@ def test_production_route_boundary_keeps_legacy_and_rejects_unimplemented_modes(
         ensure_research_execution_mode_ready("research", "legacy")
         is ResearchExecutionMode.LEGACY
     )
-    with pytest.raises(ModeRoutingError, match="RESEARCH_SHADOW_MODE_NOT_READY"):
+    # 阶段 7 起 shadow 在路由入口合法：用户可见路径仍是 legacy，是否附带
+    # 后台双跑由切流策略决定（doc38 §11.3.6）；agent 就绪前仍显式拒绝。
+    assert (
         ensure_research_execution_mode_ready("research", "shadow")
+        is ResearchExecutionMode.SHADOW
+    )
     with pytest.raises(ModeRoutingError, match="RESEARCH_AGENT_MODE_NOT_READY"):
         ensure_research_execution_mode_ready("research", "agent")
     assert ensure_research_execution_mode_ready("fast", "agent") is ResearchExecutionMode.AGENT

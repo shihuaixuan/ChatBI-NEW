@@ -147,6 +147,21 @@ def get_agent_config() -> AgentConfig:
         research_execution_mode=ResearchExecutionMode(
             settings.CHATBI_RESEARCH_EXECUTION_MODE
         ),
+        research_shadow_sample_rate=settings.CHATBI_RESEARCH_SHADOW_SAMPLE_RATE,
+        research_shadow_dataset_allowlist=tuple(
+            int(item.strip())
+            for item in (
+                settings.CHATBI_RESEARCH_SHADOW_DATASET_ALLOWLIST or ""
+            ).split(",")
+            if item.strip().isdigit()
+        ),
+        research_shadow_tenant_allowlist=tuple(
+            int(item.strip())
+            for item in (
+                settings.CHATBI_RESEARCH_SHADOW_TENANT_ALLOWLIST or ""
+            ).split(",")
+            if item.strip().isdigit()
+        ),
         plan_max_query_tasks=settings.CHATBI_PLAN_MAX_QUERY_TASKS,
         plan_query_concurrency=settings.CHATBI_PLAN_QUERY_CONCURRENCY,
         research_max_iterations=settings.CHAT_AGENT_RESEARCH_MAX_ITERATIONS,

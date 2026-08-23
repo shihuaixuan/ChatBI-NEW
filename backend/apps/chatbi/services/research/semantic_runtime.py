@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Collection, Generator
+from collections.abc import Callable, Collection, Generator
 from typing import Any
 
 from apps.chatbi.errors import (
@@ -157,9 +157,14 @@ class SemanticQueryRuntime:
         self,
         execution_service: AnalysisExecutionService,
         query_builder: SemanticQueryBuilder | None = None,
+        *,
+        execution_state_factory: Callable[[Any], Any] | None = None,
     ) -> None:
         self._execution_service = execution_service
         self._query_builder = query_builder
+        # 阶段 7：宿主可注入状态投影（如 shadow 的 ResearchExecutionState），
+        # 把工具上下文适配成执行服务要求的 run 状态表面；默认保持原样。
+        self._execution_state_factory = execution_state_factory
 
     def execute(
         self,
@@ -342,7 +347,12 @@ class SemanticQueryRuntime:
     def _execute_spec(self, context: Any, spec: Any, plan_id: str) -> Any:
         """兼容同步返回值和带事件生成器的执行服务。"""
 
-        result = self._execution_service.execute(context, spec, plan_id=plan_id)
+        execution_state = (
+            self._execution_state_factory(context)
+            if self._execution_state_factory is not None
+            else context
+        )
+        result = self._execution_service.execute(execution_state, spec, plan_id=plan_id)
         if not isinstance(result, Generator):
             return result
         while True:

@@ -65,6 +65,11 @@ class AgentConfig(BaseModel):
     execution_modes: tuple[str, ...] = ("fast", "plan")
     # Research 新旧执行路径的单一配置入口；阶段 1默认保持旧路径。
     research_execution_mode: ResearchExecutionMode = ResearchExecutionMode.LEGACY
+    # 阶段 7 切流配置：shadow 双跑按数据集/租户白名单和确定性采样比例生效，
+    # 用户可见路径始终是 legacy；回退即把 research_execution_mode 改回 legacy。
+    research_shadow_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    research_shadow_dataset_allowlist: tuple[int, ...] = ()
+    research_shadow_tenant_allowlist: tuple[int, ...] = ()
     plan_max_query_tasks: int = Field(default=5, gt=0)
     plan_query_concurrency: int = Field(default=4, gt=0)
     research_max_iterations: int = Field(default=6, gt=0, le=20)

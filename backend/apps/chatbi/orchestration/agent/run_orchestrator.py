@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Generator, Iterator
 from typing import Any
 
@@ -34,6 +35,7 @@ from apps.chatbi.orchestration.pipeline.research import (
     ResearchPipelineError,
 )
 from apps.chatbi.repository.sqlmodel import agent_run_repository
+from apps.chatbi.services.research.shadow import ShadowRunMaterial, spawn_shadow_run
 from apps.event import EventPublisher, RenderEvent
 from apps.trace import (
     AgentTraceRecorder,
@@ -46,23 +48,99 @@ from apps.trace import (
 
 __all__ = ["RunOrchestrator"]
 
+logger = logging.getLogger(__name__)
+
+
+def _build_shadow_material(state: AgentRuntimeState) -> ShadowRunMaterial | None:
+    """从 working state 的冻结路由结果构造 shadow 双跑输入。"""
+
+    from apps.chatbi.models.dto.research import ResearchRequirement
+
+    execution = state.context.state.get("execution_requirement")
+    payload = (
+        execution.get("research_requirement")
+        if isinstance(execution, dict)
+        else None
+    )
+    if not isinstance(payload, dict):
+        return None
+    record_id = getattr(state.record, "id", None)
+    if record_id is None:
+        return None
+    temporal_context = dict(getattr(state.run, "temporal_context", None) or {})
+    return ShadowRunMaterial(
+        parent_run_id=state.require_run_id(),
+        oid=int(state.run.oid),
+        chat_id=int(state.run.chat_id),
+        record_id=int(record_id),
+        user_id=getattr(state.context, "user_id", None),
+        dataset_id=getattr(state.record, "dataset_id", None),
+        temporal_context=temporal_context,
+        legacy_requirement=ResearchRequirement.model_validate(payload),
+    )
+
 
 def ensure_research_execution_mode_ready(
     route_mode: str,
     configured_mode: ResearchExecutionMode | str,
 ) -> ResearchExecutionMode:
-    """校验 Research 新旧路径配置；Fast/Plan 不受该配置影响。"""
+    """校验 Research 新旧路径配置；Fast/Plan 不受该配置影响。
+
+    阶段 7 起 shadow 成为合法值：用户可见路径仍是 legacy，是否附带后台
+    双跑由切流策略（``_resolve_shadow_rollout``）决定。agent 就绪前仍显式
+    拒绝，不能回退旧 Research。
+    """
 
     try:
         resolved_mode = ResearchExecutionMode(configured_mode)
     except ValueError as exc:
         raise ModeRoutingError("RESEARCH_EXECUTION_MODE_INVALID") from exc
-    if route_mode == "research" and resolved_mode is not ResearchExecutionMode.LEGACY:
-        # 阶段 1只完成配置契约；未实现模式必须显式拒绝，不能回退旧 Research。
+    if route_mode == "research" and resolved_mode is ResearchExecutionMode.AGENT:
         raise ModeRoutingError(
             f"RESEARCH_{resolved_mode.value.upper()}_MODE_NOT_READY"
         )
     return resolved_mode
+
+
+def resolve_shadow_rollout(
+    state: AgentRuntimeState,
+) -> dict[str, Any] | None:
+    """解析本次 research 请求的 shadow 双跑决策并写入 working state。
+
+    决策完全确定性（sha256(run_key) 分桶）；任何解析异常都按纯 legacy
+    处理——切流安全方向是少双跑，绝不让 shadow 配置拖垮主路径。
+    """
+
+    from apps.chatbi.services.research.rollout import RolloutPolicy
+
+    config = state.context.config
+    policy = RolloutPolicy.from_config(
+        mode=str(getattr(config, "research_execution_mode", "legacy")),
+        sample_rate=float(
+            getattr(config, "research_shadow_sample_rate", 0.0) or 0.0
+        ),
+        dataset_allowlist=tuple(
+            getattr(config, "research_shadow_dataset_allowlist", ()) or ()
+        ),
+        tenant_allowlist=tuple(
+            getattr(config, "research_shadow_tenant_allowlist", ()) or ()
+        ),
+    )
+    record_id = getattr(state.record, "id", None)
+    run_key = f"{state.run.chat_id}:{record_id}"
+    decision = policy.resolve(
+        datasource_id=getattr(state.record, "dataset_id", None),
+        oid=int(state.run.oid),
+        run_key=run_key,
+    )
+    payload = {
+        "configured_mode": str(policy.mode),
+        "effective_mode": decision.effective_mode,
+        "reason": decision.reason,
+        "sample_rate": float(policy.sample_rate),
+    }
+    state.context.state["research_rollout"] = payload
+    return payload
 
 
 class RunOrchestrator:
@@ -79,6 +157,7 @@ class RunOrchestrator:
         plan_pipeline: PlanPipeline | None = None,
         research_pipeline: ResearchPipeline | None = None,
         mode_router: ModeRouter | None = None,
+        shadow_runner: Any | None = None,
     ) -> None:
         self.session = session
         self.event_publisher = event_publisher
@@ -89,6 +168,9 @@ class RunOrchestrator:
         self.fast_pipeline = fast_pipeline
         self.plan_pipeline = plan_pipeline
         self.research_pipeline = research_pipeline
+        # 阶段 7：shadow 双跑宿主；为空表示本进程未装配 shadow 栈，
+        # 此时即使配置了 shadow 也只按 legacy 执行（切流安全方向）。
+        self.shadow_runner = shadow_runner
         if mode_router is None:
             raise ValueError("AGENT_MODE_ROUTER_REQUIRED")
         self.mode_router = mode_router
@@ -191,6 +273,7 @@ class RunOrchestrator:
                             error_details={"code": exc.code},
                         )
                 elif selected_mode == "research" and self.research_pipeline is not None:
+                    self._maybe_spawn_shadow(state)
                     try:
                         yield from self.research_pipeline.run(state)
                     except ResearchPipelineError as exc:
@@ -381,7 +464,46 @@ class RunOrchestrator:
                 # Research 配置缺失时明确失败；Fast/Plan 不应读取该配置。
                 raise ModeRoutingError("RESEARCH_EXECUTION_MODE_CONFIG_REQUIRED")
             ensure_research_execution_mode_ready(route_mode, configured_mode)
+            resolve_shadow_rollout(state)
         return route_mode
+
+    def _maybe_spawn_shadow(self, state: AgentRuntimeState) -> None:
+        """按切流决策启动 shadow 双跑；任何失败只降级为纯 legacy。
+
+        隔离边界（§11.3.1）：双跑在后台线程的独立会话与独立 run 行上进行，
+        用户可见路径、事件流和主路径生命周期完全不受影响。
+        """
+
+        if self.shadow_runner is None:
+            return
+        rollout = state.context.state.get("research_rollout") or {}
+        if rollout.get("effective_mode") != "shadow":
+            return
+        try:
+            material = _build_shadow_material(state)
+        except Exception as exc:
+            logger.warning(
+                "chatbi.shadow.material_failed run=%s error=%r",
+                state.require_run_id(),
+                exc,
+            )
+            return
+        if material is None:
+            return
+        try:
+            spawn_shadow_run(self.shadow_runner, material)
+            logger.info(
+                "chatbi.shadow.spawned parent_run=%s record=%s",
+                state.require_run_id(),
+                material.record_id,
+            )
+        except Exception as exc:
+            # 切流安全方向：shadow 启动失败绝不影响用户可见路径。
+            logger.warning(
+                "chatbi.shadow.spawn_failed run=%s error=%r",
+                state.require_run_id(),
+                exc,
+            )
 
     def _semantic_parse_clarification_event(
         self,

@@ -2068,6 +2068,52 @@ ResearchPipeline。
 5. 至少完成一次真实流量小比例切流和回退演练；
 6. 新路径连续稳定后才允许进入旧代码删除阶段。
 
+## 11.7 实施状态（2026-08-23）
+
+### 落地文件
+
+| 文件 | 内容 |
+| --- | --- |
+| `apps/chatbi/services/research/shadow.py` | `build_shadow_agent_requirement`（冻结输入确定性投影）、`ResearchExecutionState`（状态表面适配）、`ShadowRunner`/`ShadowRunMaterial`/`spawn_shadow_run`（隔离行生命周期 + 后台线程） |
+| `apps/chatbi/services/research/comparison.py` | `RunFacts` 归一化 + 四组比较维度（输入/过程/输出/运行），`compare_dual_runs` |
+| `apps/chatbi/services/research/gates.py` | 九条硬门禁、`QualityThresholdSet`、`evaluate_runtime_gates`、`RolloutReadinessReport` |
+| `apps/chatbi/services/research/rollout.py` | `RolloutPolicy` 确定性采样（sha256(run_key) 分桶）与数据集/租户白名单 |
+| `apps/chatbi/orchestration/agent/run_orchestrator.py` | 路由入口三态校验（legacy/shadow 放行、agent 拒绝）+ `resolve_shadow_rollout` 决策写入 working state + dispatch 前 `_maybe_spawn_shadow` |
+| `apps/chatbi/orchestration/agent/composition.py` | `build_shadow_runner` 生产装配；会话绑定服务按双跑重建，无状态服务共享 |
+| `apps/chatbi/services/research/semantic_runtime.py` | 可选 `execution_state_factory` 钩子，把 `ResearchToolContext` 适配成执行服务状态表面 |
+| `apps/chatbi/models/dto/agent.py`、`common/core/config.py`、`orchestration/agent/service.py` | 切流配置字段（sample_rate/dataset_allowlist/tenant_allowlist/eval_config） |
+| `tests/chatbi/test_research_shadow.py` | 29 项测试：投影确定性、隔离行生命周期、比较维度、九条硬门禁逐条、质量/运行门槛、切流策略与路由入口 |
+
+### 关键设计决策
+
+1. 无迁移隔离（§11.3.1）：`ChatbiAgentRun` 不加列，shadow 标记与投影后的冻结 Requirement 存 `derived_state["shadow"]`；事件、Trace、计划快照和结果工件按 shadow 行 id 落库，用户 SSE 只跟随主 run id，天然不可见。
+2. 补齐真实接线：`SemanticQueryRuntime → AnalysisExecutionService` 组合此前只存在于测试替身中（`ResearchToolContext` 缺 `require_run_id` 等表面）；通过可选 `execution_state_factory` + `ResearchExecutionState` 适配器在 shadow 栈内闭合，主路径行为不变。
+3. fail-open 方向贯穿全链：runner 未注入、rollout 解析异常、material 构建失败、spawn 失败、线程体异常都只降级为纯 legacy 并记录 warning；suspend/cancel 在 shadow 栈内显式抛 `RESEARCH_SHADOW_LIFECYCLE_UNAVAILABLE` 而非静默吞掉。
+4. 比较器诚实原则：一侧未记录的维度标 `not_comparable` 而不是猜相等；可理解性明确留给人工抽检；旧路径用量按 max−remaining 口径还原后与新路径直读用量对齐。
+5. 质量门槛未配置即阻断：`CHATBI_RESEARCH_EVAL_CONFIG` 为空时五个指标全部产生 `not_configured` 未通过判定，绝不在没有阶段 0 基线数据时发明阈值。
+6. Scope 门禁不空转：冻结输入缺失时直接记 `FROZEN_INPUT_MISSING` 越界，绝不因没有可检查的证据引用而默认通过。
+
+### 验收记录（对应 §11.5）
+
+1. Shadow 不影响用户答案和主路径状态 — 通过（自动化部分）：`test_shadow_runner_*`、`test_execution_state_*` 验证独立行、失败不上抛、持久化上下文排除大字段；事件按 shadow 行 id 隔离由装配结构保证。
+2. 硬门禁全部通过 — 通过：`test_all_nine_hard_gates_pass_on_consistent_record` 及各违规用例对九条门禁逐条覆盖（scope 越界/目标指标漂移/不可变筛选漂移/时间漂移经比较维度、跨 Run 引用、无来源引用、静默回退码、未证明查询码、引用通过率）。
+3. 质量指标达到切流标准 — 机制就绪，数值待评：阈值配置语义已测（min/max 方向、部分配置阻断）；实际判定待 `CHATBI_RESEARCH_EVAL_CONFIG` 接入阶段 0 基线后执行。
+4. 运行成本和延迟在预算内 — 机制就绪，样本待积累：p95（≥20 样本）、平均用量、超时率语义已测。
+5. 真实流量小比例切流和回退演练 — 待生产执行：采样/白名单/路由回退机制已就绪并有测试覆盖。
+6. 新路径连续稳定 — 依赖双跑数据积累，随第 3–5 条一并运营验收。
+
+### 回归
+
+- `tests/chatbi`：750 passed / 16 failed（16 个全部为既有 `SEMANTIC_DATASET_MODEL_CONFIG_MISSING` 环境性失败，与阶段 0 记录一致）；阶段 1 边界测试同步更新为"shadow 在路由入口合法、agent 仍显式拒绝"（§11.3.6 的契约演进）。
+- `tests/agent`：117 passed / 31 failed（与既有基线完全一致，均为过期测试签名/环境问题）。
+
+### 遗留与移交阶段 8
+
+- 取消传播是尽力而为：shadow 栈使用 `NeverCancelled`，主路径取消不级联到双跑线程；
+- `premise=None`：旧契约 Requirement 无前提字段，前提确认要求仅在 material 显式携带 premise 时投影；
+- 指标看板以 trace/event 查询替代独立面板；评测报告聚合脚本待 `CHATBI_RESEARCH_EVAL_CONFIG` 接入基线后补齐；
+- §11.5 第 3–6 条为运营验收项，代码侧机制已全部就绪。
+
 # 12. 阶段 8：删除旧 ResearchAction
 
 ## 12.1 这个阶段是干什么的
@@ -2459,7 +2505,7 @@ Research 核心重构完成需要满足：
 | 4 状态、证据依赖和恢复 | 已完成 | 2026-08-23 | 见 8.8；16 项状态/恢复测试通过，提交边界 + 恢复 + 取消落地，无新表 |
 | 5 Research Agent Harness | 已完成 | 2026-08-23 | 见 9.7；17 项 Harness 测试通过，动态循环 + 前提确认 + 提交边界/恢复/取消接线落地，新路径仅在测试运行 |
 | 6 假设、完成度和报告 | 已完成 | 2026-08-23 | 见 10.7；22 项结论可信层测试通过，finish 三重门禁（完成度/假设裁决/报告硬校验）+ 部分/最终报告落地，新路径仅在测试运行 |
-| 7 Shadow 双跑、评测和切流 | 待开始 | - | - |
+| 7 Shadow 双跑、评测和切流 | 已完成（切流判定待评测配置接入） | 2026-08-23 | 见 11.7；29 项 Shadow/比较器/门禁/切流测试通过，fail-open 双跑接线落地，质量/运行/演练三项待运营数据 |
 | 8 删除旧 ResearchAction | 待开始 | - | - |
 | 9 受限 SQL 和资产回流 | 待开始 | - | - |
 
