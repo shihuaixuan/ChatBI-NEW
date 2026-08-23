@@ -183,9 +183,8 @@ def _requirement_payload(
     marker_key: bool,
 ) -> dict[str, Any]:
     if marker_key:
-        from apps.chatbi.services.research.shadow import SHADOW_MARKER_KEY
-
-        marker = derived_state.get(SHADOW_MARKER_KEY)
+        # 阶段 8 起 shadow.py 已删除；该键是历史双跑行落库的持久化键。
+        marker = derived_state.get("shadow")
         requirement_payload = marker.get("requirement") if isinstance(marker, dict) else None
         if isinstance(requirement_payload, dict):
             resolved_requirement: dict[str, Any] = requirement_payload

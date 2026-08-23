@@ -1,20 +1,20 @@
-"""Research Agent 主路径编排适配器（doc38 阶段 7.5 切流接线）。
+"""Research Agent 主路径编排适配器（doc38 阶段 8 起唯一 Research 引擎）。
 
-把 :class:`ResearchAgentHarness` 接入 RunOrchestrator 分发，使
-``research_execution_mode="agent"`` 成为可切换的真实引擎（§12.2 前置
-条件 1 的代码侧前提）。适配器只做四件事：
+把 :class:`ResearchAgentHarness` 接入 RunOrchestrator 分发。适配器只做
+四件事：
 
-1. 读取路由期冻结的执行输入，用与 shadow 双跑完全相同的确定性投影
-   （``build_shadow_agent_requirement``）构造新契约 Requirement；
+1. 读取路由期冻结的新契约 Requirement（``routing_freeze`` 直接产出，
+   阶段 8 起不再经过旧契约投影），并按 Run 身份补盖 ``run_id``；
 2. 用请求作用域服务装配 Harness——主路径与用户可见执行共享同一会话、
    注册表和生命周期，取消与澄清挂起真实可达；
-3. run 行上已存在本 Run 冻结的新路径研究事实（含 ``requirement`` 的
+3. run 行上已存在本 Run 冻结的研究事实（含 ``requirement`` 的
    ``research_state``）时走恢复续跑而不是重开循环；
 4. 把 Harness 终态翻译成统一生命周期事件：succeeded/partial 等报告态
    走 finish，failed 抛 :class:`ResearchPipelineError` 交分发层失败收口，
    cancelled 走取消收口。
 
-失败一律显式报错，绝不静默回退旧 Research（§11.3.6）。
+失败一律显式报错；旧 Research 管道已随阶段 8 删除，不存在回退目标
+（§11.3.6 / §12.5）。
 """
 
 from __future__ import annotations
@@ -25,11 +25,11 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from apps.chatbi.errors import ResearchPipelineError
 from apps.chatbi.models.dto.agent import AgentConfig
-from apps.chatbi.models.dto.research import ResearchRequirement
+from apps.chatbi.models.dto.research_agent import ResearchAgentRequirement
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
-from apps.chatbi.orchestration.pipeline.research import ResearchPipelineError
 from apps.chatbi.orchestration.pipeline.research_agent import (
     ResearchAgentHarness,
     ResearchAgentRunOutcome,
@@ -40,7 +40,6 @@ from apps.chatbi.services.research.scope_stamp import (
     governed_asset_refs,
     stamp_semantic_scope,
 )
-from apps.chatbi.services.research.shadow import build_shadow_agent_requirement
 from apps.event import RenderEvent
 from apps.retrieval import ExecutableAssetReference
 from apps.trace import AgentTraceRecorder
@@ -84,7 +83,7 @@ class ResearchAgentPipeline:
             )
             outcome = harness.resume()
         else:
-            requirement = self._project_requirement(state)
+            requirement = self._load_frozen_requirement(state)
             stamped_scope = self._stamp_scope(
                 state,
                 scope_fingerprint=requirement.scope.scope_fingerprint,
@@ -107,12 +106,12 @@ class ResearchAgentPipeline:
     # 输入构造
     # ------------------------------------------------------------------ #
 
-    def _project_requirement(self, state: AgentRuntimeState) -> Any:
-        """从路由冻结输入确定性投影新契约 Requirement。
+    def _load_frozen_requirement(self, state: AgentRuntimeState) -> Any:
+        """加载路由期冻结的新契约 Requirement 并补盖本 Run 的 run_id。
 
-        与 shadow 双跑共用同一投影函数与同一冻结输入（§1.1 同源图），
-        保证 agent 主路径与被比较的影子侧行为一致。冻结输入缺失或无法
-        投影时显式失败，绝不静默改走旧 Research。
+        冻结载荷由 ``routing_freeze.freeze_research_requirement`` 在路由期
+        直接产出；run_id 属 Run 身份而非路由事实，由适配层在此覆盖。载荷
+        缺失、形状非法（含阶段 8 前的旧契约历史行）时显式失败。
         """
 
         execution = state.context.state.get("execution_requirement")
@@ -124,27 +123,18 @@ class ResearchAgentPipeline:
         if not isinstance(payload, dict):
             raise ResearchPipelineError(
                 "RESEARCH_AGENT_REQUIREMENT_MISSING",
-                "agent 引擎要求路由期冻结的旧契约 Requirement，但执行输入中缺失。",
+                "agent 引擎要求路由期冻结的新契约 Requirement，但执行输入中缺失。",
             )
+        stamped = {
+            **payload,
+            "run_id": f"research-{state.require_run_id()}",
+        }
         try:
-            legacy_requirement = ResearchRequirement.model_validate(payload)
+            return ResearchAgentRequirement.model_validate(stamped)
         except ValueError as exc:
             raise ResearchPipelineError(
                 "RESEARCH_AGENT_REQUIREMENT_INVALID",
-                f"路由冻结的旧契约 Requirement 无法加载：{exc}",
-            ) from exc
-        dataset_id = getattr(state.record, "dataset_id", None)
-        try:
-            return build_shadow_agent_requirement(
-                legacy_requirement,
-                run_id=f"research-{state.require_run_id()}",
-                tenant_scope=f"oid:{int(state.run.oid)}",
-                dataset_ref=f"ASSET:dataset:{dataset_id or 0}",
-            )
-        except ValueError as exc:
-            raise ResearchPipelineError(
-                "RESEARCH_AGENT_REQUIREMENT_PROJECTION_FAILED",
-                str(exc),
+                f"路由冻结的 Requirement 无法加载：{exc}",
             ) from exc
 
     def _stamp_scope(

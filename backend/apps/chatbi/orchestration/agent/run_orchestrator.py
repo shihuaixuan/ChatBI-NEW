@@ -6,7 +6,11 @@ import logging
 from collections.abc import Generator, Iterator
 from typing import Any
 
-from apps.chatbi.errors import QuestionUnderstandingError, SemanticClarificationError
+from apps.chatbi.errors import (
+    QuestionUnderstandingError,
+    ResearchPipelineError,
+    SemanticClarificationError,
+)
 from apps.chatbi.models import (
     AgentClarificationResumeKind,
     AgentErrorClass,
@@ -14,8 +18,7 @@ from apps.chatbi.models import (
     ChatbiAgentClarification,
     ChatbiAgentRun,
 )
-from apps.chatbi.models.dto.research import ResearchBudget
-from apps.chatbi.models.dto.research_agent import ResearchExecutionMode
+from apps.chatbi.models.dto.research_agent import ResearchBudget
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
@@ -30,12 +33,10 @@ from apps.chatbi.orchestration.pipeline.mode_router import (
     ModeRoutingError,
 )
 from apps.chatbi.orchestration.pipeline.plan_mode import PlanPipeline, PlanPipelineError
-from apps.chatbi.orchestration.pipeline.research import (
-    ResearchPipeline,
-    ResearchPipelineError,
+from apps.chatbi.orchestration.pipeline.research_agent_pipeline import (
+    ResearchAgentPipeline,
 )
 from apps.chatbi.repository.sqlmodel import agent_run_repository
-from apps.chatbi.services.research.shadow import ShadowRunMaterial, spawn_shadow_run
 from apps.event import EventPublisher, RenderEvent
 from apps.trace import (
     AgentTraceRecorder,
@@ -51,135 +52,6 @@ __all__ = ["RunOrchestrator"]
 logger = logging.getLogger(__name__)
 
 
-def _build_shadow_material(state: AgentRuntimeState) -> ShadowRunMaterial | None:
-    """从 working state 的冻结路由结果构造 shadow 双跑输入。
-
-    冻结的检索 Scope 与 DatasetSchema 快照一并携带：shadow 侧要用与主路径
-    适配器相同的共享实现盖戳工具上下文（doc38 §7.4）。任一缺失返回 None
-    不启动双跑——主路径在这些输入缺失时同样显式失败，启动注定失败的双跑
-    只会制造引擎无关的失败样本。
-    """
-
-    from apps.chatbi.models.dto.research import ResearchRequirement
-
-    execution = state.context.state.get("execution_requirement")
-    payload = (
-        execution.get("research_requirement")
-        if isinstance(execution, dict)
-        else None
-    )
-    if not isinstance(payload, dict):
-        return None
-    schema_snapshot = (
-        execution.get("asset_snapshot", {}).get("dataset_schema")
-        if isinstance(execution, dict)
-        else None
-    )
-    semantic_scope = state.context.state.get("semantic_scope")
-    if not isinstance(schema_snapshot, dict) or not isinstance(semantic_scope, dict):
-        logger.warning(
-            "chatbi.shadow.frozen_inputs_missing run=%s scope=%s schema=%s",
-            state.require_run_id(),
-            isinstance(semantic_scope, dict),
-            isinstance(schema_snapshot, dict),
-        )
-        return None
-    record_id = getattr(state.record, "id", None)
-    if record_id is None:
-        return None
-    temporal_context = dict(getattr(state.run, "temporal_context", None) or {})
-    return ShadowRunMaterial(
-        parent_run_id=state.require_run_id(),
-        oid=int(state.run.oid),
-        chat_id=int(state.run.chat_id),
-        record_id=int(record_id),
-        user_id=getattr(state.context, "user_id", None),
-        dataset_id=getattr(state.record, "dataset_id", None),
-        # ChatRecord.datasource 才是数据源 id；dataset_id 是数据集 id，
-        # 二者不可互换（run 1306 教训：stub 混用导致边界校验失配）。
-        datasource_id=getattr(state.record, "datasource", None),
-        temporal_context=temporal_context,
-        legacy_requirement=ResearchRequirement.model_validate(payload),
-        semantic_scope=dict(semantic_scope),
-        schema_snapshot=dict(schema_snapshot),
-        permission_version=getattr(state.context, "permission_version", None),
-    )
-
-
-def ensure_research_execution_mode_ready(
-    route_mode: str,  # noqa: ARG001 - 路由入口签名的组成部分，测试用它固定三态语义
-    configured_mode: ResearchExecutionMode | str,
-) -> ResearchExecutionMode:
-    """校验 Research 新旧路径配置；Fast/Plan 不受该配置影响。
-
-    阶段 7 起 shadow 成为合法值：用户可见路径仍是 legacy，是否附带后台
-    双跑由切流策略（``resolve_shadow_rollout``）决定。阶段 7.5 起 agent
-    也成为合法值：主路径直接由新契约 Harness 执行（``ResearchAgentPipeline``），
-    是否生效同样由切流策略裁决。三个取值在路由入口全部放行后，本函数
-    只剩配置合法性校验；引擎选择完全由 rollout 决策承载。
-    """
-
-    try:
-        return ResearchExecutionMode(configured_mode)
-    except ValueError as exc:
-        raise ModeRoutingError("RESEARCH_EXECUTION_MODE_INVALID") from exc
-
-
-def resolve_shadow_rollout(
-    state: AgentRuntimeState,
-) -> dict[str, Any] | None:
-    """解析本次 research 请求的切流决策并写入 working state。
-
-    agent 是终态引擎：配置即全量生效，不参与采样（阶段 7.5）。其余模式
-    的 shadow 决策完全确定性（sha256(run_key) 分桶）；任何解析异常都按
-    纯 legacy 处理——切流安全方向是少双跑，绝不让 shadow 配置拖垮主路径。
-    """
-
-    config = state.context.config
-    configured_mode = str(
-        getattr(config, "research_execution_mode", "legacy") or "legacy"
-    )
-    if configured_mode == ResearchExecutionMode.AGENT.value:
-        payload = {
-            "configured_mode": configured_mode,
-            "effective_mode": ResearchExecutionMode.AGENT.value,
-            "reason": "configured_agent",
-            "sample_rate": 0.0,
-        }
-        state.context.state["research_rollout"] = payload
-        return payload
-
-    from apps.chatbi.services.research.rollout import RolloutPolicy
-
-    policy = RolloutPolicy.from_config(
-        mode=str(getattr(config, "research_execution_mode", "legacy")),
-        sample_rate=float(
-            getattr(config, "research_shadow_sample_rate", 0.0) or 0.0
-        ),
-        dataset_allowlist=tuple(
-            getattr(config, "research_shadow_dataset_allowlist", ()) or ()
-        ),
-        tenant_allowlist=tuple(
-            getattr(config, "research_shadow_tenant_allowlist", ()) or ()
-        ),
-    )
-    record_id = getattr(state.record, "id", None)
-    run_key = f"{state.run.chat_id}:{record_id}"
-    decision = policy.resolve(
-        datasource_id=getattr(state.record, "dataset_id", None),
-        oid=int(state.run.oid),
-        run_key=run_key,
-    )
-    payload = {
-        "configured_mode": str(policy.mode),
-        "effective_mode": decision.effective_mode,
-        "reason": decision.reason,
-        "sample_rate": float(policy.sample_rate),
-    }
-    state.context.state["research_rollout"] = payload
-    return payload
-
-
 class RunOrchestrator:
     def __init__(
         self,
@@ -192,10 +64,8 @@ class RunOrchestrator:
         state_factory: AgentRuntimeStateFactory,
         fast_pipeline: FastPipeline | None = None,
         plan_pipeline: PlanPipeline | None = None,
-        research_pipeline: ResearchPipeline | None = None,
-        research_agent_pipeline: Any | None = None,
+        research_agent_pipeline: ResearchAgentPipeline | None = None,
         mode_router: ModeRouter | None = None,
-        shadow_runner: Any | None = None,
     ) -> None:
         self.session = session
         self.event_publisher = event_publisher
@@ -205,13 +75,9 @@ class RunOrchestrator:
         self.state_factory = state_factory
         self.fast_pipeline = fast_pipeline
         self.plan_pipeline = plan_pipeline
-        self.research_pipeline = research_pipeline
-        # 阶段 7.5：agent 引擎主路径管道；为空表示本进程未装配 agent 栈，
-        # 此时 rollout 判定为 agent 会显式失败，绝不静默回退旧 Research。
+        # 阶段 8：agent 是唯一 Research 引擎；为空表示本进程未装配，
+        # 分发时显式失败，不存在旧管道回退目标。
         self.research_agent_pipeline = research_agent_pipeline
-        # 阶段 7：shadow 双跑宿主；为空表示本进程未装配 shadow 栈，
-        # 此时即使配置了 shadow 也只按 legacy 执行（切流安全方向）。
-        self.shadow_runner = shadow_runner
         if mode_router is None:
             raise ValueError("AGENT_MODE_ROUTER_REQUIRED")
         self.mode_router = mode_router
@@ -446,13 +312,6 @@ class RunOrchestrator:
                         "research_max_model_calls",
                         research_defaults.max_model_calls,
                     ),
-                    max_actions_per_iteration=(
-                        getattr(
-                            config,
-                            "research_max_actions_per_iteration",
-                            research_defaults.max_actions_per_iteration,
-                        )
-                    ),
                     max_duration_seconds=(
                         getattr(
                             config,
@@ -477,101 +336,31 @@ class RunOrchestrator:
         )
         state.context.state["execution_requirement"] = result
         route_mode = str(result["route"]["mode"])
-        if route_mode == "research":
-            configured_mode = getattr(
-                state.context.config,
-                "research_execution_mode",
-                None,
-            )
-            if configured_mode is None:
-                # Research 配置缺失时明确失败；Fast/Plan 不应读取该配置。
-                raise ModeRoutingError("RESEARCH_EXECUTION_MODE_CONFIG_REQUIRED")
-            ensure_research_execution_mode_ready(route_mode, configured_mode)
-            resolve_shadow_rollout(state)
         return route_mode
 
     def _dispatch_research(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
-        """按切流决策分发 Research 执行；首次运行与澄清恢复共用。
+        """分发 Research 执行；首次运行与澄清恢复共用。
 
-        agent 是终态引擎（阶段 7.5）：rollout 判定为 agent 时由新契约
-        Harness 执行，未装配即显式失败，绝不静默回退旧 Research（§11.3.6）。
+        agent 是唯一引擎（阶段 8）：由新契约 Harness 执行，未装配即显式
+        失败；旧管道与 shadow 双跑已删除，不存在回退目标（§12.5）。
         """
 
-        rollout = state.context.state.get("research_rollout") or {}
-        if rollout.get("effective_mode") == "agent":
-            if self.research_agent_pipeline is None:
-                yield from self.lifecycle.fail(
-                    state,
-                    "Research Agent 编排器未装配。",
-                    AgentErrorClass.PLAN_INVALID.value,
-                    error_details={"code": "RESEARCH_AGENT_PIPELINE_NOT_ASSEMBLED"},
-                )
-                return
-            try:
-                yield from self.research_agent_pipeline.run(state)
-            except ResearchPipelineError as exc:
-                yield from self.lifecycle.fail(
-                    state,
-                    str(exc),
-                    AgentErrorClass.PLAN_INVALID.value,
-                    error_details={"code": exc.code},
-                )
-            return
-        if self.research_pipeline is not None:
-            self._maybe_spawn_shadow(state)
-            try:
-                yield from self.research_pipeline.run(state)
-            except ResearchPipelineError as exc:
-                yield from self.lifecycle.fail(
-                    state,
-                    str(exc),
-                    AgentErrorClass.PLAN_INVALID.value,
-                    error_details={"code": exc.code},
-                )
-            return
-        yield from self.lifecycle.fail(
-            state,
-            "RESEARCH 模式尚未实现。",
-            AgentErrorClass.PLAN_INVALID.value,
-            error_details={"code": "RESEARCH_MODE_NOT_READY"},
-        )
-
-    def _maybe_spawn_shadow(self, state: AgentRuntimeState) -> None:
-        """按切流决策启动 shadow 双跑；任何失败只降级为纯 legacy。
-
-        隔离边界（§11.3.1）：双跑在后台线程的独立会话与独立 run 行上进行，
-        用户可见路径、事件流和主路径生命周期完全不受影响。
-        """
-
-        if self.shadow_runner is None:
-            return
-        rollout = state.context.state.get("research_rollout") or {}
-        if rollout.get("effective_mode") != "shadow":
-            return
-        try:
-            material = _build_shadow_material(state)
-        except Exception as exc:
-            logger.warning(
-                "chatbi.shadow.material_failed run=%s error=%r",
-                state.require_run_id(),
-                exc,
+        if self.research_agent_pipeline is None:
+            yield from self.lifecycle.fail(
+                state,
+                "Research Agent 编排器未装配。",
+                AgentErrorClass.PLAN_INVALID.value,
+                error_details={"code": "RESEARCH_AGENT_PIPELINE_NOT_ASSEMBLED"},
             )
             return
-        if material is None:
-            return
         try:
-            spawn_shadow_run(self.shadow_runner, material)
-            logger.info(
-                "chatbi.shadow.spawned parent_run=%s record=%s",
-                state.require_run_id(),
-                material.record_id,
-            )
-        except Exception as exc:
-            # 切流安全方向：shadow 启动失败绝不影响用户可见路径。
-            logger.warning(
-                "chatbi.shadow.spawn_failed run=%s error=%r",
-                state.require_run_id(),
-                exc,
+            yield from self.research_agent_pipeline.run(state)
+        except ResearchPipelineError as exc:
+            yield from self.lifecycle.fail(
+                state,
+                str(exc),
+                AgentErrorClass.PLAN_INVALID.value,
+                error_details={"code": exc.code},
             )
 
     def _semantic_parse_clarification_event(

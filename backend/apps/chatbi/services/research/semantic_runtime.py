@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Callable, Collection, Generator
+from dataclasses import dataclass
 from typing import Any
 
 from apps.chatbi.errors import (
@@ -15,6 +17,7 @@ from apps.chatbi.errors import (
     SemanticQueryProjectionError,
     SemanticQueryRuntimeError,
 )
+from apps.chatbi.models import ChatbiAgentRun
 from apps.chatbi.models.dto.analysis_plan import ResultSetRef
 from apps.chatbi.models.dto.research_agent import (
     ResearchAgentRequirement,
@@ -35,6 +38,7 @@ from apps.chatbi.services.execution.analysis_execution import (
 from apps.chatbi.services.research.semantic_query_builder import SemanticQueryBuilder
 from apps.conversation import ChatRecordExecutionType
 from apps.semantic.errors import SemanticForbiddenError, SemanticValidationError
+from apps.tool import NeverCancelled
 from apps.tool.tools.semantic_contracts import SemanticAssetScope
 
 _BOUNDARY_ERROR_CODES = {
@@ -974,4 +978,79 @@ def semantic_query_plan_id(query: ResearchSemanticQuery) -> str:
     return SemanticQueryRuntime._plan_id(query)
 
 
-__all__ = ["SemanticQueryRuntime", "semantic_query_plan_id"]
+_STATE_EXCLUDED_KEYS = frozenset(
+    {"full_data", "tool_offloads", "semantic_schema"}
+)
+
+
+class _ExecutionDeadlineBudget:
+    """把新契约 ``ResearchBudget`` 适配成执行服务的墙钟预算表面。
+
+    ``AnalysisExecutionService`` 读取 ``state.budget.remaining_seconds()`` 计算
+    查询任务截止（run 1278 冒烟回归：投影态缺 budget 直接 AttributeError）。
+    研究循环的整跑时长由 Harness 按 ``max_duration_seconds`` 单独约束，这里
+    以每次执行构造时刻起算，只保证单次查询的截止不超过剩余时长上限。
+    """
+
+    def __init__(self, budget: Any) -> None:
+        self._budget = budget
+        self._started_at = time.monotonic()
+
+    def remaining_seconds(self) -> float:
+        limit = float(getattr(self._budget, "max_duration_seconds", 0) or 0)
+        if limit <= 0:
+            return float("inf")
+        return max(limit - (time.monotonic() - self._started_at), 0.0)
+
+
+@dataclass
+class ResearchExecutionState:
+    """把 ResearchToolContext 投影成 AnalysisExecutionService 的状态表面。
+
+    字段口径与 ``AgentRuntimeState`` 一致：working state 与会话来自底层
+    AgentToolContext，事件、Trace、计划快照和结果工件因此全部落在当前
+    Run 身份下。（原属 shadow 栈；阶段 8 shadow 删除后由主路径唯一使用，
+    随迁入本模块。）
+    """
+
+    ctx: Any
+    run: ChatbiAgentRun
+    record: Any
+
+    def require_run_id(self) -> int:
+        if self.run.id is None:
+            raise RuntimeError("AGENT_RUN_ID_MISSING")
+        return self.run.id
+
+    @property
+    def budget(self) -> Any:
+        """执行服务读取的墙钟预算表面；见 :class:`_ExecutionDeadlineBudget`。"""
+
+        return _ExecutionDeadlineBudget(getattr(self.ctx, "budget", None))
+
+    @property
+    def context(self) -> Any:
+        return self.ctx.context
+
+    @property
+    def cancellation(self) -> Any:
+        return self.ctx.cancellation or NeverCancelled()
+
+    def persistable_context(self) -> dict[str, Any]:
+        """与 AgentRuntimeState.persistable_context 同口径的持久化快照。"""
+
+        state = self.ctx.context.state
+        if not isinstance(state, dict):
+            return {}
+        return {
+            key: value
+            for key, value in state.items()
+            if key not in _STATE_EXCLUDED_KEYS
+        }
+
+
+__all__ = [
+    "ResearchExecutionState",
+    "SemanticQueryRuntime",
+    "semantic_query_plan_id",
+]

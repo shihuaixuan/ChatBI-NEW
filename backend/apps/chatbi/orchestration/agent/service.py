@@ -21,7 +21,6 @@ from apps.chatbi.models.dto.agent import (
     AgentResumeStreamRequest,
     AgentStartStreamRequest,
 )
-from apps.chatbi.models.dto.research_agent import ResearchExecutionMode
 from apps.chatbi.orchestration.agent.cancellation import (
     DatabaseRunCancellationSignal,
 )
@@ -144,32 +143,11 @@ def get_agent_config() -> AgentConfig:
             for item in (settings.CHAT_AGENT_EXECUTION_MODES or "fast,plan").split(",")
             if item.strip()
         ),
-        research_execution_mode=ResearchExecutionMode(
-            settings.CHATBI_RESEARCH_EXECUTION_MODE
-        ),
-        research_shadow_sample_rate=settings.CHATBI_RESEARCH_SHADOW_SAMPLE_RATE,
-        research_shadow_dataset_allowlist=tuple(
-            int(item.strip())
-            for item in (
-                settings.CHATBI_RESEARCH_SHADOW_DATASET_ALLOWLIST or ""
-            ).split(",")
-            if item.strip().isdigit()
-        ),
-        research_shadow_tenant_allowlist=tuple(
-            int(item.strip())
-            for item in (
-                settings.CHATBI_RESEARCH_SHADOW_TENANT_ALLOWLIST or ""
-            ).split(",")
-            if item.strip().isdigit()
-        ),
         plan_max_query_tasks=settings.CHATBI_PLAN_MAX_QUERY_TASKS,
         plan_query_concurrency=settings.CHATBI_PLAN_QUERY_CONCURRENCY,
         research_max_iterations=settings.CHAT_AGENT_RESEARCH_MAX_ITERATIONS,
         research_max_queries=settings.CHAT_AGENT_RESEARCH_MAX_QUERIES,
         research_max_model_calls=settings.CHAT_AGENT_RESEARCH_MAX_MODEL_CALLS,
-        research_max_actions_per_iteration=(
-            settings.CHAT_AGENT_RESEARCH_MAX_ACTIONS_PER_ITERATION
-        ),
         research_max_duration_seconds=(
             settings.CHAT_AGENT_RESEARCH_MAX_DURATION_SECONDS
         ),

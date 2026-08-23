@@ -409,9 +409,9 @@ def _set_compare(
 
 
 def _shadow_marker_key() -> str:
-    from apps.chatbi.services.research.shadow import SHADOW_MARKER_KEY
-
-    return SHADOW_MARKER_KEY
+    # 阶段 8 起 shadow.py 已删除；该键是历史双跑行落库的持久化键，
+    # 比较器读取历史样本时仍按此键定位标记。
+    return "shadow"
 
 
 def _legacy_requirement(derived_state: dict[str, Any]) -> dict[str, Any]:

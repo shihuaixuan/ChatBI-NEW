@@ -68,6 +68,19 @@ class ResearchRequirementError(ChatBIError, ValueError):
         super().__init__(code)
 
 
+class ResearchPipelineError(RuntimeError):
+    """Research 编排无法继续形成可信动态闭环。
+
+    阶段 8 起这是唯一的 Research 管道错误类型（原属旧
+    ``pipeline/research.py``，随旧管道删除迁入此处）；主路径分发层按
+    ``code`` 收口失败终态。
+    """
+
+    def __init__(self, code: str, message: str | None = None) -> None:
+        self.code = code
+        super().__init__(message or code)
+
+
 class ResearchExecutionError(ChatBIError, RuntimeError):
     """Research 动态循环的模型决策、动作或预算不满足执行条件。"""
 

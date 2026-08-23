@@ -4,8 +4,6 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from apps.chatbi.models.dto.research_agent import ResearchExecutionMode
-
 
 class AgentQuestionRequest(BaseModel):
     chat_id: int = Field(gt=0)
@@ -63,20 +61,13 @@ class AgentConfig(BaseModel):
     context_fold_chars: int = 30000
     # 默认只启用 P1 的确定性 FAST/PLAN 管道，避免新请求回退到 ReAct。
     execution_modes: tuple[str, ...] = ("fast", "plan")
-    # Research 新旧执行路径的单一配置入口；阶段 1默认保持旧路径。
-    research_execution_mode: ResearchExecutionMode = ResearchExecutionMode.LEGACY
-    # 阶段 7 切流配置：shadow 双跑按数据集/租户白名单和确定性采样比例生效，
-    # 用户可见路径始终是 legacy。阶段 7.5 起 agent 配置即全量切流（主路径
-    # 换为新契约引擎，不参与采样）；回退即把 research_execution_mode 改回 legacy。
-    research_shadow_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
-    research_shadow_dataset_allowlist: tuple[int, ...] = ()
-    research_shadow_tenant_allowlist: tuple[int, ...] = ()
     plan_max_query_tasks: int = Field(default=5, gt=0)
     plan_query_concurrency: int = Field(default=4, gt=0)
+    # Research 预算（阶段 8 起新契约 Harness 是唯一引擎；shadow 切流配置
+    # 与 max_actions_per_iteration 随旧 Action 架构删除）。
     research_max_iterations: int = Field(default=6, gt=0, le=20)
     research_max_queries: int = Field(default=8, gt=0, le=50)
     research_max_model_calls: int = Field(default=8, gt=1, le=50)
-    research_max_actions_per_iteration: int = Field(default=3, gt=0, le=10)
     # Harness 连续无新方向轮数的服务端停止阈值（§9.3.5.7）。
     research_max_stall_turns: int = Field(default=3, gt=0, le=20)
     research_max_duration_seconds: int = Field(default=300, gt=0, le=1800)

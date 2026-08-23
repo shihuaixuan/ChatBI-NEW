@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any
 
 from sqlmodel import Session
 
 from apps.chatbi.adapters.prompts.limited_multistep import (
     DefaultLimitedMultiStepPromptBuilder,
-)
-from apps.chatbi.adapters.prompts.research_policy import (
-    DefaultResearchPolicyPromptBuilder,
 )
 from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.composition import (
@@ -42,10 +39,6 @@ from apps.chatbi.orchestration.pipeline.plan_mode import (
     PlanPipeline,
     PlanPipelineDependencies,
 )
-from apps.chatbi.orchestration.pipeline.research import (
-    ResearchPipeline,
-    ResearchPipelineDependencies,
-)
 from apps.chatbi.orchestration.pipeline.research_agent_pipeline import (
     ResearchAgentPipeline,
     ResearchAgentPipelineDependencies,
@@ -63,7 +56,6 @@ from apps.chatbi.services.planning import (
     LimitedMultiStepDecomposer,
     PhysicalSchemaService,
 )
-from apps.chatbi.services.research.policy import ResearchPolicy
 from apps.chatbi.services.understanding import SemanticParseService
 from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
@@ -95,9 +87,6 @@ from apps.tool.tools.semantic import (
 )
 from apps.trace import AgentTraceRecorder
 from common.observability import build_metrics_recorder
-
-if TYPE_CHECKING:
-    from apps.chatbi.services.research.shadow import ShadowRunner
 
 
 def build_agent_tool_registry(
@@ -330,161 +319,17 @@ def build_run_orchestrator(
             )
         ),
         plan_pipeline=resolved_plan_pipeline,
-        research_pipeline=ResearchPipeline(
-            ResearchPipelineDependencies(
-                policy=ResearchPolicy(
-                    model_service,
-                    DefaultResearchPolicyPromptBuilder(),
-                ),
-                plan_pipeline=resolved_plan_pipeline,
-                lifecycle=lifecycle,
-                session=session,
-            )
-        ),
-        shadow_runner=(
-            build_shadow_runner(session, resolved_config)
-            if resolved_config.research_execution_mode == "shadow"
-            else None
-        ),
-        # 阶段 7.5：agent 引擎主路径管道；仅在显式配置 agent 时装配。
-        research_agent_pipeline=(
-            build_research_agent_pipeline(
-                session,
-                resolved_config,
-                lifecycle=lifecycle,
-                event_publisher=resolved_publisher,
-                registry=resolved_registry,
-                query_task_executor=resolved_query_task_executor,
-                artifact_service=resolved_result_artifact_service,
-                recorder=resolved_recorder,
-            )
-            if resolved_config.research_execution_mode == "agent"
-            else None
-        ),
-    )
-
-
-class _ShadowLifecycleStub:
-    """shadow 栈内禁用生命周期交互：双跑要么自主完成要么显式失败。
-
-    AnalysisExecutionService 只在取消和语义澄清挂起时触达生命周期；
-    shadow 使用 NeverCancelled 且不允许挂起等待用户，因此这两个入口
-    理论上不可达。显式报错而不是静默吞掉，避免误写主路径状态。
-    """
-
-    @staticmethod
-    def _refuse(*_args: Any, **_kwargs: Any) -> Any:
-        raise NotImplementedError("RESEARCH_SHADOW_LIFECYCLE_UNAVAILABLE")
-
-    cancel = _refuse
-    suspend = _refuse
-
-
-def build_shadow_runner(
-    session: Any,
-    config: AgentConfig,
-    *,
-    recorder: AgentTraceRecorder | None = None,
-) -> ShadowRunner:
-    """装配生产 shadow 双跑栈（阶段 7 §11.3.1）。
-
-    模型客户端、提示词等无会话服务在此创建一次；数据库会话、事件发布、
-    Trace 和查询服务在每次双跑时针对 shadow 会话重建——SQLAlchemy 会话
-    不能跨线程共享，且所有影子副作用必须落在 shadow run 身份下。
-    """
-
-    from apps.chatbi.orchestration.agent.model_client import DefaultAgentModelClient
-    from apps.chatbi.orchestration.pipeline.research_agent import ResearchAgentHarness
-    from apps.chatbi.services.execution.analysis_execution import (
-        AnalysisExecutionDependencies,
-        AnalysisExecutionService,
-    )
-    from apps.chatbi.services.research.semantic_runtime import SemanticQueryRuntime
-    from apps.chatbi.services.research.shadow import (
-        ResearchExecutionState,
-        ShadowRunner,
-    )
-
-    resolved_recorder = recorder or build_agent_trace_recorder()
-
-    def session_factory() -> Any:
-        bind = session.get_bind()
-        worker_engine = getattr(bind, "engine", bind)
-        return Session(worker_engine)
-
-    def harness_factory(
-        shadow_session: Any,
-        run_row: Any,
-        record: Any,
-        _requirement: Any,
-        *,
-        context_state_overlay: dict[str, Any] | None = None,
-    ) -> ResearchAgentHarness:
-        publisher = EventPublisher(shadow_session)
-        query_service = build_query_service(
-            shadow_session,
-            default_limit=config.default_limit,
-            sample_rows=config.sample_rows,
-            max_transient_retries=config.query_transient_retries,
-        )
-        semantic_query_service = build_semantic_sql_compilation_service(shadow_session)
-        artifact_service = build_result_artifact_service(shadow_session)
-        # 执行服务只需要计划侧的证明与编译工具；研究四工具由 Harness 自建。
-        registry = ToolRegistry(middlewares=default_middlewares())
-        registry.register(ValidateSqlTool(query_service))
-        registry.register(CompileSemanticSqlTool(semantic_query_service, query_service))
-        bind = shadow_session.get_bind()
-        worker_engine = getattr(bind, "engine", bind)
-        query_task_executor = QueryTaskExecutor(
-            lambda: Session(worker_engine),
-            lambda worker_session: build_query_service(
-                worker_session,
-                default_limit=config.default_limit,
-                sample_rows=config.sample_rows,
-                max_transient_retries=config.query_transient_retries,
-            ),
-        )
-        execution_service = AnalysisExecutionService(
-            AnalysisExecutionDependencies(
-                registry=registry,
-                result_processor=ChatBIToolResultProcessor(),
-                # shadow 栈内生命周期交互显式不可用（见 _ShadowLifecycleStub）。
-                lifecycle=cast("AgentLifecycle", _ShadowLifecycleStub()),
-                event_publisher=publisher,
-                session=shadow_session,
-                query_task_executor=query_task_executor,
-                max_query_tasks=config.plan_max_query_tasks,
-                query_concurrency=config.plan_query_concurrency,
-                query_timeout_seconds=config.tool_timeout_seconds,
-                compute_engine=ComputeEngine(),
-                compute_enabled=config.compute_enabled,
-                trace_recorder=resolved_recorder,
-            )
-        )
-        semantic_runtime = SemanticQueryRuntime(
-            execution_service,
-            execution_state_factory=lambda ctx: ResearchExecutionState(
-                ctx=ctx, run=run_row, record=record
-            ),
-        )
-        return ResearchAgentHarness(
-            session=shadow_session,
-            config=config,
-            run_row=run_row,
-            record=record,
-            model_client=DefaultAgentModelClient(),
-            semantic_runtime=semantic_runtime,
-            compute_engine=ComputeEngine(),
-            result_store=ResultStore(artifact_service),
+        # 阶段 8：agent 是唯一 Research 引擎，无条件装配。
+        research_agent_pipeline=build_research_agent_pipeline(
+            session,
+            resolved_config,
+            lifecycle=lifecycle,
+            event_publisher=resolved_publisher,
+            registry=resolved_registry,
+            query_task_executor=resolved_query_task_executor,
+            artifact_service=resolved_result_artifact_service,
             recorder=resolved_recorder,
-            # shadow 与主路径同口径的边界输入：盖戳后的 semantic_scope 等
-            # （run 1306 教训：缺 overlay 时每条查询都死在 SEMANTIC_SCOPE_REQUIRED）。
-            context_state_overlay=context_state_overlay,
-        )
-
-    return ShadowRunner(
-        session_factory=session_factory,
-        harness_factory=harness_factory,
+        ),
     )
 
 
@@ -512,8 +357,10 @@ def build_research_agent_pipeline(
         AnalysisExecutionDependencies,
         AnalysisExecutionService,
     )
-    from apps.chatbi.services.research.semantic_runtime import SemanticQueryRuntime
-    from apps.chatbi.services.research.shadow import ResearchExecutionState
+    from apps.chatbi.services.research.semantic_runtime import (
+        ResearchExecutionState,
+        SemanticQueryRuntime,
+    )
 
     resolved_recorder = recorder or build_agent_trace_recorder()
     execution_service = AnalysisExecutionService(
@@ -554,6 +401,5 @@ def build_research_agent_pipeline(
 __all__ = [
     "build_run_orchestrator",
     "build_agent_tool_registry",
-    "build_shadow_runner",
     "build_research_agent_pipeline",
 ]

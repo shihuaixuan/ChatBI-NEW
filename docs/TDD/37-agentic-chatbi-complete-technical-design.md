@@ -2481,6 +2481,14 @@ P1 完成后，Plan 至少覆盖多时间范围、同比、环比、差值、增
 
 # 9. Research 模式
 
+> **⛔ 历史方案折叠（2026-08-23）**：本节描述的 `ResearchAction` 白名单架构
+> （Policy 计划循环、`materialize_research_action`、Action 专用校验等）已随
+> doc38 阶段 8 物理删除（执行记录：doc39 §9）。现行唯一 Research 路径是
+> Function Calling 动态循环的 Research Agent（冻结输入 =
+> `dto/research_agent.ResearchAgentRequirement`，路由期由
+> `services/research/routing_freeze.py` 直接产出新契约）。本节仅作设计演进
+> 存档保留，**不得作为实现依据**。
+
 ## 9.1 目标架构结论
 
 Research 的目标架构不是在现有 `ResearchAction` 白名单上继续增加动作，而是：

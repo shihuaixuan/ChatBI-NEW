@@ -15,14 +15,14 @@ from apps.chatbi.models.dto.execution_requirement import (
     ExecutionRequirement,
     ExecutionRoute,
 )
-from apps.chatbi.models.dto.research import ResearchBudget
+from apps.chatbi.models.dto.research_agent import ResearchBudget
 from apps.chatbi.models.dto.semantic_parse import (
     SemanticParseOutput,
     SemanticParseTimeFilter,
 )
 from apps.chatbi.models.orm.agent_run import AgentExecutionMode
 from apps.chatbi.services.planning.limited_multistep import LimitedMultiStepDecomposer
-from apps.chatbi.services.research import build_research_requirement
+from apps.chatbi.services.research.routing_freeze import freeze_research_requirement
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.temporal import TemporalContext
@@ -95,14 +95,20 @@ class ModeRouter:
             )
         if dynamic_research is not None:
             try:
-                research_requirement = build_research_requirement(
+                research_requirement = freeze_research_requirement(
                     semantic_parse=semantic_parse,
                     schema=schema,
                     temporal_context=request.temporal_context,
                     budget=request.research_budget,
+                    tenant_scope=f"oid:{int(request.tenant_id)}",
+                    dataset_ref=f"ASSET:dataset:{request.dataset_id or 0}",
                 )
             except ResearchRequirementError as exc:
                 raise ModeRoutingError(exc.code) from exc
+            except ValueError as exc:
+                # 新契约字段校验失败（如无时间过滤的问题无法满足时间绑定），
+                # 与旧路径投影失败同口径显式暴露。
+                raise ModeRoutingError(f"RESEARCH_REQUIREMENT_INVALID:{exc}") from exc
             research_refs = {
                 *research_requirement.target_metric_refs,
                 *research_requirement.scope.dimension_refs,
@@ -176,7 +182,7 @@ class ModeRouter:
                     # 执行资产保留在服务端快照中，Research Policy 只读取清理后的逻辑目录。
                     "research_assets": research_assets,
                 },
-                research_requirement=research_requirement,
+                research_requirement=research_requirement.model_dump(mode="json"),
             ).model_dump(mode="json")
 
         execution = self._build_execution_requirements(request, schema, candidates)

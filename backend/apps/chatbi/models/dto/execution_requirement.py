@@ -8,7 +8,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from apps.chatbi.models.dto.analysis_plan import QueryTaskSpec
-from apps.chatbi.models.dto.research import ResearchRequirement
 
 
 class ExecutionRoute(BaseModel):
@@ -17,7 +16,6 @@ class ExecutionRoute(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     mode: Literal["fast", "plan", "research"]
-    origin: Literal["request", "research_action"] = "request"
     reasons: tuple[str, ...] = ()
 
 
@@ -340,7 +338,10 @@ class ExecutionRequirement(BaseModel):
     post_calculations: tuple[CalculationRequirement, ...] = ()
     result_contract: ExecutionResultContract | None = None
     decomposition: ExecutionDecompositionAudit | None = None
-    research_requirement: ResearchRequirement | None = None
+    # research 模式冻结的新契约 Requirement 载荷（dto/research_agent 的
+    # ResearchAgentRequirement model_dump）。宽松 dict：契约演进不回流到
+    # 执行需求 DTO；非 research 模式必须为空。
+    research_requirement: dict[str, Any] | None = None
     runtime: dict[str, Any] = Field(default_factory=dict)
     asset_snapshot: dict[str, Any] = Field(default_factory=dict)
     unresolved: tuple[dict[str, Any], ...] = ()
@@ -410,11 +411,7 @@ class ExecutionRequirement(BaseModel):
             if declared != leaves:
                 raise ValueError("EXECUTION_REQUIREMENT_RESULT_LEAVES_MISMATCH")
         if self.route.mode == "plan":
-            if (
-                len(self.query_requirements) == 1
-                and not self.post_calculations
-                and self.route.origin != "research_action"
-            ):
+            if len(self.query_requirements) == 1 and not self.post_calculations:
                 raise ValueError("EXECUTION_REQUIREMENT_PLAN_SHAPE_INVALID")
             if (
                 len(self.query_requirements) > 1

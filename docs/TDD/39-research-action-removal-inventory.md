@@ -1,9 +1,10 @@
 # 39. 旧 ResearchAction 删除清单与引用扫描报告
 
-> doc38 阶段 8（§12）的准备产物。状态：**准备完成（2026-08-23）；删除执行被 §12.2
-> 前置条件第 1–3 项阻断**——它们指向同一事实：默认引擎尚未切为 `agent`，
-> Shadow/小流量门槛尚未通过，回滚观察期尚未开始。本文让删除日在前置条件满足后
-> 变成一次纯机械执行。
+> doc38 阶段 8（§12）的准备产物与执行记录。状态：**删除已执行完成（2026-08-23，
+> 执行记录见 §9）**。§12.2 前置条件第 2–3 项（Shadow/小流量门槛、回滚观察期）
+> 经运营拍板强制豁免（用户决策"将开关改为agent吧，并进行阶段8"），第 1 项随
+> 切流同步完成；其余条件在执行日逐条核销。本文 §1–§8 保留执行日勘察原文，
+> 实际执行与原计划的偏离点全部记录在 §9。
 
 ## 1. §12.2 前置条件审计
 
@@ -17,8 +18,9 @@
 | 6 | 新评测集覆盖旧阶段 2、3 业务不变量 | ⚠️ 映射已建立，执行日终审 | 不变量级覆盖由新测试套承接（§6 映射表）；场景级评测集 11 例聚焦归因业务场景。删除日按映射表逐条勾验"孤儿不变量=0"后再动手 |
 | 7 | 直接 SQL 尚未与旧 Action 清理耦合 | ✅ 满足 | 阶段 9（受限 SQL）独立成章且未动工 |
 
-结论：**现在不能删**。前置条件 1–3 本质是同一件事（还没切流）。本文以下内容使
-删除动作在前置条件满足当天即可执行完毕。
+结论（勘察日）：**当时不能删**。执行日（2026-08-23）实际裁决与核销见 §9：
+条件 1 随运营拍板同步完成；条件 2–3 经运营拍板强制豁免；条件 4 以 RUNNING
+处置记录核销（runs 1258–1261）；条件 6 按映射表逐条勾验后动手。
 
 ## 2. 引用扫描总览
 
@@ -199,3 +201,116 @@ done
 ```
 
 删除完成的判定：上述命令对全部符号输出为空（docstring 措辞除外，执行日一并清理）。
+
+## 9. 执行记录（2026-08-23）
+
+按 §7 八步顺序执行完毕。前置裁决：**运营拍板**（用户决策"将开关改为agent吧，
+并进行阶段8"）——§12.2 条件 2（质量门槛数据不足）与条件 3（观察期未起算）
+经运营明确强制豁免，风险自担；条件 1（默认引擎切 `agent`）随本次一并落地。
+
+### 9.1 步骤 1：RUNNING legacy 残留处置（§6 runbook）
+
+全库扫描 `execution_mode='research'` 且非终态的行，命中 4 条：
+**runs 1258、1259、1260、1261**——均为冒烟期孤儿行（`research_state` 为空，
+探针中断于路由/准备阶段，无可恢复会话）。处置方式：统一置 `status='failed'`，
+`error` 字段落标记 `LEGACY_REMOVAL_DISPOSED: 冒烟期孤儿行（research_state 为空，
+探针中断于路由/准备阶段）；doc39 §6 runbook 删除前处置，无运行时适配器`。
+处置后复扫非终态 research 行为 0。约 46 条 `react_legacy` 的 `waiting_user` 行
+经甄别为通用聊天残留、非 research 管道产物，未触碰。删除后历史 RUNNING 行
+只能查看不能续跑（旧恢复入口已随旧 pipeline 删除）；旧形状冻结载荷若被新路径
+误续跑，将 fail-loud 为 `RESEARCH_AGENT_REQUIREMENT_INVALID`（§12.3.5 预期行为）。
+
+### 9.2 步骤 2：shadow 退役——对 §4 建议方案的裁决偏离
+
+**已删除**：`shadow.py`、`rollout.py`、orchestrator `_maybe_spawn_shadow` 生成
+分支、`research_shadow_*` 三个配置字段（采样率/租户白名单/数据集白名单）、
+`test_research_shadow.py`。
+
+**偏离 §4 点 2–3 之处：`comparison.py`、`gates.py`、`readiness.py` 保留**，
+理由：三者是纯字典消费的评测岛（互相依赖 + stdlib，无旧 DTO 依赖），其输入是
+**历史落库行的 derived_state 形状**而非旧架构运行时——删除 shadow.py 不影响
+它们读取历史双跑行（标记键 `"shadow"` 内联为常量，附注释）。保留它们使
+§11.3 的评测/门禁/就绪口径继续可用于历史样本复评与 agent 持续质量监控
+（即 §4 点 3 的去向，无需迁移代码，原文件即承载）。`gates.py` 单侧可判定项
+（无来源引用、引用通过率、跨 Run 引用、fallback/proof-failed 错误码扫描）
+原样可用。
+
+### 9.3 步骤 3–5：物理删除清单（实际执行）
+
+- 编排层：`orchestration/pipeline/research.py`（旧 ResearchPipeline）、
+  composition 旧装配、orchestrator `research_pipeline` 构造参数与三分支 dispatch
+  （收敛为 `_dispatch_research` 单一 agent 分支，未装配即
+  `RESEARCH_AGENT_PIPELINE_NOT_ASSEMBLED`）、mode_router 旧冻结调用；
+- 服务层九文件 + `requirements.py` + `report.py` + `shadow.py` + `rollout.py`
+  （共 12 文件，比 §3.2 清单多出 `requirements.py`/`report.py`/`shadow.py`/
+  `rollout.py`，均在 §3/§4 有预案）+ `adapters/prompts/research_policy.py`；
+- DTO：`models/dto/research.py` 整文件 + `dto/__init__.py` 24 个导出名 +
+  `ExecutionRoute.origin` 字段（路由决策只剩 `mode`+`reasons`）；
+- 配置三处：`AgentConfig.max_actions_per_iteration`、
+  `Settings.CHAT_AGENT_RESEARCH_MAX_ACTIONS_PER_ITERATION`、service.py 映射行；
+  `CHATBI_RESEARCH_EXECUTION_MODE` Literal 收敛为 `agent` 单值（配置项保留作
+  显式声明位）。
+
+### 9.4 融合期生产修复：路由冻结直接产出新契约（含两处口径说明）
+
+旧链路是"路由冻结旧 Requirement → shadow 投影新契约"；阶段 8 融合为
+`services/research/routing_freeze.py` 直接产出新契约
+`ResearchAgentRequirement`。两处口径说明：
+
+1. **scope_fingerprint 载荷变更**：新冻结的指纹输入集合与旧
+   `requirements.py` 不同（新增 `required_dimension_refs`/
+   `required_driver_metric_refs`/`required_hierarchy_ids`/
+   `required_contribution_dimension_refs`/`time_bindings_by_model` 参与指纹，
+   且 Scope 身份三要素 tenant/dataset/指纹本身不入指纹）。因此**跨越执行日的
+   历史 run 与新 run 的 scope_fingerprint 值不可直接互比**；评测/门禁按行内
+   自洽消费（同行的 Scope 与 version_snapshot 由同一次冻结产出），不受影响。
+2. **时间维度 Scope 并集（真实缺陷修复）**：新契约校验要求每个
+   time_binding.dimension_ref ∈ scope.dimension_refs
+   （`RESEARCH_AGENT_TIME_DIMENSION_OUT_OF_SCOPE`），而旧冻结把默认时间维度
+   单独挂 `time_bindings` 不列 Scope。融合版在 `routing_freeze.py` 中复刻原
+   shadow 投影器的确定性并集（time_bindings 及 time_bindings_by_model 的维度
+   ref 并入 scope.dimension_refs，去重保序，不重触发 `_MAX_SCOPE_DIMENSIONS`
+   截断）。该修复被 `test_mode_router.py` 研究用例首次真实触发并验证。
+
+### 9.5 步骤 6：脚本与守卫
+
+- `check_research_action_freeze.py` + 冻结清单 JSON：删除（冻结协议随被冻结物
+  消亡）；评测测试中的 freeze 断言改指依赖守卫；
+- `check_research_agent_dependencies.py`：改写为**反向守卫**——
+  `DELETED_MODULE_PREFIXES`（14 模块）全仓 import 断言 + `FORBIDDEN_NAMES`
+  （旧符号）在新契约模块禁现；执行日补录 `services.research.requirements`；
+- `run_plan_stage4_question_cases.py`：research 分支改为"路由边界 + 冻结
+  Requirement 载荷存在"验证（真实问题级 Research 冒烟由
+  `run_research_agent_eval.py` 承载）；
+- `run_research_agent_eval.py` / `evaluate_research_rollout.py` /
+  `compare_research_agent_eval.py`：零改动通过（评测岛字典消费不受删除影响）。
+
+### 9.6 步骤 7：全量回归与 §12.5 验收勾验
+
+| §12.5 条目 | 结果 | 证据 |
+| --- | --- | --- |
+| 1. 全仓无旧 Action 类型引用 | ✅ | §8 命令全空（残留仅 docstring 历史措辞与守卫/边界测试的删除清单本身）；AST 级反向守卫 `--check` 通过 |
+| 2. 无 `origin="research_action"` | ✅ | grep 为空；`ExecutionRoute` 已无 `origin` 字段（字段集 == `{mode, reasons}`） |
+| 3. 旧 Policy/物化器文件删除 | ✅ | 12 服务文件 + 旧 pipeline + prompts 构造器物理不存在（`test_deleted_modules_are_gone` 14 模块 import 必败） |
+| 4. Fast/Plan/Research 回归 | ✅（含既有失败甄别） | `tests/chatbi` 754 passed / 1 skipped；`run_plan_stage4_question_cases.py`：fast_rule_boundary ✅、dynamic_research_boundary ✅（新冻结链路真实库验证） |
+| 5. 历史 Run 仍可查看 | ✅ | 历史 derived_state/Trace 按 JSON 直出，无旧 DTO 反序列化点；评测岛对历史行形状的字典消费有 32+ 项测试；runs 1258–1261 处置行可查看（error 字段直出） |
+| 6. 无隐藏 fallback，agent 唯一 Research 路径 | ✅ | `_dispatch_research` 无 legacy/shadow 分支目标（构造参数已删）；未装配即显式失败；守卫禁止旧符号回流 |
+
+回归中的失败甄别（全部经 stash 对照 clean HEAD 证实为**既有失败，非阶段 8
+回归**）：
+
+- `tests/chatbi/test_graph_api.py` 16 例：`SEMANTIC_DATASET_MODEL_CONFIG_MISSING`
+  （语义层夹具缺 `SemanticDatasetModelConfig` 行，HEAD 同败）；
+- `tests/agent` 29 例 + `tests/architecture` 2 例：`build_run_orchestrator`
+  签名漂移等历史欠账（HEAD 同败，数量逐一相等）；
+- stage4 脚本 plan 用例 `limited_difference_top3_other`/
+  `limited_growth_rate_top3_other`（`TIME_SEMANTICS_INCOMPATIBLE`）与
+  `fixed_attribution_rule_boundary`（`STAGE4_SEMANTIC_MULTI_STEP_MISMATCH`）：
+  HEAD 同败，属语义层补课后的用例漂移，与删除无关。
+
+### 9.7 步骤 8 与文档
+
+- doc37 折叠标注、doc38 §12.6 标记完成日期与豁免记录：随本次提交完成；
+- 运行手册/错误码/Trace 说明：错误码治理见 `errors.py`（旧
+  `RESEARCH_MODE_NOT_READY`/投影三态随架构收敛，新路径错误码全集以
+  `ResearchPipelineError` + `errors.py` 为准）。

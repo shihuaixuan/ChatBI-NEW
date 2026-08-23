@@ -161,17 +161,9 @@ class Settings(BaseSettings):
     CHAT_AGENT_CONTEXT_FOLD_CHARS: int = 30000
     # P1 验收默认启用确定性 FAST/PLAN；旧链路仍可通过环境变量显式恢复。
     CHAT_AGENT_EXECUTION_MODES: str = "fast,plan"
-    # Research 重构阶段 1只定义迁移配置，默认继续使用旧 Research。
-    # shadow 在阶段 7 起可用：用户可见路径仍是 legacy，仅按下列白名单和
-    # 采样比例附带后台双跑。agent 在阶段 7.5 起可用：配置即全量切流，
-    # 主路径由新契约 ResearchAgentPipeline 执行，不参与采样；
-    # 回滚即把本值改回 legacy。
-    CHATBI_RESEARCH_EXECUTION_MODE: Literal["legacy", "shadow", "agent"] = "legacy"
-    # 阶段 7 切流配置：确定性采样（sha256(run_key) 分桶）与白名单，
-    # 全部为 0/空时 shadow 配置等价于 legacy。
-    CHATBI_RESEARCH_SHADOW_SAMPLE_RATE: float = 0.0
-    CHATBI_RESEARCH_SHADOW_DATASET_ALLOWLIST: str = ""
-    CHATBI_RESEARCH_SHADOW_TENANT_ALLOWLIST: str = ""
+    # 阶段 8：旧 ResearchAction 架构已删除，agent 是唯一 Research 引擎；
+    # 原三态开关（CHATBI_RESEARCH_EXECUTION_MODE）与 shadow 采样/白名单
+    # 配置随之移除。历史环境变量残留会被 pydantic-settings 静默忽略。
     # 质量切流门槛（§11.3.4）的评测配置 JSON 路径；空表示未配置，
     # 未配置时切流判定一律阻断，不得在没有基线数据时发明阈值。
     CHATBI_RESEARCH_EVAL_CONFIG: str = ""
@@ -179,7 +171,6 @@ class Settings(BaseSettings):
     CHAT_AGENT_RESEARCH_MAX_ITERATIONS: int = 6
     CHAT_AGENT_RESEARCH_MAX_QUERIES: int = 8
     CHAT_AGENT_RESEARCH_MAX_MODEL_CALLS: int = 8
-    CHAT_AGENT_RESEARCH_MAX_ACTIONS_PER_ITERATION: int = 3
     CHAT_AGENT_RESEARCH_MAX_DURATION_SECONDS: int = 300
     CHATBI_PLAN_MAX_QUERY_TASKS: int = 5
     CHATBI_PLAN_QUERY_CONCURRENCY: int = 4
