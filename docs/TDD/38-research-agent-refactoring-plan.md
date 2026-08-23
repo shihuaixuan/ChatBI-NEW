@@ -1865,6 +1865,73 @@ backend/apps/chatbi/services/research/completion.py
 5. 预算耗尽和部分失败有明确报告；
 6. 完成度不依赖旧 Action 类型。
 
+## 10.7 实施状态（2026-08-23）
+
+### 落地文件
+
+| 文件 | 内容 |
+| --- | --- |
+| `apps/chatbi/models/dto/research_agent.py` | `ResearchReportFinding` 契约（statement/evidence_ids/confidence/statement_kind/limitations）；`ResearchFinishRequest.findings` + finding 引用闭合校验（`RESEARCH_AGENT_FINISH_FINDING_CITATION_MISSING`） |
+| `apps/chatbi/services/research/completion.py` | Completion Evaluator：`evaluate_completion` 按 premise 处理、claim_support/counter_evidence/reconciliation/维度覆盖口径推导结构化 gaps，不决定下一个工具 |
+| `apps/chatbi/services/research/hypothesis_evaluator.py` | Hypothesis Evaluator：`evaluate_hypothesis_assessments`（证据归属、invalid 保留权、截断/零行降级）+ `apply_deterministic_status`（服务端优先）+ `HypothesisAuditRecord` 审计 |
+| `apps/chatbi/services/research/report_validator.py` | Report Validator：`validate_report_conclusions` 七类硬门禁（引用归属、无来源数字、弱证据高置信、对账要求、截断绝对表述、因果措辞、EXPLORATORY 披露、方向矛盾） |
+| `apps/chatbi/services/research/report_draft.py` | `build_partial_report` / `build_final_report` / `failed_query_facts`；confirmed/unconfirmed/failed_queries/not_executed/recommendation 受控投影 |
+| `apps/chatbi/orchestration/agent/tools/research.py` | `finish_research` 接入三重门禁（充分结论完成度、假设裁决、报告硬校验）；审计与报告输入暂存 ctx |
+| `apps/chatbi/services/research/tool_context.py` | `set_hypothesis_audit`/`hypothesis_audit`、`set_report_inputs`/`report_inputs` 状态访问器 |
+| `apps/chatbi/orchestration/pipeline/research_agent.py` | `_requirements_satisfied` 统一走评估器；success/server_stop/cancelled/premise 四条 finalize 路径写入 `report_draft`/`final_report` |
+| `apps/chatbi/services/research/run_lifecycle.py` | `cancel_research_run` 新增 `report_draft` 参数 |
+| `scripts/check_research_agent_dependencies.py` | 四个新模块纳入依赖守卫 |
+
+### 关键设计决策
+
+1. **校验失败整体拒绝**：报告硬门禁任何违规都让 `finish_research` 整体失败（INVALID_REQUEST，parameter_retryable=False），不存在"删掉引用后继续输出原结论"的路径。
+2. **充分结论门禁**：仅 `reason=sufficient_evidence` 要求 `evaluate_completion(...).satisfied`；其余结束原因不做完成度拦截，保证预算耗尽等受限退出始终可达。
+3. **premise 类需求单独口径**：`premise_confirmation` 需求由 `premise_result` 统一判断，不按证据数量计；收口提醒额外要求台账非空，宽限期锚定真实进展而非空台账上的形式满足。
+4. **确定性对账优先**：`apply_deterministic_status` 由服务端覆盖模型判断并合并证据；模型提交 `invalid` 直接整体拒绝——invalid 只能由服务端治理校验产生。
+5. **截断/零行强制降级**：SUPPORTED/WEAKENED 引用被截断或无样本行的证据时降级 INCONCLUSIVE，审计记录保留 requested→final、downgraded、reason；INCONCLUSIVE 引用的证据封顶高置信结论。
+6. **数字溯源口径**：结论语句中的数字按 Decimal 规范化后必须出现在所引证据的 sample_rows 中；方向矛盾检测仅在 current/previous 映射列或 difference 列符号可判定时触发，避免误伤不可判定投影。
+7. **报告走既有快照字段**：草案以 JSON 字符串写入 `snapshot.report_draft`/`final_report`，快照层零改动；取消路径经 `cancel_research_run(report_draft=...)` 补齐受限报告。
+8. **相关性与因果显式分离**：finding 用 `statement_kind` 声明；correlational 表述命中因果措辞即拒，causal/contribution 结论必须引用带 reconciliation/contribution 关系依赖的证据。
+
+### 验收记录（§10.4 十二场景）
+
+| 场景 | 测试 |
+| --- | --- |
+| 无 Evidence 的 SUPPORTED | `test_supported_without_evidence_is_rejected` |
+| 引用其他 Run | `test_citation_of_unknown_or_cross_run_evidence_is_rejected` |
+| 报告新增数字 | `test_unsourced_number_in_finding_is_rejected` |
+| 对账失败仍输出主要贡献 | `test_contribution_conclusion_requires_reconciliation_backing` |
+| 截断数据输出绝对结论 | `test_absolute_wording_on_truncated_data_is_rejected` |
+| 相关性写成因果 | `test_correlational_statement_with_causal_wording_is_rejected` |
+| EXPLORATORY 未披露 | `test_exploratory_evidence_must_be_disclosed` |
+| 预算耗尽部分报告 | `test_budget_exhaustion_writes_partial_report_into_snapshot` |
+| premise 不成立报告 | `test_premise_not_supported_writes_final_report_into_snapshot` |
+| 多个相互矛盾 Evidence | `test_conflicting_directions_block_high_confidence_and_causal` |
+| Requirements 已满足但模型继续查询 | `test_requirements_satisfied_but_model_keeps_querying_gets_forced_stop` |
+| 模型 finish 过早 | `test_premature_finish_is_rejected_then_model_recovers` |
+
+另有完成度评估器单元测试 4 项（premise gap、claim_support 口径、reconciliation 关系、counter_evidence 口径）、假设降级/invalid/确定性覆盖单元测试 3 项、弱证据封顶与 finish 闭合契约测试、部分报告构建器单元测试，合计 `tests/chatbi/test_research_report_quality.py` 22 项全部通过。
+
+§10.6 验收对照：
+
+1. Finding 有效证据：DTO 引用闭合、假设裁决证据归属、报告校验三层执行（对应验收 1）；
+2. 100% 硬门禁：违规整体拒绝 finish，无绕过路径（对应验收 2）；
+3. 状态变化可审计：`hypothesis_audit` 状态键随 research_state 持久化，含 requested/final/downgraded/reason（对应验收 3）；
+4. 证据强度传导：对账关系要求 + 截断降级 + EXPLORATORY 披露 + 弱证据封顶（对应验收 4）；
+5. 受限报告：partial report 列出 confirmed/unconfirmed/failed_queries/not_executed/recommendation，取消与预算路径均落盘（对应验收 5）；
+6. 不依赖旧 Action：`evaluate_completion` 只读冻结 Requirement 与证据台账；`check_research_agent_dependencies.py --check` 通过（对应验收 6）。
+
+### 回归
+
+新增 `tests/chatbi/test_research_report_quality.py` 22 项全部通过；原四个研究套件（contracts/tools/state_recovery/harness）78 项保持通过；`tests/chatbi` 全量 721 通过（16 个 `test_graph_api` 环境性预存失败与阶段 5 基线完全一致）；`tests/agent` 117 通过（31 个预存失败不变）；ruff、mypy（8 个触碰文件）、依赖守卫全部干净。本阶段改动未接通任何生产入口，新路径仅在测试运行。
+
+### 遗留与移交阶段 7
+
+- 旧 `hypotheses.py` 仍承载 legacy 路径状态机，按计划随阶段 8 删除；本阶段只移植了服务端优先语义，不做双写。
+- `hypothesis_audit` 目前存于 research_state 并随快照持久化，尚未投影到 Event/Trace 时间线；阶段 7 双跑比较需要时再接入观测层。
+- 结论级评测判分器不在本阶段范围，属阶段 7 Shadow 双跑比较器的工作项。
+- 数字溯源依赖证据 sample_rows 投影；后续若引入更激进的行裁剪策略，需同步复核溯源口径。
+
 # 11. 阶段 7：Shadow 双跑、评测和切流
 
 ## 11.1 这个阶段是干什么的
@@ -2391,7 +2458,7 @@ Research 核心重构完成需要满足：
 | 3 Research 通用工具 | 已完成 | 2026-08-22 | 见 7.7；20 项工具验收测试通过，Registry 恰含四个无 SQL 工具 |
 | 4 状态、证据依赖和恢复 | 已完成 | 2026-08-23 | 见 8.8；16 项状态/恢复测试通过，提交边界 + 恢复 + 取消落地，无新表 |
 | 5 Research Agent Harness | 已完成 | 2026-08-23 | 见 9.7；17 项 Harness 测试通过，动态循环 + 前提确认 + 提交边界/恢复/取消接线落地，新路径仅在测试运行 |
-| 6 假设、完成度和报告 | 待开始 | - | - |
+| 6 假设、完成度和报告 | 已完成 | 2026-08-23 | 见 10.7；22 项结论可信层测试通过，finish 三重门禁（完成度/假设裁决/报告硬校验）+ 部分/最终报告落地，新路径仅在测试运行 |
 | 7 Shadow 双跑、评测和切流 | 待开始 | - | - |
 | 8 删除旧 ResearchAction | 待开始 | - | - |
 | 9 受限 SQL 和资产回流 | 待开始 | - | - |

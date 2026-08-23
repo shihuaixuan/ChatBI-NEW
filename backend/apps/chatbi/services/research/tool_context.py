@@ -30,6 +30,7 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchHypothesisAssessment,
     ToolObservation,
 )
+from apps.chatbi.services.research.hypothesis_evaluator import HypothesisAuditRecord
 from apps.chatbi.services.research.state_snapshot import validate_evidence_dag
 
 if TYPE_CHECKING:
@@ -292,6 +293,37 @@ class ResearchToolContext:
         return tuple(
             ResearchHypothesisAssessment.model_validate(item) for item in raw_items
         )
+
+    def set_hypothesis_audit(
+        self, records: Sequence[HypothesisAuditRecord]
+    ) -> None:
+        """保存服务端假设裁决审计（请求值 → 最终值），供快照与报告使用。"""
+
+        self._state()["hypothesis_audit"] = [
+            {
+                "hypothesis_id": record.hypothesis_id,
+                "requested": record.requested,
+                "final": record.final,
+                "downgraded": record.downgraded,
+                "reason": record.reason,
+            }
+            for record in records
+        ]
+
+    def hypothesis_audit(self) -> tuple[HypothesisAuditRecord, ...]:
+        raw_items = self._state().get("hypothesis_audit")
+        if not isinstance(raw_items, list):
+            return ()
+        return tuple(HypothesisAuditRecord(**item) for item in raw_items)
+
+    def set_report_inputs(self, payload: dict[str, Any]) -> None:
+        """暂存已通过校验的 finish 报告输入，供最终报告构建复用。"""
+
+        self._state()["report_inputs"] = payload
+
+    def report_inputs(self) -> dict[str, Any] | None:
+        raw = self._state().get("report_inputs")
+        return raw if isinstance(raw, dict) else None
 
     # ------------------------------------------------------------------ #
     # ResultStore 引用

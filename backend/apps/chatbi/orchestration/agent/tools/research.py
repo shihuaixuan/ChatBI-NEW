@@ -49,6 +49,7 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchOrder,
     ResearchOrderDirection,
     ResearchQueryComparison,
+    ResearchReportFinding,
     ResearchResultRef,
     ResearchSemanticQuery,
     ResearchTimeRole,
@@ -61,6 +62,14 @@ from apps.chatbi.models.dto.research_agent import (
 from apps.chatbi.services.computation.errors import (
     ComputeEngineError,
     ComputeOperationError,
+)
+from apps.chatbi.services.research.completion import evaluate_completion
+from apps.chatbi.services.research.hypothesis_evaluator import (
+    HypothesisEvaluationError,
+    evaluate_hypothesis_assessments,
+)
+from apps.chatbi.services.research.report_validator import (
+    validate_report_conclusions,
 )
 from apps.chatbi.services.research.semantic_runtime import semantic_query_plan_id
 from apps.chatbi.services.research.tool_context import ResearchToolContext
@@ -152,6 +161,7 @@ class FinishResearchArgs(_ToolArgsModel):
     reason: ResearchCompletionReason
     summary: str = Field(min_length=1, max_length=4000)
     claims: tuple[ResearchClaim, ...] = ()
+    findings: tuple[ResearchReportFinding, ...] = ()
     evidence_ids: tuple[str, ...] = ()
     hypothesis_assessments: tuple[ResearchHypothesisAssessment, ...] = ()
     limitations: tuple[str, ...] = ()
@@ -1528,6 +1538,7 @@ class FinishResearchTool(
                 reason=args.reason,
                 summary=args.summary,
                 claims=args.claims,
+                findings=args.findings,
                 evidence_ids=args.evidence_ids,
                 hypothesis_assessments=args.hypothesis_assessments,
                 limitations=args.limitations,
@@ -1536,6 +1547,7 @@ class FinishResearchTool(
         except ValidationError as exc:
             raise _reject_invalid_args(ctx, self.name, exc) from exc
         status = _COMPLETION_STATUS[request.reason]
+        evidences = ctx.evidences()
         try:
             completion = ResearchCompletion.model_validate(
                 {
@@ -1548,7 +1560,7 @@ class FinishResearchTool(
                     "limitations": request.limitations,
                 }
             )
-            completion.validate_evidence(ctx.evidences())
+            completion.validate_evidence(evidences)
         except (ValidationError, ValueError) as exc:
             message = str(exc)
             code = (
@@ -1565,7 +1577,82 @@ class FinishResearchTool(
                 message=f"结束请求校验失败：{message.split('Value error, ')[-1]}",
                 details={"reason": request.reason.value, "status": status},
             ) from exc
-        ctx.record_hypothesis_assessments(request.hypothesis_assessments)
+        # §10.3.2：充分结论必须由服务端完成度评估放行；缺口未清零时拒绝。
+        if request.reason is ResearchCompletionReason.SUFFICIENT_EVIDENCE:
+            evaluation = evaluate_completion(
+                ctx.requirement,
+                evidences,
+                premise_result=ctx.premise_result,
+            )
+            if not evaluation.satisfied:
+                raise _fail(
+                    ctx,
+                    self.name,
+                    code=ToolErrorCode.INVALID_REQUEST,
+                    stage=ToolFailureStage.VALIDATION,
+                    parameter_retryable=False,
+                    message="finish 过早：证据需求尚未满足，不能提交充分结论。",
+                    details={
+                        "gaps": list(evaluation.gap_messages()),
+                        "target_metric_coverage": dict(
+                            evaluation.target_metric_coverage
+                        ),
+                    },
+                )
+        # §10.3.1：假设评估经服务端裁决——证据归属、invalid 保留权、降级。
+        try:
+            hypothesis_result = evaluate_hypothesis_assessments(
+                request.hypothesis_assessments, evidences
+            )
+        except HypothesisEvaluationError as exc:
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST
+                if exc.code == "RESEARCH_AGENT_HYPOTHESIS_EVIDENCE_REQUIRED"
+                else ToolErrorCode.EVIDENCE_REFERENCE_INVALID,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message=str(exc),
+                details={"reason_code": exc.code},
+            ) from exc
+        if hypothesis_result.violations:
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=False,
+                message="假设评估被服务端拒绝。",
+                details={"violations": list(hypothesis_result.violations)},
+            )
+        # §10.3.4：报告硬门禁。任何违规都让 finish 整体失败，不允许删掉
+        # 引用后继续输出原结论。
+        violations = validate_report_conclusions(
+            run_id=ctx.run_id,
+            findings=request.findings,
+            claims=request.claims,
+            evidences=evidences,
+            assessments=hypothesis_result.assessments,
+        )
+        if violations:
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=False,
+                message="结论校验失败：存在无法溯源或超出证据强度的表述。",
+                details={"violations": list(violations)},
+            )
+        ctx.record_hypothesis_assessments(hypothesis_result.assessments)
+        ctx.set_hypothesis_audit(hypothesis_result.audit)
+        ctx.set_report_inputs(
+            {
+                "findings": [item.model_dump(mode="json") for item in request.findings],
+                "claims": [item.model_dump(mode="json") for item in request.claims],
+            }
+        )
         ctx.finish(completion)
         return _success(
             ctx,
@@ -1574,7 +1661,11 @@ class FinishResearchTool(
             evidence_ids=tuple(request.evidence_ids),
             statistics={
                 "claims": len(request.claims),
+                "findings": len(request.findings),
                 "hypothesis_assessments": len(request.hypothesis_assessments),
+                "hypothesis_downgrades": sum(
+                    1 for record in hypothesis_result.audit if record.downgraded
+                ),
                 "unanswered_questions": len(request.unanswered_questions),
             },
         )

@@ -1385,6 +1385,26 @@ class ResearchClaim(_ContractModel):
         return self
 
 
+class ResearchReportFinding(_ContractModel):
+    """报告草案中的一条数据结论；数字必须能溯源到引用证据（§10.3.3）。"""
+
+    statement: str = Field(min_length=1, max_length=2000)
+    evidence_ids: tuple[str, ...] = Field(min_length=1)
+    confidence: Literal["high", "medium", "low"] = "medium"
+    # 相关性表述与因果性表述分开声明；服务端校验措辞与强度一致。
+    statement_kind: Literal["causal", "correlational"] = "correlational"
+    limitations: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_finding(self) -> ResearchReportFinding:
+        _unique(self.evidence_ids, "RESEARCH_AGENT_FINDING_EVIDENCE_DUPLICATED")
+        for evidence_id in self.evidence_ids:
+            _id(evidence_id, "RESEARCH_AGENT_FINDING_EVIDENCE_ID_INVALID")
+        if any(not item.strip() for item in self.limitations):
+            raise ValueError("RESEARCH_AGENT_FINDING_LIMITATION_INVALID")
+        return self
+
+
 class ResearchHypothesisAssessment(_ContractModel):
     """finish_research 返回的最小假设评估，不判断结论强度。"""
 
@@ -1412,6 +1432,7 @@ class ResearchFinishRequest(_VersionedContractModel):
     reason: ResearchCompletionReason
     summary: str = Field(min_length=1, max_length=4000)
     claims: tuple[ResearchClaim, ...] = ()
+    findings: tuple[ResearchReportFinding, ...] = ()
     evidence_ids: tuple[str, ...] = ()
     hypothesis_assessments: tuple[ResearchHypothesisAssessment, ...] = ()
     limitations: tuple[str, ...] = ()
@@ -1430,6 +1451,13 @@ class ResearchFinishRequest(_VersionedContractModel):
         }
         if not claim_ids <= set(self.evidence_ids):
             raise ValueError("RESEARCH_AGENT_FINISH_CLAIM_CITATION_MISSING")
+        finding_ids = {
+            evidence_id
+            for finding in self.findings
+            for evidence_id in finding.evidence_ids
+        }
+        if not finding_ids <= set(self.evidence_ids):
+            raise ValueError("RESEARCH_AGENT_FINISH_FINDING_CITATION_MISSING")
         hypothesis_ids = [item.hypothesis_id for item in self.hypothesis_assessments]
         _unique(
             hypothesis_ids,

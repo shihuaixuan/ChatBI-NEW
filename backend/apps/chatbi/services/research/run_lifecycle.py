@@ -548,6 +548,7 @@ def cancel_research_run(
     *,
     reason: str = "用户已请求取消运行",
     stage: str = "user_requested",
+    report_draft: str | None = None,
 ) -> ResearchRunSnapshot:
     """收口研究侧取消事实：未完成调用 INTERRUPTED，证据保留，写入终态。
 
@@ -593,6 +594,7 @@ def cancel_research_run(
         running_tool_call_ids=[],
         agent_run_id=run_db_id,
         premise_result=ctx.premise_result,
+        report_draft=report_draft,
     )
     derived[_SNAPSHOT_KEY] = snapshot.model_dump(mode="json")
     agent_run_repository.update_run(session, run_row, derived_state=derived)

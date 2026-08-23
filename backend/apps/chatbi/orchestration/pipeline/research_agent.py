@@ -48,6 +48,11 @@ from apps.chatbi.services.research.agent_context import (
     evaluate_premise_verdict,
     project_research_working_state,
 )
+from apps.chatbi.services.research.completion import evaluate_completion
+from apps.chatbi.services.research.report_draft import (
+    build_final_report,
+    build_partial_report,
+)
 from apps.chatbi.services.research.run_lifecycle import (
     RESEARCH_STATE_KEY,
     ResearchRecoveryReport,
@@ -70,6 +75,12 @@ logger = logging.getLogger(__name__)
 
 _RESULT_SETS_KEY = "result_sets"
 _MAX_COMPLETION_EVIDENCE_IDS = 20
+
+
+def _report_json(payload: dict[str, Any]) -> str:
+    """报告草案统一以 JSON 字符串进入快照的 report_draft/final_report。"""
+
+    return orjson.dumps(payload).decode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -504,7 +515,10 @@ class ResearchAgentHarness:
             limitations=("premise_not_supported",),
         )
         ctx.finish(completion)
-        snapshot = self._persist_final_state(ctx)
+        snapshot = self._persist_final_state(
+            ctx,
+            final_report=_report_json(self._final_report_payload(ctx, completion)),
+        )
         return ResearchAgentRunOutcome(
             completion=completion,
             stop_reason="premise_not_supported",
@@ -696,24 +710,19 @@ class ResearchAgentHarness:
         return None
 
     def _requirements_satisfied(self, ctx: ResearchToolContext) -> bool:
-        requirement = ctx.requirement
-        evidences = ctx.evidences()
-        for req in requirement.evidence_requirements:
-            required = set(req.required_asset_refs)
-            covered = sum(
-                1
-                for item in evidences
-                if not required
-                or required & (set(item.metric_refs) | set(item.dimension_refs))
-            )
-            if covered < req.minimum_count:
-                return False
-        if (
-            requirement.premise_to_verify is not None
-            and ctx.premise_result is None
-        ):
+        """收口提醒/强制停止的触发条件；口径统一走完成度评估器（§10.3.2）。
+
+        额外要求台账里至少有一条证据：空台账上的“满足”没有研究价值，
+        收口宽限期必须锚定在真实进展之后。
+        """
+
+        if not ctx.evidences():
             return False
-        return True
+        return evaluate_completion(
+            ctx.requirement,
+            ctx.evidences(),
+            premise_result=ctx.premise_result,
+        ).satisfied
 
     def _server_completion(
         self,
@@ -775,6 +784,22 @@ class ResearchAgentHarness:
             limitations=("data_insufficient",),
         )
 
+    def _final_report_payload(
+        self,
+        ctx: ResearchToolContext,
+        completion: ResearchCompletion,
+    ) -> dict[str, Any]:
+        """finish 通过校验后的最终报告；报告输入由 finish 工具暂存。"""
+
+        inputs = ctx.report_inputs() or {}
+        return build_final_report(
+            ctx,
+            completion,
+            findings=tuple(inputs.get("findings") or ()),
+            claims=tuple(inputs.get("claims") or ()),
+            assessments=ctx.hypothesis_assessments(),
+        )
+
     def _finalize_success(
         self,
         ctx: ResearchToolContext,
@@ -783,7 +808,10 @@ class ResearchAgentHarness:
         completion = ctx.completion
         if completion is None:
             raise TypeError("RESEARCH_HARNESS_COMPLETION_MISSING")
-        snapshot = self._persist_final_state(ctx)
+        snapshot = self._persist_final_state(
+            ctx,
+            final_report=_report_json(self._final_report_payload(ctx, completion)),
+        )
         return ResearchAgentRunOutcome(
             completion=completion,
             stop_reason="finished",
@@ -807,7 +835,11 @@ class ResearchAgentHarness:
         )
         if not ctx.finished:
             ctx.finish(completion)
-        snapshot = self._persist_final_state(ctx)
+        partial = build_partial_report(ctx, completion, stop_reason=stop_reason)
+        snapshot = self._persist_final_state(
+            ctx,
+            report_draft=_report_json(partial),
+        )
         return ResearchAgentRunOutcome(
             completion=completion,
             stop_reason=stop_reason,
@@ -822,11 +854,23 @@ class ResearchAgentHarness:
         *,
         stage: str,
     ) -> ResearchAgentRunOutcome:
+        completion = ctx.completion
+        if completion is None:
+            # 仅用于构建部分报告的受限完成态；终态写入仍由取消收口负责。
+            completion = ResearchCompletion(
+                run_id=ctx.run_id,
+                status="cancelled",
+                reason=ResearchCompletionReason.CANCELLED,
+                summary=f"研究在 {stage} 阶段被取消；已确认证据保留在台账中。",
+            )
         snapshot = cancel_research_run(
             self._session,
             self._run_row,
             ctx,
             stage=stage,
+            report_draft=_report_json(
+                build_partial_report(ctx, completion, stop_reason="cancelled")
+            ),
         )
         completion = ctx.completion
         if completion is None:
@@ -841,6 +885,9 @@ class ResearchAgentHarness:
     def _persist_final_state(
         self,
         ctx: ResearchToolContext,
+        *,
+        report_draft: str | None = None,
+        final_report: str | None = None,
     ) -> ResearchRunSnapshot:
         """刷新快照并连同研究状态一次性持久化。"""
 
@@ -859,6 +906,8 @@ class ResearchAgentHarness:
             running_tool_call_ids=[],
             agent_run_id=self._run_row.id,
             premise_result=ctx.premise_result,
+            report_draft=report_draft,
+            final_report=final_report,
         )
         derived["research_run_snapshot"] = snapshot.model_dump(mode="json")
         agent_run_repository.update_run(
