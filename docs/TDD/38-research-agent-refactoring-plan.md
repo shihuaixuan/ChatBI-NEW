@@ -1632,6 +1632,104 @@ load requirement
 7. 新路径未调用旧 Action 和物化器；
 8. 新路径未开放直接 SQL。
 
+## 9.7 实施状态（2026-08-23）
+
+阶段 5 已完成。Function Calling 动态循环取代 ResearchPolicyDecision /
+ResearchAction：`ResearchAgentHarness.run` 在一个方法内可见地实现 §9.3.2 主流程，
+每轮真实 Tool 结果经阶段 4 提交边界持久化后进入下一轮。新路径只在测试中运行
+（§9.2.7），RunOrchestrator 分发与 Shadow 接线保持不动。
+
+### 落地文件
+
+| 文件 | 内容 |
+| --- | --- |
+| `backend/apps/chatbi/orchestration/pipeline/research_agent.py` | `ResearchAgentHarness` + `ResearchAgentRunOutcome`：主循环（取消/预算检查 → 前提 preflight → requirements 提醒 → decide(research) → 批次校验 → 提交边界执行 → 观察回放 → 完成/停止检查）、`_run_premise_preflight`、`_validate_batch` / `_execute_batch` / `_reject_batch`、终态收口与 `resume()` |
+| `backend/apps/chatbi/orchestration/agent/reasoning_profile.py` | `ReasoningProfile` 冻结数据类（`direct_answer_finishes` / `soft_reminder` / `fixed_tool_allowlist` / `working_state_builder` / `working_state_note`）；NORMAL / SOFT / RESEARCH 三个单例，RESEARCH 固定四工具白名单且纯文本不构成完成 |
+| `backend/apps/chatbi/orchestration/agent/reasoning.py` | `decide(..., profile=)` 注入点：工具可见性、Working State 投影、soft 提醒和 Working State 说明全部由 Profile 提供；固定白名单 Profile 跳过旧名修正——越界工具名原样交给宿主拒绝 |
+| `backend/apps/chatbi/services/research/agent_context.py` | `build_research_system_context`（frozen-boundary + 协议规则 + 可用层级）；`project_research_working_state`（有界投影：证据 ≤12 条 × 5 行样本、最近失败 ≤3、假设 ≤20）；`build_premise_query_args`；`evaluate_premise_verdict` / `_observed_direction`（按逻辑列 value_role current/previous 映射结果字段推方向） |
+| `backend/apps/chatbi/services/research/tool_context.py` | `premise_result` 读写访问器；`consume_model_call`（模型预算轴登记） |
+| `backend/apps/chatbi/models/dto/agent.py` | 新增 `research_max_stall_turns`（默认 3，§9.3.5.7 服务端停止阈值） |
+| `backend/apps/chatbi/services/research/run_lifecycle.py` | 三处快照构建全部透传 `premise_result` |
+| `backend/scripts/check_research_agent_dependencies.py` | 登记三个新模块，依赖守卫通过 |
+| `backend/tests/chatbi/test_research_agent_harness.py` | 17 项 Harness 验收测试（脚本化模型客户端 + 真实注册表 + 真实提交边界 + FakeSession） |
+
+### 关键设计决策
+
+1. **Profile 收敛**：`normal` / `soft` 字符串白名单集中为 `ReasoningProfile`；
+   ChatBI 两条既有路径行为不变（NORMAL/SOFT 单例等价迁移），RESEARCH Profile
+   以 `fixed_tool_allowlist` 复用同一 reasoner——固定白名单下投影节点不做任何
+   改写，Scope 越界由宿主整批拒绝而不是静默纠正。
+2. **前提确认走真实工具边界**：preflight 以确定性参数构造 `query_semantic_data`
+   调用并经 `ResearchToolCallCommit` 执行，预算扣减、指纹去重、观察落账免费获得；
+   verdict 从证据的逻辑列映射读取 current/previous 取值推导，`not_supported` 直接
+   写 succeeded / `PREMISE_NOT_SUPPORTED` 终态（零模型调用）；supported /
+   undetermined 只记录 `premise_result` 并把判断交给后续循环。
+3. **受控上下文**：系统上下文承载冻结边界与协议（finish 单独成轮、禁止 SQL、
+   纯文本不算完成）；Working State 每轮由 `profile.working_state_builder` 重建，
+   只含目标/资产目录/预算/证据摘要/最近失败/需求进度，物理列、完整 Schema、
+   完整结果、跨 Run 证据一律不进入消息。
+4. **批次规则整批拒绝**：未知工具、`finish_research` 与其他调用同批、同批引用尚
+   不存在的 Evidence —— 三类违规整批转 INVALID_REQUEST 失败事实（合成观察落
+   Tool Call 行），不做部分执行；独立批次在 `tool_parallel_workers > 1` 时用
+   ThreadPoolExecutor 并行，每调用仍独立提交边界。
+5. **停止条件全部服务端持有**：有效 finish；premise 不成立；迭代 / 模型 / 时间
+   预算耗尽（partial / BUDGET_EXHAUSTED）；连续无新方向达到
+   `research_max_stall_turns`（stalled）；证据需求满足后提醒并给 N 轮宽限仍未
+   收口（requirements_unanswered）；不可恢复失败（failed / EXECUTION_FAILED）；
+   用户取消（cancelled）。直接自然语言回答计入 stall 轴并下发纠偏提醒。
+6. **预算双轨**：查询轴继续由工具层强制（BUDGET_EXHAUSTED 观察化）；模型轴由
+   Harness 每轮 `consume_model_call()` 登记进 research_state，快照剩余量精确推导。
+7. **恢复即续跑**：`resume()` = `recover_research_run` → 已有 completion 则返回
+   already_finished / already_cancelled；否则以冻结 Requirement 和恢复后的 ctx
+   继续 `run()`，recovery 报告随 outcome 返回。重试安全性由指纹去重保证：
+   恢复后重发相同查询得到 `duplicate_query_reuse` 观察，Runtime 零调用。
+8. **确定性计划 ID 支撑脚本化验收**：`semantic_query_plan_id` 使测试能在执行前
+   推导 evidence id（`evidence:{plan_id}`），脚本化 finish 引用因此可以预先写出。
+
+### 验收记录（对应 §9.4 / §9.6）
+
+| 场景 | 结果 |
+| --- | --- |
+| 两轮结果驱动筛选 | 第二轮查询携带第一轮观察追加的字面过滤（`filters[0].value == "华东"`）后 finish 成功 |
+| 三层相邻下钻 | 维度序列 20 → 21 → 22 共三个查询步骤 + finish，共 4 个 Step |
+| 查询失败后换维度 | EXECUTION_FAILED 行落账后换维度成功，finish 引用新证据 |
+| 空结果后调整粒度 | EMPTY_RESULT/PROJECTION 后换粗粒度维度成功 |
+| premise 不成立立即结束 | 零模型调用；确定性比较查询一次；succeeded / PREMISE_NOT_SUPPORTED 引用前提证据；snapshot.premise_result.observed_direction=decrease |
+| 无 premise 不执行固定比较 | Runtime 仅收到模型发起的一次查询，无 preflight Step |
+| 同轮独立查询并行 | workers=4 时两查询同 Step 双 SUCCEEDED，各自独立事实行 |
+| 有依赖 Tool 拒绝同轮执行 | 违规批次两调用均 INVALID_REQUEST 且查询未执行；分轮后 inspect 进入执行层（存储缺失 → RESULT_STORE_FAILED 结构化失败，非协议拒绝），随后 finish 成功 |
+| 重复查询被去重 | 相同指纹只执行一次，重复调用得 `duplicate_query_reuse` 观察，budget_usage.queries == 1 |
+| Scope 越界 | METRIC:9:999 被 SCOPE_DENIED 拒绝；finish data_insufficient；Scope 指纹不变（无自动扩界） |
+| 预算耗尽 | max_model_calls=1 时第二轮推理被服务端拦截，partial / BUDGET_EXHAUSTED |
+| 取消和恢复 | 取消后已完成的证据保留、cancelled completion 入账；再次 resume 返回 already_cancelled 不续跑 |
+| 中断恢复不重复执行 | 手工构造 RUNNING Step + RUNNING 调用残留：恢复收口 Step、调用标 INTERRUPTED；resume 后重发相同查询命中指纹（runtime.calls 保持 1）正常收口 |
+| 模型直接回答未调用 finish | 服务端纠偏提醒后模型补 finish 成功；连续直接回答达阈值 → stalled / failed / DATA_INSUFFICIENT |
+| execute_sql 被拒绝 | FAILED / INVALID_REQUEST，SQL 从未进入执行层 |
+
+§9.6 对照：多轮真实问题（场景 1–2）；下一步依赖上一轮 Observation（场景 1）；
+无全局 DAG（无 Replan/Action DTO，模型逐轮决策）；目标/时间/筛选/Scope 不漂移
+（frozen-boundary + 场景 Scope 越界）；Tool Call 可追踪可恢复（全部经提交边界 +
+场景中断恢复）；预算与停止服务端强制（场景预算耗尽 / 停止条件族）；未触碰旧
+Action（依赖守卫 `--check` 含全部新模块）；未开放 SQL（场景 execute_sql）。
+
+回归：新增 17 项 Harness 测试全部通过；research 四套件 78 通过；`tests/chatbi`
+全量 699 通过（16 个 `test_graph_api.py` 失败为环境性预存问题，与前几阶段相同）；
+`tests/agent` 117 通过（31 个失败为本阶段开工前 stash 对照确认的预存问题）；
+Ruff、mypy（8 个相关文件）、依赖守卫 `--check` 全部通过。
+
+### 遗留与移交阶段 6
+
+- premise 的 supported / undetermined 路径目前只记录 verdict 并继续循环；
+  `report_draft` / `final_report` 快照字段与报告校验由阶段 6 回填；
+- 假设评估已随 finish 落账（`hypothesis_assessments`），但假设状态机和
+  Evidence Requirement 完成度评估属于阶段 6；
+- events / RunOrchestrator / Shadow 接线未动：新路径仍只能在测试运行（§9.2.7）；
+- duration / evidence_rows / evidence_chars 预算轴仍未累计（沿用阶段 3/4 移交项）；
+- messages 不跨恢复持久化：resume 后模型对话从 Working State 与快照重建，历史
+  文本不保留（研究事实完整，可接受）；
+- 并行批次（tool_parallel_workers > 1）下 Session 的线程安全需在生产接入前评审
+  （沿用 legacy executor 先例，默认配置为串行）。
+
 # 10. 阶段 6：假设、完成度和报告
 
 ## 10.1 这个阶段是干什么的
@@ -2292,7 +2390,7 @@ Research 核心重构完成需要满足：
 | 2 Semantic Query Runtime | 已完成 | 2026-08-22 | 见 6.8；Dataset 243 五用例端到端验收通过，全部 `PROVEN` |
 | 3 Research 通用工具 | 已完成 | 2026-08-22 | 见 7.7；20 项工具验收测试通过，Registry 恰含四个无 SQL 工具 |
 | 4 状态、证据依赖和恢复 | 已完成 | 2026-08-23 | 见 8.8；16 项状态/恢复测试通过，提交边界 + 恢复 + 取消落地，无新表 |
-| 5 Research Agent Harness | 待开始 | - | - |
+| 5 Research Agent Harness | 已完成 | 2026-08-23 | 见 9.7；17 项 Harness 测试通过，动态循环 + 前提确认 + 提交边界/恢复/取消接线落地，新路径仅在测试运行 |
 | 6 假设、完成度和报告 | 待开始 | - | - |
 | 7 Shadow 双跑、评测和切流 | 待开始 | - | - |
 | 8 删除旧 ResearchAction | 待开始 | - | - |

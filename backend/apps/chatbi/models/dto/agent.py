@@ -71,6 +71,8 @@ class AgentConfig(BaseModel):
     research_max_queries: int = Field(default=8, gt=0, le=50)
     research_max_model_calls: int = Field(default=8, gt=1, le=50)
     research_max_actions_per_iteration: int = Field(default=3, gt=0, le=10)
+    # Harness 连续无新方向轮数的服务端停止阈值（§9.3.5.7）。
+    research_max_stall_turns: int = Field(default=3, gt=0, le=20)
     research_max_duration_seconds: int = Field(default=300, gt=0, le=1800)
     research_max_evidence_rows: int = Field(default=20, gt=0, le=100)
     research_max_evidence_chars: int = Field(default=12_000, gt=0, le=100_000)

@@ -227,6 +227,20 @@ class ResearchToolContext:
         self._state()["budget_usage"] = updated.model_dump(mode="json")
         return updated
 
+    def consume_model_call(self, count: int = 1) -> ResearchBudgetUsage:
+        """Harness 每轮推理后登记模型调用；快照的剩余预算据此推导。"""
+
+        usage = self.budget_usage()
+        updated = ResearchBudgetUsage(
+            queries=usage.queries,
+            model_calls=usage.model_calls + count,
+            duration_seconds=usage.duration_seconds,
+            evidence_rows=usage.evidence_rows,
+            evidence_chars=usage.evidence_chars,
+        )
+        self._state()["budget_usage"] = updated.model_dump(mode="json")
+        return updated
+
     # ------------------------------------------------------------------ #
     # 迭代推进与终态
     # ------------------------------------------------------------------ #
@@ -242,6 +256,18 @@ class ResearchToolContext:
         if completion.run_id != self.run_id:
             raise ValueError("RESEARCH_AGENT_COMPLETION_CROSS_RUN")
         self._state()["completion"] = completion.model_dump(mode="json")
+
+    # ------------------------------------------------------------------ #
+    # 前提确认结果（阶段 5 preflight 写入，快照投影读取）
+    # ------------------------------------------------------------------ #
+
+    @property
+    def premise_result(self) -> dict[str, Any] | None:
+        raw = self._state().get("premise_result")
+        return raw if isinstance(raw, dict) else None
+
+    def set_premise_result(self, payload: dict[str, Any]) -> None:
+        self._state()["premise_result"] = payload
 
     def record_hypothesis_assessments(
         self, assessments: Sequence[ResearchHypothesisAssessment]

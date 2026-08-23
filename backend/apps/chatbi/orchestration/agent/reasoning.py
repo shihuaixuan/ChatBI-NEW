@@ -21,15 +21,15 @@ from apps.chatbi.orchestration.agent.messages import (
     ModelDecision,
     fold_tool_messages,
 )
+from apps.chatbi.orchestration.agent.reasoning_profile import (
+    ReasoningProfile,
+    get_reasoning_profile,
+)
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
-from apps.chatbi.orchestration.agent.tool_visibility import visible_tool_names
 from apps.chatbi.orchestration.agent.tools.interaction import (
     prepare_semantic_clarification_args,
 )
-from apps.chatbi.orchestration.agent.working_state import (
-    executable_sql,
-    project_working_state,
-)
+from apps.chatbi.orchestration.agent.working_state import executable_sql
 from apps.tool import ToolCall, ToolDefinition, ToolRegistry
 from apps.trace import (
     AgentTraceRecorder,
@@ -91,13 +91,19 @@ class AgentReasoner:
         state: AgentRuntimeState,
         mode: str,
         *,
+        profile: ReasoningProfile | None = None,
         step_id: int | None = None,
         step_index: int | None = None,
     ) -> AgentDecision:
-        """执行一轮 Reason，并把模型响应转换为结构化决策。"""
+        """执行一轮 Reason，并把模型响应转换为结构化决策。
 
-        if mode not in {"normal", "soft"}:
-            raise ValueError(f"Unsupported reasoning mode: {mode}")
+        ``mode`` 仍用于 Trace 标注；行为差异全部由 Reasoning Profile 决定，
+        宿主可以用 ``profile`` 注入携带运行时闭包的模式实例（Research）。
+        """
+
+        resolved_profile = (
+            profile if profile is not None else get_reasoning_profile(mode)
+        )
         run_id = state.require_run_id()
         with self._recorder.node(
             TraceNodeSpec(
@@ -106,20 +112,29 @@ class AgentReasoner:
                 node_type=TraceNodeType.PHASE,
                 name="prepare_reasoning_context",
                 display_name="准备推理上下文",
-                metadata={"mode": mode, "step_id": step_id},
+                metadata={
+                    "mode": resolved_profile.name,
+                    "step_id": step_id,
+                },
             ),
             input_data={
                 "message_count": len(state.messages),
                 "message_chars": sum(len(item.content) for item in state.messages),
-                "mode": mode,
+                "mode": resolved_profile.name,
             },
         ) as context_node:
             fold_tool_messages(state.messages, self._config.context_fold_chars)
-            available_tools = self.available_tool_names(state, mode)
-            working_state = project_working_state(state, mode, available_tools)
+            available_tools = resolved_profile.visible_tool_names(
+                state,
+                self._registry.names(),
+            )
+            working_state = resolved_profile.project_working_state(
+                state,
+                available_tools,
+            )
             invoke_messages = self._invoke_messages(
                 state,
-                mode,
+                resolved_profile,
                 available_tools,
                 working_state,
             )
@@ -152,12 +167,12 @@ class AgentReasoner:
                 name="chat",
                 display_name="Agent 推理模型",
                 attributes=llm_attributes_data,
-                metadata={"mode": mode, "step_id": step_id},
+                metadata={"mode": resolved_profile.name, "step_id": step_id},
             ),
             input_data={
                 "message_count": len(invoke_messages),
                 "available_tool_count": len(tool_definitions),
-                "mode": mode,
+                "mode": resolved_profile.name,
             },
             input_detail={
                 "messages": [
@@ -206,7 +221,7 @@ class AgentReasoner:
                 node_type=TraceNodeType.PROJECTION,
                 name="project_agent_decision",
                 display_name="校验并整理模型决策",
-                metadata={"mode": mode, "step_id": step_id},
+                metadata={"mode": resolved_profile.name, "step_id": step_id},
             ),
             input_data={
                 "original_tool_call_count": len(model_decision.tool_calls),
@@ -218,10 +233,15 @@ class AgentReasoner:
                 ]
             },
         ) as projection_node:
-            tool_calls = [
-                self._prepare_tool_call(state, call, available_tools)
-                for call in model_decision.tool_calls
-            ]
+            if resolved_profile.fixed_tool_allowlist is not None:
+                # 固定白名单模式（Research）不做陈旧工具名纠正：越界选择必须
+                # 原样交给宿主批次校验拒绝，不能被静默改写成别的工具。
+                tool_calls = list(model_decision.tool_calls)
+            else:
+                tool_calls = [
+                    self._prepare_tool_call(state, call, available_tools)
+                    for call in model_decision.tool_calls
+                ]
             response = model_decision.message.model_copy(
                 update={"tool_calls": tool_calls}
             )
@@ -259,7 +279,7 @@ class AgentReasoner:
     def _invoke_messages(
         self,
         state: AgentRuntimeState,
-        mode: str,
+        profile: ReasoningProfile,
         available_tools: list[str],
         working_state_payload: dict[str, Any],
     ) -> list[AgentMessage]:
@@ -268,25 +288,14 @@ class AgentReasoner:
             "<agent-working-state>"
             + orjson.dumps(working_state_payload).decode()
             + "</agent-working-state>\n"
-            "该状态由服务端根据可信工具结果生成。请优先选择 recommended 动作；"
-            "只有新动作能够补充缺失信息或修正上一错误时，才进行额外探索。"
+            + profile.working_state_note
         )
         dynamic_messages = []
         if state.runtime_context is not None:
             dynamic_messages.append(state.runtime_context)
-        if mode == "soft":
-            dynamic_messages.extend(
-                [
-                    AgentMessage.user(
-                        "<system-reminder>预算接近上限。已有 SQL 时立即 execute_sql，"
-                        "已有执行结果时立即 finish；若关键歧义未消可 clarify；"
-                        "不要启动新的检索或 SQL 探索。</system-reminder>"
-                    ),
-                    working_state,
-                ]
-            )
-        else:
-            dynamic_messages.append(working_state)
+        if profile.soft_reminder is not None:
+            dynamic_messages.append(AgentMessage.user(profile.soft_reminder))
+        dynamic_messages.append(working_state)
         return [system, *state.messages, *dynamic_messages]
 
     def available_tool_names(
@@ -294,11 +303,8 @@ class AgentReasoner:
         state: AgentRuntimeState,
         mode: str,
     ) -> list[str]:
-        return visible_tool_names(
-            state,
-            mode,
-            self._registry.names(),
-        )
+        profile = get_reasoning_profile(mode)
+        return profile.visible_tool_names(state, self._registry.names())
 
     def _prepare_tool_call(
         self,

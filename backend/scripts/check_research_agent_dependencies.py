@@ -19,7 +19,10 @@ NEW_MODULES = (
     BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "tool_context.py",
     BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "state_snapshot.py",
     BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "run_lifecycle.py",
+    BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "agent_context.py",
     BACKEND_ROOT / "apps" / "chatbi" / "orchestration" / "agent" / "tools" / "research.py",
+    BACKEND_ROOT / "apps" / "chatbi" / "orchestration" / "agent" / "reasoning_profile.py",
+    BACKEND_ROOT / "apps" / "chatbi" / "orchestration" / "pipeline" / "research_agent.py",
 )
 FORBIDDEN_MODULE_PREFIXES = (
     "apps.chatbi.services.research.actions",

@@ -322,6 +322,7 @@ class ResearchToolCallCommit:
             self._ctx,
             running_tool_call_ids=running_ids,
             agent_run_id=self._run_db_id,
+            premise_result=self._ctx.premise_result,
         )
         derived[_SNAPSHOT_KEY] = snapshot.model_dump(mode="json")
         agent_run_repository.update_run(
@@ -519,6 +520,7 @@ def recover_research_run(
         ctx,
         running_tool_call_ids=[],
         agent_run_id=run_db_id,
+        premise_result=ctx.premise_result,
     )
     derived[_SNAPSHOT_KEY] = refreshed_snapshot.model_dump(mode="json")
     agent_run_repository.update_run(session, run_row, derived_state=derived)
@@ -590,6 +592,7 @@ def cancel_research_run(
         ctx,
         running_tool_call_ids=[],
         agent_run_id=run_db_id,
+        premise_result=ctx.premise_result,
     )
     derived[_SNAPSHOT_KEY] = snapshot.model_dump(mode="json")
     agent_run_repository.update_run(session, run_row, derived_state=derived)
