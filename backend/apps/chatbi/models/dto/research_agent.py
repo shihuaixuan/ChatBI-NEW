@@ -43,6 +43,18 @@ def _id(value: str, code: str = "RESEARCH_AGENT_ID_INVALID") -> str:
     return value
 
 
+def _passthrough_id(value: str, code: str) -> str:
+    """上游治理标识（如语义层 hierarchy id）原样投影：只约束非空与长度。
+
+    这类 id 由语义层生成，可能是纯数字（如 ``"1"``）；新契约若强加
+    ``_ID_PATTERN`` 的字母开头规则，投影层将无法承载真实数据集。
+    """
+
+    if not value or len(value) > 128:
+        raise ValueError(code)
+    return value
+
+
 def _ref(value: str, code: str = "RESEARCH_AGENT_LOGICAL_REF_INVALID") -> str:
     if not _REF_PATTERN.fullmatch(value):
         raise ValueError(code)
@@ -50,12 +62,16 @@ def _ref(value: str, code: str = "RESEARCH_AGENT_LOGICAL_REF_INVALID") -> str:
 
 
 def _asset_model_id(ref: str) -> int | None:
-    """读取受控资产引用中的模型 ID，用于校验跨模型关系。"""
+    """读取受控资产引用中的模型 ID，用于校验跨模型关系。
+
+    引用格式为 ``KIND:资产ID:模型ID``（见 requirements.py 的 ref 构造），
+    模型 ID 在第三段；读错段会把同模型不同资产的引用误判为跨模型。
+    """
 
     parts = ref.split(":")
     if len(parts) != 3 or not parts[2].isdigit():
         return None
-    return int(parts[1]) if parts[1].isdigit() else None
+    return int(parts[2])
 
 
 def _unique(values: Collection[str], code: str) -> None:
@@ -279,7 +295,7 @@ class ResearchHierarchy(_ContractModel):
 
     @model_validator(mode="after")
     def validate_hierarchy(self) -> ResearchHierarchy:
-        _id(self.hierarchy_id, "RESEARCH_AGENT_HIERARCHY_ID_INVALID")
+        _passthrough_id(self.hierarchy_id, "RESEARCH_AGENT_HIERARCHY_ID_INVALID")
         _unique(
             self.dimension_refs,
             "RESEARCH_AGENT_HIERARCHY_DIMENSION_DUPLICATED",
@@ -706,7 +722,8 @@ class ResearchDrilldownSpec(_ContractModel):
 
     @model_validator(mode="after")
     def validate_drilldown(self) -> ResearchDrilldownSpec:
-        _id(self.hierarchy_id, "RESEARCH_AGENT_HIERARCHY_ID_INVALID")
+        # 与 Scope 层级的透传规则一致：模型回显的 hierarchy_id 必须能匹配真实数据集。
+        _passthrough_id(self.hierarchy_id, "RESEARCH_AGENT_HIERARCHY_ID_INVALID")
         _id(self.source_evidence_id, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
         _ref(self.current_dimension_ref, "RESEARCH_AGENT_DRILLDOWN_CURRENT_REF_INVALID")
         _ref(self.next_dimension_ref, "RESEARCH_AGENT_DRILLDOWN_NEXT_REF_INVALID")

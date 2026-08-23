@@ -46,6 +46,10 @@ from apps.chatbi.orchestration.pipeline.research import (
     ResearchPipeline,
     ResearchPipelineDependencies,
 )
+from apps.chatbi.orchestration.pipeline.research_agent_pipeline import (
+    ResearchAgentPipeline,
+    ResearchAgentPipelineDependencies,
+)
 from apps.chatbi.services.computation import ComputeEngine
 from apps.chatbi.services.execution import (
     QueryTaskExecutor,
@@ -342,6 +346,21 @@ def build_run_orchestrator(
             if resolved_config.research_execution_mode == "shadow"
             else None
         ),
+        # 阶段 7.5：agent 引擎主路径管道；仅在显式配置 agent 时装配。
+        research_agent_pipeline=(
+            build_research_agent_pipeline(
+                session,
+                resolved_config,
+                lifecycle=lifecycle,
+                event_publisher=resolved_publisher,
+                registry=resolved_registry,
+                query_task_executor=resolved_query_task_executor,
+                artifact_service=resolved_result_artifact_service,
+                recorder=resolved_recorder,
+            )
+            if resolved_config.research_execution_mode == "agent"
+            else None
+        ),
     )
 
 
@@ -464,8 +483,72 @@ def build_shadow_runner(
     )
 
 
+def build_research_agent_pipeline(
+    session: Any,
+    config: AgentConfig,
+    *,
+    lifecycle: AgentLifecycle,
+    event_publisher: EventPublisher,
+    registry: ToolRegistry,
+    query_task_executor: QueryTaskExecutor,
+    artifact_service: ResultArtifactService,
+    recorder: AgentTraceRecorder | None = None,
+) -> ResearchAgentPipeline:
+    """装配主路径 Research Agent 管道（阶段 7.5 切流接线）。
+
+    与 shadow 栈（逐次重建会话与服务）不同：复用请求作用域的会话、
+    工具注册表和生命周期——主路径与用户可见执行共享同一事务边界，
+    取消与澄清挂起真实可达。执行服务只需要计划侧的证明与编译工具
+    （研究四工具由 Harness 自建），``resolved_registry`` 天然满足。
+    """
+
+    from apps.chatbi.orchestration.agent.model_client import DefaultAgentModelClient
+    from apps.chatbi.services.execution.analysis_execution import (
+        AnalysisExecutionDependencies,
+        AnalysisExecutionService,
+    )
+    from apps.chatbi.services.research.semantic_runtime import SemanticQueryRuntime
+    from apps.chatbi.services.research.shadow import ResearchExecutionState
+
+    resolved_recorder = recorder or build_agent_trace_recorder()
+    execution_service = AnalysisExecutionService(
+        AnalysisExecutionDependencies(
+            registry=registry,
+            result_processor=ChatBIToolResultProcessor(),
+            lifecycle=lifecycle,
+            event_publisher=event_publisher,
+            session=session,
+            query_task_executor=query_task_executor,
+            max_query_tasks=config.plan_max_query_tasks,
+            query_concurrency=config.plan_query_concurrency,
+            query_timeout_seconds=config.tool_timeout_seconds,
+            compute_engine=ComputeEngine(),
+            compute_enabled=config.compute_enabled,
+            trace_recorder=resolved_recorder,
+        )
+    )
+    return ResearchAgentPipeline(
+        ResearchAgentPipelineDependencies(
+            config=config,
+            session=session,
+            lifecycle=lifecycle,
+            model_client=DefaultAgentModelClient(),
+            result_store=ResultStore(artifact_service),
+            recorder=resolved_recorder,
+            semantic_runtime_factory=lambda run_row, record: SemanticQueryRuntime(
+                execution_service,
+                execution_state_factory=lambda ctx: ResearchExecutionState(
+                    ctx=ctx, run=run_row, record=record
+                ),
+            ),
+            compute_engine_factory=ComputeEngine,
+        )
+    )
+
+
 __all__ = [
     "build_run_orchestrator",
     "build_agent_tool_registry",
     "build_shadow_runner",
+    "build_research_agent_pipeline",
 ]

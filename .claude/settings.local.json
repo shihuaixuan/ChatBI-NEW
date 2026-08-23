@@ -47,7 +47,11 @@
       "Bash(python -m json.tool data/research_agent_eval_cases.json)",
       "Bash(python -m py_compile scripts/run_research_agent_eval.py)",
       "Bash(python *)",
-      "Bash(ruff check *)"
+      "Bash(ruff check *)",
+      "Bash(backend/.venv/bin/python *)",
+      "Bash(/Users/twenty/LLM/ChatBI/SQLBot/backend/.venv/bin/python *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(awk '{print $2}')"
     ]
   }
 }

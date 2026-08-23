@@ -81,39 +81,50 @@ def _build_shadow_material(state: AgentRuntimeState) -> ShadowRunMaterial | None
 
 
 def ensure_research_execution_mode_ready(
-    route_mode: str,
+    route_mode: str,  # noqa: ARG001 - 路由入口签名的组成部分，测试用它固定三态语义
     configured_mode: ResearchExecutionMode | str,
 ) -> ResearchExecutionMode:
     """校验 Research 新旧路径配置；Fast/Plan 不受该配置影响。
 
     阶段 7 起 shadow 成为合法值：用户可见路径仍是 legacy，是否附带后台
-    双跑由切流策略（``_resolve_shadow_rollout``）决定。agent 就绪前仍显式
-    拒绝，不能回退旧 Research。
+    双跑由切流策略（``resolve_shadow_rollout``）决定。阶段 7.5 起 agent
+    也成为合法值：主路径直接由新契约 Harness 执行（``ResearchAgentPipeline``），
+    是否生效同样由切流策略裁决。三个取值在路由入口全部放行后，本函数
+    只剩配置合法性校验；引擎选择完全由 rollout 决策承载。
     """
 
     try:
-        resolved_mode = ResearchExecutionMode(configured_mode)
+        return ResearchExecutionMode(configured_mode)
     except ValueError as exc:
         raise ModeRoutingError("RESEARCH_EXECUTION_MODE_INVALID") from exc
-    if route_mode == "research" and resolved_mode is ResearchExecutionMode.AGENT:
-        raise ModeRoutingError(
-            f"RESEARCH_{resolved_mode.value.upper()}_MODE_NOT_READY"
-        )
-    return resolved_mode
 
 
 def resolve_shadow_rollout(
     state: AgentRuntimeState,
 ) -> dict[str, Any] | None:
-    """解析本次 research 请求的 shadow 双跑决策并写入 working state。
+    """解析本次 research 请求的切流决策并写入 working state。
 
-    决策完全确定性（sha256(run_key) 分桶）；任何解析异常都按纯 legacy
-    处理——切流安全方向是少双跑，绝不让 shadow 配置拖垮主路径。
+    agent 是终态引擎：配置即全量生效，不参与采样（阶段 7.5）。其余模式
+    的 shadow 决策完全确定性（sha256(run_key) 分桶）；任何解析异常都按
+    纯 legacy 处理——切流安全方向是少双跑，绝不让 shadow 配置拖垮主路径。
     """
+
+    config = state.context.config
+    configured_mode = str(
+        getattr(config, "research_execution_mode", "legacy") or "legacy"
+    )
+    if configured_mode == ResearchExecutionMode.AGENT.value:
+        payload = {
+            "configured_mode": configured_mode,
+            "effective_mode": ResearchExecutionMode.AGENT.value,
+            "reason": "configured_agent",
+            "sample_rate": 0.0,
+        }
+        state.context.state["research_rollout"] = payload
+        return payload
 
     from apps.chatbi.services.research.rollout import RolloutPolicy
 
-    config = state.context.config
     policy = RolloutPolicy.from_config(
         mode=str(getattr(config, "research_execution_mode", "legacy")),
         sample_rate=float(
@@ -156,6 +167,7 @@ class RunOrchestrator:
         fast_pipeline: FastPipeline | None = None,
         plan_pipeline: PlanPipeline | None = None,
         research_pipeline: ResearchPipeline | None = None,
+        research_agent_pipeline: Any | None = None,
         mode_router: ModeRouter | None = None,
         shadow_runner: Any | None = None,
     ) -> None:
@@ -168,6 +180,9 @@ class RunOrchestrator:
         self.fast_pipeline = fast_pipeline
         self.plan_pipeline = plan_pipeline
         self.research_pipeline = research_pipeline
+        # 阶段 7.5：agent 引擎主路径管道；为空表示本进程未装配 agent 栈，
+        # 此时 rollout 判定为 agent 会显式失败，绝不静默回退旧 Research。
+        self.research_agent_pipeline = research_agent_pipeline
         # 阶段 7：shadow 双跑宿主；为空表示本进程未装配 shadow 栈，
         # 此时即使配置了 shadow 也只按 legacy 执行（切流安全方向）。
         self.shadow_runner = shadow_runner
@@ -272,26 +287,8 @@ class RunOrchestrator:
                             AgentErrorClass.PLAN_INVALID.value,
                             error_details={"code": exc.code},
                         )
-                elif selected_mode == "research" and self.research_pipeline is not None:
-                    self._maybe_spawn_shadow(state)
-                    try:
-                        yield from self.research_pipeline.run(state)
-                    except ResearchPipelineError as exc:
-                        yield from self.lifecycle.fail(
-                            state,
-                            str(exc),
-                            AgentErrorClass.PLAN_INVALID.value,
-                            error_details={"code": exc.code},
-                        )
-                else:
-                    yield from self.lifecycle.fail(
-                        state,
-                        f"{selected_mode.upper()} 模式尚未实现。",
-                        AgentErrorClass.PLAN_INVALID.value,
-                        error_details={
-                            "code": f"{selected_mode.upper()}_MODE_NOT_READY"
-                        },
-                    )
+                elif selected_mode == "research":
+                    yield from self._dispatch_research(state)
                 return
             yield from self.lifecycle.fail(
                 state,
@@ -467,6 +464,52 @@ class RunOrchestrator:
             resolve_shadow_rollout(state)
         return route_mode
 
+    def _dispatch_research(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
+        """按切流决策分发 Research 执行；首次运行与澄清恢复共用。
+
+        agent 是终态引擎（阶段 7.5）：rollout 判定为 agent 时由新契约
+        Harness 执行，未装配即显式失败，绝不静默回退旧 Research（§11.3.6）。
+        """
+
+        rollout = state.context.state.get("research_rollout") or {}
+        if rollout.get("effective_mode") == "agent":
+            if self.research_agent_pipeline is None:
+                yield from self.lifecycle.fail(
+                    state,
+                    "Research Agent 编排器未装配。",
+                    AgentErrorClass.PLAN_INVALID.value,
+                    error_details={"code": "RESEARCH_AGENT_PIPELINE_NOT_ASSEMBLED"},
+                )
+                return
+            try:
+                yield from self.research_agent_pipeline.run(state)
+            except ResearchPipelineError as exc:
+                yield from self.lifecycle.fail(
+                    state,
+                    str(exc),
+                    AgentErrorClass.PLAN_INVALID.value,
+                    error_details={"code": exc.code},
+                )
+            return
+        if self.research_pipeline is not None:
+            self._maybe_spawn_shadow(state)
+            try:
+                yield from self.research_pipeline.run(state)
+            except ResearchPipelineError as exc:
+                yield from self.lifecycle.fail(
+                    state,
+                    str(exc),
+                    AgentErrorClass.PLAN_INVALID.value,
+                    error_details={"code": exc.code},
+                )
+            return
+        yield from self.lifecycle.fail(
+            state,
+            "RESEARCH 模式尚未实现。",
+            AgentErrorClass.PLAN_INVALID.value,
+            error_details={"code": "RESEARCH_MODE_NOT_READY"},
+        )
+
     def _maybe_spawn_shadow(self, state: AgentRuntimeState) -> None:
         """按切流决策启动 shadow 双跑；任何失败只降级为纯 legacy。
 
@@ -626,6 +669,20 @@ class RunOrchestrator:
                         AgentErrorClass.PLAN_INVALID.value,
                         error_details={"code": exc.code},
                     )
+                return
+            if selected_mode == "research" and (
+                self.research_agent_pipeline is not None
+                or self.research_pipeline is not None
+            ):
+                # 阶段 7.5 起 Research 支持澄清恢复：agent 引擎恢复续跑
+                # （Harness.resume），legacy 引擎按首次运行语义重开。
+                agent_run_repository.update_run(
+                    self.session,
+                    state.run,
+                    execution_mode=selected_mode,
+                )
+                self.session.commit()
+                yield from self._dispatch_research(state)
                 return
             yield from self.lifecycle.fail(
                 state,

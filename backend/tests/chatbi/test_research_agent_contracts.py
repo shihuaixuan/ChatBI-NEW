@@ -50,10 +50,10 @@ def _version() -> dict[str, object]:
 
 def _scope() -> dict[str, object]:
     return {
-        "target_metric_refs": ["METRIC:1:10"],
-        "dimension_refs": ["DIMENSION:1:20"],
-        "driver_metric_refs": ["METRIC:1:11"],
-        "allowed_filter_refs": ["DIMENSION:1:20"],
+        "target_metric_refs": ["METRIC:10:1"],
+        "dimension_refs": ["DIMENSION:20:1"],
+        "driver_metric_refs": ["METRIC:11:1"],
+        "allowed_filter_refs": ["DIMENSION:20:1"],
         "tenant_scope": "tenant-1",
         "dataset_ref": "ASSET:dataset:1",
         "scope_fingerprint": "scope-1",
@@ -64,40 +64,40 @@ def _governed_scope() -> ResearchScope:
     """构造包含层级、驱动关系和贡献度范围的最小治理 Scope。"""
 
     return ResearchScope(
-        target_metric_refs=("METRIC:1:10",),
+        target_metric_refs=("METRIC:10:1",),
         dimension_refs=(
-            "DIMENSION:1:20",
-            "DIMENSION:1:21",
-            "DIMENSION:1:22",
+            "DIMENSION:20:1",
+            "DIMENSION:21:1",
+            "DIMENSION:22:1",
         ),
-        driver_metric_refs=("METRIC:1:11",),
+        driver_metric_refs=("METRIC:11:1",),
         allowed_filter_refs=(
-            "DIMENSION:1:20",
-            "DIMENSION:1:21",
-            "DIMENSION:1:22",
+            "DIMENSION:20:1",
+            "DIMENSION:21:1",
+            "DIMENSION:22:1",
         ),
         hierarchies=(
             ResearchHierarchy(
                 hierarchy_id="geo",
                 dimension_refs=(
-                    "DIMENSION:1:20",
-                    "DIMENSION:1:21",
-                    "DIMENSION:1:22",
+                    "DIMENSION:20:1",
+                    "DIMENSION:21:1",
+                    "DIMENSION:22:1",
                 ),
             ),
         ),
         driver_relationships=(
             ResearchDriverRelationship(
-                target_metric_ref="METRIC:1:10",
-                driver_metric_ref="METRIC:1:11",
+                target_metric_ref="METRIC:10:1",
+                driver_metric_ref="METRIC:11:1",
                 relationship_type="certified_driver",
-                dimension_refs=("DIMENSION:1:20",),
+                dimension_refs=("DIMENSION:20:1",),
                 time_roles=("current", "previous"),
                 relationship_fingerprint="relation-1",
             ),
         ),
-        contribution_metric_refs=("METRIC:1:10",),
-        contribution_dimension_refs=("DIMENSION:1:21",),
+        contribution_metric_refs=("METRIC:10:1",),
+        contribution_dimension_refs=("DIMENSION:21:1",),
         tenant_scope="tenant-1",
         dataset_ref="ASSET:dataset:1",
         scope_fingerprint="scope-1",
@@ -111,18 +111,18 @@ def _governed_requirement() -> ResearchAgentRequirement:
         run_id="run-1",
         goal="分析总 GMV 变化",
         reason="open_ended_cause",
-        target_metric_refs=("METRIC:1:10",),
+        target_metric_refs=("METRIC:10:1",),
         time_bindings=(
             ResearchTimeBinding(
                 role="current",
                 expression="本月",
-                dimension_ref="DIMENSION:1:20",
+                dimension_ref="DIMENSION:20:1",
                 normalized={"kind": "absolute_range", "start": "2026-08-01"},
             ),
             ResearchTimeBinding(
                 role="previous",
                 expression="上月",
-                dimension_ref="DIMENSION:1:20",
+                dimension_ref="DIMENSION:20:1",
                 normalized={"kind": "absolute_range", "start": "2026-07-01"},
             ),
         ),
@@ -143,12 +143,12 @@ def _requirement() -> ResearchAgentRequirement:
         run_id="run-1",
         goal="分析总 GMV 变化",
         reason="open_ended_cause",
-        target_metric_refs=("METRIC:1:10",),
+        target_metric_refs=("METRIC:10:1",),
         time_bindings=(
             ResearchTimeBinding(
                 role="current",
                 expression="本月",
-                dimension_ref="DIMENSION:1:20",
+                dimension_ref="DIMENSION:20:1",
                 normalized={"kind": "absolute_range", "start": "2026-08-01"},
             ),
         ),
@@ -174,8 +174,8 @@ def _query() -> ResearchSemanticQuery:
         run_id="run-1",
         scope_fingerprint="scope-1",
         version_snapshot=ResearchVersionSnapshot.model_validate(_version()),
-        metrics=("METRIC:1:10",),
-        dimensions=("DIMENSION:1:20",),
+        metrics=("METRIC:10:1",),
+        dimensions=("DIMENSION:20:1",),
         time_ranges=("current",),
         purpose="确认当前期变化",
     )
@@ -191,13 +191,13 @@ def _evidence(iteration: int = 1) -> ResearchEvidence:
         result_ref=ResearchResultRef(run_id="run-1", result_id="result-1"),
         iteration=iteration,
         purpose="确认当前期变化",
-        metric_refs=("METRIC:1:10",),
-        dimension_refs=("DIMENSION:1:20",),
+        metric_refs=("METRIC:10:1",),
+        dimension_refs=("DIMENSION:20:1",),
         time_ranges=("current",),
         logical_columns=(
-            ResearchLogicalColumn(asset_ref="METRIC:1:10", value_role="value"),
+            ResearchLogicalColumn(asset_ref="METRIC:10:1", value_role="value"),
             ResearchLogicalColumn(
-                asset_ref="DIMENSION:1:20", value_role="group_key"
+                asset_ref="DIMENSION:20:1", value_role="group_key"
             ),
         ),
         statistics=ResearchEvidenceStatistics(row_count=1),
@@ -219,12 +219,12 @@ def test_core_contracts_round_trip_without_action_types() -> None:
     state = ResearchWorkingState(
         run_id="run-1",
         goal="分析变化",
-        target_metric_refs=("METRIC:1:10",),
+        target_metric_refs=("METRIC:10:1",),
         time_bindings=(
             ResearchTimeBinding(
                 role="current",
                 expression="本月",
-                dimension_ref="DIMENSION:1:20",
+                dimension_ref="DIMENSION:20:1",
                 normalized={"kind": "absolute_range"},
             ),
         ),
@@ -269,7 +269,7 @@ def test_only_top_level_contracts_carry_agent_protocol_version() -> None:
     assert "agent_contract_version" not in ResearchTimeBinding(
         role="current",
         expression="本月",
-        dimension_ref="DIMENSION:1:20",
+        dimension_ref="DIMENSION:20:1",
         normalized={"kind": "absolute_range"},
     ).model_dump()
 
@@ -279,7 +279,7 @@ def test_requirement_rejects_scope_outside_metric_and_filter() -> None:
         ResearchAgentRequirement(
             **{
                 **_requirement().model_dump(),
-                "target_metric_refs": ("METRIC:1:999",),
+                "target_metric_refs": ("METRIC:999:1",),
             }
         )
     with pytest.raises(ValueError, match="IMMUTABLE_FILTER_OUT_OF_SCOPE"):
@@ -287,7 +287,7 @@ def test_requirement_rejects_scope_outside_metric_and_filter() -> None:
             **{
                 **_requirement().model_dump(),
                 "immutable_filters": (
-                    {"target_ref": "DIMENSION:1:999", "operator": "equals", "value": "x"},
+                    {"target_ref": "DIMENSION:999:1", "operator": "equals", "value": "x"},
                 ),
             }
         )
@@ -296,8 +296,8 @@ def test_requirement_rejects_scope_outside_metric_and_filter() -> None:
             **{
                 **_requirement().model_dump(),
                 "immutable_filters": (
-                    {"target_ref": "DIMENSION:1:20", "operator": "equals", "value": "x"},
-                    {"target_ref": "DIMENSION:1:20", "operator": "equals", "value": "y"},
+                    {"target_ref": "DIMENSION:20:1", "operator": "equals", "value": "x"},
+                    {"target_ref": "DIMENSION:20:1", "operator": "equals", "value": "y"},
                 ),
             }
         )
@@ -309,7 +309,7 @@ def test_requirement_rejects_scope_outside_metric_and_filter() -> None:
                     {
                         "role": "current",
                         "expression": "本月",
-                        "dimension_ref": "DIMENSION:1:999",
+                        "dimension_ref": "DIMENSION:999:1",
                         "normalized": {"kind": "absolute_range"},
                     },
                 ),
@@ -324,13 +324,13 @@ def test_query_rejects_out_of_scope_and_physical_payload() -> None:
             ResearchSemanticQuery(
                 **{
                     **_query().model_dump(),
-                    "dimensions": ("DIMENSION:1:999",),
+                    "dimensions": ("DIMENSION:999:1",),
                 }
             )
         )
     with pytest.raises(ValueError, match="PHYSICAL_PAYLOAD_FORBIDDEN"):
         ResearchLiteralFilter(
-            target_ref="DIMENSION:1:20",
+            target_ref="DIMENSION:20:1",
             operator="equals",
             value={"physical_column": "customer_id"},
         )
@@ -339,7 +339,7 @@ def test_query_rejects_out_of_scope_and_physical_payload() -> None:
 def test_query_cannot_change_frozen_time_or_immutable_filter() -> None:
     payload = _requirement().model_dump()
     payload["immutable_filters"] = [
-        {"target_ref": "DIMENSION:1:20", "operator": "equals", "value": "华东"}
+        {"target_ref": "DIMENSION:20:1", "operator": "equals", "value": "华东"}
     ]
     requirement = ResearchAgentRequirement.model_validate(payload)
     with pytest.raises(ValueError, match="IMMUTABLE_FILTER_MISSING"):
@@ -349,7 +349,7 @@ def test_query_cannot_change_frozen_time_or_immutable_filter() -> None:
             **_query().model_dump(),
             "filters": [
                 {
-                    "target_ref": "DIMENSION:1:20",
+                    "target_ref": "DIMENSION:20:1",
                     "operator": "equals",
                     "value": "华南",
                 }
@@ -371,8 +371,8 @@ def test_value_ref_requires_current_run_and_existing_logical_column() -> None:
     value_ref = ResearchEvidenceValueRef(
         run_id="run-1",
         evidence_id="evidence-1",
-        target_ref="DIMENSION:1:20",
-        column_ref="METRIC:1:10",
+        target_ref="DIMENSION:20:1",
+        column_ref="METRIC:10:1",
         row_selector=ResearchRowSelector(rank=1),
     )
     value_ref.validate_against(evidence)
@@ -382,7 +382,7 @@ def test_value_ref_requires_current_run_and_existing_logical_column() -> None:
         ).validate_against(evidence)
     with pytest.raises(ValueError, match="COLUMN_NOT_FOUND"):
         ResearchEvidenceValueRef(
-            **{**value_ref.model_dump(), "column_ref": "METRIC:1:999"}
+            **{**value_ref.model_dump(), "column_ref": "METRIC:999:1"}
         ).validate_against(evidence)
 
 
@@ -394,8 +394,8 @@ def test_query_rejects_cross_run_or_unknown_evidence_value() -> None:
                 {
                     "run_id": "run-2",
                     "evidence_id": "evidence-1",
-                    "target_ref": "DIMENSION:1:20",
-                    "column_ref": "DIMENSION:1:20",
+                    "target_ref": "DIMENSION:20:1",
+                    "column_ref": "DIMENSION:20:1",
                     "row_selector": {"rank": 1},
                 }
             ],
@@ -410,12 +410,12 @@ def test_drilldown_requires_current_run_source_evidence() -> None:
         **{
             **_query().model_dump(),
             "analysis": "drilldown",
-            "dimensions": ("DIMENSION:1:21",),
+            "dimensions": ("DIMENSION:21:1",),
             "drilldown": {
                 "hierarchy_id": "geo",
                 "source_evidence_id": "missing-evidence",
-                "current_dimension_ref": "DIMENSION:1:20",
-                "next_dimension_ref": "DIMENSION:1:21",
+                "current_dimension_ref": "DIMENSION:20:1",
+                "next_dimension_ref": "DIMENSION:21:1",
             },
         }
     )
@@ -509,12 +509,12 @@ def test_working_state_rejects_full_results_and_frozen_what_changes() -> None:
     state = ResearchWorkingState(
         run_id="run-1",
         goal="分析变化",
-        target_metric_refs=("METRIC:1:10",),
+        target_metric_refs=("METRIC:10:1",),
         time_bindings=(
             ResearchTimeBinding(
                 role="current",
                 expression="本月",
-                dimension_ref="DIMENSION:1:20",
+                dimension_ref="DIMENSION:20:1",
                 normalized={"kind": "absolute_range"},
             ),
         ),
@@ -523,7 +523,7 @@ def test_working_state_rejects_full_results_and_frozen_what_changes() -> None:
         budget_remaining={"iterations": 2, "queries": 4, "model_calls": 4, "duration_seconds": 100},
     )
     with pytest.raises(ValueError, match="FROZEN_WHAT_CHANGED"):
-        state.evolve(target_metric_refs=("METRIC:1:11",))
+        state.evolve(target_metric_refs=("METRIC:11:1",))
     with pytest.raises(ValidationError, match="extra_forbidden"):
         ResearchWorkingState.model_validate(
             {**state.model_dump(), "full_results": [{"value": 1}]}
@@ -589,10 +589,10 @@ def test_tool_args_are_independent_strict_dtos() -> None:
             run_id="run-1",
             operation=operation,
             input_evidence_ids=("evidence-1", "evidence-2"),
-            metric_refs=("METRIC:1:10",),
-            dimension_refs=("DIMENSION:1:20",),
-            group_by_refs=("DIMENSION:1:20",),
-            order=({"ref": "METRIC:1:10"},),
+            metric_refs=("METRIC:10:1",),
+            dimension_refs=("DIMENSION:20:1",),
+            group_by_refs=("DIMENSION:20:1",),
+            order=({"ref": "METRIC:10:1"},),
             limit=5,
             tolerance=0.01,
         )
@@ -601,8 +601,8 @@ def test_tool_args_are_independent_strict_dtos() -> None:
     inspect = ResearchInspectEvidenceRequest(
         run_id="run-1",
         evidence_id="evidence-1",
-        logical_column_refs=("DIMENSION:1:20",),
-        order=({"ref": "METRIC:1:10"},),
+        logical_column_refs=("DIMENSION:20:1",),
+        order=({"ref": "METRIC:10:1"},),
         offset=10,
         limit=5,
         max_rows=5,
@@ -658,7 +658,7 @@ def test_agent_protocol_version_is_separate_from_published_versions() -> None:
         ResearchTimeBinding(
             role="future",
             expression="未来",
-            dimension_ref="DIMENSION:1:20",
+            dimension_ref="DIMENSION:20:1",
             normalized={"kind": "absolute_range"},
         )
 
@@ -674,7 +674,7 @@ def test_scope_rejects_governance_references_outside_scope() -> None:
                 "driver_relationships": [
                     {
                         **base["driver_relationships"][0],
-                        "driver_metric_ref": "METRIC:1:999",
+                        "driver_metric_ref": "METRIC:999:1",
                     }
                 ],
             }
@@ -683,14 +683,14 @@ def test_scope_rejects_governance_references_outside_scope() -> None:
         ResearchScope(
             **{
                 **base,
-                "contribution_dimension_refs": ("DIMENSION:1:999",),
+                "contribution_dimension_refs": ("DIMENSION:999:1",),
             }
         )
     with pytest.raises(ValueError, match="EXCLUDED_ASSET_INCLUDED"):
         ResearchScope(
             **{
                 **base,
-                "excluded_asset_refs": ("METRIC:1:10",),
+                "excluded_asset_refs": ("METRIC:10:1",),
             }
         )
 
@@ -698,19 +698,45 @@ def test_scope_rejects_governance_references_outside_scope() -> None:
 def test_driver_relationship_preserves_formula_and_cross_model_invariants() -> None:
     with pytest.raises(ValueError, match="FORMULA_COMPONENT_REQUIRED"):
         ResearchDriverRelationship(
-            target_metric_ref="METRIC:1:10",
-            driver_metric_ref="METRIC:1:11",
+            target_metric_ref="METRIC:10:1",
+            driver_metric_ref="METRIC:11:1",
             relationship_type="formula_component",
             time_roles=("current",),
             relationship_fingerprint="formula-1",
         )
     with pytest.raises(ValueError, match="CROSS_MODEL_RELATION_PATH_REQUIRED"):
         ResearchDriverRelationship(
-            target_metric_ref="METRIC:1:10",
-            driver_metric_ref="METRIC:2:11",
+            target_metric_ref="METRIC:10:1",
+            driver_metric_ref="METRIC:11:2",
             relationship_type="certified_driver",
             time_roles=("current",),
             relationship_fingerprint="cross-model-1",
+        )
+
+
+def test_driver_relationship_model_id_is_third_ref_segment() -> None:
+    """引用格式 ``KIND:资产ID:模型ID``：同模型不同资产不是跨模型（run 1264 回归）。
+
+    生产冻结引用由 requirements.py 以 ``f"METRIC:{id}:{model}"`` 构造，
+    模型 ID 在第三段；读错段会把单模型数据集的全部 driver 关系误判为跨模型。
+    """
+
+    relationship = ResearchDriverRelationship(
+        target_metric_ref="METRIC:271:246",
+        driver_metric_ref="METRIC:265:246",
+        relationship_type="certified_driver",
+        dimension_refs_by_model={"246": ("DIMENSION:276:246",)},
+        time_roles=("current",),
+        relationship_fingerprint="same-model-different-assets",
+    )
+    assert relationship.relation_path == ()
+    with pytest.raises(ValueError, match="CROSS_MODEL_RELATION_PATH_REQUIRED"):
+        ResearchDriverRelationship(
+            target_metric_ref="METRIC:271:246",
+            driver_metric_ref="METRIC:265:13",
+            relationship_type="certified_driver",
+            time_roles=("current",),
+            relationship_fingerprint="cross-model-by-third-segment",
         )
 
 
@@ -719,21 +745,21 @@ def test_cross_model_time_bindings_are_consistent_and_frozen() -> None:
     payload["scope"] = {
         **payload["scope"],
         "dimension_refs": (
-            "DIMENSION:1:20",
-            "DIMENSION:1:21",
-            "DIMENSION:1:22",
-            "DIMENSION:2:21",
+            "DIMENSION:20:1",
+            "DIMENSION:21:1",
+            "DIMENSION:22:1",
+            "DIMENSION:21:2",
         ),
-        "driver_metric_refs": ("METRIC:2:11",),
+        "driver_metric_refs": ("METRIC:11:2",),
         "driver_relationships": (
             {
-                "target_metric_ref": "METRIC:1:10",
-                "driver_metric_ref": "METRIC:2:11",
+                "target_metric_ref": "METRIC:10:1",
+                "driver_metric_ref": "METRIC:11:2",
                 "relationship_type": "certified_driver",
                 "dimension_refs": (),
                 "dimension_refs_by_model": {
-                    "1": ("DIMENSION:1:20",),
-                    "2": ("DIMENSION:2:21",),
+                    "1": ("DIMENSION:20:1",),
+                    "2": ("DIMENSION:21:2",),
                 },
                 "relation_path": (1,),
                 "time_roles": ("current", "previous"),
@@ -749,13 +775,13 @@ def test_cross_model_time_bindings_are_consistent_and_frozen() -> None:
                     {
                         "role": "current",
                         "expression": "本月",
-                        "dimension_ref": "DIMENSION:1:20",
+                        "dimension_ref": "DIMENSION:20:1",
                         "normalized": {"kind": "absolute_range"},
                     },
                     {
                         "role": "previous",
                         "expression": "上月",
-                        "dimension_ref": "DIMENSION:1:20",
+                        "dimension_ref": "DIMENSION:20:1",
                         "normalized": {"kind": "absolute_range"},
                     },
                 ],
@@ -763,13 +789,13 @@ def test_cross_model_time_bindings_are_consistent_and_frozen() -> None:
                     {
                         "role": "current",
                         "expression": "本月",
-                        "dimension_ref": "DIMENSION:2:21",
+                        "dimension_ref": "DIMENSION:21:2",
                         "normalized": {"kind": "absolute_range"},
                     },
                     {
                         "role": "previous",
                         "expression": "上月",
-                        "dimension_ref": "DIMENSION:2:21",
+                        "dimension_ref": "DIMENSION:21:2",
                         "normalized": {"kind": "absolute_range"},
                     },
                 ],
@@ -781,7 +807,7 @@ def test_cross_model_time_bindings_are_consistent_and_frozen() -> None:
     state = ResearchWorkingState(
         run_id="run-1",
         goal="分析变化",
-        target_metric_refs=("METRIC:1:10",),
+        target_metric_refs=("METRIC:10:1",),
         time_bindings=requirement.time_bindings,
         time_bindings_by_model=requirement.time_bindings_by_model,
         scope_fingerprint="scope-1",
@@ -815,7 +841,7 @@ def test_cross_model_time_bindings_reject_invalid_model_role_and_dimension() -> 
                         {
                             "role": "current",
                             "expression": "本月",
-                            "dimension_ref": "DIMENSION:1:21",
+                            "dimension_ref": "DIMENSION:21:1",
                             "normalized": {"kind": "absolute_range"},
                         }
                     ]
@@ -831,13 +857,13 @@ def test_cross_model_time_bindings_reject_invalid_model_role_and_dimension() -> 
                         {
                             "role": "current",
                             "expression": "本月",
-                            "dimension_ref": "DIMENSION:1:999",
+                            "dimension_ref": "DIMENSION:999:1",
                             "normalized": {"kind": "absolute_range"},
                         },
                         {
                             "role": "previous",
                             "expression": "上月",
-                            "dimension_ref": "DIMENSION:1:999",
+                            "dimension_ref": "DIMENSION:999:1",
                             "normalized": {"kind": "absolute_range"},
                         },
                     ]
@@ -856,12 +882,12 @@ def test_cross_model_time_bindings_reject_invalid_model_role_and_dimension() -> 
 def test_cross_model_mapping_rejects_dimension_from_another_model() -> None:
     with pytest.raises(ValueError, match="DRIVER_MODEL_DIMENSIONS_INVALID"):
         ResearchDriverRelationship(
-            target_metric_ref="METRIC:1:10",
-            driver_metric_ref="METRIC:2:11",
+            target_metric_ref="METRIC:10:1",
+            driver_metric_ref="METRIC:11:2",
             relationship_type="certified_driver",
             dimension_refs_by_model={
-                "1": ("DIMENSION:1:20",),
-                "2": ("DIMENSION:1:21",),
+                "1": ("DIMENSION:20:1",),
+                "2": ("DIMENSION:21:1",),
             },
             relation_path=(1,),
             time_roles=("current", "previous"),
@@ -887,7 +913,7 @@ def test_queries_cover_compare_breakdown_drilldown_result_filter_and_contributio
         **{
             **compare.model_dump(),
             "analysis": "breakdown",
-            "dimensions": ("DIMENSION:1:21",),
+            "dimensions": ("DIMENSION:21:1",),
         }
     )
     requirement.validate_query(breakdown)
@@ -896,12 +922,12 @@ def test_queries_cover_compare_breakdown_drilldown_result_filter_and_contributio
         **{
             **_query().model_dump(),
             "analysis": "drilldown",
-            "dimensions": ("DIMENSION:1:21",),
+            "dimensions": ("DIMENSION:21:1",),
             "drilldown": {
                 "hierarchy_id": "geo",
                 "source_evidence_id": "evidence-1",
-                "current_dimension_ref": "DIMENSION:1:20",
-                "next_dimension_ref": "DIMENSION:1:21",
+                "current_dimension_ref": "DIMENSION:20:1",
+                "next_dimension_ref": "DIMENSION:21:1",
             },
         }
     )
@@ -915,8 +941,8 @@ def test_queries_cover_compare_breakdown_drilldown_result_filter_and_contributio
                 {
                     "run_id": "run-1",
                     "evidence_id": "evidence-1",
-                    "target_ref": "DIMENSION:1:20",
-                    "column_ref": "DIMENSION:1:20",
+                    "target_ref": "DIMENSION:20:1",
+                    "column_ref": "DIMENSION:20:1",
                     "row_selector": {"rank": 1},
                 }
             ],
@@ -929,7 +955,7 @@ def test_queries_cover_compare_breakdown_drilldown_result_filter_and_contributio
             **compare.model_dump(),
             "analysis": "contribution",
             "comparison": "contribution",
-            "dimensions": ("DIMENSION:1:21",),
+            "dimensions": ("DIMENSION:21:1",),
         }
     )
     requirement.validate_query(contribution)
@@ -944,12 +970,12 @@ def test_query_rejects_non_adjacent_drilldown_and_invalid_contribution_scope() -
                 **{
                     **_query().model_dump(),
                     "analysis": "drilldown",
-                    "dimensions": ("DIMENSION:1:22",),
+                    "dimensions": ("DIMENSION:22:1",),
                     "drilldown": {
                         "hierarchy_id": "geo",
                         "source_evidence_id": "evidence-1",
-                        "current_dimension_ref": "DIMENSION:1:20",
-                        "next_dimension_ref": "DIMENSION:1:22",
+                        "current_dimension_ref": "DIMENSION:20:1",
+                        "next_dimension_ref": "DIMENSION:22:1",
                     },
                 }
             ),
@@ -962,7 +988,7 @@ def test_query_rejects_non_adjacent_drilldown_and_invalid_contribution_scope() -
                 **_query().model_dump(),
                 "analysis": "contribution",
                 "comparison": "contribution",
-                "dimensions": ("DIMENSION:1:20",),
+                "dimensions": ("DIMENSION:20:1",),
                 "time_ranges": ("current", "previous"),
             }
         ).validate_scope(requirement.scope)

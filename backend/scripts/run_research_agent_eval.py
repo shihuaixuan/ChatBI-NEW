@@ -1,13 +1,17 @@
-"""Research 阶段 0 统一评测：旧路径基线 + 不变量自动判分（38 号文档 §4.3）。
+"""Research 统一评测：新旧引擎双跑判分（38 号文档 §4.3；阶段 7.5 起 --engine）。
 
 用例来自 ``data/research_agent_eval_cases.json``（结构化 Gold），通过生产入口
-``create_agent_start_events`` 运行旧 ResearchAction 路径，然后对每个 Run 输出统一
+``create_agent_start_events`` 运行 Research 路径，然后对每个 Run 输出统一
 评测记录并自动判分：
 
 1. 用例断言：目标指标、时间角色、必需/禁止证据模式、结束原因、Scope 越界；
 2. 全局不变量（对应 §4.3.3 类别 13/15/18/19/20/23）：Evidence 所有权、无引用结论、
    重复动作执行、报告数字溯源、相关性写成因果、Evidence 依赖顺序；
 3. 运行指标：迭代数、模型调用、查询数、耗时、错误码分布（§4.3.4 运行指标）。
+
+``--engine legacy|agent`` 选择被测引擎（默认 legacy）：agent 走阶段 7.5 接线的
+新契约主路径。当前判分视图仍以旧路径持久化形态为基准，agent 记录在投影层
+补齐前可能低估得分——比较两侧时以 run 行事实为准。
 
 结果分为五类，显式失败和静默错误被明确区分：
 ``pass`` / ``correct_reject`` / ``explicit_failure`` / ``silent_error`` / ``harness_error``。
@@ -16,6 +20,7 @@
     python scripts/run_research_agent_eval.py --list-cases
     python scripts/run_research_agent_eval.py --case research-cause-003
     python scripts/run_research_agent_eval.py --output data/research_agent_eval_baseline_20260822.json
+    python scripts/run_research_agent_eval.py --engine agent --case research-cause-001
 
 环境前置与 run_research_stage3_real_questions.py 相同：真实数据库 + 真实模型，
 ``CHAT_AGENT_EXECUTION_MODES`` 需要包含 research（脚本已自动设置）。
@@ -40,6 +45,18 @@ from typing import Any
 # 必须在导入任何应用模块前设置：Settings 在导入时实例化。
 os.environ["CHAT_AGENT_ENABLED"] = "true"
 os.environ["CHAT_AGENT_EXECUTION_MODES"] = "fast,plan,research"
+
+
+def _resolve_engine_env() -> str:
+    """``--engine`` 必须在导入期生效（Settings 导入即实例化），故先扫 argv。"""
+
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--engine", choices=("legacy", "agent"), default="legacy")
+    known, _unknown = pre_parser.parse_known_args()
+    return known.engine
+
+
+os.environ["CHATBI_RESEARCH_EXECUTION_MODE"] = _resolve_engine_env()
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
@@ -348,6 +365,253 @@ def _artifact_size(value: Any) -> int | None:
             if size is not None:
                 return size
     return None
+
+
+# ---------------------------------------------------------------------------
+# agent 引擎（新契约）派生事实 → legacy 判分视图的确定性投影
+
+
+_ROLE_FIELD_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("_growth_rate", "growth_rate"),
+    ("_difference", "difference"),
+    ("_contribution", "contribution"),
+    ("_current", "current"),
+    ("_previous", "previous"),
+)
+
+
+def _is_agent_research_state(state: dict[str, Any]) -> bool:
+    """新契约研究事实以 ``requirement`` 锚定；缺该键即 legacy/shadow 形状。"""
+
+    return isinstance(state.get("requirement"), dict)
+
+
+def _agent_field_role(field_name: str) -> str | None:
+    """按服务端确定性列别名约定（``{biz_name}_{role}``）推导逻辑角色。
+
+    新路径证据的 ``logical_columns`` 只声明部分角色（如 group_key 与
+    contribution），其余时间/差值列由命名约定识别；``reconciliation_*``
+    是对账审计列，不参与任何角色判分。
+    """
+
+    if field_name.startswith("reconciliation"):
+        return None
+    for suffix, role in _ROLE_FIELD_SUFFIXES:
+        if field_name.endswith(suffix):
+            return role
+    return None
+
+
+def _project_agent_evidence(item: dict[str, Any]) -> dict[str, Any]:
+    """把新契约 ResearchEvidence 快照投成 legacy 判分证据形状。
+
+    保持原字段不动，只补齐判分器消费的派生视图：``time_roles`` 来自
+    ``time_ranges``；行样本转成 ``top_rows`` 单元格数组并按命名约定补全
+    ``logical_columns``，使数值对账与角色检查照常工作。
+    """
+
+    projected = dict(item)
+    projected["time_roles"] = list(item.get("time_ranges") or [])
+    result_ref = item.get("result_ref") or {}
+    if isinstance(result_ref, dict) and result_ref.get("result_id"):
+        projected["result_id"] = result_ref["result_id"]
+    projected["applied_filters"] = list(item.get("filters") or [])
+
+    declared = {
+        column.get("result_field")
+        for column in item.get("logical_columns") or ()
+        if isinstance(column, dict)
+    }
+    field_order: list[str] = []
+    for row in item.get("sample_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        for key in row:
+            if key not in field_order:
+                field_order.append(key)
+    columns = [
+        dict(column)
+        for column in (item.get("logical_columns") or [])
+        if isinstance(column, dict)
+    ]
+    for field_name in field_order:
+        if field_name in declared:
+            continue
+        role = _agent_field_role(field_name)
+        if role is not None:
+            columns.append({"result_field": field_name, "value_role": role})
+    projected["logical_columns"] = columns
+
+    rows = []
+    for row in item.get("sample_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            {
+                "values": [
+                    {"value": row.get(column["result_field"]), "logical_column_index": index}
+                    for index, column in enumerate(columns)
+                    if column.get("result_field") in row
+                ]
+            }
+        )
+    projected["top_rows"] = rows
+    projected["bottom_rows"] = []
+    return projected
+
+
+def build_agent_eval_view(
+    research_state: dict[str, Any],
+    derived: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """把 agent 引擎的新契约派生状态确定性地投成 legacy 判分视图。
+
+    判分器（check_case_assertions / check_required_patterns /
+    check_global_invariants / classify_outcome）全部按 legacy research_state
+    形状实现；本投影不改变运行事实本身，只做形状翻译。快照缺失时退回
+    research_state 内已有的事实，保证失败 Run 也能按错误码判分。
+    """
+
+    snapshot = derived.get("research_run_snapshot")
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    completion = research_state.get("completion") or {}
+    evidences_raw = snapshot.get("evidences")
+    if not isinstance(evidences_raw, list):
+        evidences_raw = [
+            item
+            for item in (research_state.get("evidence") or {}).values()
+            if isinstance(item, dict)
+        ]
+    evidence = [_project_agent_evidence(item) for item in evidences_raw]
+
+    observations = research_state.get("observations") or {}
+    failed_actions = [
+        {
+            # message 携带内部门码（如 DATASOURCE_SCOPE_MISMATCH），
+            # _collect_error_codes 的正则据此还原可匹配错误码。
+            "error_code": (obs.get("message") or obs.get("error_code") or "")
+            if isinstance(obs, dict)
+            else ""
+        }
+        for obs in (
+            snapshot.get("failed_observations")
+            or [item for item in observations.values() if isinstance(item, dict)]
+        )
+        if isinstance(obs, dict) and obs.get("status") == "failed"
+    ]
+
+    iteration_records: dict[int, dict[str, Any]] = {}
+    for item in evidence:
+        record = iteration_records.setdefault(
+            int(item.get("iteration") or 0),
+            {
+                "iteration": int(item.get("iteration") or 0),
+                "evidence_ids": [],
+                "plan_ids": [],
+                "result_ids": [],
+                "failed_actions": [],
+            },
+        )
+        evidence_id = item.get("evidence_id")
+        if evidence_id:
+            record["evidence_ids"].append(evidence_id)
+            if str(evidence_id).startswith("evidence:"):
+                record["plan_ids"].append(str(evidence_id).split(":", 1)[1])
+        if item.get("result_id"):
+            record["result_ids"].append(item["result_id"])
+    terminal_record = iteration_records.setdefault(
+        int(snapshot.get("iteration") or len(iteration_records)),
+        {
+            "iteration": int(snapshot.get("iteration") or 0),
+            "evidence_ids": [],
+            "plan_ids": [],
+            "result_ids": [],
+            "failed_actions": [],
+        },
+    )
+    terminal_record["failed_actions"].extend(failed_actions)
+
+    hypotheses = [
+        {
+            "status": item.get("assessment"),
+            "evidence_ids": list(item.get("evidence_ids") or []),
+        }
+        for item in snapshot.get("hypothesis_assessments") or ()
+        if isinstance(item, dict) and item.get("assessment") in {"supported", "weakened", "inconclusive"}
+    ]
+    covered_drivers = sorted(
+        {
+            ref
+            for item in evidence
+            if item.get("hypothesis_ids")
+            for ref in (item.get("metric_refs") or [])
+        }
+    )
+
+    final_report = snapshot.get("final_report")
+    report: dict[str, Any] = {}
+    if isinstance(final_report, dict):
+        findings = []
+        citations = []
+        for finding in final_report.get("findings") or ():
+            if not isinstance(finding, dict):
+                continue
+            findings.append(
+                {
+                    "statement": finding.get("statement"),
+                    "evidence_ids": list(finding.get("evidence_ids") or []),
+                    # statement_kind → claim_level：保持"相关性表述不得使用
+                    # 因果措辞"不变量的判分语义。
+                    "claim_level": (
+                        "common_change"
+                        if finding.get("statement_kind") == "causal"
+                        else "correlation_clue"
+                    ),
+                }
+            )
+            citations.extend(
+                {"evidence_id": evidence_id}
+                for evidence_id in finding.get("evidence_ids") or ()
+            )
+        report = {
+            "findings": findings,
+            "citations": citations,
+            "summary": final_report.get("summary"),
+        }
+
+    premise_result = snapshot.get("premise_result")
+    premise_result = premise_result if isinstance(premise_result, dict) else {}
+
+    ownership: dict[str, Any] = {}
+    dependencies: dict[str, Any] = {}
+    run_id = research_state.get("run_id") or ""
+    fingerprints = research_state.get("request_fingerprints")
+    for item in evidence:
+        evidence_id = item.get("evidence_id")
+        if not evidence_id:
+            continue
+        ownership[evidence_id] = item.get("run_id") or run_id
+        dependencies[evidence_id] = {
+            "depends_on_evidence_ids": list(item.get("dependencies") or []),
+            "iteration": item.get("iteration"),
+        }
+
+    state = {
+        "status": completion.get("status"),
+        "finish_reason": completion.get("reason"),
+        "report": report,
+        "hypotheses": hypotheses,
+        "covered_driver_metric_refs": covered_drivers,
+        "premise_supported": premise_result.get("status") == "supported",
+        "remaining_budget": snapshot.get("budget_remaining") or {},
+        "executed_action_fingerprints": list(fingerprints or ()),
+        "research_evidence_ownership": ownership,
+        "research_evidence_dependencies": dependencies,
+        "iteration_records": [
+            iteration_records[key] for key in sorted(iteration_records)
+        ],
+    }
+    return state, evidence
 
 
 def _runtime_usage(
@@ -1584,6 +1848,22 @@ def classify_outcome(
     return "pass"
 
 
+def _eval_view(derived: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """按派生状态形状选择 legacy 判分视图或 agent 引擎投影视图。"""
+
+    research_state = dict(derived.get("research_state") or {})
+    if _is_agent_research_state(research_state):
+        return build_agent_eval_view(research_state, derived)
+    state = dict(research_state)
+    for metadata_key in (
+        "research_evidence_ownership",
+        "research_evidence_dependencies",
+    ):
+        if metadata_key in derived:
+            state[metadata_key] = derived[metadata_key]
+    return state, list(derived.get("research_evidence") or [])
+
+
 def evaluate_case(
     case: EvalCase,
     args: argparse.Namespace,
@@ -1638,10 +1918,11 @@ def evaluate_case(
         with Session(engine) as session:
             run = _latest_run(session, chat_id)
             derived = run.get("derived_state") or {}
+            eval_state, _eval_evidence = _eval_view(derived)
             usage = _runtime_usage(
                 session,
                 run,
-                derived.get("research_state") or {},
+                eval_state,
                 case,
             )
     except Exception as exc:  # 单个用例异常不阻断其余用例
@@ -1650,7 +1931,7 @@ def evaluate_case(
         print(f"[case:{case.id}] HARNESS EXCEPTION: {exc!r}")
 
     derived = run.get("derived_state") or {}
-    state = dict(derived.get("research_state") or {})
+    state, evidence = _eval_view(derived)
     version_snapshot = (
         (derived.get("execution_requirement") or {}).get("version_snapshot")
         or (
@@ -1660,14 +1941,6 @@ def evaluate_case(
         or (derived.get("research_requirement") or {}).get("version_snapshot")
         or {}
     )
-    # 评测元数据与 ResearchState 分开保存，判分时合并为只读快照。
-    for metadata_key in (
-        "research_evidence_ownership",
-        "research_evidence_dependencies",
-    ):
-        if metadata_key in derived:
-            state[metadata_key] = derived[metadata_key]
-    evidence = list(derived.get("research_evidence") or [])
     report = state.get("report") or {}
 
     error_codes = _collect_error_codes(run, state)
@@ -1729,7 +2002,7 @@ def evaluate_case(
         "question": case.question,
         "outcome": outcome,
         "violations": violations,
-        "engine": "legacy",
+        "engine": getattr(args, "engine", "legacy"),
         "run": {
             "id": run.get("id"),
             "record_id": run.get("record_id"),
@@ -1948,7 +2221,7 @@ def _eval_meta(
         None if scope_fingerprint else "run_version_snapshot_missing"
     )
     return {
-        "engine": "legacy",
+        "engine": getattr(args, "engine", "legacy"),
         "observability_contract_version": OBSERVABILITY_CONTRACT_VERSION,
         "ran_at": started.isoformat(timespec="seconds"),
         "tenant_id": args.tenant_id or defaults.get("tenant_id"),
@@ -1981,6 +2254,12 @@ def main() -> int:
     parser.add_argument("--datasource-id", type=int, default=None)
     parser.add_argument("--dataset-id", type=int, default=None)
     parser.add_argument("--cases-file", type=Path, default=CASES_FILE)
+    parser.add_argument(
+        "--engine",
+        choices=("legacy", "agent"),
+        default="legacy",
+        help="被测 Research 引擎；agent 走阶段 7.5 接线的新契约主路径（doc38 §11.8）",
+    )
     parser.add_argument("--case", action="append", default=[], help="按用例 ID 选择，可重复")
     parser.add_argument("--list-cases", action="store_true")
     parser.add_argument(

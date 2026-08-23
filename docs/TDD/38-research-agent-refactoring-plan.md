@@ -2114,6 +2114,104 @@ ResearchPipeline。
 - 指标看板以 trace/event 查询替代独立面板；评测报告聚合脚本待 `CHATBI_RESEARCH_EVAL_CONFIG` 接入基线后补齐；
 - §11.5 第 3–6 条为运营验收项，代码侧机制已全部就绪。
 
+## 11.8 实施状态（2026-08-23）——阶段 7.5 切流接线
+
+§12.2 前置条件 1 的代码侧前提完成：`agent` 从"配置了就被拒"变成可切换的
+真实引擎。默认值仍为 `legacy`——真正切流仍是运营决策（拨配置 + 观察期），
+但代码侧已不再存在不可逾越的门。
+
+### 落地文件
+
+| 文件 | 内容 |
+| --- | --- |
+| `apps/chatbi/orchestration/pipeline/research_agent_pipeline.py` | 新增 `ResearchAgentPipeline` 适配器：冻结输入投影、恢复续跑判定、Harness 终态→生命周期事件翻译 |
+| `apps/chatbi/orchestration/agent/run_orchestrator.py` | 移除路由入口 agent 拒绝（三态全放行）；`resolve_shadow_rollout` agent 短路（配置即全量，reason=`configured_agent`）；分发抽取 `_dispatch_research`（首次运行与澄清恢复共用），agent 未装配显式失败 `RESEARCH_AGENT_PIPELINE_NOT_ASSEMBLED`；`_resume` 补 research 分支 |
+| `apps/chatbi/orchestration/agent/composition.py` | `build_research_agent_pipeline` 生产装配；仅配置 agent 时注入 `research_agent_pipeline` |
+| `apps/chatbi/orchestration/pipeline/research_agent.py` | 模块 docstring 更新（新路径已接入 RunOrchestrator 分发） |
+| `common/core/config.py`、`apps/chatbi/models/dto/agent.py` | 配置注释更新：agent 配置即全量切流，回滚改回 legacy |
+| `tests/chatbi/test_research_agent_pipeline.py` | 新增 19 项测试：投影确定性/fail-loud 三态、恢复判定（requirement 字段区分新旧）、终态翻译（finish/partial/fail/cancel）、分发路由五态、装配冒烟 |
+
+### 关键设计决策
+
+1. 同源冻结输入（§1.1）：主路径与 shadow 共用 `build_shadow_agent_requirement`
+   投影同一路由冻结输入；run_id 无 `-shadow` 后缀（`research-{run_id}`），
+   tenant/dataset 指纹口径与影子侧一致。
+2. fail-loud 替代静默回退（§11.3.6）：冻结输入缺失
+   （`RESEARCH_AGENT_REQUIREMENT_MISSING`）、载荷非法（`_INVALID`）、投影失败
+   （`_PROJECTION_FAILED`）、管道未装配（`RESEARCH_AGENT_PIPELINE_NOT_ASSEMBLED`）
+   全部显式报错，绝不回退旧 Research。
+3. 请求作用域复用：与 shadow 栈逐次重建会话不同，agent 主路径复用当前请求的
+   会话、`resolved_registry`（含 validate_sql/compile_semantic_sql）、真实
+   `AgentLifecycle` 与事件发布——取消与澄清挂起真实可达；只有随 Run 身份变化
+   的 `SemanticQueryRuntime` 经工厂按次构造。
+4. 恢复续跑判定：新旧路径共用 `derived_state["research_state"]` 键但载荷形状
+   不同——行上 research_state 含 `requirement` 字段即视为新路径事实，
+   dispatch 重入时走 `harness.resume()`（recover→续循环）而不是重开清空证据。
+   历史恢复入口决策：新路径恢复入口即 `ResearchAgentPipeline.run` 的重入 +
+   `ResearchAgentHarness.resume()`；不做独立运维端点（与旧路径现状对齐，
+   历史 RUNNING 处置按 doc39 §6 runbook）。
+5. 终态翻译：succeeded/partial/budget_exhausted 等"有报告"终态一律
+   `lifecycle.finish`（answer=final_report > report_draft > 完成态摘要的 JSON）；
+   failed 抛 `RESEARCH_{REASON}` 交统一失败收口；cancelled 走
+   `finalize_cancellation`（cancel_research_run 只收口研究事实的既有契约）。
+6. 澄清恢复补全：`_resume` 此前对 research 模式直接落"不支持的执行模式"
+   死胡同；现经同一 `_dispatch_research` 分发——agent 引擎恢复续跑（配合
+   决策 4），legacy 引擎按首次运行语义重开（与现状一致）。
+
+### 验收记录
+
+1. 路由入口三态放行：`test_production_route_boundary_accepts_all_three_modes`、
+   `test_route_entry_accepts_all_research_modes`。
+2. agent rollout 短路不采样：`test_resolve_shadow_rollout_agent_short_circuits_sampling`。
+3. 投影 fail-loud 三态 + 确定性：`test_missing_frozen_requirement_fails_loud` 等 4 项。
+4. 分发路由五态（agent 有/无装配、pipeline 错误翻译、非 agent 走 legacy、
+   双缺失败）：`test_dispatch_*` 5 项。
+5. 回归：`tests/chatbi` 770 passed / 16 failed（16 个均为既有环境性失败，
+   基线一致）；`tests/agent` 117 passed / 31 failed（与基线完全一致）。
+
+### 移交
+
+- 切流操作面：`CHATBI_RESEARCH_EXECUTION_MODE=agent` 即全量生效；回滚拨回
+  `legacy`。切流当天应同步停用 shadow spawn（doc39 §4 方案）。
+- §12.2 条件 1 的代码缺口已闭合；条件 2–3（门槛数据 + 观察期）仍待运营。
+
+### 真实数据集端到端冒烟（2026-08-23 补录）
+
+接线完成后在 dataset 243 上以 `scripts/run_research_agent_eval.py --engine
+agent` 冒烟（run 1264–1280），暴露出九个单元套件测不到的集成断层——
+根因共性是"测试夹具互相自洽、但与生产数据/平台现状不符"。全部修复并
+配钉住测试；legacy 对照跑同用例 `pass`，冻结路径零回归。
+
+| # | 断层 | 根因 | 修复 |
+| --- | --- | --- | --- |
+| 1 | CROSS_MODEL_RELATION_PATH_REQUIRED | `research_agent._asset_model_id` 读 `parts[1]`（资产ID 当模型ID）；夹具用转置引用 `METRIC:1:10` 掩盖 | 改读第三段；全量夹具段交换（involution 保校验结果）；builder 同步改生产资产优先键序；2 项钉住测试 |
+| 2 | HIERARCHY_ID_INVALID | 语义层 hierarchy id 是数字串 `"1"`，过不了严格 `_ID_PATTERN` | 新增 `_passthrough_id`（非空 ≤128），仅 hierarchy_id 两处投影点使用 |
+| 3 | TIME_DIMENSION_OUT_OF_SCOPE | 旧冻结把时间维单挂 time_bindings、不列进 scope.dimension_refs；新契约要求绑定维 ⊆ Scope 维 | shadow 投影做确定性并集（`_binding_dimension_refs`） |
+| 4 | "Session is already flushing" | 工具 worker 与主线程共享请求作用域 Session，并行是假象 | `_execute_batch` 固定串行（关闭本节遗留评审项：会话隔离引入前不启用 tool_parallel_workers） |
+| 5 | PERMISSION_DENIED 零细节 | harness `_initial_context` 新建最小 AgentToolContext，丢弃路由期 semantic_scope；且 ChatRecord 字段是 `datasource` 不是 `datasource_id` | 适配层 `context_state_overlay` 注入盖戳 Scope；字段名对齐 state.py 统一读法；离线探针（patch `_runtime_failure`/边界函数 + runpy）成为定位手段 |
+| 6 | SEMANTIC_PERMISSION_VERSION_REQUIRED | permission_version 是 P2-4 资产级授权预留钩子：索引投影、路由期检索、工具上下文三处都不填，端到端 None，legacy 也从不校验 | 门禁改为"任一侧提供即必须一致；两侧缺失合法"，权限仍由 permission_fingerprint + authorized_tables 完整约束；3 参钉住测试 |
+| 7 | UNSUPPORTED_CAPABILITY 全灭 | 路由期检索 Scope 的 `allowed_assets=()`（检索契约不列计划资产），builder asset_map 恒空 | 盖戳时从冻结 Requirement 的治理引用物化 allowed_assets（口径=SCOPE_DENIED 门：目标∪驱动∪贡献指标、Scope∪贡献维度，剔 excluded）；不扩大权限 |
+| 8 | AttributeError `.budget` | 主路径/shadow 共用的 `ResearchExecutionState` 缺执行服务的 `budget.remaining_seconds()` 表面 | `_ExecutionDeadlineBudget` 适配器：按 max_duration_seconds 封顶单次查询截止，整跑时长仍由 Harness 约束 |
+| 9 | 判分全空 | 评测脚本只认 legacy 形状派生状态 | `build_agent_eval_view` 确定性投影：completion→status/finish_reason、快照证据→legacy 行/逻辑列（按 `{biz}_{role}` 别名约定补全 value_role）、假设评估→hypotheses、失败观察→iteration_records 错误码、指纹/归属/依赖元数据齐全 |
+
+**冒烟结论**：run 1279 `succeeded`——真实执行档口级 current vs previous
+差异+贡献度查询（总差 −42030.39，贡献比例和≈1 对账成立），证据注册、
+预算扣减、完成态落库全部正常。run 1280 `silent_error` 属模型质量波动：
+选了层级父维而非用户要求的档口维度，且 3 次 finish 被"结论无法溯源"
+报告校验正确拒绝后以 no_new_direction 收口——服务端 fail-loud 门禁按
+设计工作。已知评分形状差异：新引擎单查询可同时携带 difference+contribution
+列，legacy 三证据对账（contribution/breakdown/total 分立）判 unavailable，
+属诚实不可判而非违规。
+
+**回归基线**：tests/chatbi 782 passed / 16 failed（16 个均为既有环境性
+失败）；tests/agent 117 / 31（与基线一致）；新增钉住测试分布在
+contracts/runtime/pipeline/harness 四套。
+
+**correct_reject 对照**：越界用例 research-cause-008 在 agent 引擎下同样
+`correct_reject`（run 1282，`RESEARCH_DIMENSION_MODEL_MISMATCH`，
+preparation 阶段拒绝，3.2s）——拒绝发生在路由期冻结点（引擎无关），
+agent 模式未改变越界防护行为。
+
 # 12. 阶段 8：删除旧 ResearchAction
 
 ## 12.1 这个阶段是干什么的
@@ -2226,6 +2324,40 @@ DTO。需要恢复的旧 Run 在删除前完成、取消或明确终止。
 5. 历史 Run 仍可查看；
 6. 没有隐藏 fallback 到旧 Pipeline；
 7. 新 Agent 是唯一 Research 执行路径。
+
+## 12.6 实施状态（2026-08-23）
+
+**准备完成；删除执行未发生。** §12.2 前置条件第 1–3 项不满足（默认引擎仍为
+`legacy` 且路由入口拒绝 agent、质量门槛因 `CHATBI_RESEARCH_EVAL_CONFIG` 未配置
+而阻断、观察期无从起算），按本文自身门禁不得开始删除。本阶段产出的是
+§12.4 要求的《删除清单和引用扫描报告》：`docs/TDD/39-research-action-removal-inventory.md`，包含：
+
+- §12.2 七项前置条件逐条审计表；
+- 全量引用扫描（逐符号文件清单）与删除对象五组清单（DTO/服务/编排/配置/脚本）；
+- **Shadow 栈退役决策点**：shadow/comparison/rollout/gates 寿命绑定过渡期，
+  删除日必须先停 shadow 再删 `requirements.py` 与 `dto/research.py`
+  （投影依赖两者）；gates 中单侧可判定项可迁入 agent 持续质量监控；
+- 新路径承接映射表（§12.3.1 保留/迁移语义 + 测试四分类），保证删除不降低覆盖率；
+- 历史 Run 处置 runbook 与执行日八步操作顺序；
+- 删除完成判定命令（全符号 grep 为空）。
+
+关键勘察结论：
+
+1. 新路径对旧 Action 符号**零运行时依赖**——`hypotheses.py`/`evidence.py`/
+   `requirements.py` 仅被旧 pipeline 引用，新假设管理走 `hypothesis_evaluator.py`，
+   可整文件删除；
+2. 存在一个本文此前未列出的接线缺口：路由期没有新契约 `ResearchAgentRequirement`
+   构造器（今天唯一途径是从旧 Requirement 投影）。切流前需补"阶段 7.5"接线：
+   移除 `RESEARCH_AGENT_MODE_NOT_READY` 门 + dispatch 分支接 ResearchAgentHarness +
+   新契约路由期构造 + 历史恢复入口决策；
+3. `origin="research_action"` 全仓仅 `actions.py` 一处；`build_research_requirement`
+   的生产调用点唯一（`mode_router.py`），即旧 Requirement 冻结的可控删除面。
+
+> **2026-08-23 更新**：第 2 条缺口已由阶段 7.5 切流接线闭合（见 §11.8）。
+> §12.2 条件 1 的代码侧前提完成，剩余阻断只来自条件 2–3（门槛数据与观察期）。
+> 本节其余内容（删除清单、runbook、执行顺序）不变。
+
+§12.5 六条验收全部未触发，留待执行日按 doc39 §7 顺序逐条核对。
 
 # 13. 阶段 9：受限 SQL 和资产回流
 
@@ -2505,8 +2637,8 @@ Research 核心重构完成需要满足：
 | 4 状态、证据依赖和恢复 | 已完成 | 2026-08-23 | 见 8.8；16 项状态/恢复测试通过，提交边界 + 恢复 + 取消落地，无新表 |
 | 5 Research Agent Harness | 已完成 | 2026-08-23 | 见 9.7；17 项 Harness 测试通过，动态循环 + 前提确认 + 提交边界/恢复/取消接线落地，新路径仅在测试运行 |
 | 6 假设、完成度和报告 | 已完成 | 2026-08-23 | 见 10.7；22 项结论可信层测试通过，finish 三重门禁（完成度/假设裁决/报告硬校验）+ 部分/最终报告落地，新路径仅在测试运行 |
-| 7 Shadow 双跑、评测和切流 | 已完成（切流判定待评测配置接入） | 2026-08-23 | 见 11.7；29 项 Shadow/比较器/门禁/切流测试通过，fail-open 双跑接线落地，质量/运行/演练三项待运营数据 |
-| 8 删除旧 ResearchAction | 待开始 | - | - |
+| 7 Shadow 双跑、评测和切流 | 已完成（含 7.5 切流接线；切流判定待评测配置接入） | 2026-08-23 | 见 11.7/11.8；29+19 项 Shadow/比较器/门禁/切流/接线测试通过，agent 成为可切换引擎（默认仍 legacy），质量/运行/演练三项待运营数据 |
+| 8 删除旧 ResearchAction | 进行中（准备与审计完成；删除执行待 §12.2.2–3，条件 1 代码侧已闭合） | - | 准备见 docs/TDD/39 与 12.6；执行日按 doc39 §7 runbook 核对 §12.5 |
 | 9 受限 SQL 和资产回流 | 待开始 | - | - |
 
 ## 15.2 建议的第一个实施任务

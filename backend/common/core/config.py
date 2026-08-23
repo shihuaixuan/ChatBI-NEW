@@ -163,7 +163,9 @@ class Settings(BaseSettings):
     CHAT_AGENT_EXECUTION_MODES: str = "fast,plan"
     # Research 重构阶段 1只定义迁移配置，默认继续使用旧 Research。
     # shadow 在阶段 7 起可用：用户可见路径仍是 legacy，仅按下列白名单和
-    # 采样比例附带后台双跑；agent 就绪前仍由入口明确拒绝。
+    # 采样比例附带后台双跑。agent 在阶段 7.5 起可用：配置即全量切流，
+    # 主路径由新契约 ResearchAgentPipeline 执行，不参与采样；
+    # 回滚即把本值改回 legacy。
     CHATBI_RESEARCH_EXECUTION_MODE: Literal["legacy", "shadow", "agent"] = "legacy"
     # 阶段 7 切流配置：确定性采样（sha256(run_key) 分桶）与白名单，
     # 全部为 0/空时 shadow 配置等价于 legacy。

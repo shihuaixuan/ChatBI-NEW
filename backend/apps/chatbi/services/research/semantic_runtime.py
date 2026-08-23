@@ -435,14 +435,14 @@ class SemanticQueryRuntime:
             raise SemanticQueryBoundaryError("SEMANTIC_PERMISSION_FINGERPRINT_CHANGED")
         context_permission_version = getattr(inner, "permission_version", None)
         scope_permission_version = getattr(semantic_scope, "permission_version", None)
-        if (
-            not isinstance(context_permission_version, str)
-            or not context_permission_version
-            or not isinstance(scope_permission_version, str)
-            or not scope_permission_version
+        # permission_version 是检索层资产级授权（P2-4）的版本钩子：当前索引投影
+        # 与路由期检索请求都尚未填充，端到端为 None，legacy 路径也从不校验。
+        # 门禁因此只在平台真正提供版本时强制一致——任一侧有值而另一侧缺失、
+        # 或两侧值不同，都是边界破坏；两侧同时缺失是当前栈的合法形态，
+        # 权限仍由 permission_fingerprint 门与 authorized_tables 完整约束。
+        if (context_permission_version or scope_permission_version) and (
+            context_permission_version != scope_permission_version
         ):
-            raise SemanticQueryBoundaryError("SEMANTIC_PERMISSION_VERSION_REQUIRED")
-        if context_permission_version != scope_permission_version:
             raise SemanticQueryBoundaryError("SEMANTIC_PERMISSION_VERSION_CHANGED")
 
     @staticmethod

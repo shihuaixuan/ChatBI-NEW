@@ -7,15 +7,17 @@
 可追踪、可恢复、可取消。
 
 主流程集中在 :meth:`ResearchAgentHarness.run` 一个方法内（§9.3.2）；
-Tool 执行、批次校验和终态收口等复杂职责下沉为私有方法。新路径当前只在
-测试或 Shadow 场景运行（§9.2.7），不接入 RunOrchestrator 分发。
+Tool 执行、批次校验和终态收口等复杂职责下沉为私有方法。阶段 7.5 起
+主路径经由 :class:`~apps.chatbi.orchestration.pipeline.research_agent_pipeline.
+ResearchAgentPipeline` 适配器接入 RunOrchestrator 分发（配置
+``research_execution_mode="agent"`` 时生效）；此前新路径只在测试或
+Shadow 场景运行。
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from typing import Any
@@ -115,6 +117,7 @@ class ResearchAgentHarness:
         recorder: AgentTraceRecorder | None = None,
         cancellation: Any = None,
         observation_recorder: Any = None,
+        context_state_overlay: dict[str, Any] | None = None,
     ) -> None:
         self._session = session
         self._config = config
@@ -132,6 +135,9 @@ class ResearchAgentHarness:
         self._result_store = result_store
         self._cancellation = cancellation
         self._observation_recorder = observation_recorder
+        # 主路径接线（阶段 7.5）：工具上下文需要路由期产出的边界输入
+        # （盖戳后的 semantic_scope、permission_version），由适配层显式注入。
+        self._context_state_overlay = dict(context_state_overlay or {})
 
     # ------------------------------------------------------------------ #
     # 入口
@@ -388,18 +394,22 @@ class ResearchAgentHarness:
             session=self._session,
             oid=int(self._run_row.oid),
             user_id=self._run_row.created_by,
-            datasource_id=None,
+            # ChatRecord 的字段名是 datasource（不是 datasource_id），
+            # 与 orchestration/agent/state.py 的统一读法保持一致；
+            # 读错字段会得到 None，让运行时边界校验报 DATASOURCE_SCOPE_MISMATCH。
+            datasource_id=getattr(self._record, "datasource", None),
             execution_id=(
                 f"agent:{self._run_row.id}" if self._run_row.id is not None else None
             ),
             chat_id=int(self._run_row.chat_id),
             record_id=int(self._run_row.record_id),
-            dataset_id=None,
+            dataset_id=getattr(self._record, "dataset_id", None),
             result_store=self._result_store,
             state={
                 "research_run_id": requirement.run_id,
                 RESEARCH_STATE_KEY: {},
                 _RESULT_SETS_KEY: {},
+                **self._context_state_overlay,
             },
         )
         ctx = ResearchToolContext(
@@ -580,19 +590,15 @@ class ResearchAgentHarness:
         step: Any,
         calls: list[ToolCall],
     ) -> list[tuple[ToolCall, ToolObservation]]:
-        """在提交边界内执行一批独立工具调用；每个调用独立持久化。"""
+        """在提交边界内执行一批独立工具调用；每个调用独立持久化。
 
-        workers = max(1, min(self._config.tool_parallel_workers, len(calls)))
-        if workers <= 1:
-            return [self._execute_single(ctx, step, call) for call in calls]
-        with ThreadPoolExecutor(
-            max_workers=workers,
-            thread_name_prefix="research-tool",
-        ) as pool:
-            futures = [
-                pool.submit(self._execute_single, ctx, step, call) for call in calls
-            ]
-            return [future.result() for future in futures]
+        固定串行执行（doc38 §11.7 遗留评审项的裁决）：研究循环的工具经
+        注册表访问与主线程相同的请求作用域 Session，跨线程并发会触发
+        "Session is already flushing"；在引入会话隔离前不启用
+        ``tool_parallel_workers``。
+        """
+
+        return [self._execute_single(ctx, step, call) for call in calls]
 
     def _execute_single(
         self,

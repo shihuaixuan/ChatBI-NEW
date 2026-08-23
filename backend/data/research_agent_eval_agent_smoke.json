@@ -2,7 +2,7 @@
   "eval_meta": {
     "engine": "agent",
     "observability_contract_version": "phase0-v2",
-    "ran_at": "2026-08-23T16:45:54",
+    "ran_at": "2026-08-23T15:11:06",
     "tenant_id": 1,
     "user_id": 1,
     "dataset_id": 243,
@@ -55,53 +55,67 @@
   "aggregate": {
     "total_cases": 1,
     "pass": 0,
-    "correct_reject": 1,
-    "explicit_failure": 0,
+    "correct_reject": 0,
+    "explicit_failure": 1,
     "silent_error": 0,
     "harness_error": 0,
     "rates": {
       "pass_rate": 0.0,
-      "correct_reject_rate": 1.0,
-      "explicit_failure_rate": 0.0,
+      "correct_reject_rate": 0.0,
+      "explicit_failure_rate": 1.0,
       "silent_error_rate": 0.0
     },
     "hard_invariant_failures": {},
-    "case_check_failure_distribution": {},
+    "case_check_failure_distribution": {
+      "research_status_allowed": 1,
+      "finish_reason_allowed": 1,
+      "time_roles_required_observed": 1,
+      "target_metric_required_observed": 1,
+      "required_dimension_refs_covered": 1,
+      "required_pattern:premise_confirmation": 1,
+      "required_pattern:dimension_breakdown": 1
+    },
     "action_error_code_distribution": {},
     "runtime_summary": {
-      "avg_duration_s": 3.2,
-      "max_duration_s": 3.2,
-      "avg_model_calls_observed": null,
+      "avg_duration_s": 25.0,
+      "max_duration_s": 25.0,
+      "avg_model_calls_observed": 3.0,
       "avg_queries_observed": null,
-      "model_calls_observed_cases": 0,
+      "model_calls_observed_cases": 1,
       "queries_observed_cases": 0,
-      "eval_wall_time_s": 3.3
+      "eval_wall_time_s": 25.1
     }
   },
   "records": [
     {
-      "case_id": "research-cause-008",
-      "name": "scope_violation_goods_rejected",
+      "case_id": "research-cause-001",
+      "name": "premise_open_cause",
       "categories": [
-        12
+        1
       ],
-      "question": "2026年6月29日总GMV比6月28日下降了，请分析原因并继续下钻到商品ID，找出哪些商品导致下降。",
-      "outcome": "correct_reject",
-      "violations": [],
+      "question": "总GMV在2026年6月29日比6月28日明显下降了，帮我找出主要原因，需要的话可以量化各档口对这次下降的贡献。",
+      "outcome": "explicit_failure",
+      "violations": [
+        "research_status_allowed [got None, allowed=['succeeded', 'partial']]",
+        "finish_reason_allowed [got None, allowed=['sufficient_evidence', 'no_new_direction', 'budget_exhausted', 'partial_failure']]",
+        "time_roles_required_observed [missing=['current', 'previous']]",
+        "target_metric_required_observed [missing=['METRIC:271:246']]",
+        "required_dimension_refs_covered [missing=['DIMENSION:278:246']]",
+        "required_pattern:premise_confirmation",
+        "required_pattern:dimension_breakdown"
+      ],
       "engine": "agent",
       "run": {
-        "id": 1282,
-        "record_id": 13040,
+        "id": 1270,
+        "record_id": 12978,
         "status": "failed",
         "execution_mode": "research",
         "error_class": "plan_invalid",
-        "error": "RESEARCH_DIMENSION_MODEL_MISMATCH",
-        "matched_routing_error_code": "RESEARCH_DIMENSION_MODEL_MISMATCH",
-        "error_codes": [
-          "RESEARCH_DIMENSION_MODEL_MISMATCH"
-        ],
-        "rejection_stage": "preparation",
-        "duration_s": 3.2,
+        "error": "连续多轮没有产生新方向且没有任何证据，研究在第 3 轮结束。",
+        "matched_routing_error_code": null,
+        "error_codes": [],
+        "rejection_stage": null,
+        "duration_s": 25.0,
         "config": {
           "enabled": true,
           "max_steps": 12,
@@ -163,32 +177,32 @@
       },
       "runtime": {
         "remaining_budget": {},
-        "step_count": 0,
+        "step_count": 3,
         "steps_with_token_usage": 0,
-        "total_latency_ms": null,
+        "total_latency_ms": 13289,
         "token_usage": {
           "input": null,
           "output": null
         },
         "availability": {
           "steps": true,
-          "step_latency": false,
+          "step_latency": true,
           "token_usage": false
         },
         "tool_calls": {
-          "value": 0,
-          "available": true,
-          "unavailable_reason": null
-        },
-        "trace_nodes": {
           "value": 5,
           "available": true,
           "unavailable_reason": null
         },
+        "trace_nodes": {
+          "value": 14,
+          "available": true,
+          "unavailable_reason": null
+        },
         "model_calls": {
-          "value": null,
-          "available": false,
-          "unavailable_reason": "trace_has_no_model_call_nodes"
+          "value": 3,
+          "available": true,
+          "unavailable_reason": null
         },
         "queries": {
           "value": null,
@@ -220,14 +234,19 @@
       "evidence_digest": [],
       "checks": [
         {
-          "name": "explicit_rejection_status",
+          "name": "execution_mode_is_research",
           "ok": true,
-          "detail": "got failed"
+          "detail": "got research"
         },
         {
-          "name": "explicit_rejection_stage",
-          "ok": true,
-          "detail": "stage=preparation, error_code=RESEARCH_DIMENSION_MODEL_MISMATCH"
+          "name": "research_status_allowed",
+          "ok": false,
+          "detail": "got None, allowed=['succeeded', 'partial']"
+        },
+        {
+          "name": "finish_reason_allowed",
+          "ok": false,
+          "detail": "got None, allowed=['sufficient_evidence', 'no_new_direction', 'budget_exhausted', 'partial_failure']"
         },
         {
           "name": "time_roles_retained",
@@ -235,8 +254,8 @@
         },
         {
           "name": "time_roles_required_observed",
-          "ok": true,
-          "detail": "not_observable_due_to_explicit_rejection_or_data_insufficient"
+          "ok": false,
+          "detail": "missing=['current', 'previous']"
         },
         {
           "name": "target_metric_scope_kept",
@@ -244,12 +263,21 @@
         },
         {
           "name": "target_metric_required_observed",
-          "ok": true,
-          "detail": "not_observable_due_to_explicit_rejection_or_data_insufficient"
+          "ok": false,
+          "detail": "missing=['METRIC:271:246']"
         },
         {
-          "name": "scope_violation_dimensions",
-          "ok": true
+          "name": "required_dimension_refs_covered",
+          "ok": false,
+          "detail": "missing=['DIMENSION:278:246']"
+        },
+        {
+          "name": "required_pattern:premise_confirmation",
+          "ok": false
+        },
+        {
+          "name": "required_pattern:dimension_breakdown",
+          "ok": false
         },
         {
           "name": "budget:case_limits_respected",
@@ -259,9 +287,9 @@
             "max_queries": 8,
             "max_model_calls": 8,
             "queries": 0,
-            "model_calls": 0,
+            "model_calls": 3,
             "query_count_kind": "lower_bound",
-            "model_call_count_kind": "lower_bound"
+            "model_call_count_kind": "observed"
           }
         },
         {

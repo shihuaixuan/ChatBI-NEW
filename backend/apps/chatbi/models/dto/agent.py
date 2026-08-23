@@ -66,7 +66,8 @@ class AgentConfig(BaseModel):
     # Research 新旧执行路径的单一配置入口；阶段 1默认保持旧路径。
     research_execution_mode: ResearchExecutionMode = ResearchExecutionMode.LEGACY
     # 阶段 7 切流配置：shadow 双跑按数据集/租户白名单和确定性采样比例生效，
-    # 用户可见路径始终是 legacy；回退即把 research_execution_mode 改回 legacy。
+    # 用户可见路径始终是 legacy。阶段 7.5 起 agent 配置即全量切流（主路径
+    # 换为新契约引擎，不参与采样）；回退即把 research_execution_mode 改回 legacy。
     research_shadow_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     research_shadow_dataset_allowlist: tuple[int, ...] = ()
     research_shadow_tenant_allowlist: tuple[int, ...] = ()

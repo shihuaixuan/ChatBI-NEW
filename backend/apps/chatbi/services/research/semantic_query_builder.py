@@ -254,7 +254,7 @@ class SemanticQueryBuilder:
                 # 使用带模型 ID 的冻结绑定，因此此类资产不能参与逻辑解析。
                 continue
             key = SemanticQueryBuilder._ref_key(
-                str(asset_type), item.model_id, item.asset_id
+                str(asset_type), item.asset_id, item.model_id
             )
             result[key] = item
         # 严格计划在某些旧检索结果中只保存计划，不重复列出资产引用；
@@ -262,23 +262,25 @@ class SemanticQueryBuilder:
         for plan in scope.query_plans or ((scope.query_plan,) if scope.query_plan else ()):
             for metric_binding in plan.metrics:
                 key = SemanticQueryBuilder._ref_key(
-                    "METRIC", metric_binding.model_id, metric_binding.metric_id
+                    "METRIC", metric_binding.metric_id, metric_binding.model_id
                 )
                 result.setdefault(key, metric_binding)
             for dimension_binding in plan.dimensions:
                 key = SemanticQueryBuilder._ref_key(
                     "DIMENSION",
-                    dimension_binding.model_id,
                     dimension_binding.physical_dimension_id,
+                    dimension_binding.model_id,
                 )
                 result.setdefault(key, dimension_binding)
         return result
 
     @staticmethod
-    def _ref_key(asset_type: str, model_id: int | None, asset_id: int) -> str:
+    def _ref_key(asset_type: str, asset_id: int, model_id: int | None) -> str:
+        """构造与生产冻结引用同序的资产键：``KIND:资产ID:模型ID``。"""
+
         if model_id is None or model_id <= 0 or asset_id <= 0:
             raise SemanticQueryBuildError("SEMANTIC_ASSET_REFERENCE_INVALID")
-        return f"{asset_type.upper()}:{model_id}:{asset_id}"
+        return f"{asset_type.upper()}:{asset_id}:{model_id}"
 
     @staticmethod
     def _resolve_asset(
@@ -302,6 +304,7 @@ class SemanticQueryBuilder:
             if ref not in allowed:
                 raise SemanticQueryBuildError("SCOPE_DENIED")
         key = SemanticQueryBuilder._ref_key(asset_type, int(parts[1]), int(parts[2]))
+        # parts[1]=资产ID、parts[2]=模型ID（生产冻结格式），键序与 _asset_map 一致。
         asset = asset_map.get(key)
         if asset is None:
             raise SemanticQueryBuildError("UNSUPPORTED_CAPABILITY")
@@ -321,10 +324,12 @@ class SemanticQueryBuilder:
 
     @staticmethod
     def _parse_ref(ref: str) -> tuple[int, int]:
+        """解析 ``KIND:资产ID:模型ID``（生产冻结引用格式）为 ``(model_id, asset_id)``。"""
+
         parts = ref.split(":")
         if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
             raise SemanticQueryBuildError("SEMANTIC_ASSET_REFERENCE_INVALID")
-        return int(parts[1]), int(parts[2])
+        return int(parts[2]), int(parts[1])
 
     @staticmethod
     def _model_id(asset: Any) -> int | None:

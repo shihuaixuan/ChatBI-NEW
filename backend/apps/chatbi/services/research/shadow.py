@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -122,6 +123,7 @@ def build_shadow_agent_requirement(
         dataset_ref=dataset_ref,
         scope_fingerprint=legacy_version.scope_fingerprint,
         time_roles=legacy_requirement.time_roles,
+        extra_dimension_refs=_binding_dimension_refs(legacy_requirement),
     )
     time_bindings = tuple(
         _project_time_binding(item) for item in legacy_requirement.time_bindings
@@ -183,6 +185,24 @@ def _permission_fingerprint(
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()[:32]
 
 
+def _binding_dimension_refs(legacy_requirement: ResearchRequirement) -> tuple[str, ...]:
+    """收集全部时间绑定引用的维度，供投影并进 Scope.dimension_refs。"""
+
+    bindings = [
+        *legacy_requirement.time_bindings,
+        *(
+            binding
+            for grouped in (legacy_requirement.time_bindings_by_model or {}).values()
+            for binding in grouped
+        ),
+    ]
+    return tuple(
+        dict.fromkeys(
+            binding.dimension_ref for binding in bindings if binding.dimension_ref
+        )
+    )
+
+
 def _project_scope(
     legacy_scope: LegacyScope,
     *,
@@ -190,6 +210,7 @@ def _project_scope(
     dataset_ref: str,
     scope_fingerprint: str,
     time_roles: tuple[str, ...],
+    extra_dimension_refs: tuple[str, ...] = (),
 ) -> ResearchScope:
     resolved_time_roles = tuple(
         role for role in time_roles if role in {item.value for item in ResearchTimeRole}
@@ -207,7 +228,11 @@ def _project_scope(
     )
     return ResearchScope(
         target_metric_refs=legacy_scope.target_metric_refs,
-        dimension_refs=legacy_scope.dimension_refs,
+        # 新契约要求时间绑定的维度必须在 Scope 内；旧冻结把默认时间维度单独
+        # 挂在 time_bindings 上而不列入 scope.dimension_refs，这里做确定性并集。
+        dimension_refs=tuple(
+            dict.fromkeys((*legacy_scope.dimension_refs, *extra_dimension_refs))
+        ),
         driver_metric_refs=legacy_scope.driver_metric_refs,
         allowed_filter_refs=legacy_scope.allowed_filter_refs,
         hierarchies=hierarchies,
@@ -288,6 +313,26 @@ def _default_evidence_requirements(
     )
 
 
+class _ExecutionDeadlineBudget:
+    """把新契约 ``ResearchBudget`` 适配成执行服务的墙钟预算表面。
+
+    ``AnalysisExecutionService`` 读取 ``state.budget.remaining_seconds()`` 计算
+    查询任务截止（run 1278 冒烟回归：投影态缺 budget 直接 AttributeError）。
+    研究循环的整跑时长由 Harness 按 ``max_duration_seconds`` 单独约束，这里
+    以每次执行构造时刻起算，只保证单次查询的截止不超过剩余时长上限。
+    """
+
+    def __init__(self, budget: Any) -> None:
+        self._budget = budget
+        self._started_at = time.monotonic()
+
+    def remaining_seconds(self) -> float:
+        limit = float(getattr(self._budget, "max_duration_seconds", 0) or 0)
+        if limit <= 0:
+            return float("inf")
+        return max(limit - (time.monotonic() - self._started_at), 0.0)
+
+
 @dataclass
 class ResearchExecutionState:
     """把 ResearchToolContext 投影成 AnalysisExecutionService 的状态表面。
@@ -305,6 +350,12 @@ class ResearchExecutionState:
         if self.run.id is None:
             raise RuntimeError("AGENT_RUN_ID_MISSING")
         return self.run.id
+
+    @property
+    def budget(self) -> Any:
+        """执行服务读取的墙钟预算表面；见 :class:`_ExecutionDeadlineBudget`。"""
+
+        return _ExecutionDeadlineBudget(getattr(self.ctx, "budget", None))
 
     @property
     def context(self) -> Any:
