@@ -35,11 +35,14 @@ from apps.chatbi.orchestration.pipeline.research_agent import (
     ResearchAgentRunOutcome,
 )
 from apps.chatbi.services.research.run_lifecycle import load_research_state
+from apps.chatbi.services.research.scope_stamp import (
+    allowed_asset_references,
+    governed_asset_refs,
+    stamp_semantic_scope,
+)
 from apps.chatbi.services.research.shadow import build_shadow_agent_requirement
 from apps.event import RenderEvent
-from apps.retrieval import ExecutableAssetReference, RetrievalResourceType
-from apps.semantic.models.dto import DatasetSchema
-from apps.tool.tools.semantic_contracts import SemanticAssetScope
+from apps.retrieval import ExecutableAssetReference
 from apps.trace import AgentTraceRecorder
 
 logger = logging.getLogger(__name__)
@@ -180,78 +183,35 @@ class ResearchAgentPipeline:
                 "RESEARCH_AGENT_SCOPE_MISSING",
                 "agent 引擎要求路由期检索 Scope，但执行输入中缺失。",
             )
-        scope = (
-            raw_scope
-            if isinstance(raw_scope, SemanticAssetScope)
-            else SemanticAssetScope.model_validate(raw_scope)
+        stamped = stamp_semantic_scope(
+            scope=raw_scope,
+            schema_payload=schema_payload,
+            scope_fingerprint=scope_fingerprint,
+            permission_fingerprint=permission_fingerprint,
+            allowed_asset_refs=allowed_asset_refs,
         )
-        enriched = scope.model_copy(
-            update={
-                "schema_snapshot": DatasetSchema.model_validate(schema_payload),
-                "scope_fingerprint": scope_fingerprint,
-                "permission_fingerprint": permission_fingerprint,
-                "allowed_assets": self._allowed_asset_references(allowed_asset_refs),
-            }
-        )
-        stamped = enriched.model_dump(mode="json")
         state.context.state["semantic_scope"] = stamped
         return stamped
 
     @staticmethod
     def _governed_asset_refs(scope: Any) -> tuple[str, ...]:
-        """从冻结治理 Scope 推导可执行资产引用集合。
+        """委托共享实现；口径说明见 :func:`scope_stamp.governed_asset_refs`。"""
 
-        指标取目标 ∪ 驱动 ∪ 贡献，维度取 Scope 维度 ∪ 贡献维度，剔除
-        ``excluded_asset_refs`` 后按引用去重。口径必须覆盖 semantic_query_builder
-        的 SCOPE_DENIED 门允许的全部引用，否则合法查询会因 asset_map 缺项
-        被误判 UNSUPPORTED_CAPABILITY。
-        """
-
-        def _get(key: str) -> list[str]:
-            value = (
-                scope.get(key) if isinstance(scope, dict) else getattr(scope, key, None)
-            )
-            return [item for item in (value or ()) if isinstance(item, str)]
-
-        excluded = set(_get("excluded_asset_refs"))
-        refs: list[str] = []
-        for key in (
-            "target_metric_refs",
-            "driver_metric_refs",
-            "contribution_metric_refs",
-            "dimension_refs",
-            "contribution_dimension_refs",
-        ):
-            refs.extend(item for item in _get(key) if item not in excluded)
-        return tuple(dict.fromkeys(refs))
+        return governed_asset_refs(scope)
 
     @staticmethod
     def _allowed_asset_references(
         refs: tuple[str, ...],
     ) -> tuple[ExecutableAssetReference, ...]:
-        """把 ``KIND:资产ID:模型ID`` 冻结引用物化为运行时可执行资产。"""
+        """委托共享实现；非法引用按管道契约显式失败（fail-loud 不变）。"""
 
-        references: list[ExecutableAssetReference] = []
-        for ref in refs:
-            parts = ref.split(":")
-            if (
-                len(parts) != 3
-                or not parts[1].isdigit()
-                or not parts[2].isdigit()
-                or parts[0] not in {item.value for item in RetrievalResourceType}
-            ):
-                raise ResearchPipelineError(
-                    "RESEARCH_AGENT_REQUIREMENT_INVALID",
-                    f"冻结 Scope 含非法资产引用：{ref!r}",
-                )
-            references.append(
-                ExecutableAssetReference(
-                    asset_type=RetrievalResourceType(parts[0]),
-                    asset_id=int(parts[1]),
-                    model_id=int(parts[2]),
-                )
-            )
-        return tuple(references)
+        try:
+            return allowed_asset_references(refs)
+        except ValueError as exc:
+            raise ResearchPipelineError(
+                "RESEARCH_AGENT_REQUIREMENT_INVALID",
+                str(exc),
+            ) from exc
 
     def _stamp_scope_from_frozen(self, state: AgentRuntimeState) -> dict[str, Any]:
         """恢复续跑前按行上冻结的新契约 Requirement 补齐 Scope 指纹。"""

@@ -2212,6 +2212,150 @@ contracts/runtime/pipeline/harness 四套。
 preparation 阶段拒绝，3.2s）——拒绝发生在路由期冻结点（引擎无关），
 agent 模式未改变越界防护行为。
 
+### 双引擎全量门槛样本（2026-08-23）
+
+用例集全量 11 例 × 双引擎各跑一遍，产出首批切流门槛样本：
+
+| 引擎 | pass | correct_reject | explicit_failure | silent_error |
+| --- | --- | --- | --- | --- |
+| legacy | 5 | 2 | 3 | 1 |
+| agent（判分初版） | 2 | 2 | 3 | 4 |
+| agent（评分保真修复复评后） | 4 | 2 | 3 | 2 |
+
+注：agent 复评后为 6/11 pass/correct-reject（legacy 7/11）。三例
+explicit_failure（002/004/006）与两例 correct_reject（008/009）两引擎
+错误码完全一致，均为路由/准备期引擎无关行为。
+
+**比较器评测入口**：`normalize_agent_side` 补主路径回退——无 shadow 标记
+时从新形状 `research_state.requirement` 读冻结输入（标记优先，漂移副本
+不参与比较），+2 测试；新增 `scripts/compare_research_agent_eval.py`
+按 case 配对两份结果文件、取 DB `derived_state` 交 `compare_dual_runs`
+出四组维度报告。
+
+**评分保真修复（不放宽口径，只读出实际发生的事实）**：
+- 证据补 `batch_id ← iteration`：新引擎同一助手轮次发出的一批查询共享
+  iteration，是 legacy"并行批次"的忠实类比；`parallel_directions` 判定
+  据此恢复（cause-010 实际 it1 同批覆盖两要求维度）。
+- 新增 `covered_hierarchy_ids` 还原：新证据不携带 hierarchy_id，但下钻的
+  可观测特征是"证据维度位于层级深层且 applied filter 指向同层级上级"，
+  从冻结 Scope 层级定义确定性还原（cause-003 实际完成 277→278 下钻带
+  继承筛选）。二者均经离线复评验证转 pass。
+- 离线复评工具：不重跑模型，从存量 run 的 derived_state 重算
+  outcome/checks 后落盘修正版结果文件。
+
+**剩余真实质量差距（能力存在、模型未用，属门槛观察项而非代码缺口）**：
+- cause-005 driver_validation：模型把三个驱动指标查进了证据但从未声明
+  hypothesis_ids（`query_semantic_data` 入参支持假设流），driver 覆盖
+  口径与 legacy 一致地只认假设验证联动；
+- cause-011 budget exhaustion 观察：模型在第 2 轮以 no_new_direction 提前
+  收口（queries 余 3 / iterations 余 2），未如 legacy 观察到预算边界；
+- 反向样本：cause-007 legacy silent_error 而 agent pass（单次波动）。
+
+**冻结输入同源实证**：比较器 input 组五维（goal/target/filters/
+time_roles/scope_fingerprint）在全部 11 对双跑上 verdict=equal。
+
+数据文件：`data/research_agent_eval_{legacy_full,agent_full,
+agent_rescored}_20260823.json` + `research_agent_eval_comparison_20260823.json`。
+
+### 切流就绪判定接线（2026-08-23 补录）
+
+补齐 §11.7 遗留的代码缺口：``CHATBI_RESEARCH_EVAL_CONFIG`` 此前无任何生产
+消费者，``QualityThresholdSet``/硬门禁只有测试在调——"配置→判定"链路不存在。
+
+**新增 `apps/chatbi/services/research/readiness.py`**：
+- `load_quality_thresholds` / `load_runtime_limits`：读评测配置 JSON
+  （`{"quality": {...}, "runtime": {...}}`）。路径为空=未配置→质量门槛
+  全量 `not_configured` 阻断；文件缺失/JSON 非法则显式报错（离线判定
+  fail loud，绝不静默当未配置）；运行上限未配置时 `runtime_passed` 恒
+  False，同样保守阻断；
+- `DualPair`：一对双跑派生状态，来源 `shadow`（库内标记行）或 `eval`
+  （评测文件配对），判定逻辑对来源不敏感；
+- `compute_quality_metrics`：§11.3.4 五指标的持久化口径——目标指标证据
+  覆盖率、成功态零证据静默率、拒绝一致性、报告引用自洽率（复用硬门禁
+  citation 结论）、无效查询占比（重复请求由指纹/熔断执行前拦截，持久化
+  面以失败查询观察为代理）；两侧都无研究事实的引擎无关 pair 不进分母，
+  一侧缺一侧在反而是最重回归信号必须参与硬门禁；
+- `build_readiness_report`：逐 pair 硬门禁＋质量聚合＋运行门槛 →
+  `RolloutReadinessReport`（promote/blocked）＋诊断明细。
+
+**gates 补丁**：`_requirement_payload` 对 agent 侧增加主路径嵌入回退
+（无 shadow 标记时读新形状 `research_state.requirement`），与比较器
+normalize 同口径——评测配对的硬门禁不再误报 FROZEN_INPUT_MISSING。
+
+**新增 CLI `scripts/evaluate_research_rollout.py`**：默认扫库内 shadow
+双跑行组成 pair，`--eval-legacy/--eval-agent` 支持评测文件基线模式；
+产出 promote/blocked、逐项 blocker 与质量指标 JSON 报告。
+
+测试：`tests/chatbi/test_research_readiness.py` 14 项（配置加载形状/
+五指标口径/三层总装 promote·blocked 转换）；shadow 套件 32 项含比较器
+回退 2 项。
+
+**阈值提案**（`data/research_eval_thresholds_proposal_20260823.json`，
+待运营拍板，拍板前 EVAL_CONFIG 保持为空）：按"不低于旧路径"取 legacy
+同口径基线——hit≥1.0 / silent≤0.0 / reject≥1.0 / support≥1.0 /
+invalid≤0.0。对现有样本的诚实判定结果：**BLOCKED**，命中三项真实差距
+（agent hit 0.833<1.0；correct_reject 分母缺失；invalid 0.381>0，8 次
+失败查询集中在 cause-007/011 两 run 的模型重试行为）。runtime 段待
+shadow 演练积累 ≥20 样本后再定 p95 等上限。
+
+### 真实条件 Shadow 演练（2026-08-23 补录，research-baseline-fix）
+
+单问全链路真数据演练：chat 11197 提问"2026-06-29 总GMV 比 06-28 下降，
+分析原因并量化各档口贡献"，环境变量置 shadow（sample_rate=1.0、
+allowlist=243）后走生产入口 `create_agent_start_events`。前两次演练失败
+暴露五个纯集成测试无法发现的生产接线缺陷（测试夹具自洽但装配走样），
+全部按 research-baseline-fix 修复：
+
+1. **Shadow 缺冻结 Scope 盖章 → 全部查询死于 SEMANTIC_SCOPE_REQUIRED**
+   （映射 PERMISSION_DENIED）。修复：抽共享盖章模块
+   `services/research/scope_stamp.py`（governed_asset_refs /
+   allowed_asset_references / stamp_semantic_scope），主路径 pipeline 与
+   shadow 共用；`ShadowRunMaterial` 增 `semantic_scope`/`schema_snapshot`/
+   `permission_version`/`datasource_id` 四项冻结输入，run_orchestrator
+   `_build_shadow_material` 负责采集，缺失则拒绝启动（fail loud，
+   RESEARCH_SHADOW_SCOPE_INPUT_MISSING）；harness_factory 契约增
+   `context_state_overlay` 关键字注入。
+2. **record stub 把 datasource 写成 dataset_id**（243≠13，ChatRecord
+   字段是 `datasource`）——修完缺陷 1 后必然撞上的下一个边界错。
+3. **harness `_persist_initial_state` 整表替换 derived_state 抹掉
+   shadow 标记** → 孤儿 running 行对比较器/就绪扫描不可见。修复：
+   合并写入；`_finish_row` 标记丢失分支改为 warning+照常落终态快照，
+   不再静默返回。
+4. **PERMISSION_DENIED 观察丢失 internal_code**，无从定位是哪条边界门。
+   修复：`ResearchSemanticQueryOutcome` 增类型化 `internal_code`
+   （≤128 字符，旧载荷不受影响），semantic_runtime 各异常分支捕获，
+   query 工具失败路径并入 observation details（与 plan_id 并列）。
+5. **`AnalysisExecutionService._persist_state` 每次语义查询执行都整表
+   替换 derived_state**——同时打穿双引擎的中途 research_run_snapshot
+   （缺陷 3 修后标记仍被抹即此因）。修复为合并写入。
+
+**终局事实（第三次演练）**：主 run 1309 legacy succeeded（2 证据）；
+shadow run 1310 行 finished 且标记完整存活
+（parent_run_id=1309/mode=shadow/finished_at 时间戳齐全），快照
+succeeded/no_new_direction，2 证据均锚定冻结目标 METRIC:271:246，
+budget 4 queries/4 model_calls，frozen_goal_match=true，
+scope_fingerprint=5456158a…。影子查询在真实库上数值正确（总 GMV
+环比 −42030.39；六档口贡献合计与差额调和误差 ≈−1.45e-11）；期间出现
+一次 citation 三重门的诚实 finish_research 拒绝后才收口。
+
+**就绪 CLI 真实消费**：`scripts/evaluate_research_rollout.py --config
+data/research_eval_thresholds_proposal_20260823.json` 扫库自动配对
+(1309,1310)，9 项硬门禁全过、三项可算质量指标全过（hit=1.0/silent=0/
+support=1.0），诚实 BLOCKED 于两项：correct_reject 无拒绝样本（分母
+缺席，符合预期）；duplicate_invalid_query_rate=0.5>0——经 internal_code
+定位为 2 次 planning 期 ANALYSIS_EXECUTION_PRIMARY_RESULT_NOT_UNIQUE
+（计划 DAG 多叶被构建器拒绝）后的诚实重试，指纹去重正常工作（重试
+指纹不同），属"首次成 plan 通过率"保守代理而非重复浪费；提案阈值
+invalid≤0.0 对真实流量是否过严留运营拍板（需更多样本分型）。
+
+**已知残留限制（记录不修）**：shadow 侧 trace-detail 写入因 recorder
+要求 chat_id+record_id（TRACE_DETAIL_OWNERSHIP_REQUIRED）而丢弃明细，
+节点仍落盘。
+
+回归基线：chatbi 803 过/16 已知环境性（test_graph_api 配置缺失）+
+agent 117 过/31 已知；新增/调整测试 6 处全部通过（shadow 36、harness
+18、tools internal_code、analysis_execution 合并语义）。
+
 # 12. 阶段 8：删除旧 ResearchAction
 
 ## 12.1 这个阶段是干什么的
@@ -2637,7 +2781,7 @@ Research 核心重构完成需要满足：
 | 4 状态、证据依赖和恢复 | 已完成 | 2026-08-23 | 见 8.8；16 项状态/恢复测试通过，提交边界 + 恢复 + 取消落地，无新表 |
 | 5 Research Agent Harness | 已完成 | 2026-08-23 | 见 9.7；17 项 Harness 测试通过，动态循环 + 前提确认 + 提交边界/恢复/取消接线落地，新路径仅在测试运行 |
 | 6 假设、完成度和报告 | 已完成 | 2026-08-23 | 见 10.7；22 项结论可信层测试通过，finish 三重门禁（完成度/假设裁决/报告硬校验）+ 部分/最终报告落地，新路径仅在测试运行 |
-| 7 Shadow 双跑、评测和切流 | 已完成（含 7.5 切流接线；切流判定待评测配置接入） | 2026-08-23 | 见 11.7/11.8；29+19 项 Shadow/比较器/门禁/切流/接线测试通过，agent 成为可切换引擎（默认仍 legacy），质量/运行/演练三项待运营数据 |
+| 7 Shadow 双跑、评测和切流 | 已完成（含 7.5 切流接线＋真实条件演练：5 缺陷修复后单问全链路成功并经就绪 CLI 真实消费） | 2026-08-23 | 见 11.7/11.8；29+19 项 Shadow/比较器/门禁/切流/接线测试通过，agent 成为可切换引擎（默认仍 legacy），质量/运行/演练三项待运营数据（真实演练样本 1 对已入判定，BLOCKED 项分析见 §11.8） |
 | 8 删除旧 ResearchAction | 进行中（准备与审计完成；删除执行待 §12.2.2–3，条件 1 代码侧已闭合） | - | 准备见 docs/TDD/39 与 12.6；执行日按 doc39 §7 runbook 核对 §12.5 |
 | 9 受限 SQL 和资产回流 | 待开始 | - | - |
 

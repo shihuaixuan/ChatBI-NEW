@@ -190,6 +190,12 @@ def _requirement_payload(
         if isinstance(requirement_payload, dict):
             resolved_requirement: dict[str, Any] = requirement_payload
             return resolved_requirement
+        # 评测双跑的 agent 主路径行没有 shadow 标记；冻结 Requirement 锚在
+        # 新形状 research_state 的 requirement 字段上。回退读取与比较器
+        # normalize_agent_side 同口径；两处都没有时按缺失记越界。
+        embedded = (derived_state.get("research_state") or {}).get("requirement")
+        if isinstance(embedded, dict):
+            return embedded
         return {}
     execution = derived_state.get("execution_requirement")
     if isinstance(execution, dict):

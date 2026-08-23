@@ -157,6 +157,13 @@ def normalize_agent_side(derived_state: dict[str, Any]) -> RunFacts:
     snapshot = dict(derived_state.get("research_run_snapshot") or {})
     marker = dict(derived_state.get(_shadow_marker_key()) or {})
     requirement = dict(marker.get("requirement") or {})
+    if not requirement:
+        # 评测双跑的 agent 主路径行没有 shadow 标记；其冻结 Requirement 锚在
+        # 新形状 research_state 的 requirement 字段上。回退读取保持输入组
+        # 维度可比；两处都没有时维持缺失语义，不猜测相等（§11.3.2）。
+        embedded = (derived_state.get("research_state") or {}).get("requirement")
+        if isinstance(embedded, dict):
+            requirement = embedded
     evidences = [item for item in (snapshot.get("evidences") or []) if isinstance(item, dict)]
     usage = dict(snapshot.get("budget_usage") or {})
     version = dict(requirement.get("version_snapshot") or {})

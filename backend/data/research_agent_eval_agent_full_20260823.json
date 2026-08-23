@@ -1,0 +1,4565 @@
+{
+  "eval_meta": {
+    "engine": "agent",
+    "observability_contract_version": "phase0-v2",
+    "ran_at": "2026-08-23T16:56:49",
+    "tenant_id": 1,
+    "user_id": 1,
+    "dataset_id": 243,
+    "datasource_id": 13,
+    "model": null,
+    "model_unavailable_reason": "run_config_model_fields_missing",
+    "cases_file": "backend/scripts/data/research_agent_eval_cases.json",
+    "cases_file_version": 2,
+    "cases_file_sha256": "cab5686745f2d8bc6de942f77a5d90ca9f0a2360e63ebedea3bc6035ee37c116",
+    "schema_version": 22,
+    "contract_version": 3,
+    "schema_fingerprint": null,
+    "schema_fingerprint_unavailable_reason": "run_version_snapshot_missing",
+    "scope_fingerprint": null,
+    "scope_fingerprint_unavailable_reason": "run_version_snapshot_missing",
+    "covered_categories": [
+      1,
+      2,
+      3,
+      4,
+      6,
+      7,
+      8,
+      9,
+      10,
+      12,
+      13,
+      15,
+      16,
+      18,
+      19,
+      20,
+      22,
+      23
+    ],
+    "uncovered_categories": [
+      "11_语义能力不支持",
+      "14_查询执行失败和超时",
+      "17_部分查询成功部分失败",
+      "21_取消和恢复",
+      "24_权限和租户隔离",
+      "5_跳级下钻拒绝",
+      "_comment"
+    ],
+    "code": {
+      "commit": "8bf21a30a71084551da522088ae29de8d52af1cd",
+      "dirty": true
+    }
+  },
+  "aggregate": {
+    "total_cases": 11,
+    "pass": 2,
+    "correct_reject": 2,
+    "explicit_failure": 3,
+    "silent_error": 4,
+    "harness_error": 0,
+    "rates": {
+      "pass_rate": 0.1818,
+      "correct_reject_rate": 0.1818,
+      "explicit_failure_rate": 0.2727,
+      "silent_error_rate": 0.3636
+    },
+    "hard_invariant_failures": {},
+    "case_check_failure_distribution": {
+      "research_status_allowed": 3,
+      "finish_reason_allowed": 3,
+      "time_roles_required_observed": 3,
+      "target_metric_required_observed": 3,
+      "required_dimension_refs_covered": 2,
+      "required_pattern:baseline_single_period": 1,
+      "required_pattern:result_driven_filter": 1,
+      "required_pattern:hierarchy_drilldown": 1,
+      "execution_mode_is_research": 1,
+      "required_pattern:premise_confirmation": 2,
+      "required_pattern:contribution_reconciled": 1,
+      "hypothesis_with_evidence_present": 1,
+      "required_pattern:driver_validation": 1,
+      "required_pattern:parallel_directions": 1,
+      "budget:exhaustion_observed": 1
+    },
+    "action_error_code_distribution": {
+      "结论校验失败：存在无法溯源或超出证据强度的表述。": 8,
+      "参数不合法：Value error, RESEARCH_AGENT_FINISH_CLAIM_CITATION_MISSING": 2,
+      "查询结果为空": 1,
+      "INVALID_REQUEST": 6,
+      "工具 compute_evidence 参数不合法: 1 validation error for ComputeEvidenceArgs\npurpose\n  Extra inputs are not permitted [type=extra_forbidden, input_value='计算各档口GMV下降...GMV下降的贡献度', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden": 1
+    },
+    "runtime_summary": {
+      "avg_duration_s": 17.2,
+      "max_duration_s": 47.6,
+      "avg_model_calls_observed": 3.8,
+      "avg_queries_observed": null,
+      "model_calls_observed_cases": 6,
+      "queries_observed_cases": 0,
+      "eval_wall_time_s": 189.6
+    }
+  },
+  "records": [
+    {
+      "case_id": "research-cause-001",
+      "name": "premise_open_cause",
+      "categories": [
+        1
+      ],
+      "question": "总GMV在2026年6月29日比6月28日明显下降了，帮我找出主要原因，需要的话可以量化各档口对这次下降的贡献。",
+      "outcome": "pass",
+      "violations": [],
+      "engine": "agent",
+      "run": {
+        "id": 1294,
+        "record_id": 13064,
+        "status": "finished",
+        "execution_mode": "research",
+        "error_class": null,
+        "error": null,
+        "matched_routing_error_code": null,
+        "error_codes": [],
+        "rejection_stage": null,
+        "duration_s": 40.9,
+        "config": {
+          "enabled": true,
+          "max_steps": 12,
+          "sample_rows": 10,
+          "token_budget": 100000,
+          "default_limit": 100,
+          "history_rounds": 3,
+          "compute_enabled": true,
+          "execution_modes": [
+            "fast",
+            "plan",
+            "research"
+          ],
+          "max_sql_retries": 2,
+          "timeout_seconds": 120,
+          "summary_max_chars": 4000,
+          "context_fold_chars": 30000,
+          "max_clarifications": 2,
+          "datasource_allowlist": [],
+          "plan_max_query_tasks": 5,
+          "research_max_queries": 8,
+          "tool_timeout_seconds": 60.0,
+          "repeat_fuse_threshold": 3,
+          "tool_parallel_workers": 4,
+          "plan_query_concurrency": 4,
+          "query_transient_retries": 1,
+          "research_execution_mode": "agent",
+          "research_max_iterations": 6,
+          "answer_citation_enforced": true,
+          "research_max_model_calls": 8,
+          "research_max_stall_turns": 3,
+          "assisted_fallback_enabled": false,
+          "research_max_evidence_rows": 20,
+          "research_max_evidence_chars": 12000,
+          "research_shadow_sample_rate": 0.0,
+          "tool_default_timeout_seconds": 30.0,
+          "research_max_duration_seconds": 300,
+          "research_shadow_tenant_allowlist": [],
+          "research_shadow_dataset_allowlist": [],
+          "research_max_actions_per_iteration": 3
+        },
+        "schema_version": null,
+        "contract_version": null,
+        "schema_fingerprint": null,
+        "scope_fingerprint": null
+      },
+      "research": {
+        "status": "succeeded",
+        "finish_reason": "no_new_direction",
+        "premise_supported": false,
+        "iterations": 2,
+        "evidence_count": 2,
+        "hypotheses": [],
+        "covered_dimension_refs": null,
+        "covered_driver_metric_refs": [],
+        "covered_hierarchy_ids": null,
+        "covered_contribution_dimension_refs": null,
+        "failed_action_error_codes": [
+          "结论校验失败：存在无法溯源或超出证据强度的表述。",
+          "结论校验失败：存在无法溯源或超出证据强度的表述。",
+          "结论校验失败：存在无法溯源或超出证据强度的表述。"
+        ]
+      },
+      "runtime": {
+        "remaining_budget": {
+          "queries": 6,
+          "iterations": 2,
+          "model_calls": 4,
+          "duration_seconds": 300.0
+        },
+        "step_count": 4,
+        "steps_with_token_usage": 0,
+        "total_latency_ms": 29861,
+        "token_usage": {
+          "input": null,
+          "output": null
+        },
+        "availability": {
+          "steps": true,
+          "step_latency": true,
+          "token_usage": false
+        },
+        "tool_calls": {
+          "value": 5,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "trace_nodes": {
+          "value": 23,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "model_calls": {
+          "value": 4,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "queries": {
+          "value": null,
+          "available": false,
+          "lower_bound": 2,
+          "unavailable_reason": "legacy_research_query_fact_not_persisted"
+        },
+        "model_calls_lower_bound": 2,
+        "queries_lower_bound": 2,
+        "plan_count": 2,
+        "result_count": 2,
+        "budget_check": {
+          "max_queries": 8,
+          "max_model_calls": 8,
+          "query_lower_bound": 2,
+          "model_call_lower_bound": 2,
+          "lower_bound_within_limit": true,
+          "actual_values_observed": true
+        },
+        "budget_remaining_snapshot": {
+          "queries": 6,
+          "iterations": 2,
+          "model_calls": 4,
+          "duration_seconds": 300.0
+        },
+        "artifact_size_bytes": 172,
+        "artifact_size_available": true,
+        "model_calls_used_estimated": null,
+        "queries_used_estimated": null
+      },
+      "report_summary": null,
+      "findings": [],
+      "limitations": null,
+      "evidence_digest": [
+        {
+          "evidence_id": "evidence:research-query-4d62ed02dd093a0f",
+          "purpose": "建立总GMV在current(6/29)与previous(6/28)的基线水平，确认下降幅度",
+          "metric_refs": [
+            "METRIC:271:246"
+          ],
+          "dimension_refs": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "METRIC:271:246",
+              "value_role": "difference",
+              "result_field": "gmv_total_difference"
+            },
+            {
+              "result_field": "gmv_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "gmv_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": -42030.389999999985,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": 99194.88,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 141225.27,
+                  "logical_column_index": 2
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [],
+          "lineage": null,
+          "row_count": 1,
+          "truncated": false
+        },
+        {
+          "evidence_id": "evidence:research-query-b3d2c390554a8adc",
+          "purpose": "按档口(DIMENSION:278)分解GMV，观察各档口current与previous及贡献",
+          "metric_refs": [
+            "METRIC:271:246"
+          ],
+          "dimension_refs": [
+            "DIMENSION:278:246"
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "DIMENSION:278:246",
+              "value_role": "group_key",
+              "result_field": "dimension_1"
+            },
+            {
+              "asset_ref": "METRIC:271:246",
+              "value_role": "contribution",
+              "result_field": "gmv_total_contribution"
+            },
+            {
+              "result_field": "total_difference",
+              "value_role": "difference"
+            },
+            {
+              "result_field": "gmv_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "gmv_total_previous",
+              "value_role": "previous"
+            },
+            {
+              "result_field": "gmv_total_difference",
+              "value_role": "difference"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": 100011,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": 0.06713618408013827,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -42030.389999999985,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 28308.48,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 31130.24,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": -2821.760000000002,
+                  "logical_column_index": 5
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100022,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": 0.16712002910275164,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -42030.389999999985,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 23603.2,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 30627.32,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": -7024.119999999999,
+                  "logical_column_index": 5
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100021,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": 0.19611428778081771,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -42030.389999999985,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 14246.4,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 22489.16,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": -8242.76,
+                  "logical_column_index": 5
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100012,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": 0.013848788935815292,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -42030.389999999985,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 13114.88,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 13696.95,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": -582.0700000000015,
+                  "logical_column_index": 5
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100023,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": 0.16558875613573898,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -42030.389999999985,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 11358.72,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 18318.48,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": -6959.76,
+                  "logical_column_index": 5
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100013,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": 0.3901919539647385,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -42030.389999999985,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 8563.2,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 24963.12,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": -16399.92,
+                  "logical_column_index": 5
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [],
+          "lineage": null,
+          "row_count": 6,
+          "truncated": false
+        }
+      ],
+      "checks": [
+        {
+          "name": "execution_mode_is_research",
+          "ok": true,
+          "detail": "got research"
+        },
+        {
+          "name": "research_status_allowed",
+          "ok": true,
+          "detail": "got succeeded, allowed=['succeeded', 'partial']"
+        },
+        {
+          "name": "finish_reason_allowed",
+          "ok": true,
+          "detail": "got no_new_direction, allowed=['sufficient_evidence', 'no_new_direction', 'budget_exhausted', 'partial_failure']"
+        },
+        {
+          "name": "time_roles_retained",
+          "ok": true
+        },
+        {
+          "name": "time_roles_required_observed",
+          "ok": true
+        },
+        {
+          "name": "target_metric_scope_kept",
+          "ok": true
+        },
+        {
+          "name": "target_metric_required_observed",
+          "ok": true
+        },
+        {
+          "name": "required_dimension_refs_covered",
+          "ok": true,
+          "detail": "missing=[]"
+        },
+        {
+          "name": "required_pattern:premise_confirmation",
+          "ok": true
+        },
+        {
+          "name": "required_pattern:dimension_breakdown",
+          "ok": true
+        },
+        {
+          "name": "budget:case_limits_respected",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "max_queries": 8,
+            "max_model_calls": 8,
+            "queries": 2,
+            "model_calls": 4,
+            "query_count_kind": "lower_bound",
+            "model_call_count_kind": "observed"
+          }
+        },
+        {
+          "name": "invariant:no_cross_run_or_unknown_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:evidence_ownership_observed",
+          "ok": true,
+          "available": true
+        },
+        {
+          "name": "invariant:findings_have_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_duplicate_action_execution",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_causal_claim_on_correlation",
+          "ok": true
+        },
+        {
+          "name": "invariant:report_numbers_from_cited_evidence",
+          "ok": true,
+          "available": false
+        },
+        {
+          "name": "invariant:evidence_dependency_ordering",
+          "ok": true,
+          "available": true
+        }
+      ]
+    },
+    {
+      "case_id": "research-cause-002",
+      "name": "open_exploration_no_premise",
+      "categories": [
+        2,
+        3
+      ],
+      "question": "2026年6月29日总GMV在各档口的分布情况如何？请先找出表现最异常的档口，再根据该档口的数据继续深入分析原因。",
+      "outcome": "explicit_failure",
+      "violations": [
+        "research_status_allowed [got None, allowed=['succeeded', 'partial']]",
+        "finish_reason_allowed [got None, allowed=['sufficient_evidence', 'no_new_direction', 'data_insufficient', 'budget_exhausted', 'partial_failure']]",
+        "time_roles_required_observed [missing=['single']]",
+        "target_metric_required_observed [missing=['METRIC:271:246']]",
+        "required_dimension_refs_covered [missing=['DIMENSION:278:246']]",
+        "required_pattern:baseline_single_period",
+        "required_pattern:result_driven_filter"
+      ],
+      "engine": "agent",
+      "run": {
+        "id": 1295,
+        "record_id": 13066,
+        "status": "failed",
+        "execution_mode": "research",
+        "error_class": "plan_invalid",
+        "error": "RESEARCH_GOVERNANCE_CONTRACT_INVALID",
+        "matched_routing_error_code": null,
+        "error_codes": [
+          "RESEARCH_GOVERNANCE_CONTRACT_INVALID"
+        ],
+        "rejection_stage": null,
+        "duration_s": 2.7,
+        "config": {
+          "enabled": true,
+          "max_steps": 12,
+          "sample_rows": 10,
+          "token_budget": 100000,
+          "default_limit": 100,
+          "history_rounds": 3,
+          "compute_enabled": true,
+          "execution_modes": [
+            "fast",
+            "plan",
+            "research"
+          ],
+          "max_sql_retries": 2,
+          "timeout_seconds": 120,
+          "summary_max_chars": 4000,
+          "context_fold_chars": 30000,
+          "max_clarifications": 2,
+          "datasource_allowlist": [],
+          "plan_max_query_tasks": 5,
+          "research_max_queries": 8,
+          "tool_timeout_seconds": 60.0,
+          "repeat_fuse_threshold": 3,
+          "tool_parallel_workers": 4,
+          "plan_query_concurrency": 4,
+          "query_transient_retries": 1,
+          "research_execution_mode": "agent",
+          "research_max_iterations": 6,
+          "answer_citation_enforced": true,
+          "research_max_model_calls": 8,
+          "research_max_stall_turns": 3,
+          "assisted_fallback_enabled": false,
+          "research_max_evidence_rows": 20,
+          "research_max_evidence_chars": 12000,
+          "research_shadow_sample_rate": 0.0,
+          "tool_default_timeout_seconds": 30.0,
+          "research_max_duration_seconds": 300,
+          "research_shadow_tenant_allowlist": [],
+          "research_shadow_dataset_allowlist": [],
+          "research_max_actions_per_iteration": 3
+        },
+        "schema_version": null,
+        "contract_version": null,
+        "schema_fingerprint": null,
+        "scope_fingerprint": null
+      },
+      "research": {
+        "status": null,
+        "finish_reason": null,
+        "premise_supported": null,
+        "iterations": 0,
+        "evidence_count": 0,
+        "hypotheses": null,
+        "covered_dimension_refs": null,
+        "covered_driver_metric_refs": null,
+        "covered_hierarchy_ids": null,
+        "covered_contribution_dimension_refs": null,
+        "failed_action_error_codes": []
+      },
+      "runtime": {
+        "remaining_budget": {},
+        "step_count": 0,
+        "steps_with_token_usage": 0,
+        "total_latency_ms": null,
+        "token_usage": {
+          "input": null,
+          "output": null
+        },
+        "availability": {
+          "steps": true,
+          "step_latency": false,
+          "token_usage": false
+        },
+        "tool_calls": {
+          "value": 0,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "trace_nodes": {
+          "value": 5,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "model_calls": {
+          "value": null,
+          "available": false,
+          "unavailable_reason": "trace_has_no_model_call_nodes"
+        },
+        "queries": {
+          "value": null,
+          "available": false,
+          "lower_bound": 0,
+          "unavailable_reason": "legacy_research_query_fact_not_persisted"
+        },
+        "model_calls_lower_bound": 0,
+        "queries_lower_bound": 0,
+        "plan_count": 0,
+        "result_count": 0,
+        "budget_check": {
+          "max_queries": 8,
+          "max_model_calls": 8,
+          "query_lower_bound": 0,
+          "model_call_lower_bound": 0,
+          "lower_bound_within_limit": true,
+          "actual_values_observed": true
+        },
+        "budget_remaining_snapshot": {},
+        "artifact_size_bytes": null,
+        "artifact_size_available": false,
+        "model_calls_used_estimated": null,
+        "queries_used_estimated": null
+      },
+      "report_summary": null,
+      "findings": [],
+      "limitations": null,
+      "evidence_digest": [],
+      "checks": [
+        {
+          "name": "execution_mode_is_research",
+          "ok": true,
+          "detail": "got research"
+        },
+        {
+          "name": "research_status_allowed",
+          "ok": false,
+          "detail": "got None, allowed=['succeeded', 'partial']"
+        },
+        {
+          "name": "finish_reason_allowed",
+          "ok": false,
+          "detail": "got None, allowed=['sufficient_evidence', 'no_new_direction', 'data_insufficient', 'budget_exhausted', 'partial_failure']"
+        },
+        {
+          "name": "time_roles_retained",
+          "ok": true
+        },
+        {
+          "name": "time_roles_required_observed",
+          "ok": false,
+          "detail": "missing=['single']"
+        },
+        {
+          "name": "target_metric_scope_kept",
+          "ok": true
+        },
+        {
+          "name": "target_metric_required_observed",
+          "ok": false,
+          "detail": "missing=['METRIC:271:246']"
+        },
+        {
+          "name": "required_dimension_refs_covered",
+          "ok": false,
+          "detail": "missing=['DIMENSION:278:246']"
+        },
+        {
+          "name": "required_pattern:baseline_single_period",
+          "ok": false
+        },
+        {
+          "name": "required_pattern:result_driven_filter",
+          "ok": false
+        },
+        {
+          "name": "forbidden_pattern:premise_confirmation",
+          "ok": true
+        },
+        {
+          "name": "budget:case_limits_respected",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "max_queries": 8,
+            "max_model_calls": 8,
+            "queries": 0,
+            "model_calls": 0,
+            "query_count_kind": "lower_bound",
+            "model_call_count_kind": "lower_bound"
+          }
+        },
+        {
+          "name": "invariant:no_cross_run_or_unknown_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:evidence_ownership_observed",
+          "ok": true,
+          "available": true
+        },
+        {
+          "name": "invariant:findings_have_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_duplicate_action_execution",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_causal_claim_on_correlation",
+          "ok": true
+        },
+        {
+          "name": "invariant:report_numbers_from_cited_evidence",
+          "ok": true,
+          "available": false
+        },
+        {
+          "name": "invariant:evidence_dependency_ordering",
+          "ok": true,
+          "available": true,
+          "detail": "research did not start; dependency check not applicable"
+        }
+      ]
+    },
+    {
+      "case_id": "research-cause-003",
+      "name": "result_driven_hierarchy_drilldown",
+      "categories": [
+        1,
+        3,
+        4
+      ],
+      "question": "2026年6月29日总GMV比6月28日下降了，请找出下降最大的商家，然后继续下钻分析该商家下各档口的下降情况。",
+      "outcome": "silent_error",
+      "violations": [
+        "required_pattern:hierarchy_drilldown"
+      ],
+      "engine": "agent",
+      "run": {
+        "id": 1296,
+        "record_id": 13068,
+        "status": "finished",
+        "execution_mode": "research",
+        "error_class": null,
+        "error": null,
+        "matched_routing_error_code": null,
+        "error_codes": [],
+        "rejection_stage": null,
+        "duration_s": 21.1,
+        "config": {
+          "enabled": true,
+          "max_steps": 12,
+          "sample_rows": 10,
+          "token_budget": 100000,
+          "default_limit": 100,
+          "history_rounds": 3,
+          "compute_enabled": true,
+          "execution_modes": [
+            "fast",
+            "plan",
+            "research"
+          ],
+          "max_sql_retries": 2,
+          "timeout_seconds": 120,
+          "summary_max_chars": 4000,
+          "context_fold_chars": 30000,
+          "max_clarifications": 2,
+          "datasource_allowlist": [],
+          "plan_max_query_tasks": 5,
+          "research_max_queries": 8,
+          "tool_timeout_seconds": 60.0,
+          "repeat_fuse_threshold": 3,
+          "tool_parallel_workers": 4,
+          "plan_query_concurrency": 4,
+          "query_transient_retries": 1,
+          "research_execution_mode": "agent",
+          "research_max_iterations": 6,
+          "answer_citation_enforced": true,
+          "research_max_model_calls": 8,
+          "research_max_stall_turns": 3,
+          "assisted_fallback_enabled": false,
+          "research_max_evidence_rows": 20,
+          "research_max_evidence_chars": 12000,
+          "research_shadow_sample_rate": 0.0,
+          "tool_default_timeout_seconds": 30.0,
+          "research_max_duration_seconds": 300,
+          "research_shadow_tenant_allowlist": [],
+          "research_shadow_dataset_allowlist": [],
+          "research_max_actions_per_iteration": 3
+        },
+        "schema_version": null,
+        "contract_version": null,
+        "schema_fingerprint": null,
+        "scope_fingerprint": null
+      },
+      "research": {
+        "status": "succeeded",
+        "finish_reason": "no_new_direction",
+        "premise_supported": false,
+        "iterations": 3,
+        "evidence_count": 2,
+        "hypotheses": [],
+        "covered_dimension_refs": null,
+        "covered_driver_metric_refs": [],
+        "covered_hierarchy_ids": null,
+        "covered_contribution_dimension_refs": null,
+        "failed_action_error_codes": [
+          "结论校验失败：存在无法溯源或超出证据强度的表述。",
+          "结论校验失败：存在无法溯源或超出证据强度的表述。"
+        ]
+      },
+      "runtime": {
+        "remaining_budget": {
+          "queries": 6,
+          "iterations": 2,
+          "model_calls": 4,
+          "duration_seconds": 300.0
+        },
+        "step_count": 4,
+        "steps_with_token_usage": 0,
+        "total_latency_ms": 17793,
+        "token_usage": {
+          "input": null,
+          "output": null
+        },
+        "availability": {
+          "steps": true,
+          "step_latency": true,
+          "token_usage": false
+        },
+        "tool_calls": {
+          "value": 4,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "trace_nodes": {
+          "value": 23,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "model_calls": {
+          "value": 4,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "queries": {
+          "value": null,
+          "available": false,
+          "lower_bound": 2,
+          "unavailable_reason": "legacy_research_query_fact_not_persisted"
+        },
+        "model_calls_lower_bound": 3,
+        "queries_lower_bound": 2,
+        "plan_count": 2,
+        "result_count": 2,
+        "budget_check": {
+          "max_queries": 8,
+          "max_model_calls": 8,
+          "query_lower_bound": 2,
+          "model_call_lower_bound": 3,
+          "lower_bound_within_limit": true,
+          "actual_values_observed": true
+        },
+        "budget_remaining_snapshot": {
+          "queries": 6,
+          "iterations": 2,
+          "model_calls": 4,
+          "duration_seconds": 300.0
+        },
+        "artifact_size_bytes": 359,
+        "artifact_size_available": true,
+        "model_calls_used_estimated": null,
+        "queries_used_estimated": null
+      },
+      "report_summary": null,
+      "findings": [],
+      "limitations": null,
+      "evidence_digest": [
+        {
+          "evidence_id": "evidence:research-query-7deb77b896b132f5",
+          "purpose": "找出下降最大的商家（按目标指标 difference 升序排序）",
+          "metric_refs": [
+            "METRIC:271:246"
+          ],
+          "dimension_refs": [
+            "DIMENSION:277:246"
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "DIMENSION:277:246",
+              "value_role": "group_key",
+              "result_field": "dimension_1"
+            },
+            {
+              "asset_ref": "METRIC:271:246",
+              "value_role": "difference",
+              "result_field": "gmv_total_difference"
+            },
+            {
+              "result_field": "gmv_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "gmv_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": 10002,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -22226.640000000007,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 49208.32,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 71434.96,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 10001,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -19803.75,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 49986.56,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 69790.31,
+                  "logical_column_index": 3
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [],
+          "lineage": null,
+          "row_count": 2,
+          "truncated": false
+        },
+        {
+          "evidence_id": "evidence:research-query-4d1690d98a881fc9",
+          "purpose": "下钻分析下降最大商家10002下各档口的下降情况",
+          "metric_refs": [
+            "METRIC:271:246"
+          ],
+          "dimension_refs": [
+            "DIMENSION:278:246"
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "DIMENSION:278:246",
+              "value_role": "group_key",
+              "result_field": "dimension_1"
+            },
+            {
+              "asset_ref": "METRIC:271:246",
+              "value_role": "difference",
+              "result_field": "gmv_total_difference"
+            },
+            {
+              "result_field": "gmv_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "gmv_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": 100023,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -6959.76,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 11358.72,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 18318.48,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100021,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -8242.76,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 14246.4,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 22489.16,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100022,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -7024.119999999999,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 23603.2,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 30627.32,
+                  "logical_column_index": 3
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [
+            {
+              "value": 10002,
+              "operator": "=",
+              "target_ref": "DIMENSION:277:246"
+            }
+          ],
+          "lineage": null,
+          "row_count": 3,
+          "truncated": false
+        }
+      ],
+      "checks": [
+        {
+          "name": "execution_mode_is_research",
+          "ok": true,
+          "detail": "got research"
+        },
+        {
+          "name": "research_status_allowed",
+          "ok": true,
+          "detail": "got succeeded, allowed=['succeeded', 'partial']"
+        },
+        {
+          "name": "finish_reason_allowed",
+          "ok": true,
+          "detail": "got no_new_direction, allowed=['sufficient_evidence', 'no_new_direction', 'budget_exhausted', 'partial_failure']"
+        },
+        {
+          "name": "time_roles_retained",
+          "ok": true
+        },
+        {
+          "name": "time_roles_required_observed",
+          "ok": true
+        },
+        {
+          "name": "target_metric_scope_kept",
+          "ok": true
+        },
+        {
+          "name": "target_metric_required_observed",
+          "ok": true
+        },
+        {
+          "name": "required_dimension_refs_covered",
+          "ok": true,
+          "detail": "missing=[]"
+        },
+        {
+          "name": "required_pattern:premise_confirmation",
+          "ok": true
+        },
+        {
+          "name": "required_pattern:result_driven_filter",
+          "ok": true
+        },
+        {
+          "name": "required_pattern:hierarchy_drilldown",
+          "ok": false
+        },
+        {
+          "name": "budget:case_limits_respected",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "max_queries": 8,
+            "max_model_calls": 8,
+            "queries": 2,
+            "model_calls": 4,
+            "query_count_kind": "lower_bound",
+            "model_call_count_kind": "observed"
+          }
+        },
+        {
+          "name": "invariant:no_cross_run_or_unknown_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:evidence_ownership_observed",
+          "ok": true,
+          "available": true
+        },
+        {
+          "name": "invariant:findings_have_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_duplicate_action_execution",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_causal_claim_on_correlation",
+          "ok": true
+        },
+        {
+          "name": "invariant:report_numbers_from_cited_evidence",
+          "ok": true,
+          "available": false
+        },
+        {
+          "name": "invariant:evidence_dependency_ordering",
+          "ok": true,
+          "available": true
+        }
+      ]
+    },
+    {
+      "case_id": "research-cause-004",
+      "name": "contribution_reconciliation",
+      "categories": [
+        1,
+        6
+      ],
+      "question": "总GMV在2026年6月29日比6月28日下降了，请计算各档口对这次下降的贡献分别是多少。",
+      "outcome": "explicit_failure",
+      "violations": [
+        "execution_mode_is_research [got plan]",
+        "research_status_allowed [got None, allowed=['succeeded', 'partial']]",
+        "finish_reason_allowed [got None, allowed=['sufficient_evidence', 'no_new_direction', 'budget_exhausted', 'partial_failure']]",
+        "time_roles_required_observed [missing=['current', 'previous']]",
+        "target_metric_required_observed [missing=['METRIC:271:246']]",
+        "required_dimension_refs_covered [missing=['DIMENSION:278:246']]",
+        "required_pattern:premise_confirmation",
+        "required_pattern:contribution_reconciled [contribution/breakdown/total Evidence 不完整]"
+      ],
+      "engine": "agent",
+      "run": {
+        "id": 1297,
+        "record_id": 13070,
+        "status": "failed",
+        "execution_mode": "plan",
+        "error_class": "plan_invalid",
+        "error": "COMPUTE_CONTRIBUTION_DIFFERENCE_COLUMN_REQUIRED",
+        "matched_routing_error_code": null,
+        "error_codes": [
+          "COMPUTE_CONTRIBUTION_DIFFERENCE_COLUMN_REQUIRED"
+        ],
+        "rejection_stage": null,
+        "duration_s": 3.1,
+        "config": {
+          "enabled": true,
+          "max_steps": 12,
+          "sample_rows": 10,
+          "token_budget": 100000,
+          "default_limit": 100,
+          "history_rounds": 3,
+          "compute_enabled": true,
+          "execution_modes": [
+            "fast",
+            "plan",
+            "research"
+          ],
+          "max_sql_retries": 2,
+          "timeout_seconds": 120,
+          "summary_max_chars": 4000,
+          "context_fold_chars": 30000,
+          "max_clarifications": 2,
+          "datasource_allowlist": [],
+          "plan_max_query_tasks": 5,
+          "research_max_queries": 8,
+          "tool_timeout_seconds": 60.0,
+          "repeat_fuse_threshold": 3,
+          "tool_parallel_workers": 4,
+          "plan_query_concurrency": 4,
+          "query_transient_retries": 1,
+          "research_execution_mode": "agent",
+          "research_max_iterations": 6,
+          "answer_citation_enforced": true,
+          "research_max_model_calls": 8,
+          "research_max_stall_turns": 3,
+          "assisted_fallback_enabled": false,
+          "research_max_evidence_rows": 20,
+          "research_max_evidence_chars": 12000,
+          "research_shadow_sample_rate": 0.0,
+          "tool_default_timeout_seconds": 30.0,
+          "research_max_duration_seconds": 300,
+          "research_shadow_tenant_allowlist": [],
+          "research_shadow_dataset_allowlist": [],
+          "research_max_actions_per_iteration": 3
+        },
+        "schema_version": null,
+        "contract_version": null,
+        "schema_fingerprint": null,
+        "scope_fingerprint": null
+      },
+      "research": {
+        "status": null,
+        "finish_reason": null,
+        "premise_supported": null,
+        "iterations": 0,
+        "evidence_count": 0,
+        "hypotheses": null,
+        "covered_dimension_refs": null,
+        "covered_driver_metric_refs": null,
+        "covered_hierarchy_ids": null,
+        "covered_contribution_dimension_refs": null,
+        "failed_action_error_codes": []
+      },
+      "runtime": {
+        "remaining_budget": {},
+        "step_count": 0,
+        "steps_with_token_usage": 0,
+        "total_latency_ms": null,
+        "token_usage": {
+          "input": null,
+          "output": null
+        },
+        "availability": {
+          "steps": true,
+          "step_latency": false,
+          "token_usage": false
+        },
+        "tool_calls": {
+          "value": 0,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "trace_nodes": {
+          "value": 9,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "model_calls": {
+          "value": null,
+          "available": false,
+          "unavailable_reason": "trace_has_no_model_call_nodes"
+        },
+        "queries": {
+          "value": null,
+          "available": false,
+          "lower_bound": 0,
+          "unavailable_reason": "legacy_research_query_fact_not_persisted"
+        },
+        "model_calls_lower_bound": 0,
+        "queries_lower_bound": 0,
+        "plan_count": 0,
+        "result_count": 0,
+        "budget_check": {
+          "max_queries": 8,
+          "max_model_calls": 8,
+          "query_lower_bound": 0,
+          "model_call_lower_bound": 0,
+          "lower_bound_within_limit": true,
+          "actual_values_observed": true
+        },
+        "budget_remaining_snapshot": {},
+        "artifact_size_bytes": 406,
+        "artifact_size_available": true,
+        "model_calls_used_estimated": null,
+        "queries_used_estimated": null
+      },
+      "report_summary": null,
+      "findings": [],
+      "limitations": null,
+      "evidence_digest": [],
+      "checks": [
+        {
+          "name": "execution_mode_is_research",
+          "ok": false,
+          "detail": "got plan"
+        },
+        {
+          "name": "research_status_allowed",
+          "ok": false,
+          "detail": "got None, allowed=['succeeded', 'partial']"
+        },
+        {
+          "name": "finish_reason_allowed",
+          "ok": false,
+          "detail": "got None, allowed=['sufficient_evidence', 'no_new_direction', 'budget_exhausted', 'partial_failure']"
+        },
+        {
+          "name": "time_roles_retained",
+          "ok": true
+        },
+        {
+          "name": "time_roles_required_observed",
+          "ok": false,
+          "detail": "missing=['current', 'previous']"
+        },
+        {
+          "name": "target_metric_scope_kept",
+          "ok": true
+        },
+        {
+          "name": "target_metric_required_observed",
+          "ok": false,
+          "detail": "missing=['METRIC:271:246']"
+        },
+        {
+          "name": "required_dimension_refs_covered",
+          "ok": false,
+          "detail": "missing=['DIMENSION:278:246']"
+        },
+        {
+          "name": "required_pattern:premise_confirmation",
+          "ok": false
+        },
+        {
+          "name": "required_pattern:contribution_reconciled",
+          "ok": false,
+          "available": false,
+          "detail": "contribution/breakdown/total Evidence 不完整"
+        },
+        {
+          "name": "budget:case_limits_respected",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "max_queries": 8,
+            "max_model_calls": 8,
+            "queries": 0,
+            "model_calls": 0,
+            "query_count_kind": "lower_bound",
+            "model_call_count_kind": "lower_bound"
+          }
+        },
+        {
+          "name": "invariant:no_cross_run_or_unknown_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:evidence_ownership_observed",
+          "ok": true,
+          "available": true
+        },
+        {
+          "name": "invariant:findings_have_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_duplicate_action_execution",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_causal_claim_on_correlation",
+          "ok": true
+        },
+        {
+          "name": "invariant:report_numbers_from_cited_evidence",
+          "ok": true,
+          "available": false
+        },
+        {
+          "name": "invariant:evidence_dependency_ordering",
+          "ok": true,
+          "available": true,
+          "detail": "research did not start; dependency check not applicable"
+        }
+      ]
+    },
+    {
+      "case_id": "research-cause-005",
+      "name": "driver_same_model_validation",
+      "categories": [
+        1,
+        7,
+        20
+      ],
+      "question": "2026年6月29日总GMV比6月28日下降了。请分别验证总订单数减少和订单平均客单价下降这两个方向是否得到数据支持，并给出证据；不要把同向变化直接表述为因果。",
+      "outcome": "silent_error",
+      "violations": [
+        "hypothesis_with_evidence_present [hypotheses=0]",
+        "required_pattern:driver_validation"
+      ],
+      "engine": "agent",
+      "run": {
+        "id": 1298,
+        "record_id": 13072,
+        "status": "finished",
+        "execution_mode": "research",
+        "error_class": null,
+        "error": null,
+        "matched_routing_error_code": null,
+        "error_codes": [
+          "RESEARCH_AGENT_FINISH_CLAIM_CITATION_MISSING"
+        ],
+        "rejection_stage": null,
+        "duration_s": 27.0,
+        "config": {
+          "enabled": true,
+          "max_steps": 12,
+          "sample_rows": 10,
+          "token_budget": 100000,
+          "default_limit": 100,
+          "history_rounds": 3,
+          "compute_enabled": true,
+          "execution_modes": [
+            "fast",
+            "plan",
+            "research"
+          ],
+          "max_sql_retries": 2,
+          "timeout_seconds": 120,
+          "summary_max_chars": 4000,
+          "context_fold_chars": 30000,
+          "max_clarifications": 2,
+          "datasource_allowlist": [],
+          "plan_max_query_tasks": 5,
+          "research_max_queries": 8,
+          "tool_timeout_seconds": 60.0,
+          "repeat_fuse_threshold": 3,
+          "tool_parallel_workers": 4,
+          "plan_query_concurrency": 4,
+          "query_transient_retries": 1,
+          "research_execution_mode": "agent",
+          "research_max_iterations": 6,
+          "answer_citation_enforced": true,
+          "research_max_model_calls": 8,
+          "research_max_stall_turns": 3,
+          "assisted_fallback_enabled": false,
+          "research_max_evidence_rows": 20,
+          "research_max_evidence_chars": 12000,
+          "research_shadow_sample_rate": 0.0,
+          "tool_default_timeout_seconds": 30.0,
+          "research_max_duration_seconds": 300,
+          "research_shadow_tenant_allowlist": [],
+          "research_shadow_dataset_allowlist": [],
+          "research_max_actions_per_iteration": 3
+        },
+        "schema_version": null,
+        "contract_version": null,
+        "schema_fingerprint": null,
+        "scope_fingerprint": null
+      },
+      "research": {
+        "status": "succeeded",
+        "finish_reason": "no_new_direction",
+        "premise_supported": false,
+        "iterations": 2,
+        "evidence_count": 1,
+        "hypotheses": [],
+        "covered_dimension_refs": null,
+        "covered_driver_metric_refs": [],
+        "covered_hierarchy_ids": null,
+        "covered_contribution_dimension_refs": null,
+        "failed_action_error_codes": [
+          "参数不合法：Value error, RESEARCH_AGENT_FINISH_CLAIM_CITATION_MISSING",
+          "结论校验失败：存在无法溯源或超出证据强度的表述。",
+          "结论校验失败：存在无法溯源或超出证据强度的表述。"
+        ]
+      },
+      "runtime": {
+        "remaining_budget": {
+          "queries": 7,
+          "iterations": 2,
+          "model_calls": 4,
+          "duration_seconds": 300.0
+        },
+        "step_count": 4,
+        "steps_with_token_usage": 0,
+        "total_latency_ms": 23986,
+        "token_usage": {
+          "input": null,
+          "output": null
+        },
+        "availability": {
+          "steps": true,
+          "step_latency": true,
+          "token_usage": false
+        },
+        "tool_calls": {
+          "value": 4,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "trace_nodes": {
+          "value": 21,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "model_calls": {
+          "value": 4,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "queries": {
+          "value": null,
+          "available": false,
+          "lower_bound": 1,
+          "unavailable_reason": "legacy_research_query_fact_not_persisted"
+        },
+        "model_calls_lower_bound": 2,
+        "queries_lower_bound": 1,
+        "plan_count": 1,
+        "result_count": 1,
+        "budget_check": {
+          "max_queries": 8,
+          "max_model_calls": 8,
+          "query_lower_bound": 1,
+          "model_call_lower_bound": 2,
+          "lower_bound_within_limit": true,
+          "actual_values_observed": true
+        },
+        "budget_remaining_snapshot": {
+          "queries": 7,
+          "iterations": 2,
+          "model_calls": 4,
+          "duration_seconds": 300.0
+        },
+        "artifact_size_bytes": 283,
+        "artifact_size_available": true,
+        "model_calls_used_estimated": null,
+        "queries_used_estimated": null
+      },
+      "report_summary": null,
+      "findings": [],
+      "limitations": null,
+      "evidence_digest": [
+        {
+          "evidence_id": "evidence:research-query-add39ff0dfb63153",
+          "purpose": "获取GMV目标指标及驱动指标（订单数、客单价等）在current(6/29)与previous(6/28)的对比，判断GMV下降源于订单数还是客单价。",
+          "metric_refs": [
+            "METRIC:271:246",
+            "METRIC:266:246",
+            "METRIC:303:246",
+            "METRIC:265:246"
+          ],
+          "dimension_refs": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "METRIC:271:246",
+              "value_role": "difference",
+              "result_field": "gmv_total_difference"
+            },
+            {
+              "asset_ref": "METRIC:266:246",
+              "value_role": "difference",
+              "result_field": "item_qty_sale_difference"
+            },
+            {
+              "asset_ref": "METRIC:303:246",
+              "value_role": "difference",
+              "result_field": "aov_total_difference"
+            },
+            {
+              "asset_ref": "METRIC:265:246",
+              "value_role": "difference",
+              "result_field": "order_cnt_total_difference"
+            },
+            {
+              "result_field": "aov_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "gmv_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "aov_total_previous",
+              "value_role": "previous"
+            },
+            {
+              "result_field": "gmv_total_previous",
+              "value_role": "previous"
+            },
+            {
+              "result_field": "item_qty_sale_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "item_qty_sale_previous",
+              "value_role": "previous"
+            },
+            {
+              "result_field": "order_cnt_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "order_cnt_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": -42030.389999999985,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -118.0,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -917.8,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 1.0,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 2024.39,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": 99194.88,
+                  "logical_column_index": 5
+                },
+                {
+                  "value": 2942.19,
+                  "logical_column_index": 6
+                },
+                {
+                  "value": 141225.27,
+                  "logical_column_index": 7
+                },
+                {
+                  "value": 187.0,
+                  "logical_column_index": 8
+                },
+                {
+                  "value": 305.0,
+                  "logical_column_index": 9
+                },
+                {
+                  "value": 49.0,
+                  "logical_column_index": 10
+                },
+                {
+                  "value": 48.0,
+                  "logical_column_index": 11
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [],
+          "lineage": null,
+          "row_count": 1,
+          "truncated": false
+        }
+      ],
+      "checks": [
+        {
+          "name": "execution_mode_is_research",
+          "ok": true,
+          "detail": "got research"
+        },
+        {
+          "name": "research_status_allowed",
+          "ok": true,
+          "detail": "got succeeded, allowed=['succeeded', 'partial']"
+        },
+        {
+          "name": "finish_reason_allowed",
+          "ok": true,
+          "detail": "got no_new_direction, allowed=['sufficient_evidence', 'no_new_direction', 'data_insufficient', 'budget_exhausted', 'partial_failure']"
+        },
+        {
+          "name": "time_roles_retained",
+          "ok": true
+        },
+        {
+          "name": "time_roles_required_observed",
+          "ok": true
+        },
+        {
+          "name": "target_metric_scope_kept",
+          "ok": true
+        },
+        {
+          "name": "target_metric_required_observed",
+          "ok": true
+        },
+        {
+          "name": "hypothesis_with_evidence_present",
+          "ok": false,
+          "detail": "hypotheses=0"
+        },
+        {
+          "name": "required_pattern:premise_confirmation",
+          "ok": true
+        },
+        {
+          "name": "required_pattern:driver_validation",
+          "ok": false
+        },
+        {
+          "name": "budget:case_limits_respected",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "max_queries": 8,
+            "max_model_calls": 8,
+            "queries": 1,
+            "model_calls": 4,
+            "query_count_kind": "lower_bound",
+            "model_call_count_kind": "observed"
+          }
+        },
+        {
+          "name": "invariant:no_cross_run_or_unknown_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:evidence_ownership_observed",
+          "ok": true,
+          "available": true
+        },
+        {
+          "name": "invariant:findings_have_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_duplicate_action_execution",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_causal_claim_on_correlation",
+          "ok": true
+        },
+        {
+          "name": "invariant:report_numbers_from_cited_evidence",
+          "ok": true,
+          "available": false
+        },
+        {
+          "name": "invariant:evidence_dependency_ordering",
+          "ok": true,
+          "available": true
+        }
+      ]
+    },
+    {
+      "case_id": "research-cause-006",
+      "name": "driver_cross_model_ungoverned",
+      "categories": [
+        8,
+        12
+      ],
+      "question": "总GMV在2026年6月29日比6月28日下降了，请验证库存件数的下降是不是主要原因，并给出证据。",
+      "outcome": "explicit_failure",
+      "violations": [
+        "research_status_allowed [got None, allowed=['succeeded', 'partial', 'failed']]",
+        "finish_reason_allowed [got None, allowed=['sufficient_evidence', 'no_new_direction', 'data_insufficient', 'execution_failed', 'budget_exhausted', 'partial_failure']]",
+        "time_roles_required_observed [missing=['current', 'previous']]",
+        "target_metric_required_observed [missing=['METRIC:271:246']]",
+        "required_pattern:premise_confirmation"
+      ],
+      "engine": "agent",
+      "run": {
+        "id": 1299,
+        "record_id": 13074,
+        "status": "failed",
+        "execution_mode": "research",
+        "error_class": "plan_invalid",
+        "error": "RESEARCH_TARGET_METRIC_SINGLE_MODEL_REQUIRED",
+        "matched_routing_error_code": null,
+        "error_codes": [
+          "RESEARCH_TARGET_METRIC_SINGLE_MODEL_REQUIRED"
+        ],
+        "rejection_stage": null,
+        "duration_s": 3.4,
+        "config": {
+          "enabled": true,
+          "max_steps": 12,
+          "sample_rows": 10,
+          "token_budget": 100000,
+          "default_limit": 100,
+          "history_rounds": 3,
+          "compute_enabled": true,
+          "execution_modes": [
+            "fast",
+            "plan",
+            "research"
+          ],
+          "max_sql_retries": 2,
+          "timeout_seconds": 120,
+          "summary_max_chars": 4000,
+          "context_fold_chars": 30000,
+          "max_clarifications": 2,
+          "datasource_allowlist": [],
+          "plan_max_query_tasks": 5,
+          "research_max_queries": 8,
+          "tool_timeout_seconds": 60.0,
+          "repeat_fuse_threshold": 3,
+          "tool_parallel_workers": 4,
+          "plan_query_concurrency": 4,
+          "query_transient_retries": 1,
+          "research_execution_mode": "agent",
+          "research_max_iterations": 6,
+          "answer_citation_enforced": true,
+          "research_max_model_calls": 8,
+          "research_max_stall_turns": 3,
+          "assisted_fallback_enabled": false,
+          "research_max_evidence_rows": 20,
+          "research_max_evidence_chars": 12000,
+          "research_shadow_sample_rate": 0.0,
+          "tool_default_timeout_seconds": 30.0,
+          "research_max_duration_seconds": 300,
+          "research_shadow_tenant_allowlist": [],
+          "research_shadow_dataset_allowlist": [],
+          "research_max_actions_per_iteration": 3
+        },
+        "schema_version": null,
+        "contract_version": null,
+        "schema_fingerprint": null,
+        "scope_fingerprint": null
+      },
+      "research": {
+        "status": null,
+        "finish_reason": null,
+        "premise_supported": null,
+        "iterations": 0,
+        "evidence_count": 0,
+        "hypotheses": null,
+        "covered_dimension_refs": null,
+        "covered_driver_metric_refs": null,
+        "covered_hierarchy_ids": null,
+        "covered_contribution_dimension_refs": null,
+        "failed_action_error_codes": []
+      },
+      "runtime": {
+        "remaining_budget": {},
+        "step_count": 0,
+        "steps_with_token_usage": 0,
+        "total_latency_ms": null,
+        "token_usage": {
+          "input": null,
+          "output": null
+        },
+        "availability": {
+          "steps": true,
+          "step_latency": false,
+          "token_usage": false
+        },
+        "tool_calls": {
+          "value": 0,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "trace_nodes": {
+          "value": 5,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "model_calls": {
+          "value": null,
+          "available": false,
+          "unavailable_reason": "trace_has_no_model_call_nodes"
+        },
+        "queries": {
+          "value": null,
+          "available": false,
+          "lower_bound": 0,
+          "unavailable_reason": "legacy_research_query_fact_not_persisted"
+        },
+        "model_calls_lower_bound": 0,
+        "queries_lower_bound": 0,
+        "plan_count": 0,
+        "result_count": 0,
+        "budget_check": {
+          "max_queries": 8,
+          "max_model_calls": 8,
+          "query_lower_bound": 0,
+          "model_call_lower_bound": 0,
+          "lower_bound_within_limit": true,
+          "actual_values_observed": true
+        },
+        "budget_remaining_snapshot": {},
+        "artifact_size_bytes": null,
+        "artifact_size_available": false,
+        "model_calls_used_estimated": null,
+        "queries_used_estimated": null
+      },
+      "report_summary": null,
+      "findings": [],
+      "limitations": null,
+      "evidence_digest": [],
+      "checks": [
+        {
+          "name": "execution_mode_is_research",
+          "ok": true,
+          "detail": "got research"
+        },
+        {
+          "name": "research_status_allowed",
+          "ok": false,
+          "detail": "got None, allowed=['succeeded', 'partial', 'failed']"
+        },
+        {
+          "name": "finish_reason_allowed",
+          "ok": false,
+          "detail": "got None, allowed=['sufficient_evidence', 'no_new_direction', 'data_insufficient', 'execution_failed', 'budget_exhausted', 'partial_failure']"
+        },
+        {
+          "name": "time_roles_retained",
+          "ok": true
+        },
+        {
+          "name": "time_roles_required_observed",
+          "ok": false,
+          "detail": "missing=['current', 'previous']"
+        },
+        {
+          "name": "target_metric_scope_kept",
+          "ok": true
+        },
+        {
+          "name": "target_metric_required_observed",
+          "ok": false,
+          "detail": "missing=['METRIC:271:246']"
+        },
+        {
+          "name": "forbidden_driver_not_covered",
+          "ok": true
+        },
+        {
+          "name": "required_pattern:premise_confirmation",
+          "ok": false
+        },
+        {
+          "name": "budget:case_limits_respected",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "max_queries": 8,
+            "max_model_calls": 8,
+            "queries": 0,
+            "model_calls": 0,
+            "query_count_kind": "lower_bound",
+            "model_call_count_kind": "lower_bound"
+          }
+        },
+        {
+          "name": "invariant:no_cross_run_or_unknown_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:evidence_ownership_observed",
+          "ok": true,
+          "available": true
+        },
+        {
+          "name": "invariant:findings_have_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_duplicate_action_execution",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_causal_claim_on_correlation",
+          "ok": true
+        },
+        {
+          "name": "invariant:report_numbers_from_cited_evidence",
+          "ok": true,
+          "available": false
+        },
+        {
+          "name": "invariant:evidence_dependency_ordering",
+          "ok": true,
+          "available": true,
+          "detail": "research did not start; dependency check not applicable"
+        }
+      ]
+    },
+    {
+      "case_id": "research-cause-007",
+      "name": "empty_result_graceful",
+      "categories": [
+        9,
+        10
+      ],
+      "question": "档口88888在2026年6月29日的总GMV比6月28日下降了，请分析下降原因。",
+      "outcome": "pass",
+      "violations": [],
+      "engine": "agent",
+      "run": {
+        "id": 1300,
+        "record_id": 13076,
+        "status": "failed",
+        "execution_mode": "research",
+        "error_class": "plan_invalid",
+        "error": "连续多轮没有产生新方向且没有任何证据，研究在第 3 轮结束。",
+        "matched_routing_error_code": null,
+        "error_codes": [
+          "INVALID_REQUEST"
+        ],
+        "rejection_stage": null,
+        "duration_s": 16.2,
+        "config": {
+          "enabled": true,
+          "max_steps": 12,
+          "sample_rows": 10,
+          "token_budget": 100000,
+          "default_limit": 100,
+          "history_rounds": 3,
+          "compute_enabled": true,
+          "execution_modes": [
+            "fast",
+            "plan",
+            "research"
+          ],
+          "max_sql_retries": 2,
+          "timeout_seconds": 120,
+          "summary_max_chars": 4000,
+          "context_fold_chars": 30000,
+          "max_clarifications": 2,
+          "datasource_allowlist": [],
+          "plan_max_query_tasks": 5,
+          "research_max_queries": 8,
+          "tool_timeout_seconds": 60.0,
+          "repeat_fuse_threshold": 3,
+          "tool_parallel_workers": 4,
+          "plan_query_concurrency": 4,
+          "query_transient_retries": 1,
+          "research_execution_mode": "agent",
+          "research_max_iterations": 6,
+          "answer_citation_enforced": true,
+          "research_max_model_calls": 8,
+          "research_max_stall_turns": 3,
+          "assisted_fallback_enabled": false,
+          "research_max_evidence_rows": 20,
+          "research_max_evidence_chars": 12000,
+          "research_shadow_sample_rate": 0.0,
+          "tool_default_timeout_seconds": 30.0,
+          "research_max_duration_seconds": 300,
+          "research_shadow_tenant_allowlist": [],
+          "research_shadow_dataset_allowlist": [],
+          "research_max_actions_per_iteration": 3
+        },
+        "schema_version": null,
+        "contract_version": null,
+        "schema_fingerprint": null,
+        "scope_fingerprint": null
+      },
+      "research": {
+        "status": "failed",
+        "finish_reason": "data_insufficient",
+        "premise_supported": false,
+        "iterations": 1,
+        "evidence_count": 0,
+        "hypotheses": [],
+        "covered_dimension_refs": null,
+        "covered_driver_metric_refs": [],
+        "covered_hierarchy_ids": null,
+        "covered_contribution_dimension_refs": null,
+        "failed_action_error_codes": [
+          "查询结果为空",
+          "INVALID_REQUEST",
+          "INVALID_REQUEST",
+          "INVALID_REQUEST",
+          "INVALID_REQUEST"
+        ]
+      },
+      "runtime": {
+        "remaining_budget": {
+          "queries": 3,
+          "iterations": 3,
+          "model_calls": 5,
+          "duration_seconds": 300.0
+        },
+        "step_count": 3,
+        "steps_with_token_usage": 0,
+        "total_latency_ms": 12761,
+        "token_usage": {
+          "input": null,
+          "output": null
+        },
+        "availability": {
+          "steps": true,
+          "step_latency": true,
+          "token_usage": false
+        },
+        "tool_calls": {
+          "value": 5,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "trace_nodes": {
+          "value": 18,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "model_calls": {
+          "value": 3,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "queries": {
+          "value": null,
+          "available": false,
+          "lower_bound": 0,
+          "unavailable_reason": "legacy_research_query_fact_not_persisted"
+        },
+        "model_calls_lower_bound": 1,
+        "queries_lower_bound": 0,
+        "plan_count": 0,
+        "result_count": 0,
+        "budget_check": {
+          "max_queries": 8,
+          "max_model_calls": 8,
+          "query_lower_bound": 0,
+          "model_call_lower_bound": 1,
+          "lower_bound_within_limit": true,
+          "actual_values_observed": true
+        },
+        "budget_remaining_snapshot": {
+          "queries": 3,
+          "iterations": 3,
+          "model_calls": 5,
+          "duration_seconds": 300.0
+        },
+        "artifact_size_bytes": 161,
+        "artifact_size_available": true,
+        "model_calls_used_estimated": null,
+        "queries_used_estimated": null
+      },
+      "report_summary": null,
+      "findings": [],
+      "limitations": null,
+      "evidence_digest": [],
+      "checks": [
+        {
+          "name": "data:data_insufficient_outcome",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "evidence_count": 0,
+            "status": "failed",
+            "finish_reason": "data_insufficient"
+          }
+        },
+        {
+          "name": "execution_mode_is_research",
+          "ok": true,
+          "detail": "got research"
+        },
+        {
+          "name": "research_status_allowed",
+          "ok": true,
+          "detail": "got failed, allowed=['failed', 'needs_clarification', 'partial', 'succeeded', 'budget_exhausted']"
+        },
+        {
+          "name": "finish_reason_allowed",
+          "ok": true,
+          "detail": "got data_insufficient, allowed=['premise_not_supported', 'data_insufficient', 'needs_clarification', 'execution_failed', 'partial_failure', 'budget_exhausted']"
+        },
+        {
+          "name": "time_roles_retained",
+          "ok": true
+        },
+        {
+          "name": "time_roles_required_observed",
+          "ok": true,
+          "detail": "not_observable_due_to_explicit_rejection_or_data_insufficient"
+        },
+        {
+          "name": "target_metric_scope_kept",
+          "ok": true
+        },
+        {
+          "name": "target_metric_required_observed",
+          "ok": true,
+          "detail": "not_observable_due_to_explicit_rejection_or_data_insufficient"
+        },
+        {
+          "name": "immutable_filter_retained:DIMENSION:278:246",
+          "ok": true
+        },
+        {
+          "name": "budget:case_limits_respected",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "max_queries": 8,
+            "max_model_calls": 8,
+            "queries": 0,
+            "model_calls": 3,
+            "query_count_kind": "lower_bound",
+            "model_call_count_kind": "observed"
+          }
+        },
+        {
+          "name": "invariant:no_cross_run_or_unknown_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:evidence_ownership_observed",
+          "ok": true,
+          "available": true
+        },
+        {
+          "name": "invariant:findings_have_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_duplicate_action_execution",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_causal_claim_on_correlation",
+          "ok": true
+        },
+        {
+          "name": "invariant:report_numbers_from_cited_evidence",
+          "ok": true,
+          "available": false
+        },
+        {
+          "name": "invariant:evidence_dependency_ordering",
+          "ok": true,
+          "available": true,
+          "detail": "no reference action observed"
+        }
+      ]
+    },
+    {
+      "case_id": "research-cause-008",
+      "name": "scope_violation_goods_rejected",
+      "categories": [
+        12
+      ],
+      "question": "2026年6月29日总GMV比6月28日下降了，请分析原因并继续下钻到商品ID，找出哪些商品导致下降。",
+      "outcome": "correct_reject",
+      "violations": [],
+      "engine": "agent",
+      "run": {
+        "id": 1301,
+        "record_id": 13078,
+        "status": "failed",
+        "execution_mode": "research",
+        "error_class": "plan_invalid",
+        "error": "RESEARCH_DIMENSION_MODEL_MISMATCH",
+        "matched_routing_error_code": "RESEARCH_DIMENSION_MODEL_MISMATCH",
+        "error_codes": [
+          "RESEARCH_DIMENSION_MODEL_MISMATCH"
+        ],
+        "rejection_stage": "preparation",
+        "duration_s": 2.6,
+        "config": {
+          "enabled": true,
+          "max_steps": 12,
+          "sample_rows": 10,
+          "token_budget": 100000,
+          "default_limit": 100,
+          "history_rounds": 3,
+          "compute_enabled": true,
+          "execution_modes": [
+            "fast",
+            "plan",
+            "research"
+          ],
+          "max_sql_retries": 2,
+          "timeout_seconds": 120,
+          "summary_max_chars": 4000,
+          "context_fold_chars": 30000,
+          "max_clarifications": 2,
+          "datasource_allowlist": [],
+          "plan_max_query_tasks": 5,
+          "research_max_queries": 8,
+          "tool_timeout_seconds": 60.0,
+          "repeat_fuse_threshold": 3,
+          "tool_parallel_workers": 4,
+          "plan_query_concurrency": 4,
+          "query_transient_retries": 1,
+          "research_execution_mode": "agent",
+          "research_max_iterations": 6,
+          "answer_citation_enforced": true,
+          "research_max_model_calls": 8,
+          "research_max_stall_turns": 3,
+          "assisted_fallback_enabled": false,
+          "research_max_evidence_rows": 20,
+          "research_max_evidence_chars": 12000,
+          "research_shadow_sample_rate": 0.0,
+          "tool_default_timeout_seconds": 30.0,
+          "research_max_duration_seconds": 300,
+          "research_shadow_tenant_allowlist": [],
+          "research_shadow_dataset_allowlist": [],
+          "research_max_actions_per_iteration": 3
+        },
+        "schema_version": null,
+        "contract_version": null,
+        "schema_fingerprint": null,
+        "scope_fingerprint": null
+      },
+      "research": {
+        "status": null,
+        "finish_reason": null,
+        "premise_supported": null,
+        "iterations": 0,
+        "evidence_count": 0,
+        "hypotheses": null,
+        "covered_dimension_refs": null,
+        "covered_driver_metric_refs": null,
+        "covered_hierarchy_ids": null,
+        "covered_contribution_dimension_refs": null,
+        "failed_action_error_codes": []
+      },
+      "runtime": {
+        "remaining_budget": {},
+        "step_count": 0,
+        "steps_with_token_usage": 0,
+        "total_latency_ms": null,
+        "token_usage": {
+          "input": null,
+          "output": null
+        },
+        "availability": {
+          "steps": true,
+          "step_latency": false,
+          "token_usage": false
+        },
+        "tool_calls": {
+          "value": 0,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "trace_nodes": {
+          "value": 5,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "model_calls": {
+          "value": null,
+          "available": false,
+          "unavailable_reason": "trace_has_no_model_call_nodes"
+        },
+        "queries": {
+          "value": null,
+          "available": false,
+          "lower_bound": 0,
+          "unavailable_reason": "legacy_research_query_fact_not_persisted"
+        },
+        "model_calls_lower_bound": 0,
+        "queries_lower_bound": 0,
+        "plan_count": 0,
+        "result_count": 0,
+        "budget_check": {
+          "max_queries": 8,
+          "max_model_calls": 8,
+          "query_lower_bound": 0,
+          "model_call_lower_bound": 0,
+          "lower_bound_within_limit": true,
+          "actual_values_observed": true
+        },
+        "budget_remaining_snapshot": {},
+        "artifact_size_bytes": null,
+        "artifact_size_available": false,
+        "model_calls_used_estimated": null,
+        "queries_used_estimated": null
+      },
+      "report_summary": null,
+      "findings": [],
+      "limitations": null,
+      "evidence_digest": [],
+      "checks": [
+        {
+          "name": "explicit_rejection_status",
+          "ok": true,
+          "detail": "got failed"
+        },
+        {
+          "name": "explicit_rejection_stage",
+          "ok": true,
+          "detail": "stage=preparation, error_code=RESEARCH_DIMENSION_MODEL_MISMATCH"
+        },
+        {
+          "name": "time_roles_retained",
+          "ok": true
+        },
+        {
+          "name": "time_roles_required_observed",
+          "ok": true,
+          "detail": "not_observable_due_to_explicit_rejection_or_data_insufficient"
+        },
+        {
+          "name": "target_metric_scope_kept",
+          "ok": true
+        },
+        {
+          "name": "target_metric_required_observed",
+          "ok": true,
+          "detail": "not_observable_due_to_explicit_rejection_or_data_insufficient"
+        },
+        {
+          "name": "scope_violation_dimensions",
+          "ok": true
+        },
+        {
+          "name": "budget:case_limits_respected",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "max_queries": 8,
+            "max_model_calls": 8,
+            "queries": 0,
+            "model_calls": 0,
+            "query_count_kind": "lower_bound",
+            "model_call_count_kind": "lower_bound"
+          }
+        },
+        {
+          "name": "invariant:no_cross_run_or_unknown_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:evidence_ownership_observed",
+          "ok": true,
+          "available": true
+        },
+        {
+          "name": "invariant:findings_have_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_duplicate_action_execution",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_causal_claim_on_correlation",
+          "ok": true
+        },
+        {
+          "name": "invariant:report_numbers_from_cited_evidence",
+          "ok": true,
+          "available": false
+        },
+        {
+          "name": "invariant:evidence_dependency_ordering",
+          "ok": true,
+          "available": true,
+          "detail": "research did not start; dependency check not applicable"
+        }
+      ]
+    },
+    {
+      "case_id": "research-cause-009",
+      "name": "governance_missing_channel_contribution",
+      "categories": [
+        1,
+        12
+      ],
+      "question": "2026年6月29日总GMV比6月28日下降了，请分析各交易渠道对这次下降的贡献分别是多少。",
+      "outcome": "correct_reject",
+      "violations": [],
+      "engine": "agent",
+      "run": {
+        "id": 1302,
+        "record_id": 13080,
+        "status": "failed",
+        "execution_mode": "plan",
+        "error_class": "plan_invalid",
+        "error": "SEMANTIC_EXECUTION_ASSET_NOT_COVERED:DIMENSION:309:249",
+        "matched_routing_error_code": "SEMANTIC_EXECUTION_ASSET_NOT_COVERED",
+        "error_codes": [
+          "DIMENSION",
+          "SEMANTIC_EXECUTION_ASSET_NOT_COVERED"
+        ],
+        "rejection_stage": "execution",
+        "duration_s": 2.7,
+        "config": {
+          "enabled": true,
+          "max_steps": 12,
+          "sample_rows": 10,
+          "token_budget": 100000,
+          "default_limit": 100,
+          "history_rounds": 3,
+          "compute_enabled": true,
+          "execution_modes": [
+            "fast",
+            "plan",
+            "research"
+          ],
+          "max_sql_retries": 2,
+          "timeout_seconds": 120,
+          "summary_max_chars": 4000,
+          "context_fold_chars": 30000,
+          "max_clarifications": 2,
+          "datasource_allowlist": [],
+          "plan_max_query_tasks": 5,
+          "research_max_queries": 8,
+          "tool_timeout_seconds": 60.0,
+          "repeat_fuse_threshold": 3,
+          "tool_parallel_workers": 4,
+          "plan_query_concurrency": 4,
+          "query_transient_retries": 1,
+          "research_execution_mode": "agent",
+          "research_max_iterations": 6,
+          "answer_citation_enforced": true,
+          "research_max_model_calls": 8,
+          "research_max_stall_turns": 3,
+          "assisted_fallback_enabled": false,
+          "research_max_evidence_rows": 20,
+          "research_max_evidence_chars": 12000,
+          "research_shadow_sample_rate": 0.0,
+          "tool_default_timeout_seconds": 30.0,
+          "research_max_duration_seconds": 300,
+          "research_shadow_tenant_allowlist": [],
+          "research_shadow_dataset_allowlist": [],
+          "research_max_actions_per_iteration": 3
+        },
+        "schema_version": null,
+        "contract_version": null,
+        "schema_fingerprint": null,
+        "scope_fingerprint": null
+      },
+      "research": {
+        "status": null,
+        "finish_reason": null,
+        "premise_supported": null,
+        "iterations": 0,
+        "evidence_count": 0,
+        "hypotheses": null,
+        "covered_dimension_refs": null,
+        "covered_driver_metric_refs": null,
+        "covered_hierarchy_ids": null,
+        "covered_contribution_dimension_refs": null,
+        "failed_action_error_codes": []
+      },
+      "runtime": {
+        "remaining_budget": {},
+        "step_count": 0,
+        "steps_with_token_usage": 0,
+        "total_latency_ms": null,
+        "token_usage": {
+          "input": null,
+          "output": null
+        },
+        "availability": {
+          "steps": true,
+          "step_latency": false,
+          "token_usage": false
+        },
+        "tool_calls": {
+          "value": 0,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "trace_nodes": {
+          "value": 5,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "model_calls": {
+          "value": null,
+          "available": false,
+          "unavailable_reason": "trace_has_no_model_call_nodes"
+        },
+        "queries": {
+          "value": null,
+          "available": false,
+          "lower_bound": 0,
+          "unavailable_reason": "legacy_research_query_fact_not_persisted"
+        },
+        "model_calls_lower_bound": 0,
+        "queries_lower_bound": 0,
+        "plan_count": 0,
+        "result_count": 0,
+        "budget_check": {
+          "max_queries": 8,
+          "max_model_calls": 8,
+          "query_lower_bound": 0,
+          "model_call_lower_bound": 0,
+          "lower_bound_within_limit": true,
+          "actual_values_observed": true
+        },
+        "budget_remaining_snapshot": {},
+        "artifact_size_bytes": null,
+        "artifact_size_available": false,
+        "model_calls_used_estimated": null,
+        "queries_used_estimated": null
+      },
+      "report_summary": null,
+      "findings": [],
+      "limitations": null,
+      "evidence_digest": [],
+      "checks": [
+        {
+          "name": "explicit_rejection_status",
+          "ok": true,
+          "detail": "got failed"
+        },
+        {
+          "name": "explicit_rejection_stage",
+          "ok": true,
+          "detail": "stage=execution, error_code=SEMANTIC_EXECUTION_ASSET_NOT_COVERED"
+        },
+        {
+          "name": "time_roles_retained",
+          "ok": true
+        },
+        {
+          "name": "time_roles_required_observed",
+          "ok": true,
+          "detail": "not_observable_due_to_explicit_rejection_or_data_insufficient"
+        },
+        {
+          "name": "target_metric_scope_kept",
+          "ok": true
+        },
+        {
+          "name": "target_metric_required_observed",
+          "ok": true,
+          "detail": "not_observable_due_to_explicit_rejection_or_data_insufficient"
+        },
+        {
+          "name": "scope_violation_dimensions",
+          "ok": true
+        },
+        {
+          "name": "budget:case_limits_respected",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "max_queries": 8,
+            "max_model_calls": 8,
+            "queries": 0,
+            "model_calls": 0,
+            "query_count_kind": "lower_bound",
+            "model_call_count_kind": "lower_bound"
+          }
+        },
+        {
+          "name": "invariant:no_cross_run_or_unknown_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:evidence_ownership_observed",
+          "ok": true,
+          "available": true
+        },
+        {
+          "name": "invariant:findings_have_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_duplicate_action_execution",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_causal_claim_on_correlation",
+          "ok": true
+        },
+        {
+          "name": "invariant:report_numbers_from_cited_evidence",
+          "ok": true,
+          "available": false
+        },
+        {
+          "name": "invariant:evidence_dependency_ordering",
+          "ok": true,
+          "available": true,
+          "detail": "research did not start; dependency check not applicable"
+        }
+      ]
+    },
+    {
+      "case_id": "research-cause-010",
+      "name": "multi_direction_parallel",
+      "categories": [
+        1,
+        22
+      ],
+      "question": "2026年6月29日总GMV比6月28日下降了，原因是什么？请同时从商家和档口两个方向展开分析，找出下降最集中的对象。",
+      "outcome": "silent_error",
+      "violations": [
+        "required_pattern:parallel_directions"
+      ],
+      "engine": "agent",
+      "run": {
+        "id": 1303,
+        "record_id": 13082,
+        "status": "finished",
+        "execution_mode": "research",
+        "error_class": null,
+        "error": null,
+        "matched_routing_error_code": null,
+        "error_codes": [
+          "RESEARCH_AGENT_FINISH_CLAIM_CITATION_MISSING"
+        ],
+        "rejection_stage": null,
+        "duration_s": 47.6,
+        "config": {
+          "enabled": true,
+          "max_steps": 12,
+          "sample_rows": 10,
+          "token_budget": 100000,
+          "default_limit": 100,
+          "history_rounds": 3,
+          "compute_enabled": true,
+          "execution_modes": [
+            "fast",
+            "plan",
+            "research"
+          ],
+          "max_sql_retries": 2,
+          "timeout_seconds": 120,
+          "summary_max_chars": 4000,
+          "context_fold_chars": 30000,
+          "max_clarifications": 2,
+          "datasource_allowlist": [],
+          "plan_max_query_tasks": 5,
+          "research_max_queries": 8,
+          "tool_timeout_seconds": 60.0,
+          "repeat_fuse_threshold": 3,
+          "tool_parallel_workers": 4,
+          "plan_query_concurrency": 4,
+          "query_transient_retries": 1,
+          "research_execution_mode": "agent",
+          "research_max_iterations": 6,
+          "answer_citation_enforced": true,
+          "research_max_model_calls": 8,
+          "research_max_stall_turns": 3,
+          "assisted_fallback_enabled": false,
+          "research_max_evidence_rows": 20,
+          "research_max_evidence_chars": 12000,
+          "research_shadow_sample_rate": 0.0,
+          "tool_default_timeout_seconds": 30.0,
+          "research_max_duration_seconds": 300,
+          "research_shadow_tenant_allowlist": [],
+          "research_shadow_dataset_allowlist": [],
+          "research_max_actions_per_iteration": 3
+        },
+        "schema_version": null,
+        "contract_version": null,
+        "schema_fingerprint": null,
+        "scope_fingerprint": null
+      },
+      "research": {
+        "status": "succeeded",
+        "finish_reason": "no_new_direction",
+        "premise_supported": false,
+        "iterations": 3,
+        "evidence_count": 5,
+        "hypotheses": [],
+        "covered_dimension_refs": null,
+        "covered_driver_metric_refs": [],
+        "covered_hierarchy_ids": null,
+        "covered_contribution_dimension_refs": null,
+        "failed_action_error_codes": [
+          "参数不合法：Value error, RESEARCH_AGENT_FINISH_CLAIM_CITATION_MISSING",
+          "结论校验失败：存在无法溯源或超出证据强度的表述。"
+        ]
+      },
+      "runtime": {
+        "remaining_budget": {
+          "queries": 3,
+          "iterations": 2,
+          "model_calls": 4,
+          "duration_seconds": 300.0
+        },
+        "step_count": 4,
+        "steps_with_token_usage": 0,
+        "total_latency_ms": 43379,
+        "token_usage": {
+          "input": null,
+          "output": null
+        },
+        "availability": {
+          "steps": true,
+          "step_latency": true,
+          "token_usage": false
+        },
+        "tool_calls": {
+          "value": 7,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "trace_nodes": {
+          "value": 29,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "model_calls": {
+          "value": 4,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "queries": {
+          "value": null,
+          "available": false,
+          "lower_bound": 5,
+          "unavailable_reason": "legacy_research_query_fact_not_persisted"
+        },
+        "model_calls_lower_bound": 3,
+        "queries_lower_bound": 5,
+        "plan_count": 5,
+        "result_count": 5,
+        "budget_check": {
+          "max_queries": 8,
+          "max_model_calls": 8,
+          "query_lower_bound": 5,
+          "model_call_lower_bound": 3,
+          "lower_bound_within_limit": true,
+          "actual_values_observed": true
+        },
+        "budget_remaining_snapshot": {
+          "queries": 3,
+          "iterations": 2,
+          "model_calls": 4,
+          "duration_seconds": 300.0
+        },
+        "artifact_size_bytes": 423,
+        "artifact_size_available": true,
+        "model_calls_used_estimated": null,
+        "queries_used_estimated": null
+      },
+      "report_summary": null,
+      "findings": [],
+      "limitations": null,
+      "evidence_digest": [
+        {
+          "evidence_id": "evidence:research-query-a112f3c9951217f1",
+          "purpose": "定位总GMV下降在商家方向(DIMENSION:277)的集中对象",
+          "metric_refs": [
+            "METRIC:271:246"
+          ],
+          "dimension_refs": [
+            "DIMENSION:277:246"
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "DIMENSION:277:246",
+              "value_role": "group_key",
+              "result_field": "dimension_1"
+            },
+            {
+              "asset_ref": "METRIC:271:246",
+              "value_role": "difference",
+              "result_field": "gmv_total_difference"
+            },
+            {
+              "result_field": "gmv_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "gmv_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": 10001,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -19803.75,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 49986.56,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 69790.31,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 10002,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -22226.640000000007,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 49208.32,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 71434.96,
+                  "logical_column_index": 3
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [],
+          "lineage": null,
+          "row_count": 2,
+          "truncated": false
+        },
+        {
+          "evidence_id": "evidence:research-query-5ea62cf84ff50a7f",
+          "purpose": "定位总GMV下降在档口方向(DIMENSION:278)的集中对象",
+          "metric_refs": [
+            "METRIC:271:246"
+          ],
+          "dimension_refs": [
+            "DIMENSION:278:246"
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "DIMENSION:278:246",
+              "value_role": "group_key",
+              "result_field": "dimension_1"
+            },
+            {
+              "asset_ref": "METRIC:271:246",
+              "value_role": "difference",
+              "result_field": "gmv_total_difference"
+            },
+            {
+              "result_field": "gmv_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "gmv_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": 100011,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -2821.760000000002,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 28308.48,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 31130.24,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100022,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -7024.119999999999,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 23603.2,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 30627.32,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100021,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -8242.76,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 14246.4,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 22489.16,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100012,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -582.0700000000015,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 13114.88,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 13696.95,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100023,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -6959.76,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 11358.72,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 18318.48,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100013,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -16399.92,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 8563.2,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 24963.12,
+                  "logical_column_index": 3
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [],
+          "lineage": null,
+          "row_count": 6,
+          "truncated": false
+        },
+        {
+          "evidence_id": "evidence:research-query-a3be53db7571dcec",
+          "purpose": "下钻商家10002到档口，定位其GMV下降集中档口",
+          "metric_refs": [
+            "METRIC:271:246"
+          ],
+          "dimension_refs": [
+            "DIMENSION:278:246"
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "DIMENSION:278:246",
+              "value_role": "group_key",
+              "result_field": "dimension_1"
+            },
+            {
+              "asset_ref": "METRIC:271:246",
+              "value_role": "difference",
+              "result_field": "gmv_total_difference"
+            },
+            {
+              "result_field": "gmv_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "gmv_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": 100022,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -7024.119999999999,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 23603.2,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 30627.32,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100021,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -8242.76,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 14246.4,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 22489.16,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100023,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -6959.76,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 11358.72,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 18318.48,
+                  "logical_column_index": 3
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [
+            {
+              "value": 10002,
+              "operator": "=",
+              "target_ref": "DIMENSION:277:246"
+            }
+          ],
+          "lineage": null,
+          "row_count": 3,
+          "truncated": false
+        },
+        {
+          "evidence_id": "evidence:research-query-65d4492902e37f4a",
+          "purpose": "查看商家方向驱动指标变化以定位GMV下降原因",
+          "metric_refs": [
+            "METRIC:266:246",
+            "METRIC:303:246",
+            "METRIC:265:246"
+          ],
+          "dimension_refs": [
+            "DIMENSION:277:246"
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "DIMENSION:277:246",
+              "value_role": "group_key",
+              "result_field": "dimension_1"
+            },
+            {
+              "asset_ref": "METRIC:266:246",
+              "value_role": "difference",
+              "result_field": "item_qty_sale_difference"
+            },
+            {
+              "asset_ref": "METRIC:303:246",
+              "value_role": "difference",
+              "result_field": "aov_total_difference"
+            },
+            {
+              "asset_ref": "METRIC:265:246",
+              "value_role": "difference",
+              "result_field": "order_cnt_total_difference"
+            },
+            {
+              "result_field": "aov_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "aov_total_previous",
+              "value_role": "previous"
+            },
+            {
+              "result_field": "item_qty_sale_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "item_qty_sale_previous",
+              "value_role": "previous"
+            },
+            {
+              "result_field": "order_cnt_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "order_cnt_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": 10002,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -59.0,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -1213.2399999999998,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 3.0,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 1892.63,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": 3105.87,
+                  "logical_column_index": 5
+                },
+                {
+                  "value": 111.0,
+                  "logical_column_index": 6
+                },
+                {
+                  "value": 170.0,
+                  "logical_column_index": 7
+                },
+                {
+                  "value": 26.0,
+                  "logical_column_index": 8
+                },
+                {
+                  "value": 23.0,
+                  "logical_column_index": 9
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 10001,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -59.0,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -618.2800000000002,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": -2.0,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 2173.33,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": 2791.61,
+                  "logical_column_index": 5
+                },
+                {
+                  "value": 76.0,
+                  "logical_column_index": 6
+                },
+                {
+                  "value": 135.0,
+                  "logical_column_index": 7
+                },
+                {
+                  "value": 23.0,
+                  "logical_column_index": 8
+                },
+                {
+                  "value": 25.0,
+                  "logical_column_index": 9
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [],
+          "lineage": null,
+          "row_count": 2,
+          "truncated": false
+        },
+        {
+          "evidence_id": "evidence:research-query-f0283438982d8432",
+          "purpose": "查看档口方向驱动指标变化以定位GMV下降原因",
+          "metric_refs": [
+            "METRIC:266:246",
+            "METRIC:303:246",
+            "METRIC:265:246"
+          ],
+          "dimension_refs": [
+            "DIMENSION:278:246"
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "DIMENSION:278:246",
+              "value_role": "group_key",
+              "result_field": "dimension_1"
+            },
+            {
+              "asset_ref": "METRIC:266:246",
+              "value_role": "difference",
+              "result_field": "item_qty_sale_difference"
+            },
+            {
+              "asset_ref": "METRIC:303:246",
+              "value_role": "difference",
+              "result_field": "aov_total_difference"
+            },
+            {
+              "asset_ref": "METRIC:265:246",
+              "value_role": "difference",
+              "result_field": "order_cnt_total_difference"
+            },
+            {
+              "result_field": "aov_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "aov_total_previous",
+              "value_role": "previous"
+            },
+            {
+              "result_field": "item_qty_sale_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "item_qty_sale_previous",
+              "value_role": "previous"
+            },
+            {
+              "result_field": "order_cnt_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "order_cnt_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": 100011,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": 23.0,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -908.6200000000003,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 1.0,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 3538.56,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": 4447.18,
+                  "logical_column_index": 5
+                },
+                {
+                  "value": 63.0,
+                  "logical_column_index": 6
+                },
+                {
+                  "value": 40.0,
+                  "logical_column_index": 7
+                },
+                {
+                  "value": 8.0,
+                  "logical_column_index": 8
+                },
+                {
+                  "value": 7.0,
+                  "logical_column_index": 9
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100023,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": 17.0,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -1159.96,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 0.0,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 1893.12,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": 3053.08,
+                  "logical_column_index": 5
+                },
+                {
+                  "value": 49.0,
+                  "logical_column_index": 6
+                },
+                {
+                  "value": 32.0,
+                  "logical_column_index": 7
+                },
+                {
+                  "value": 6.0,
+                  "logical_column_index": 8
+                },
+                {
+                  "value": 6.0,
+                  "logical_column_index": 9
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100021,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -30.0,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -1074.16,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 1.0,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 1424.64,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": 2498.8,
+                  "logical_column_index": 5
+                },
+                {
+                  "value": 32.0,
+                  "logical_column_index": 6
+                },
+                {
+                  "value": 62.0,
+                  "logical_column_index": 7
+                },
+                {
+                  "value": 10.0,
+                  "logical_column_index": 8
+                },
+                {
+                  "value": 9.0,
+                  "logical_column_index": 9
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100022,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -46.0,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -1468.1,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 2.0,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 2360.32,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": 3828.42,
+                  "logical_column_index": 5
+                },
+                {
+                  "value": 30.0,
+                  "logical_column_index": 6
+                },
+                {
+                  "value": 76.0,
+                  "logical_column_index": 7
+                },
+                {
+                  "value": 10.0,
+                  "logical_column_index": 8
+                },
+                {
+                  "value": 8.0,
+                  "logical_column_index": 9
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100012,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -12.0,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 473.69000000000005,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": -2.0,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 2185.81,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": 1712.12,
+                  "logical_column_index": 5
+                },
+                {
+                  "value": 7.0,
+                  "logical_column_index": 6
+                },
+                {
+                  "value": 19.0,
+                  "logical_column_index": 7
+                },
+                {
+                  "value": 6.0,
+                  "logical_column_index": 8
+                },
+                {
+                  "value": 8.0,
+                  "logical_column_index": 9
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100013,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -70.0,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -1544.84,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": -1.0,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 951.47,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": 2496.31,
+                  "logical_column_index": 5
+                },
+                {
+                  "value": 6.0,
+                  "logical_column_index": 6
+                },
+                {
+                  "value": 76.0,
+                  "logical_column_index": 7
+                },
+                {
+                  "value": 9.0,
+                  "logical_column_index": 8
+                },
+                {
+                  "value": 10.0,
+                  "logical_column_index": 9
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [],
+          "lineage": null,
+          "row_count": 6,
+          "truncated": false
+        }
+      ],
+      "checks": [
+        {
+          "name": "execution_mode_is_research",
+          "ok": true,
+          "detail": "got research"
+        },
+        {
+          "name": "research_status_allowed",
+          "ok": true,
+          "detail": "got succeeded, allowed=['succeeded', 'partial']"
+        },
+        {
+          "name": "finish_reason_allowed",
+          "ok": true,
+          "detail": "got no_new_direction, allowed=['sufficient_evidence', 'no_new_direction', 'budget_exhausted', 'partial_failure']"
+        },
+        {
+          "name": "time_roles_retained",
+          "ok": true
+        },
+        {
+          "name": "time_roles_required_observed",
+          "ok": true
+        },
+        {
+          "name": "target_metric_scope_kept",
+          "ok": true
+        },
+        {
+          "name": "target_metric_required_observed",
+          "ok": true
+        },
+        {
+          "name": "required_dimension_refs_covered",
+          "ok": true,
+          "detail": "missing=[]"
+        },
+        {
+          "name": "required_pattern:premise_confirmation",
+          "ok": true
+        },
+        {
+          "name": "required_pattern:parallel_directions",
+          "ok": false
+        },
+        {
+          "name": "budget:case_limits_respected",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "max_queries": 8,
+            "max_model_calls": 8,
+            "queries": 5,
+            "model_calls": 4,
+            "query_count_kind": "lower_bound",
+            "model_call_count_kind": "observed"
+          }
+        },
+        {
+          "name": "invariant:no_cross_run_or_unknown_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:evidence_ownership_observed",
+          "ok": true,
+          "available": true
+        },
+        {
+          "name": "invariant:findings_have_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_duplicate_action_execution",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_causal_claim_on_correlation",
+          "ok": true
+        },
+        {
+          "name": "invariant:report_numbers_from_cited_evidence",
+          "ok": true,
+          "available": false
+        },
+        {
+          "name": "invariant:evidence_dependency_ordering",
+          "ok": true,
+          "available": true
+        }
+      ]
+    },
+    {
+      "case_id": "research-cause-011",
+      "name": "broad_analysis_budget_pressure",
+      "categories": [
+        1,
+        16
+      ],
+      "question": "2026年6月29日总GMV比6月28日下降了，请全面分析下降原因：先从商家和档口分别分解变化，再计算主要档口的贡献度，并验证订单数、销售商品件数、客单价三个驱动方向是否成立。",
+      "outcome": "silent_error",
+      "violations": [
+        "budget:exhaustion_observed [{'config_matches_case': True, 'terminal_claim': False, 'remaining_budget': {'queries': 3, 'iterations': 2, 'model_calls': 4, 'duration_seconds': 300.0}, 'boundary_observed': False, 'boundary_proven_by_lower_bound': False}]"
+      ],
+      "engine": "agent",
+      "run": {
+        "id": 1304,
+        "record_id": 13084,
+        "status": "finished",
+        "execution_mode": "research",
+        "error_class": null,
+        "error": null,
+        "matched_routing_error_code": null,
+        "error_codes": [
+          "GMV",
+          "INVALID_REQUEST"
+        ],
+        "rejection_stage": null,
+        "duration_s": 21.4,
+        "config": {
+          "enabled": true,
+          "max_steps": 12,
+          "sample_rows": 10,
+          "token_budget": 100000,
+          "default_limit": 100,
+          "history_rounds": 3,
+          "compute_enabled": true,
+          "execution_modes": [
+            "fast",
+            "plan",
+            "research"
+          ],
+          "max_sql_retries": 2,
+          "timeout_seconds": 120,
+          "summary_max_chars": 4000,
+          "context_fold_chars": 30000,
+          "max_clarifications": 2,
+          "datasource_allowlist": [],
+          "plan_max_query_tasks": 5,
+          "research_max_queries": 8,
+          "tool_timeout_seconds": 60.0,
+          "repeat_fuse_threshold": 3,
+          "tool_parallel_workers": 4,
+          "plan_query_concurrency": 4,
+          "query_transient_retries": 1,
+          "research_execution_mode": "agent",
+          "research_max_iterations": 6,
+          "answer_citation_enforced": true,
+          "research_max_model_calls": 8,
+          "research_max_stall_turns": 3,
+          "assisted_fallback_enabled": false,
+          "research_max_evidence_rows": 20,
+          "research_max_evidence_chars": 12000,
+          "research_shadow_sample_rate": 0.0,
+          "tool_default_timeout_seconds": 30.0,
+          "research_max_duration_seconds": 300,
+          "research_shadow_tenant_allowlist": [],
+          "research_shadow_dataset_allowlist": [],
+          "research_max_actions_per_iteration": 3
+        },
+        "schema_version": null,
+        "contract_version": null,
+        "schema_fingerprint": null,
+        "scope_fingerprint": null
+      },
+      "research": {
+        "status": "succeeded",
+        "finish_reason": "no_new_direction",
+        "premise_supported": false,
+        "iterations": 3,
+        "evidence_count": 3,
+        "hypotheses": [],
+        "covered_dimension_refs": null,
+        "covered_driver_metric_refs": [],
+        "covered_hierarchy_ids": null,
+        "covered_contribution_dimension_refs": null,
+        "failed_action_error_codes": [
+          "INVALID_REQUEST",
+          "INVALID_REQUEST",
+          "工具 compute_evidence 参数不合法: 1 validation error for ComputeEvidenceArgs\npurpose\n  Extra inputs are not permitted [type=extra_forbidden, input_value='计算各档口GMV下降...GMV下降的贡献度', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.13/v/extra_forbidden"
+        ]
+      },
+      "runtime": {
+        "remaining_budget": {
+          "queries": 3,
+          "iterations": 2,
+          "model_calls": 4,
+          "duration_seconds": 300.0
+        },
+        "step_count": 4,
+        "steps_with_token_usage": 0,
+        "total_latency_ms": 16140,
+        "token_usage": {
+          "input": null,
+          "output": null
+        },
+        "availability": {
+          "steps": true,
+          "step_latency": true,
+          "token_usage": false
+        },
+        "tool_calls": {
+          "value": 6,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "trace_nodes": {
+          "value": 25,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "model_calls": {
+          "value": 4,
+          "available": true,
+          "unavailable_reason": null
+        },
+        "queries": {
+          "value": null,
+          "available": false,
+          "lower_bound": 3,
+          "unavailable_reason": "legacy_research_query_fact_not_persisted"
+        },
+        "model_calls_lower_bound": 3,
+        "queries_lower_bound": 3,
+        "plan_count": 3,
+        "result_count": 3,
+        "budget_check": {
+          "max_queries": 8,
+          "max_model_calls": 8,
+          "query_lower_bound": 3,
+          "model_call_lower_bound": 3,
+          "lower_bound_within_limit": true,
+          "actual_values_observed": true
+        },
+        "budget_remaining_snapshot": {
+          "queries": 3,
+          "iterations": 2,
+          "model_calls": 4,
+          "duration_seconds": 300.0
+        },
+        "artifact_size_bytes": 423,
+        "artifact_size_available": true,
+        "model_calls_used_estimated": null,
+        "queries_used_estimated": null
+      },
+      "report_summary": null,
+      "findings": [],
+      "limitations": null,
+      "evidence_digest": [
+        {
+          "evidence_id": "evidence:research-query-4d7519ac576572b3",
+          "purpose": "建立总GMV及三个驱动指标(订单数/件数/客单价)在当前日与前一日的基线对照",
+          "metric_refs": [
+            "METRIC:271:246",
+            "METRIC:266:246",
+            "METRIC:303:246",
+            "METRIC:265:246"
+          ],
+          "dimension_refs": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "METRIC:271:246",
+              "value_role": "difference",
+              "result_field": "gmv_total_difference"
+            },
+            {
+              "asset_ref": "METRIC:266:246",
+              "value_role": "difference",
+              "result_field": "item_qty_sale_difference"
+            },
+            {
+              "asset_ref": "METRIC:303:246",
+              "value_role": "difference",
+              "result_field": "aov_total_difference"
+            },
+            {
+              "asset_ref": "METRIC:265:246",
+              "value_role": "difference",
+              "result_field": "order_cnt_total_difference"
+            },
+            {
+              "result_field": "aov_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "gmv_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "aov_total_previous",
+              "value_role": "previous"
+            },
+            {
+              "result_field": "gmv_total_previous",
+              "value_role": "previous"
+            },
+            {
+              "result_field": "item_qty_sale_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "item_qty_sale_previous",
+              "value_role": "previous"
+            },
+            {
+              "result_field": "order_cnt_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "order_cnt_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": -42030.389999999985,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -118.0,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": -917.8,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 1.0,
+                  "logical_column_index": 3
+                },
+                {
+                  "value": 2024.39,
+                  "logical_column_index": 4
+                },
+                {
+                  "value": 99194.88,
+                  "logical_column_index": 5
+                },
+                {
+                  "value": 2942.19,
+                  "logical_column_index": 6
+                },
+                {
+                  "value": 141225.27,
+                  "logical_column_index": 7
+                },
+                {
+                  "value": 187.0,
+                  "logical_column_index": 8
+                },
+                {
+                  "value": 305.0,
+                  "logical_column_index": 9
+                },
+                {
+                  "value": 49.0,
+                  "logical_column_index": 10
+                },
+                {
+                  "value": 48.0,
+                  "logical_column_index": 11
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [],
+          "lineage": null,
+          "row_count": 1,
+          "truncated": false
+        },
+        {
+          "evidence_id": "evidence:research-query-49b71849690a35f7",
+          "purpose": "按商家维度分解总GMV当前日与前一日的数值，用于计算各商家贡献度",
+          "metric_refs": [
+            "METRIC:271:246"
+          ],
+          "dimension_refs": [
+            "DIMENSION:277:246"
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "DIMENSION:277:246",
+              "value_role": "group_key",
+              "result_field": "dimension_1"
+            },
+            {
+              "asset_ref": "METRIC:271:246",
+              "value_role": "difference",
+              "result_field": "gmv_total_difference"
+            },
+            {
+              "result_field": "gmv_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "gmv_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": 10001,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -19803.75,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 49986.56,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 69790.31,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 10002,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -22226.640000000007,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 49208.32,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 71434.96,
+                  "logical_column_index": 3
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [],
+          "lineage": null,
+          "row_count": 2,
+          "truncated": false
+        },
+        {
+          "evidence_id": "evidence:research-query-0ce3caaa3067a67f",
+          "purpose": "按档口维度分解总GMV当前日与前一日的数值，用于计算各档口贡献度",
+          "metric_refs": [
+            "METRIC:271:246"
+          ],
+          "dimension_refs": [
+            "DIMENSION:278:246"
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "logical_columns": [
+            {
+              "asset_ref": "DIMENSION:278:246",
+              "value_role": "group_key",
+              "result_field": "dimension_1"
+            },
+            {
+              "asset_ref": "METRIC:271:246",
+              "value_role": "difference",
+              "result_field": "gmv_total_difference"
+            },
+            {
+              "result_field": "gmv_total_current",
+              "value_role": "current"
+            },
+            {
+              "result_field": "gmv_total_previous",
+              "value_role": "previous"
+            }
+          ],
+          "top_rows": [
+            {
+              "values": [
+                {
+                  "value": 100011,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -2821.760000000002,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 28308.48,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 31130.24,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100022,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -7024.119999999999,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 23603.2,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 30627.32,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100021,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -8242.76,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 14246.4,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 22489.16,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100012,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -582.0700000000015,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 13114.88,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 13696.95,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100023,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -6959.76,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 11358.72,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 18318.48,
+                  "logical_column_index": 3
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "value": 100013,
+                  "logical_column_index": 0
+                },
+                {
+                  "value": -16399.92,
+                  "logical_column_index": 1
+                },
+                {
+                  "value": 8563.2,
+                  "logical_column_index": 2
+                },
+                {
+                  "value": 24963.12,
+                  "logical_column_index": 3
+                }
+              ]
+            }
+          ],
+          "bottom_rows": [],
+          "applied_filters": [],
+          "lineage": null,
+          "row_count": 6,
+          "truncated": false
+        }
+      ],
+      "checks": [
+        {
+          "name": "budget:exhaustion_observed",
+          "ok": false,
+          "available": true,
+          "detail": {
+            "config_matches_case": true,
+            "terminal_claim": false,
+            "remaining_budget": {
+              "queries": 3,
+              "iterations": 2,
+              "model_calls": 4,
+              "duration_seconds": 300.0
+            },
+            "boundary_observed": false,
+            "boundary_proven_by_lower_bound": false
+          }
+        },
+        {
+          "name": "execution_mode_is_research",
+          "ok": true,
+          "detail": "got research"
+        },
+        {
+          "name": "research_status_allowed",
+          "ok": true,
+          "detail": "got succeeded, allowed=['succeeded', 'partial', 'budget_exhausted']"
+        },
+        {
+          "name": "finish_reason_allowed",
+          "ok": true,
+          "detail": "got no_new_direction, allowed=['sufficient_evidence', 'no_new_direction', 'budget_exhausted', 'partial_failure']"
+        },
+        {
+          "name": "time_roles_retained",
+          "ok": true
+        },
+        {
+          "name": "time_roles_required_observed",
+          "ok": true
+        },
+        {
+          "name": "target_metric_scope_kept",
+          "ok": true
+        },
+        {
+          "name": "target_metric_required_observed",
+          "ok": true
+        },
+        {
+          "name": "required_pattern:premise_confirmation",
+          "ok": true
+        },
+        {
+          "name": "required_pattern:dimension_breakdown",
+          "ok": true
+        },
+        {
+          "name": "budget:case_limits_respected",
+          "ok": true,
+          "available": true,
+          "detail": {
+            "max_queries": 8,
+            "max_model_calls": 8,
+            "queries": 3,
+            "model_calls": 4,
+            "query_count_kind": "lower_bound",
+            "model_call_count_kind": "observed"
+          }
+        },
+        {
+          "name": "invariant:no_cross_run_or_unknown_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:evidence_ownership_observed",
+          "ok": true,
+          "available": true
+        },
+        {
+          "name": "invariant:findings_have_citations",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_duplicate_action_execution",
+          "ok": true
+        },
+        {
+          "name": "invariant:no_causal_claim_on_correlation",
+          "ok": true
+        },
+        {
+          "name": "invariant:report_numbers_from_cited_evidence",
+          "ok": true,
+          "available": false
+        },
+        {
+          "name": "invariant:evidence_dependency_ordering",
+          "ok": true,
+          "available": true
+        }
+      ]
+    }
+  ]
+}

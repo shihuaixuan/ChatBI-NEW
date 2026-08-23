@@ -1616,6 +1616,10 @@ class ResearchSemanticQueryOutcome(_VersionedContractModel):
     capability_gap: bool = False
     sql_escalation_allowed: bool = False
     message: str | None = Field(default=None, max_length=2000)
+    # 边界门失配的内部码（如 SEMANTIC_SCOPE_REQUIRED）。error_code 已映射成
+    # 粗粒度 PERMISSION_DENIED 时，没有它现场无法定位是哪道门在拦（run 1306
+    # 演练教训）；可选字段，旧载荷不受影响。
+    internal_code: str | None = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def validate_outcome(self) -> ResearchSemanticQueryOutcome:

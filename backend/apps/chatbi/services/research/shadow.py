@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -67,7 +68,13 @@ from apps.chatbi.models.dto.research_agent import (
 from apps.chatbi.models.dto.research_agent import (
     ResearchReason as AgentResearchReason,
 )
+from apps.chatbi.services.research.scope_stamp import (
+    governed_asset_refs,
+    stamp_semantic_scope,
+)
 from apps.tool import NeverCancelled
+
+logger = logging.getLogger(__name__)
 
 SHADOW_RUN_ID_SUFFIX = "-shadow"
 # derived_state 中 shadow 标记的键名；比较器与运维查询都依赖该键。
@@ -380,7 +387,14 @@ class ResearchExecutionState:
 
 @dataclass
 class ShadowRunMaterial:
-    """启动一次 shadow 双跑所需的全部冻结输入。"""
+    """启动一次 shadow 双跑所需的全部冻结输入。
+
+    ``semantic_scope``/``schema_snapshot`` 是路由期冻结的检索 Scope 载荷与
+    ``DatasetSchema`` 快照：主路径由适配器盖戳注入工具上下文（doc38 §7.4），
+    shadow 侧用同一共享实现（``scope_stamp``）盖出逐字节相同的载荷。缺任一
+    输入的请求不启动双跑——主路径在这些输入缺失时也会显式失败，启动一个
+    注定失败的 shadow 行只会制造引擎无关的噪声样本。
+    """
 
     parent_run_id: int
     oid: int
@@ -390,6 +404,10 @@ class ShadowRunMaterial:
     dataset_id: int | None
     temporal_context: dict[str, Any]
     legacy_requirement: ResearchRequirement
+    datasource_id: int | None = None
+    semantic_scope: dict[str, Any] | None = None
+    schema_snapshot: dict[str, Any] | None = None
+    permission_version: str | None = None
     premise: ResearchPremise | None = None
 
     def base_run_id(self) -> str:
@@ -413,9 +431,11 @@ class ShadowRunResult:
 class ShadowRunner:
     """在隔离栈中双跑新路径；所有副作用只落在 shadow run 身份上。
 
-    ``harness_factory(session, run_row, record, requirement)`` 由宿主注入，
-    返回带 ``run(requirement=..., ctx=None)`` 的研究循环宿主。Runner 自己
-    不装配模型客户端和执行服务，保证依赖方向 services ← orchestration。
+    ``harness_factory(session, run_row, record, requirement, *,
+    context_state_overlay)`` 由宿主注入，返回带 ``run(requirement=...,
+    ctx=None)`` 的研究循环宿主；overlay 携带盖戳后的 semantic_scope（见
+    :meth:`_context_overlay`）。Runner 自己不装配模型客户端和执行服务，
+    保证依赖方向 services ← orchestration。
     """
 
     def __init__(
@@ -439,11 +459,16 @@ class ShadowRunner:
             dataset_ref=material.dataset_ref(),
             premise=material.premise,
         )
+        overlay = self._context_overlay(material, requirement)
         with self._session_factory() as session:
             row = self._start_row(session, material, requirement=requirement)
             try:
                 harness = self._harness_factory(
-                    session, row, self._record_stub(material), requirement
+                    session,
+                    row,
+                    self._record_stub(material),
+                    requirement,
+                    context_state_overlay=overlay,
                 )
                 outcome = harness.run(requirement=requirement)
             except Exception as exc:  # 隔离边界：shadow 失败绝不上抛影响主路径。
@@ -471,6 +496,36 @@ class ShadowRunner:
     # shadow 行生命周期（独立于主路径 lifecycle）
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _context_overlay(
+        material: ShadowRunMaterial,
+        requirement: ResearchAgentRequirement,
+    ) -> dict[str, Any]:
+        """盖戳路由 Scope 并组装 Harness 工具上下文注入载荷。
+
+        与主路径适配器共用 ``scope_stamp`` 实现：同一冻结输入得到同一份
+        semantic_scope，双跑比较才有"输入同源"意义。冻结输入缺失显式报错，
+        绝不带空 Scope 开跑——那会让每条查询都死在运行时边界门上
+        （真实演练 run 1306 的教训：SEMANTIC_SCOPE_REQUIRED →
+        PERMISSION_DENIED，零证据终局）。
+        """
+
+        if not isinstance(material.semantic_scope, dict) or not isinstance(
+            material.schema_snapshot, dict
+        ):
+            raise ValueError("RESEARCH_SHADOW_SCOPE_INPUT_MISSING")
+        stamped = stamp_semantic_scope(
+            scope=material.semantic_scope,
+            schema_payload=material.schema_snapshot,
+            scope_fingerprint=requirement.scope.scope_fingerprint,
+            permission_fingerprint=requirement.version_snapshot.permission_fingerprint,
+            allowed_asset_refs=governed_asset_refs(requirement.scope),
+        )
+        return {
+            "semantic_scope": stamped,
+            "permission_version": material.permission_version,
+        }
+
     def _shadow_marker(self, material: ShadowRunMaterial) -> dict[str, Any]:
         return {
             "parent_run_id": material.parent_run_id,
@@ -481,7 +536,10 @@ class ShadowRunner:
     def _record_stub(self, material: ShadowRunMaterial) -> Any:
         class _RecordStub:
             id = material.record_id
-            datasource = material.dataset_id
+            # ChatRecord 字段口径：datasource 是数据源 id，dataset_id 是数据
+            # 集 id。两者混用会在运行时边界校验撞上 DATASOURCE_SCOPE_MISMATCH
+            # （run 1306 教训之二：stub 曾把 dataset_id 填进 datasource）。
+            datasource = material.datasource_id
             dataset_id = material.dataset_id
             question = ""
 
@@ -524,9 +582,26 @@ class ShadowRunner:
         snapshot: dict[str, Any] | None = None,
     ) -> None:
         derived = dict(row.derived_state or {})
-        if derived.get(SHADOW_MARKER_KEY) is None:
+        marker = derived.get(SHADOW_MARKER_KEY)
+        if marker is None:
+            # 标记丢失说明行上派生状态被其他写入方整表替换。终态仍必须落：
+            # 孤儿 running 行对就绪扫描和运维都是谎言（run 1306 教训之三，
+            # 早期版本在这里静默返回）。不再声称 marker 状态，只留警告可查。
+            logger.warning(
+                "chatbi.shadow.marker_lost run=%s status=%s",
+                getattr(row, "id", None),
+                status,
+            )
+            if snapshot is not None:
+                derived["research_run_snapshot"] = snapshot
+            row.derived_state = derived
+            row.status = "finished" if status == "finished" else "failed"
+            if error is not None:
+                row.error = error
+            row.updated_at = self._now()
+            session.commit()
             return
-        marker = dict(derived.get(SHADOW_MARKER_KEY) or {})
+        marker = dict(marker)
         marker["status"] = status
         marker["finished_at"] = self._now().isoformat()
         if error is not None:

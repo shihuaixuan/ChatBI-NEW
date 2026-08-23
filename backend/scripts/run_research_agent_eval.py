@@ -412,6 +412,9 @@ def _project_agent_evidence(item: dict[str, Any]) -> dict[str, Any]:
 
     projected = dict(item)
     projected["time_roles"] = list(item.get("time_ranges") or [])
+    # 新引擎一次助手轮次发出的一批查询共享同一 iteration；legacy 判分器按
+    # batch_id 聚合"并行方向"，这里以 iteration 作批次标识忠实对应。
+    projected["batch_id"] = f"iteration-{item.get('iteration')}"
     result_ref = item.get("result_ref") or {}
     if isinstance(result_ref, dict) and result_ref.get("result_id"):
         projected["result_id"] = result_ref["result_id"]
@@ -548,6 +551,29 @@ def build_agent_eval_view(
         }
     )
 
+    # 层级覆盖：legacy 由"声明 hierarchy_id 且完成的下钻动作"累计；新路径
+    # 证据不携带 hierarchy_id，但下钻的可观测特征是"证据维度位于层级深层、
+    # 同时 applied filter 指向同一层级的上级维度"。按该特征从冻结 Scope 的
+    # 层级定义确定性还原，口径不放宽（无下钻即空）。
+    requirement = research_state.get("requirement") or {}
+    scope_payload = requirement.get("scope") or {}
+    covered_hierarchy_ids: list[str] = []
+    for hierarchy in scope_payload.get("hierarchies") or ():
+        if not isinstance(hierarchy, dict) or not hierarchy.get("hierarchy_id"):
+            continue
+        dims = [ref for ref in hierarchy.get("dimension_refs") or () if isinstance(ref, str)]
+        drilled = any(
+            set(dims[position + 1:]) & set(item.get("dimension_refs") or [])
+            and any(
+                isinstance(applied, dict) and applied.get("target_ref") == ancestor
+                for applied in item.get("applied_filters") or ()
+            )
+            for position, ancestor in enumerate(dims[:-1])
+            for item in evidence
+        )
+        if drilled:
+            covered_hierarchy_ids.append(str(hierarchy["hierarchy_id"]))
+
     final_report = snapshot.get("final_report")
     report: dict[str, Any] = {}
     if isinstance(final_report, dict):
@@ -602,6 +628,7 @@ def build_agent_eval_view(
         "report": report,
         "hypotheses": hypotheses,
         "covered_driver_metric_refs": covered_drivers,
+        "covered_hierarchy_ids": covered_hierarchy_ids,
         "premise_supported": premise_result.get("status") == "supported",
         "remaining_budget": snapshot.get("budget_remaining") or {},
         "executed_action_fingerprints": list(fingerprints or ()),

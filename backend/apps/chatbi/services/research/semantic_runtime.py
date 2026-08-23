@@ -179,6 +179,9 @@ class SemanticQueryRuntime:
         """执行一次 Semantic Query；该入口不自动修改参数或重试。"""
 
         resolved_plan_id = plan_id or self._plan_id(query)
+        # 失败观察的内部定位码：error_code 被映射成粗粒度值（如
+        # PERMISSION_DENIED）时，观察侧靠它区分是哪道门在拦（run 1306）。
+        internal_code: str | None = None
         try:
             semantic_scope = self._semantic_scope(context)
             resolved_requirement = requirement or self._requirement(context)
@@ -275,6 +278,7 @@ class SemanticQueryRuntime:
             same_parameter_retryable = False
             capability_gap = False
             message = str(exc) or exc.__class__.__name__
+            internal_code = message
         except SemanticQueryRuntimeError as exc:
             (
                 code,
@@ -286,6 +290,9 @@ class SemanticQueryRuntime:
                 _sql_escalation_allowed,
             ) = self._runtime_error_metadata(exc)
             message = str(exc) or exc.__class__.__name__
+            details = getattr(exc, "details", None)
+            if isinstance(details, dict):
+                internal_code = details.get("internal_code")
         except PlanPipelineError as exc:
             (
                 code,
@@ -307,6 +314,7 @@ class SemanticQueryRuntime:
             message = str(exc) or exc.__class__.__name__
         except SemanticValidationError as exc:
             semantic_code = exc.detail
+            internal_code = semantic_code
             if semantic_code in _SEMANTIC_CAPABILITY_CODES:
                 code = ToolErrorCode.UNSUPPORTED_CAPABILITY
                 stage = ToolFailureStage.PLANNING
@@ -342,6 +350,7 @@ class SemanticQueryRuntime:
             # 阶段 2不开放裸 SQL，即使语义能力不足也不能在本入口升级。
             sql_escalation_allowed=False,
             message=message,
+            internal_code=internal_code,
         )
 
     def _execute_spec(self, context: Any, spec: Any, plan_id: str) -> Any:

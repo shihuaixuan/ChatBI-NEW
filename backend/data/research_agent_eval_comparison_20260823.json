@@ -1,0 +1,3139 @@
+{
+  "summary": {
+    "generated_at": "2026-08-23",
+    "legacy_file": "data/research_agent_eval_legacy_full_20260823.json",
+    "agent_file": "data/research_agent_eval_agent_rescored_20260823.json",
+    "cases_compared": 11,
+    "cases_all_equal": 5,
+    "cases_with_differences": 6,
+    "only_in_legacy": [],
+    "only_in_agent": [],
+    "differing_dimension_distribution": {
+      "process.finish_reason": 6,
+      "process.hypotheses": 6,
+      "process.query_count": 5,
+      "process.query_direction_metrics": 4,
+      "process.covered_dimensions": 2,
+      "process.status": 2
+    }
+  },
+  "comparisons": [
+    {
+      "case_id": "research-cause-001",
+      "name": "premise_open_cause",
+      "question": "总GMV在2026年6月29日比6月28日明显下降了，帮我找出主要原因，需要的话可以量化各档口对这次下降的贡献。",
+      "outcome": {
+        "legacy": "pass",
+        "agent": "pass"
+      },
+      "run_ids": {
+        "legacy": 1283,
+        "agent": 1294
+      },
+      "has_different": true,
+      "verdict_counts": {
+        "equal": 11,
+        "different": 3,
+        "not_comparable": 5
+      },
+      "differing_dimensions": [
+        {
+          "group": "process",
+          "dimension": "finish_reason",
+          "legacy_value": "sufficient_evidence",
+          "agent_value": "no_new_direction",
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "query_count",
+          "legacy_value": 3,
+          "agent_value": 2,
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "hypotheses",
+          "legacy_value": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "agent_value": [],
+          "detail": "仅旧路径有=['h1', 'h2', 'h3']; 仅新路径有=[]"
+        }
+      ],
+      "not_comparable_dimensions": [
+        "output.core_findings_count",
+        "output.comprehensibility",
+        "runtime.queries_used",
+        "runtime.model_calls_used",
+        "runtime.latency"
+      ],
+      "facts": {
+        "legacy": {
+          "side": "legacy",
+          "goal": "找出总GMV下降的主要原因，并量化各档口对下降的贡献",
+          "status": "succeeded",
+          "finish_reason": "sufficient_evidence",
+          "premise_supported": true,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "cc6e7612bf793861e8fe7d0a7c931e81fc591a3115fee92372db55a261da0906",
+          "schema_fingerprint": null,
+          "evidence_count": 3,
+          "evidence_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "evidence_dimension_refs": [
+            "DIMENSION:278:246"
+          ],
+          "hypothesis_ids": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": 0
+        },
+        "agent": {
+          "side": "agent",
+          "goal": "找出总GMV下降的主要原因，并量化各档口对下降的贡献",
+          "status": "succeeded",
+          "finish_reason": "no_new_direction",
+          "premise_supported": null,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "cc6e7612bf793861e8fe7d0a7c931e81fc591a3115fee92372db55a261da0906",
+          "schema_fingerprint": "c5da73a8229ccee710f81f569bb70879a295692b32ff1ca5f30f496d1bd4e16d",
+          "evidence_count": 2,
+          "evidence_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "evidence_dimension_refs": [
+            "DIMENSION:278:246"
+          ],
+          "hypothesis_ids": [],
+          "queries_used": 2,
+          "model_calls_used": 4,
+          "duration_seconds": null,
+          "error_codes": [
+            "INVALID_REQUEST",
+            "INVALID_REQUEST",
+            "INVALID_REQUEST"
+          ],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": null
+        },
+        "dimensions": [
+          {
+            "group": "input",
+            "dimension": "goal",
+            "verdict": "equal",
+            "legacy_value": "找出总GMV下降的主要原因，并量化各档口对下降的贡献",
+            "agent_value": "找出总GMV下降的主要原因，并量化各档口对下降的贡献",
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "target_metrics",
+            "verdict": "equal",
+            "legacy_value": [
+              "METRIC:271:246"
+            ],
+            "agent_value": [
+              "METRIC:271:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "immutable_filters",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "time_roles",
+            "verdict": "equal",
+            "legacy_value": [
+              "current",
+              "previous"
+            ],
+            "agent_value": [
+              "current",
+              "previous"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "scope_fingerprint",
+            "verdict": "equal",
+            "legacy_value": "cc6e7612bf793861e8fe7d0a7c931e81fc591a3115fee92372db55a261da0906",
+            "agent_value": "cc6e7612bf793861e8fe7d0a7c931e81fc591a3115fee92372db55a261da0906",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "status",
+            "verdict": "equal",
+            "legacy_value": "succeeded",
+            "agent_value": "succeeded",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "finish_reason",
+            "verdict": "different",
+            "legacy_value": "sufficient_evidence",
+            "agent_value": "no_new_direction",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_count",
+            "verdict": "different",
+            "legacy_value": 3,
+            "agent_value": 2,
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_direction_metrics",
+            "verdict": "equal",
+            "legacy_value": [
+              "METRIC:271:246"
+            ],
+            "agent_value": [
+              "METRIC:271:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "covered_dimensions",
+            "verdict": "equal",
+            "legacy_value": [
+              "DIMENSION:278:246"
+            ],
+            "agent_value": [
+              "DIMENSION:278:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "hypotheses",
+            "verdict": "different",
+            "legacy_value": [
+              "h1",
+              "h2",
+              "h3"
+            ],
+            "agent_value": [],
+            "detail": "仅旧路径有=['h1', 'h2', 'h3']; 仅新路径有=[]"
+          },
+          {
+            "group": "process",
+            "dimension": "premise_supported",
+            "verdict": "equal",
+            "legacy_value": true,
+            "agent_value": true,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "core_findings_count",
+            "verdict": "not_comparable",
+            "legacy_value": 0,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "output",
+            "dimension": "report_present",
+            "verdict": "equal",
+            "legacy_value": true,
+            "agent_value": true,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "forbidden_conclusions",
+            "verdict": "equal",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "新路径最终报告由七类硬校验整体把关；旧路径无对应机制，该维度只对新路径做结构性断言"
+          },
+          {
+            "group": "output",
+            "dimension": "comprehensibility",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "用户可理解性需要人工抽检，自动比较器不做判断"
+          },
+          {
+            "group": "runtime",
+            "dimension": "queries_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 2,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "model_calls_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 4,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "latency",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "两侧延迟由运行门槛单独采集，比较器不重复计算"
+          }
+        ],
+        "has_different": true
+      }
+    },
+    {
+      "case_id": "research-cause-002",
+      "name": "open_exploration_no_premise",
+      "question": "2026年6月29日总GMV在各档口的分布情况如何？请先找出表现最异常的档口，再根据该档口的数据继续深入分析原因。",
+      "outcome": {
+        "legacy": "explicit_failure",
+        "agent": "explicit_failure"
+      },
+      "run_ids": {
+        "legacy": 1284,
+        "agent": 1295
+      },
+      "has_different": false,
+      "verdict_counts": {
+        "not_comparable": 11,
+        "equal": 8
+      },
+      "differing_dimensions": [],
+      "not_comparable_dimensions": [
+        "input.goal",
+        "input.scope_fingerprint",
+        "process.status",
+        "process.finish_reason",
+        "process.premise_supported",
+        "output.core_findings_count",
+        "output.forbidden_conclusions",
+        "output.comprehensibility",
+        "runtime.queries_used",
+        "runtime.model_calls_used",
+        "runtime.latency"
+      ],
+      "facts": {
+        "legacy": {
+          "side": "legacy",
+          "goal": null,
+          "status": null,
+          "finish_reason": null,
+          "premise_supported": null,
+          "target_metric_refs": [],
+          "immutable_filters": [],
+          "time_roles": [],
+          "scope_fingerprint": null,
+          "schema_fingerprint": null,
+          "evidence_count": 0,
+          "evidence_metric_refs": [],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": false,
+          "report_citation_ids": [],
+          "findings_count": 0
+        },
+        "agent": {
+          "side": "agent",
+          "goal": null,
+          "status": null,
+          "finish_reason": null,
+          "premise_supported": null,
+          "target_metric_refs": [],
+          "immutable_filters": [],
+          "time_roles": [],
+          "scope_fingerprint": null,
+          "schema_fingerprint": null,
+          "evidence_count": 0,
+          "evidence_metric_refs": [],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": false,
+          "report_citation_ids": [],
+          "findings_count": null
+        },
+        "dimensions": [
+          {
+            "group": "input",
+            "dimension": "goal",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "input",
+            "dimension": "target_metrics",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "immutable_filters",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "time_roles",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "scope_fingerprint",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "status",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "finish_reason",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "query_count",
+            "verdict": "equal",
+            "legacy_value": 0,
+            "agent_value": 0,
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_direction_metrics",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "covered_dimensions",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "hypotheses",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "premise_supported",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧缺少可比较的前提结论"
+          },
+          {
+            "group": "output",
+            "dimension": "core_findings_count",
+            "verdict": "not_comparable",
+            "legacy_value": 0,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "output",
+            "dimension": "report_present",
+            "verdict": "equal",
+            "legacy_value": false,
+            "agent_value": false,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "forbidden_conclusions",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "新路径最终报告由七类硬校验整体把关；旧路径无对应机制，该维度只对新路径做结构性断言"
+          },
+          {
+            "group": "output",
+            "dimension": "comprehensibility",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "用户可理解性需要人工抽检，自动比较器不做判断"
+          },
+          {
+            "group": "runtime",
+            "dimension": "queries_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "model_calls_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "latency",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "两侧延迟由运行门槛单独采集，比较器不重复计算"
+          }
+        ],
+        "has_different": false
+      }
+    },
+    {
+      "case_id": "research-cause-003",
+      "name": "result_driven_hierarchy_drilldown",
+      "question": "2026年6月29日总GMV比6月28日下降了，请找出下降最大的商家，然后继续下钻分析该商家下各档口的下降情况。",
+      "outcome": {
+        "legacy": "pass",
+        "agent": "pass"
+      },
+      "run_ids": {
+        "legacy": 1285,
+        "agent": 1296
+      },
+      "has_different": true,
+      "verdict_counts": {
+        "equal": 11,
+        "different": 3,
+        "not_comparable": 5
+      },
+      "differing_dimensions": [
+        {
+          "group": "process",
+          "dimension": "finish_reason",
+          "legacy_value": "sufficient_evidence",
+          "agent_value": "no_new_direction",
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "query_count",
+          "legacy_value": 3,
+          "agent_value": 2,
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "hypotheses",
+          "legacy_value": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "agent_value": [],
+          "detail": "仅旧路径有=['h1', 'h2', 'h3']; 仅新路径有=[]"
+        }
+      ],
+      "not_comparable_dimensions": [
+        "output.core_findings_count",
+        "output.comprehensibility",
+        "runtime.queries_used",
+        "runtime.model_calls_used",
+        "runtime.latency"
+      ],
+      "facts": {
+        "legacy": {
+          "side": "legacy",
+          "goal": "找出下降最大的商家，然后下钻分析该商家下各档口的下降情况",
+          "status": "succeeded",
+          "finish_reason": "sufficient_evidence",
+          "premise_supported": true,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "3812eb1a89158dc29ee80c783823d176a37e9499f8a92e03255a91d092772b51",
+          "schema_fingerprint": null,
+          "evidence_count": 3,
+          "evidence_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "evidence_dimension_refs": [
+            "DIMENSION:277:246",
+            "DIMENSION:278:246"
+          ],
+          "hypothesis_ids": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": 0
+        },
+        "agent": {
+          "side": "agent",
+          "goal": "找出下降最大的商家，然后下钻分析该商家下各档口的下降情况",
+          "status": "succeeded",
+          "finish_reason": "no_new_direction",
+          "premise_supported": null,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "3812eb1a89158dc29ee80c783823d176a37e9499f8a92e03255a91d092772b51",
+          "schema_fingerprint": "c5da73a8229ccee710f81f569bb70879a295692b32ff1ca5f30f496d1bd4e16d",
+          "evidence_count": 2,
+          "evidence_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "evidence_dimension_refs": [
+            "DIMENSION:277:246",
+            "DIMENSION:278:246"
+          ],
+          "hypothesis_ids": [],
+          "queries_used": 2,
+          "model_calls_used": 4,
+          "duration_seconds": null,
+          "error_codes": [
+            "INVALID_REQUEST",
+            "INVALID_REQUEST"
+          ],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": null
+        },
+        "dimensions": [
+          {
+            "group": "input",
+            "dimension": "goal",
+            "verdict": "equal",
+            "legacy_value": "找出下降最大的商家，然后下钻分析该商家下各档口的下降情况",
+            "agent_value": "找出下降最大的商家，然后下钻分析该商家下各档口的下降情况",
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "target_metrics",
+            "verdict": "equal",
+            "legacy_value": [
+              "METRIC:271:246"
+            ],
+            "agent_value": [
+              "METRIC:271:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "immutable_filters",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "time_roles",
+            "verdict": "equal",
+            "legacy_value": [
+              "current",
+              "previous"
+            ],
+            "agent_value": [
+              "current",
+              "previous"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "scope_fingerprint",
+            "verdict": "equal",
+            "legacy_value": "3812eb1a89158dc29ee80c783823d176a37e9499f8a92e03255a91d092772b51",
+            "agent_value": "3812eb1a89158dc29ee80c783823d176a37e9499f8a92e03255a91d092772b51",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "status",
+            "verdict": "equal",
+            "legacy_value": "succeeded",
+            "agent_value": "succeeded",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "finish_reason",
+            "verdict": "different",
+            "legacy_value": "sufficient_evidence",
+            "agent_value": "no_new_direction",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_count",
+            "verdict": "different",
+            "legacy_value": 3,
+            "agent_value": 2,
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_direction_metrics",
+            "verdict": "equal",
+            "legacy_value": [
+              "METRIC:271:246"
+            ],
+            "agent_value": [
+              "METRIC:271:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "covered_dimensions",
+            "verdict": "equal",
+            "legacy_value": [
+              "DIMENSION:277:246",
+              "DIMENSION:278:246"
+            ],
+            "agent_value": [
+              "DIMENSION:277:246",
+              "DIMENSION:278:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "hypotheses",
+            "verdict": "different",
+            "legacy_value": [
+              "h1",
+              "h2",
+              "h3"
+            ],
+            "agent_value": [],
+            "detail": "仅旧路径有=['h1', 'h2', 'h3']; 仅新路径有=[]"
+          },
+          {
+            "group": "process",
+            "dimension": "premise_supported",
+            "verdict": "equal",
+            "legacy_value": true,
+            "agent_value": true,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "core_findings_count",
+            "verdict": "not_comparable",
+            "legacy_value": 0,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "output",
+            "dimension": "report_present",
+            "verdict": "equal",
+            "legacy_value": true,
+            "agent_value": true,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "forbidden_conclusions",
+            "verdict": "equal",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "新路径最终报告由七类硬校验整体把关；旧路径无对应机制，该维度只对新路径做结构性断言"
+          },
+          {
+            "group": "output",
+            "dimension": "comprehensibility",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "用户可理解性需要人工抽检，自动比较器不做判断"
+          },
+          {
+            "group": "runtime",
+            "dimension": "queries_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 2,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "model_calls_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 4,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "latency",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "两侧延迟由运行门槛单独采集，比较器不重复计算"
+          }
+        ],
+        "has_different": true
+      }
+    },
+    {
+      "case_id": "research-cause-004",
+      "name": "contribution_reconciliation",
+      "question": "总GMV在2026年6月29日比6月28日下降了，请计算各档口对这次下降的贡献分别是多少。",
+      "outcome": {
+        "legacy": "explicit_failure",
+        "agent": "explicit_failure"
+      },
+      "run_ids": {
+        "legacy": 1286,
+        "agent": 1297
+      },
+      "has_different": false,
+      "verdict_counts": {
+        "not_comparable": 11,
+        "equal": 8
+      },
+      "differing_dimensions": [],
+      "not_comparable_dimensions": [
+        "input.goal",
+        "input.scope_fingerprint",
+        "process.status",
+        "process.finish_reason",
+        "process.premise_supported",
+        "output.core_findings_count",
+        "output.forbidden_conclusions",
+        "output.comprehensibility",
+        "runtime.queries_used",
+        "runtime.model_calls_used",
+        "runtime.latency"
+      ],
+      "facts": {
+        "legacy": {
+          "side": "legacy",
+          "goal": null,
+          "status": null,
+          "finish_reason": null,
+          "premise_supported": null,
+          "target_metric_refs": [],
+          "immutable_filters": [],
+          "time_roles": [],
+          "scope_fingerprint": null,
+          "schema_fingerprint": null,
+          "evidence_count": 0,
+          "evidence_metric_refs": [],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": false,
+          "report_citation_ids": [],
+          "findings_count": 0
+        },
+        "agent": {
+          "side": "agent",
+          "goal": null,
+          "status": null,
+          "finish_reason": null,
+          "premise_supported": null,
+          "target_metric_refs": [],
+          "immutable_filters": [],
+          "time_roles": [],
+          "scope_fingerprint": null,
+          "schema_fingerprint": null,
+          "evidence_count": 0,
+          "evidence_metric_refs": [],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": false,
+          "report_citation_ids": [],
+          "findings_count": null
+        },
+        "dimensions": [
+          {
+            "group": "input",
+            "dimension": "goal",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "input",
+            "dimension": "target_metrics",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "immutable_filters",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "time_roles",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "scope_fingerprint",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "status",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "finish_reason",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "query_count",
+            "verdict": "equal",
+            "legacy_value": 0,
+            "agent_value": 0,
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_direction_metrics",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "covered_dimensions",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "hypotheses",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "premise_supported",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧缺少可比较的前提结论"
+          },
+          {
+            "group": "output",
+            "dimension": "core_findings_count",
+            "verdict": "not_comparable",
+            "legacy_value": 0,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "output",
+            "dimension": "report_present",
+            "verdict": "equal",
+            "legacy_value": false,
+            "agent_value": false,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "forbidden_conclusions",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "新路径最终报告由七类硬校验整体把关；旧路径无对应机制，该维度只对新路径做结构性断言"
+          },
+          {
+            "group": "output",
+            "dimension": "comprehensibility",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "用户可理解性需要人工抽检，自动比较器不做判断"
+          },
+          {
+            "group": "runtime",
+            "dimension": "queries_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "model_calls_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "latency",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "两侧延迟由运行门槛单独采集，比较器不重复计算"
+          }
+        ],
+        "has_different": false
+      }
+    },
+    {
+      "case_id": "research-cause-005",
+      "name": "driver_same_model_validation",
+      "question": "2026年6月29日总GMV比6月28日下降了。请分别验证总订单数减少和订单平均客单价下降这两个方向是否得到数据支持，并给出证据；不要把同向变化直接表述为因果。",
+      "outcome": {
+        "legacy": "pass",
+        "agent": "silent_error"
+      },
+      "run_ids": {
+        "legacy": 1287,
+        "agent": 1298
+      },
+      "has_different": true,
+      "verdict_counts": {
+        "equal": 9,
+        "different": 5,
+        "not_comparable": 5
+      },
+      "differing_dimensions": [
+        {
+          "group": "process",
+          "dimension": "finish_reason",
+          "legacy_value": "sufficient_evidence",
+          "agent_value": "no_new_direction",
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "query_count",
+          "legacy_value": 3,
+          "agent_value": 1,
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "query_direction_metrics",
+          "legacy_value": [
+            "METRIC:265:246",
+            "METRIC:271:246",
+            "METRIC:303:246"
+          ],
+          "agent_value": [
+            "METRIC:265:246",
+            "METRIC:266:246",
+            "METRIC:271:246",
+            "METRIC:303:246"
+          ],
+          "detail": "仅旧路径有=[]; 仅新路径有=['METRIC:266:246']"
+        },
+        {
+          "group": "process",
+          "dimension": "covered_dimensions",
+          "legacy_value": [
+            "DIMENSION:277:246",
+            "DIMENSION:278:246"
+          ],
+          "agent_value": [],
+          "detail": "仅旧路径有=['DIMENSION:277:246', 'DIMENSION:278:246']; 仅新路径有=[]"
+        },
+        {
+          "group": "process",
+          "dimension": "hypotheses",
+          "legacy_value": [
+            "h1",
+            "h2"
+          ],
+          "agent_value": [],
+          "detail": "仅旧路径有=['h1', 'h2']; 仅新路径有=[]"
+        }
+      ],
+      "not_comparable_dimensions": [
+        "output.core_findings_count",
+        "output.comprehensibility",
+        "runtime.queries_used",
+        "runtime.model_calls_used",
+        "runtime.latency"
+      ],
+      "facts": {
+        "legacy": {
+          "side": "legacy",
+          "goal": "验证总GMV下降主要由总订单数减少还是订单平均客单价下降导致",
+          "status": "succeeded",
+          "finish_reason": "sufficient_evidence",
+          "premise_supported": true,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "3b8550c9ae8ee10adcc8ac74698c7965142d4535e9b02673c19e2db4e078ac08",
+          "schema_fingerprint": null,
+          "evidence_count": 3,
+          "evidence_metric_refs": [
+            "METRIC:265:246",
+            "METRIC:271:246",
+            "METRIC:303:246"
+          ],
+          "evidence_dimension_refs": [
+            "DIMENSION:277:246",
+            "DIMENSION:278:246"
+          ],
+          "hypothesis_ids": [
+            "h1",
+            "h2"
+          ],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": 0
+        },
+        "agent": {
+          "side": "agent",
+          "goal": "验证总GMV下降主要由总订单数减少还是订单平均客单价下降导致",
+          "status": "succeeded",
+          "finish_reason": "no_new_direction",
+          "premise_supported": null,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "3b8550c9ae8ee10adcc8ac74698c7965142d4535e9b02673c19e2db4e078ac08",
+          "schema_fingerprint": "c5da73a8229ccee710f81f569bb70879a295692b32ff1ca5f30f496d1bd4e16d",
+          "evidence_count": 1,
+          "evidence_metric_refs": [
+            "METRIC:265:246",
+            "METRIC:266:246",
+            "METRIC:271:246",
+            "METRIC:303:246"
+          ],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": 1,
+          "model_calls_used": 4,
+          "duration_seconds": null,
+          "error_codes": [
+            "INVALID_REQUEST",
+            "INVALID_REQUEST",
+            "INVALID_REQUEST"
+          ],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": null
+        },
+        "dimensions": [
+          {
+            "group": "input",
+            "dimension": "goal",
+            "verdict": "equal",
+            "legacy_value": "验证总GMV下降主要由总订单数减少还是订单平均客单价下降导致",
+            "agent_value": "验证总GMV下降主要由总订单数减少还是订单平均客单价下降导致",
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "target_metrics",
+            "verdict": "equal",
+            "legacy_value": [
+              "METRIC:271:246"
+            ],
+            "agent_value": [
+              "METRIC:271:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "immutable_filters",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "time_roles",
+            "verdict": "equal",
+            "legacy_value": [
+              "current",
+              "previous"
+            ],
+            "agent_value": [
+              "current",
+              "previous"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "scope_fingerprint",
+            "verdict": "equal",
+            "legacy_value": "3b8550c9ae8ee10adcc8ac74698c7965142d4535e9b02673c19e2db4e078ac08",
+            "agent_value": "3b8550c9ae8ee10adcc8ac74698c7965142d4535e9b02673c19e2db4e078ac08",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "status",
+            "verdict": "equal",
+            "legacy_value": "succeeded",
+            "agent_value": "succeeded",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "finish_reason",
+            "verdict": "different",
+            "legacy_value": "sufficient_evidence",
+            "agent_value": "no_new_direction",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_count",
+            "verdict": "different",
+            "legacy_value": 3,
+            "agent_value": 1,
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_direction_metrics",
+            "verdict": "different",
+            "legacy_value": [
+              "METRIC:265:246",
+              "METRIC:271:246",
+              "METRIC:303:246"
+            ],
+            "agent_value": [
+              "METRIC:265:246",
+              "METRIC:266:246",
+              "METRIC:271:246",
+              "METRIC:303:246"
+            ],
+            "detail": "仅旧路径有=[]; 仅新路径有=['METRIC:266:246']"
+          },
+          {
+            "group": "process",
+            "dimension": "covered_dimensions",
+            "verdict": "different",
+            "legacy_value": [
+              "DIMENSION:277:246",
+              "DIMENSION:278:246"
+            ],
+            "agent_value": [],
+            "detail": "仅旧路径有=['DIMENSION:277:246', 'DIMENSION:278:246']; 仅新路径有=[]"
+          },
+          {
+            "group": "process",
+            "dimension": "hypotheses",
+            "verdict": "different",
+            "legacy_value": [
+              "h1",
+              "h2"
+            ],
+            "agent_value": [],
+            "detail": "仅旧路径有=['h1', 'h2']; 仅新路径有=[]"
+          },
+          {
+            "group": "process",
+            "dimension": "premise_supported",
+            "verdict": "equal",
+            "legacy_value": true,
+            "agent_value": true,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "core_findings_count",
+            "verdict": "not_comparable",
+            "legacy_value": 0,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "output",
+            "dimension": "report_present",
+            "verdict": "equal",
+            "legacy_value": true,
+            "agent_value": true,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "forbidden_conclusions",
+            "verdict": "equal",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "新路径最终报告由七类硬校验整体把关；旧路径无对应机制，该维度只对新路径做结构性断言"
+          },
+          {
+            "group": "output",
+            "dimension": "comprehensibility",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "用户可理解性需要人工抽检，自动比较器不做判断"
+          },
+          {
+            "group": "runtime",
+            "dimension": "queries_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 1,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "model_calls_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 4,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "latency",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "两侧延迟由运行门槛单独采集，比较器不重复计算"
+          }
+        ],
+        "has_different": true
+      }
+    },
+    {
+      "case_id": "research-cause-006",
+      "name": "driver_cross_model_ungoverned",
+      "question": "总GMV在2026年6月29日比6月28日下降了，请验证库存件数的下降是不是主要原因，并给出证据。",
+      "outcome": {
+        "legacy": "explicit_failure",
+        "agent": "explicit_failure"
+      },
+      "run_ids": {
+        "legacy": 1288,
+        "agent": 1299
+      },
+      "has_different": false,
+      "verdict_counts": {
+        "not_comparable": 11,
+        "equal": 8
+      },
+      "differing_dimensions": [],
+      "not_comparable_dimensions": [
+        "input.goal",
+        "input.scope_fingerprint",
+        "process.status",
+        "process.finish_reason",
+        "process.premise_supported",
+        "output.core_findings_count",
+        "output.forbidden_conclusions",
+        "output.comprehensibility",
+        "runtime.queries_used",
+        "runtime.model_calls_used",
+        "runtime.latency"
+      ],
+      "facts": {
+        "legacy": {
+          "side": "legacy",
+          "goal": null,
+          "status": null,
+          "finish_reason": null,
+          "premise_supported": null,
+          "target_metric_refs": [],
+          "immutable_filters": [],
+          "time_roles": [],
+          "scope_fingerprint": null,
+          "schema_fingerprint": null,
+          "evidence_count": 0,
+          "evidence_metric_refs": [],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": false,
+          "report_citation_ids": [],
+          "findings_count": 0
+        },
+        "agent": {
+          "side": "agent",
+          "goal": null,
+          "status": null,
+          "finish_reason": null,
+          "premise_supported": null,
+          "target_metric_refs": [],
+          "immutable_filters": [],
+          "time_roles": [],
+          "scope_fingerprint": null,
+          "schema_fingerprint": null,
+          "evidence_count": 0,
+          "evidence_metric_refs": [],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": false,
+          "report_citation_ids": [],
+          "findings_count": null
+        },
+        "dimensions": [
+          {
+            "group": "input",
+            "dimension": "goal",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "input",
+            "dimension": "target_metrics",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "immutable_filters",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "time_roles",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "scope_fingerprint",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "status",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "finish_reason",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "query_count",
+            "verdict": "equal",
+            "legacy_value": 0,
+            "agent_value": 0,
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_direction_metrics",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "covered_dimensions",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "hypotheses",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "premise_supported",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧缺少可比较的前提结论"
+          },
+          {
+            "group": "output",
+            "dimension": "core_findings_count",
+            "verdict": "not_comparable",
+            "legacy_value": 0,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "output",
+            "dimension": "report_present",
+            "verdict": "equal",
+            "legacy_value": false,
+            "agent_value": false,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "forbidden_conclusions",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "新路径最终报告由七类硬校验整体把关；旧路径无对应机制，该维度只对新路径做结构性断言"
+          },
+          {
+            "group": "output",
+            "dimension": "comprehensibility",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "用户可理解性需要人工抽检，自动比较器不做判断"
+          },
+          {
+            "group": "runtime",
+            "dimension": "queries_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "model_calls_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "latency",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "两侧延迟由运行门槛单独采集，比较器不重复计算"
+          }
+        ],
+        "has_different": false
+      }
+    },
+    {
+      "case_id": "research-cause-007",
+      "name": "empty_result_graceful",
+      "question": "档口88888在2026年6月29日的总GMV比6月28日下降了，请分析下降原因。",
+      "outcome": {
+        "legacy": "silent_error",
+        "agent": "pass"
+      },
+      "run_ids": {
+        "legacy": 1289,
+        "agent": 1300
+      },
+      "has_different": true,
+      "verdict_counts": {
+        "equal": 7,
+        "different": 6,
+        "not_comparable": 6
+      },
+      "differing_dimensions": [
+        {
+          "group": "process",
+          "dimension": "status",
+          "legacy_value": "partial",
+          "agent_value": "failed",
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "finish_reason",
+          "legacy_value": "budget_exhausted",
+          "agent_value": "data_insufficient",
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "query_count",
+          "legacy_value": 4,
+          "agent_value": 0,
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "query_direction_metrics",
+          "legacy_value": [
+            "METRIC:266:246",
+            "METRIC:271:246",
+            "METRIC:303:246"
+          ],
+          "agent_value": [],
+          "detail": "仅旧路径有=['METRIC:266:246', 'METRIC:271:246', 'METRIC:303:246']; 仅新路径有=[]"
+        },
+        {
+          "group": "process",
+          "dimension": "covered_dimensions",
+          "legacy_value": [
+            "DIMENSION:277:246",
+            "DIMENSION:278:246"
+          ],
+          "agent_value": [],
+          "detail": "仅旧路径有=['DIMENSION:277:246', 'DIMENSION:278:246']; 仅新路径有=[]"
+        },
+        {
+          "group": "process",
+          "dimension": "hypotheses",
+          "legacy_value": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "agent_value": [],
+          "detail": "仅旧路径有=['h1', 'h2', 'h3']; 仅新路径有=[]"
+        }
+      ],
+      "not_comparable_dimensions": [
+        "process.premise_supported",
+        "output.core_findings_count",
+        "output.comprehensibility",
+        "runtime.queries_used",
+        "runtime.model_calls_used",
+        "runtime.latency"
+      ],
+      "facts": {
+        "legacy": {
+          "side": "legacy",
+          "goal": "分析档口88888总GMV下降的原因",
+          "status": "partial",
+          "finish_reason": "budget_exhausted",
+          "premise_supported": null,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [
+            "DIMENSION:278:246|=|\"88888\""
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "a91d24ed3114fcdb4d18c8d16480e831577f9855dd820726fe21239144a63b9f",
+          "schema_fingerprint": null,
+          "evidence_count": 4,
+          "evidence_metric_refs": [
+            "METRIC:266:246",
+            "METRIC:271:246",
+            "METRIC:303:246"
+          ],
+          "evidence_dimension_refs": [
+            "DIMENSION:277:246",
+            "DIMENSION:278:246"
+          ],
+          "hypothesis_ids": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": 0
+        },
+        "agent": {
+          "side": "agent",
+          "goal": "分析档口88888总GMV下降的原因",
+          "status": "failed",
+          "finish_reason": "data_insufficient",
+          "premise_supported": null,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [
+            "DIMENSION:278:246|=|\"88888\""
+          ],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "a91d24ed3114fcdb4d18c8d16480e831577f9855dd820726fe21239144a63b9f",
+          "schema_fingerprint": "c5da73a8229ccee710f81f569bb70879a295692b32ff1ca5f30f496d1bd4e16d",
+          "evidence_count": 0,
+          "evidence_metric_refs": [],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": 5,
+          "model_calls_used": 3,
+          "duration_seconds": null,
+          "error_codes": [
+            "EMPTY_RESULT",
+            "INVALID_REQUEST",
+            "INVALID_REQUEST",
+            "INVALID_REQUEST",
+            "INVALID_REQUEST"
+          ],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": null
+        },
+        "dimensions": [
+          {
+            "group": "input",
+            "dimension": "goal",
+            "verdict": "equal",
+            "legacy_value": "分析档口88888总GMV下降的原因",
+            "agent_value": "分析档口88888总GMV下降的原因",
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "target_metrics",
+            "verdict": "equal",
+            "legacy_value": [
+              "METRIC:271:246"
+            ],
+            "agent_value": [
+              "METRIC:271:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "immutable_filters",
+            "verdict": "equal",
+            "legacy_value": [
+              "DIMENSION:278:246|=|\"88888\""
+            ],
+            "agent_value": [
+              "DIMENSION:278:246|=|\"88888\""
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "time_roles",
+            "verdict": "equal",
+            "legacy_value": [
+              "current",
+              "previous"
+            ],
+            "agent_value": [
+              "current",
+              "previous"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "scope_fingerprint",
+            "verdict": "equal",
+            "legacy_value": "a91d24ed3114fcdb4d18c8d16480e831577f9855dd820726fe21239144a63b9f",
+            "agent_value": "a91d24ed3114fcdb4d18c8d16480e831577f9855dd820726fe21239144a63b9f",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "status",
+            "verdict": "different",
+            "legacy_value": "partial",
+            "agent_value": "failed",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "finish_reason",
+            "verdict": "different",
+            "legacy_value": "budget_exhausted",
+            "agent_value": "data_insufficient",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_count",
+            "verdict": "different",
+            "legacy_value": 4,
+            "agent_value": 0,
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_direction_metrics",
+            "verdict": "different",
+            "legacy_value": [
+              "METRIC:266:246",
+              "METRIC:271:246",
+              "METRIC:303:246"
+            ],
+            "agent_value": [],
+            "detail": "仅旧路径有=['METRIC:266:246', 'METRIC:271:246', 'METRIC:303:246']; 仅新路径有=[]"
+          },
+          {
+            "group": "process",
+            "dimension": "covered_dimensions",
+            "verdict": "different",
+            "legacy_value": [
+              "DIMENSION:277:246",
+              "DIMENSION:278:246"
+            ],
+            "agent_value": [],
+            "detail": "仅旧路径有=['DIMENSION:277:246', 'DIMENSION:278:246']; 仅新路径有=[]"
+          },
+          {
+            "group": "process",
+            "dimension": "hypotheses",
+            "verdict": "different",
+            "legacy_value": [
+              "h1",
+              "h2",
+              "h3"
+            ],
+            "agent_value": [],
+            "detail": "仅旧路径有=['h1', 'h2', 'h3']; 仅新路径有=[]"
+          },
+          {
+            "group": "process",
+            "dimension": "premise_supported",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧缺少可比较的前提结论"
+          },
+          {
+            "group": "output",
+            "dimension": "core_findings_count",
+            "verdict": "not_comparable",
+            "legacy_value": 0,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "output",
+            "dimension": "report_present",
+            "verdict": "equal",
+            "legacy_value": true,
+            "agent_value": true,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "forbidden_conclusions",
+            "verdict": "equal",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "新路径最终报告由七类硬校验整体把关；旧路径无对应机制，该维度只对新路径做结构性断言"
+          },
+          {
+            "group": "output",
+            "dimension": "comprehensibility",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "用户可理解性需要人工抽检，自动比较器不做判断"
+          },
+          {
+            "group": "runtime",
+            "dimension": "queries_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 5,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "model_calls_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 3,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "latency",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "两侧延迟由运行门槛单独采集，比较器不重复计算"
+          }
+        ],
+        "has_different": true
+      }
+    },
+    {
+      "case_id": "research-cause-008",
+      "name": "scope_violation_goods_rejected",
+      "question": "2026年6月29日总GMV比6月28日下降了，请分析原因并继续下钻到商品ID，找出哪些商品导致下降。",
+      "outcome": {
+        "legacy": "correct_reject",
+        "agent": "correct_reject"
+      },
+      "run_ids": {
+        "legacy": 1290,
+        "agent": 1301
+      },
+      "has_different": false,
+      "verdict_counts": {
+        "not_comparable": 11,
+        "equal": 8
+      },
+      "differing_dimensions": [],
+      "not_comparable_dimensions": [
+        "input.goal",
+        "input.scope_fingerprint",
+        "process.status",
+        "process.finish_reason",
+        "process.premise_supported",
+        "output.core_findings_count",
+        "output.forbidden_conclusions",
+        "output.comprehensibility",
+        "runtime.queries_used",
+        "runtime.model_calls_used",
+        "runtime.latency"
+      ],
+      "facts": {
+        "legacy": {
+          "side": "legacy",
+          "goal": null,
+          "status": null,
+          "finish_reason": null,
+          "premise_supported": null,
+          "target_metric_refs": [],
+          "immutable_filters": [],
+          "time_roles": [],
+          "scope_fingerprint": null,
+          "schema_fingerprint": null,
+          "evidence_count": 0,
+          "evidence_metric_refs": [],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": false,
+          "report_citation_ids": [],
+          "findings_count": 0
+        },
+        "agent": {
+          "side": "agent",
+          "goal": null,
+          "status": null,
+          "finish_reason": null,
+          "premise_supported": null,
+          "target_metric_refs": [],
+          "immutable_filters": [],
+          "time_roles": [],
+          "scope_fingerprint": null,
+          "schema_fingerprint": null,
+          "evidence_count": 0,
+          "evidence_metric_refs": [],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": false,
+          "report_citation_ids": [],
+          "findings_count": null
+        },
+        "dimensions": [
+          {
+            "group": "input",
+            "dimension": "goal",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "input",
+            "dimension": "target_metrics",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "immutable_filters",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "time_roles",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "scope_fingerprint",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "status",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "finish_reason",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "query_count",
+            "verdict": "equal",
+            "legacy_value": 0,
+            "agent_value": 0,
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_direction_metrics",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "covered_dimensions",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "hypotheses",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "premise_supported",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧缺少可比较的前提结论"
+          },
+          {
+            "group": "output",
+            "dimension": "core_findings_count",
+            "verdict": "not_comparable",
+            "legacy_value": 0,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "output",
+            "dimension": "report_present",
+            "verdict": "equal",
+            "legacy_value": false,
+            "agent_value": false,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "forbidden_conclusions",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "新路径最终报告由七类硬校验整体把关；旧路径无对应机制，该维度只对新路径做结构性断言"
+          },
+          {
+            "group": "output",
+            "dimension": "comprehensibility",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "用户可理解性需要人工抽检，自动比较器不做判断"
+          },
+          {
+            "group": "runtime",
+            "dimension": "queries_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "model_calls_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "latency",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "两侧延迟由运行门槛单独采集，比较器不重复计算"
+          }
+        ],
+        "has_different": false
+      }
+    },
+    {
+      "case_id": "research-cause-009",
+      "name": "governance_missing_channel_contribution",
+      "question": "2026年6月29日总GMV比6月28日下降了，请分析各交易渠道对这次下降的贡献分别是多少。",
+      "outcome": {
+        "legacy": "correct_reject",
+        "agent": "correct_reject"
+      },
+      "run_ids": {
+        "legacy": 1291,
+        "agent": 1302
+      },
+      "has_different": false,
+      "verdict_counts": {
+        "not_comparable": 11,
+        "equal": 8
+      },
+      "differing_dimensions": [],
+      "not_comparable_dimensions": [
+        "input.goal",
+        "input.scope_fingerprint",
+        "process.status",
+        "process.finish_reason",
+        "process.premise_supported",
+        "output.core_findings_count",
+        "output.forbidden_conclusions",
+        "output.comprehensibility",
+        "runtime.queries_used",
+        "runtime.model_calls_used",
+        "runtime.latency"
+      ],
+      "facts": {
+        "legacy": {
+          "side": "legacy",
+          "goal": null,
+          "status": null,
+          "finish_reason": null,
+          "premise_supported": null,
+          "target_metric_refs": [],
+          "immutable_filters": [],
+          "time_roles": [],
+          "scope_fingerprint": null,
+          "schema_fingerprint": null,
+          "evidence_count": 0,
+          "evidence_metric_refs": [],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": false,
+          "report_citation_ids": [],
+          "findings_count": 0
+        },
+        "agent": {
+          "side": "agent",
+          "goal": null,
+          "status": null,
+          "finish_reason": null,
+          "premise_supported": null,
+          "target_metric_refs": [],
+          "immutable_filters": [],
+          "time_roles": [],
+          "scope_fingerprint": null,
+          "schema_fingerprint": null,
+          "evidence_count": 0,
+          "evidence_metric_refs": [],
+          "evidence_dimension_refs": [],
+          "hypothesis_ids": [],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": false,
+          "report_citation_ids": [],
+          "findings_count": null
+        },
+        "dimensions": [
+          {
+            "group": "input",
+            "dimension": "goal",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "input",
+            "dimension": "target_metrics",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "immutable_filters",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "time_roles",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "scope_fingerprint",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "status",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "finish_reason",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "process",
+            "dimension": "query_count",
+            "verdict": "equal",
+            "legacy_value": 0,
+            "agent_value": 0,
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_direction_metrics",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "covered_dimensions",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "hypotheses",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "premise_supported",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧缺少可比较的前提结论"
+          },
+          {
+            "group": "output",
+            "dimension": "core_findings_count",
+            "verdict": "not_comparable",
+            "legacy_value": 0,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "output",
+            "dimension": "report_present",
+            "verdict": "equal",
+            "legacy_value": false,
+            "agent_value": false,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "forbidden_conclusions",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "新路径最终报告由七类硬校验整体把关；旧路径无对应机制，该维度只对新路径做结构性断言"
+          },
+          {
+            "group": "output",
+            "dimension": "comprehensibility",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "用户可理解性需要人工抽检，自动比较器不做判断"
+          },
+          {
+            "group": "runtime",
+            "dimension": "queries_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "model_calls_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "latency",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "两侧延迟由运行门槛单独采集，比较器不重复计算"
+          }
+        ],
+        "has_different": false
+      }
+    },
+    {
+      "case_id": "research-cause-010",
+      "name": "multi_direction_parallel",
+      "question": "2026年6月29日总GMV比6月28日下降了，原因是什么？请同时从商家和档口两个方向展开分析，找出下降最集中的对象。",
+      "outcome": {
+        "legacy": "pass",
+        "agent": "pass"
+      },
+      "run_ids": {
+        "legacy": 1292,
+        "agent": 1303
+      },
+      "has_different": true,
+      "verdict_counts": {
+        "equal": 10,
+        "different": 4,
+        "not_comparable": 5
+      },
+      "differing_dimensions": [
+        {
+          "group": "process",
+          "dimension": "finish_reason",
+          "legacy_value": "sufficient_evidence",
+          "agent_value": "no_new_direction",
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "query_count",
+          "legacy_value": 3,
+          "agent_value": 5,
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "query_direction_metrics",
+          "legacy_value": [
+            "METRIC:271:246"
+          ],
+          "agent_value": [
+            "METRIC:265:246",
+            "METRIC:266:246",
+            "METRIC:271:246",
+            "METRIC:303:246"
+          ],
+          "detail": "仅旧路径有=[]; 仅新路径有=['METRIC:265:246', 'METRIC:266:246', 'METRIC:303:246']"
+        },
+        {
+          "group": "process",
+          "dimension": "hypotheses",
+          "legacy_value": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "agent_value": [],
+          "detail": "仅旧路径有=['h1', 'h2', 'h3']; 仅新路径有=[]"
+        }
+      ],
+      "not_comparable_dimensions": [
+        "output.core_findings_count",
+        "output.comprehensibility",
+        "runtime.queries_used",
+        "runtime.model_calls_used",
+        "runtime.latency"
+      ],
+      "facts": {
+        "legacy": {
+          "side": "legacy",
+          "goal": "找出总GMV下降最集中的对象，从商家和档口两个方向分析原因",
+          "status": "succeeded",
+          "finish_reason": "sufficient_evidence",
+          "premise_supported": true,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "6e2018c7a28f0d8a44f2e0ee6c8d1616e46622377467b676d5381b6455d6aec0",
+          "schema_fingerprint": null,
+          "evidence_count": 3,
+          "evidence_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "evidence_dimension_refs": [
+            "DIMENSION:277:246",
+            "DIMENSION:278:246"
+          ],
+          "hypothesis_ids": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": 0
+        },
+        "agent": {
+          "side": "agent",
+          "goal": "找出总GMV下降最集中的对象，从商家和档口两个方向分析原因",
+          "status": "succeeded",
+          "finish_reason": "no_new_direction",
+          "premise_supported": null,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "6e2018c7a28f0d8a44f2e0ee6c8d1616e46622377467b676d5381b6455d6aec0",
+          "schema_fingerprint": "c5da73a8229ccee710f81f569bb70879a295692b32ff1ca5f30f496d1bd4e16d",
+          "evidence_count": 5,
+          "evidence_metric_refs": [
+            "METRIC:265:246",
+            "METRIC:266:246",
+            "METRIC:271:246",
+            "METRIC:303:246"
+          ],
+          "evidence_dimension_refs": [
+            "DIMENSION:277:246",
+            "DIMENSION:278:246"
+          ],
+          "hypothesis_ids": [],
+          "queries_used": 5,
+          "model_calls_used": 4,
+          "duration_seconds": null,
+          "error_codes": [
+            "INVALID_REQUEST",
+            "INVALID_REQUEST"
+          ],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": null
+        },
+        "dimensions": [
+          {
+            "group": "input",
+            "dimension": "goal",
+            "verdict": "equal",
+            "legacy_value": "找出总GMV下降最集中的对象，从商家和档口两个方向分析原因",
+            "agent_value": "找出总GMV下降最集中的对象，从商家和档口两个方向分析原因",
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "target_metrics",
+            "verdict": "equal",
+            "legacy_value": [
+              "METRIC:271:246"
+            ],
+            "agent_value": [
+              "METRIC:271:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "immutable_filters",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "time_roles",
+            "verdict": "equal",
+            "legacy_value": [
+              "current",
+              "previous"
+            ],
+            "agent_value": [
+              "current",
+              "previous"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "scope_fingerprint",
+            "verdict": "equal",
+            "legacy_value": "6e2018c7a28f0d8a44f2e0ee6c8d1616e46622377467b676d5381b6455d6aec0",
+            "agent_value": "6e2018c7a28f0d8a44f2e0ee6c8d1616e46622377467b676d5381b6455d6aec0",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "status",
+            "verdict": "equal",
+            "legacy_value": "succeeded",
+            "agent_value": "succeeded",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "finish_reason",
+            "verdict": "different",
+            "legacy_value": "sufficient_evidence",
+            "agent_value": "no_new_direction",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_count",
+            "verdict": "different",
+            "legacy_value": 3,
+            "agent_value": 5,
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_direction_metrics",
+            "verdict": "different",
+            "legacy_value": [
+              "METRIC:271:246"
+            ],
+            "agent_value": [
+              "METRIC:265:246",
+              "METRIC:266:246",
+              "METRIC:271:246",
+              "METRIC:303:246"
+            ],
+            "detail": "仅旧路径有=[]; 仅新路径有=['METRIC:265:246', 'METRIC:266:246', 'METRIC:303:246']"
+          },
+          {
+            "group": "process",
+            "dimension": "covered_dimensions",
+            "verdict": "equal",
+            "legacy_value": [
+              "DIMENSION:277:246",
+              "DIMENSION:278:246"
+            ],
+            "agent_value": [
+              "DIMENSION:277:246",
+              "DIMENSION:278:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "hypotheses",
+            "verdict": "different",
+            "legacy_value": [
+              "h1",
+              "h2",
+              "h3"
+            ],
+            "agent_value": [],
+            "detail": "仅旧路径有=['h1', 'h2', 'h3']; 仅新路径有=[]"
+          },
+          {
+            "group": "process",
+            "dimension": "premise_supported",
+            "verdict": "equal",
+            "legacy_value": true,
+            "agent_value": true,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "core_findings_count",
+            "verdict": "not_comparable",
+            "legacy_value": 0,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "output",
+            "dimension": "report_present",
+            "verdict": "equal",
+            "legacy_value": true,
+            "agent_value": true,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "forbidden_conclusions",
+            "verdict": "equal",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "新路径最终报告由七类硬校验整体把关；旧路径无对应机制，该维度只对新路径做结构性断言"
+          },
+          {
+            "group": "output",
+            "dimension": "comprehensibility",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "用户可理解性需要人工抽检，自动比较器不做判断"
+          },
+          {
+            "group": "runtime",
+            "dimension": "queries_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 5,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "model_calls_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 4,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "latency",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "两侧延迟由运行门槛单独采集，比较器不重复计算"
+          }
+        ],
+        "has_different": true
+      }
+    },
+    {
+      "case_id": "research-cause-011",
+      "name": "broad_analysis_budget_pressure",
+      "question": "2026年6月29日总GMV比6月28日下降了，请全面分析下降原因：先从商家和档口分别分解变化，再计算主要档口的贡献度，并验证订单数、销售商品件数、客单价三个驱动方向是否成立。",
+      "outcome": {
+        "legacy": "pass",
+        "agent": "silent_error"
+      },
+      "run_ids": {
+        "legacy": 1293,
+        "agent": 1304
+      },
+      "has_different": true,
+      "verdict_counts": {
+        "equal": 10,
+        "different": 4,
+        "not_comparable": 5
+      },
+      "differing_dimensions": [
+        {
+          "group": "process",
+          "dimension": "status",
+          "legacy_value": "partial",
+          "agent_value": "succeeded",
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "finish_reason",
+          "legacy_value": "budget_exhausted",
+          "agent_value": "no_new_direction",
+          "detail": ""
+        },
+        {
+          "group": "process",
+          "dimension": "query_direction_metrics",
+          "legacy_value": [
+            "METRIC:271:246"
+          ],
+          "agent_value": [
+            "METRIC:265:246",
+            "METRIC:266:246",
+            "METRIC:271:246",
+            "METRIC:303:246"
+          ],
+          "detail": "仅旧路径有=[]; 仅新路径有=['METRIC:265:246', 'METRIC:266:246', 'METRIC:303:246']"
+        },
+        {
+          "group": "process",
+          "dimension": "hypotheses",
+          "legacy_value": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "agent_value": [],
+          "detail": "仅旧路径有=['h1', 'h2', 'h3']; 仅新路径有=[]"
+        }
+      ],
+      "not_comparable_dimensions": [
+        "output.core_findings_count",
+        "output.comprehensibility",
+        "runtime.queries_used",
+        "runtime.model_calls_used",
+        "runtime.latency"
+      ],
+      "facts": {
+        "legacy": {
+          "side": "legacy",
+          "goal": "全面分析总GMV下降原因：从商家和档口分解变化，计算主要档口贡献度，并验证订单数、销售商品件数、客单价三个驱动方向是否成立",
+          "status": "partial",
+          "finish_reason": "budget_exhausted",
+          "premise_supported": true,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "bbad29c5fc1a8028c225f194493b915653c4657c8606d507cf306625049ddeec",
+          "schema_fingerprint": null,
+          "evidence_count": 3,
+          "evidence_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "evidence_dimension_refs": [
+            "DIMENSION:277:246",
+            "DIMENSION:278:246"
+          ],
+          "hypothesis_ids": [
+            "h1",
+            "h2",
+            "h3"
+          ],
+          "queries_used": null,
+          "model_calls_used": null,
+          "duration_seconds": null,
+          "error_codes": [],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": 0
+        },
+        "agent": {
+          "side": "agent",
+          "goal": "全面分析总GMV下降原因：从商家和档口分解变化，计算主要档口贡献度，并验证订单数、销售商品件数、客单价三个驱动方向是否成立",
+          "status": "succeeded",
+          "finish_reason": "no_new_direction",
+          "premise_supported": null,
+          "target_metric_refs": [
+            "METRIC:271:246"
+          ],
+          "immutable_filters": [],
+          "time_roles": [
+            "current",
+            "previous"
+          ],
+          "scope_fingerprint": "bbad29c5fc1a8028c225f194493b915653c4657c8606d507cf306625049ddeec",
+          "schema_fingerprint": "c5da73a8229ccee710f81f569bb70879a295692b32ff1ca5f30f496d1bd4e16d",
+          "evidence_count": 3,
+          "evidence_metric_refs": [
+            "METRIC:265:246",
+            "METRIC:266:246",
+            "METRIC:271:246",
+            "METRIC:303:246"
+          ],
+          "evidence_dimension_refs": [
+            "DIMENSION:277:246",
+            "DIMENSION:278:246"
+          ],
+          "hypothesis_ids": [],
+          "queries_used": 5,
+          "model_calls_used": 4,
+          "duration_seconds": null,
+          "error_codes": [
+            "INVALID_REQUEST",
+            "INVALID_REQUEST",
+            "EXECUTION_FAILED"
+          ],
+          "report_present": true,
+          "report_citation_ids": [],
+          "findings_count": null
+        },
+        "dimensions": [
+          {
+            "group": "input",
+            "dimension": "goal",
+            "verdict": "equal",
+            "legacy_value": "全面分析总GMV下降原因：从商家和档口分解变化，计算主要档口贡献度，并验证订单数、销售商品件数、客单价三个驱动方向是否成立",
+            "agent_value": "全面分析总GMV下降原因：从商家和档口分解变化，计算主要档口贡献度，并验证订单数、销售商品件数、客单价三个驱动方向是否成立",
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "target_metrics",
+            "verdict": "equal",
+            "legacy_value": [
+              "METRIC:271:246"
+            ],
+            "agent_value": [
+              "METRIC:271:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "immutable_filters",
+            "verdict": "equal",
+            "legacy_value": [],
+            "agent_value": [],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "time_roles",
+            "verdict": "equal",
+            "legacy_value": [
+              "current",
+              "previous"
+            ],
+            "agent_value": [
+              "current",
+              "previous"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "input",
+            "dimension": "scope_fingerprint",
+            "verdict": "equal",
+            "legacy_value": "bbad29c5fc1a8028c225f194493b915653c4657c8606d507cf306625049ddeec",
+            "agent_value": "bbad29c5fc1a8028c225f194493b915653c4657c8606d507cf306625049ddeec",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "status",
+            "verdict": "different",
+            "legacy_value": "partial",
+            "agent_value": "succeeded",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "finish_reason",
+            "verdict": "different",
+            "legacy_value": "budget_exhausted",
+            "agent_value": "no_new_direction",
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_count",
+            "verdict": "equal",
+            "legacy_value": 3,
+            "agent_value": 3,
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "query_direction_metrics",
+            "verdict": "different",
+            "legacy_value": [
+              "METRIC:271:246"
+            ],
+            "agent_value": [
+              "METRIC:265:246",
+              "METRIC:266:246",
+              "METRIC:271:246",
+              "METRIC:303:246"
+            ],
+            "detail": "仅旧路径有=[]; 仅新路径有=['METRIC:265:246', 'METRIC:266:246', 'METRIC:303:246']"
+          },
+          {
+            "group": "process",
+            "dimension": "covered_dimensions",
+            "verdict": "equal",
+            "legacy_value": [
+              "DIMENSION:277:246",
+              "DIMENSION:278:246"
+            ],
+            "agent_value": [
+              "DIMENSION:277:246",
+              "DIMENSION:278:246"
+            ],
+            "detail": ""
+          },
+          {
+            "group": "process",
+            "dimension": "hypotheses",
+            "verdict": "different",
+            "legacy_value": [
+              "h1",
+              "h2",
+              "h3"
+            ],
+            "agent_value": [],
+            "detail": "仅旧路径有=['h1', 'h2', 'h3']; 仅新路径有=[]"
+          },
+          {
+            "group": "process",
+            "dimension": "premise_supported",
+            "verdict": "equal",
+            "legacy_value": true,
+            "agent_value": true,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "core_findings_count",
+            "verdict": "not_comparable",
+            "legacy_value": 0,
+            "agent_value": null,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "output",
+            "dimension": "report_present",
+            "verdict": "equal",
+            "legacy_value": true,
+            "agent_value": true,
+            "detail": ""
+          },
+          {
+            "group": "output",
+            "dimension": "forbidden_conclusions",
+            "verdict": "equal",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "新路径最终报告由七类硬校验整体把关；旧路径无对应机制，该维度只对新路径做结构性断言"
+          },
+          {
+            "group": "output",
+            "dimension": "comprehensibility",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "用户可理解性需要人工抽检，自动比较器不做判断"
+          },
+          {
+            "group": "runtime",
+            "dimension": "queries_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 5,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "model_calls_used",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": 4,
+            "detail": "一侧未记录该维度"
+          },
+          {
+            "group": "runtime",
+            "dimension": "latency",
+            "verdict": "not_comparable",
+            "legacy_value": null,
+            "agent_value": null,
+            "detail": "两侧延迟由运行门槛单独采集，比较器不重复计算"
+          }
+        ],
+        "has_different": true
+      }
+    }
+  ]
+}

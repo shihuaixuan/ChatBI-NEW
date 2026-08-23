@@ -1286,11 +1286,17 @@ class AnalysisExecutionService:
             plan_node.set_output_detail({"analysis_plan": plan.model_dump(mode="json")})
 
     @staticmethod
+    @staticmethod
     def _persist_state(state: AgentRuntimeState) -> None:
+        # 合并而不是整表替换：行上可能已有其他写入方落下的键——shadow 行的
+        # ``shadow`` 标记、研究循环的 research_run_snapshot 等。run 1306 演练
+        # 教训：整表替换曾把 shadow 标记抹掉，终态收口与就绪扫描都看不见该行。
+        derived = dict(state.run.derived_state or {})
+        derived.update(state.persistable_context())
         agent_run_repository.update_run(
             state.context.session,
             state.run,
-            derived_state=state.persistable_context(),
+            derived_state=derived,
         )
         state.context.session.commit()
 

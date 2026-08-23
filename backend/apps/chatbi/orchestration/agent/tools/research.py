@@ -493,6 +493,12 @@ class QuerySemanticDataTool(
         usage_after = ctx.consume_query()
         if outcome.status != "succeeded":
             # 失败也消耗预算（真实执行成本），但不记录指纹，允许换参重试。
+            # internal_code 保留边界门的内部码（如 SEMANTIC_SCOPE_REQUIRED）：
+            # 只落 error_code 会把门失配伪装成同一种 PERMISSION_DENIED，
+            # 现场排查无从下手（run 1306 演练教训之四）。
+            failure_details: dict[str, Any] = {"plan_id": plan_id}
+            if outcome.internal_code:
+                failure_details["internal_code"] = outcome.internal_code
             raise _fail(
                 ctx,
                 self.name,
@@ -503,7 +509,7 @@ class QuerySemanticDataTool(
                 same_parameter_retryable=outcome.same_parameter_retryable,
                 capability_gap=outcome.capability_gap,
                 message=outcome.message or "语义查询失败",
-                details={"plan_id": plan_id},
+                details=failure_details,
                 budget_consumed=usage_after,
             )
         for evidence in outcome.evidence:

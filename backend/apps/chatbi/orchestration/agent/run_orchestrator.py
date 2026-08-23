@@ -52,7 +52,13 @@ logger = logging.getLogger(__name__)
 
 
 def _build_shadow_material(state: AgentRuntimeState) -> ShadowRunMaterial | None:
-    """从 working state 的冻结路由结果构造 shadow 双跑输入。"""
+    """从 working state 的冻结路由结果构造 shadow 双跑输入。
+
+    冻结的检索 Scope 与 DatasetSchema 快照一并携带：shadow 侧要用与主路径
+    适配器相同的共享实现盖戳工具上下文（doc38 §7.4）。任一缺失返回 None
+    不启动双跑——主路径在这些输入缺失时同样显式失败，启动注定失败的双跑
+    只会制造引擎无关的失败样本。
+    """
 
     from apps.chatbi.models.dto.research import ResearchRequirement
 
@@ -63,6 +69,20 @@ def _build_shadow_material(state: AgentRuntimeState) -> ShadowRunMaterial | None
         else None
     )
     if not isinstance(payload, dict):
+        return None
+    schema_snapshot = (
+        execution.get("asset_snapshot", {}).get("dataset_schema")
+        if isinstance(execution, dict)
+        else None
+    )
+    semantic_scope = state.context.state.get("semantic_scope")
+    if not isinstance(schema_snapshot, dict) or not isinstance(semantic_scope, dict):
+        logger.warning(
+            "chatbi.shadow.frozen_inputs_missing run=%s scope=%s schema=%s",
+            state.require_run_id(),
+            isinstance(semantic_scope, dict),
+            isinstance(schema_snapshot, dict),
+        )
         return None
     record_id = getattr(state.record, "id", None)
     if record_id is None:
@@ -75,8 +95,14 @@ def _build_shadow_material(state: AgentRuntimeState) -> ShadowRunMaterial | None
         record_id=int(record_id),
         user_id=getattr(state.context, "user_id", None),
         dataset_id=getattr(state.record, "dataset_id", None),
+        # ChatRecord.datasource 才是数据源 id；dataset_id 是数据集 id，
+        # 二者不可互换（run 1306 教训：stub 混用导致边界校验失配）。
+        datasource_id=getattr(state.record, "datasource", None),
         temporal_context=temporal_context,
         legacy_requirement=ResearchRequirement.model_validate(payload),
+        semantic_scope=dict(semantic_scope),
+        schema_snapshot=dict(schema_snapshot),
+        permission_version=getattr(state.context, "permission_version", None),
     )
 
 

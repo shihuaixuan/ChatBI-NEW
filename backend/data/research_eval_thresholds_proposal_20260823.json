@@ -1,0 +1,34 @@
+{
+  "quality": {
+    "key_evidence_hit_rate_min": 1.0,
+    "silent_error_rate_max": 0.0,
+    "correct_reject_rate_min": 1.0,
+    "conclusion_support_rate_min": 1.0,
+    "duplicate_invalid_query_rate_max": 0.0
+  },
+  "notes": {
+    "status": "PROPOSAL——数值待运营拍板，拍板前 CHATBI_RESEARCH_EVAL_CONFIG 保持为空（未配置即阻断）",
+    "rule": "doc38 §11.3.4：质量门槛 = 不低于旧路径 + 绝对最低要求；本表取 legacy 同口径基线值",
+    "baseline_source": "data/research_agent_eval_{legacy_full,agent_rescored}_20260823.json（11 例×双引擎，计入 6 例研究循环样本）",
+    "observed_legacy": {
+      "key_evidence_hit_rate": 1.0,
+      "silent_error_rate": 0.0,
+      "duplicate_invalid_query_rate": 0.0
+    },
+    "observed_agent": {
+      "key_evidence_hit_rate": 0.8333,
+      "silent_error_rate": 0.0,
+      "duplicate_invalid_query_rate": 0.3809,
+      "invalid_query_composition": "8 次失败查询（INVALID_REQUEST×7、EMPTY_RESULT、EXECUTION_FAILED）集中在 cause-007/011 两 run"
+    },
+    "not_measured": [
+      "correct_reject_rate：本样本的拒绝均发生在路由期（引擎无关、双侧一致），研究循环内的拒绝样本为 0，分母缺失",
+      "conclusion_support_rate：legacy 报告不携带可校验引用（conclusions 为纯文本），同口径基线不可得，暂以 1.0（绝对要求）占位"
+    ],
+    "open_decisions": [
+      "是否在'不低于旧路径'上给容忍度（如 hit_rate_min=0.9）：样本仅 6 例，单例波动即 0.17",
+      "duplicate_invalid_query_rate_max=0.0 过脆：agent 样本 0.38 全部来自两次模型重试行为，建议运营在 0.2/0.3/0.4 间取舍",
+      "runtime 段（p95/avg 用量/超时率）：p95 需 ≥20 样本，待 shadow 演练与观察期数据补充后再写入"
+    ]
+  }
+}

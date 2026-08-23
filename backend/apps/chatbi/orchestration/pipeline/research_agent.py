@@ -425,10 +425,12 @@ class ResearchAgentHarness:
         return ctx
 
     def _persist_initial_state(self, ctx: ResearchToolContext) -> None:
-        derived = {
-            RESEARCH_STATE_KEY: ctx.context.state[RESEARCH_STATE_KEY],
-            _RESULT_SETS_KEY: {},
-        }
+        # 合并而不是整表替换：行上可能已有其他写入方落下的键（shadow 行的
+        # ``shadow`` 标记、路由期遗留载荷）。run 1306 教训：曾整表覆盖把
+        # shadow 标记抹掉，终态收口因找不到标记而静默跳过，留下孤儿 running 行。
+        derived = dict(self._run_row.derived_state or {})
+        derived[RESEARCH_STATE_KEY] = ctx.context.state[RESEARCH_STATE_KEY]
+        derived[_RESULT_SETS_KEY] = {}
         agent_run_repository.update_run(
             self._session, self._run_row, derived_state=derived
         )

@@ -417,6 +417,8 @@ def build_shadow_runner(
         run_row: Any,
         record: Any,
         _requirement: Any,
+        *,
+        context_state_overlay: dict[str, Any] | None = None,
     ) -> ResearchAgentHarness:
         publisher = EventPublisher(shadow_session)
         query_service = build_query_service(
@@ -475,6 +477,9 @@ def build_shadow_runner(
             compute_engine=ComputeEngine(),
             result_store=ResultStore(artifact_service),
             recorder=resolved_recorder,
+            # shadow 与主路径同口径的边界输入：盖戳后的 semantic_scope 等
+            # （run 1306 教训：缺 overlay 时每条查询都死在 SEMANTIC_SCOPE_REQUIRED）。
+            context_state_overlay=context_state_overlay,
         )
 
     return ShadowRunner(
