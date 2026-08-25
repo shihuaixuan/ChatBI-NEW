@@ -6,7 +6,7 @@ import time
 from collections.abc import Generator, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
 from apps.chatbi.models import AgentClarificationResumeKind
@@ -184,6 +184,7 @@ class AnalysisExecutionService:
             raise ValueError("PLAN_QUERY_CONCURRENCY_INVALID")
         if dependencies.query_timeout_seconds <= 0:
             raise ValueError("PLAN_QUERY_TIMEOUT_INVALID")
+        self._dependencies = dependencies
         self._registry = dependencies.registry
         self._result_processor = dependencies.result_processor
         self._lifecycle = dependencies.lifecycle
@@ -199,6 +200,11 @@ class AnalysisExecutionService:
         self._trace_recorder = dependencies.trace_recorder
         self._semantic_schema_provider = dependencies.semantic_schema_provider
         self._plan_snapshot_counts: dict[int, int] = {}
+
+    def fork_with_session(self, session: Any) -> AnalysisExecutionService:
+        """为并行 Research 工具创建独立数据库会话的执行服务。"""
+
+        return AnalysisExecutionService(replace(self._dependencies, session=session))
 
     @property
     def max_query_tasks(self) -> int:
@@ -254,9 +260,7 @@ class AnalysisExecutionService:
         scope = state.context.semantic_asset_scope
         if scope is not None and scope.semantic_enforcement == "STRICT":
             try:
-                requirement_by_id = {
-                    item.id: item for item in spec.query_requirements
-                }
+                requirement_by_id = {item.id: item for item in spec.query_requirements}
                 query_requirements = tuple(
                     requirement_by_id[task.source_requirement_id]
                     for task in query_tasks
@@ -273,9 +277,7 @@ class AnalysisExecutionService:
                     scope,
                     query_requirements,
                     schema_provider=self._semantic_schema_provider,
-                    schema_snapshot=spec.asset_snapshot.get(
-                        "dataset_schema"
-                    ),
+                    schema_snapshot=spec.asset_snapshot.get("dataset_schema"),
                     workspace_id=state.context.workspace_id,
                     dataset_id=dataset_id_value,
                 )
@@ -383,7 +385,9 @@ class AnalysisExecutionService:
             }
             for task in plan.tasks
         }
-        state.context.state["plan_execution_batches"] = [list(batch) for batch in batches]
+        state.context.state["plan_execution_batches"] = [
+            list(batch) for batch in batches
+        ]
         state.context.state["plan_task_states"] = task_states
         self._persist_state(state)
 
@@ -667,8 +671,7 @@ class AnalysisExecutionService:
                     cancellation=state.cancellation,
                     idempotency_key=(
                         f"plan-query:{self._required_execution_id(state)}:"
-                        f"{effective_plan_id}:{task.id}:"
-                        f"{int(task_states[task.id]['attempt'])}"
+                        f"{effective_plan_id}:{task.id}"
                     ),
                 )
             )
@@ -718,7 +721,9 @@ class AnalysisExecutionService:
                         task_id=request.task_id,
                         attempt=request.attempt,
                         status=QueryTaskExecutionStatus.CANCELLED,
-                        error_code=("query_cancelled" if cancelled else "query_timeout"),
+                        error_code=(
+                            "query_cancelled" if cancelled else "query_timeout"
+                        ),
                         message=(
                             "计划批次收到取消请求，结果未合并"
                             if cancelled
@@ -726,8 +731,9 @@ class AnalysisExecutionService:
                         ),
                     )
         finally:
-            # 运行中的数据源调用通过独立截止时间自行退出；主线程不再等待它们。
-            pool.shutdown(wait=not pending, cancel_futures=True)
+            # Future.cancel 只能取消尚未启动的任务；批次返回前必须等待已经启动的
+            # 查询退出，确保它们持有的独立 Session 已关闭，不在 Run 终态后继续工作。
+            pool.shutdown(wait=True, cancel_futures=True)
         return results
 
     def _run_compute_batch(
@@ -748,11 +754,7 @@ class AnalysisExecutionService:
         )
         now = time.monotonic()
         if state.cancellation.is_cancelled() or now >= deadline:
-            error_code = (
-                "COMPUTE_TIMEOUT"
-                if now >= deadline
-                else "COMPUTE_CANCELLED"
-            )
+            error_code = "COMPUTE_TIMEOUT" if now >= deadline else "COMPUTE_CANCELLED"
             return {task.id: ComputeEngineError(error_code) for task in tasks}
         prepared = {
             task.id: self._load_compute_inputs(state, plan_id, task) for task in tasks
@@ -809,7 +811,8 @@ class AnalysisExecutionService:
                     future.cancel()
                     results[future_tasks[future].id] = ComputeEngineError(error_code)
         finally:
-            pool.shutdown(wait=not pending, cancel_futures=True)
+            # 计算任务同样不能越过批次终态继续修改外部资源。
+            pool.shutdown(wait=True, cancel_futures=True)
         return results
 
     def _load_compute_inputs(
@@ -870,8 +873,7 @@ class AnalysisExecutionService:
             source_sql=data.sql,
             semantic_refs=self._semantic_refs(state),
             idempotency_key=(
-                f"plan-query:{self._required_execution_id(state)}:"
-                f"{plan_id}:{task.id}:{result.attempt}"
+                f"plan-query:{self._required_execution_id(state)}:{plan_id}:{task.id}"
             ),
         )
         self._merge_result_ref(state, result_ref)
@@ -929,8 +931,7 @@ class AnalysisExecutionService:
             attempt=attempt,
             source_sql=computed.sql,
             idempotency_key=(
-                f"plan-compute:{self._required_execution_id(state)}:"
-                f"{plan_id}:{task.id}:{attempt}"
+                f"plan-compute:{self._required_execution_id(state)}:{plan_id}:{task.id}"
             ),
         )
         self._merge_result_ref(state, result_ref)
@@ -1113,16 +1114,12 @@ class AnalysisExecutionService:
     def _evidence_version_snapshot(self, state: AgentRuntimeState) -> Any:
         execution = state.context.state.get("execution_requirement")
         asset_snapshot = (
-            execution.get("asset_snapshot")
-            if isinstance(execution, dict)
-            else {}
+            execution.get("asset_snapshot") if isinstance(execution, dict) else {}
         )
         semantic_scope = state.context.state.get("semantic_scope")
         return build_analysis_version_snapshot(
             asset_snapshot=asset_snapshot if isinstance(asset_snapshot, dict) else {},
-            semantic_scope=(
-                semantic_scope if isinstance(semantic_scope, dict) else {}
-            ),
+            semantic_scope=(semantic_scope if isinstance(semantic_scope, dict) else {}),
         )
 
     @staticmethod
@@ -1281,7 +1278,9 @@ class AnalysisExecutionService:
                 )
                 if selected_plan is None:
                     # 带来源 ID 的新契约节点禁止退回资产签名或索引匹配。
-                    raise PlanPipelineError("PLAN_STRICT_SOURCE_REQUIREMENT_NOT_MATCHED")
+                    raise PlanPipelineError(
+                        "PLAN_STRICT_SOURCE_REQUIREMENT_NOT_MATCHED"
+                    )
             if task_spec is not None:
                 selected_plan = selected_plan or next(
                     (
@@ -1437,6 +1436,7 @@ class AnalysisExecutionService:
             if query_task_count is None:
                 raise PlanPipelineError("PLAN_STRICT_QUERY_PLAN_MISSING")
             query_tasks = []
+
         # 严格计划覆盖 group_by、where 和 having 的全部维度（见
         # prepare_strict_query_scope），任务签名必须使用同一口径，
         # 否则带维度值过滤的查询会被误判为缺少计划。
@@ -1619,13 +1619,13 @@ class AnalysisExecutionService:
         state.context.session.commit()
 
 
-
 __all__ = [
     "AnalysisExecutionService",
     "PlanExecutionOutcome",
     "AnalysisExecutionDependencies",
     "PlanPipelineError",
 ]
+
 
 def _pipeline_trace_node_type(name: str) -> TraceNodeType:
     if name == "validate_sql":

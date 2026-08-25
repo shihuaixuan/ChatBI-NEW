@@ -33,6 +33,14 @@ class ResultArtifactStore(Protocol):
 
     def read(self, data: ResultArtifactReadInput) -> ResultArtifactSnapshot: ...
 
+    def find_by_idempotency_key(
+        self,
+        *,
+        execution_id: str,
+        kind: str,
+        idempotency_key: str,
+    ) -> ResultArtifactSnapshot | None: ...
+
 
 class ResultStore:
     """注册、读取并摘要化一个 Run 内的命名结果集。"""
@@ -67,6 +75,8 @@ class ResultStore:
             raise ValueError("RESULT_SET_ATTEMPT_INVALID")
         if idempotency_key is not None and not idempotency_key.strip():
             raise ValueError("RESULT_SET_IDEMPOTENCY_KEY_INVALID")
+        if idempotency_key is not None and len(idempotency_key) > 256:
+            raise ValueError("RESULT_SET_IDEMPOTENCY_KEY_TOO_LONG")
         result_set_id = build_result_set_id(plan_id, node_id)
         normalized_fields = [str(field) for field in fields]
         json_rows = [_json_row(row) for row in rows]
@@ -77,7 +87,7 @@ class ResultStore:
             fields=normalized_fields,
             rows=json_rows,
             row_count=row_count,
-            attempt=attempt,
+            attempt=None if idempotency_key else attempt,
             source_sql=source_sql,
             semantic_refs=normalized_semantic_refs,
         )
@@ -85,12 +95,27 @@ class ResultStore:
         created_at = datetime.now()
         with self._write_lock:
             if cache_key is not None:
+                assert idempotency_key is not None
                 cached = self._idempotent_refs.get(cache_key)
                 if cached is not None:
                     cached_fingerprint, cached_ref = cached
                     if cached_fingerprint != fingerprint:
                         raise ValueError("RESULT_SET_IDEMPOTENCY_CONFLICT")
                     return cached_ref
+                persisted = self._artifact_service.find_by_idempotency_key(
+                    execution_id=execution_id,
+                    kind=self.ARTIFACT_KIND,
+                    idempotency_key=idempotency_key,
+                )
+                if persisted is not None:
+                    persisted_fingerprint = persisted.metadata.get(
+                        "registration_fingerprint"
+                    )
+                    if persisted_fingerprint != fingerprint:
+                        raise ValueError("RESULT_SET_IDEMPOTENCY_CONFLICT")
+                    ref = _result_ref_from_snapshot(persisted)
+                    self._idempotent_refs[cache_key] = (fingerprint, ref)
+                    return ref
             # 命名结果集与旧结果统一经过同一个 result_artifact_service.save 网关。
             result_artifact_service = self._artifact_service
             artifact_ref = result_artifact_service.save(
@@ -121,6 +146,7 @@ class ResultStore:
                         "semantic_refs": normalized_semantic_refs,
                         "created_at": created_at.isoformat(),
                         "numeric_stats": _numeric_stats(rows),
+                        "registration_fingerprint": fingerprint,
                         **(
                             {"idempotency_key": idempotency_key}
                             if idempotency_key
@@ -143,6 +169,17 @@ class ResultStore:
                 created_at=created_at,
             )
             if cache_key is not None:
+                assert idempotency_key is not None
+                persisted = self._artifact_service.find_by_idempotency_key(
+                    execution_id=execution_id,
+                    kind=self.ARTIFACT_KIND,
+                    idempotency_key=idempotency_key,
+                )
+                if persisted is None:
+                    raise ValueError("RESULT_SET_IDEMPOTENCY_RECORD_MISSING")
+                if persisted.metadata.get("registration_fingerprint") != fingerprint:
+                    raise ValueError("RESULT_SET_IDEMPOTENCY_CONFLICT")
+                ref = _result_ref_from_snapshot(persisted)
                 self._idempotent_refs[cache_key] = (fingerprint, ref)
             return ref
 
@@ -179,7 +216,11 @@ class ResultStore:
         fields = payload.get("fields")
         rows = payload.get("rows")
         row_count = payload.get("row_count")
-        if not isinstance(fields, list) or not isinstance(rows, list) or not isinstance(row_count, int):
+        if (
+            not isinstance(fields, list)
+            or not isinstance(rows, list)
+            or not isinstance(row_count, int)
+        ):
             raise ValueError("RESULT_SET_PAYLOAD_INVALID")
         if fields != list(ref.fields) or row_count != ref.row_count:
             raise ValueError("RESULT_SET_PAYLOAD_SUMMARY_MISMATCH")
@@ -213,7 +254,9 @@ class ResultStore:
         )
 
 
-def _numeric_stats(rows: list[dict[str, Any]]) -> dict[str, dict[str, int | float | str]]:
+def _numeric_stats(
+    rows: list[dict[str, Any]],
+) -> dict[str, dict[str, int | float | str]]:
     """统一把数值转 Decimal 计算，避免混合类型和浮点累加误差。"""
 
     numeric_values: dict[str, list[Decimal]] = {}
@@ -241,7 +284,7 @@ def _registration_fingerprint(
     fields: list[str],
     rows: list[dict[str, Any]],
     row_count: int,
-    attempt: int,
+    attempt: int | None,
     source_sql: str | None,
     semantic_refs: list[dict[str, Any]],
 ) -> str:
@@ -257,8 +300,40 @@ def _registration_fingerprint(
         "source_sql": source_sql,
         "semantic_refs": semantic_refs,
     }
-    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    canonical = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _result_ref_from_snapshot(snapshot: ResultArtifactSnapshot) -> ResultSetRef:
+    """把持久化 Artifact 元数据还原为 ResultSetRef。"""
+
+    metadata = snapshot.metadata
+    return ResultSetRef(
+        result_set_id=str(metadata["result_set_id"]),
+        plan_id=str(metadata["plan_id"]),
+        node_id=str(metadata["node_id"]),
+        kind=ResultSetKind(str(metadata["result_kind"])),
+        artifact_ref=ChatBIResultArtifactRef(
+            artifact_id=snapshot.artifact_id,
+            kind=snapshot.kind,
+            content_type=snapshot.content_type,
+            size=snapshot.size,
+            digest=snapshot.digest,
+            metadata=metadata,
+        ),
+        fields=tuple(str(item) for item in snapshot.payload.get("fields", [])),
+        row_count=int(metadata["row_count"]),
+        attempt=int(metadata["attempt"]),
+        source_sql=(
+            str(metadata["source_sql"])
+            if metadata.get("source_sql") is not None
+            else None
+        ),
+        semantic_refs=tuple(metadata.get("semantic_refs") or ()),
+        created_at=datetime.fromisoformat(str(metadata["created_at"])),
+    )
 
 
 def _json_number(value: Decimal) -> str:

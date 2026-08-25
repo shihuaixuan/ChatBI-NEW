@@ -55,16 +55,12 @@ class ResultArtifactService:
                 payload=data.payload,
                 metadata=metadata,
             )
-            return ChatBIResultArtifactRef.model_validate(
-                _artifact_mapping(stored)
-            )
+            return ChatBIResultArtifactRef.model_validate(_artifact_mapping(stored))
         except ResultArtifactWriteError:
             raise
         except Exception as exc:
             # 存储异常必须转换为稳定业务错误，调用方不能误判为已存档。
-            raise ResultArtifactWriteError(
-                "RESULT_ARTIFACT_WRITE_FAILED"
-            ) from exc
+            raise ResultArtifactWriteError("RESULT_ARTIFACT_WRITE_FAILED") from exc
 
     def save_named_result_set(
         self,
@@ -90,9 +86,7 @@ class ResultArtifactService:
         except ResultArtifactReadError:
             raise
         except Exception as exc:
-            raise ResultArtifactReadError(
-                ResultArtifactReadError.READ_FAILED
-            ) from exc
+            raise ResultArtifactReadError(ResultArtifactReadError.READ_FAILED) from exc
 
         expected_metadata = {
             "execution_id": data.execution_id,
@@ -111,10 +105,26 @@ class ResultArtifactService:
             )
         )
         if not ownership_matches:
-            raise ResultArtifactReadError(
-                ResultArtifactReadError.OWNERSHIP_MISMATCH
-            )
+            raise ResultArtifactReadError(ResultArtifactReadError.OWNERSHIP_MISMATCH)
         return snapshot
+
+    def find_by_idempotency_key(
+        self,
+        *,
+        execution_id: str,
+        kind: str,
+        idempotency_key: str,
+    ) -> ResultArtifactSnapshot | None:
+        """从持久化存储恢复同一执行节点已经写入的 Artifact。"""
+
+        stored = self._gateway.find_json(
+            run_id=execution_id,
+            kind=kind,
+            idempotency_key=idempotency_key,
+        )
+        if stored is None:
+            return None
+        return ResultArtifactSnapshot.model_validate(_artifact_mapping(stored))
 
     def read_named_result_set(
         self,
@@ -130,7 +140,9 @@ class ResultArtifactService:
             **data.expected_metadata,
             "result_set_id": result_set_id,
         }
-        return self.read(data.model_copy(update={"expected_metadata": expected_metadata}))
+        return self.read(
+            data.model_copy(update={"expected_metadata": expected_metadata})
+        )
 
     def schedule_chat_cleanup(
         self,

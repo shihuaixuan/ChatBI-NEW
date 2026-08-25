@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from threading import Lock
+from threading import Event, Lock, Thread
 from time import sleep
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +21,7 @@ from apps.chatbi.models.dto.analysis_plan import (
     PresentationHint,
     QueryTask,
     QueryTaskSpec,
+    ResultSetKind,
 )
 from apps.chatbi.orchestration.agent.messages import AgentMessage
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
@@ -36,6 +37,8 @@ from apps.chatbi.services.execution import (
     QueryTaskExecutionResult,
     QueryTaskExecutionStatus,
     QueryTaskExecutor,
+    ResultArtifactService,
+    ResultStore,
 )
 from apps.chatbi.services.generation.agent_finalization import (
     AgentFinalizationInput,
@@ -44,6 +47,7 @@ from apps.chatbi.services.generation.agent_finalization import (
 )
 from apps.chatbi.services.planning.analysis_planner import AnalysisPlanner
 from apps.chatbi.services.planning.dag_scheduler import build_execution_batches
+from apps.conversation import ChatRecordExecutionType
 from apps.datasource.models.dto.query import (
     DatasourceQueryData,
     DatasourceQueryResult,
@@ -468,6 +472,149 @@ def test_query_task_executor_rejects_expired_deadline_before_opening_session() -
     assert result.error_code == "query_timeout"
 
 
+def test_cancelled_query_batch_waits_for_running_worker_to_exit() -> None:
+    """批次取消后必须等待已启动查询退出，不能把 Session 留在后台。"""
+
+    started = Event()
+    release = Event()
+    worker_exited = Event()
+
+    class Cancellation:
+        cancelled = False
+
+        def is_cancelled(self) -> bool:
+            return self.cancelled
+
+    class BlockingExecutor:
+        def execute(self, request):
+            started.set()
+            release.wait(timeout=2)
+            worker_exited.set()
+            return QueryTaskExecutionResult(
+                task_id=request.task_id,
+                attempt=request.attempt,
+                status=QueryTaskExecutionStatus.CANCELLED,
+                error_code="query_cancelled",
+            )
+
+    pipeline = object.__new__(AnalysisExecutionService)
+    pipeline._query_task_executor = BlockingExecutor()
+    pipeline._query_concurrency = 1
+    pipeline._query_timeout_seconds = 10.0
+    cancellation = Cancellation()
+    state = SimpleNamespace(
+        context=SimpleNamespace(
+            datasource_id=1,
+            oid=1,
+            user_id=1,
+            execution_id="agent:cancel-test",
+        ),
+        cancellation=cancellation,
+        budget=BudgetGuard(timeout_seconds=10),
+    )
+    task = QueryTask(
+        id="query-a",
+        spec=QueryTaskSpec(dataset_id=1),
+        compiled=CompiledQuery(
+            plan_fingerprint="proof:query-a",
+            sql="SELECT 1",
+            tables=("orders",),
+        ),
+    )
+    results: dict[str, QueryTaskExecutionResult] = {}
+
+    def run_batch() -> None:
+        results.update(
+            pipeline._run_query_batch(
+                state,
+                [task],
+                {"query-a": {"status": "RUNNING", "attempt": 1}},
+            )
+        )
+
+    batch_thread = Thread(target=run_batch)
+    batch_thread.start()
+    assert started.wait(timeout=1)
+    cancellation.cancelled = True
+    sleep(0.1)
+    assert batch_thread.is_alive()
+    assert not worker_exited.is_set()
+
+    release.set()
+    batch_thread.join(timeout=1)
+
+    assert worker_exited.is_set()
+    assert not batch_thread.is_alive()
+    assert results["query-a"].status is QueryTaskExecutionStatus.CANCELLED
+
+
+def test_result_store_idempotency_survives_instance_rebuild() -> None:
+    """ResultStore 重建和 attempt 变化不能重复写入同一节点 Artifact。"""
+
+    class Gateway:
+        def __init__(self) -> None:
+            self.items: list[dict[str, Any]] = []
+
+        def put_json(self, run_id, kind, payload, metadata=None):
+            item = {
+                "artifact_id": f"artifact-{len(self.items) + 1}",
+                "run_id": run_id,
+                "kind": kind,
+                "content_type": "application/json",
+                "size": 1,
+                "digest": "sha256:test",
+                "metadata": metadata or {},
+                "payload": payload,
+            }
+            self.items.append(item)
+            return item
+
+        def get_json(self, artifact_id):
+            return next(
+                item for item in self.items if item["artifact_id"] == artifact_id
+            )
+
+        def find_json(self, *, run_id, kind, idempotency_key):
+            return next(
+                (
+                    item
+                    for item in self.items
+                    if item["run_id"] == run_id
+                    and item["kind"] == kind
+                    and item["metadata"].get("idempotency_key") == idempotency_key
+                ),
+                None,
+            )
+
+        def schedule_cleanup(self, *, metadata, execution_ids=None):
+            return 0
+
+        def process_pending_cleanup(self):
+            return 0
+
+    gateway = Gateway()
+    arguments = {
+        "execution_id": "agent:10",
+        "execution_type": ChatRecordExecutionType.AGENT,
+        "chat_id": 20,
+        "record_id": 30,
+        "plan_id": "plan-1",
+        "node_id": "query-sales",
+        "kind": ResultSetKind.QUERY,
+        "fields": ["amount"],
+        "rows": [{"amount": 10}],
+        "row_count": 1,
+        "idempotency_key": "plan-query:agent:10:plan-1:query-sales",
+    }
+    first = ResultStore(ResultArtifactService(gateway)).register(**arguments)
+    second = ResultStore(ResultArtifactService(gateway)).register(
+        **{**arguments, "attempt": 2}
+    )
+
+    assert second == first
+    assert len(gateway.items) == 1
+
+
 def test_plan_failed_dependency_is_skipped_after_parallel_batch() -> None:
     """一个查询失败后，无依赖的同批查询仍成功，下游计算明确标记为跳过。"""
 
@@ -514,6 +661,7 @@ def test_plan_failed_dependency_is_skipped_after_parallel_batch() -> None:
         {"result_set_id": "result:plan-failure:query-b"},
         [],
     )
+
     def run_compute_batch(_state, _plan_id, tasks):
         if tasks:
             pytest.fail("依赖失败的 ComputeTask 不应执行")
@@ -550,11 +698,14 @@ def test_plan_compute_input_lookup_isolated_by_plan_id() -> None:
         },
     }
 
-    assert AnalysisExecutionService._result_set_id_for_node(
-        result_sets,
-        "plan-b",
-        "q:current",
-    ) == "result:plan-b:q:current"
+    assert (
+        AnalysisExecutionService._result_set_id_for_node(
+            result_sets,
+            "plan-b",
+            "q:current",
+        )
+        == "result:plan-b:q:current"
+    )
 
 
 def test_semantic_clarification_resume_only_reparses_candidates() -> None:

@@ -24,12 +24,18 @@ from sqlbot_platform.workflow_engine.infrastructure.persistence.artifact_reposit
 def workflow_artifact_root() -> Path:
     """返回 Graph Artifact 正文的唯一根目录。"""
 
-    return Path(
-        os.getenv(
-            "SQLBOT_WORKFLOW_ARTIFACT_DIR",
-            str(Path(__file__).resolve().parents[4] / "data" / "workflow_artifacts"),
+    return (
+        Path(
+            os.getenv(
+                "SQLBOT_WORKFLOW_ARTIFACT_DIR",
+                str(
+                    Path(__file__).resolve().parents[4] / "data" / "workflow_artifacts"
+                ),
+            )
         )
-    ).expanduser().resolve()
+        .expanduser()
+        .resolve()
+    )
 
 
 def _artifact_path_from_uri(storage_uri: str, root: Path) -> Path:
@@ -58,6 +64,14 @@ class ArtifactMetadataStore(Protocol):
 
     def get(self, artifact_id: str) -> WorkflowArtifact: ...
 
+    def find_by_idempotency_key(
+        self,
+        *,
+        run_id: str,
+        kind: str,
+        idempotency_key: str,
+    ) -> WorkflowArtifact | None: ...
+
 
 class SessionArtifactMetadataStore:
     """每次操作创建独立 Session，允许并行查询安全写入元数据。"""
@@ -74,6 +88,20 @@ class SessionArtifactMetadataStore:
     def get(self, artifact_id: str) -> WorkflowArtifact:
         with self._session_factory() as session:
             return ArtifactRepository(session).get(artifact_id)
+
+    def find_by_idempotency_key(
+        self,
+        *,
+        run_id: str,
+        kind: str,
+        idempotency_key: str,
+    ) -> WorkflowArtifact | None:
+        with self._session_factory() as session:
+            return ArtifactRepository(session).find_by_idempotency_key(
+                run_id=run_id,
+                kind=kind,
+                idempotency_key=idempotency_key,
+            )
 
 
 class FileArtifactStore:
@@ -140,6 +168,22 @@ class FileArtifactStore:
         if len(content) != artifact.size or digest != artifact.digest:
             raise ValueError("ARTIFACT_CONTENT_CORRUPTED")
         return artifact, content
+
+    def find_by_idempotency_key(
+        self,
+        *,
+        run_id: str,
+        kind: str,
+        idempotency_key: str,
+    ) -> tuple[WorkflowArtifact, bytes] | None:
+        artifact = self._metadata_store.find_by_idempotency_key(
+            run_id=run_id,
+            kind=kind,
+            idempotency_key=idempotency_key,
+        )
+        if artifact is None:
+            return None
+        return self.get(artifact.artifact_id)
 
     def _path_from_uri(self, storage_uri: str) -> Path:
         return _artifact_path_from_uri(storage_uri, self._root)

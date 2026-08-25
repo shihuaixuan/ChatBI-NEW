@@ -70,6 +70,9 @@ class RecordingArtifactGateway:
             "payload": {"question": "本月新增客户数"},
         }
 
+    def find_json(self, *, run_id, kind, idempotency_key):
+        return None
+
     def schedule_cleanup(self, *, metadata, execution_ids=None):
         self.cleanup_calls.append((metadata, execution_ids))
         return 2
@@ -224,7 +227,5 @@ def test_chat_cleanup_uses_chat_metadata_and_legacy_graph_execution_ids():
 
     assert scheduled == 2
     assert processed == 2
-    assert gateway.cleanup_calls == [
-        ({"chat_id": 20}, ["graph-legacy"])
-    ]
+    assert gateway.cleanup_calls == [({"chat_id": 20}, ["graph-legacy"])]
     assert gateway.process_calls == 1

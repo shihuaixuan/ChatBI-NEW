@@ -25,6 +25,11 @@ class ArtifactRepository:
             digest=artifact.digest,
             storage_uri=artifact.storage_uri,
             metadata_json=artifact.metadata,
+            idempotency_key=(
+                str(artifact.metadata["idempotency_key"])
+                if artifact.metadata.get("idempotency_key") is not None
+                else None
+            ),
             temporary=artifact.temporary,
             created_at=artifact.created_at,
         )
@@ -40,6 +45,41 @@ class ArtifactRepository:
                 WorkflowArtifactModel.artifact_id == artifact_id
             )
         ).one()
+        if model.created_at is None:
+            raise ValueError("ARTIFACT_CREATED_AT_REQUIRED")
+        return WorkflowArtifact(
+            artifact_id=model.artifact_id,
+            run_id=model.run_id,
+            kind=model.kind,
+            content_type=model.content_type,
+            size=model.size,
+            digest=model.digest,
+            storage_uri=model.storage_uri,
+            metadata=model.metadata_json,
+            temporary=model.temporary,
+            created_at=model.created_at,
+        )
+
+    def find_by_idempotency_key(
+        self,
+        *,
+        run_id: str,
+        kind: str,
+        idempotency_key: str,
+    ) -> WorkflowArtifact | None:
+        """按稳定执行节点身份读取已存在的 Artifact。"""
+
+        model = self._session.exec(
+            select(WorkflowArtifactModel).where(
+                WorkflowArtifactModel.run_id == run_id,
+                WorkflowArtifactModel.kind == kind,
+                WorkflowArtifactModel.idempotency_key == idempotency_key,
+            )
+        ).one_or_none()
+        if model is None:
+            return None
+        if model.created_at is None:
+            raise ValueError("ARTIFACT_CREATED_AT_REQUIRED")
         return WorkflowArtifact(
             artifact_id=model.artifact_id,
             run_id=model.run_id,
@@ -55,7 +95,9 @@ class ArtifactRepository:
 
     def mark_referenced(self, artifact_id: str) -> None:
         model = self._session.exec(
-            select(WorkflowArtifactModel).where(WorkflowArtifactModel.artifact_id == artifact_id)
+            select(WorkflowArtifactModel).where(
+                WorkflowArtifactModel.artifact_id == artifact_id
+            )
         ).one()
         model.temporary = False
         self._session.add(model)

@@ -8,6 +8,7 @@ from typing import Any
 
 import orjson
 from sqlalchemy import delete, or_
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from common.core.db import engine
@@ -48,12 +49,25 @@ class WorkflowArtifactGateway:
         payload: dict[str, Any],
         metadata: dict[str, Any] | None = None,
     ) -> ArtifactRef:
-        return self._store.put_json(
-            run_id=run_id,
-            kind=kind,
-            payload=payload,
-            metadata=metadata,
-        )
+        try:
+            return self._store.put_json(
+                run_id=run_id,
+                kind=kind,
+                payload=payload,
+                metadata=metadata,
+            )
+        except IntegrityError:
+            idempotency_key = (metadata or {}).get("idempotency_key")
+            if not isinstance(idempotency_key, str) or not idempotency_key:
+                raise
+            existing = self.find_json(
+                run_id=run_id,
+                kind=kind,
+                idempotency_key=idempotency_key,
+            )
+            if existing is None:
+                raise
+            return ArtifactRef.model_validate(existing)
 
     def get_json(self, artifact_id: str) -> dict[str, Any]:
         """读取并校验一个 JSON Artifact，正文完整性由 Store 统一保证。"""
@@ -68,6 +82,28 @@ class WorkflowArtifactGateway:
             **artifact.model_dump(mode="json"),
             "payload": payload,
         }
+
+    def find_json(
+        self,
+        *,
+        run_id: str,
+        kind: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        """按稳定幂等键读取 JSON Artifact。"""
+
+        found = self._store.find_by_idempotency_key(
+            run_id=run_id,
+            kind=kind,
+            idempotency_key=idempotency_key,
+        )
+        if found is None:
+            return None
+        artifact, content = found
+        payload = orjson.loads(content)
+        if not isinstance(payload, dict):
+            raise ValueError("ARTIFACT_JSON_OBJECT_REQUIRED")
+        return {**artifact.model_dump(mode="json"), "payload": payload}
 
     def schedule_cleanup(
         self,

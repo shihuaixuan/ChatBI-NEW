@@ -170,6 +170,15 @@ class SemanticQueryRuntime:
         # 把工具上下文适配成执行服务要求的 run 状态表面；默认保持原样。
         self._execution_state_factory = execution_state_factory
 
+    def fork_with_session(self, session: Any) -> SemanticQueryRuntime:
+        """复制运行时，并把执行服务绑定到独立 Session。"""
+
+        return SemanticQueryRuntime(
+            self._execution_service.fork_with_session(session),
+            self._query_builder,
+            execution_state_factory=self._execution_state_factory,
+        )
+
     def execute(
         self,
         context: Any,
@@ -215,7 +224,9 @@ class SemanticQueryRuntime:
             builder = self._query_builder or SemanticQueryBuilder(
                 semantic_scope=semantic_scope,
                 schema_snapshot=(
-                    semantic_scope.schema_snapshot if semantic_scope is not None else None
+                    semantic_scope.schema_snapshot
+                    if semantic_scope is not None
+                    else None
                 ),
                 evidence_value_resolver=(
                     lambda value_ref, evidence_item: self._resolve_evidence_value(
@@ -407,12 +418,18 @@ class SemanticQueryRuntime:
         dataset_id = getattr(inner, "dataset_id", None)
         if dataset_id != semantic_scope.dataset_id:
             raise SemanticQueryBoundaryError("DATASET_SCOPE_MISMATCH")
-        if query.version_snapshot.schema_version != self._schema_version(semantic_scope):
+        if query.version_snapshot.schema_version != self._schema_version(
+            semantic_scope
+        ):
             raise SemanticQueryBoundaryError("SEMANTIC_SCHEMA_VERSION_CHANGED")
-        if query.version_snapshot.contract_version != self._contract_version(semantic_scope):
+        if query.version_snapshot.contract_version != self._contract_version(
+            semantic_scope
+        ):
             raise SemanticQueryBoundaryError("SEMANTIC_CONTRACT_VERSION_CHANGED")
         schema_snapshot = getattr(semantic_scope, "schema_snapshot", None)
-        schema_dataset_id = getattr(getattr(schema_snapshot, "data_set", None), "id", None)
+        schema_dataset_id = getattr(
+            getattr(schema_snapshot, "data_set", None), "id", None
+        )
         if (
             isinstance(schema_dataset_id, int)
             and schema_dataset_id != semantic_scope.dataset_id
@@ -438,9 +455,7 @@ class SemanticQueryRuntime:
             not isinstance(scope_permission_fingerprint, str)
             or not scope_permission_fingerprint
         ):
-            raise SemanticQueryBoundaryError(
-                "SEMANTIC_PERMISSION_FINGERPRINT_REQUIRED"
-            )
+            raise SemanticQueryBoundaryError("SEMANTIC_PERMISSION_FINGERPRINT_REQUIRED")
         if (
             scope_permission_fingerprint
             != requirement.version_snapshot.permission_fingerprint
@@ -474,7 +489,9 @@ class SemanticQueryRuntime:
     def _requirement(context: Any) -> ResearchAgentRequirement | None:
         inner = getattr(context, "context", context)
         state = getattr(inner, "state", {})
-        value = state.get("research_agent_requirement") if isinstance(state, dict) else None
+        value = (
+            state.get("research_agent_requirement") if isinstance(state, dict) else None
+        )
         if value is None:
             return None
         if isinstance(value, ResearchAgentRequirement):
@@ -498,22 +515,22 @@ class SemanticQueryRuntime:
                 "RESEARCH_AGENT_EXECUTION_OUTCOME_INVALID"
             )
         result_refs = tuple(
-            ResearchResultRef(run_id=query.run_id, result_id=str(result.get("result_set_id")))
+            ResearchResultRef(
+                run_id=query.run_id, result_id=str(result.get("result_set_id"))
+            )
             for result in records.values()
             if isinstance(result, dict) and result.get("result_set_id")
         )
         primary = getattr(raw_outcome, "primary_execution", None)
         if not isinstance(primary, dict):
-            raise SemanticQueryProjectionError(
-                "RESEARCH_AGENT_PRIMARY_RESULT_MISSING"
-            )
+            raise SemanticQueryProjectionError("RESEARCH_AGENT_PRIMARY_RESULT_MISSING")
         primary_id = str(primary.get("result_set_id") or "")
         if not primary_id:
-            raise SemanticQueryProjectionError(
-                "RESEARCH_AGENT_PRIMARY_RESULT_MISSING"
-            )
+            raise SemanticQueryProjectionError("RESEARCH_AGENT_PRIMARY_RESULT_MISSING")
         rows = getattr(raw_outcome, "primary_rows", None)
-        normalized_rows = tuple(dict(item) for item in rows or () if isinstance(item, dict))
+        normalized_rows = tuple(
+            dict(item) for item in rows or () if isinstance(item, dict)
+        )
         if not normalized_rows:
             return ResearchSemanticQueryOutcome(
                 run_id=query.run_id,
@@ -884,7 +901,10 @@ class SemanticQueryRuntime:
         payload = result_sets.get(evidence.result_ref.result_id)
         if payload is None:
             for candidate in result_sets.values():
-                if isinstance(candidate, dict) and candidate.get("result_set_id") == evidence.result_ref.result_id:
+                if (
+                    isinstance(candidate, dict)
+                    and candidate.get("result_set_id") == evidence.result_ref.result_id
+                ):
                     payload = candidate
                     break
         if payload is None:
@@ -931,7 +951,10 @@ class SemanticQueryRuntime:
             reverse = value_ref.row_selector.direction.value == "desc"
             try:
                 rows.sort(
-                    key=lambda row: (row.get(order_field) is None, row.get(order_field)),
+                    key=lambda row: (
+                        row.get(order_field) is None,
+                        row.get(order_field),
+                    ),
                     reverse=reverse,
                 )
             except TypeError as exc:
@@ -978,9 +1001,7 @@ def semantic_query_plan_id(query: ResearchSemanticQuery) -> str:
     return SemanticQueryRuntime._plan_id(query)
 
 
-_STATE_EXCLUDED_KEYS = frozenset(
-    {"full_data", "tool_offloads", "semantic_schema"}
-)
+_STATE_EXCLUDED_KEYS = frozenset({"full_data", "tool_offloads", "semantic_schema"})
 
 
 class _ExecutionDeadlineBudget:

@@ -18,15 +18,20 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Sequence
+from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from typing import Any
 
 import orjson
+from sqlmodel import Session
 
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.models.dto.research_agent import (
     ResearchAgentRequirement,
+    ResearchBudgetUsage,
     ResearchCompletion,
     ResearchCompletionReason,
     ResearchRunSnapshot,
@@ -44,7 +49,10 @@ from apps.chatbi.orchestration.agent.tools.research import (
     build_research_tool_registry,
 )
 from apps.chatbi.repository.sqlmodel import agent_run_repository
-from apps.chatbi.services.evidence import ANALYSIS_EVIDENCE_REGISTRY_KEY
+from apps.chatbi.services.evidence import (
+    ANALYSIS_EVIDENCE_REGISTRY_KEY,
+    EvidenceRegistry,
+)
 from apps.chatbi.services.research.agent_context import (
     build_premise_query_args,
     build_research_system_context,
@@ -72,7 +80,9 @@ from apps.tool import (
     ToolCall,
     ToolErrorCategory,
     ToolResult,
+    ToolStatus,
 )
+from apps.tool.concurrency import ToolBatchExecutionError, execute_tool_batch
 from apps.trace import AgentTraceRecorder, DisabledAgentTraceRecorder
 
 logger = logging.getLogger(__name__)
@@ -231,7 +241,8 @@ class ResearchAgentHarness:
                     )
                     requirements_directive_at = turns
                 elif (
-                    turns >= requirements_directive_at + self._config.research_max_stall_turns
+                    turns
+                    >= requirements_directive_at + self._config.research_max_stall_turns
                 ):
                     return self._finalize_server_stop(
                         ctx,
@@ -242,7 +253,9 @@ class ResearchAgentHarness:
 
             # 3. ---- 一轮推理：受控上下文 -> decide(profile=research) ----
             turn_index = ctx.iteration + 1
-            step = agent_run_repository.start_step(self._session, self._run_row, turn_index)
+            step = agent_run_repository.start_step(
+                self._session, self._run_row, turn_index
+            )
             self._session.commit()
             profile = dataclass_replace(
                 RESEARCH_PROFILE,
@@ -312,9 +325,7 @@ class ResearchAgentHarness:
                     )
                     stall_turns += 1
                 else:
-                    observations = self._execute_batch(
-                        ctx, step, decision.tool_calls
-                    )
+                    observations = self._execute_batch(ctx, step, decision.tool_calls)
             except AgentCancellationRequested:
                 agent_run_repository.cancel_step(
                     self._session, step, "用户在工具执行期间请求取消"
@@ -371,9 +382,8 @@ class ResearchAgentHarness:
             if recovered_with_evidence:
                 actionable_recovery_pending = False
             if (
-                (strengthened_report or recovered_with_evidence)
-                and self._requirements_satisfied(ctx)
-            ):
+                strengthened_report or recovered_with_evidence
+            ) and self._requirements_satisfied(ctx):
                 # 需求满足后补做计算会产生更强的新证据，应重新给予一次收口
                 # 宽限期；参数纠正后新产生的证据同样属于有效恢复进展。
                 requirements_directive_at = turns
@@ -674,7 +684,9 @@ class ResearchAgentHarness:
                 "expected_direction": premise.expected_direction.value,
                 "observed_direction": observed,
                 "evidence_id": (
-                    premise_evidence.evidence_id if premise_evidence is not None else None
+                    premise_evidence.evidence_id
+                    if premise_evidence is not None
+                    else None
                 ),
             }
         )
@@ -690,9 +702,7 @@ class ResearchAgentHarness:
                 f"与预期 {premise.expected_direction.value} 不符，研究提前结束。"
             ),
             evidence_ids=(
-                (premise_evidence.evidence_id,)
-                if premise_evidence is not None
-                else ()
+                (premise_evidence.evidence_id,) if premise_evidence is not None else ()
             ),
             limitations=("premise_not_supported",),
         )
@@ -777,7 +787,9 @@ class ResearchAgentHarness:
         if premise is None:
             return None
         preflight_index = ctx.iteration + 1
-        step = agent_run_repository.start_step(self._session, self._run_row, preflight_index)
+        step = agent_run_repository.start_step(
+            self._session, self._run_row, preflight_index
+        )
         self._session.commit()
         call = ToolCall(
             name="query_semantic_data",
@@ -905,15 +917,168 @@ class ResearchAgentHarness:
         step: Any,
         calls: list[ToolCall],
     ) -> list[tuple[ToolCall, ToolObservation]]:
-        """在提交边界内执行一批独立工具调用；每个调用独立持久化。
+        """并行执行独立调用，主线程按原顺序合并并持久化研究事实。"""
 
-        固定串行执行（doc38 §11.7 遗留评审项的裁决）：研究循环的工具经
-        注册表访问与主线程相同的请求作用域 Session，跨线程并发会触发
-        "Session is already flushing"；在引入会话隔离前不启用
-        ``tool_parallel_workers``。
-        """
+        if len(calls) <= 1:
+            return [self._execute_single(ctx, step, call) for call in calls]
+        query_count = sum(call.name == "query_semantic_data" for call in calls)
+        remaining_queries = max(
+            ctx.budget.max_queries - ctx.budget_usage().queries,
+            0,
+        )
+        call_fingerprints = [
+            (call.name, orjson.dumps(call.args or {}, option=orjson.OPT_SORT_KEYS))
+            for call in calls
+        ]
+        if query_count > remaining_queries or len(set(call_fingerprints)) < len(
+            call_fingerprints
+        ):
+            # 预算不足或同批存在重复请求时保持顺序执行，让工具自身的预算门和
+            # 指纹去重看到前一个调用已经提交的状态。
+            return [self._execute_single(ctx, step, call) for call in calls]
 
-        return [self._execute_single(ctx, step, call) for call in calls]
+        commits = [
+            ResearchToolCallCommit(
+                self._session,
+                self._run_row,
+                step_id=int(step.id),
+                tool_call_id=call.call_id,
+                tool_name=call.name,
+                args_summary=dict(call.args or {}),
+                ctx=ctx,
+            )
+            for call in calls
+        ]
+        for commit in commits:
+            commit.__enter__()
+
+        worker_contexts: dict[str, ResearchToolContext] = {}
+        baseline_usage = ctx.budget_usage()
+
+        def execute_isolated(call: ToolCall) -> ToolResult[Any]:
+            if hasattr(self._session, "get_bind"):
+                worker_session: Any = Session(bind=self._session.get_bind())
+            else:
+                # 内存测试 Session 也必须按调用隔离，不能在线程间共享同一实例。
+                worker_session = type(self._session)(self._run_row)
+            session_scope = (
+                worker_session
+                if hasattr(worker_session, "__enter__")
+                else nullcontext(worker_session)
+            )
+            with session_scope:
+                worker_agent_context = dataclass_replace(
+                    ctx.context,
+                    session=worker_session,
+                    state=deepcopy(ctx.context.state),
+                )
+                semantic_runtime = self._semantic_runtime
+                if semantic_runtime is not None and hasattr(
+                    semantic_runtime, "fork_with_session"
+                ):
+                    semantic_runtime = semantic_runtime.fork_with_session(
+                        worker_session
+                    )
+                worker_ctx = dataclass_replace(
+                    ctx,
+                    context=worker_agent_context,
+                    semantic_runtime=semantic_runtime,
+                    trace_recorder=None,
+                )
+                result = self._registry.execute(call, worker_ctx)
+                worker_contexts[call.call_id] = worker_ctx
+                return result
+
+        try:
+            executed = execute_tool_batch(
+                calls,
+                execute_isolated,
+                max_workers=int(getattr(self._config, "tool_parallel_workers", 4) or 4),
+                cancellation=self._cancellation,
+            )
+        except ToolBatchExecutionError as exc:
+            self._finish_parallel_commits(
+                ctx,
+                commits,
+                exc.outcomes,
+                worker_contexts,
+                baseline_usage,
+            )
+            raise exc.cause from exc
+
+        return self._finish_parallel_commits(
+            ctx,
+            commits,
+            executed,
+            worker_contexts,
+            baseline_usage,
+        )
+
+    def _finish_parallel_commits(
+        self,
+        ctx: ResearchToolContext,
+        commits: list[ResearchToolCallCommit],
+        outcomes: Sequence[tuple[ToolCall, ToolResult[Any] | BaseException]],
+        worker_contexts: dict[str, ResearchToolContext],
+        baseline_usage: ResearchBudgetUsage,
+    ) -> list[tuple[ToolCall, ToolObservation]]:
+        """合并隔离状态，并按调用原顺序提交每个工具事实。"""
+
+        observations: list[tuple[ToolCall, ToolObservation]] = []
+        for commit, (call, outcome) in zip(commits, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                commit.__exit__(type(outcome), outcome, outcome.__traceback__)
+                continue
+            worker_ctx = worker_contexts.get(call.call_id)
+            if worker_ctx is not None and outcome.status is ToolStatus.SUCCEEDED:
+                self._merge_parallel_context(ctx, worker_ctx, baseline_usage)
+            observation = commit.finish(outcome)
+            commit.__exit__(None, None, None)
+            if observation is None:
+                raise TypeError("RESEARCH_HARNESS_OBSERVATION_REQUIRED")
+            observations.append((call, observation))
+        return observations
+
+    @staticmethod
+    def _merge_parallel_context(
+        ctx: ResearchToolContext,
+        worker_ctx: ResearchToolContext,
+        baseline_usage: ResearchBudgetUsage,
+    ) -> None:
+        """只合并工具允许产生的状态增量，避免覆盖其他并行调用。"""
+
+        for evidence in worker_ctx.evidences():
+            ctx.register_evidence(evidence)
+        EvidenceRegistry(ctx.context.state).merge(worker_ctx.analysis_evidences())
+
+        worker_research = worker_ctx.context.state.get(RESEARCH_STATE_KEY)
+        main_research = ctx.context.state.get(RESEARCH_STATE_KEY)
+        if not isinstance(worker_research, dict) or not isinstance(main_research, dict):
+            raise TypeError("RESEARCH_TOOL_STATE_INVALID")
+        worker_fingerprints = worker_research.get("fingerprints")
+        main_fingerprints = main_research.setdefault("fingerprints", {})
+        if isinstance(worker_fingerprints, dict) and isinstance(
+            main_fingerprints, dict
+        ):
+            main_fingerprints.update(worker_fingerprints)
+
+        worker_results = worker_ctx.context.state.get(_RESULT_SETS_KEY)
+        main_results = ctx.context.state.setdefault(_RESULT_SETS_KEY, {})
+        if isinstance(worker_results, dict) and isinstance(main_results, dict):
+            main_results.update(worker_results)
+
+        worker_usage = worker_ctx.budget_usage()
+        current_usage = ctx.budget_usage()
+        main_research["budget_usage"] = ResearchBudgetUsage(
+            queries=current_usage.queries
+            + max(worker_usage.queries - baseline_usage.queries, 0),
+            model_calls=current_usage.model_calls,
+            duration_seconds=current_usage.duration_seconds,
+            evidence_rows=current_usage.evidence_rows,
+            evidence_chars=current_usage.evidence_chars,
+        ).model_dump(mode="json")
+        observation = worker_ctx.observations()[-1]
+        ctx.record_observation(observation)
 
     def _execute_single(
         self,

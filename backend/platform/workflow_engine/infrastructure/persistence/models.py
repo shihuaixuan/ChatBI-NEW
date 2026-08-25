@@ -196,6 +196,14 @@ class WorkflowArtifactModel(SQLModel, table=True):
     __table_args__ = (
         Index("idx_workflow_artifact_run", "run_id", "kind"),
         Index("idx_workflow_artifact_temporary", "temporary", "created_at"),
+        Index(
+            "ux_workflow_artifact_idempotency",
+            "run_id",
+            "kind",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     id: int | None = Field(sa_column=Column(BigInteger, Identity(always=True), primary_key=True))
@@ -207,6 +215,10 @@ class WorkflowArtifactModel(SQLModel, table=True):
     digest: str = Field(sa_column=Column(String(128), nullable=False))
     storage_uri: str = Field(sa_column=Column(String(512), nullable=False))
     metadata_json: dict = Field(sa_column=Column(JSONB, nullable=False, server_default=text("'{}'::jsonb")))
+    idempotency_key: str | None = Field(
+        default=None,
+        sa_column=Column(String(256), nullable=True),
+    )
     temporary: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default=text("true")))
     created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
 

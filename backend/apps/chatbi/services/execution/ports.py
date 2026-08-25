@@ -18,6 +18,14 @@ class ResultArtifactGateway(Protocol):
 
     def get_json(self, artifact_id: str) -> Any: ...
 
+    def find_json(
+        self,
+        *,
+        run_id: str,
+        kind: str,
+        idempotency_key: str,
+    ) -> Any | None: ...
+
     def schedule_cleanup(
         self,
         *,
