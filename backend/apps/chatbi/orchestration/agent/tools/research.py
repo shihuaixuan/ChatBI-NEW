@@ -1583,21 +1583,22 @@ class FinishResearchTool(
                 message=f"结束请求校验失败：{message.split('Value error, ')[-1]}",
                 details={"reason": request.reason.value, "status": status},
             ) from exc
-        # §10.3.2：充分结论必须由服务端完成度评估放行；缺口未清零时拒绝。
+        # §10.3.2：充分结论必须先满足服务端最低结构门槛；该门槛是
+        # 必要条件，不替代模型对 Evidence 实际内容的充分性判断。
         if request.reason is ResearchCompletionReason.SUFFICIENT_EVIDENCE:
             evaluation = evaluate_completion(
                 ctx.requirement,
                 ctx.analysis_evidences(),
                 premise_result=ctx.premise_result,
             )
-            if not evaluation.satisfied:
+            if not evaluation.minimum_requirements_met:
                 raise _fail(
                     ctx,
                     self.name,
                     code=ToolErrorCode.INVALID_REQUEST,
                     stage=ToolFailureStage.VALIDATION,
                     parameter_retryable=False,
-                    message="finish 过早：证据需求尚未满足，不能提交充分结论。",
+                    message="finish 过早：最低结构要求尚未覆盖，不能提交充分结论。",
                     details={
                         "gaps": list(evaluation.gap_messages()),
                         "target_metric_coverage": dict(

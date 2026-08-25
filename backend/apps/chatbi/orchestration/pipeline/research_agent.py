@@ -188,8 +188,7 @@ class ResearchAgentHarness:
 
         started_at = time.monotonic()
         stall_turns = 0
-        requirements_directive_at: int | None = None
-        actionable_recovery_pending = False
+        structural_coverage_reminded = False
         turns = 0
 
         # 冻结 Requirement 带有首轮计划时，先完成所有当前可确定节点，
@@ -201,7 +200,7 @@ class ResearchAgentHarness:
                 state.messages.append(
                     AgentMessage.user(
                         "<system-reminder>首轮基础计划已全部尝试，但存在失败或未满足的"
-                        "Completion Gap。只有根据当前 Evidence 和失败观察能够确定"
+                        "最低结构覆盖缺口。只有根据当前 Evidence 和失败观察能够确定"
                         "新增方向时，才生成下一批工具调用。</system-reminder>"
                     )
                 )
@@ -231,25 +230,20 @@ class ResearchAgentHarness:
                 if outcome is not None:
                     return outcome
 
-            # ---- 证据需求满足后提醒收口；宽限期过后由服务端强制停止 ----
-            if self._requirements_satisfied(ctx):
-                if requirements_directive_at is None:
-                    state.messages.append(
-                        AgentMessage.user(
-                            "<system-reminder>证据需求已全部满足。请尽快调用 finish_research 提交结论。</system-reminder>"
-                        )
+            # ---- 最低结构覆盖只提供评估提示，不能替代内容充分性判断或启动强制收口 ----
+            if (
+                not structural_coverage_reminded
+                and self._minimum_structural_coverage_met(ctx)
+            ):
+                state.messages.append(
+                    AgentMessage.user(
+                        "<system-reminder>当前 Evidence 已覆盖预设的最低结构要求。"
+                        "请结合用户问题和实际数据判断内容是否足以回答：如果足够，"
+                        "请调用 finish_research 提交结论；如果不足，请明确说明缺口并"
+                        "生成能够补齐该缺口的下一步工具调用。</system-reminder>"
                     )
-                    requirements_directive_at = turns
-                elif (
-                    turns
-                    >= requirements_directive_at + self._config.research_max_stall_turns
-                ):
-                    return self._finalize_server_stop(
-                        ctx,
-                        turns,
-                        stop_reason="requirements_unanswered",
-                        reason_key="no_new_direction",
-                    )
+                )
+                structural_coverage_reminded = True
 
             # 3. ---- 一轮推理：受控上下文 -> decide(profile=research) ----
             turn_index = ctx.iteration + 1
@@ -366,27 +360,9 @@ class ResearchAgentHarness:
                 )
                 for _call, observation in observations
             )
-            if actionable_failure:
-                actionable_recovery_pending = True
-                # 参数可修正意味着下一轮仍有明确方向，不能沿用旧的强制收口
-                # 倒计时提前结束研究；总预算仍然提供最终上限。
-                requirements_directive_at = turns
-            stall_turns = 0 if new_direction else stall_turns + 1
-            strengthened_report = any(
-                observation.tool_name == "compute_evidence"
-                and observation.status is ToolObservationStatus.SUCCEEDED
-                and set(observation.evidence_ids) - known_before
-                for _call, observation in observations
+            stall_turns = (
+                0 if new_direction or actionable_failure else stall_turns + 1
             )
-            recovered_with_evidence = new_direction and actionable_recovery_pending
-            if recovered_with_evidence:
-                actionable_recovery_pending = False
-            if (
-                strengthened_report or recovered_with_evidence
-            ) and self._requirements_satisfied(ctx):
-                # 需求满足后补做计算会产生更强的新证据，应重新给予一次收口
-                # 宽限期；参数纠正后新产生的证据同样属于有效恢复进展。
-                requirements_directive_at = turns
 
             agent_run_repository.finish_step(
                 self._session,
@@ -877,12 +853,6 @@ class ResearchAgentHarness:
             )
         if len(calls) > 1 and any(call.name == "finish_research" for call in calls):
             return False, "finish_research 必须单独一轮提交，不能和其他工具同批。"
-        if (
-            ctx.requirement.initial_plan is not None
-            and self._requirements_satisfied(ctx)
-            and any(call.name != "finish_research" for call in calls)
-        ):
-            return False, "首轮计划已经满足证据需求，请直接调用 finish_research。"
         known = set(ctx.known_evidence_ids())
         for call in calls:
             if call.name == "finish_research":
@@ -1199,11 +1169,11 @@ class ResearchAgentHarness:
             return "duration"
         return None
 
-    def _requirements_satisfied(self, ctx: ResearchToolContext) -> bool:
-        """收口提醒/强制停止的触发条件；口径统一走完成度评估器（§10.3.2）。
+    def _minimum_structural_coverage_met(self, ctx: ResearchToolContext) -> bool:
+        """判断最低结构覆盖；该结果不能证明内容足以回答用户问题。
 
         额外要求台账里至少有一条证据：空台账上的“满足”没有研究价值，
-        收口宽限期必须锚定在真实进展之后。
+        结构覆盖提示必须锚定在真实进展之后。
         """
 
         if not ctx.analysis_evidences():
@@ -1212,7 +1182,7 @@ class ResearchAgentHarness:
             ctx.requirement,
             ctx.analysis_evidences(),
             premise_result=ctx.premise_result,
-        ).satisfied
+        ).minimum_requirements_met
 
     def _server_completion(
         self,

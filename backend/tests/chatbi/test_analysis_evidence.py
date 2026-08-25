@@ -172,5 +172,21 @@ def test_completion_reads_unified_evidence() -> None:
         premise_result={"status": "supported"},
     )
 
-    assert evaluation.satisfied is True
+    assert evaluation.minimum_requirements_met is True
     assert evaluation.core_supported is True
+
+
+def test_completion_only_reports_minimum_structural_coverage() -> None:
+    """字段覆盖满足时仍不能据此判断 Evidence 内容已经回答用户问题。"""
+
+    requirement = _requirement()
+    evidence = _evidence(purpose="只有结构字段，没有原因解释内容")
+
+    evaluation = evaluate_completion(
+        requirement,
+        [evidence],
+        premise_result={"status": "supported"},
+    )
+
+    assert evaluation.minimum_requirements_met is True
+    assert evaluation.gaps == ()

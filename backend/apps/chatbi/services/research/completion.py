@@ -1,7 +1,8 @@
-"""Evidence Requirement 完成度评估（doc38 §10.3.2）。
+"""Evidence Requirement 最低结构覆盖评估（doc38 §10.3.2）。
 
 只根据冻结 Requirement、当前 Run 的证据台账和前提确认结果推导结构化
-完成度与缺口；不决定下一个工具，也不依赖任何 Action 执行记录。
+覆盖与缺口；不读取 Evidence 实际数据内容，不判断能否回答用户问题，
+也不决定下一个工具。
 """
 
 from __future__ import annotations
@@ -30,9 +31,9 @@ class ResearchCompletionGap:
 
 @dataclass(frozen=True)
 class ResearchCompletionEvaluation:
-    """完成度评估结果：结构化事实，不携带任何下一步动作建议。"""
+    """最低结构覆盖结果，不代表 Evidence 内容已经充分。"""
 
-    satisfied: bool
+    minimum_requirements_met: bool
     premise_handled: bool
     core_supported: bool
     target_metric_coverage: dict[str, int]
@@ -48,7 +49,7 @@ def evaluate_completion(
     *,
     premise_result: dict[str, Any] | None = None,
 ) -> ResearchCompletionEvaluation:
-    """按 Requirement 的证据需求逐条判断覆盖情况。"""
+    """按字段、数量和依赖关系判断最低结构覆盖，不检查实际数据语义。"""
 
     evidence_items = list(evidences)
     target_refs = set(requirement.target_metric_refs)
@@ -95,7 +96,7 @@ def evaluate_completion(
         for item in evidence_items
     )
     return ResearchCompletionEvaluation(
-        satisfied=not gaps,
+        minimum_requirements_met=not gaps,
         premise_handled=premise_handled,
         core_supported=core_supported,
         target_metric_coverage=coverage,

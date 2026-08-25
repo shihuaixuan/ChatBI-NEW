@@ -307,7 +307,7 @@ def _requirements_progress(
     requirement: ResearchAgentRequirement,
     evidences: list[ResearchEvidence],
 ) -> list[dict[str, Any]]:
-    """确定性统计每条证据需求的覆盖数；精确评估由阶段 6 完成。"""
+    """确定性统计最低结构覆盖；该结果不表示内容足以回答问题。"""
 
     progress: list[dict[str, Any]] = []
     for req in requirement.evidence_requirements:
@@ -324,7 +324,7 @@ def _requirements_progress(
                 "description": req.description[:200],
                 "minimum_count": req.minimum_count,
                 "covered_count": covered,
-                "satisfied": covered >= req.minimum_count,
+                "minimum_coverage_met": covered >= req.minimum_count,
             }
         )
     return progress
