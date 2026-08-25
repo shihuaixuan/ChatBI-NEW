@@ -116,6 +116,97 @@ class ResearchToolContext:
             research["execution_id"] = self.context.execution_id
         if research.get("dataset_id") is None and self.context.dataset_id is not None:
             research["dataset_id"] = self.context.dataset_id
+        if self.requirement.initial_plan is not None:
+            research.setdefault(
+                "initial_plan_state",
+                {"status": "pending", "nodes": {}},
+            )
+
+    # ------------------------------------------------------------------ #
+    # 首轮计划状态
+    # ------------------------------------------------------------------ #
+
+    def initial_plan_complete(self) -> bool:
+        """判断首轮计划的所有节点是否都成功。"""
+
+        plan = self.requirement.initial_plan
+        if plan is None:
+            return True
+        state = self._state().get("initial_plan_state")
+        if not isinstance(state, dict):
+            return False
+        nodes = state.get("nodes")
+        if not isinstance(nodes, dict):
+            return False
+        return all(
+            isinstance(nodes.get(node.node_id), dict)
+            and nodes[node.node_id].get("status") == "succeeded"
+            for node in plan.nodes
+        )
+
+    def initial_plan_exhausted(self) -> bool:
+        """判断首轮计划的所有节点是否都已经尝试完成。"""
+
+        plan = self.requirement.initial_plan
+        if plan is None:
+            return True
+        state = self._state().get("initial_plan_state")
+        nodes = state.get("nodes") if isinstance(state, dict) else None
+        if not isinstance(nodes, dict):
+            return False
+        return all(
+            isinstance(nodes.get(node.node_id), dict)
+            and nodes[node.node_id].get("status") in {"succeeded", "failed"}
+            for node in plan.nodes
+        )
+
+    def initial_plan_node(self, node_id: str) -> dict[str, Any] | None:
+        state = self._state().get("initial_plan_state")
+        if not isinstance(state, dict) or not isinstance(state.get("nodes"), dict):
+            return None
+        value = state["nodes"].get(node_id)
+        return dict(value) if isinstance(value, dict) else None
+
+    def initial_plan_node_evidence_ids(self, node_id: str) -> tuple[str, ...]:
+        record = self.initial_plan_node(node_id) or {}
+        evidence_ids = record.get("evidence_ids")
+        if not isinstance(evidence_ids, list):
+            return ()
+        return tuple(item for item in evidence_ids if isinstance(item, str))
+
+    def mark_initial_plan_node(
+        self,
+        node_id: str,
+        *,
+        status: str,
+        tool_call_id: str,
+        evidence_ids: Sequence[str] = (),
+        message: str | None = None,
+    ) -> None:
+        """记录计划节点终态；计划定义本身仍来自冻结 Requirement。"""
+
+        if status not in {"succeeded", "failed"}:
+            raise ValueError("RESEARCH_PLAN_NODE_STATUS_INVALID")
+        state = self._state().setdefault(
+            "initial_plan_state", {"status": "pending", "nodes": {}}
+        )
+        if not isinstance(state, dict):
+            raise TypeError("RESEARCH_PLAN_STATE_INVALID")
+        nodes = state.setdefault("nodes", {})
+        if not isinstance(nodes, dict):
+            raise TypeError("RESEARCH_PLAN_NODES_INVALID")
+        nodes[node_id] = {
+            "status": status,
+            "tool_call_id": tool_call_id,
+            "evidence_ids": list(evidence_ids),
+            "message": message,
+        }
+        if self.initial_plan_complete():
+            state["status"] = "completed"
+        elif self.initial_plan_exhausted():
+            state["status"] = "exhausted"
+        else:
+            state["status"] = "running"
 
     # ------------------------------------------------------------------ #
     # 证据台账

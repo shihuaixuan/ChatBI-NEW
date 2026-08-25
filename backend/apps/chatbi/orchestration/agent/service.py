@@ -169,17 +169,12 @@ def create_agent_start_events(
     config = get_agent_config()
     if not config.enabled:
         raise AgentNotEnabledError("Agent ChatBI is not enabled")
-    if (
-        request.datasource_id
-        and config.datasource_allowlist
-        and request.datasource_id not in config.datasource_allowlist
-    ):
-        raise AgentDatasourceNotAllowedError(
-            "Datasource is not enabled for Agent ChatBI"
-        )
+    if (request.datasource_id and config.datasource_allowlist and request.datasource_id not in config.datasource_allowlist):
+        raise AgentDatasourceNotAllowedError("Datasource is not enabled for Agent ChatBI")
 
     def stream() -> Iterator[RenderEvent]:
         # 事件迭代器自己持有 session，事件生成后立即通过 SSE 推送。
+        # 1. 数据库会话与资源创建
         with Session(engine) as stream_session:
             record, run = create_record_and_run(
                 stream_session,
@@ -187,6 +182,7 @@ def create_agent_start_events(
                 AgentQuestionRequest(**request.model_dump(exclude={"action"})),
                 config.model_dump(),
             )
+            # 2. 构建追踪（Trace）记录器
             recorder = build_agent_trace_recorder()
             with recorder.node(
                 TraceNodeSpec(
@@ -217,6 +213,7 @@ def create_agent_start_events(
                         "datasource_allowed": True,
                     }
                 )
+            # 3. 构建 Orchestrator 并执行 Agent 运行
             orchestrator = build_run_orchestrator(
                 stream_session,
                 current_user,

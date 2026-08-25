@@ -422,7 +422,7 @@ def freeze_research_requirement(
             )
         )
 
-    return ResearchAgentRequirement(
+    requirement = ResearchAgentRequirement(
         run_id="routing",  # 占位：主路径适配层按 Run 身份覆盖。
         goal=dynamic.goal,
         reason=dynamic.reason,
@@ -447,6 +447,7 @@ def freeze_research_requirement(
             permission_fingerprint=permission_fingerprint,
         ),
     )
+    return requirement
 
 
 def _governed_dimensions(

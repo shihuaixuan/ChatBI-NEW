@@ -74,6 +74,8 @@ class AgentInputPreparer:
         if state.context.dataset_id is None or state.context.dataset_id <= 0:
             raise QuestionUnderstandingError("AGENT_INPUT_DATASET_REQUIRED")
 
+        # 1. 问题重写
+
         temporal_context = state.temporal_context
         rewrite_input = {
             "current_question": original_question,
@@ -132,6 +134,8 @@ class AgentInputPreparer:
                 "question_rewrite": rewrite_payload,
             }
         )
+
+        # 2. 语义资产候选检索
 
         retrieval_request = build_retrieval_request(
             tenant_id=state.context.oid,

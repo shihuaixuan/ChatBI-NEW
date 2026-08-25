@@ -133,13 +133,16 @@ class RunOrchestrator:
             return
 
         try:
+            # 1. 问题重写与语义资产候选检索
             ready = yield from self.input_preparer.prepare_initial(state)
             if not ready:
                 return
+            # 2. 判断是否需要澄清
             clarification_event = self._semantic_parse_clarification_event(state)
             if clarification_event is not None:
                 yield clarification_event
                 return
+            # 3. 执行模式选择与分发
             selected_mode = self._select_mode(state)
             if selected_mode == "fast":
                 if self.fast_pipeline is None:

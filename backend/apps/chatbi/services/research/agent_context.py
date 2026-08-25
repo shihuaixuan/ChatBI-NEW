@@ -122,6 +122,12 @@ def project_research_working_state(
     ][-_MAX_RECENT_FAILURES:]
 
     hypotheses = _project_hypotheses(ctx, evidences)
+    research_state = ctx.context.state.get("research_state")
+    initial_plan_state = (
+        research_state.get("initial_plan_state")
+        if isinstance(research_state, dict)
+        else None
+    )
 
     return {
         "iteration": ctx.iteration,
@@ -170,6 +176,14 @@ def project_research_working_state(
             ),
             "remaining_iterations": max(budget.max_iterations - ctx.iteration, 0),
         },
+        "initial_plan": (
+            {
+                "status": initial_plan_state.get("status", "pending"),
+                "nodes": initial_plan_state.get("nodes", {}),
+            }
+            if isinstance(initial_plan_state, dict)
+            else None
+        ),
         "evidence_requirements": _requirements_progress(requirement, evidences),
         "hypotheses": hypotheses[:_MAX_HYPOTHESES],
         "evidences": evidence_items,

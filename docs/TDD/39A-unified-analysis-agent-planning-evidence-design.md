@@ -380,6 +380,12 @@ Evidence Requirement 描述完成目标需要什么证据，不指定必须调�
 
 Planner 读取冻结 Requirement，生成当前可确定节点和依赖。
 
+这里的 Planner 与 Plan 模式遵循同一边界：它是服务端根据冻结 Requirement
+确定性生成当前可证明的计划，不是按某个具体问题在代码中写死工具调用，也不是
+让模型在每完成一个基础查询后重新选择下一个基础查询。Research 与 Plan 的区别
+在于首轮计划是否完整：Plan 执行完整 DAG 后结束，Research 执行当前可确定的
+部分 DAG 后，再根据 Evidence 和 Completion Gap 决定是否追加计划。
+
 Planner 只能引用：
 
 - 已绑定资产；
@@ -829,4 +835,3 @@ Research
 - Completion Evaluation 成为统一停止依据；
 - 结论从字符匹配升级为结构化证据引用；
 - 查询、计算、证据、结论和报告形成完整审计关系。
-

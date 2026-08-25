@@ -34,6 +34,7 @@ from apps.chatbi.orchestration.pipeline.research_agent import (
     ResearchAgentHarness,
     ResearchAgentRunOutcome,
 )
+from apps.chatbi.services.research.initial_plan import ResearchInitialPlanner
 from apps.chatbi.services.research.routing_freeze import (
     research_permission_fingerprint,
 )
@@ -293,6 +294,7 @@ class ResearchAgentPipeline:
             result_store=deps.result_store,
             recorder=deps.recorder,
             cancellation=getattr(state, "cancellation", None),
+            initial_planner=ResearchInitialPlanner(),
         )
 
     # ------------------------------------------------------------------ #

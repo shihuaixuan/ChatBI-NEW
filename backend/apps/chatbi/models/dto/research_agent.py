@@ -156,6 +156,18 @@ class ResearchQueryComparison(StrEnum):
     CONTRIBUTION = "contribution"
 
 
+class ResearchComputeOperation(StrEnum):
+    DIFFERENCE = "difference"
+    GROWTH_RATE = "growth_rate"
+    SHARE = "share"
+    RATIO = "ratio"
+    RANKING = "ranking"
+    TOPN_OTHER = "topn_other"
+    CONTRIBUTION = "contribution"
+    MERGE = "merge"
+    RECONCILIATION = "reconciliation"
+
+
 class ResearchOrderDirection(StrEnum):
     ASC = "asc"
     DESC = "desc"
@@ -519,6 +531,104 @@ class ResearchEvidenceRequirement(_ContractModel):
         return self
 
 
+class ResearchInitialPlanNode(_ContractModel):
+    """Research 首轮执行的确定性计划节点。"""
+
+    node_id: str = Field(min_length=1, max_length=128)
+    node_type: Literal["query", "compute"]
+    batch_index: int = Field(ge=0, le=20)
+    dependency_node_ids: tuple[str, ...] = ()
+    metrics: tuple[str, ...] = ()
+    dimensions: tuple[str, ...] = ()
+    time_ranges: tuple[ResearchTimeRole, ...] = ()
+    filters: tuple[ResearchImmutableFilter, ...] = ()
+    comparison: ResearchQueryComparison = ResearchQueryComparison.NONE
+    analysis: Literal[
+        "compare",
+        "breakdown",
+        "drilldown",
+        "filter_from_result",
+        "contribution",
+        "exploration",
+    ] = "exploration"
+    purpose: str = Field(min_length=1, max_length=1000)
+    compute_operation: ResearchComputeOperation | None = None
+    group_by_refs: tuple[str, ...] = ()
+    tolerance: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_plan_node(self) -> ResearchInitialPlanNode:
+        _id(self.node_id, "RESEARCH_AGENT_PLAN_NODE_ID_INVALID")
+        _unique(
+            self.dependency_node_ids,
+            "RESEARCH_AGENT_PLAN_NODE_DEPENDENCY_DUPLICATED",
+        )
+        _unique(self.metrics, "RESEARCH_AGENT_PLAN_NODE_METRIC_DUPLICATED")
+        _unique(self.dimensions, "RESEARCH_AGENT_PLAN_NODE_DIMENSION_DUPLICATED")
+        _unique(self.time_ranges, "RESEARCH_AGENT_PLAN_NODE_TIME_ROLE_DUPLICATED")
+        _unique(self.group_by_refs, "RESEARCH_AGENT_PLAN_NODE_GROUP_BY_DUPLICATED")
+        _unique(
+            tuple(item.target_ref for item in self.filters),
+            "RESEARCH_AGENT_PLAN_NODE_FILTER_DUPLICATED",
+        )
+        for ref in (*self.metrics, *self.dimensions, *self.group_by_refs):
+            _ref(ref, "RESEARCH_AGENT_PLAN_NODE_REF_INVALID")
+        if self.node_type == "query":
+            if self.dependency_node_ids:
+                raise ValueError("RESEARCH_AGENT_PLAN_QUERY_DEPENDENCY_FORBIDDEN")
+            if not self.metrics:
+                raise ValueError("RESEARCH_AGENT_PLAN_QUERY_METRIC_REQUIRED")
+            if not self.time_ranges:
+                raise ValueError("RESEARCH_AGENT_PLAN_QUERY_TIME_ROLE_REQUIRED")
+            if self.compute_operation is not None:
+                raise ValueError("RESEARCH_AGENT_PLAN_QUERY_COMPUTE_FORBIDDEN")
+            if self.group_by_refs or self.tolerance is not None:
+                raise ValueError("RESEARCH_AGENT_PLAN_QUERY_COMPUTE_FIELD_FORBIDDEN")
+            if self.analysis == "breakdown" and not self.dimensions:
+                raise ValueError("RESEARCH_AGENT_PLAN_BREAKDOWN_DIMENSION_REQUIRED")
+        else:
+            if self.compute_operation is None:
+                raise ValueError("RESEARCH_AGENT_PLAN_COMPUTE_OPERATION_REQUIRED")
+            if not self.dependency_node_ids:
+                raise ValueError("RESEARCH_AGENT_PLAN_COMPUTE_DEPENDENCY_REQUIRED")
+            if self.time_ranges:
+                raise ValueError("RESEARCH_AGENT_PLAN_COMPUTE_TIME_ROLE_FORBIDDEN")
+            if self.comparison is not ResearchQueryComparison.NONE:
+                raise ValueError("RESEARCH_AGENT_PLAN_COMPUTE_COMPARISON_FORBIDDEN")
+            if self.analysis != "exploration":
+                raise ValueError("RESEARCH_AGENT_PLAN_COMPUTE_ANALYSIS_FORBIDDEN")
+        return self
+
+
+class ResearchInitialPlan(_ContractModel):
+    """由冻结 Evidence Requirement 生成的首轮计划。"""
+
+    nodes: tuple[ResearchInitialPlanNode, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_plan(self) -> ResearchInitialPlan:
+        node_ids = tuple(item.node_id for item in self.nodes)
+        _unique(node_ids, "RESEARCH_AGENT_PLAN_NODE_DUPLICATED")
+        known: set[str] = set()
+        batch_by_id: dict[str, int] = {}
+        for node in self.nodes:
+            if any(dependency not in node_ids for dependency in node.dependency_node_ids):
+                raise ValueError("RESEARCH_AGENT_PLAN_DEPENDENCY_NOT_FOUND")
+            if any(
+                dependency not in known
+                for dependency in node.dependency_node_ids
+            ):
+                raise ValueError("RESEARCH_AGENT_PLAN_DEPENDENCY_ORDER_INVALID")
+            if any(
+                batch_by_id[dependency] >= node.batch_index
+                for dependency in node.dependency_node_ids
+            ):
+                raise ValueError("RESEARCH_AGENT_PLAN_DEPENDENCY_BATCH_INVALID")
+            known.add(node.node_id)
+            batch_by_id[node.node_id] = node.batch_index
+        return self
+
+
 class ResearchAgentRequirement(_VersionedContractModel):
     """Research Agent 的冻结输入；不包含 allowed_actions。"""
 
@@ -534,6 +644,7 @@ class ResearchAgentRequirement(_VersionedContractModel):
     immutable_filters: tuple[ResearchImmutableFilter, ...] = ()
     scope: ResearchScope
     evidence_requirements: tuple[ResearchEvidenceRequirement, ...] = Field(min_length=1)
+    initial_plan: ResearchInitialPlan | None = None
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
     version_snapshot: ResearchVersionSnapshot
     output_requirements: tuple[str, ...] = ()
@@ -607,6 +718,63 @@ class ResearchAgentRequirement(_VersionedContractModel):
         for requirement in self.evidence_requirements:
             if not set(requirement.required_asset_refs) <= scope_refs:
                 raise ValueError("RESEARCH_AGENT_EVIDENCE_REQUIREMENT_OUT_OF_SCOPE")
+        if self.initial_plan is not None:
+            allowed_metrics = set(self.scope.target_metric_refs) | set(
+                self.scope.driver_metric_refs
+            )
+            allowed_dimensions = set(self.scope.dimension_refs)
+            allowed_time_roles = set(roles)
+            for node in self.initial_plan.nodes:
+                if not set(node.metrics) <= allowed_metrics:
+                    raise ValueError("RESEARCH_AGENT_PLAN_METRIC_OUT_OF_SCOPE")
+                if not set(node.dimensions) <= allowed_dimensions:
+                    raise ValueError("RESEARCH_AGENT_PLAN_DIMENSION_OUT_OF_SCOPE")
+                if not set(node.group_by_refs) <= allowed_dimensions:
+                    raise ValueError("RESEARCH_AGENT_PLAN_GROUP_BY_OUT_OF_SCOPE")
+                if not set(node.time_ranges) <= allowed_time_roles:
+                    raise ValueError("RESEARCH_AGENT_PLAN_TIME_ROLE_OUT_OF_SCOPE")
+                if any(
+                    item.target_ref not in self.scope.allowed_filter_refs
+                    for item in node.filters
+                ):
+                    raise ValueError("RESEARCH_AGENT_PLAN_FILTER_OUT_OF_SCOPE")
+                if any(
+                    item != next(
+                        (
+                            frozen
+                            for frozen in self.immutable_filters
+                            if frozen.target_ref == item.target_ref
+                        ),
+                        None,
+                    )
+                    for item in node.filters
+                ):
+                    raise ValueError("RESEARCH_AGENT_PLAN_FILTER_CHANGED")
+                if node.node_type == "query" and {
+                    item.target_ref for item in node.filters
+                } != {item.target_ref for item in self.immutable_filters}:
+                    raise ValueError("RESEARCH_AGENT_PLAN_IMMUTABLE_FILTER_MISSING")
+                if node.node_type == "compute" and node.filters:
+                    raise ValueError("RESEARCH_AGENT_PLAN_COMPUTE_FILTER_FORBIDDEN")
+                if node.comparison in {
+                    ResearchQueryComparison.DIFFERENCE,
+                    ResearchQueryComparison.GROWTH_RATE,
+                    ResearchQueryComparison.CONTRIBUTION,
+                } and not {
+                    ResearchTimeRole.CURRENT,
+                    ResearchTimeRole.PREVIOUS,
+                } <= set(node.time_ranges):
+                    raise ValueError("RESEARCH_AGENT_PLAN_COMPARISON_TIME_ROLE_INVALID")
+                if node.node_type == "compute":
+                    if not set(node.metrics) <= allowed_metrics:
+                        raise ValueError("RESEARCH_AGENT_PLAN_COMPUTE_METRIC_OUT_OF_SCOPE")
+                    if node.compute_operation in {
+                        ResearchComputeOperation.CONTRIBUTION,
+                        ResearchComputeOperation.RECONCILIATION,
+                    } and not set(node.dimensions) <= set(
+                        self.scope.contribution_dimension_refs
+                    ):
+                        raise ValueError("RESEARCH_AGENT_PLAN_CONTRIBUTION_DIMENSION_OUT_OF_SCOPE")
         if self.version_snapshot.scope_fingerprint != self.scope.scope_fingerprint:
             raise ValueError("RESEARCH_AGENT_SCOPE_FINGERPRINT_MISMATCH")
         return self
@@ -874,18 +1042,6 @@ class ResearchToolCall(_VersionedContractModel):
         _id(self.run_id, "RESEARCH_AGENT_RUN_ID_INVALID")
         _id(self.tool_call_id, "RESEARCH_AGENT_TOOL_CALL_ID_INVALID")
         return self
-
-
-class ResearchComputeOperation(StrEnum):
-    DIFFERENCE = "difference"
-    GROWTH_RATE = "growth_rate"
-    SHARE = "share"
-    RATIO = "ratio"
-    RANKING = "ranking"
-    TOPN_OTHER = "topn_other"
-    CONTRIBUTION = "contribution"
-    MERGE = "merge"
-    RECONCILIATION = "reconciliation"
 
 
 class ResearchComputeRequest(_VersionedContractModel):
@@ -1689,6 +1845,8 @@ __all__ = [
     "ResearchEvidenceRequirement",
     "ResearchEvidenceStatistics",
     "ResearchEvidenceValueRef",
+    "ResearchInitialPlan",
+    "ResearchInitialPlanNode",
     "ResearchImmutableFilter",
     "ResearchFinishRequest",
     "ResearchHierarchy",
