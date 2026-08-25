@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from threading import Lock
 from time import sleep
 from types import SimpleNamespace
@@ -350,7 +351,12 @@ def test_plan_query_batch_executes_tasks_in_parallel() -> None:
     pipeline._query_concurrency = 2
     pipeline._query_timeout_seconds = 10.0
     state = SimpleNamespace(
-        context=SimpleNamespace(datasource_id=1, oid=1, user_id=1),
+        context=SimpleNamespace(
+            datasource_id=1,
+            oid=1,
+            user_id=1,
+            execution_id="agent:parallel-test",
+        ),
         cancellation=NeverCancelled(),
         budget=BudgetGuard(timeout_seconds=10),
     )
@@ -436,6 +442,32 @@ def test_query_task_executor_uses_independent_session_and_call_context() -> None
     assert call_ids == ["plan-query:query-a:1", "plan-query:query-b:1"]
 
 
+def test_query_task_executor_rejects_expired_deadline_before_opening_session() -> None:
+    """查询截止时间已过期时，不应创建 Session 或调用数据源。"""
+
+    executor = QueryTaskExecutor(
+        lambda: pytest.fail("过期查询不应创建 Session"),
+        lambda _session: pytest.fail("过期查询不应创建查询服务"),
+    )
+    result = executor.execute(
+        QueryTaskExecutionRequest(
+            task_id="query-timeout",
+            attempt=1,
+            sql="SELECT 1",
+            datasource_id=1,
+            workspace_id=1,
+            user_id=1,
+            selected_tables=("orders",),
+            deadline_monotonic=time.monotonic() - 1,
+            cancellation=NeverCancelled(),
+            idempotency_key="plan-query:timeout",
+        )
+    )
+
+    assert result.status is QueryTaskExecutionStatus.CANCELLED
+    assert result.error_code == "query_timeout"
+
+
 def test_plan_failed_dependency_is_skipped_after_parallel_batch() -> None:
     """一个查询失败后，无依赖的同批查询仍成功，下游计算明确标记为跳过。"""
 
@@ -464,7 +496,7 @@ def test_plan_failed_dependency_is_skipped_after_parallel_batch() -> None:
         compute_finished=lambda *_args: "compute-finished",
     )
     pipeline._persist_state = lambda _state: None
-    pipeline._run_query_batch = lambda *_args: {
+    pipeline._run_query_batch = lambda *_args, **_kwargs: {
         "query-a": QueryTaskExecutionResult(
             task_id="query-a",
             attempt=1,

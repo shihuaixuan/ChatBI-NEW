@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Generator, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, cast
@@ -476,7 +476,12 @@ class AnalysisExecutionService:
                     query_tasks.append(executable_task)
                 else:
                     compute_tasks.append(executable_task)
-            query_results = self._run_query_batch(state, query_tasks, task_states)
+            query_results = self._run_query_batch(
+                state,
+                query_tasks,
+                task_states,
+                plan_id=plan.id,
+            )
             compute_results = self._run_compute_batch(state, plan.id, compute_tasks)
 
             for task_id in executable_ids:
@@ -520,10 +525,15 @@ class AnalysisExecutionService:
                 else:
                     computed = compute_results[task_id]
                     if isinstance(computed, ComputeEngineError):
+                        compute_status = (
+                            AnalysisTaskExecutionStatus.CANCELLED
+                            if computed.code in {"COMPUTE_CANCELLED", "COMPUTE_TIMEOUT"}
+                            else AnalysisTaskExecutionStatus.FAILED
+                        )
                         self._set_task_state(
                             task_states,
                             task_id,
-                            AnalysisTaskExecutionStatus.FAILED,
+                            compute_status,
                             error_code=computed.code,
                             message=str(computed),
                         )
@@ -533,7 +543,7 @@ class AnalysisExecutionService:
                                 state,
                                 plan.id,
                                 task_id,
-                                AnalysisTaskExecutionStatus.FAILED,
+                                compute_status,
                                 batch_index=batch_index,
                                 error_code=computed.code,
                             ),
@@ -614,6 +624,8 @@ class AnalysisExecutionService:
         state: AgentRuntimeState,
         tasks: list[QueryTask],
         task_states: dict[str, dict[str, Any]],
+        *,
+        plan_id: str | None = None,
     ) -> dict[str, QueryTaskExecutionResult]:
         if not tasks:
             return {}
@@ -632,6 +644,7 @@ class AnalysisExecutionService:
             raise PlanPipelineError("PLAN_QUERY_OWNERSHIP_REQUIRED")
         if not isinstance(user_id, int) or isinstance(user_id, bool):
             raise PlanPipelineError("PLAN_QUERY_OWNERSHIP_REQUIRED")
+        effective_plan_id = plan_id or "unknown-plan"
         deadline = time.monotonic() + min(
             self._query_timeout_seconds,
             state.budget.remaining_seconds(),
@@ -652,21 +665,69 @@ class AnalysisExecutionService:
                     selected_tables=compiled.tables,
                     deadline_monotonic=deadline,
                     cancellation=state.cancellation,
+                    idempotency_key=(
+                        f"plan-query:{self._required_execution_id(state)}:"
+                        f"{effective_plan_id}:{task.id}:"
+                        f"{int(task_states[task.id]['attempt'])}"
+                    ),
                 )
             )
         results: dict[str, QueryTaskExecutionResult] = {}
-        with ThreadPoolExecutor(
+        pool = ThreadPoolExecutor(
             max_workers=min(self._query_concurrency, len(requests)),
             thread_name_prefix="chatbi-plan-query",
-        ) as pool:
-            futures = [
-                pool.submit(self._query_task_executor.execute, item)
-                for item in requests
-            ]
-            for request, future in zip(requests, futures, strict=True):
-                # QueryTaskExecutor 已将可预期的数据源失败编码为结果；未知程序异常
-                # 必须继续抛出，不能伪装成可重试的查询失败。
-                results[request.task_id] = future.result()
+        )
+        future_requests = {
+            pool.submit(self._query_task_executor.execute, request): request
+            for request in requests
+        }
+        pending = set(future_requests)
+        try:
+            while pending:
+                if state.cancellation.is_cancelled():
+                    break
+                remaining = max(deadline - time.monotonic(), 0.0)
+                if remaining <= 0:
+                    break
+                completed, pending = wait(
+                    pending,
+                    timeout=min(remaining, 0.05),
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in completed:
+                    request = future_requests[future]
+                    # QueryTaskExecutor 已将可预期的数据源失败编码为结果；未知程序异常
+                    # 必须继续抛出，不能伪装成可重试的查询失败。
+                    results[request.task_id] = future.result()
+            # 取消或超时与轮询交错时，先收取已经完成的任务，避免误报为取消。
+            if pending:
+                completed, pending = wait(
+                    pending,
+                    timeout=0,
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in completed:
+                    request = future_requests[future]
+                    results[request.task_id] = future.result()
+            if pending:
+                cancelled = state.cancellation.is_cancelled()
+                for future in pending:
+                    future.cancel()
+                    request = future_requests[future]
+                    results[request.task_id] = QueryTaskExecutionResult(
+                        task_id=request.task_id,
+                        attempt=request.attempt,
+                        status=QueryTaskExecutionStatus.CANCELLED,
+                        error_code=("query_cancelled" if cancelled else "query_timeout"),
+                        message=(
+                            "计划批次收到取消请求，结果未合并"
+                            if cancelled
+                            else "计划查询超过批次截止时间，结果未合并"
+                        ),
+                    )
+        finally:
+            # 运行中的数据源调用通过独立截止时间自行退出；主线程不再等待它们。
+            pool.shutdown(wait=not pending, cancel_futures=True)
         return results
 
     def _run_compute_batch(
@@ -681,24 +742,74 @@ class AnalysisExecutionService:
             raise PlanPipelineError("PLAN_COMPUTE_DISABLED")
         if self._compute_engine is None:
             raise PlanPipelineError("PLAN_COMPUTE_ENGINE_REQUIRED")
+        deadline = time.monotonic() + min(
+            self._query_timeout_seconds,
+            state.budget.remaining_seconds(),
+        )
+        now = time.monotonic()
+        if state.cancellation.is_cancelled() or now >= deadline:
+            error_code = (
+                "COMPUTE_TIMEOUT"
+                if now >= deadline
+                else "COMPUTE_CANCELLED"
+            )
+            return {task.id: ComputeEngineError(error_code) for task in tasks}
         prepared = {
             task.id: self._load_compute_inputs(state, plan_id, task) for task in tasks
         }
         results: dict[str, ComputeExecution | ComputeEngineError] = {}
-        with ThreadPoolExecutor(
+        pool = ThreadPoolExecutor(
             max_workers=min(self._query_concurrency, len(tasks)),
             thread_name_prefix="chatbi-plan-compute",
-        ) as pool:
-            futures = [
-                pool.submit(self._compute_engine.execute, task, prepared[task.id])
-                for task in tasks
-            ]
-            for task, future in zip(tasks, futures, strict=True):
-                # 计算引擎只声明 ComputeEngineError 为业务失败；未知异常不能吞掉。
-                try:
-                    results[task.id] = future.result()
-                except ComputeEngineError as exc:
-                    results[task.id] = exc
+        )
+        future_tasks = {
+            pool.submit(self._compute_engine.execute, task, prepared[task.id]): task
+            for task in tasks
+        }
+        pending = set(future_tasks)
+        try:
+            while pending:
+                if state.cancellation.is_cancelled():
+                    break
+                remaining = max(deadline - time.monotonic(), 0.0)
+                if remaining <= 0:
+                    break
+                completed, pending = wait(
+                    pending,
+                    timeout=min(remaining, 0.05),
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in completed:
+                    task = future_tasks[future]
+                    # 计算引擎只声明 ComputeEngineError 为业务失败；未知异常不能吞掉。
+                    try:
+                        results[task.id] = future.result()
+                    except ComputeEngineError as exc:
+                        results[task.id] = exc
+            # 取消或超时与轮询交错时，先收取已经完成的任务，避免误报为取消。
+            if pending:
+                completed, pending = wait(
+                    pending,
+                    timeout=0,
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in completed:
+                    task = future_tasks[future]
+                    try:
+                        results[task.id] = future.result()
+                    except ComputeEngineError as exc:
+                        results[task.id] = exc
+            if pending:
+                error_code = (
+                    "COMPUTE_CANCELLED"
+                    if state.cancellation.is_cancelled()
+                    else "COMPUTE_TIMEOUT"
+                )
+                for future in pending:
+                    future.cancel()
+                    results[future_tasks[future].id] = ComputeEngineError(error_code)
+        finally:
+            pool.shutdown(wait=not pending, cancel_futures=True)
         return results
 
     def _load_compute_inputs(
@@ -758,6 +869,10 @@ class AnalysisExecutionService:
             attempt=result.attempt,
             source_sql=data.sql,
             semantic_refs=self._semantic_refs(state),
+            idempotency_key=(
+                f"plan-query:{self._required_execution_id(state)}:"
+                f"{plan_id}:{task.id}:{result.attempt}"
+            ),
         )
         self._merge_result_ref(state, result_ref)
         self._register_query_evidence(
@@ -813,6 +928,10 @@ class AnalysisExecutionService:
             row_count=computed.row_count,
             attempt=attempt,
             source_sql=computed.sql,
+            idempotency_key=(
+                f"plan-compute:{self._required_execution_id(state)}:"
+                f"{plan_id}:{task.id}:{attempt}"
+            ),
         )
         self._merge_result_ref(state, result_ref)
         self._register_compute_evidence(

@@ -549,6 +549,7 @@ class FastPipeline:
             ],
             row_count=int(execution.get("row_count") or 0),
             source_sql=str(execution.get("sql") or "") or None,
+            idempotency_key=f"fast-assisted:{self._required_execution_id(state)}",
         )
         execution["result_set_id"] = result_ref.result_set_id
         execution["artifact_ref"] = result_ref.artifact_ref.model_dump(mode="json")

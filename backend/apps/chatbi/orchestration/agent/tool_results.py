@@ -352,6 +352,9 @@ class ChatBIToolResultProcessor:
                 row_count=payload.get("row_count") or 0,
                 source_sql=str(payload.get("sql") or "") or None,
                 semantic_refs=self._semantic_refs(context),
+                idempotency_key=(
+                    f"execute-sql:{context.execution_id}:{plan_id}:{node_id}"
+                ),
             )
         except ResultArtifactWriteError:
             return self._artifact_failure("sql_result_artifact_write_failed")

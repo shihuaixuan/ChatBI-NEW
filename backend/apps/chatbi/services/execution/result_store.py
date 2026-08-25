@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from decimal import Decimal
+from threading import RLock
 from typing import Any, Protocol
 
 from apps.chatbi.models.dto.analysis_plan import (
@@ -39,6 +42,8 @@ class ResultStore:
 
     def __init__(self, artifact_service: ResultArtifactStore) -> None:
         self._artifact_service = artifact_service
+        self._write_lock = RLock()
+        self._idempotent_refs: dict[tuple[str, str], tuple[str, ResultSetRef]] = {}
 
     def register(
         self,
@@ -56,60 +61,90 @@ class ResultStore:
         attempt: int = 1,
         source_sql: str | None = None,
         semantic_refs: list[dict[str, Any]] | None = None,
+        idempotency_key: str | None = None,
     ) -> ResultSetRef:
         if attempt <= 0:
             raise ValueError("RESULT_SET_ATTEMPT_INVALID")
+        if idempotency_key is not None and not idempotency_key.strip():
+            raise ValueError("RESULT_SET_IDEMPOTENCY_KEY_INVALID")
         result_set_id = build_result_set_id(plan_id, node_id)
         normalized_fields = [str(field) for field in fields]
         json_rows = [_json_row(row) for row in rows]
         normalized_semantic_refs = list(semantic_refs or [])
-        created_at = datetime.now()
-        # 命名结果集与旧结果统一经过同一个 result_artifact_service.save 网关。
-        result_artifact_service = self._artifact_service
-        artifact_ref = result_artifact_service.save(
-            ResultArtifactWriteData(
-                execution_id=execution_id,
-                execution_type=execution_type,
-                chat_id=chat_id,
-                record_id=record_id,
-                kind=self.ARTIFACT_KIND,
-                payload={
-                    "result_set_id": result_set_id,
-                    # 旧消费者仍可通过 query_id 识别单查询结果。
-                    "query_id": node_id,
-                    "fields": normalized_fields,
-                    "rows": json_rows,
-                    "row_count": row_count,
-                    "attempt": attempt,
-                },
-                metadata={
-                    "result_set_id": result_set_id,
-                    "plan_id": plan_id,
-                    "node_id": node_id,
-                    "query_id": node_id,
-                    "result_kind": kind.value,
-                    "row_count": row_count,
-                    "attempt": attempt,
-                    "source_sql": source_sql,
-                    "semantic_refs": normalized_semantic_refs,
-                    "created_at": created_at.isoformat(),
-                    "numeric_stats": _numeric_stats(rows),
-                },
-            )
-        )
-        return ResultSetRef(
+        fingerprint = _registration_fingerprint(
             result_set_id=result_set_id,
-            plan_id=plan_id,
-            node_id=node_id,
             kind=kind,
-            artifact_ref=artifact_ref,
-            fields=tuple(normalized_fields),
+            fields=normalized_fields,
+            rows=json_rows,
             row_count=row_count,
             attempt=attempt,
             source_sql=source_sql,
-            semantic_refs=tuple(normalized_semantic_refs),
-            created_at=created_at,
+            semantic_refs=normalized_semantic_refs,
         )
+        cache_key = (execution_id, idempotency_key) if idempotency_key else None
+        created_at = datetime.now()
+        with self._write_lock:
+            if cache_key is not None:
+                cached = self._idempotent_refs.get(cache_key)
+                if cached is not None:
+                    cached_fingerprint, cached_ref = cached
+                    if cached_fingerprint != fingerprint:
+                        raise ValueError("RESULT_SET_IDEMPOTENCY_CONFLICT")
+                    return cached_ref
+            # 命名结果集与旧结果统一经过同一个 result_artifact_service.save 网关。
+            result_artifact_service = self._artifact_service
+            artifact_ref = result_artifact_service.save(
+                ResultArtifactWriteData(
+                    execution_id=execution_id,
+                    execution_type=execution_type,
+                    chat_id=chat_id,
+                    record_id=record_id,
+                    kind=self.ARTIFACT_KIND,
+                    payload={
+                        "result_set_id": result_set_id,
+                        # 旧消费者仍可通过 query_id 识别单查询结果。
+                        "query_id": node_id,
+                        "fields": normalized_fields,
+                        "rows": json_rows,
+                        "row_count": row_count,
+                        "attempt": attempt,
+                    },
+                    metadata={
+                        "result_set_id": result_set_id,
+                        "plan_id": plan_id,
+                        "node_id": node_id,
+                        "query_id": node_id,
+                        "result_kind": kind.value,
+                        "row_count": row_count,
+                        "attempt": attempt,
+                        "source_sql": source_sql,
+                        "semantic_refs": normalized_semantic_refs,
+                        "created_at": created_at.isoformat(),
+                        "numeric_stats": _numeric_stats(rows),
+                        **(
+                            {"idempotency_key": idempotency_key}
+                            if idempotency_key
+                            else {}
+                        ),
+                    },
+                )
+            )
+            ref = ResultSetRef(
+                result_set_id=result_set_id,
+                plan_id=plan_id,
+                node_id=node_id,
+                kind=kind,
+                artifact_ref=artifact_ref,
+                fields=tuple(normalized_fields),
+                row_count=row_count,
+                attempt=attempt,
+                source_sql=source_sql,
+                semantic_refs=tuple(normalized_semantic_refs),
+                created_at=created_at,
+            )
+            if cache_key is not None:
+                self._idempotent_refs[cache_key] = (fingerprint, ref)
+            return ref
 
     def read(
         self,
@@ -197,6 +232,33 @@ def _numeric_stats(rows: list[dict[str, Any]]) -> dict[str, dict[str, int | floa
         for field, values in numeric_values.items()
         if values
     }
+
+
+def _registration_fingerprint(
+    *,
+    result_set_id: str,
+    kind: ResultSetKind,
+    fields: list[str],
+    rows: list[dict[str, Any]],
+    row_count: int,
+    attempt: int,
+    source_sql: str | None,
+    semantic_refs: list[dict[str, Any]],
+) -> str:
+    """为同一幂等键校验请求内容是否一致。"""
+
+    payload = {
+        "result_set_id": result_set_id,
+        "kind": kind.value,
+        "fields": fields,
+        "rows": rows,
+        "row_count": row_count,
+        "attempt": attempt,
+        "source_sql": source_sql,
+        "semantic_refs": semantic_refs,
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _json_number(value: Decimal) -> str:

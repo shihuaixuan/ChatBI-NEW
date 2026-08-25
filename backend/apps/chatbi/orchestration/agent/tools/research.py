@@ -1353,6 +1353,7 @@ class ComputeEvidenceTool(
                 rows=rows,
                 row_count=len(rows),
                 source_sql=sql,
+                idempotency_key=f"research-compute:{ctx.run_id}:{fingerprint}",
             )
         except (ResultArtifactWriteError, ValueError) as exc:
             raise _fail(

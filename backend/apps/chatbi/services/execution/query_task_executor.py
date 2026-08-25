@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -40,6 +41,21 @@ class QueryTaskExecutionRequest:
     selected_tables: tuple[str, ...]
     deadline_monotonic: float | None
     cancellation: CancellationSignal
+    idempotency_key: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class _TaskCancellationSignal:
+    """把 Run 取消和当前任务的截止时间合并成一个线程安全信号。"""
+
+    parent: CancellationSignal
+    deadline_monotonic: float | None
+
+    def is_cancelled(self) -> bool:
+        return self.parent.is_cancelled() or (
+            self.deadline_monotonic is not None
+            and time.monotonic() >= self.deadline_monotonic
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,21 +80,36 @@ class QueryTaskExecutor:
         self._query_service_factory = query_service_factory
 
     def execute(self, request: QueryTaskExecutionRequest) -> QueryTaskExecutionResult:
-        if request.cancellation.is_cancelled():
+        cancellation = _TaskCancellationSignal(
+            request.cancellation,
+            request.deadline_monotonic,
+        )
+        if cancellation.is_cancelled():
             return QueryTaskExecutionResult(
                 task_id=request.task_id,
                 attempt=request.attempt,
                 status=QueryTaskExecutionStatus.CANCELLED,
-                error_code="query_cancelled",
-                message="查询开始前收到取消请求",
+                error_code=(
+                    "query_timeout"
+                    if _deadline_exceeded(request.deadline_monotonic)
+                    else "query_cancelled"
+                ),
+                message=(
+                    "查询开始前已超过任务截止时间"
+                    if _deadline_exceeded(request.deadline_monotonic)
+                    else "查询开始前收到取消请求"
+                ),
             )
         # Session 生命周期严格限制在工作线程内，不能传回主线程复用。
         with self._session_factory() as session:
             service = self._query_service_factory(session)
             call_context = ToolCallContext(
-                tool_call_id=f"plan-query:{request.task_id}:{request.attempt}",
+                tool_call_id=(
+                    request.idempotency_key
+                    or f"plan-query:{request.task_id}:{request.attempt}"
+                ),
                 deadline_monotonic=request.deadline_monotonic,
-                cancellation=request.cancellation,
+                cancellation=cancellation,
             )
             with bind_tool_call_context(call_context):
                 result = service.execute(
@@ -93,13 +124,21 @@ class QueryTaskExecutor:
                         deadline_monotonic=request.deadline_monotonic,
                     )
                 )
-        if request.cancellation.is_cancelled():
+        if cancellation.is_cancelled():
             return QueryTaskExecutionResult(
                 task_id=request.task_id,
                 attempt=request.attempt,
                 status=QueryTaskExecutionStatus.CANCELLED,
-                error_code="query_cancelled",
-                message="查询完成时收到取消请求，结果未合并",
+                error_code=(
+                    "query_timeout"
+                    if _deadline_exceeded(request.deadline_monotonic)
+                    else "query_cancelled"
+                ),
+                message=(
+                    "查询完成时已超过任务截止时间，结果未合并"
+                    if _deadline_exceeded(request.deadline_monotonic)
+                    else "查询完成时收到取消请求，结果未合并"
+                ),
             )
         if result.status is not DatasourceQueryStatus.SUCCEEDED or result.data is None:
             return QueryTaskExecutionResult(
@@ -115,6 +154,12 @@ class QueryTaskExecutor:
             status=QueryTaskExecutionStatus.SUCCEEDED,
             data=result.data,
         )
+
+
+def _deadline_exceeded(deadline_monotonic: float | None) -> bool:
+    """判断任务取消是否由截止时间触发。"""
+
+    return deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
 
 
 __all__ = [
