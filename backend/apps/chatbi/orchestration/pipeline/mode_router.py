@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from apps.chatbi.errors import (
@@ -17,6 +17,7 @@ from apps.chatbi.models.dto.execution_requirement import (
 )
 from apps.chatbi.models.dto.research_agent import ResearchBudget
 from apps.chatbi.models.dto.semantic_parse import (
+    SemanticParseAssetRef,
     SemanticParseOutput,
     SemanticParseTimeFilter,
 )
@@ -84,11 +85,6 @@ class ModeRouter:
             and semantic_parse.multi_step.type == "dynamic_research"
             else None
         )
-        if (
-            dynamic_research is not None
-            and AgentExecutionMode.RESEARCH.value not in enabled
-        ):
-            raise ModeRoutingError("EXECUTION_MODE_NOT_AVAILABLE:research")
         selected_refs = _selected_refs(semantic_parse)
         candidates = self._resolve_candidates(request, schema, set(selected_refs))
         missing_refs = sorted(set(selected_refs) - set(candidates))
@@ -96,7 +92,13 @@ class ModeRouter:
             raise ModeRoutingError(
                 "SEMANTIC_PARSE_CANDIDATE_NOT_FOUND:" + ",".join(missing_refs)
             )
-        if dynamic_research is not None:
+        complete_dynamic_parse = _complete_dynamic_plan_parse(
+            semantic_parse,
+            candidates,
+        )
+        if dynamic_research is not None and complete_dynamic_parse is None:
+            if AgentExecutionMode.RESEARCH.value not in enabled:
+                raise ModeRoutingError("EXECUTION_MODE_NOT_AVAILABLE:research")
             try:
                 research_requirement = freeze_research_requirement(
                     semantic_parse=semantic_parse,
@@ -192,8 +194,15 @@ class ModeRouter:
                 research_requirement=research_requirement.model_dump(mode="json"),
             ).model_dump(mode="json")
 
+        # 动态语义只有在结构化输入不足以证明固定拓扑时才保留 Research。
+        # 已经明确的驱动指标和分析维度先进入普通执行需求，再由执行节点结构
+        # 判断 Fast 或 Plan，避免把“需要验证主要原因”误当成动态路由依据。
+        if complete_dynamic_parse is not None:
+            request = replace(request, semantic_parse=complete_dynamic_parse)
         execution = self._build_execution_requirements(request, schema, candidates)
         mode, reasons = self._select_mode(execution)
+        if dynamic_research is not None:
+            reasons = ["complete_initial_plan", *reasons]
         if mode.value not in enabled:
             raise ModeRoutingError(f"EXECUTION_MODE_NOT_AVAILABLE:{mode.value}")
 
@@ -478,6 +487,73 @@ def _selected_refs(semantic_parse: SemanticParseOutput) -> list[str]:
         refs.extend(multi_step.required_dimension_refs)
         refs.extend(multi_step.required_driver_metric_refs)
     return list(dict.fromkeys(refs))
+
+
+def _complete_dynamic_plan_parse(
+    semantic_parse: SemanticParseOutput,
+    candidates: dict[str, dict[str, Any]],
+) -> SemanticParseOutput | None:
+    """把已声明完整拓扑的动态语义投影为固定执行语义。"""
+
+    dynamic = semantic_parse.multi_step
+    if dynamic is None or dynamic.type != "dynamic_research":
+        return None
+    # 这些原因明确表示后续节点类型或停止条件依赖结果，当前路由器不能
+    # 在没有 AnalysisPlan 证明的情况下把它们降级为固定计划。
+    if dynamic.reason.value in {
+        "result_driven_filter",
+        "result_driven_dimension",
+        "data_driven_stop_condition",
+    }:
+        return None
+
+    metric_refs = list(dict.fromkeys(
+        [item.ref for item in semantic_parse.measures]
+        + list(dynamic.required_driver_metric_refs)
+    ))
+    dimension_refs = list(dict.fromkeys(
+        [item.ref for item in semantic_parse.group_by]
+        + list(dynamic.required_dimension_refs)
+    ))
+    if (
+        not metric_refs
+        or not dynamic.required_driver_metric_refs
+        or not dimension_refs
+    ):
+        return None
+    if any(
+        ref not in candidates
+        or candidates[ref].get("asset_type") != "METRIC"
+        for ref in metric_refs
+    ):
+        raise ModeRoutingError("SEMANTIC_FIXED_PLAN_METRIC_BINDING_REQUIRED")
+    if any(
+        ref not in candidates
+        or candidates[ref].get("asset_type") != "DIMENSION"
+        for ref in dimension_refs
+    ):
+        raise ModeRoutingError("SEMANTIC_FIXED_PLAN_DIMENSION_BINDING_REQUIRED")
+    model_ids = {
+        candidates[ref].get("model_id")
+        for ref in (*metric_refs, *dimension_refs)
+    }
+    if len(model_ids) != 1 or None in model_ids:
+        return None
+
+    # 只保留已绑定资产和原有结构化计算，动态目标文本不会进入执行器。
+    return semantic_parse.model_copy(
+        update={
+            "measures": [
+                SemanticParseAssetRef(ref=ref)
+                for ref in metric_refs
+            ],
+            "group_by": [
+                SemanticParseAssetRef(ref=ref)
+                for ref in dimension_refs
+            ],
+            "multi_step": None,
+        }
+    )
 
 
 @dataclass(frozen=True, slots=True)

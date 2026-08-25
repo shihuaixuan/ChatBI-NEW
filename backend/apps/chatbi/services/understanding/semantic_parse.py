@@ -452,15 +452,17 @@ calculations 中平铺多个互相没有输入关系的计算。
     "requested_outputs": ["差值Top3和其他汇总"]
   }
 }
-如果需要根据中间结果选择最大、最差、异常对象后继续查询，必须输出
-dynamic_research，不得伪装成固定多步。
-判断目标变化主要由哪个驱动因素导致（例如“主要由销售订单数减少还是主要由客单价下降
-导致，请验证”）属于验证方向依赖证据：哪个驱动因素是主因必须用数据验证后才能确定，
-必须输出 dynamic_research（reason=open_ended_cause），不得把这类验证问题降级为普通
-比较计算或 limited_multistep。
-开放式原因探索（例如“找出主要原因”“原因是什么”“哪些对象导致下降”）没有唯一预先
-确定的归因维度或验证路径，必须输出 dynamic_research（reason=open_ended_cause）；
-只有用户已经明确指定唯一归因维度和对比期时才允许 fixed_attribution。
+如果下一节点的类型或筛选对象无法在执行前确定，必须输出 dynamic_research。
+如果只是选择固定的 Top N、固定的下钻维度，且完整 DAG 可以在执行前声明，仍应
+输出 fixed_drilldown、limited_multistep 或普通 calculations。
+判断目标变化主要由哪个驱动因素导致时，如果驱动指标集合或后续分析维度尚未明确，
+属于验证方向依赖证据，必须输出 dynamic_research（reason=open_ended_cause）；如果用户
+已经列出全部待验证驱动指标、分析维度和时间口径，则保留这些结构化绑定，交由计划
+完整性判断是否可以固定执行。
+开放式原因探索只有在归因维度、驱动指标或后续节点类型无法在执行前确定时才输出
+dynamic_research（reason=open_ended_cause）。如果用户已经明确指定需要验证的驱动指标、
+分析维度和时间口径，且完整 DAG 可以声明，应保留这些结构化字段供计划完整性判断，
+不能仅因为出现“原因”“导致”等措辞进入 Research。
 dynamic_research 只表示后续查询方向依赖中间结果。如果当前指标和维度已经由候选唯一
 确定，status 仍然返回 resolved，measures 和 group_by 保留这些 ref，unresolved 返回 []。
 用户明确指定的分析维度和驱动指标必须写入 dynamic_research.required_*；
