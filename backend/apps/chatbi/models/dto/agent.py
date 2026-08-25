@@ -46,7 +46,7 @@ AgentStreamRequest = Annotated[
 
 
 class AgentConfig(BaseModel):
-    enabled: bool = False
+    enabled: bool = True
     datasource_allowlist: list[int] = Field(default_factory=list)
     max_steps: int = 12
     max_sql_retries: int = 2
@@ -59,13 +59,13 @@ class AgentConfig(BaseModel):
     summary_max_chars: int = 4000
     history_rounds: int = 3
     context_fold_chars: int = 30000
-    # 默认只启用 P1 的确定性 FAST/PLAN 管道，避免新请求回退到 ReAct。
-    execution_modes: tuple[str, ...] = ("fast", "plan")
+    # 阶段 8 后默认开放三条正式执行路径，Research 只使用新 Agent 引擎。
+    execution_modes: tuple[str, ...] = ("fast", "plan", "research")
     plan_max_query_tasks: int = Field(default=5, gt=0)
     plan_query_concurrency: int = Field(default=4, gt=0)
     # Research 预算（阶段 8 起新契约 Harness 是唯一引擎；shadow 切流配置
     # 与 max_actions_per_iteration 随旧 Action 架构删除）。
-    research_max_iterations: int = Field(default=6, gt=0, le=20)
+    research_max_iterations: int = Field(default=8, gt=0, le=20)
     research_max_queries: int = Field(default=8, gt=0, le=50)
     research_max_model_calls: int = Field(default=8, gt=1, le=50)
     # Harness 连续无新方向轮数的服务端停止阈值（§9.3.5.7）。

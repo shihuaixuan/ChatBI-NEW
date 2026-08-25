@@ -420,7 +420,13 @@ SEMANTIC_PARSE_SYSTEM_PROMPT = """
     "reason": "result_driven_filter | result_driven_dimension | open_ended_cause | data_driven_stop_condition",
     "required_dimension_refs": ["用户明确要求必须分析或下钻的 DIMENSION ref"],
     "required_driver_metric_refs": ["用户明确要求必须验证的驱动 METRIC ref"],
-    "required_actions": ["breakdown | drilldown | contribution | validate_hypothesis"]
+    "premise_to_verify": {
+      "premise_type": "metric_change | metric_anomaly | user_assertion",
+      "metric_ref": "待验证前提对应的 METRIC ref",
+      "expected_direction": "increase | decrease | stable | unknown",
+      "time_roles": ["current | previous | single"],
+      "statement": "用户陈述的待验证事实"
+    }
   },
   "unresolved": [{"type": "...", "text": "...", "reason": "...", "candidate_refs": []}]
 }
@@ -457,15 +463,14 @@ dynamic_research，不得伪装成固定多步。
 只有用户已经明确指定唯一归因维度和对比期时才允许 fixed_attribution。
 dynamic_research 只表示后续查询方向依赖中间结果。如果当前指标和维度已经由候选唯一
 确定，status 仍然返回 resolved，measures 和 group_by 保留这些 ref，unresolved 返回 []。
-用户明确指定的分析维度、驱动指标和动作必须同时写入 dynamic_research.required_*；
-例如“同时从商家和档口分析”保留两个 required_dimension_refs，“下钻”写入 drilldown，
-“计算贡献”写入 contribution，“分别验证订单数和客单价”保留两个驱动 ref 并写入
-validate_hypothesis。required_* 只能引用候选资产，不能把允许探索的全部 Scope 写进去。
-required_actions 只记录用户明确要求的动作，不能把策略后续可能选择的动作写进去：
-“从两个维度分析”只要求 breakdown，不等于 drilldown 或 contribution；“找出原因”也不等于
-用户明确要求贡献度。用户明确要求 contribution 时，calculations 中还必须同时包含一条
+用户明确指定的分析维度和驱动指标必须写入 dynamic_research.required_*；
+例如“同时从商家和档口分析”保留两个 required_dimension_refs，“分别验证订单数和客单价”
+保留两个 required_driver_metric_refs。required_* 只能引用候选资产，不能把允许探索的全部
+Scope 写进去。用户明确要求 contribution 时，calculations 中还必须同时包含一条
 type=contribution，且贡献维度必须保留在 group_by 或 dynamic_research.required_dimension_refs；
 服务端只把该结构化计算要求视为必须完成的贡献度目标。
+用户陈述“某指标已经上升/下降/异常”等待验证事实时，必须填写 premise_to_verify；开放式探索
+没有待验证事实时必须为 null，不能为了触发固定比较而虚构前提。
 用户只说“深入分析”不能单独触发 dynamic_research。如果全部查询、计算和依赖在执行前
 可以确定，仍应使用普通 calculations、fixed_drilldown、fixed_attribution 或
 limited_multistep。只有筛选值、分析对象、维度、验证方向或停止条件必须依赖中间结果时，

@@ -105,14 +105,28 @@ class QuestionRewriteOutput(BaseModel):
 
     @model_validator(mode="after")
     def validate_phrase_boundaries(self) -> QuestionRewriteOutput:
+        """只保留可由重写问题直接溯源的检索短语。
+
+        指标、维度短语只是语义资产召回提示，不是问题重写的主体。模型偶尔会在
+        改写问题后继续输出改写前的同义短语；此时应丢弃无法溯源的提示，而不是
+        让完整且可执行的 rewrite_question 整体失败。
+        """
+
         seen: set[str] = set()
-        for phrase in [*self.metric_phrases, *self.dimension_phrases]:
+        for phrase in [
+            *[item for item in self.metric_phrases if item in self.rewrite_question],
+            *[item for item in self.dimension_phrases if item in self.rewrite_question],
+        ]:
             key = phrase.casefold()
             if key in seen:
                 raise ValueError("指标短语和维度短语不能重复")
             seen.add(key)
-            if phrase not in self.rewrite_question:
-                raise ValueError("检索短语必须来自 rewrite_question")
+        self.metric_phrases = [
+            phrase for phrase in self.metric_phrases if phrase in self.rewrite_question
+        ]
+        self.dimension_phrases = [
+            phrase for phrase in self.dimension_phrases if phrase in self.rewrite_question
+        ]
         return self
 
 

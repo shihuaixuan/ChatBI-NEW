@@ -74,6 +74,13 @@ def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
         f"6. {premise_line}\n"
         "7. 你可以调整维度、排序、限制、拆分方式和 Scope 内驱动指标；"
         "不能修改目标指标、时间绑定、不可变筛选或冻结版本。\n"
+        "8. 报告只能写证据样本或确定性计算证据中已经存在的数字；没有 "
+        "growth_rate/share/contribution 证据时，不得自行换算百分比。\n"
+        "9. claim_level=contribution 和因果措辞只能引用 contribution 或 "
+        "reconciliation 证据；普通比较证据使用 common_change 或 "
+        "correlation_clue，并明确为共同变化或相关线索。\n"
+        "10. evidence ID 和资产 ref 只放在结构化引用字段中，不要写进 "
+        "summary、finding 或 claim 的正文。\n"
         "</protocol>\n"
         + (f"\n<available-hierarchies>\n{hierarchy_lines}\n</available-hierarchies>\n" if hierarchy_lines else "")
     )
@@ -107,6 +114,8 @@ def project_research_working_state(
             "message": (item.message or "")[:300],
             "suggested_corrections": list(item.suggested_corrections)[:3],
             "retryable": item.retryable,
+            "parameter_retryable": item.parameter_retryable,
+            "same_parameter_retryable": item.same_parameter_retryable,
         }
         for item in observations
         if item.status is not ToolObservationStatus.SUCCEEDED
@@ -187,6 +196,7 @@ def build_premise_query_args(
         "dimensions": (),
         "time_ranges": premise.time_roles,
         "analysis": "compare",
+        "comparison": "difference",
         "purpose": f"前提确认：{statement}"[:1000],
     }
 
@@ -217,19 +227,43 @@ def _observed_direction(metric_ref: str, evidence: ResearchEvidence | None) -> s
         if column.asset_ref == metric_ref and column.result_field:
             if column.value_role in ("current", "previous"):
                 fields[column.value_role] = column.result_field
-    if not {"current", "previous"} <= fields.keys() or not evidence.sample_rows:
-        return "unknown"
-    row = evidence.sample_rows[0]
-    try:
-        current = float(row[fields["current"]])
-        previous = float(row[fields["previous"]])
-    except (KeyError, TypeError, ValueError):
-        return "unknown"
-    if current > previous:
-        return ResearchDirection.INCREASE.value
-    if current < previous:
-        return ResearchDirection.DECREASE.value
-    return ResearchDirection.STABLE.value
+    if evidence.sample_rows and {"current", "previous"} <= fields.keys():
+        row = evidence.sample_rows[0]
+        try:
+            current = float(row[fields["current"]])
+            previous = float(row[fields["previous"]])
+        except (KeyError, TypeError, ValueError):
+            pass
+        else:
+            if current > previous:
+                return ResearchDirection.INCREASE.value
+            if current < previous:
+                return ResearchDirection.DECREASE.value
+            return ResearchDirection.STABLE.value
+
+    # 部分语义执行器只为比较结果发布 difference 映射。前提方向仍可由该
+    # 受治理列确定，不能因为缺少 current/previous 映射而误报 undetermined。
+    difference_field = next(
+        (
+            column.result_field
+            for column in evidence.logical_columns
+            if column.asset_ref == metric_ref
+            and column.value_role == "difference"
+            and column.result_field
+        ),
+        None,
+    )
+    if difference_field and evidence.sample_rows:
+        try:
+            difference = float(evidence.sample_rows[0][difference_field])
+        except (KeyError, TypeError, ValueError):
+            return "unknown"
+        if difference > 0:
+            return ResearchDirection.INCREASE.value
+        if difference < 0:
+            return ResearchDirection.DECREASE.value
+        return ResearchDirection.STABLE.value
+    return "unknown"
 
 
 def _evidence_summary(item: ResearchEvidence) -> dict[str, Any]:

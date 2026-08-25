@@ -467,17 +467,25 @@ class ChatBIToolResultProcessor:
 def _terminal_refusal_answer(result: ToolResult[Any]) -> str | None:
     """把不可重试的语义组合冲突收口为正常拒答。"""
 
-    if result.error_code != "semantic_metric_dimension_incompatible":
+    return semantic_incompatibility_answer(result.error_code)
+
+
+def semantic_incompatibility_answer(error_code: str | None) -> str | None:
+    """把检索期和路由期的指标维度不兼容统一为用户可理解的拒答。"""
+
+    normalized = str(error_code or "").upper()
+    if not normalized.startswith("SEMANTIC_METRIC_DIMENSION_INCOMPATIBLE"):
         return None
     return (
-        "当前问题中的指标和维度不属于同一个可执行语义模型，"
-        "P0 阶段不能安全合并为一条查询。请改用同一业务模型内的指标和维度，"
-        "或将问题拆分后分别查询。"
+        "当前指标不能按所选维度进行查询或贡献度分解，因为已发布的语义契约中"
+        "没有这组指标和维度的可执行关系。请改用该指标已支持的维度，或先在"
+        "语义模型中发布对应的指标维度能力。"
     )
 
 
 __all__ = [
     "ChatBIToolResultProcessor",
+    "semantic_incompatibility_answer",
     "SuggestedDomainEvent",
     "ToolControlAction",
     "ToolResultProjection",

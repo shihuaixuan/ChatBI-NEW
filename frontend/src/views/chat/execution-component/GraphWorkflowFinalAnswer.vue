@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { ChatRecord } from '@/api/chat'
 import MdComponent from '@/views/chat/component/MdComponent.vue'
+import { projectResearchReportAnswer } from '@/views/chat/answer/researchReportProjection'
 
 const props = withDefaults(
   defineProps<{
@@ -16,7 +17,9 @@ const props = withDefaults(
   }
 )
 
-const answer = computed(() => props.record?.chart_answer || props.record?.sql_answer || '')
+const answer = computed(() =>
+  projectResearchReportAnswer(props.record?.chart_answer || props.record?.sql_answer || '')
+)
 </script>
 
 <template>

@@ -32,6 +32,7 @@ from apps.chatbi.models.dto.analysis_plan import (
     ResultSetSnapshot,
 )
 from apps.chatbi.models.dto.research_agent import (
+    RESEARCH_COMPLETION_STATUS_BY_REASON,
     ResearchBudgetUsage,
     ResearchClaim,
     ResearchCompletion,
@@ -42,6 +43,7 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchEvidence,
     ResearchEvidenceDependency,
     ResearchEvidenceStatistics,
+    ResearchEvidenceValueRef,
     ResearchFinishRequest,
     ResearchHypothesisAssessment,
     ResearchLiteralFilter,
@@ -119,9 +121,15 @@ class QuerySemanticDataArgs(_ToolArgsModel):
     dimensions: tuple[str, ...] = ()
     time_ranges: tuple[ResearchTimeRole, ...] = Field(min_length=1)
     filters: tuple[ResearchLiteralFilter, ...] = ()
+    evidence_value_filters: tuple[ResearchEvidenceValueRef, ...] = ()
     comparison: ResearchQueryComparison = ResearchQueryComparison.NONE
     analysis: Literal[
-        "compare", "breakdown", "drilldown", "exploration", "contribution"
+        "compare",
+        "breakdown",
+        "drilldown",
+        "filter_from_result",
+        "exploration",
+        "contribution",
     ] = "exploration"
     drilldown: ResearchDrilldownSpec | None = None
     order: tuple[ResearchOrder, ...] = ()
@@ -153,6 +161,7 @@ class ComputeEvidenceArgs(_ToolArgsModel):
     order: tuple[ResearchOrder, ...] = ()
     limit: int | None = Field(default=None, gt=0, le=1000)
     tolerance: float | None = Field(default=None, ge=0)
+    purpose: str | None = Field(default=None, min_length=1, max_length=1000)
 
 
 class FinishResearchArgs(_ToolArgsModel):
@@ -184,19 +193,6 @@ _ERROR_CATEGORIES = {
     ToolErrorCode.CANCELLED: "cancellation",
     ToolErrorCode.UNSUPPORTED_CAPABILITY: "domain",
 }
-
-_COMPLETION_STATUS: dict[ResearchCompletionReason, str] = {
-    ResearchCompletionReason.SUFFICIENT_EVIDENCE: "succeeded",
-    ResearchCompletionReason.PREMISE_NOT_SUPPORTED: "succeeded",
-    ResearchCompletionReason.NO_NEW_DIRECTION: "succeeded",
-    ResearchCompletionReason.PARTIAL_FAILURE: "partial",
-    ResearchCompletionReason.BUDGET_EXHAUSTED: "partial",
-    ResearchCompletionReason.NEEDS_CLARIFICATION: "needs_clarification",
-    ResearchCompletionReason.EXECUTION_FAILED: "failed",
-    ResearchCompletionReason.DATA_INSUFFICIENT: "failed",
-    ResearchCompletionReason.CANCELLED: "cancelled",
-}
-
 
 def _call_id() -> str:
     call = current_tool_call_context()
@@ -452,6 +448,7 @@ class QuerySemanticDataTool(
                 dimensions=args.dimensions,
                 time_ranges=args.time_ranges,
                 filters=args.filters,
+                evidence_value_filters=args.evidence_value_filters,
                 comparison=args.comparison,
                 analysis=args.analysis,
                 drilldown=args.drilldown,
@@ -704,7 +701,7 @@ class ComputeEvidenceTool(
     title = "对既有证据执行确定性计算"
     description = (
         "只接受当前 Run 的证据引用和白名单确定性操作：difference、growth_rate、"
-        "share、ratio、ranking、top_n_other、merge、contribution、reconciliation。"
+        "share、ratio、ranking、topn_other、merge、contribution、reconciliation。"
         "输出保存到 ResultStore 并生成依赖输入证据的新 Evidence；对零分母、"
         "缺列、对账失败返回明确错误码。禁止任意表达式和 SQL。"
     )
@@ -742,6 +739,7 @@ class ComputeEvidenceTool(
                 order=args.order,
                 limit=args.limit,
                 tolerance=args.tolerance,
+                purpose=args.purpose,
             )
         except ValidationError as exc:
             raise _reject_invalid_args(ctx, self.name, exc) from exc
@@ -918,7 +916,7 @@ class ComputeEvidenceTool(
             )
         if operation is ResearchComputeOperation.RATIO:
             return self._ratio_task(ctx, request, inputs)
-        if operation is ResearchComputeOperation.TOP_N_OTHER:
+        if operation is ResearchComputeOperation.TOPN_OTHER:
             evidence = self._single_input(ctx, request, inputs)
             dimension = self._single_dimension(ctx, request, evidence)
             metric = self._metric_field(ctx, request, evidence)
@@ -1085,7 +1083,7 @@ class ComputeEvidenceTool(
                 code=ToolErrorCode.INVALID_REQUEST,
                 stage=ToolFailureStage.VALIDATION,
                 parameter_retryable=True,
-                message="top_n_other 需要恰好 1 个维度",
+                message="topn_other 需要恰好 1 个维度",
                 details={"dimensions": len(fields)},
             )
         return fields[0]
@@ -1401,7 +1399,8 @@ class ComputeEvidenceTool(
             ),
             iteration=iteration,
             purpose=(
-                f"{request.operation.value} 计算基于证据 "
+                request.purpose
+                or f"{request.operation.value} 计算基于证据 "
                 f"{', '.join(request.input_evidence_ids)}"
             ),
             metric_refs=request.metric_refs,
@@ -1552,7 +1551,7 @@ class FinishResearchTool(
             )
         except ValidationError as exc:
             raise _reject_invalid_args(ctx, self.name, exc) from exc
-        status = _COMPLETION_STATUS[request.reason]
+        status = RESEARCH_COMPLETION_STATUS_BY_REASON[request.reason]
         evidences = ctx.evidences()
         try:
             completion = ResearchCompletion.model_validate(
@@ -1636,6 +1635,9 @@ class FinishResearchTool(
         # 引用后继续输出原结论。
         violations = validate_report_conclusions(
             run_id=ctx.run_id,
+            summary=request.summary,
+            summary_evidence_ids=request.evidence_ids,
+            summary_limitations=request.limitations,
             findings=request.findings,
             claims=request.claims,
             evidences=evidences,
@@ -1647,9 +1649,10 @@ class FinishResearchTool(
                 self.name,
                 code=ToolErrorCode.INVALID_REQUEST,
                 stage=ToolFailureStage.VALIDATION,
-                parameter_retryable=False,
+                parameter_retryable=True,
                 message="结论校验失败：存在无法溯源或超出证据强度的表述。",
                 details={"violations": list(violations)},
+                corrections=tuple(violations[:10]),
             )
         ctx.record_hypothesis_assessments(hypothesis_result.assessments)
         ctx.set_hypothesis_audit(hypothesis_result.audit)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -81,6 +83,33 @@ def test_removed_config_fields_do_not_exist() -> None:
         "research_max_actions_per_iteration",
     ):
         assert name not in config_fields, name
+
+
+def test_deprecated_research_environment_is_rejected() -> None:
+    """旧开关残留必须让进程显式失败，不能被配置层静默忽略。"""
+
+    deprecated_names = (
+        "CHATBI_RESEARCH_EXECUTION_MODE",
+        "CHATBI_RESEARCH_SHADOW_SAMPLE_RATE",
+        "CHATBI_RESEARCH_SHADOW_DATASET_ALLOWLIST",
+        "CHATBI_RESEARCH_SHADOW_TENANT_ALLOWLIST",
+        "CHAT_AGENT_RESEARCH_MAX_ACTIONS_PER_ITERATION",
+    )
+    environment = os.environ.copy()
+    for name in deprecated_names:
+        environment.pop(name, None)
+    environment["CHATBI_RESEARCH_EXECUTION_MODE"] = "legacy"
+    result = subprocess.run(
+        [sys.executable, "-c", "import common.core.config"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "DEPRECATED_RESEARCH_ENVIRONMENT_VARIABLES:" in result.stderr
+    assert "CHATBI_RESEARCH_EXECUTION_MODE" in result.stderr
 
 
 def test_execution_route_has_no_origin_field() -> None:

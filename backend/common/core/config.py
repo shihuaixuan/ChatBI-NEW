@@ -1,3 +1,4 @@
+import os
 import secrets
 import urllib.parse
 from typing import Annotated, Any, Literal
@@ -144,7 +145,7 @@ class Settings(BaseSettings):
     RETRIEVAL_QUERY_TIMEOUT_MS: int = 1500
 
     # Agent 问数链路（chatbi/orchestration/agent，LLM 自主规划）
-    CHAT_AGENT_ENABLED: bool = False
+    CHAT_AGENT_ENABLED: bool = True
     # P0 分诊与 verified query 上下文均可独立回退。
     CHATBI_TRIAGE_ENABLED: bool = True
     # 筛选值归一：把理解产出的筛选值生成 VALUE 检索槽，命中维值字典后替换 canonical 值。
@@ -159,16 +160,16 @@ class Settings(BaseSettings):
     CHAT_AGENT_MAX_CLARIFICATIONS: int = 2
     CHAT_AGENT_HISTORY_ROUNDS: int = 3
     CHAT_AGENT_CONTEXT_FOLD_CHARS: int = 30000
-    # P1 验收默认启用确定性 FAST/PLAN；旧链路仍可通过环境变量显式恢复。
-    CHAT_AGENT_EXECUTION_MODES: str = "fast,plan"
+    # 新问题默认开放 FAST、PLAN 和唯一的 Research Agent 执行路径。
+    CHAT_AGENT_EXECUTION_MODES: str = "fast,plan,research"
     # 阶段 8：旧 ResearchAction 架构已删除，agent 是唯一 Research 引擎；
-    # 原三态开关（CHATBI_RESEARCH_EXECUTION_MODE）与 shadow 采样/白名单
-    # 配置随之移除。历史环境变量残留会被 pydantic-settings 静默忽略。
+    # 原三态开关与 shadow 采样/白名单配置随阶段 8 移除；模块初始化时会
+    # 显式拒绝仍注入进程环境的废弃变量，避免运维误以为回退已经生效。
     # 质量切流门槛（§11.3.4）的评测配置 JSON 路径；空表示未配置，
     # 未配置时切流判定一律阻断，不得在没有基线数据时发明阈值。
     CHATBI_RESEARCH_EVAL_CONFIG: str = ""
     # Research 预算默认值与 AgentConfig.research_* 保持一致（doc §9.6 第一版建议默认）。
-    CHAT_AGENT_RESEARCH_MAX_ITERATIONS: int = 6
+    CHAT_AGENT_RESEARCH_MAX_ITERATIONS: int = 8
     CHAT_AGENT_RESEARCH_MAX_QUERIES: int = 8
     CHAT_AGENT_RESEARCH_MAX_MODEL_CALLS: int = 8
     CHAT_AGENT_RESEARCH_MAX_DURATION_SECONDS: int = 300
@@ -276,4 +277,22 @@ class Settings(BaseSettings):
         return v
 
 
+_DEPRECATED_RESEARCH_ENV_VARS = (
+    "CHATBI_RESEARCH_EXECUTION_MODE",
+    "CHATBI_RESEARCH_SHADOW_SAMPLE_RATE",
+    "CHATBI_RESEARCH_SHADOW_DATASET_ALLOWLIST",
+    "CHATBI_RESEARCH_SHADOW_TENANT_ALLOWLIST",
+    "CHAT_AGENT_RESEARCH_MAX_ACTIONS_PER_ITERATION",
+)
+
+
+def _reject_deprecated_research_env() -> None:
+    deprecated = sorted(name for name in _DEPRECATED_RESEARCH_ENV_VARS if name in os.environ)
+    if deprecated:
+        raise RuntimeError(
+            "DEPRECATED_RESEARCH_ENVIRONMENT_VARIABLES:" + ",".join(deprecated)
+        )
+
+
+_reject_deprecated_research_env()
 settings = Settings()

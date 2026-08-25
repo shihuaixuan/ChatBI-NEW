@@ -31,12 +31,18 @@ from apps.chatbi.models.dto.research_agent import (
 
 _ABSOLUTE_PATTERN = re.compile(r"全部|所有|唯一|必然|绝对|一定")
 _CAUSAL_PATTERN = re.compile(r"导致|造成|使得|归因于|根因|根本原因|驱动了")
-_NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?")
+_NUMBER_PATTERN = re.compile(r"(?<![A-Za-z0-9_:])[+-]?\d+(?:\.\d+)?%?")
+_IDENTIFIER_PATTERN = re.compile(
+    r"(?:evidence:[A-Za-z0-9:_-]+|(?:METRIC|DIMENSION|ASSET):[A-Za-z0-9:_-]+)"
+)
 
 
 def validate_report_conclusions(
     *,
     run_id: str,
+    summary: str | None = None,
+    summary_evidence_ids: tuple[str, ...] = (),
+    summary_limitations: tuple[str, ...] = (),
     findings: tuple[ResearchReportFinding, ...] = (),
     claims: tuple[ResearchClaim, ...] = (),
     evidences: list[ResearchEvidence] | tuple[ResearchEvidence, ...] = (),
@@ -52,6 +58,23 @@ def validate_report_conclusions(
         for evidence_id in item.evidence_ids
     }
     violations: list[str] = []
+    if summary:
+        # summary 会原样进入用户可见报告，必须和结构化结论执行同一硬门禁，
+        # 不能成为绕过数字溯源与因果措辞校验的自由文本出口。
+        violations.extend(
+            _check_conclusion(
+                statement=summary,
+                evidence_ids=summary_evidence_ids,
+                confidence="medium",
+                causal=False,
+                claim_level=None,
+                limitations=summary_limitations,
+                run_id=run_id,
+                evidence_by_id=evidence_by_id,
+                weak_evidence_ids=weak_evidence_ids,
+                label="Summary",
+            )
+        )
     for finding in findings:
         violations.extend(
             _check_conclusion(
@@ -110,8 +133,14 @@ def _check_conclusion(
             continue
         cited.append(item)
 
+    # 数字和因果措辞是文本本身的硬门禁；即使没有有效引用，也不能跳过。
+    violations.extend(_numeric_violations(label, statement, cited))
+    if not causal and _CAUSAL_PATTERN.search(statement):
+        violations.append(
+            f"{label}：相关性表述不得使用因果措辞；请改为因果声明并引用"
+            "对账证据，或改写为相关关系。"
+        )
     if cited:
-        violations.extend(_numeric_violations(label, statement, cited))
         violations.extend(
             _truncation_violations(label, statement, cited)
         )
@@ -132,11 +161,6 @@ def _check_conclusion(
                 f"{label}：贡献度/因果结论必须引用经过对账或贡献度计算的"
                 "证据，相关性观察不足以支撑。"
             )
-        if not causal and _CAUSAL_PATTERN.search(statement):
-            violations.append(
-                f"{label}：相关性表述不得使用因果措辞；请改为因果声明并引用"
-                "对账证据，或改写为相关关系。"
-            )
         conflicts = _direction_conflicts(cited)
         if conflicts and (confidence == "high" or causal):
             violations.append(
@@ -153,13 +177,45 @@ def _numeric_violations(
 ) -> list[str]:
     known = _known_numbers(cited)
     violations: list[str] = []
-    for raw in _NUMBER_PATTERN.findall(statement):
-        value = _canonical(raw)
-        if value is not None and value not in known:
+    # Evidence ID 和逻辑资产引用只是引用标识，不是报告中的业务数值。
+    masked = _IDENTIFIER_PATTERN.sub(lambda item: " " * len(item.group()), statement)
+    for match in _NUMBER_PATTERN.finditer(masked):
+        raw = statement[match.start() : match.end()]
+        # 日期是冻结时间上下文，不是报告自行生成的数据结论。
+        if statement[match.end() : match.end() + 1] in {"年", "月", "日"}:
+            continue
+        value = _canonical(raw.rstrip("%"))
+        if value is not None and not _matches_known_number(value, raw, known):
             violations.append(
                 f"{label}：数字 {raw} 无法溯源到任何引用证据，禁止无来源数字。"
             )
     return violations
+
+
+def _matches_known_number(
+    value: Decimal,
+    raw: str,
+    known: set[Decimal],
+) -> bool:
+    """允许证据值按报告展示精度四舍五入，并接受下降量的绝对值表达。"""
+
+    numeric_raw = raw.rstrip("%")
+    decimals = len(numeric_raw.rsplit(".", 1)[1]) if "." in numeric_raw else 0
+    tolerance = Decimal("0.5") * (Decimal(10) ** -decimals)
+    magnitude = abs(value)
+    is_percent = raw.endswith("%")
+    return any(
+        abs(candidate - value) <= tolerance
+        or abs(abs(candidate) - magnitude) <= tolerance
+        or (
+            is_percent
+            and (
+                abs(candidate * 100 - value) <= tolerance
+                or abs(abs(candidate) * 100 - magnitude) <= tolerance
+            )
+        )
+        for candidate in known
+    )
 
 
 def _truncation_violations(
@@ -201,51 +257,62 @@ def _has_reconciliation(evidence: ResearchEvidence) -> bool:
 
 
 def _direction_conflicts(cited: list[ResearchEvidence]) -> str | None:
-    """检测引用证据之间可判定的方向矛盾；不可判定返回 None。"""
+    """只比较同一指标在不同证据中的方向，避免多指标驱动分析误判。"""
 
-    directions: set[str] = set()
+    directions_by_metric: dict[str, set[str]] = {}
     for item in cited:
-        direction = _observed_direction(item)
-        if direction is not None:
-            directions.add(direction)
-    if {"increase", "decrease"} <= directions:
+        for metric_ref, direction in _metric_directions(item).items():
+            directions_by_metric.setdefault(metric_ref, set()).add(direction)
+    if any(
+        {"increase", "decrease"} <= directions
+        for directions in directions_by_metric.values()
+    ):
         return "increase vs decrease"
     return None
 
 
-def _observed_direction(evidence: ResearchEvidence) -> str | None:
-    fields: dict[str, str] = {}
+def _metric_directions(evidence: ResearchEvidence) -> dict[str, str]:
+    fields: dict[str, dict[str, str]] = {}
     for column in evidence.logical_columns:
         if column.value_role in ("current", "previous") and column.result_field:
-            fields[column.value_role] = column.result_field
-    if {"current", "previous"} <= fields.keys() and evidence.sample_rows:
-        row = evidence.sample_rows[0]
-        current = _canonical(row.get(fields["current"]))
-        previous = _canonical(row.get(fields["previous"]))
+            fields.setdefault(column.asset_ref, {})[column.value_role] = (
+                column.result_field
+            )
+    directions: dict[str, str] = {}
+    if not evidence.sample_rows:
+        return directions
+    row = evidence.sample_rows[0]
+    for metric_ref, metric_fields in fields.items():
+        if not {"current", "previous"} <= metric_fields.keys():
+            continue
+        current = _canonical(row.get(metric_fields["current"]))
+        previous = _canonical(row.get(metric_fields["previous"]))
         if current is not None and previous is not None:
             if current > previous:
-                return "increase"
-            if current < previous:
-                return "decrease"
-            return "stable"
-    difference = next(
-        (
-            column.result_field
-            for column in evidence.logical_columns
-            if column.value_role == "difference" and column.result_field
-        ),
-        None,
-    )
-    if difference and evidence.sample_rows:
-        value = _canonical(evidence.sample_rows[0].get(difference))
+                directions[metric_ref] = "increase"
+            elif current < previous:
+                directions[metric_ref] = "decrease"
+            else:
+                directions[metric_ref] = "stable"
+    for column in evidence.logical_columns:
+        if (
+            column.asset_ref in directions
+            or column.value_role != "difference"
+            or not column.result_field
+        ):
+            continue
+        value = _canonical(row.get(column.result_field))
         if value is not None and value != 0:
-            return "increase" if value > 0 else "decrease"
-    return None
+            directions[column.asset_ref] = "increase" if value > 0 else "decrease"
+        elif value == 0:
+            directions[column.asset_ref] = "stable"
+    return directions
 
 
 def _known_numbers(cited: list[ResearchEvidence]) -> set[Decimal]:
     known: set[Decimal] = set()
     for item in cited:
+        known.add(Decimal(item.statistics.row_count))
         for row in item.sample_rows:
             for value in row.values():
                 number = _canonical(value)

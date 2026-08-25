@@ -2,10 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildAgentFlow } from './agentTimelineProjection.ts'
-import {
-  normalizeAgentEvent,
-  reduceAgentEvent,
-} from '../answer/agentEventReducer.ts'
+import { normalizeAgentEvent, reduceAgentEvent } from '../answer/agentEventReducer.ts'
 
 const CONTRACT = {
   'question.understood': { kind: 'thinking', phase: 'end' },
@@ -64,14 +61,21 @@ test('PLAN 计划、查询和计算事件进入时间线', () => {
       status: 'succeeded',
       result_set_id: 'result:plan-1:q1',
     }),
+    agentEvent('task.started', { sequence: 4, task_id: 'c1', status: 'running' }),
     agentEvent('compute.finished', {
-      sequence: 4,
+      sequence: 5,
+      task_id: 'c1',
+      status: 'succeeded',
+      result_set_id: 'result:plan-1:c1',
+    }),
+    agentEvent('task.finished', {
+      sequence: 6,
       task_id: 'c1',
       status: 'succeeded',
       result_set_id: 'result:plan-1:c1',
     }),
     agentEvent('plan.updated', {
-      sequence: 5,
+      sequence: 7,
       plan_id: 'plan-1',
       status: 'PROVEN',
     }),
@@ -86,6 +90,8 @@ test('PLAN 计划、查询和计算事件进入时间线', () => {
     ]
   )
   assert.equal(flow.steps[1].result.result_set_id, 'result:plan-1:q1')
+  assert.equal(flow.steps[2].title, '执行计算 c1')
+  assert.equal(flow.steps[2].result.result_set_id, 'result:plan-1:c1')
 })
 
 test('未知 domain 不影响事件消费', () => {

@@ -2,18 +2,22 @@
 
 按已确认的验收方案执行（全部走 Semantic 服务层，不做裸 ORM 插入）：
 1. 创建维度层级「商家-档口」：逻辑维度 2(商家 seller_id) -> 14(档口 stall_id)；
-2. 创建 3 条指标关系（目标指标 271 总GMV）：
+2. 补齐核心指标结构化公式和分析关系：
+   - 303 订单平均客单价 = 271 总GMV / 265 总订单数；
+   - 总GMV、客户当日GMV及其订单数、商品件数、新增成交客户数关系；
+   - 跨模型关系只允许预聚合后按日期、档口对齐；
+3. 创建和更新指标关系（原有关系继续保留）：
    - 265 总订单数      CERTIFIED_DRIVER / SAME_DIRECTION / POSITIVE
    - 266 销售商品件数 CERTIFIED_DRIVER / SAME_DIRECTION / POSITIVE
    - 303 订单平均客单价 GOVERNED_ANALYSIS_RELATION / SAME_DIRECTION / POSITIVE
-   共同分析维度 [14, 2]，支持时间角色 [current, previous]；
-3. 为能力行 271x14、271x2 追加 CONTRIBUTION 用途；
-4. 数据集资产选择：层级 + 3 条关系；同时修复数据集存量问题
+   并补充总商品件数、客户当日GMV、新增成交客户数等关系；
+4. 为可加指标在已证明安全的商家、档口、客户、交易渠道维度追加 CONTRIBUTION；
+5. 数据集资产选择：层级 + 全部核心指标关系；同时修复数据集存量问题
    （query_config 携带已移除的 semanticEnforcement；model_configs 缺少唯一默认模型，
    以 GMV 所在事实模型 246 为默认）；
-5. 发布数据集契约并输出验收核对结果。
+6. 发布数据集契约、重建检索索引并输出验收核对结果。
 
-脚本幂等：已存在的同名层级/同目标驱动关系/已含 CONTRIBUTION 的能力会被跳过。
+脚本可重复执行：不会重复创建同名层级、指标关系或重复追加 CONTRIBUTION 用途。
 """
 
 from __future__ import annotations
@@ -28,11 +32,21 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from sqlmodel import Session, col, select  # noqa: E402
 
+from apps.retrieval.indexing.worker import process_index_jobs  # noqa: E402
+from apps.retrieval.sources.semantic_indexing import (  # noqa: E402
+    SemanticIndexCoordinator,
+)
 from apps.semantic.composition import (  # noqa: E402
     build_semantic_contract_publication_service,
     build_semantic_contract_service,
 )
-from apps.semantic.models.dto import DatasetSchema  # noqa: E402
+from apps.semantic.models.dto import (  # noqa: E402
+    DatasetSchema,
+    MetricFormulaComponent,
+    MetricFormulaDefinition,
+    MetricPayload,
+    ModelRelationPayload,
+)
 from apps.semantic.models.dto.dataset import (  # noqa: E402
     DatasetAssetPayload,
     DatasetModelConfigPayload,
@@ -49,9 +63,14 @@ from apps.semantic.models.orm import (  # noqa: E402
     SemanticDataset,
     SemanticDatasetAsset,
     SemanticDatasetModelConfig,
+    SemanticMetric,
+    SemanticModelRelation,
 )
 from apps.semantic.models.orm.contract_version import (  # noqa: E402
     SemanticContractVersion,
+)
+from apps.semantic.repository.sqlmodel.dataset_index_repository import (  # noqa: E402
+    SqlModelDatasetIndexRepository,
 )
 from apps.semantic.repository.sqlmodel.dataset_repository import (  # noqa: E402
     SqlModelDatasetRepository,
@@ -59,13 +78,30 @@ from apps.semantic.repository.sqlmodel.dataset_repository import (  # noqa: E402
 from apps.semantic.repository.sqlmodel.domain_repository import (  # noqa: E402
     SqlModelDomainRepository,
 )
+from apps.semantic.repository.sqlmodel.metric_repository import (  # noqa: E402
+    SqlModelMetricRepository,
+)
+from apps.semantic.repository.sqlmodel.model_relation_repository import (  # noqa: E402
+    SqlModelModelRelationRepository,
+)
+from apps.semantic.repository.sqlmodel.model_repository import (  # noqa: E402
+    SqlModelModelRepository,
+)
 from apps.semantic.repository.sqlmodel.schema_loader import (  # noqa: E402
     SemanticSchemaLoader,
 )
 from apps.semantic.services.contract_publication_service import (  # noqa: E402
     SemanticContractCompletenessReport,
 )
+from apps.semantic.services.dataset_index_service import (  # noqa: E402
+    SemanticDatasetIndexService,
+)
 from apps.semantic.services.dataset_service import SemanticDatasetService  # noqa: E402
+from apps.semantic.services.metric_service import SemanticMetricService  # noqa: E402
+from apps.semantic.services.model_relation_service import (  # noqa: E402
+    SemanticModelRelationService,
+)
+from apps.semantic.services.schema_service import SemanticSchemaService  # noqa: E402
 from common.core.db import engine  # noqa: E402
 
 OID = 1
@@ -76,20 +112,145 @@ HIERARCHY_NAME = "seller_stall_hierarchy"
 HIERARCHY_LEVELS = [(2, 1), (14, 2)]  # 商家(seller_id) -> 档口(stall_id)
 
 TARGET_GMV = 271
+ORDER_MODEL_ID = 246
+CUSTOMER_MODEL_ID = 249
+AOV_METRIC_ID = 303
+
+# 关系只表达已经审定的分析范围，不将普通相关性写成因果关系。
 RELATIONSHIPS = [
-    # (driver_metric_id, relationship_type)
-    (265, "CERTIFIED_DRIVER"),  # 总订单数，与总GMV和总客单价口径一致
-    (266, "CERTIFIED_DRIVER"),  # 销售商品件数
-    (303, "GOVERNED_ANALYSIS_RELATION"),  # 订单平均客单价
+    # target, driver, relationship_type, validation_method, expected_direction,
+    # common_dimensions, relation_path_key
+    (271, 265, "CERTIFIED_DRIVER", "SAME_DIRECTION", "POSITIVE", [14, 2], None),
+    (271, 266, "CERTIFIED_DRIVER", "SAME_DIRECTION", "POSITIVE", [14, 2], None),
+    (271, 268, "CERTIFIED_DRIVER", "SAME_DIRECTION", "POSITIVE", [14, 2], None),
+    (271, 303, "GOVERNED_ANALYSIS_RELATION", "SAME_DIRECTION", "POSITIVE", [14, 2], None),
+    (271, 286, "GOVERNED_ANALYSIS_RELATION", "FORMULA_RECONCILIATION", "UNKNOWN", [14, 2], "order_customer"),
+    (271, 313, "GOVERNED_ANALYSIS_RELATION", "SAME_DIRECTION", "POSITIVE", [14, 2], "order_customer"),
+    (286, 287, "CERTIFIED_DRIVER", "SAME_DIRECTION", "POSITIVE", [2, 4, 14, 15], None),
+    (286, 288, "CERTIFIED_DRIVER", "SAME_DIRECTION", "POSITIVE", [2, 4, 14, 15], None),
+    (286, 313, "GOVERNED_ANALYSIS_RELATION", "SAME_DIRECTION", "POSITIVE", [2, 4, 14, 15], None),
 ]
 LEGACY_ORDER_DRIVER = 263
-RELATIONSHIP_DIMS = [14, 2]
 SUPPORTED_TIME_ROLES = ["current", "previous"]
 
-CONTRIBUTION_METRIC = 271
-CONTRIBUTION_DIMS = [14, 2]
+CONTRIBUTION_TARGETS = {
+    265: [2, 14],
+    268: [2, 14],
+    271: [2, 14],
+    286: [2, 4, 14, 15],
+    287: [2, 4, 14, 15],
+    288: [2, 4, 14, 15],
+}
 
 DEFAULT_MODEL_ID = 246  # 总GMV 所在事实模型
+
+
+def _ensure_aov_formula(session: Session) -> None:
+    metric = session.get(SemanticMetric, AOV_METRIC_ID)
+    if metric is None or metric.oid != OID or metric.status != 1:
+        raise SystemExit(f"metric {AOV_METRIC_ID} not found")
+    expected = {
+        "operation": "RATIO",
+        "components": [
+            {"metric_id": 271, "role": "numerator"},
+            {"metric_id": 265, "role": "denominator"},
+        ],
+    }
+    if metric.formula_definition == expected:
+        print(f"[skip] metric {AOV_METRIC_ID} structured formula exists")
+        return
+    payload = MetricPayload(
+        model_id=metric.model_id,
+        name=metric.name,
+        biz_name=metric.biz_name,
+        description=metric.description,
+        alias=list(metric.alias or []),
+        default_agg=metric.default_agg,
+        type=metric.type,
+        define_type=metric.define_type,
+        type_params=dict(metric.type_params or {}),
+        relate_dimensions=list(metric.relate_dimensions or []),
+        result_grain=list(metric.result_grain or []),
+        additivity=metric.additivity,
+        distinct_keys=list(metric.distinct_keys or []),
+        time_semantics=metric.time_semantics,
+        default_time_dimension_id=metric.default_time_dimension_id,
+        snapshot_aggregation=metric.snapshot_aggregation,
+        formula_definition=MetricFormulaDefinition(
+            operation="RATIO",
+            components=[
+                MetricFormulaComponent(metric_id=271, role="numerator"),
+                MetricFormulaComponent(metric_id=265, role="denominator"),
+            ],
+        ),
+        comparison_grains=list(metric.comparison_grains or []),
+        time_alignment_policy=metric.time_alignment_policy,
+    )
+    updated = SemanticMetricService(
+        SqlModelMetricRepository(session),
+        SqlModelModelRepository(session),
+    ).update_metric(OID, AOV_METRIC_ID, payload)
+    print(
+        f"[update] metric {updated.id} structured formula="
+        f"{json.dumps(updated.formula_definition, ensure_ascii=False)}"
+    )
+
+
+def _ensure_order_customer_model_relation(session: Session) -> int:
+    existing = session.exec(
+        select(SemanticModelRelation).where(
+            SemanticModelRelation.oid == OID,
+            SemanticModelRelation.left_model_id == ORDER_MODEL_ID,
+            SemanticModelRelation.right_model_id == CUSTOMER_MODEL_ID,
+            SemanticModelRelation.status == 1,
+        )
+    ).first()
+    payload = ModelRelationPayload(
+        domain_id=DOMAIN_ID,
+        left_model_id=ORDER_MODEL_ID,
+        right_model_id=CUSTOMER_MODEL_ID,
+        join_type="left join",
+        join_conditions=[
+            {"leftField": "stat_date", "operator": "=", "rightField": "stat_date"},
+            {"leftField": "stall_id", "operator": "=", "rightField": "stall_id"},
+        ],
+        cardinality="ONE_TO_MANY",
+        left_unique=True,
+        right_unique=False,
+        metric_propagation="LEFT_TO_RIGHT",
+        aggregation_safety="PRE_AGGREGATE_REQUIRED",
+    )
+    service = SemanticModelRelationService(
+        SqlModelModelRelationRepository(session),
+        SqlModelModelRepository(session),
+    )
+    if existing is None:
+        relation = service.create_model_relation(OID, payload)
+        print(f"[create] model relation {ORDER_MODEL_ID}->{CUSTOMER_MODEL_ID} id={relation.id}")
+        return relation.id
+    comparable = {
+        key: getattr(existing, key)
+        for key in (
+            "domain_id",
+            "left_model_id",
+            "right_model_id",
+            "join_type",
+            "join_conditions",
+            "ext",
+            "cardinality",
+            "left_unique",
+            "right_unique",
+            "metric_propagation",
+            "aggregation_safety",
+            "valid_time_condition",
+        )
+    }
+    if comparable == payload.model_dump():
+        print(f"[skip] model relation {ORDER_MODEL_ID}->{CUSTOMER_MODEL_ID} id={existing.id}")
+        return existing.id
+    relation = service.update_model_relation(OID, existing.id, payload)
+    print(f"[update] model relation {ORDER_MODEL_ID}->{CUSTOMER_MODEL_ID} id={relation.id}")
+    return relation.id
 
 
 def _ensure_hierarchy(service) -> int:
@@ -120,41 +281,79 @@ def _ensure_hierarchy(service) -> int:
     return dto.id
 
 
-def _ensure_relationships(service, existing_by_driver: dict[int, int]) -> list[int]:
-    created: list[int] = []
-    for driver_id, rel_type in RELATIONSHIPS:
-        if driver_id in existing_by_driver:
-            print(f"[skip] relationship target={TARGET_GMV} driver={driver_id} exists")
-            continue
+def _ensure_relationships(
+    service,
+    existing_by_pair: dict[tuple[int, int], object],
+    relation_paths: dict[str, list[int]],
+) -> list[int]:
+    relationship_ids: list[int] = []
+    for (
+        target_id,
+        driver_id,
+        rel_type,
+        validation_method,
+        expected_direction,
+        logical_dimension_ids,
+        relation_path_key,
+    ) in RELATIONSHIPS:
         payload = MetricRelationshipPayload(
             domain_id=DOMAIN_ID,
-            target_metric_id=TARGET_GMV,
+            target_metric_id=target_id,
             driver_metric_id=driver_id,
             relationship_type=rel_type,
-            validation_method="SAME_DIRECTION",
-            expected_direction="POSITIVE",
+            validation_method=validation_method,
+            expected_direction=expected_direction,
             supported_time_roles=SUPPORTED_TIME_ROLES,
-            logical_dimension_ids=RELATIONSHIP_DIMS,
+            logical_dimension_ids=logical_dimension_ids,
+            relation_path=relation_paths.get(relation_path_key or "", []),
         )
-        if driver_id == 265 and LEGACY_ORDER_DRIVER in existing_by_driver:
+        existing = existing_by_pair.get((target_id, driver_id))
+        if existing is not None:
+            current = {
+                "domain_id": existing.domain_id,
+                "target_metric_id": existing.target_metric_id,
+                "driver_metric_id": existing.driver_metric_id,
+                "relationship_type": existing.relationship_type,
+                "validation_method": existing.validation_method,
+                "expected_direction": existing.expected_direction,
+                "supported_time_roles": list(existing.supported_time_roles),
+                "logical_dimension_ids": list(existing.logical_dimension_ids),
+                "relation_path": list(existing.relation_path),
+            }
+            if current == payload.model_dump():
+                print(
+                    f"[skip] relationship id={existing.id} target={target_id} "
+                    f"driver={driver_id} type={rel_type}"
+                )
+                relationship_ids.append(existing.id)
+                continue
+            dto = service.update_metric_relationship(OID, existing.id, payload)
+            print(
+                f"[update] relationship id={dto.id} target={target_id} "
+                f"driver={driver_id} type={rel_type}"
+            )
+            relationship_ids.append(dto.id)
+            continue
+        legacy = existing_by_pair.get((target_id, LEGACY_ORDER_DRIVER))
+        if target_id == TARGET_GMV and driver_id == 265 and legacy is not None:
             dto = service.update_metric_relationship(
                 OID,
-                existing_by_driver[LEGACY_ORDER_DRIVER],
+                legacy.id,
                 payload,
             )
             print(
                 f"[update] relationship id={dto.id} driver="
                 f"{LEGACY_ORDER_DRIVER}->{driver_id} type={rel_type}"
             )
-            created.append(dto.id)
+            relationship_ids.append(dto.id)
             continue
         dto = service.create_metric_relationship(OID, payload)
         print(
-            f"[create] relationship id={dto.id} target={TARGET_GMV} "
+            f"[create] relationship id={dto.id} target={target_id} "
             f"driver={driver_id} type={rel_type}"
         )
-        created.append(dto.id)
-    return created
+        relationship_ids.append(dto.id)
+    return relationship_ids
 
 
 def _ensure_contribution(service, capabilities: list[MetricDimensionCapability]) -> None:
@@ -267,19 +466,14 @@ def _relationship_ids(session: Session) -> list[int]:
     return [row.id for row in _relationship_rows(session)]
 
 
-def _relationship_ids_by_driver(session: Session) -> dict[int, int]:
-    from apps.semantic.models.orm import MetricRelationship
-
-    driver_ids = [driver for driver, _ in RELATIONSHIPS] + [LEGACY_ORDER_DRIVER]
-    rows = session.exec(
-        select(MetricRelationship).where(
-            MetricRelationship.oid == OID,
-            MetricRelationship.target_metric_id == TARGET_GMV,
-            col(MetricRelationship.driver_metric_id).in_(driver_ids),
-            MetricRelationship.status == 1,
-        )
-    ).all()
-    return {row.driver_metric_id: row.id for row in rows}
+def _relationship_dtos_by_pair(service) -> dict[tuple[int, int], object]:
+    expected_pairs = {(item[0], item[1]) for item in RELATIONSHIPS}
+    expected_pairs.add((TARGET_GMV, LEGACY_ORDER_DRIVER))
+    return {
+        (item.target_metric_id, item.driver_metric_id): item
+        for item in service.list_metric_relationships(OID, DOMAIN_ID)
+        if (item.target_metric_id, item.driver_metric_id) in expected_pairs
+    }
 
 
 def _relationship_rows(session: Session) -> list:
@@ -289,9 +483,11 @@ def _relationship_rows(session: Session) -> list:
         session.exec(
             select(MetricRelationship).where(
                 MetricRelationship.oid == OID,
-                MetricRelationship.target_metric_id == TARGET_GMV,
+                col(MetricRelationship.target_metric_id).in_(
+                    sorted({item[0] for item in RELATIONSHIPS})
+                ),
                 col(MetricRelationship.driver_metric_id).in_(
-                    [driver for driver, _ in RELATIONSHIPS]
+                    sorted({item[1] for item in RELATIONSHIPS})
                 ),
                 MetricRelationship.status == 1,
             )
@@ -306,6 +502,22 @@ def _publish(session: Session) -> SemanticContractCompletenessReport:
         SemanticSchemaLoader(session),
     )
     return report
+
+
+def _rebuild_index(session: Session) -> None:
+    result = SemanticDatasetIndexService(
+        SqlModelDatasetIndexRepository(session),
+        SemanticSchemaService(SemanticSchemaLoader(session)),
+        SemanticIndexCoordinator(session),
+    ).rebuild_index(OID, DATASET_ID)
+    job_results = process_index_jobs(result.job_ids)
+    failed = [item for item in job_results if item.status.lower() != "succeeded"]
+    if failed:
+        raise SystemExit(f"semantic index rebuild failed: {failed}")
+    print(
+        f"[index] dataset={DATASET_ID} index_version={result.index_version} "
+        f"jobs={list(result.job_ids)}"
+    )
 
 
 def _verify(session: Session, report: SemanticContractCompletenessReport) -> None:
@@ -364,8 +576,11 @@ def _verify(session: Session, report: SemanticContractCompletenessReport) -> Non
             f"dims={list(r.dimension_refs)} roles={list(r.time_roles)}"
         )
     assert len(hierarchies) >= 1, "hierarchies must be published"
-    assert len(relationships) >= 3, "relationships must be published"
-    assert len(contrib_caps) >= 2, "CONTRIBUTION capabilities must be published"
+    assert len(relationships) >= len(RELATIONSHIPS), "relationships must be published"
+    expected_contribution_count = sum(len(items) for items in CONTRIBUTION_TARGETS.values())
+    assert len(contrib_caps) >= expected_contribution_count, (
+        "CONTRIBUTION capabilities must be published"
+    )
     print("\n全部断言通过：治理资产已进入发布契约。")
 
 
@@ -373,24 +588,39 @@ def main() -> None:
     with Session(engine) as session:
         contract_service = build_semantic_contract_service(session)
 
+        _ensure_aov_formula(session)
+        model_relation_id = _ensure_order_customer_model_relation(session)
         hierarchy_id = _ensure_hierarchy(contract_service)
 
-        existing_relationships = _relationship_ids_by_driver(session)
-        _ensure_relationships(contract_service, existing_relationships)
+        existing_relationships = _relationship_dtos_by_pair(contract_service)
+        _ensure_relationships(
+            contract_service,
+            existing_relationships,
+            {"order_customer": [model_relation_id]},
+        )
 
+        contribution_pairs = [
+            (metric_id, logical_id)
+            for metric_id, logical_ids in CONTRIBUTION_TARGETS.items()
+            for logical_id in logical_ids
+        ]
         caps = session.exec(
             select(MetricDimensionCapability).where(
                 MetricDimensionCapability.oid == OID,
-                MetricDimensionCapability.metric_id == CONTRIBUTION_METRIC,
-                col(MetricDimensionCapability.logical_dimension_id).in_(
-                    CONTRIBUTION_DIMS
+                col(MetricDimensionCapability.metric_id).in_(
+                    sorted(CONTRIBUTION_TARGETS)
                 ),
                 MetricDimensionCapability.status == 1,
             )
         ).all()
-        if len(caps) != len(CONTRIBUTION_DIMS):
+        caps = [
+            item
+            for item in caps
+            if (item.metric_id, item.logical_dimension_id) in contribution_pairs
+        ]
+        if len(caps) != len(contribution_pairs):
             raise SystemExit(
-                f"expected {len(CONTRIBUTION_DIMS)} capability rows, found {len(caps)}"
+                f"expected {len(contribution_pairs)} capability rows, found {len(caps)}"
             )
         _ensure_contribution(contract_service, caps)
 
@@ -402,6 +632,8 @@ def main() -> None:
 
         session.expire_all()
         _verify(session, report)
+        if report.status == "READY":
+            _rebuild_index(session)
 
 
 if __name__ == "__main__":

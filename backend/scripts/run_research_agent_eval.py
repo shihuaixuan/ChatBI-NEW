@@ -1866,7 +1866,7 @@ def classify_outcome(
         return "harness_error"
     failed_names = [item["name"] for item in checks if not item.get("ok")]
     status = state.get("status")
-    claimed_success = status in {"succeeded", "partial", "budget_exhausted"}
+    claimed_success = status in {"succeeded", "partial"}
     if explicit_rejection:
         # 只有错误码、失败状态和阶段均符合用例声明时，才分类为正确拒绝。
         return "correct_reject" if not failed_names else "silent_error"

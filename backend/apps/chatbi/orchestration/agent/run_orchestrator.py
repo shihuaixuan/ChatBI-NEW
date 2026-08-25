@@ -26,6 +26,9 @@ from apps.chatbi.orchestration.agent.state import (
     AgentRuntimeState,
     AgentRuntimeStateFactory,
 )
+from apps.chatbi.orchestration.agent.tool_results import (
+    semantic_incompatibility_answer,
+)
 from apps.chatbi.orchestration.pipeline.fast import FastPipeline, FastPipelineError
 from apps.chatbi.orchestration.pipeline.mode_router import (
     ModeRouteInput,
@@ -188,12 +191,7 @@ class RunOrchestrator:
                 AgentErrorClass.PLAN_INVALID.value,
             )
         except ModeRoutingError as exc:
-            yield from self.lifecycle.fail(
-                state,
-                str(exc),
-                AgentErrorClass.PLAN_INVALID.value,
-                error_details={"code": str(exc)},
-            )
+            yield from self._finalize_mode_routing_error(state, exc)
         except QuestionUnderstandingError as exc:
             yield from self.lifecycle.fail(
                 state,
@@ -296,6 +294,16 @@ class RunOrchestrator:
                 ),
                 temporal_context=state.temporal_context,
                 datasource_id=state.context.datasource_id,
+                # Fast/Plan 的轻量状态不要求用户字段；Research 若缺失会在
+                # 执行前的权限指纹复核中显式拒绝，不能影响非 Research 路由。
+                user_id=getattr(state.context, "user_id", None),
+                permission_version=getattr(state.context, "permission_version", None),
+                authorized_tables=tuple(
+                    sorted(
+                        str(item)
+                        for item in (state.context.state.get("allowed_tables") or ())
+                    )
+                ),
                 research_budget=ResearchBudget(
                     max_iterations=getattr(
                         config,
@@ -485,12 +493,9 @@ class RunOrchestrator:
                         error_details={"code": exc.code},
                     )
                 return
-            if selected_mode == "research" and (
-                self.research_agent_pipeline is not None
-                or self.research_pipeline is not None
-            ):
-                # 阶段 7.5 起 Research 支持澄清恢复：agent 引擎恢复续跑
-                # （Harness.resume），legacy 引擎按首次运行语义重开。
+            if selected_mode == "research":
+                # Research 恢复统一进入新 Agent 管道；未装配时由分发入口
+                # 返回稳定错误码，不能访问已经删除的旧管道字段。
                 agent_run_repository.update_run(
                     self.session,
                     state.run,
@@ -505,12 +510,7 @@ class RunOrchestrator:
                 AgentErrorClass.PLAN_INVALID.value,
             )
         except ModeRoutingError as exc:
-            yield from self.lifecycle.fail(
-                state,
-                str(exc),
-                AgentErrorClass.PLAN_INVALID.value,
-                error_details={"code": str(exc)},
-            )
+            yield from self._finalize_mode_routing_error(state, exc)
         except QuestionUnderstandingError as exc:
             yield from self.lifecycle.fail(
                 state,
@@ -529,6 +529,30 @@ class RunOrchestrator:
             yield from self.lifecycle.fail(
                 state, message, AgentErrorClass.UNEXPECTED.value
             )
+
+    def _finalize_mode_routing_error(
+        self,
+        state: AgentRuntimeState,
+        error: ModeRoutingError,
+    ) -> Iterator[RenderEvent]:
+        """路由期业务不兼容正常拒答，其余规划错误保持显式失败。"""
+
+        code = str(error)
+        refusal_answer = semantic_incompatibility_answer(code)
+        if refusal_answer is not None:
+            yield from self.lifecycle.finish(
+                state,
+                answer=refusal_answer,
+                chart={},
+                sql=None,
+            )
+            return
+        yield from self.lifecycle.fail(
+            state,
+            code,
+            AgentErrorClass.PLAN_INVALID.value,
+            error_details={"code": code},
+        )
 
 
 # ---- Trace 结果 ----

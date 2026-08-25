@@ -7,6 +7,12 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.chatbi.models.dto.execution_requirement import CalculationOperation
+from apps.chatbi.models.dto.research_agent import (
+    ResearchDirection,
+    ResearchPremiseType,
+    ResearchReason,
+    ResearchTimeRole,
+)
 
 
 class SemanticParseAssetRef(BaseModel):
@@ -93,6 +99,18 @@ class SemanticParseFixedAttribution(BaseModel):
     )
 
 
+class SemanticParseResearchPremise(BaseModel):
+    """用户陈述的待验证事实；只描述前提，不指定查询动作。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    premise_type: ResearchPremiseType
+    metric_ref: str = Field(min_length=1)
+    expected_direction: ResearchDirection = ResearchDirection.UNKNOWN
+    time_roles: tuple[ResearchTimeRole, ...] = Field(min_length=1)
+    statement: str | None = Field(default=None, max_length=1000)
+
+
 class SemanticParseDynamicResearch(BaseModel):
     """后续查询方向依赖中间结果的动态分析目标。"""
 
@@ -100,18 +118,10 @@ class SemanticParseDynamicResearch(BaseModel):
 
     type: Literal["dynamic_research"] = "dynamic_research"
     goal: str = Field(min_length=1, max_length=1000)
-    reason: Literal[
-        "result_driven_filter",
-        "result_driven_dimension",
-        "open_ended_cause",
-        "data_driven_stop_condition",
-    ]
+    reason: ResearchReason
+    premise_to_verify: SemanticParseResearchPremise | None = None
     required_dimension_refs: tuple[str, ...] = ()
     required_driver_metric_refs: tuple[str, ...] = ()
-    required_actions: tuple[
-        Literal["breakdown", "drilldown", "contribution", "validate_hypothesis"],
-        ...,
-    ] = ()
 
 
 class SemanticParseLimitedMultiStep(BaseModel):
@@ -176,6 +186,7 @@ __all__ = [
     "SemanticParseMultiStep",
     "SemanticParseOrderBy",
     "SemanticParseOutput",
+    "SemanticParseResearchPremise",
     "SemanticParseTimeFilter",
     "SemanticParseUnresolved",
 ]

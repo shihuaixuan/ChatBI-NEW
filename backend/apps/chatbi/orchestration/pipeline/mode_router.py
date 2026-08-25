@@ -47,6 +47,9 @@ class ModeRouteInput:
     )
     temporal_context: TemporalContext | None = None
     datasource_id: int | None = None
+    user_id: int | None = None
+    permission_version: str | None = None
+    authorized_tables: tuple[str, ...] = ()
     research_budget: ResearchBudget | None = None
 
 
@@ -102,6 +105,10 @@ class ModeRouter:
                     budget=request.research_budget,
                     tenant_scope=f"oid:{int(request.tenant_id)}",
                     dataset_ref=f"ASSET:dataset:{request.dataset_id or 0}",
+                    user_id=request.user_id,
+                    datasource_id=request.datasource_id,
+                    permission_version=request.permission_version,
+                    authorized_tables=request.authorized_tables,
                 )
             except ResearchRequirementError as exc:
                 raise ModeRoutingError(exc.code) from exc
@@ -264,6 +271,34 @@ class ModeRouter:
             if ref not in candidates:
                 raise ModeRoutingError(f"SEMANTIC_ASSET_BINDING_REQUIRED:{ref}")
 
+        # 普通执行需求只会把维度挂到同模型指标查询上。此前跨模型维度会被
+        # 静默跳过，直到最终覆盖检查才暴露内部错误码；这里在生成查询前按
+        # 实际执行能力明确拒绝，不能把“未生成查询”误报成“资产未覆盖”。
+        metric_model_ids = {
+            candidates[ref]["model_id"]
+            for ref in metric_refs
+            if candidates[ref].get("model_id") is not None
+        }
+        selected_dimension_refs = {
+            *dimension_refs,
+            *(item.target_ref for item in semantic_parse.filters),
+            *(
+                item.target_ref
+                for item in semantic_parse.order_by
+                if candidates[item.target_ref]["asset_type"] == "DIMENSION"
+            ),
+        }
+        incompatible_dimensions = sorted(
+            ref
+            for ref in selected_dimension_refs
+            if candidates[ref]["model_id"] not in metric_model_ids
+        )
+        if incompatible_dimensions:
+            raise ModeRoutingError(
+                "SEMANTIC_METRIC_DIMENSION_INCOMPATIBLE:"
+                + ",".join(incompatible_dimensions)
+            )
+
         model_ids = {
             candidates[ref]["model_id"]
             for ref in selected_refs
@@ -347,7 +382,13 @@ class ModeRouter:
             _calculation_requirement(item, query_requirements)
             for item in semantic_parse.calculations
         ]
-        if len(query_requirements) > 1 and not post_calculations:
+        if len(post_calculations) > 1:
+            # 同一问题明确要求的并列计算属于同级输出，统一合并为一个最终
+            # 结果集，避免为了满足执行契约而人为指定主结果和辅助结果。
+            post_calculations.append(
+                _merge_parallel_calculation_results(post_calculations)
+            )
+        elif len(query_requirements) > 1 and not post_calculations:
             post_calculations.append(_merge_requirement(query_requirements))
         return {
             "query_requirements": query_requirements,
@@ -984,7 +1025,9 @@ def _build_fixed_attribution_requirements(
     metric = candidates[spec.metric_ref]
     dimension = candidates[spec.dimension_ref]
     if metric["model_id"] != dimension["model_id"]:
-        raise ModeRoutingError("SEMANTIC_ATTRIBUTION_DIMENSION_MODEL_MISMATCH")
+        raise ModeRoutingError(
+            "SEMANTIC_METRIC_DIMENSION_INCOMPATIBLE:" + spec.dimension_ref
+        )
     metric_contract = next(
         (
             item
@@ -1313,6 +1356,34 @@ def _merge_requirement(query_requirements: list[dict[str, Any]]) -> dict[str, An
         "type": CalculationOperation.MERGE.value,
         "inputs": [item["id"] for item in query_requirements],
         "join_keys": list(_common_group_columns(query_requirements)),
+    }
+
+
+def _merge_parallel_calculation_results(
+    calculations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """把同级计算结果合并为唯一最终结果，保持用户要求的计算顺序。"""
+
+    if len(calculations) < 2:
+        raise ModeRoutingError("SEMANTIC_PARALLEL_CALCULATIONS_REQUIRED")
+    join_keys = tuple(calculations[0].get("join_keys") or ())
+    if any(
+        tuple(item.get("join_keys") or ()) != join_keys
+        for item in calculations[1:]
+    ):
+        # 不同粒度的结果不能直接合并，否则可能产生扇出或错误对齐。
+        raise ModeRoutingError("SEMANTIC_CALCULATION_RESULT_GRAIN_MISMATCH")
+    known_ids = {str(item["id"]) for item in calculations}
+    result_id = "combined_results"
+    suffix = 2
+    while result_id in known_ids:
+        result_id = f"combined_results_{suffix}"
+        suffix += 1
+    return {
+        "id": result_id,
+        "type": CalculationOperation.MERGE.value,
+        "inputs": [str(item["id"]) for item in calculations],
+        "join_keys": list(join_keys),
     }
 
 

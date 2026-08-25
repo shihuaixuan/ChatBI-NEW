@@ -122,14 +122,6 @@ class ResearchReason(StrEnum):
     DATA_DRIVEN_STOP_CONDITION = "data_driven_stop_condition"
 
 
-class ResearchExecutionMode(StrEnum):
-    """Research 执行路径选择；阶段 1只实现 legacy。"""
-
-    LEGACY = "legacy"
-    SHADOW = "shadow"
-    AGENT = "agent"
-
-
 class ResearchPremiseType(StrEnum):
     METRIC_CHANGE = "metric_change"
     METRIC_ANOMALY = "metric_anomaly"
@@ -171,7 +163,6 @@ class ResearchOrderDirection(StrEnum):
 
 class ToolObservationStatus(StrEnum):
     SUCCEEDED = "succeeded"
-    PARTIAL = "partial"
     FAILED = "failed"
 
 
@@ -215,7 +206,6 @@ class ResearchRunStatus(StrEnum):
     NEEDS_CLARIFICATION = "needs_clarification"
     FAILED = "failed"
     CANCELLED = "cancelled"
-    BUDGET_EXHAUSTED = "budget_exhausted"
 
 
 class ResearchCompletionReason(StrEnum):
@@ -228,6 +218,25 @@ class ResearchCompletionReason(StrEnum):
     PARTIAL_FAILURE = "partial_failure"
     BUDGET_EXHAUSTED = "budget_exhausted"
     CANCELLED = "cancelled"
+
+
+ResearchCompletionStatus = Literal[
+    "succeeded", "partial", "needs_clarification", "failed", "cancelled"
+]
+
+RESEARCH_COMPLETION_STATUS_BY_REASON: dict[
+    ResearchCompletionReason, ResearchCompletionStatus
+] = {
+    ResearchCompletionReason.SUFFICIENT_EVIDENCE: "succeeded",
+    ResearchCompletionReason.PREMISE_NOT_SUPPORTED: "succeeded",
+    ResearchCompletionReason.NO_NEW_DIRECTION: "succeeded",
+    ResearchCompletionReason.PARTIAL_FAILURE: "partial",
+    ResearchCompletionReason.BUDGET_EXHAUSTED: "partial",
+    ResearchCompletionReason.NEEDS_CLARIFICATION: "needs_clarification",
+    ResearchCompletionReason.EXECUTION_FAILED: "failed",
+    ResearchCompletionReason.DATA_INSUFFICIENT: "failed",
+    ResearchCompletionReason.CANCELLED: "cancelled",
+}
 
 
 class ResearchClaimLevel(StrEnum):
@@ -248,7 +257,7 @@ class ResearchVersionSnapshot(_ContractModel):
 
 
 class ResearchBudget(_ContractModel):
-    max_iterations: int = Field(default=6, gt=0, le=20)
+    max_iterations: int = Field(default=8, gt=0, le=20)
     max_queries: int = Field(default=8, gt=0, le=50)
     max_model_calls: int = Field(default=8, gt=0, le=50)
     max_duration_seconds: int = Field(default=300, gt=0, le=1800)
@@ -873,7 +882,7 @@ class ResearchComputeOperation(StrEnum):
     SHARE = "share"
     RATIO = "ratio"
     RANKING = "ranking"
-    TOP_N_OTHER = "top_n_other"
+    TOPN_OTHER = "topn_other"
     CONTRIBUTION = "contribution"
     MERGE = "merge"
     RECONCILIATION = "reconciliation"
@@ -891,6 +900,7 @@ class ResearchComputeRequest(_VersionedContractModel):
     order: tuple[ResearchOrder, ...] = ()
     limit: int | None = Field(default=None, gt=0, le=1000)
     tolerance: float | None = Field(default=None, ge=0)
+    purpose: str | None = Field(default=None, min_length=1, max_length=1000)
 
     @model_validator(mode="after")
     def validate_compute_request(self) -> ResearchComputeRequest:
@@ -917,7 +927,7 @@ class ResearchComputeRequest(_VersionedContractModel):
             raise ValueError("RESEARCH_AGENT_COMPUTE_ORDER_REF_INVALID")
         if self.operation is ResearchComputeOperation.RANKING and not self.order:
             raise ValueError("RESEARCH_AGENT_COMPUTE_RANK_ORDER_REQUIRED")
-        if self.operation is ResearchComputeOperation.TOP_N_OTHER and self.limit is None:
+        if self.operation is ResearchComputeOperation.TOPN_OTHER and self.limit is None:
             raise ValueError("RESEARCH_AGENT_COMPUTE_TOP_N_LIMIT_REQUIRED")
         return self
 
@@ -994,10 +1004,7 @@ class ToolObservation(_VersionedContractModel):
         _reject_physical_payload(self.details)
         _reject_physical_payload(self.statistics)
         _reject_physical_payload(self.sample_rows)
-        failed = self.status in {
-            ToolObservationStatus.FAILED,
-            ToolObservationStatus.PARTIAL,
-        }
+        failed = self.status is ToolObservationStatus.FAILED
         if failed:
             if self.error_code is None:
                 raise ValueError("RESEARCH_AGENT_FAILURE_ERROR_CODE_REQUIRED")
@@ -1283,7 +1290,6 @@ class ResearchRunSnapshot(_VersionedContractModel):
             ResearchRunStatus.NEEDS_CLARIFICATION,
             ResearchRunStatus.FAILED,
             ResearchRunStatus.CANCELLED,
-            ResearchRunStatus.BUDGET_EXHAUSTED,
         }
         is_terminal = self.status in terminal_statuses
         if is_terminal != (self.finish_reason is not None):
@@ -1359,7 +1365,6 @@ class ResearchWorkingState(_VersionedContractModel):
             ResearchRunStatus.NEEDS_CLARIFICATION,
             ResearchRunStatus.FAILED,
             ResearchRunStatus.CANCELLED,
-            ResearchRunStatus.BUDGET_EXHAUSTED,
         }
         if terminal != (self.completion is not None):
             raise ValueError("RESEARCH_AGENT_STATE_COMPLETION_MISMATCH")
@@ -1496,9 +1501,7 @@ class ResearchCompletion(_VersionedContractModel):
     """结束请求；所有数据结论都必须带 Evidence 引用。"""
 
     run_id: str = Field(min_length=1, max_length=128)
-    status: Literal[
-        "succeeded", "partial", "needs_clarification", "failed", "cancelled", "budget_exhausted"
-    ]
+    status: ResearchCompletionStatus
     reason: ResearchCompletionReason
     summary: str = Field(min_length=1, max_length=4000)
     claims: tuple[ResearchClaim, ...] = ()
@@ -1508,25 +1511,7 @@ class ResearchCompletion(_VersionedContractModel):
     @model_validator(mode="after")
     def validate_completion(self) -> ResearchCompletion:
         _id(self.run_id, "RESEARCH_AGENT_RUN_ID_INVALID")
-        required_reason = {
-            "succeeded": {
-                ResearchCompletionReason.SUFFICIENT_EVIDENCE,
-                ResearchCompletionReason.PREMISE_NOT_SUPPORTED,
-                ResearchCompletionReason.NO_NEW_DIRECTION,
-            },
-            "partial": {
-                ResearchCompletionReason.PARTIAL_FAILURE,
-                ResearchCompletionReason.BUDGET_EXHAUSTED,
-            },
-            "needs_clarification": {ResearchCompletionReason.NEEDS_CLARIFICATION},
-            "failed": {
-                ResearchCompletionReason.EXECUTION_FAILED,
-                ResearchCompletionReason.DATA_INSUFFICIENT,
-            },
-            "cancelled": {ResearchCompletionReason.CANCELLED},
-            "budget_exhausted": {ResearchCompletionReason.BUDGET_EXHAUSTED},
-        }
-        if self.reason not in required_reason[self.status]:
+        if RESEARCH_COMPLETION_STATUS_BY_REASON[self.reason] != self.status:
             raise ValueError("RESEARCH_AGENT_COMPLETION_REASON_INVALID")
         if self.reason in {
             ResearchCompletionReason.SUFFICIENT_EVIDENCE,
@@ -1687,6 +1672,8 @@ __all__ = [
     "ResearchClaimLevel",
     "ResearchCompletion",
     "ResearchCompletionReason",
+    "ResearchCompletionStatus",
+    "RESEARCH_COMPLETION_STATUS_BY_REASON",
     "ResearchComputeOperation",
     "ResearchComputeRequest",
     "ResearchDirection",
@@ -1702,7 +1689,6 @@ __all__ = [
     "ResearchEvidenceRequirement",
     "ResearchEvidenceStatistics",
     "ResearchEvidenceValueRef",
-    "ResearchExecutionMode",
     "ResearchImmutableFilter",
     "ResearchFinishRequest",
     "ResearchHierarchy",

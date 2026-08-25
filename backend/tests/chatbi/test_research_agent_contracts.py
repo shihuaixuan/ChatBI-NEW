@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 from pydantic import ValidationError
 
@@ -15,7 +17,6 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchEvidenceRequirement,
     ResearchEvidenceStatistics,
     ResearchEvidenceValueRef,
-    ResearchExecutionMode,
     ResearchFinishRequest,
     ResearchHierarchy,
     ResearchHypothesisAssessment,
@@ -36,6 +37,16 @@ from apps.chatbi.models.dto.research_agent import (
     ToolFailureStage,
     ToolObservation,
 )
+from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
+from apps.chatbi.services.research.agent_context import build_premise_query_args
+from apps.chatbi.services.research.report_validator import validate_report_conclusions
+from apps.chatbi.services.research.routing_freeze import freeze_research_requirement
+from apps.semantic.models.dto import (
+    DatasetSchema,
+    MetricRelationshipRuntimeDTO,
+    SchemaElement,
+)
+from apps.temporal import build_temporal_context
 
 
 def _version() -> dict[str, object]:
@@ -624,7 +635,7 @@ def test_tool_args_are_independent_strict_dtos() -> None:
         unanswered_questions=("是否需要更长时间范围？",),
     )
     assert set(computes) == set(ResearchComputeOperation)
-    assert computes[ResearchComputeOperation.TOP_N_OTHER].limit == 5
+    assert computes[ResearchComputeOperation.TOPN_OTHER].limit == 5
     assert inspect.max_rows == 5
     assert finish.reason.value == "data_insufficient"
 
@@ -637,7 +648,7 @@ def test_tool_args_are_independent_strict_dtos() -> None:
     with pytest.raises(ValueError, match="TOP_N_LIMIT_REQUIRED"):
         ResearchComputeRequest(
             run_id="run-1",
-            operation="top_n_other",
+            operation="topn_other",
             input_evidence_ids=("evidence-1",),
         )
     with pytest.raises(ValidationError, match="extra_forbidden"):
@@ -1009,7 +1020,231 @@ def test_single_time_query_is_allowed_but_comparison_requires_two_roles() -> Non
         )
 
 
-def test_execution_mode_is_strict_and_defaults_to_legacy() -> None:
-    assert ResearchExecutionMode.LEGACY.value == "legacy"
-    with pytest.raises(ValueError):
-        ResearchExecutionMode("unsupported")
+def test_freeze_classifies_explicit_drivers_before_projecting_relationships() -> None:
+    """派生驱动指标的反向公式关系不能污染目标指标 Scope。"""
+
+    def element(asset_id: int, asset_type: str, *, default_time: bool = False):
+        return SchemaElement(
+            data_set_id=1,
+            data_set_name="test",
+            model=1,
+            id=asset_id,
+            name=str(asset_id),
+            biz_name=str(asset_id),
+            type=asset_type,
+            ext_info={
+                "field_name": f"field_{asset_id}",
+                "is_default_time": default_time,
+            },
+        )
+
+    relationships = [
+        MetricRelationshipRuntimeDTO.model_validate(
+            {
+                "id": "target-base",
+                "target_metric_ref": "METRIC:10:1",
+                "driver_metric_ref": "METRIC:11:1",
+                "relationship_type": "certified_driver",
+                "validation_method": "SAME_DIRECTION",
+                "expected_direction": "POSITIVE",
+                "dimension_refs": ["DIMENSION:20:1"],
+                "time_roles": ["current", "previous"],
+                "relationship_fingerprint": "target-base",
+            }
+        ),
+        MetricRelationshipRuntimeDTO.model_validate(
+            {
+                "id": "target-derived",
+                "target_metric_ref": "METRIC:10:1",
+                "driver_metric_ref": "METRIC:12:1",
+                "relationship_type": "governed_analysis_relation",
+                "validation_method": "SAME_DIRECTION",
+                "expected_direction": "POSITIVE",
+                "dimension_refs": ["DIMENSION:20:1"],
+                "time_roles": ["current", "previous"],
+                "relationship_fingerprint": "target-derived",
+            }
+        ),
+        MetricRelationshipRuntimeDTO.model_validate(
+            {
+                "id": "derived-formula",
+                "target_metric_ref": "METRIC:12:1",
+                "driver_metric_ref": "METRIC:10:1",
+                "component_metric_refs": ["METRIC:10:1", "METRIC:11:1"],
+                "relationship_type": "formula_component",
+                "validation_method": "FORMULA_RECONCILIATION",
+                "expected_direction": "UNKNOWN",
+                "dimension_refs": ["DIMENSION:22:1"],
+                "time_roles": ["single"],
+                "relationship_fingerprint": "derived-formula",
+            }
+        ),
+    ]
+    schema = DatasetSchema(
+        data_set=element(1, "DATASET"),
+        metrics=[element(10, "METRIC"), element(11, "METRIC"), element(12, "METRIC")],
+        dimensions=[
+            element(20, "DIMENSION"),
+            element(21, "DIMENSION", default_time=True),
+            element(22, "DIMENSION"),
+        ],
+        metric_dimension_capabilities=[
+            {
+                "id": 1,
+                "metric_id": 10,
+                "logical_dimension_id": 20,
+                "physical_dimension_id": 20,
+                "usages": ["GROUP_BY", "FILTER"],
+                "aggregation_safety": "SAFE",
+            }
+        ],
+        research_relationships=relationships,
+        metric_contracts=[{"metric_id": 10, "additivity": "FULL"}],
+        schema_version=1,
+        contract_version=1,
+        schema_fingerprint="schema-freeze-test",
+    )
+    semantic_parse = SemanticParseOutput.model_validate(
+        {
+            "status": "resolved",
+            "measures": [
+                {"ref": "METRIC:10:1"},
+                {"ref": "METRIC:11:1"},
+                {"ref": "METRIC:12:1"},
+            ],
+            "group_by": [{"ref": "DIMENSION:20:1"}],
+            "time_filters": [
+                {"expression": "2026年6月29日", "role": "current"},
+                {"expression": "2026年6月28日", "role": "previous"},
+            ],
+            "multi_step": {
+                "type": "dynamic_research",
+                "goal": "分析目标指标下降并验证驱动指标",
+                "reason": "open_ended_cause",
+                "required_dimension_refs": ["DIMENSION:20:1"],
+                "required_driver_metric_refs": ["METRIC:11:1", "METRIC:12:1"],
+                "premise_to_verify": {
+                    "premise_type": "metric_change",
+                    "metric_ref": "METRIC:10:1",
+                    "expected_direction": "decrease",
+                    "time_roles": ["current", "previous"],
+                },
+            },
+        }
+    )
+
+    requirement = freeze_research_requirement(
+        semantic_parse=semantic_parse,
+        schema=schema,
+        temporal_context=build_temporal_context(
+            reference_at=datetime.fromisoformat("2026-08-24T12:00:00+08:00")
+        ),
+        tenant_scope="oid:1",
+        dataset_ref="ASSET:dataset:1",
+    )
+
+    assert requirement.target_metric_refs == ("METRIC:10:1",)
+    assert requirement.scope.driver_metric_refs == (
+        "METRIC:11:1",
+        "METRIC:12:1",
+    )
+    assert tuple(
+        item.driver_metric_ref for item in requirement.scope.driver_relationships
+    ) == ("METRIC:11:1", "METRIC:12:1")
+
+
+def test_premise_preflight_builds_an_executable_difference_query() -> None:
+    """前提比较必须显式携带 difference，不能形成无计算类型的 compare。"""
+
+    requirement = ResearchAgentRequirement.model_validate(
+        {
+            **_governed_requirement().model_dump(mode="json"),
+            "premise_to_verify": {
+                "premise_type": "metric_change",
+                "metric_ref": "METRIC:10:1",
+                "expected_direction": "decrease",
+                "time_roles": ("current", "previous"),
+            },
+        }
+    )
+
+    args = build_premise_query_args(requirement)
+    assert args is not None
+    assert args["analysis"] == "compare"
+    assert args["comparison"] == "difference"
+
+
+def test_report_number_validation_accepts_dates_signs_and_display_rounding() -> None:
+    """日期不作为数据数字校验，下降量允许符号转换和展示精度舍入。"""
+
+    evidence = _evidence().model_copy(
+        update={
+            "dimension_refs": (),
+            "time_ranges": ("current", "previous"),
+            "logical_columns": (
+                ResearchLogicalColumn(
+                    asset_ref="METRIC:10:1",
+                    value_role="current",
+                    result_field="metric_current",
+                ),
+                ResearchLogicalColumn(
+                    asset_ref="METRIC:10:1",
+                    value_role="previous",
+                    result_field="metric_previous",
+                ),
+                ResearchLogicalColumn(
+                    asset_ref="METRIC:10:1",
+                    value_role="difference",
+                    result_field="metric_difference",
+                ),
+            ),
+            "sample_rows": (
+                {
+                    "metric_current": 99194.88,
+                    "metric_previous": 141225.27,
+                    "metric_difference": -42030.389999999985,
+                },
+            ),
+        }
+    )
+
+    assert validate_report_conclusions(
+        run_id="run-1",
+        summary="2026年6月29日较6月28日下降42030.39。",
+        summary_evidence_ids=("evidence-1",),
+        evidences=(evidence,),
+    ) == ()
+    violations = validate_report_conclusions(
+        run_id="run-1",
+        summary="2026年6月29日较6月28日下降29.8%。",
+        summary_evidence_ids=("evidence-1",),
+        evidences=(evidence,),
+    )
+    assert any("29.8" in item for item in violations)
+
+
+def test_report_number_validation_accepts_identifiers_row_count_and_percent_scale() -> None:
+    """引用标识不参与数字校验，行数和小数形式的占比可以正常展示。"""
+
+    evidence = _evidence().model_copy(
+        update={
+            "evidence_id": "evidence:research-query-48820610e9d48ba9",
+            "statistics": ResearchEvidenceStatistics(row_count=6),
+            "sample_rows": (
+                {
+                    "dimension_1": 100013,
+                    "gmv_difference_contribution": 0.3901919539647385,
+                },
+            ),
+        }
+    )
+
+    assert validate_report_conclusions(
+        run_id="run-1",
+        summary=(
+            "证据 evidence:research-query-48820610e9d48ba9 包含6个档口，"
+            "其中档口100013贡献占比为39.0%。"
+        ),
+        summary_evidence_ids=(evidence.evidence_id,),
+        evidences=(evidence,),
+    ) == ()

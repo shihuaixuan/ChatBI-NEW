@@ -578,7 +578,7 @@ def test_question_rewrite_repair_receives_specific_validation_error() -> None:
         {
             "original_question": "分析渠道贡献",
             "rewrite_question": "分析渠道贡献",
-            "metric_phrases": ["渠道下降贡献"],
+            "metric_phrases": [""],
             "dimension_phrases": ["渠道"],
         },
         {
@@ -628,4 +628,4 @@ def test_question_rewrite_repair_receives_specific_validation_error() -> None:
         list(preparer.prepare_initial(state))
 
     assert len(prompts) == 2
-    assert "检索短语必须来自 rewrite_question" in prompts[1]
+    assert "检索短语不能为空" in prompts[1]

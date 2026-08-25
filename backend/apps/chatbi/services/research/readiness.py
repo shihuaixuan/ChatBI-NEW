@@ -185,7 +185,9 @@ def compute_quality_metrics(
     ]
     evaluated = [
         (legacy_facts, agent_facts, report)
-        for (legacy_facts, agent_facts, _pair), report in zip(facts, reports)
+        for (legacy_facts, agent_facts, _pair), report in zip(
+            facts, reports, strict=True
+        )
         if _has_research_facts(legacy_facts, agent_facts)
     ]
     metrics: dict[str, float] = {}

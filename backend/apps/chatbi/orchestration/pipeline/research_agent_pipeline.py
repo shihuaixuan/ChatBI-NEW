@@ -34,6 +34,9 @@ from apps.chatbi.orchestration.pipeline.research_agent import (
     ResearchAgentHarness,
     ResearchAgentRunOutcome,
 )
+from apps.chatbi.services.research.routing_freeze import (
+    research_permission_fingerprint,
+)
 from apps.chatbi.services.research.run_lifecycle import load_research_state
 from apps.chatbi.services.research.scope_stamp import (
     allowed_asset_references,
@@ -42,6 +45,7 @@ from apps.chatbi.services.research.scope_stamp import (
 )
 from apps.event import RenderEvent
 from apps.retrieval import ExecutableAssetReference
+from apps.tool.tools.semantic_contracts import SemanticAssetScope
 from apps.trace import AgentTraceRecorder
 
 logger = logging.getLogger(__name__)
@@ -173,8 +177,36 @@ class ResearchAgentPipeline:
                 "RESEARCH_AGENT_SCOPE_MISSING",
                 "agent 引擎要求路由期检索 Scope，但执行输入中缺失。",
             )
+        try:
+            resolved_scope = SemanticAssetScope.model_validate(raw_scope)
+        except ValueError as exc:
+            raise ResearchPipelineError(
+                "RESEARCH_AGENT_SCOPE_INVALID",
+                f"路由期检索 Scope 无法加载：{exc}",
+            ) from exc
+        schema_fingerprint = schema_payload.get("schema_fingerprint")
+        if not isinstance(schema_fingerprint, str) or not schema_fingerprint:
+            raise ResearchPipelineError(
+                "RESEARCH_AGENT_SCHEMA_SNAPSHOT_INVALID",
+                "路由期 DatasetSchema 快照缺少 schema_fingerprint。",
+            )
+        current_permission_fingerprint = research_permission_fingerprint(
+            schema_fingerprint=schema_fingerprint,
+            scope_fingerprint=scope_fingerprint,
+            tenant_scope=f"oid:{resolved_scope.workspace_id}",
+            dataset_ref=f"ASSET:dataset:{resolved_scope.dataset_id}",
+            user_id=resolved_scope.user_id,
+            datasource_id=resolved_scope.datasource_id,
+            permission_version=resolved_scope.permission_version,
+            authorized_tables=resolved_scope.authorized_tables,
+        )
+        if current_permission_fingerprint != permission_fingerprint:
+            raise ResearchPipelineError(
+                "RESEARCH_AGENT_PERMISSION_FINGERPRINT_CHANGED",
+                "当前身份或数据权限与路由期冻结快照不一致，拒绝继续执行。",
+            )
         stamped = stamp_semantic_scope(
-            scope=raw_scope,
+            scope=resolved_scope,
             schema_payload=schema_payload,
             scope_fingerprint=scope_fingerprint,
             permission_fingerprint=permission_fingerprint,
@@ -306,16 +338,22 @@ class ResearchAgentPipeline:
                 continue
             try:
                 payload = json.loads(raw)
-            except ValueError:
-                continue
+            except ValueError as exc:
+                raise ResearchPipelineError(
+                    "RESEARCH_AGENT_REPORT_INVALID",
+                    f"研究报告 {key} 不是合法 JSON，不能降级为未校验摘要。",
+                ) from exc
             if isinstance(payload, dict):
                 return payload
+            raise ResearchPipelineError(
+                "RESEARCH_AGENT_REPORT_INVALID",
+                f"研究报告 {key} 必须是 JSON 对象。",
+            )
         return {
             "summary": outcome.completion.summary,
             "evidence_ids": list(outcome.completion.evidence_ids),
             "limitations": list(outcome.completion.limitations),
         }
-
 
 __all__ = [
     "ResearchAgentPipeline",

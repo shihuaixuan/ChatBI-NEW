@@ -165,6 +165,7 @@ class ResearchAgentHarness:
         started_at = time.monotonic()
         stall_turns = 0
         requirements_directive_at: int | None = None
+        actionable_recovery_pending = False
         turns = 0
 
         while True:
@@ -318,7 +319,36 @@ class ResearchAgentHarness:
                 and set(observation.evidence_ids) - known_before
                 for _call, observation in observations
             )
+            actionable_failure = any(
+                observation.status is not ToolObservationStatus.SUCCEEDED
+                and (
+                    observation.parameter_retryable
+                    or observation.same_parameter_retryable
+                )
+                for _call, observation in observations
+            )
+            if actionable_failure:
+                actionable_recovery_pending = True
+                # 参数可修正意味着下一轮仍有明确方向，不能沿用旧的强制收口
+                # 倒计时提前结束研究；总预算仍然提供最终上限。
+                requirements_directive_at = turns
             stall_turns = 0 if new_direction else stall_turns + 1
+            strengthened_report = any(
+                observation.tool_name == "compute_evidence"
+                and observation.status is ToolObservationStatus.SUCCEEDED
+                and set(observation.evidence_ids) - known_before
+                for _call, observation in observations
+            )
+            recovered_with_evidence = new_direction and actionable_recovery_pending
+            if recovered_with_evidence:
+                actionable_recovery_pending = False
+            if (
+                (strengthened_report or recovered_with_evidence)
+                and self._requirements_satisfied(ctx)
+            ):
+                # 需求满足后补做计算会产生更强的新证据，应重新给予一次收口
+                # 宽限期；参数纠正后新产生的证据同样属于有效恢复进展。
+                requirements_directive_at = turns
 
             agent_run_repository.finish_step(
                 self._session,
@@ -686,8 +716,12 @@ class ResearchAgentHarness:
                     else None
                 ),
                 "retryable": observation.retryable,
+                "parameter_retryable": observation.parameter_retryable,
                 "same_parameter_retryable": observation.same_parameter_retryable,
                 "suggested_corrections": list(observation.suggested_corrections),
+                # 校验器已经生成了可执行的违规明细；必须反馈给模型，
+                # 否则模型只能用相同参数盲目重试，最终触发停滞收口。
+                "details": observation.details,
             }
         return orjson.dumps(payload).decode()
 
@@ -772,8 +806,8 @@ class ResearchAgentHarness:
         if evidences:
             return ResearchCompletion(
                 run_id=ctx.run_id,
-                status="succeeded",
-                reason=ResearchCompletionReason.NO_NEW_DIRECTION,
+                status="partial",
+                reason=ResearchCompletionReason.PARTIAL_FAILURE,
                 summary=(
                     f"连续多轮没有产生新方向，研究在第 {ctx.iteration} 轮结束；"
                     f"共保留 {len(evidences)} 条证据供后续分析。"

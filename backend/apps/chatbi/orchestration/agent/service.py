@@ -140,7 +140,9 @@ def get_agent_config() -> AgentConfig:
         context_fold_chars=settings.CHAT_AGENT_CONTEXT_FOLD_CHARS,
         execution_modes=tuple(
             item.strip().lower()
-            for item in (settings.CHAT_AGENT_EXECUTION_MODES or "fast,plan").split(",")
+            for item in (
+                settings.CHAT_AGENT_EXECUTION_MODES or "fast,plan,research"
+            ).split(",")
             if item.strip()
         ),
         plan_max_query_tasks=settings.CHATBI_PLAN_MAX_QUERY_TASKS,

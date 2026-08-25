@@ -130,6 +130,10 @@ def _covered_count(
         return sum(
             1
             for item in evidences
+            if (
+                not required
+                or required <= (set(item.metric_refs) | set(item.dimension_refs))
+            )
             if any(
                 dependency.relation in {"reconciliation", "contribution"}
                 for dependency in item.dependencies

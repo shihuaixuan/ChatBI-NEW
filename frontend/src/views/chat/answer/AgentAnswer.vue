@@ -11,6 +11,7 @@ import {
   latestAgentEventSequence,
   reduceAgentEvent,
 } from '@/views/chat/answer/agentEventReducer'
+import { projectResearchReportAnswer } from '@/views/chat/answer/researchReportProjection'
 
 const props = withDefaults(
   defineProps<{
@@ -73,7 +74,10 @@ const runtimeLoading = ref(false)
 
 // Agent 的最终回答与图表配置分开生成，答案文本直接使用后端持久化的 Markdown。
 const finalAnswer = computed(
-  () => props.message?.record?.sql_answer || props.message?.record?.chart_answer || ''
+  () =>
+    projectResearchReportAnswer(
+      props.message?.record?.sql_answer || props.message?.record?.chart_answer || ''
+    )
 )
 const caliberCard = computed(() => props.message?.record?.caliber_card || {})
 const caliberMetrics = computed(() =>

@@ -116,16 +116,18 @@ export function buildAgentFlow(
         pipelineSteps.set(key, step)
         break
       }
-      case 'task.started':
+      case 'task.started': {
+        const computeTask = String(event.task_id || '').startsWith('c:')
         pipelineSteps.set(`task:${event.task_id}`, {
           key: `task-${event.task_id}`,
-          kind: 'task',
-          title: `执行任务 ${event.task_id}`,
+          kind: computeTask ? 'compute' : 'task',
+          title: `${computeTask ? '执行计算' : '执行查询'} ${event.task_id}`,
           status: 'running',
           args: {},
           result: { ...event },
         })
         break
+      }
       case 'task.finished': {
         const key = `task:${event.task_id}`
         const step = pipelineSteps.get(key)
@@ -136,14 +138,23 @@ export function buildAgentFlow(
         break
       }
       case 'compute.finished': {
-        const key = `compute:${event.task_id}`
-        pipelineSteps.set(key, {
-          key: `compute-${event.task_id}`,
-          kind: 'compute',
-          title: `计算结果 ${event.task_id}`,
-          status: event.status === 'failed' ? 'failed' : 'success',
+        // compute.finished 是计算任务的结果事件，不代表再次执行。与同一
+        // task_id 的生命周期事件合并，避免时间线把一次计算展示成两条。
+        const key = `task:${event.task_id}`
+        const step = pipelineSteps.get(key) || {
+          key: `task-${event.task_id}`,
+          kind: 'compute' as const,
+          title: `执行计算 ${event.task_id}`,
+          status: 'running' as const,
           args: {},
-          result: { ...event },
+          result: {},
+        }
+        step.kind = 'compute'
+        step.title = `执行计算 ${event.task_id}`
+        step.status = event.status === 'failed' ? 'failed' : 'success'
+        step.result = { ...step.result, ...event }
+        pipelineSteps.set(key, {
+          ...step,
         })
         break
       }
@@ -298,11 +309,7 @@ export function buildAgentFlow(
 
   // 同一轮先展示模型为什么这样做，再展示实际工具调用，保留 Agent 的决策脉络。
   const steps: AgentFlowStep[] = understandingStep ? [understandingStep] : []
-  const indexedTools = [
-    ...toolSteps.values(),
-    ...workflowSteps.values(),
-    ...pipelineSteps.values(),
-  ]
+  const indexedTools = [...toolSteps.values(), ...workflowSteps.values(), ...pipelineSteps.values()]
   const stepIndexes = [
     ...new Set([
       ...thinkingSteps.keys(),

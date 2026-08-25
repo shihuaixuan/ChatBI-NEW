@@ -22,7 +22,7 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchEvidenceRequirement,
     ResearchHierarchy,
     ResearchImmutableFilter,
-    ResearchReason,
+    ResearchPremise,
     ResearchScope,
     ResearchTimeBinding,
     ResearchTimeRole,
@@ -56,14 +56,31 @@ def freeze_research_requirement(
     budget: ResearchBudget | None = None,
     tenant_scope: str,
     dataset_ref: str,
+    user_id: int | None = None,
+    datasource_id: int | None = None,
+    permission_version: str | None = None,
+    authorized_tables: tuple[str, ...] = (),
 ) -> ResearchAgentRequirement:
     """冻结新契约 Requirement；run_id 由主路径适配层按 Run 身份补盖。"""
 
     dynamic = semantic_parse.multi_step
     if dynamic is None or dynamic.type != "dynamic_research":
         raise ResearchRequirementError(ResearchRequirementError.TARGET_METRIC_REQUIRED)
-    target_metric_refs = tuple(
+    selected_metric_refs = tuple(
         dict.fromkeys(item.ref for item in semantic_parse.measures)
+    )
+    if not selected_metric_refs:
+        raise ResearchRequirementError(ResearchRequirementError.TARGET_METRIC_REQUIRED)
+
+    # dynamic_research 的 required_driver_metric_refs 是解析阶段已经明确的
+    # 目标/驱动边界，必须先完成分类再投影治理关系。否则派生驱动指标自身的
+    # 公式关系会被误当成目标关系，污染本次 Research Scope。
+    declared_driver_refs = tuple(
+        dict.fromkeys(dynamic.required_driver_metric_refs)
+    )
+    declared_driver_set = set(declared_driver_refs)
+    target_metric_refs = tuple(
+        ref for ref in selected_metric_refs if ref not in declared_driver_set
     )
     if not target_metric_refs:
         raise ResearchRequirementError(ResearchRequirementError.TARGET_METRIC_REQUIRED)
@@ -76,6 +93,17 @@ def freeze_research_requirement(
         for item in schema.dimensions
         if item.model is not None
     }
+    if any(ref not in metrics for ref in declared_driver_refs):
+        raise ResearchRequirementError(
+            ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+        )
+    if (
+        dynamic.premise_to_verify is not None
+        and dynamic.premise_to_verify.metric_ref in declared_driver_set
+    ):
+        raise ResearchRequirementError(
+            ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+        )
     try:
         target_metrics = [metrics[ref] for ref in target_metric_refs]
     except KeyError as exc:
@@ -161,30 +189,14 @@ def freeze_research_requirement(
         dimension_refs=scope_dimension_refs,
         time_roles=time_roles,
     )
-    # 用户显式提到、但按治理关系属于其他目标指标驱动指标的度量（例如
-    # “验证 GMV 下降主要由订单数减少还是客单价下降导致”）归入驱动指标；
-    # 否则目标与驱动集合相交会触发 RESEARCH_TARGET_DRIVER_METRIC_CONFLICT。
     governed_driver_refs = {
         metric_ref
         for item in driver_relationships
         for metric_ref in (item.component_metric_refs or (item.driver_metric_ref,))
     }
-    reclassified_target_refs = tuple(
-        ref for ref in target_metric_refs if ref not in governed_driver_refs
-    )
-    if not reclassified_target_refs:
+    if not declared_driver_set <= governed_driver_refs:
         raise ResearchRequirementError(
-            ResearchRequirementError.TARGET_METRIC_REQUIRED
-        )
-    if len(reclassified_target_refs) != len(target_metric_refs):
-        target_metric_refs = reclassified_target_refs
-        target_metrics = [metrics[ref] for ref in target_metric_refs]
-        driver_relationships = _driver_relationships(
-            schema=schema,
-            target_metrics=target_metrics,
-            metrics=metrics,
-            dimension_refs=scope_dimension_refs,
-            time_roles=time_roles,
+            ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
         )
     time_bindings_by_model = _time_bindings_by_model(
         schema=schema,
@@ -278,28 +290,7 @@ def freeze_research_requirement(
         target_metrics,
         contribution_dimension_refs,
     )
-    explicit_driver_refs = tuple(
-        ref
-        for ref in dict.fromkeys(
-            (
-                *(item.ref for item in semantic_parse.measures),
-                *dynamic.required_driver_metric_refs,
-            )
-        )
-        if ref in governed_driver_refs
-    )
-    required_hierarchy_ids = tuple(
-        hierarchy.id
-        for hierarchy in hierarchies
-        if "drilldown" in dynamic.required_actions
-        and dynamic.reason
-        in {
-            ResearchReason.RESULT_DRIVEN_DIMENSION.value,
-            ResearchReason.RESULT_DRIVEN_FILTER.value,
-        }
-        and len(explicit_dimension_refs) >= 2
-        and set(explicit_dimension_refs) <= set(hierarchy.dimension_refs)
-    )
+    explicit_driver_refs = declared_driver_refs
     contribution_requested = any(
         item.type.value == "contribution"
         for item in semantic_parse.calculations
@@ -358,7 +349,6 @@ def freeze_research_requirement(
             },
             "required_dimension_refs": explicit_dimension_refs,
             "required_driver_metric_refs": explicit_driver_refs,
-            "required_hierarchy_ids": required_hierarchy_ids,
             "required_contribution_dimension_refs": (
                 required_contribution_dimensions
             ),
@@ -367,20 +357,77 @@ def freeze_research_requirement(
             "schema_fingerprint": schema.schema_fingerprint,
         }
     )
-    permission_fingerprint = _fingerprint(
-        {
-            "schema_fingerprint": schema.schema_fingerprint,
-            "scope_fingerprint": scope_fingerprint,
-            "tenant_scope": tenant_scope,
-            "dataset_ref": dataset_ref,
-        }
-    )[:32]
+    permission_fingerprint = research_permission_fingerprint(
+        schema_fingerprint=schema.schema_fingerprint,
+        scope_fingerprint=scope_fingerprint,
+        tenant_scope=tenant_scope,
+        dataset_ref=dataset_ref,
+        user_id=user_id,
+        datasource_id=datasource_id,
+        permission_version=permission_version,
+        authorized_tables=authorized_tables,
+    )
+    premise = (
+        ResearchPremise.model_validate(dynamic.premise_to_verify.model_dump())
+        if dynamic.premise_to_verify is not None
+        else None
+    )
+    evidence_requirements: list[ResearchEvidenceRequirement] = []
+    if premise is not None:
+        evidence_requirements.append(
+            ResearchEvidenceRequirement(
+                requirement_id="premise-confirmation",
+                kind="premise_confirmation",
+                description="确认用户陈述的指标事实是否成立",
+                required_asset_refs=(premise.metric_ref,),
+            )
+        )
+    evidence_requirements.append(
+        ResearchEvidenceRequirement(
+            requirement_id="target-analysis",
+            kind="dimension_or_driver_analysis",
+            description="围绕目标指标完成归因分析",
+            required_asset_refs=target_metric_refs,
+        )
+    )
+    for index, ref in enumerate(explicit_dimension_refs, start=1):
+        evidence_requirements.append(
+            ResearchEvidenceRequirement(
+                requirement_id=f"required-dimension-{index}",
+                kind="dimension_or_driver_analysis",
+                description=f"覆盖用户明确要求的分析维度 {ref}",
+                required_asset_refs=(ref,),
+            )
+        )
+    for index, ref in enumerate(explicit_driver_refs, start=1):
+        evidence_requirements.append(
+            ResearchEvidenceRequirement(
+                requirement_id=f"required-driver-{index}",
+                kind="claim_support",
+                description=f"验证用户明确要求的驱动指标 {ref}",
+                required_asset_refs=(ref,),
+            )
+        )
+    if contribution_requested:
+        evidence_requirements.append(
+            ResearchEvidenceRequirement(
+                requirement_id="contribution-reconciliation",
+                kind="reconciliation",
+                description="完成贡献度分解并与总量变化对账",
+                required_asset_refs=tuple(
+                    dict.fromkeys(
+                        (*target_metric_refs, *required_contribution_dimensions)
+                    )
+                ),
+            )
+        )
+
     return ResearchAgentRequirement(
         run_id="routing",  # 占位：主路径适配层按 Run 身份覆盖。
         goal=dynamic.goal,
-        reason=ResearchReason(dynamic.reason),
+        reason=dynamic.reason,
         target_metric_refs=target_metric_refs,
-        premise_to_verify=None,
+        premise_to_verify=premise,
         time_bindings=time_bindings,
         time_bindings_by_model=time_bindings_by_model,
         immutable_filters=immutable_filters,
@@ -390,14 +437,7 @@ def freeze_research_requirement(
             dataset_ref=dataset_ref,
             scope_fingerprint=scope_fingerprint,
         ),
-        evidence_requirements=(
-            ResearchEvidenceRequirement(
-                requirement_id="target-analysis",
-                kind="dimension_or_driver_analysis",
-                description="围绕目标指标完成维度或驱动归因分析",
-                required_asset_refs=target_metric_refs,
-            ),
-        ),
+        evidence_requirements=tuple(evidence_requirements),
         budget=budget or ResearchBudget(),
         version_snapshot=ResearchVersionSnapshot(
             schema_version=schema.schema_version,
@@ -663,7 +703,9 @@ def _driver_relationships(
                     else None
                 ),
                 dimension_refs=normalized_dimensions,
-                time_roles=normalized_time_roles,
+                time_roles=tuple(
+                    ResearchTimeRole(role) for role in normalized_time_roles
+                ),
                 relationship_fingerprint=fingerprint,
             )
         )
@@ -719,10 +761,10 @@ def _time_bindings(
     schema: DatasetSchema,
     model_id: int,
     temporal_context: TemporalContext | None,
-) -> tuple[tuple[str, ...], tuple[ResearchTimeBinding, ...]]:
+) -> tuple[tuple[ResearchTimeRole, ...], tuple[ResearchTimeBinding, ...]]:
     if not semantic_parse.time_filters:
-        return ("single",), ()
-    roles = tuple(item.role for item in semantic_parse.time_filters)
+        return (ResearchTimeRole.SINGLE,), ()
+    roles = tuple(ResearchTimeRole(item.role) for item in semantic_parse.time_filters)
     if len(roles) != len(set(roles)):
         raise ResearchRequirementError(ResearchRequirementError.TIME_ROLE_DUPLICATED)
     if temporal_context is None:
@@ -760,13 +802,13 @@ def _time_bindings_by_model(
     schema: DatasetSchema,
     target_model_id: int,
     driver_relationships: Sequence[ResearchDriverRelationship],
-    time_roles: tuple[str, ...],
+    time_roles: tuple[ResearchTimeRole, ...],
     target_bindings: tuple[ResearchTimeBinding, ...],
     temporal_context: TemporalContext | None,
 ) -> dict[str, tuple[ResearchTimeBinding, ...]]:
     """为跨模型驱动查询分别解析各模型的物理时间维度。"""
 
-    if time_roles == ("single",) or not driver_relationships:
+    if time_roles == (ResearchTimeRole.SINGLE,) or not driver_relationships:
         return {}
     model_ids = {target_model_id}
     for relationship in driver_relationships:
@@ -813,10 +855,9 @@ def _time_bindings_by_model(
                 )
             bindings.append(
                 ResearchTimeBinding(
-                    role=role,
+                    role=ResearchTimeRole(role),
                     expression=source.expression,
                     dimension_ref=_dimension_ref(time_dimension),
-                    dimension_id=time_dimension.id,
                     normalized=normalized,
                 )
             )
@@ -905,4 +946,37 @@ def _fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-__all__ = ["freeze_research_requirement"]
+def research_permission_fingerprint(
+    *,
+    schema_fingerprint: str,
+    scope_fingerprint: str,
+    tenant_scope: str,
+    dataset_ref: str,
+    user_id: int | None,
+    datasource_id: int | None,
+    permission_version: str | None,
+    authorized_tables: tuple[str, ...],
+) -> str:
+    """对真实执行身份和授权表集合生成稳定权限指纹。"""
+
+    return _fingerprint(
+        {
+            "schema_fingerprint": schema_fingerprint,
+            "scope_fingerprint": scope_fingerprint,
+            "tenant_scope": tenant_scope,
+            "dataset_ref": dataset_ref,
+            "user_id": user_id,
+            "datasource_id": datasource_id,
+            "permission_version": permission_version,
+            "authorized_tables": sorted(
+                {
+                    str(table).strip().lower()
+                    for table in authorized_tables
+                    if str(table).strip()
+                }
+            ),
+        }
+    )[:32]
+
+
+__all__ = ["freeze_research_requirement", "research_permission_fingerprint"]

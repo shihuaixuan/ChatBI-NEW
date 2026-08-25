@@ -179,16 +179,35 @@ def test_agent_rewrite_output_contains_question_and_phrase_fields_only():
         )
 
 
-def test_question_rewrite_phrases_must_be_non_repeated_substrings():
-    with pytest.raises(ValidationError, match="必须来自 rewrite_question"):
-        QuestionRewriteOutput.model_validate(
-            {
-                "original_question": "按城市看销售额",
-                "rewrite_question": "按城市看销售额",
-                "metric_phrases": ["订单数"],
-                "dimension_phrases": ["城市"],
-            }
-        )
+def test_question_rewrite_filters_untraceable_retrieval_phrases():
+    output = QuestionRewriteOutput.model_validate(
+        {
+            "original_question": "按城市看销售额",
+            "rewrite_question": "按城市看销售额",
+            "metric_phrases": ["销售额", "订单数"],
+            "dimension_phrases": ["城市", "区域"],
+        }
+    )
+
+    assert output.metric_phrases == ["销售额"]
+    assert output.dimension_phrases == ["城市"]
+
+
+def test_question_rewrite_allows_empty_phrases_after_traceability_filter():
+    output = QuestionRewriteOutput.model_validate(
+        {
+            "original_question": "分析库存风险",
+            "rewrite_question": "分析库存风险",
+            "metric_phrases": ["库存异常数量"],
+            "dimension_phrases": ["仓库"],
+        }
+    )
+
+    assert output.metric_phrases == []
+    assert output.dimension_phrases == []
+
+
+def test_question_rewrite_rejects_cross_category_duplicate_phrases():
 
     with pytest.raises(ValidationError, match="不能重复"):
         QuestionRewriteOutput.model_validate(
