@@ -10,6 +10,12 @@ from apps.chatbi.models.dto import (
     AgentTraceOverviewSnapshot,
     AgentTraceSnapshot,
     AiModelQuestion,
+    AnalysisEvidence,
+    AnalysisEvidenceColumn,
+    AnalysisEvidenceDependency,
+    AnalysisEvidenceLevel,
+    AnalysisEvidenceStatistics,
+    AnalysisEvidenceVersion,
     AnalysisExecutionSpec,
     AnalysisPlan,
     AnalysisPlanStatus,
@@ -135,6 +141,12 @@ from apps.chatbi.models.orm import (
 )
 
 __all__ = [
+    "AnalysisEvidence",
+    "AnalysisEvidenceColumn",
+    "AnalysisEvidenceDependency",
+    "AnalysisEvidenceLevel",
+    "AnalysisEvidenceStatistics",
+    "AnalysisEvidenceVersion",
     "AnalysisPlan",
     "AnalysisPlanStatus",
     "AnalysisTask",

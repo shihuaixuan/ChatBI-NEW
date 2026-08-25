@@ -262,6 +262,7 @@ class RunOrchestrator:
             raise ModeRoutingError("SEMANTIC_PARSE_STATE_REQUIRED")
         if not isinstance(candidate_groups, dict):
             raise ModeRoutingError("SEMANTIC_CANDIDATES_STATE_REQUIRED")
+
         try:
             semantic_parse = SemanticParseOutput.model_validate(semantic_parse_payload)
         except ValueError as exc:
@@ -334,9 +335,6 @@ class RunOrchestrator:
 
     def _dispatch_research(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         """分发 Research 执行；首次运行与澄清恢复共用。
-
-        agent 是唯一引擎（阶段 8）：由新契约 Harness 执行，未装配即显式
-        失败；旧管道与 shadow 双跑已删除，不存在回退目标（§12.5）。
         """
 
         if self.research_agent_pipeline is None:

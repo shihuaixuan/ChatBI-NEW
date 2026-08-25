@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from apps.chatbi.models.dto.analysis_evidence import AnalysisEvidence
 from apps.chatbi.models.dto.analysis_plan import ResultSetRef
 from apps.chatbi.models.dto.research_agent import (
     ResearchAgentRequirement,
@@ -29,6 +30,10 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchEvidence,
     ResearchHypothesisAssessment,
     ToolObservation,
+)
+from apps.chatbi.services.evidence import (
+    EvidenceRegistry,
+    build_research_analysis_evidence,
 )
 from apps.chatbi.services.research.hypothesis_evaluator import HypothesisAuditRecord
 from apps.chatbi.services.research.state_snapshot import validate_evidence_dag
@@ -120,6 +125,23 @@ class ResearchToolContext:
             research.setdefault(
                 "initial_plan_state",
                 {"status": "pending", "nodes": {}},
+            )
+        # 恢复旧快照时把 Research Evidence 投影到统一台账；原 Research 台账
+        # 继续保留，避免破坏当前完成度和报告恢复协议。
+        existing = tuple(
+            ResearchEvidence.model_validate(raw)
+            for raw in self._evidence_map().values()
+            if isinstance(raw, dict)
+        )
+        if existing:
+            EvidenceRegistry(self.context.state).merge_missing(
+                tuple(
+                    build_research_analysis_evidence(
+                        item,
+                        run_id=self._analysis_evidence_run_id(),
+                    )
+                    for item in existing
+                )
             )
 
     # ------------------------------------------------------------------ #
@@ -224,6 +246,11 @@ class ResearchToolContext:
             for raw in self._evidence_map().values()
         ]
 
+    def analysis_evidences(self) -> tuple[AnalysisEvidence, ...]:
+        """读取三种分析模式共用的 Evidence 台账。"""
+
+        return EvidenceRegistry(self.context.state).evidences()
+
     def known_evidence_ids(self) -> tuple[str, ...]:
         return tuple(self._evidence_map())
 
@@ -246,6 +273,20 @@ class ResearchToolContext:
         candidate.append(evidence)
         validate_evidence_dag(candidate)
         self._evidence_map()[evidence.evidence_id] = evidence.model_dump(mode="json")
+        EvidenceRegistry(self.context.state).register(
+            build_research_analysis_evidence(
+                evidence,
+                run_id=self._analysis_evidence_run_id(),
+            )
+        )
+
+    def _analysis_evidence_run_id(self) -> str:
+        """统一 Evidence 使用 Agent 执行 ID，模式信息只保存在 mode 字段。"""
+
+        value = self.context.execution_id
+        if not isinstance(value, str) or not value:
+            raise ValueError("RESEARCH_ANALYSIS_EVIDENCE_EXECUTION_ID_REQUIRED")
+        return value
 
     # ------------------------------------------------------------------ #
     # Observation 重放

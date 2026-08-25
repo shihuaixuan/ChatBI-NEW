@@ -12,6 +12,14 @@ from apps.chatbi.models.dto.agent_trace import (
     AgentTraceOverviewSnapshot,
     AgentTraceSnapshot,
 )
+from apps.chatbi.models.dto.analysis_evidence import (
+    AnalysisEvidence,
+    AnalysisEvidenceColumn,
+    AnalysisEvidenceDependency,
+    AnalysisEvidenceLevel,
+    AnalysisEvidenceStatistics,
+    AnalysisEvidenceVersion,
+)
 from apps.chatbi.models.dto.analysis_plan import (
     AnalysisPlan,
     AnalysisPlanStatus,
@@ -176,6 +184,12 @@ from apps.chatbi.models.dto.sql_generation import (
 from apps.chatbi.models.dto.streaming import ModelMessage, ModelStreamChunk
 
 __all__ = [
+    "AnalysisEvidence",
+    "AnalysisEvidenceColumn",
+    "AnalysisEvidenceDependency",
+    "AnalysisEvidenceLevel",
+    "AnalysisEvidenceStatistics",
+    "AnalysisEvidenceVersion",
     "AnalysisPlan",
     "AnalysisExpression",
     "AnalysisPlanStatus",

@@ -24,6 +24,7 @@ from apps.chatbi.orchestration.agent.tools.interaction import (
     ClarifyTool,
     prepare_semantic_clarification_args,
 )
+from apps.chatbi.services.evidence import EvidenceRegistry
 from apps.chatbi.services.generation.agent_finalization import (
     AgentFinalizationResult,
 )
@@ -699,6 +700,17 @@ def test_chatbi_result_processor_saves_public_sql_result_artifact():
     ctx = _ctx(
         result_artifact_service=artifact_service,
         compiled_sql="select amount from orders",
+        execution_requirement={
+            "asset_snapshot": {
+                "schema_version": 1,
+                "contract_version": 1,
+                "schema_fingerprint": "schema-test",
+            }
+        },
+        semantic_scope={
+            "scope_fingerprint": "scope-test",
+            "permission_fingerprint": "permission-test",
+        },
     )
     result = AgentToolResult.succeeded(
         "summary",
@@ -733,6 +745,11 @@ def test_chatbi_result_processor_saves_public_sql_result_artifact():
         {"amount": 10},
         {"amount": 20},
     ]
+    evidences = EvidenceRegistry(ctx.state).evidences()
+    assert len(evidences) == 1
+    assert evidences[0].run_id == "agent:10"
+    assert evidences[0].mode == "plan"
+    assert evidences[0].result_set_id == result_set_id
     assert "last_execution" not in ctx.state
 
 

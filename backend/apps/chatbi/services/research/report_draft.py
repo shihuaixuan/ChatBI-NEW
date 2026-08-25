@@ -30,7 +30,7 @@ def build_partial_report(
 
     evaluation = evaluate_completion(
         ctx.requirement,
-        ctx.evidences(),
+        ctx.analysis_evidences(),
         premise_result=ctx.premise_result,
     )
     failed = [

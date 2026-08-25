@@ -1586,7 +1586,7 @@ class FinishResearchTool(
         if request.reason is ResearchCompletionReason.SUFFICIENT_EVIDENCE:
             evaluation = evaluate_completion(
                 ctx.requirement,
-                evidences,
+                ctx.analysis_evidences(),
                 premise_result=ctx.premise_result,
             )
             if not evaluation.satisfied:

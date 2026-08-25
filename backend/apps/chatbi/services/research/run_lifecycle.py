@@ -40,6 +40,7 @@ from apps.chatbi.models.orm.agent_run import (
 )
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.repository.sqlmodel import agent_run_repository
+from apps.chatbi.services.evidence import ANALYSIS_EVIDENCE_REGISTRY_KEY
 from apps.chatbi.services.research.state_snapshot import (
     build_research_run_snapshot,
 )
@@ -311,6 +312,11 @@ class ResearchToolCallCommit:
             merged = dict(derived.get(_RESULT_SETS_KEY) or {})
             merged.update(result_sets)
             derived[_RESULT_SETS_KEY] = merged
+        analysis_evidence = self._ctx.context.state.get(
+            ANALYSIS_EVIDENCE_REGISTRY_KEY
+        )
+        if isinstance(analysis_evidence, dict):
+            derived[ANALYSIS_EVIDENCE_REGISTRY_KEY] = dict(analysis_evidence)
         running_ids = [
             item.tool_call_id
             for item in agent_run_repository.list_running_tool_calls(
@@ -375,6 +381,7 @@ def rebuild_research_context(
     run_row: ChatbiAgentRun,
     requirement: ResearchAgentRequirement,
     research_state: Mapping[str, Any],
+    analysis_evidence: Mapping[str, Any] | None = None,
     *,
     semantic_runtime: Any = None,
     compute_engine: Any = None,
@@ -404,6 +411,7 @@ def rebuild_research_context(
             "research_run_id": requirement.run_id,
             RESEARCH_STATE_KEY: dict(research_state),
             _RESULT_SETS_KEY: {},
+            ANALYSIS_EVIDENCE_REGISTRY_KEY: dict(analysis_evidence or {}),
         },
     )
     ctx = ResearchToolContext(
@@ -462,6 +470,11 @@ def recover_research_run(
         run_row,
         requirement,
         research_state,
+        analysis_evidence=(
+            derived.get(ANALYSIS_EVIDENCE_REGISTRY_KEY)
+            if isinstance(derived.get(ANALYSIS_EVIDENCE_REGISTRY_KEY), dict)
+            else None
+        ),
         semantic_runtime=semantic_runtime,
         compute_engine=compute_engine,
         result_store=result_store,
@@ -516,6 +529,9 @@ def recover_research_run(
             **dict(derived.get(_RESULT_SETS_KEY) or {}),
             **result_sets,
         }
+    analysis_evidence = ctx.context.state.get(ANALYSIS_EVIDENCE_REGISTRY_KEY)
+    if isinstance(analysis_evidence, dict):
+        derived[ANALYSIS_EVIDENCE_REGISTRY_KEY] = dict(analysis_evidence)
     refreshed_snapshot = build_research_run_snapshot(
         ctx,
         running_tool_call_ids=[],
@@ -589,6 +605,9 @@ def cancel_research_run(
             **dict(derived.get(_RESULT_SETS_KEY) or {}),
             **result_sets,
         }
+    analysis_evidence = ctx.context.state.get(ANALYSIS_EVIDENCE_REGISTRY_KEY)
+    if isinstance(analysis_evidence, dict):
+        derived[ANALYSIS_EVIDENCE_REGISTRY_KEY] = dict(analysis_evidence)
     snapshot = build_research_run_snapshot(
         ctx,
         running_tool_call_ids=[],

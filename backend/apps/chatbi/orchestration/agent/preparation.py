@@ -182,6 +182,7 @@ class AgentInputPreparer:
             },
         )
 
+        # 3. 通过LLM进行语义解析
         semantic_parse = self._semantic_parse_service.parse(
             rewrite_question=rewrite.rewrite_question,
             candidate_payload={"candidate_groups": candidate_groups},

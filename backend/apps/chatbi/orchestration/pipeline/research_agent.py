@@ -44,6 +44,7 @@ from apps.chatbi.orchestration.agent.tools.research import (
     build_research_tool_registry,
 )
 from apps.chatbi.repository.sqlmodel import agent_run_repository
+from apps.chatbi.services.evidence import ANALYSIS_EVIDENCE_REGISTRY_KEY
 from apps.chatbi.services.research.agent_context import (
     build_premise_query_args,
     build_research_system_context,
@@ -182,7 +183,6 @@ class ResearchAgentHarness:
         turns = 0
 
         # 冻结 Requirement 带有首轮计划时，先完成所有当前可确定节点，
-        # 首轮计划结束前不把固定查询交给模型重复选择。
         if ctx.requirement.initial_plan is not None:
             outcome = self._execute_initial_plan(ctx, turns, started_at)
             if outcome is not None:
@@ -197,9 +197,11 @@ class ResearchAgentHarness:
                 )
 
         while True:
+            # 1. 取消信号检查
             if self._is_cancelled():
                 return self._finalize_cancelled(ctx, turns, stage="loop_top")
 
+            # 2. 预算检查
             exhaustion = self._budget_exhaustion(ctx, started_at)
             if exhaustion is not None:
                 return self._finalize_server_stop(
@@ -224,14 +226,12 @@ class ResearchAgentHarness:
                 if requirements_directive_at is None:
                     state.messages.append(
                         AgentMessage.user(
-                            "<system-reminder>证据需求已全部满足。请尽快调用 "
-                            "finish_research 提交结论。</system-reminder>"
+                            "<system-reminder>证据需求已全部满足。请尽快调用 finish_research 提交结论。</system-reminder>"
                         )
                     )
                     requirements_directive_at = turns
                 elif (
-                    turns
-                    >= requirements_directive_at + self._config.research_max_stall_turns
+                    turns >= requirements_directive_at + self._config.research_max_stall_turns
                 ):
                     return self._finalize_server_stop(
                         ctx,
@@ -240,7 +240,7 @@ class ResearchAgentHarness:
                         reason_key="no_new_direction",
                     )
 
-            # ---- 一轮推理：受控上下文 -> decide(profile=research) ----
+            # 3. ---- 一轮推理：受控上下文 -> decide(profile=research) ----
             turn_index = ctx.iteration + 1
             step = agent_run_repository.start_step(self._session, self._run_row, turn_index)
             self._session.commit()
@@ -283,8 +283,7 @@ class ResearchAgentHarness:
                 stall_turns += 1
                 state.messages.append(
                     AgentMessage.user(
-                        "<system-reminder>纯文本回答不构成完成。请继续调用工具推进研究；"
-                        "若研究已经可以结束，必须调用 finish_research。</system-reminder>"
+                        "<system-reminder>纯文本回答不构成完成。请继续调用工具推进研究；若研究已经可以结束，必须调用 finish_research。</system-reminder>"
                     )
                 )
                 agent_run_repository.finish_step(
@@ -490,6 +489,7 @@ class ResearchAgentHarness:
         derived = dict(self._run_row.derived_state or {})
         derived[RESEARCH_STATE_KEY] = ctx.context.state[RESEARCH_STATE_KEY]
         derived[_RESULT_SETS_KEY] = {}
+        self._persist_analysis_evidence(derived, ctx)
         agent_run_repository.update_run(
             self._session, self._run_row, derived_state=derived
         )
@@ -755,6 +755,7 @@ class ResearchAgentHarness:
                 **dict(derived.get(_RESULT_SETS_KEY) or {}),
                 **result_sets,
             }
+        self._persist_analysis_evidence(derived, ctx)
         agent_run_repository.update_run(
             self._session,
             self._run_row,
@@ -1040,11 +1041,11 @@ class ResearchAgentHarness:
         收口宽限期必须锚定在真实进展之后。
         """
 
-        if not ctx.evidences():
+        if not ctx.analysis_evidences():
             return False
         return evaluate_completion(
             ctx.requirement,
-            ctx.evidences(),
+            ctx.analysis_evidences(),
             premise_result=ctx.premise_result,
         ).satisfied
 
@@ -1225,6 +1226,7 @@ class ResearchAgentHarness:
                 **dict(derived.get(_RESULT_SETS_KEY) or {}),
                 **result_sets,
             }
+        self._persist_analysis_evidence(derived, ctx)
         snapshot = build_research_run_snapshot(
             ctx,
             running_tool_call_ids=[],
@@ -1239,6 +1241,17 @@ class ResearchAgentHarness:
         )
         self._session.commit()
         return snapshot
+
+    @staticmethod
+    def _persist_analysis_evidence(
+        derived: dict[str, Any],
+        ctx: ResearchToolContext,
+    ) -> None:
+        """把统一 Evidence 台账随 Research 状态一起持久化。"""
+
+        registry = ctx.context.state.get(ANALYSIS_EVIDENCE_REGISTRY_KEY)
+        if isinstance(registry, dict):
+            derived[ANALYSIS_EVIDENCE_REGISTRY_KEY] = dict(registry)
 
 
 __all__ = ["ResearchAgentHarness", "ResearchAgentRunOutcome"]

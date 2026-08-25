@@ -16,6 +16,7 @@ from apps.chatbi.models.dto.analysis_plan import (
     PresentationHint,
     QueryTask,
     QueryTaskSpec,
+    ResultSetKind,
 )
 from apps.chatbi.models.dto.execution_requirement import (
     ExecutionRequirement,
@@ -31,6 +32,12 @@ from apps.chatbi.orchestration.agent.tools.interaction import (
 )
 from apps.chatbi.orchestration.pipeline.events import PipelineEvents
 from apps.chatbi.repository.sqlmodel import agent_run_repository
+from apps.chatbi.services.evidence import (
+    EvidenceRegistry,
+    build_analysis_evidence,
+    build_analysis_version_snapshot,
+)
+from apps.chatbi.services.execution.result_store import ResultStore
 from apps.chatbi.services.generation.agent_finalization import (
     AgentFinalizationInput,
     AgentFinalizationService,
@@ -50,6 +57,7 @@ from apps.chatbi.services.planning.confidence import (
 from apps.chatbi.services.planning.semantic_query_preparation import (
     prepare_strict_query_scope,
 )
+from apps.conversation import ChatRecordExecutionType
 from apps.event import EventPublisher, RenderEvent
 from apps.tool import ToolCall, ToolCallContext, ToolRegistry, ToolResult, ToolStatus
 from apps.trace import (
@@ -467,6 +475,7 @@ class FastPipeline:
         }
         state.context.state["last_execution"] = execution
         state.context.state["full_data"] = result.rows
+        self._register_assisted_fallback_evidence(state, execution)
         understanding = state.context.state.get("question_understanding")
         intent = (
             understanding.get("intent", {}) if isinstance(understanding, dict) else {}
@@ -514,6 +523,93 @@ class FastPipeline:
             caliber_card=caliber_card,
             chart_spec=chart_spec,
         )
+
+    def _register_assisted_fallback_evidence(
+        self,
+        state: AgentRuntimeState,
+        execution: dict[str, Any],
+    ) -> None:
+        result_store = state.context.result_store
+        if result_store is None:
+            raise FastPipelineError("FAST_RESULT_STORE_REQUIRED")
+        plan_id = f"fast-{state.require_run_id()}"
+        result_ref = result_store.register(
+            execution_id=self._required_execution_id(state),
+            execution_type=ChatRecordExecutionType.AGENT,
+            chat_id=self._required_chat_id(state),
+            record_id=self._required_record_id(state),
+            plan_id=plan_id,
+            node_id=ResultStore.LEGACY_QUERY_ID,
+            kind=ResultSetKind.QUERY,
+            fields=[str(item) for item in execution.get("fields") or []],
+            rows=[
+                item
+                for item in execution.get("full_data") or []
+                if isinstance(item, dict)
+            ],
+            row_count=int(execution.get("row_count") or 0),
+            source_sql=str(execution.get("sql") or "") or None,
+        )
+        execution["result_set_id"] = result_ref.result_set_id
+        execution["artifact_ref"] = result_ref.artifact_ref.model_dump(mode="json")
+        evidence = build_analysis_evidence(
+            run_id=self._required_execution_id(state),
+            mode="fast",
+            plan_id=plan_id,
+            node_id=ResultStore.LEGACY_QUERY_ID,
+            tool_call_id="assisted_fallback",
+            result_set_id=result_ref.result_set_id,
+            fields=[str(item) for item in execution.get("fields") or []],
+            rows=[
+                item
+                for item in execution.get("full_data") or []
+                if isinstance(item, dict)
+            ],
+            row_count=int(execution.get("row_count") or 0),
+            purpose="Fast ASSISTED 兜底结果",
+            evidence_level="exploratory",
+            limitations=("assisted_semantic_binding",),
+            version_snapshot=self._evidence_version_snapshot(state),
+        )
+        EvidenceRegistry(state.context.state).register(evidence)
+        self._persist_state(state)
+
+    @staticmethod
+    def _evidence_version_snapshot(state: AgentRuntimeState) -> Any:
+        execution = state.context.state.get("execution_requirement")
+        asset_snapshot = (
+            execution.get("asset_snapshot")
+            if isinstance(execution, dict)
+            else {}
+        )
+        semantic_scope = state.context.state.get("semantic_scope")
+        return build_analysis_version_snapshot(
+            asset_snapshot=asset_snapshot if isinstance(asset_snapshot, dict) else {},
+            semantic_scope=(
+                semantic_scope if isinstance(semantic_scope, dict) else {}
+            ),
+        )
+
+    @staticmethod
+    def _required_execution_id(state: AgentRuntimeState) -> str:
+        value = state.context.execution_id
+        if not isinstance(value, str) or not value:
+            raise FastPipelineError("FAST_EXECUTION_ID_REQUIRED")
+        return value
+
+    @staticmethod
+    def _required_chat_id(state: AgentRuntimeState) -> int:
+        value = state.context.chat_id
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise FastPipelineError("FAST_RESULT_OWNERSHIP_REQUIRED")
+        return value
+
+    @staticmethod
+    def _required_record_id(state: AgentRuntimeState) -> int:
+        value = state.context.record_id
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise FastPipelineError("FAST_RESULT_OWNERSHIP_REQUIRED")
+        return value
 
     @staticmethod
     def _require_understanding(state: AgentRuntimeState) -> None:

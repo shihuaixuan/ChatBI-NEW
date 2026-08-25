@@ -17,7 +17,7 @@ from apps.chatbi.services.research.completion import evaluate_completion
 from tests.chatbi.test_research_agent_contracts import _requirement
 
 
-def _version(run_id: str = "run-1"):
+def _version():
     return build_analysis_version_snapshot(
         asset_snapshot={
             "schema_version": 22,
@@ -28,7 +28,6 @@ def _version(run_id: str = "run-1"):
             "scope_fingerprint": "scope-1",
             "permission_fingerprint": "permission-1",
         },
-        run_id=run_id,
     )
 
 
@@ -56,7 +55,7 @@ def _evidence(
         purpose=purpose,
         iteration=iteration,
         dependencies=dependencies,
-        version_snapshot=_version(run_id),
+        version_snapshot=_version(),
     )
 
 
@@ -135,6 +134,32 @@ def test_registry_rejects_cross_run_evidence() -> None:
 
     with pytest.raises(ValueError, match="ANALYSIS_EVIDENCE_CROSS_RUN"):
         registry.register(_evidence(run_id="run-2", node_id="other"))
+
+
+def test_version_snapshot_rejects_missing_governance_fingerprint() -> None:
+    with pytest.raises(
+        ValueError,
+        match="ANALYSIS_EVIDENCE_PERMISSION_FINGERPRINT_REQUIRED",
+    ):
+        build_analysis_version_snapshot(
+            asset_snapshot={
+                "schema_version": 22,
+                "contract_version": 3,
+                "schema_fingerprint": "schema-1",
+            },
+            semantic_scope={"scope_fingerprint": "scope-1"},
+        )
+
+
+def test_merge_missing_preserves_existing_unified_evidence() -> None:
+    state: dict[str, object] = {}
+    registry = EvidenceRegistry(state)
+    existing = _evidence(purpose="统一台账规范记录")
+    registry.register(existing)
+
+    registry.merge_missing((_evidence(purpose="旧 Research 投影"),))
+
+    assert registry.get(existing.evidence_id) == existing
 
 
 def test_completion_reads_unified_evidence() -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -206,6 +208,12 @@ class ModeRouter:
         if mode.value not in enabled:
             raise ModeRoutingError(f"EXECUTION_MODE_NOT_AVAILABLE:{mode.value}")
 
+        scope_fingerprint = _analysis_scope_fingerprint(
+            execution,
+            schema_fingerprint=schema.schema_fingerprint,
+        )
+        permission_fingerprint = _analysis_permission_fingerprint(request)
+
         return ExecutionRequirement(
             status="ready",
             route=ExecutionRoute(
@@ -228,6 +236,8 @@ class ModeRouter:
                 "schema_version": schema.schema_version,
                 "contract_version": schema.contract_version,
                 "schema_fingerprint": schema.schema_fingerprint,
+                "scope_fingerprint": scope_fingerprint,
+                "permission_fingerprint": permission_fingerprint,
             },
             unresolved=(),
         ).model_dump(mode="json")
@@ -1520,6 +1530,48 @@ def _normalize_mode(value: str | None) -> str | None:
     }:
         raise ModeRoutingError(f"EXECUTION_MODE_INVALID:{normalized}")
     return normalized
+
+
+def _analysis_scope_fingerprint(
+    execution: dict[str, Any],
+    *,
+    schema_fingerprint: str,
+) -> str:
+    """冻结 Fast/Plan 实际可执行需求，作为统一 Evidence 的 Scope 版本。"""
+
+    return _fingerprint(
+        {
+            "schema_fingerprint": schema_fingerprint,
+            "query_requirements": execution.get("query_requirements") or (),
+            "post_calculations": execution.get("post_calculations") or (),
+            "result_contract": execution.get("result_contract"),
+        }
+    )
+
+
+def _analysis_permission_fingerprint(request: ModeRouteInput) -> str:
+    """冻结本次执行使用的租户、用户、数据源和授权表边界。"""
+
+    return _fingerprint(
+        {
+            "tenant_id": request.tenant_id,
+            "user_id": request.user_id,
+            "datasource_id": request.datasource_id,
+            "dataset_id": request.dataset_id,
+            "permission_version": request.permission_version,
+            "authorized_tables": sorted(set(request.authorized_tables)),
+        }
+    )
+
+
+def _fingerprint(payload: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 __all__ = ["ModeRouteInput", "ModeRouter", "ModeRoutingError"]

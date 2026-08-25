@@ -7,13 +7,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeAlias
 
+from apps.chatbi.models.dto.analysis_evidence import AnalysisEvidence
 from apps.chatbi.models.dto.research_agent import (
     ResearchAgentRequirement,
     ResearchEvidence,
-    ResearchEvidenceLevel,
 )
+
+EvidenceItem: TypeAlias = AnalysisEvidence | ResearchEvidence
 
 
 @dataclass(frozen=True)
@@ -42,7 +44,7 @@ class ResearchCompletionEvaluation:
 
 def evaluate_completion(
     requirement: ResearchAgentRequirement,
-    evidences: list[ResearchEvidence] | tuple[ResearchEvidence, ...],
+    evidences: list[EvidenceItem] | tuple[EvidenceItem, ...],
     *,
     premise_result: dict[str, Any] | None = None,
 ) -> ResearchCompletionEvaluation:
@@ -88,7 +90,7 @@ def evaluate_completion(
             )
 
     core_supported = any(
-        item.evidence_level is ResearchEvidenceLevel.GOVERNED
+        _is_governed(item)
         and target_refs & set(item.metric_refs)
         for item in evidence_items
     )
@@ -104,7 +106,7 @@ def evaluate_completion(
 def _covered_count(
     kind: str,
     required_asset_refs: tuple[str, ...],
-    evidences: list[ResearchEvidence],
+    evidences: list[EvidenceItem],
 ) -> int:
     """不同需求类型的覆盖口径；只看证据内容，不看工具调用记录。"""
 
@@ -116,7 +118,7 @@ def _covered_count(
         return sum(
             1
             for item in evidences
-            if item.evidence_level is ResearchEvidenceLevel.GOVERNED
+            if _is_governed(item)
             and (not required or required & set(item.metric_refs))
         )
     if kind == "counter_evidence":
@@ -147,6 +149,13 @@ def _covered_count(
         or required
         & (set(item.metric_refs) | set(item.dimension_refs))
     )
+
+
+def _is_governed(evidence: EvidenceItem) -> bool:
+    """兼容旧 Research 枚举和统一 Evidence 枚举。"""
+
+    level = evidence.evidence_level
+    return getattr(level, "value", level) == "governed"
 
 
 __all__ = [

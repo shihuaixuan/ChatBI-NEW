@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from apps.chatbi.models import AgentClarificationResumeKind
+from apps.chatbi.models.dto.analysis_evidence import AnalysisEvidenceDependency
 from apps.chatbi.models.dto.analysis_plan import (
     AnalysisPlan,
     AnalysisPlanStatus,
@@ -34,6 +35,11 @@ from apps.chatbi.services.computation import (
     ComputeEngine,
     ComputeEngineError,
     ComputeExecution,
+)
+from apps.chatbi.services.evidence import (
+    EvidenceRegistry,
+    build_analysis_evidence,
+    build_analysis_version_snapshot,
 )
 from apps.chatbi.services.execution.query_task_executor import (
     QueryTaskExecutionRequest,
@@ -387,6 +393,7 @@ class AnalysisExecutionService:
             AnalysisTaskExecutionStatus.CANCELLED.value,
         }
         for batch_index, batch in enumerate(batches, start=1):
+            state.context.state["current_plan_batch"] = batch_index
             if state.cancellation.is_cancelled():
                 for task_id, task_state in task_states.items():
                     if task_state["status"] not in {
@@ -729,9 +736,12 @@ class AnalysisExecutionService:
         plan_id: str,
         task: QueryTask,
         result: QueryTaskExecutionResult,
+        *,
+        iteration: int = 0,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if result.data is None or state.context.result_store is None:
             raise PlanPipelineError("PLAN_QUERY_RESULT_STORE_REQUIRED")
+        iteration = iteration or int(state.context.state.get("current_plan_batch") or 0)
         data = result.data
         rows = [dict(row) for row in data.full_data]
         result_ref = state.context.result_store.register(
@@ -750,6 +760,16 @@ class AnalysisExecutionService:
             semantic_refs=self._semantic_refs(state),
         )
         self._merge_result_ref(state, result_ref)
+        self._register_query_evidence(
+            state,
+            plan_id,
+            task,
+            result_ref=result_ref,
+            fields=list(data.fields),
+            rows=rows,
+            row_count=data.row_count,
+            iteration=iteration,
+        )
         return (
             {
                 "sql": data.sql,
@@ -773,10 +793,12 @@ class AnalysisExecutionService:
         computed: ComputeExecution,
         *,
         attempt: int,
+        iteration: int = 0,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         result_store = state.context.result_store
         if result_store is None:
             raise PlanPipelineError("PLAN_RESULT_STORE_REQUIRED")
+        iteration = iteration or int(state.context.state.get("current_plan_batch") or 0)
         rows = [dict(row) for row in computed.rows]
         result_ref = result_store.register(
             execution_id=self._required_execution_id(state),
@@ -793,6 +815,16 @@ class AnalysisExecutionService:
             source_sql=computed.sql,
         )
         self._merge_result_ref(state, result_ref)
+        self._register_compute_evidence(
+            state,
+            plan_id,
+            task,
+            result_ref=result_ref,
+            fields=list(computed.fields),
+            rows=rows,
+            row_count=computed.row_count,
+            iteration=iteration,
+        )
         return (
             {
                 "sql": computed.sql,
@@ -805,6 +837,173 @@ class AnalysisExecutionService:
                 "attempt": attempt,
             },
             rows,
+        )
+
+    def _register_query_evidence(
+        self,
+        state: AgentRuntimeState,
+        plan_id: str,
+        task: QueryTask,
+        *,
+        result_ref: ResultSetRef,
+        fields: list[str],
+        rows: list[dict[str, Any]],
+        row_count: int,
+        iteration: int,
+    ) -> None:
+        if self._is_research_execution(state):
+            return
+        requirement = self._query_requirement_payload(state, task.source_requirement_id)
+        metric_refs = tuple(
+            str(item.get("ref"))
+            for item in ((requirement.get("metrics") or ()) if requirement else ())
+            if isinstance(item, dict) and isinstance(item.get("ref"), str)
+        )
+        dimension_refs = tuple(
+            str(item.get("ref"))
+            for item in ((requirement.get("group_by") or ()) if requirement else ())
+            if isinstance(item, dict) and isinstance(item.get("ref"), str)
+        )
+        filters = tuple(
+            item
+            for item in ((requirement.get("filters") or ()) if requirement else ())
+            if isinstance(item, dict)
+        )
+        time_roles = self._time_roles(requirement)
+        self._register_unified_evidence(
+            state,
+            build_analysis_evidence(
+                run_id=self._analysis_evidence_run_id(state),
+                mode="plan",
+                plan_id=plan_id,
+                node_id=task.id,
+                tool_call_id=f"query:{task.id}",
+                result_set_id=result_ref.result_set_id,
+                fields=fields,
+                rows=rows,
+                row_count=row_count,
+                metric_refs=metric_refs,
+                dimension_refs=dimension_refs,
+                time_roles=time_roles,
+                filters=filters,
+                purpose=f"执行计划查询节点 {task.id}",
+                iteration=iteration,
+                version_snapshot=self._evidence_version_snapshot(state),
+            ),
+        )
+
+    def _register_compute_evidence(
+        self,
+        state: AgentRuntimeState,
+        plan_id: str,
+        task: ComputeTask,
+        *,
+        result_ref: ResultSetRef,
+        fields: list[str],
+        rows: list[dict[str, Any]],
+        row_count: int,
+        iteration: int,
+    ) -> None:
+        if self._is_research_execution(state):
+            return
+        registry = EvidenceRegistry(state.context.state)
+        dependencies: list[AnalysisEvidenceDependency] = []
+        metric_refs: list[str] = []
+        dimension_refs: list[str] = []
+        for input_id in task.inputs:
+            source_id = f"result:{plan_id}:{input_id}"
+            source = next(
+                (
+                    item
+                    for item in registry.evidences()
+                    if item.result_set_id == source_id
+                ),
+                None,
+            )
+            if source is None:
+                raise PlanPipelineError("PLAN_INPUT_EVIDENCE_MISSING")
+            dependencies.append(
+                AnalysisEvidenceDependency(
+                    evidence_id=source.evidence_id,
+                    relation=task.operation.value,
+                    source_iteration=source.iteration,
+                )
+            )
+            metric_refs.extend(source.metric_refs)
+            dimension_refs.extend(source.dimension_refs)
+        self._register_unified_evidence(
+            state,
+            build_analysis_evidence(
+                run_id=self._analysis_evidence_run_id(state),
+                mode="plan",
+                plan_id=plan_id,
+                node_id=task.id,
+                tool_call_id=f"compute:{task.id}",
+                result_set_id=result_ref.result_set_id,
+                fields=fields,
+                rows=rows,
+                row_count=row_count,
+                metric_refs=tuple(dict.fromkeys(metric_refs)),
+                dimension_refs=tuple(dict.fromkeys(dimension_refs)),
+                purpose=f"执行计划计算节点 {task.id}",
+                iteration=iteration,
+                dependencies=dependencies,
+                version_snapshot=self._evidence_version_snapshot(state),
+            ),
+        )
+
+    @staticmethod
+    def _register_unified_evidence(
+        state: AgentRuntimeState,
+        evidence: Any,
+    ) -> None:
+        EvidenceRegistry(state.context.state).register(evidence)
+
+    @staticmethod
+    def _is_research_execution(state: AgentRuntimeState) -> bool:
+        return isinstance(state.context.state.get("research_run_id"), str)
+
+    def _analysis_evidence_run_id(self, state: AgentRuntimeState) -> str:
+        """统一使用工具与 ResultStore 已绑定的 Agent 执行 ID。"""
+
+        return self._required_execution_id(state)
+
+    @staticmethod
+    def _query_requirement_payload(
+        state: AgentRuntimeState,
+        requirement_id: str | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(requirement_id, str):
+            return None
+        execution = state.context.state.get("execution_requirement")
+        if not isinstance(execution, dict):
+            return None
+        for item in execution.get("query_requirements") or ():
+            if isinstance(item, dict) and item.get("id") == requirement_id:
+                return item
+        return None
+
+    @staticmethod
+    def _time_roles(requirement: dict[str, Any] | None) -> tuple[str, ...]:
+        time = requirement.get("time") if isinstance(requirement, dict) else None
+        if not isinstance(time, dict):
+            return ()
+        role = time.get("role")
+        return (str(role),) if isinstance(role, str) and role else ()
+
+    def _evidence_version_snapshot(self, state: AgentRuntimeState) -> Any:
+        execution = state.context.state.get("execution_requirement")
+        asset_snapshot = (
+            execution.get("asset_snapshot")
+            if isinstance(execution, dict)
+            else {}
+        )
+        semantic_scope = state.context.state.get("semantic_scope")
+        return build_analysis_version_snapshot(
+            asset_snapshot=asset_snapshot if isinstance(asset_snapshot, dict) else {},
+            semantic_scope=(
+                semantic_scope if isinstance(semantic_scope, dict) else {}
+            ),
         )
 
     @staticmethod

@@ -12,6 +12,11 @@ from apps.chatbi.orchestration.agent.semantic_projection import (
     refresh_semantic_projection,
 )
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
+from apps.chatbi.services.evidence import (
+    EvidenceRegistry,
+    build_analysis_evidence,
+    build_analysis_version_snapshot,
+)
 from apps.chatbi.services.execution.result_artifacts import ResultArtifactWriteError
 from apps.chatbi.services.execution.result_store import ResultArtifactStore, ResultStore
 from apps.conversation import ChatRecordExecutionType
@@ -361,6 +366,33 @@ class ChatBIToolResultProcessor:
         )
         result_set_payload = result_set_ref.model_dump(mode="json")
         artifact_payload = result_set_ref.artifact_ref.model_dump(mode="json")
+        mode = (
+            "fast"
+            if context.state.get("execution_mode") == "fast"
+            else "plan"
+        )
+        EvidenceRegistry(context.state).register(
+            build_analysis_evidence(
+                run_id=self._required_execution_id(context),
+                mode=mode,
+                plan_id=plan_id,
+                node_id=node_id,
+                tool_call_id=f"execute_sql:{node_id}",
+                result_set_id=result_set_ref.result_set_id,
+                fields=payload.get("fields") or [],
+                rows=rows,
+                row_count=payload.get("row_count") or 0,
+                metric_refs=self._logical_refs(context, node_id, "metrics"),
+                dimension_refs=self._logical_refs(context, node_id, "group_by"),
+                time_roles=self._time_roles(context, node_id),
+                filters=self._query_filters(context, node_id),
+                purpose=f"{mode} 执行结果 {node_id}",
+                version_snapshot=build_analysis_version_snapshot(
+                    asset_snapshot=self._asset_snapshot(context),
+                    semantic_scope=self._semantic_scope_payload(context),
+                ),
+            )
+        )
         execution = {
             "sql": sql,
             "fields": payload.get("fields") or [],
@@ -428,6 +460,72 @@ class ChatBIToolResultProcessor:
             for item in scope.get("allowed_assets") or []
             if isinstance(item, dict)
         ]
+
+    @staticmethod
+    def _logical_refs(
+        context: AgentToolContext,
+        node_id: str,
+        key: str,
+    ) -> tuple[str, ...]:
+        execution = context.state.get("execution_requirement")
+        if not isinstance(execution, dict):
+            return ()
+        for item in execution.get("query_requirements") or ():
+            if not isinstance(item, dict) or item.get("id") != node_id.removeprefix("q:"):
+                continue
+            return tuple(
+                str(ref.get("ref"))
+                for ref in item.get(key) or ()
+                if isinstance(ref, dict) and isinstance(ref.get("ref"), str)
+            )
+        return ()
+
+    @staticmethod
+    def _time_roles(context: AgentToolContext, node_id: str) -> tuple[str, ...]:
+        execution = context.state.get("execution_requirement")
+        if not isinstance(execution, dict):
+            return ()
+        for item in execution.get("query_requirements") or ():
+            if not isinstance(item, dict) or item.get("id") != node_id.removeprefix("q:"):
+                continue
+            time = item.get("time")
+            role = time.get("role") if isinstance(time, dict) else None
+            return (str(role),) if isinstance(role, str) and role else ()
+        return ()
+
+    @staticmethod
+    def _query_filters(
+        context: AgentToolContext,
+        node_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        execution = context.state.get("execution_requirement")
+        if not isinstance(execution, dict):
+            return ()
+        for item in execution.get("query_requirements") or ():
+            if not isinstance(item, dict) or item.get("id") != node_id.removeprefix("q:"):
+                continue
+            return tuple(
+                value for value in item.get("filters") or () if isinstance(value, dict)
+            )
+        return ()
+
+    @staticmethod
+    def _asset_snapshot(context: AgentToolContext) -> dict[str, Any]:
+        execution = context.state.get("execution_requirement")
+        snapshot = execution.get("asset_snapshot") if isinstance(execution, dict) else {}
+        return snapshot if isinstance(snapshot, dict) else {}
+
+    @staticmethod
+    def _semantic_scope_payload(context: AgentToolContext) -> dict[str, Any]:
+        scope = context.state.get("semantic_scope")
+        return scope if isinstance(scope, dict) else {}
+
+    @staticmethod
+    def _required_execution_id(context: AgentToolContext) -> str:
+        value = context.execution_id
+        if not isinstance(value, str) or not value:
+            raise ValueError("ANALYSIS_EVIDENCE_EXECUTION_ID_REQUIRED")
+        return value
 
     @staticmethod
     def _artifact_failure(error_code: str) -> ToolResultProjection:
