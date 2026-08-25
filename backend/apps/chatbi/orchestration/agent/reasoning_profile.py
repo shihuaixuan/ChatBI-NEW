@@ -37,7 +37,8 @@ DEFAULT_WORKING_STATE_NOTE = (
 
 RESEARCH_WORKING_STATE_NOTE = (
     "该状态由服务端根据可信工具结果生成。基于它决定下一个工具调用；"
-    "结论充分或需要结束时必须调用 finish_research，纯文本回答不构成完成。"
+    "Evidence 产生后使用 assess_research 提交内容充分性判断；需要继续时必须携带"
+    "明确缺口和计划增量，结束时调用 finish_research，纯文本回答不构成完成。"
 )
 
 

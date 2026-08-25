@@ -14,7 +14,7 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchHypothesisAssessment,
     ToolObservation,
 )
-from apps.chatbi.services.research.completion import evaluate_completion
+from apps.chatbi.services.research.completion import evaluate_structural_coverage
 from apps.chatbi.services.research.tool_context import ResearchToolContext
 
 _MAX_LISTED_ITEMS = 20
@@ -28,7 +28,7 @@ def build_partial_report(
 ) -> dict[str, Any]:
     """服务端强制停止时的受限报告：确认了什么、缺什么、为什么停。"""
 
-    evaluation = evaluate_completion(
+    evaluation = evaluate_structural_coverage(
         ctx.requirement,
         ctx.analysis_evidences(),
         premise_result=ctx.premise_result,
@@ -76,7 +76,10 @@ def build_partial_report(
             "model_calls_used": usage.model_calls,
         },
     }
-    report["recommendation"] = _recommendation(stop_reason, bool(evaluation.gaps))
+    report["recommendation"] = _recommendation(
+        stop_reason,
+        bool(evaluation.missing_requirements),
+    )
     return report
 
 

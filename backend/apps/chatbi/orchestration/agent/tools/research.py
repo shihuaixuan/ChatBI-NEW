@@ -1,6 +1,6 @@
 """Research 通用工具：Runtime / ResultStore / ComputeEngine 的治理边界。
 
-阶段 3 的四个工具是 Agent 与服务端能力的唯一边界：
+Research 工具是 Agent 与服务端能力的唯一边界：
 
 - 参数边界：模型只提交"怎么查"；run_id、scope 指纹和版本快照由服务端从
   冻结 Requirement 注入，物理字段和 SQL 被 Pydantic 契约拒绝；
@@ -46,6 +46,7 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchEvidenceValueRef,
     ResearchFinishRequest,
     ResearchHypothesisAssessment,
+    ResearchInspectEvidenceRequest,
     ResearchLiteralFilter,
     ResearchLogicalColumn,
     ResearchOrder,
@@ -56,6 +57,8 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchSemanticQuery,
     ResearchTimeRole,
     ResearchToolCallRef,
+    SemanticAssessment,
+    SemanticAssessmentStatus,
     ToolErrorCode,
     ToolFailureStage,
     ToolObservation,
@@ -65,7 +68,7 @@ from apps.chatbi.services.computation.errors import (
     ComputeEngineError,
     ComputeOperationError,
 )
-from apps.chatbi.services.research.completion import evaluate_completion
+from apps.chatbi.services.research.completion import evaluate_structural_coverage
 from apps.chatbi.services.research.hypothesis_evaluator import (
     HypothesisEvaluationError,
     evaluate_hypothesis_assessments,
@@ -99,6 +102,7 @@ RESEARCH_TOOL_NAMES: tuple[str, ...] = (
     "query_semantic_data",
     "inspect_evidence",
     "compute_evidence",
+    "assess_research",
     "finish_research",
 )
 
@@ -168,6 +172,7 @@ class FinishResearchArgs(_ToolArgsModel):
     """finish_research 参数：结论必须引用当前 Run 的证据。"""
 
     reason: ResearchCompletionReason
+    semantic_assessment: SemanticAssessment
     summary: str = Field(min_length=1, max_length=4000)
     claims: tuple[ResearchClaim, ...] = ()
     findings: tuple[ResearchReportFinding, ...] = ()
@@ -175,6 +180,12 @@ class FinishResearchArgs(_ToolArgsModel):
     hypothesis_assessments: tuple[ResearchHypothesisAssessment, ...] = ()
     limitations: tuple[str, ...] = ()
     unanswered_questions: tuple[str, ...] = ()
+
+
+class AssessResearchArgs(_ToolArgsModel):
+    """assess_research 参数：显式提交内容充分性判断和下一步计划。"""
+
+    assessment: SemanticAssessment
 
 
 class _ObservationFailure(Exception):
@@ -1508,6 +1519,154 @@ class ComputeEvidenceTool(
         return build(metric_ref, "value")
 
 
+class AssessResearchTool(
+    Tool[ResearchToolContext, AssessResearchArgs, ToolObservation]
+):
+    name = "assess_research"
+    title = "提交 Evidence 内容充分性评估"
+    description = (
+        "读取用户问题和当前 Evidence 后提交四态语义评估。内容不足必须给出明确缺口；"
+        "需要继续时必须提交由 query_semantic_data、inspect_evidence 或 "
+        "compute_evidence 组成的计划增量。服务端校验引用、Scope 和工具参数后才批准执行。"
+    )
+    args_model = AssessResearchArgs
+    result_model = ToolObservation
+    execution = ToolExecutionPolicy(
+        side_effect=ToolSideEffect.WRITE,
+        concurrency=ToolConcurrency.SERIAL,
+        idempotent=True,
+    )
+
+    def execute(
+        self,
+        ctx: ResearchToolContext,
+        args: AssessResearchArgs,
+    ) -> ToolResult[ToolObservation]:
+        return _finalize(ctx, lambda: self._run(ctx, args))
+
+    def _run(
+        self,
+        ctx: ResearchToolContext,
+        args: AssessResearchArgs,
+    ) -> ToolObservation:
+        _guard_finished(ctx, self.name)
+        assessment = args.assessment
+        known = set(ctx.known_evidence_ids())
+        finding_refs = {
+            evidence_id
+            for finding in assessment.supported_findings
+            for evidence_id in finding.evidence_ids
+        }
+        missing = sorted(finding_refs - known)
+        if missing:
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.EVIDENCE_REFERENCE_INVALID,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message="语义评估引用了不属于当前 Run 的 Evidence。",
+                details={"missing_evidence_ids": missing},
+            )
+
+        coverage = evaluate_structural_coverage(
+            ctx.requirement,
+            ctx.analysis_evidences(),
+            premise_result=ctx.premise_result,
+        )
+        if (
+            assessment.status is SemanticAssessmentStatus.ANSWERABLE
+            and not coverage.minimum_requirements_met
+        ):
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message="最低结构要求尚未覆盖，不能判断为 answerable。",
+                details={"gaps": list(coverage.gap_messages())},
+            )
+
+        for addition in assessment.proposed_plan_additions:
+            self._validate_addition(ctx, addition.tool_name, addition.arguments)
+        ctx.set_semantic_assessment(assessment)
+        return _success(
+            ctx,
+            self.name,
+            message=f"语义评估已接受：{assessment.status.value}",
+            evidence_ids=tuple(sorted(finding_refs)),
+            statistics={
+                "unresolved_gaps": len(assessment.unresolved_gaps),
+                "approved_plan_additions": len(assessment.proposed_plan_additions),
+            },
+            limitations=assessment.limitations,
+        )
+
+    def _validate_addition(
+        self,
+        ctx: ResearchToolContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        """使用实际工具契约编译计划增量，并提前执行 Scope 与引用校验。"""
+
+        try:
+            if tool_name == "query_semantic_data":
+                query_args = QuerySemanticDataArgs.model_validate(arguments)
+                query = ResearchSemanticQuery(
+                    run_id=ctx.run_id,
+                    scope_fingerprint=ctx.requirement.scope.scope_fingerprint,
+                    version_snapshot=ctx.requirement.version_snapshot,
+                    **query_args.model_dump(),
+                )
+                ctx.requirement.validate_query(query, ctx.evidences())
+            elif tool_name == "inspect_evidence":
+                inspect_args = InspectEvidenceArgs.model_validate(arguments)
+                ResearchInspectEvidenceRequest(
+                    run_id=ctx.run_id,
+                    **inspect_args.model_dump(),
+                )
+                evidence = ctx.evidence(inspect_args.evidence_id)
+                if evidence is None:
+                    raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
+                available_refs = {item.asset_ref for item in evidence.logical_columns}
+                if not set(inspect_args.logical_column_refs) <= available_refs:
+                    raise ValueError("RESEARCH_AGENT_EVIDENCE_COLUMN_NOT_FOUND")
+            else:
+                compute_args = ComputeEvidenceArgs.model_validate(arguments)
+                request = ResearchComputeRequest(
+                    run_id=ctx.run_id,
+                    **compute_args.model_dump(),
+                )
+                if any(
+                    ctx.evidence(evidence_id) is None
+                    for evidence_id in request.input_evidence_ids
+                ):
+                    raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
+                allowed_refs = (
+                    set(ctx.requirement.scope.target_metric_refs)
+                    | set(ctx.requirement.scope.driver_metric_refs)
+                    | set(ctx.requirement.scope.dimension_refs)
+                )
+                if not (
+                    set(request.metric_refs)
+                    | set(request.dimension_refs)
+                    | set(request.group_by_refs)
+                ) <= allowed_refs:
+                    raise ValueError("RESEARCH_AGENT_COMPUTE_REF_OUT_OF_SCOPE")
+        except (ValidationError, ValueError) as exc:
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message=f"计划增量无法编译或超出 Scope：{exc}",
+                details={"tool_name": tool_name},
+            ) from exc
+
+
 class FinishResearchTool(
     Tool[ResearchToolContext, FinishResearchArgs, ToolObservation]
 ):
@@ -1542,6 +1701,7 @@ class FinishResearchTool(
             request = ResearchFinishRequest(
                 run_id=ctx.run_id,
                 reason=args.reason,
+                semantic_assessment=args.semantic_assessment,
                 summary=args.summary,
                 claims=args.claims,
                 findings=args.findings,
@@ -1552,6 +1712,19 @@ class FinishResearchTool(
             )
         except ValidationError as exc:
             raise _reject_invalid_args(ctx, self.name, exc) from exc
+        current_assessment = ctx.semantic_assessment()
+        if (
+            current_assessment is not None
+            and current_assessment != request.semantic_assessment
+        ):
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message="finish 中的语义评估与当前 Evidence 已接受的评估不一致。",
+            )
         status = RESEARCH_COMPLETION_STATUS_BY_REASON[request.reason]
         evidences = ctx.evidences()
         try:
@@ -1586,7 +1759,7 @@ class FinishResearchTool(
         # §10.3.2：充分结论必须先满足服务端最低结构门槛；该门槛是
         # 必要条件，不替代模型对 Evidence 实际内容的充分性判断。
         if request.reason is ResearchCompletionReason.SUFFICIENT_EVIDENCE:
-            evaluation = evaluate_completion(
+            evaluation = evaluate_structural_coverage(
                 ctx.requirement,
                 ctx.analysis_evidences(),
                 premise_result=ctx.premise_result,
@@ -1664,6 +1837,7 @@ class FinishResearchTool(
                 "claims": [item.model_dump(mode="json") for item in request.claims],
             }
         )
+        ctx.set_semantic_assessment(request.semantic_assessment)
         ctx.finish(completion)
         return _success(
             ctx,
@@ -1726,13 +1900,14 @@ def build_research_tool_registry(
     *,
     middlewares: list[Any] | None = None,
 ) -> ToolRegistry:
-    """只注册 Research 所需的四个工具，不暴露任何直接 SQL 工具。"""
+    """只注册 Research 所需工具，不暴露任何直接 SQL 工具。"""
 
     registry = ToolRegistry(middlewares=middlewares)
     for tool in (
         QuerySemanticDataTool(),
         InspectEvidenceTool(),
         ComputeEvidenceTool(),
+        AssessResearchTool(),
         FinishResearchTool(),
     ):
         registry.register(tool)
@@ -1741,6 +1916,8 @@ def build_research_tool_registry(
 
 __all__ = [
     "RESEARCH_TOOL_NAMES",
+    "AssessResearchArgs",
+    "AssessResearchTool",
     "ComputeEvidenceArgs",
     "ComputeEvidenceTool",
     "FinishResearchArgs",

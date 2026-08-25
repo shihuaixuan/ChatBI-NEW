@@ -13,7 +13,7 @@ from apps.chatbi.services.evidence import (
     build_analysis_evidence,
     build_analysis_version_snapshot,
 )
-from apps.chatbi.services.research.completion import evaluate_completion
+from apps.chatbi.services.research.completion import evaluate_structural_coverage
 from tests.chatbi.test_research_agent_contracts import _requirement
 
 
@@ -166,7 +166,7 @@ def test_completion_reads_unified_evidence() -> None:
     requirement = _requirement()
     evidence = _evidence()
 
-    evaluation = evaluate_completion(
+    evaluation = evaluate_structural_coverage(
         requirement,
         [evidence],
         premise_result={"status": "supported"},
@@ -182,11 +182,11 @@ def test_completion_only_reports_minimum_structural_coverage() -> None:
     requirement = _requirement()
     evidence = _evidence(purpose="只有结构字段，没有原因解释内容")
 
-    evaluation = evaluate_completion(
+    evaluation = evaluate_structural_coverage(
         requirement,
         [evidence],
         premise_result={"status": "supported"},
     )
 
     assert evaluation.minimum_requirements_met is True
-    assert evaluation.gaps == ()
+    assert evaluation.missing_requirements == ()

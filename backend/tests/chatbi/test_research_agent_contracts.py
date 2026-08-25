@@ -33,20 +33,27 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchToolCallRef,
     ResearchVersionSnapshot,
     ResearchWorkingState,
+    SemanticAssessment,
+    StructuralCoverage,
+    StructuralCoverageGap,
     ToolErrorCode,
     ToolFailureStage,
     ToolObservation,
 )
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
+from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
+from apps.chatbi.orchestration.agent.tools.research import build_research_tool_registry
 from apps.chatbi.services.research.agent_context import build_premise_query_args
 from apps.chatbi.services.research.report_validator import validate_report_conclusions
 from apps.chatbi.services.research.routing_freeze import freeze_research_requirement
+from apps.chatbi.services.research.tool_context import ResearchToolContext
 from apps.semantic.models.dto import (
     DatasetSchema,
     MetricRelationshipRuntimeDTO,
     SchemaElement,
 )
 from apps.temporal import build_temporal_context
+from apps.tool import ToolCall
 
 
 def _version() -> dict[str, object]:
@@ -57,6 +64,158 @@ def _version() -> dict[str, object]:
         "scope_fingerprint": "scope-1",
         "permission_fingerprint": "permission-1",
     }
+
+
+def test_semantic_assessment_four_states_are_mutually_constrained() -> None:
+    answerable = SemanticAssessment(status="answerable")
+    assert answerable.status.value == "answerable"
+
+    with pytest.raises(ValidationError, match="RESEARCH_AGENT_EXPLICIT_GAP_PLAN_REQUIRED"):
+        SemanticAssessment(
+            status="explicit_gap",
+            unresolved_gaps=(
+                {"gap_id": "gap-1", "description": "还缺一个维度拆解。"},
+            ),
+        )
+    with pytest.raises(ValidationError, match="RESEARCH_AGENT_TERMINAL_LIMITATION_REQUIRED"):
+        SemanticAssessment(
+            status="no_new_direction",
+            unresolved_gaps=(
+                {"gap_id": "gap-1", "description": "还缺一个维度拆解。"},
+            ),
+        )
+    with pytest.raises(ValidationError, match="RESEARCH_AGENT_ANSWERABLE_GAP_FORBIDDEN"):
+        SemanticAssessment(
+            status="answerable",
+            unresolved_gaps=(
+                {"gap_id": "gap-1", "description": "不应存在的缺口。"},
+            ),
+        )
+
+
+def test_structural_coverage_state_must_match_missing_requirements() -> None:
+    gap = StructuralCoverageGap(
+        requirement_id="claim-support",
+        kind="claim_support",
+        missing_count=1,
+        message="还缺一条支持证据。",
+    )
+    with pytest.raises(ValidationError, match="RESEARCH_AGENT_STRUCTURAL_COVERAGE_STATE_INVALID"):
+        StructuralCoverage(
+            minimum_requirements_met=True,
+            premise_handled=True,
+            core_supported=False,
+            missing_requirements=(gap,),
+        )
+
+
+def test_assess_research_compiles_and_freezes_plan_additions() -> None:
+    requirement = _governed_requirement()
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    registry = build_research_tool_registry()
+    arguments = {
+        "metrics": ["METRIC:10:1"],
+        "dimensions": ["DIMENSION:20:1"],
+        "time_ranges": ["current"],
+        "analysis": "breakdown",
+        "purpose": "补齐维度拆解",
+    }
+    result = registry.execute(
+        ToolCall(
+            name="assess_research",
+            call_id="assessment-1",
+            args={
+                "assessment": {
+                    "status": "explicit_gap",
+                    "unresolved_gaps": (
+                        {"gap_id": "dimension-gap", "description": "缺少维度拆解"},
+                    ),
+                    "proposed_plan_additions": (
+                        {
+                            "addition_id": "dimension-query",
+                            "gap_id": "dimension-gap",
+                            "tool_name": "query_semantic_data",
+                            "arguments": arguments,
+                        },
+                    ),
+                }
+            },
+        ),
+        context,
+    )
+
+    assert result.data is not None
+    assert result.data.status.value == "succeeded"
+    additions = context.approved_plan_additions()
+    assert len(additions) == 1
+    assert additions[0].arguments == arguments
+
+
+def test_assess_research_rejects_out_of_scope_plan_addition() -> None:
+    requirement = _governed_requirement()
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    result = build_research_tool_registry().execute(
+        ToolCall(
+            name="assess_research",
+            call_id="assessment-2",
+            args={
+                "assessment": {
+                    "status": "explicit_gap",
+                    "unresolved_gaps": (
+                        {"gap_id": "metric-gap", "description": "缺少目标外指标"},
+                    ),
+                    "proposed_plan_additions": (
+                        {
+                            "addition_id": "invalid-query",
+                            "gap_id": "metric-gap",
+                            "tool_name": "query_semantic_data",
+                            "arguments": {
+                                "metrics": ["METRIC:999:9"],
+                                "time_ranges": ["current"],
+                                "purpose": "尝试查询目标外指标",
+                            },
+                        },
+                    ),
+                }
+            },
+        ),
+        context,
+    )
+
+    assert result.data is not None
+    assert result.data.status.value == "failed"
+    assert result.data.error_code is ToolErrorCode.INVALID_REQUEST
+    assert context.approved_plan_additions() == ()
 
 
 def _scope() -> dict[str, object]:
@@ -622,6 +781,13 @@ def test_tool_args_are_independent_strict_dtos() -> None:
     finish = ResearchFinishRequest(
         run_id="run-1",
         reason="data_insufficient",
+        semantic_assessment={
+            "status": "data_insufficient",
+            "unresolved_gaps": (
+                {"gap_id": "sample-gap", "description": "样本不足"},
+            ),
+            "limitations": ("样本不足",),
+        },
         summary="数据不足",
         hypothesis_assessments=(
             ResearchHypothesisAssessment(

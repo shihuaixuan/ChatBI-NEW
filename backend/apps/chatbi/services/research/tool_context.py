@@ -29,6 +29,8 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchCompletion,
     ResearchEvidence,
     ResearchHypothesisAssessment,
+    ResearchPlanAddition,
+    SemanticAssessment,
     ToolObservation,
 )
 from apps.chatbi.services.evidence import (
@@ -279,6 +281,8 @@ class ResearchToolContext:
                 run_id=self._analysis_evidence_run_id(),
             )
         )
+        # 语义评估只对提交时的 Evidence 集合有效；新增证据后必须重新判断。
+        self._state().pop("semantic_assessment", None)
 
     def _analysis_evidence_run_id(self) -> str:
         """统一 Evidence 使用 Agent 执行 ID，模式信息只保存在 mode 字段。"""
@@ -389,6 +393,42 @@ class ResearchToolContext:
         if completion.run_id != self.run_id:
             raise ValueError("RESEARCH_AGENT_COMPLETION_CROSS_RUN")
         self._state()["completion"] = completion.model_dump(mode="json")
+
+    def semantic_assessment(self) -> SemanticAssessment | None:
+        """读取对当前 Evidence 集合仍然有效的模型评估。"""
+
+        raw = self._state().get("semantic_assessment")
+        if not isinstance(raw, dict):
+            return None
+        if raw.get("evidence_ids") != sorted(self.known_evidence_ids()):
+            return None
+        payload = raw.get("assessment")
+        if not isinstance(payload, dict):
+            raise TypeError("RESEARCH_SEMANTIC_ASSESSMENT_INVALID")
+        return SemanticAssessment.model_validate(payload)
+
+    def set_semantic_assessment(self, assessment: SemanticAssessment) -> None:
+        """保存模型评估，并把已批准的计划增量排入下一执行批次。"""
+
+        self._state()["semantic_assessment"] = {
+            "evidence_ids": sorted(self.known_evidence_ids()),
+            "assessment": assessment.model_dump(mode="json"),
+        }
+        self._state()["approved_plan_additions"] = [
+            item.model_dump(mode="json")
+            for item in assessment.proposed_plan_additions
+        ]
+
+    def approved_plan_additions(self) -> tuple[ResearchPlanAddition, ...]:
+        """读取等待模型按原样执行的已批准计划增量。"""
+
+        raw_items = self._state().get("approved_plan_additions", [])
+        if not isinstance(raw_items, list):
+            raise TypeError("RESEARCH_APPROVED_PLAN_ADDITIONS_INVALID")
+        return tuple(ResearchPlanAddition.model_validate(item) for item in raw_items)
+
+    def clear_approved_plan_additions(self) -> None:
+        self._state().pop("approved_plan_additions", None)
 
     # ------------------------------------------------------------------ #
     # 前提确认结果（阶段 5 preflight 写入，快照投影读取）

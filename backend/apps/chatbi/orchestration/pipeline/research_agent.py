@@ -1,7 +1,7 @@
 """Research Agent Harness：Function Calling 动态研究循环（doc38 §9）。
 
 取代旧 ``ResearchPolicyDecision`` / ``ResearchAction`` 计划式循环：模型每轮
-根据 Requirement、Working State 和 Observation 自己选择四个研究工具，服务端
+根据 Requirement、Working State 和 Observation 自己选择受控研究工具，服务端
 只负责协议规则、预算、停止条件和持久化边界。没有全局 DAG，也没有 Action
 物化器；每一步事实都落在阶段 4 的 ``ResearchToolCallCommit`` 边界上，
 可追踪、可恢复、可取消。
@@ -59,7 +59,7 @@ from apps.chatbi.services.research.agent_context import (
     evaluate_premise_verdict,
     project_research_working_state,
 )
-from apps.chatbi.services.research.completion import evaluate_completion
+from apps.chatbi.services.research.completion import evaluate_structural_coverage
 from apps.chatbi.services.research.initial_plan import ResearchInitialPlanner
 from apps.chatbi.services.research.report_draft import (
     build_final_report,
@@ -311,6 +311,7 @@ class ResearchAgentHarness:
 
             # ---- 服务端批次规则校验（§9.3.5）----
             known_before = set(ctx.known_evidence_ids())
+            executing_approved_additions = bool(ctx.approved_plan_additions())
             valid_batch, reject_reason = self._validate_batch(ctx, decision.tool_calls)
             try:
                 if not valid_batch:
@@ -320,6 +321,8 @@ class ResearchAgentHarness:
                     stall_turns += 1
                 else:
                     observations = self._execute_batch(ctx, step, decision.tool_calls)
+                    if executing_approved_additions:
+                        ctx.clear_approved_plan_additions()
             except AgentCancellationRequested:
                 agent_run_repository.cancel_step(
                     self._session, step, "用户在工具执行期间请求取消"
@@ -349,7 +352,16 @@ class ResearchAgentHarness:
 
             new_direction = any(
                 observation.status is ToolObservationStatus.SUCCEEDED
-                and set(observation.evidence_ids) - known_before
+                and (
+                    bool(set(observation.evidence_ids) - known_before)
+                    or (
+                        observation.tool_name == "assess_research"
+                        and observation.statistics.get(
+                            "approved_plan_additions", 0
+                        )
+                        > 0
+                    )
+                )
                 for _call, observation in observations
             )
             actionable_failure = any(
@@ -853,7 +865,34 @@ class ResearchAgentHarness:
             )
         if len(calls) > 1 and any(call.name == "finish_research" for call in calls):
             return False, "finish_research 必须单独一轮提交，不能和其他工具同批。"
+        if len(calls) > 1 and any(call.name == "assess_research" for call in calls):
+            return False, "assess_research 必须单独一轮提交，不能和执行工具同批。"
+        approved = ctx.approved_plan_additions()
+        if approved:
+            actual = [
+                (call.name, orjson.dumps(call.args or {}, option=orjson.OPT_SORT_KEYS))
+                for call in calls
+            ]
+            expected = [
+                (
+                    item.tool_name,
+                    orjson.dumps(item.arguments, option=orjson.OPT_SORT_KEYS),
+                )
+                for item in approved
+            ]
+            if actual != expected:
+                return False, "下一批工具调用必须与已批准的计划增量完全一致。"
         known = set(ctx.known_evidence_ids())
+        assessment = ctx.semantic_assessment()
+        if (
+            assessment is not None
+            and not approved
+            and any(call.name != "finish_research" for call in calls)
+        ):
+            return False, (
+                f"当前语义评估状态为 {assessment.status.value}，"
+                "Runtime 只接受 finish_research 收口。"
+            )
         for call in calls:
             if call.name == "finish_research":
                 # finish 引用的证据是结论引用而非执行依赖，不受分轮规则限制。
@@ -1178,7 +1217,7 @@ class ResearchAgentHarness:
 
         if not ctx.analysis_evidences():
             return False
-        return evaluate_completion(
+        return evaluate_structural_coverage(
             ctx.requirement,
             ctx.analysis_evidences(),
             premise_result=ctx.premise_result,

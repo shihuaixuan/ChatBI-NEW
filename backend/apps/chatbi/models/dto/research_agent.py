@@ -232,6 +232,15 @@ class ResearchCompletionReason(StrEnum):
     CANCELLED = "cancelled"
 
 
+class SemanticAssessmentStatus(StrEnum):
+    """模型对当前 Evidence 内容充分性的四态判断。"""
+
+    ANSWERABLE = "answerable"
+    EXPLICIT_GAP = "explicit_gap"
+    NO_NEW_DIRECTION = "no_new_direction"
+    DATA_INSUFFICIENT = "data_insufficient"
+
+
 ResearchCompletionStatus = Literal[
     "succeeded", "partial", "needs_clarification", "failed", "cancelled"
 ]
@@ -529,6 +538,54 @@ class ResearchEvidenceRequirement(_ContractModel):
         for value in self.required_asset_refs:
             _ref(value, "RESEARCH_AGENT_EVIDENCE_REQUIREMENT_REF_INVALID")
         return self
+
+
+class StructuralCoverageGap(_ContractModel):
+    """服务端确定的一条最低结构覆盖缺口。"""
+
+    requirement_id: str | None = Field(default=None, max_length=128)
+    kind: str = Field(min_length=1, max_length=128)
+    missing_count: int = Field(gt=0, le=1000)
+    message: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_gap(self) -> StructuralCoverageGap:
+        if self.requirement_id is not None:
+            _id(self.requirement_id, "RESEARCH_AGENT_COVERAGE_REQUIREMENT_ID_INVALID")
+        return self
+
+
+class StructuralCoverage(_ContractModel):
+    """服务端生成的最低结构覆盖结果，不代表内容已经足够。"""
+
+    minimum_requirements_met: bool
+    premise_handled: bool
+    core_supported: bool
+    covered_requirements: tuple[str, ...] = ()
+    missing_requirements: tuple[StructuralCoverageGap, ...] = ()
+    invalid_evidence_refs: tuple[str, ...] = ()
+    target_metric_coverage: dict[str, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_coverage(self) -> StructuralCoverage:
+        _unique(
+            self.covered_requirements,
+            "RESEARCH_AGENT_COVERED_REQUIREMENT_DUPLICATED",
+        )
+        _unique(
+            self.invalid_evidence_refs,
+            "RESEARCH_AGENT_INVALID_EVIDENCE_REF_DUPLICATED",
+        )
+        if self.minimum_requirements_met != (
+            not self.missing_requirements and not self.invalid_evidence_refs
+        ):
+            raise ValueError("RESEARCH_AGENT_STRUCTURAL_COVERAGE_STATE_INVALID")
+        if any(value < 0 for value in self.target_metric_coverage.values()):
+            raise ValueError("RESEARCH_AGENT_TARGET_COVERAGE_INVALID")
+        return self
+
+    def gap_messages(self) -> tuple[str, ...]:
+        return tuple(item.message for item in self.missing_requirements)
 
 
 class ResearchInitialPlanNode(_ContractModel):
@@ -1583,6 +1640,81 @@ class ResearchReportFinding(_ContractModel):
         return self
 
 
+class ResearchGap(_ContractModel):
+    """模型根据 Evidence 内容识别出的明确缺口。"""
+
+    gap_id: str = Field(min_length=1, max_length=128)
+    description: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_gap(self) -> ResearchGap:
+        _id(self.gap_id, "RESEARCH_AGENT_GAP_ID_INVALID")
+        return self
+
+
+class ResearchPlanAddition(_ContractModel):
+    """等待服务端编译和校验的单个研究计划增量。"""
+
+    addition_id: str = Field(min_length=1, max_length=128)
+    gap_id: str = Field(min_length=1, max_length=128)
+    tool_name: Literal[
+        "query_semantic_data",
+        "inspect_evidence",
+        "compute_evidence",
+    ]
+    arguments: dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_addition(self) -> ResearchPlanAddition:
+        _id(self.addition_id, "RESEARCH_AGENT_PLAN_ADDITION_ID_INVALID")
+        _id(self.gap_id, "RESEARCH_AGENT_GAP_ID_INVALID")
+        if not self.arguments:
+            raise ValueError("RESEARCH_AGENT_PLAN_ADDITION_ARGUMENTS_REQUIRED")
+        _reject_physical_payload(self.arguments)
+        return self
+
+
+class SemanticAssessment(_ContractModel):
+    """模型对当前 Evidence 内容充分性和下一步方向的结构化判断。"""
+
+    status: SemanticAssessmentStatus
+    supported_findings: tuple[ResearchReportFinding, ...] = ()
+    unresolved_gaps: tuple[ResearchGap, ...] = ()
+    proposed_plan_additions: tuple[ResearchPlanAddition, ...] = ()
+    limitations: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_semantic_assessment(self) -> SemanticAssessment:
+        gap_ids = tuple(item.gap_id for item in self.unresolved_gaps)
+        _unique(gap_ids, "RESEARCH_AGENT_GAP_DUPLICATED")
+        addition_ids = tuple(item.addition_id for item in self.proposed_plan_additions)
+        _unique(addition_ids, "RESEARCH_AGENT_PLAN_ADDITION_DUPLICATED")
+        known_gaps = set(gap_ids)
+        if any(
+            item.gap_id not in known_gaps for item in self.proposed_plan_additions
+        ):
+            raise ValueError("RESEARCH_AGENT_PLAN_ADDITION_GAP_NOT_FOUND")
+        if any(not item.strip() for item in self.limitations):
+            raise ValueError("RESEARCH_AGENT_ASSESSMENT_LIMITATION_INVALID")
+
+        if self.status is SemanticAssessmentStatus.ANSWERABLE:
+            if self.unresolved_gaps or self.proposed_plan_additions:
+                raise ValueError("RESEARCH_AGENT_ANSWERABLE_GAP_FORBIDDEN")
+        elif self.status is SemanticAssessmentStatus.EXPLICIT_GAP:
+            if not self.unresolved_gaps:
+                raise ValueError("RESEARCH_AGENT_EXPLICIT_GAP_REQUIRED")
+            if not self.proposed_plan_additions:
+                raise ValueError("RESEARCH_AGENT_EXPLICIT_GAP_PLAN_REQUIRED")
+        else:
+            if not self.unresolved_gaps:
+                raise ValueError("RESEARCH_AGENT_TERMINAL_GAP_REQUIRED")
+            if self.proposed_plan_additions:
+                raise ValueError("RESEARCH_AGENT_TERMINAL_PLAN_FORBIDDEN")
+            if not self.limitations:
+                raise ValueError("RESEARCH_AGENT_TERMINAL_LIMITATION_REQUIRED")
+        return self
+
+
 class ResearchHypothesisAssessment(_ContractModel):
     """finish_research 返回的最小假设评估，不判断结论强度。"""
 
@@ -1608,6 +1740,7 @@ class ResearchFinishRequest(_VersionedContractModel):
 
     run_id: str = Field(min_length=1, max_length=128)
     reason: ResearchCompletionReason
+    semantic_assessment: SemanticAssessment
     summary: str = Field(min_length=1, max_length=4000)
     claims: tuple[ResearchClaim, ...] = ()
     findings: tuple[ResearchReportFinding, ...] = ()
@@ -1650,6 +1783,20 @@ class ResearchFinishRequest(_VersionedContractModel):
             raise ValueError("RESEARCH_AGENT_FINISH_HYPOTHESIS_CITATION_MISSING")
         if any(not question.strip() for question in self.unanswered_questions):
             raise ValueError("RESEARCH_AGENT_FINISH_QUESTION_INVALID")
+        expected_status = {
+            ResearchCompletionReason.SUFFICIENT_EVIDENCE: SemanticAssessmentStatus.ANSWERABLE,
+            ResearchCompletionReason.NO_NEW_DIRECTION: SemanticAssessmentStatus.NO_NEW_DIRECTION,
+            ResearchCompletionReason.DATA_INSUFFICIENT: SemanticAssessmentStatus.DATA_INSUFFICIENT,
+        }.get(self.reason)
+        if (
+            expected_status is not None
+            and self.semantic_assessment.status is not expected_status
+        ):
+            raise ValueError("RESEARCH_AGENT_FINISH_ASSESSMENT_STATUS_INVALID")
+        if self.semantic_assessment.status is SemanticAssessmentStatus.EXPLICIT_GAP:
+            raise ValueError("RESEARCH_AGENT_EXPLICIT_GAP_CANNOT_FINISH")
+        if self.findings != self.semantic_assessment.supported_findings:
+            raise ValueError("RESEARCH_AGENT_FINISH_FINDINGS_ASSESSMENT_MISMATCH")
         return self
 
 
@@ -1845,6 +1992,7 @@ __all__ = [
     "ResearchEvidenceRequirement",
     "ResearchEvidenceStatistics",
     "ResearchEvidenceValueRef",
+    "ResearchGap",
     "ResearchInitialPlan",
     "ResearchInitialPlanNode",
     "ResearchImmutableFilter",
@@ -1856,6 +2004,7 @@ __all__ = [
     "ResearchLogicalColumn",
     "ResearchOrder",
     "ResearchOrderDirection",
+    "ResearchPlanAddition",
     "ResearchPremise",
     "ResearchPremiseType",
     "ResearchQueryComparison",
@@ -1874,6 +2023,10 @@ __all__ = [
     "ResearchToolObservation",
     "ResearchVersionSnapshot",
     "ResearchWorkingState",
+    "SemanticAssessment",
+    "SemanticAssessmentStatus",
+    "StructuralCoverage",
+    "StructuralCoverageGap",
     "ToolErrorCode",
     "ToolFailureStage",
     "ToolObservation",
