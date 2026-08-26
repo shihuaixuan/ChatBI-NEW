@@ -1,4 +1,4 @@
-"""Fast/Plan 共用的执行需求契约。"""
+"""统一分析 Runtime 的执行需求契约。"""
 
 from __future__ import annotations
 
@@ -11,11 +11,11 @@ from apps.chatbi.models.dto.analysis_plan import QueryTaskSpec
 
 
 class ExecutionRoute(BaseModel):
-    """执行需求的确定性路由结果。"""
+    """迁移期快照字段；新请求统一标记为 Agent Runtime。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    mode: Literal["fast", "plan", "research"]
+    mode: Literal["agent", "fast", "plan", "research"]
     reasons: tuple[str, ...] = ()
 
 
@@ -314,10 +314,10 @@ class AnalysisExecutionSpec(BaseModel):
 
     @classmethod
     def from_requirement(cls, requirement: ExecutionRequirement) -> AnalysisExecutionSpec:
-        """只投影 Plan 根需求，不把根路由带入执行服务。"""
+        """投影固定计划根需求，不把迁移期执行类别带入执行服务。"""
 
-        if requirement.route.mode != "plan":
-            raise ValueError("ANALYSIS_EXECUTION_ROUTE_NOT_PLAN")
+        if requirement.route.mode in {"agent", "research"}:
+            raise ValueError("ANALYSIS_EXECUTION_DYNAMIC_REQUIREMENT_NOT_SUPPORTED")
         return cls(
             query_requirements=requirement.query_requirements,
             post_calculations=requirement.post_calculations,
@@ -328,7 +328,7 @@ class AnalysisExecutionSpec(BaseModel):
 
 
 class ExecutionRequirement(BaseModel):
-    """Fast、Plan 和 Research 执行阶段的唯一业务输入。"""
+    """统一分析执行阶段的业务输入。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -338,9 +338,9 @@ class ExecutionRequirement(BaseModel):
     post_calculations: tuple[CalculationRequirement, ...] = ()
     result_contract: ExecutionResultContract | None = None
     decomposition: ExecutionDecompositionAudit | None = None
-    # research 模式冻结的新契约 Requirement 载荷（dto/research_agent 的
+    # 统一 Agent Requirement 载荷（dto/research_agent 的
     # ResearchAgentRequirement model_dump）。宽松 dict：契约演进不回流到
-    # 执行需求 DTO；非 research 模式必须为空。
+    # 迁移期执行需求 DTO。
     research_requirement: dict[str, Any] | None = None
     runtime: dict[str, Any] = Field(default_factory=dict)
     asset_snapshot: dict[str, Any] = Field(default_factory=dict)
@@ -348,7 +348,7 @@ class ExecutionRequirement(BaseModel):
 
     @model_validator(mode="after")
     def validate_unique_requirement_ids(self) -> ExecutionRequirement:
-        """统一校验 ID、依赖图和 Fast/Plan 路由不变量。"""
+        """统一校验 ID、依赖图和执行需求不变量。"""
 
         query_ids = [item.id for item in self.query_requirements]
         calculation_ids = [item.id for item in self.post_calculations]
@@ -372,11 +372,7 @@ class ExecutionRequirement(BaseModel):
             and not self.query_requirements
         ):
             raise ValueError("EXECUTION_REQUIREMENT_QUERY_REQUIRED")
-        if self.route.mode == "fast" and (
-            len(self.query_requirements) != 1 or self.post_calculations
-        ):
-            raise ValueError("EXECUTION_REQUIREMENT_FAST_SHAPE_INVALID")
-        if self.route.mode == "research":
+        if self.route.mode in {"agent", "research"}:
             if self.research_requirement is None:
                 raise ValueError("EXECUTION_REQUIREMENT_RESEARCH_REQUIRED")
             if (
@@ -411,8 +407,6 @@ class ExecutionRequirement(BaseModel):
             if declared != leaves:
                 raise ValueError("EXECUTION_REQUIREMENT_RESULT_LEAVES_MISMATCH")
         if self.route.mode == "plan":
-            if len(self.query_requirements) == 1 and not self.post_calculations:
-                raise ValueError("EXECUTION_REQUIREMENT_PLAN_SHAPE_INVALID")
             if (
                 len(self.query_requirements) > 1
                 and not self.post_calculations
@@ -421,13 +415,13 @@ class ExecutionRequirement(BaseModel):
                 raise ValueError("EXECUTION_REQUIREMENT_MULTI_QUERY_RESULT_UNRESOLVED")
         return self
 
-    def require_ready(self, mode: str) -> ExecutionRequirement:
-        """校验当前模式只能执行匹配的、已经准备好的需求。"""
+    def require_ready(self) -> ExecutionRequirement:
+        """校验固定计划需求已经准备完成。"""
 
         if self.status != "ready":
             raise ValueError("EXECUTION_REQUIREMENT_NOT_READY")
-        if self.route.mode != mode:
-            raise ValueError("EXECUTION_REQUIREMENT_ROUTE_MISMATCH")
+        if self.route.mode in {"agent", "research"}:
+            raise ValueError("EXECUTION_REQUIREMENT_DYNAMIC_NOT_EXECUTABLE")
         if self.unresolved:
             raise ValueError("EXECUTION_REQUIREMENT_UNRESOLVED")
         return self

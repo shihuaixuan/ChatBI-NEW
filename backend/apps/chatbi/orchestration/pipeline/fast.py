@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from apps.chatbi.models import AgentClarificationResumeKind
+from apps.chatbi.models.dto.analysis_evidence import AnalysisEvidenceLevel
 from apps.chatbi.models.dto.analysis_plan import (
     AnalysisPlan,
     AnalysisPlanStatus,
@@ -53,6 +54,13 @@ from apps.chatbi.services.generation.fallback_sql import (
 from apps.chatbi.services.planning.confidence import (
     ConfidenceSignals,
     assess_confidence,
+)
+from apps.chatbi.services.planning.execution_state import (
+    PLAN_EXECUTION_STATE_KEY,
+    PlanNodeExecutionStatus,
+    build_analysis_plan_execution_state,
+    load_plan_execution_state,
+    transition_plan_node,
 )
 from apps.chatbi.services.planning.semantic_query_preparation import (
     prepare_strict_query_scope,
@@ -120,7 +128,7 @@ class FastPipeline:
             self._metrics.record_run(mode="fast", status="started")
         execution_requirement = self._load_execution_requirement(state)
         try:
-            execution_requirement.require_ready("fast")
+            execution_requirement.require_ready()
         except ValueError as exc:
             raise FastPipelineError(str(exc)) from exc
         if len(execution_requirement.query_requirements) != 1:
@@ -153,6 +161,7 @@ class FastPipeline:
             presentation=PresentationHint(primary_result=query_task.id),
             validation=PlanValidation(status=AnalysisPlanStatus.DRAFT),
         )
+        self._ensure_plan_execution_state(state, draft_plan)
         self._save_plan(state, draft_plan)
         yield self._events.plan_updated(
             run_id,
@@ -165,6 +174,9 @@ class FastPipeline:
         )
         self._session.commit()
 
+        self._transition_plan_node(
+            state, query_task.id, PlanNodeExecutionStatus.RUNNING
+        )
         yield self._events.task_started(
             run_id,
             {
@@ -228,6 +240,11 @@ class FastPipeline:
         result_set_id = (
             execution.get("result_set_id") if isinstance(execution, dict) else None
         )
+        self._transition_plan_node(
+            state,
+            query_task.id,
+            PlanNodeExecutionStatus.SUCCEEDED,
+        )
         yield self._events.task_finished(
             run_id,
             {
@@ -257,7 +274,9 @@ class FastPipeline:
             state.context.state.get("question") or state.record.question or ""
         )
         if self._answer_composer is not None:
-            final = self._answer_composer.compose(
+            plan_payload = state.context.state.get("analysis_plan")
+            semantic_payload = state.context.state.get("semantic_scope")
+            composed = self._answer_composer.compose(
                 AnswerComposerInput(
                     question=question,
                     intent=intent if isinstance(intent, dict) else {},
@@ -265,17 +284,22 @@ class FastPipeline:
                     if isinstance(execution, dict)
                     else {"status": "succeeded"},
                     rows=rows,
-                    plan=state.context.state.get("analysis_plan")
-                    if isinstance(state.context.state.get("analysis_plan"), dict)
-                    else {},
-                    semantic_context=state.context.state.get("semantic_scope")
-                    if isinstance(state.context.state.get("semantic_scope"), dict)
-                    else {},
+                    plan=dict(plan_payload) if isinstance(plan_payload, dict) else {},
+                    semantic_context=(
+                        dict(semantic_payload)
+                        if isinstance(semantic_payload, dict)
+                        else {}
+                    ),
                     mode="fast",
                 )
             )
+            answer = composed.answer
+            chart = composed.chart
+            claims = list(getattr(composed, "claims", []) or [])
+            caliber_card = dict(getattr(composed, "caliber_card", {}) or {})
+            chart_spec = dict(getattr(composed, "chart_spec", {}) or {})
         else:
-            final = self._finalization_service.generate(
+            generated = self._finalization_service.generate(
                 AgentFinalizationInput(
                     question=question,
                     intent=intent if isinstance(intent, dict) else {},
@@ -285,16 +309,21 @@ class FastPipeline:
                     rows=rows,
                 )
             )
+            answer = generated.answer
+            chart = generated.chart
+            claims = list(getattr(generated, "claims", []) or [])
+            caliber_card = dict(getattr(generated, "caliber_card", {}) or {})
+            chart_spec = dict(getattr(generated, "chart_spec", {}) or {})
         yield from self._lifecycle.finish(
             state,
-            answer=final.answer,
-            chart=final.chart,
+            answer=answer,
+            chart=chart,
             sql=str(compiled_payload["sql"]),
             full_data=state.context.state.get("full_data"),
             execution=execution if isinstance(execution, dict) else None,
-            claims=list(getattr(final, "claims", []) or []),
-            caliber_card=dict(getattr(final, "caliber_card", {}) or {}),
-            chart_spec=dict(getattr(final, "chart_spec", {}) or {}),
+            claims=claims,
+            caliber_card=caliber_card,
+            chart_spec=chart_spec,
         )
 
     def _call_tool(
@@ -568,7 +597,7 @@ class FastPipeline:
             ],
             row_count=int(execution.get("row_count") or 0),
             purpose="Fast ASSISTED 兜底结果",
-            evidence_level="exploratory",
+            evidence_level=AnalysisEvidenceLevel.EXPLORATORY,
             limitations=("assisted_semantic_binding",),
             version_snapshot=self._evidence_version_snapshot(state),
         )
@@ -579,16 +608,12 @@ class FastPipeline:
     def _evidence_version_snapshot(state: AgentRuntimeState) -> Any:
         execution = state.context.state.get("execution_requirement")
         asset_snapshot = (
-            execution.get("asset_snapshot")
-            if isinstance(execution, dict)
-            else {}
+            execution.get("asset_snapshot") if isinstance(execution, dict) else {}
         )
         semantic_scope = state.context.state.get("semantic_scope")
         return build_analysis_version_snapshot(
             asset_snapshot=asset_snapshot if isinstance(asset_snapshot, dict) else {},
-            semantic_scope=(
-                semantic_scope if isinstance(semantic_scope, dict) else {}
-            ),
+            semantic_scope=(semantic_scope if isinstance(semantic_scope, dict) else {}),
         )
 
     @staticmethod
@@ -628,8 +653,13 @@ class FastPipeline:
         if scope is None or scope.semantic_enforcement != "STRICT":
             return
 
-        runtime = state.context.state.get("execution_requirement")
-        runtime = runtime.get("runtime") if isinstance(runtime, dict) else {}
+        execution_payload = state.context.state.get("execution_requirement")
+        runtime_value = (
+            execution_payload.get("runtime")
+            if isinstance(execution_payload, dict)
+            else None
+        )
+        runtime = runtime_value if isinstance(runtime_value, dict) else {}
         dataset_id = runtime.get("dataset_id")
         if not isinstance(dataset_id, int) or isinstance(dataset_id, bool):
             dataset_id = state.context.dataset_id
@@ -788,6 +818,7 @@ class FastPipeline:
 
     def _save_plan(self, state: AgentRuntimeState, plan: AnalysisPlan) -> None:
         state.context.state["analysis_plan"] = plan.model_dump(mode="json")
+        self._ensure_plan_execution_state(state, plan)
         FastPipeline._persist_state(state)
         if self._trace_recorder is None:
             return
@@ -818,6 +849,34 @@ class FastPipeline:
                 }
             )
             plan_node.set_output_detail({"analysis_plan": plan.model_dump(mode="json")})
+
+    @staticmethod
+    def _ensure_plan_execution_state(
+        state: AgentRuntimeState,
+        plan: AnalysisPlan,
+    ) -> None:
+        if isinstance(state.context.state.get(PLAN_EXECUTION_STATE_KEY), dict):
+            return
+        state.context.state[PLAN_EXECUTION_STATE_KEY] = (
+            build_analysis_plan_execution_state(plan).model_dump(mode="json")
+        )
+
+    def _transition_plan_node(
+        self,
+        state: AgentRuntimeState,
+        node_id: str,
+        status: PlanNodeExecutionStatus,
+    ) -> None:
+        raw = state.context.state.get(PLAN_EXECUTION_STATE_KEY)
+        if not isinstance(raw, dict):
+            raise FastPipelineError("FAST_PLAN_EXECUTION_STATE_REQUIRED")
+        execution_state = load_plan_execution_state(raw)
+        if execution_state is None:
+            raise FastPipelineError("FAST_PLAN_EXECUTION_STATE_REQUIRED")
+        state.context.state[PLAN_EXECUTION_STATE_KEY] = transition_plan_node(
+            execution_state, node_id, status
+        ).model_dump(mode="json")
+        self._persist_state(state)
 
     @staticmethod
     def _persist_state(state: AgentRuntimeState) -> None:

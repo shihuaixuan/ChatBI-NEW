@@ -41,9 +41,10 @@ from apps.chatbi.models.dto.research_agent import (
     ToolObservation,
 )
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
+from apps.chatbi.orchestration.agent.reasoning_profile import RESEARCH_PROFILE
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.research import build_research_tool_registry
-from apps.chatbi.services.research.agent_context import build_premise_query_args
+from apps.chatbi.services.planning.execution_state import PlanNodeExecutionStatus
 from apps.chatbi.services.research.report_validator import validate_report_conclusions
 from apps.chatbi.services.research.routing_freeze import freeze_research_requirement
 from apps.chatbi.services.research.tool_context import ResearchToolContext
@@ -91,6 +92,36 @@ def test_semantic_assessment_four_states_are_mutually_constrained() -> None:
                 {"gap_id": "gap-1", "description": "不应存在的缺口。"},
             ),
         )
+
+
+def test_research_profile_exposes_planning_tools_only() -> None:
+    """模型只能提交计划或完成判断，不能绕过 DAG 直接执行节点。"""
+
+    assert RESEARCH_PROFILE.fixed_tool_allowlist == (
+        "assess_research",
+        "finish_research",
+    )
+
+
+def test_requirement_without_time_filter_accepts_single_role_query() -> None:
+    """无时间条件时仍允许 Planner 生成 single 查询，执行器不应伪造时间绑定。"""
+
+    requirement = _requirement().model_copy(
+        update={
+            "time_bindings": (),
+            "time_bindings_by_model": {},
+        }
+    )
+    query = ResearchSemanticQuery(
+        run_id=requirement.run_id,
+        scope_fingerprint=requirement.scope.scope_fingerprint,
+        version_snapshot=requirement.version_snapshot,
+        metrics=requirement.target_metric_refs,
+        time_ranges=(ResearchTimeRole.SINGLE,),
+        purpose="查询目标指标",
+    )
+
+    requirement.validate_query(query)
 
 
 def test_structural_coverage_state_must_match_missing_requirements() -> None:
@@ -161,9 +192,11 @@ def test_assess_research_compiles_and_freezes_plan_additions() -> None:
 
     assert result.data is not None
     assert result.data.status.value == "succeeded"
-    additions = context.approved_plan_additions()
-    assert len(additions) == 1
-    assert additions[0].arguments == arguments
+    plan_state = context.plan_execution_state()
+    assert plan_state.revision == 2
+    assert plan_state.nodes[-1].id == "dimension-query"
+    assert plan_state.nodes[-1].gap_id == "dimension-gap"
+    assert plan_state.nodes[-1].arguments == arguments
 
 
 def test_assess_research_rejects_out_of_scope_plan_addition() -> None:
@@ -215,7 +248,345 @@ def test_assess_research_rejects_out_of_scope_plan_addition() -> None:
     assert result.data is not None
     assert result.data.status.value == "failed"
     assert result.data.error_code is ToolErrorCode.INVALID_REQUEST
-    assert context.approved_plan_additions() == ()
+    assert context.plan_execution_state().nodes == ()
+
+
+def test_plan_dependencies_drive_ready_nodes_without_evidence_id_guessing() -> None:
+    """计算节点显式依赖查询节点，Planner 不需要预先猜测 Evidence ID。"""
+
+    requirement = _governed_requirement()
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    result = build_research_tool_registry().execute(
+        ToolCall(
+            name="assess_research",
+            call_id="assessment-dag",
+            args={
+                "assessment": {
+                    "status": "explicit_gap",
+                    "unresolved_gaps": (
+                        {"gap_id": "calculation-gap", "description": "需要计算占比"},
+                    ),
+                    "proposed_plan_additions": (
+                        {
+                            "addition_id": "source-query",
+                            "gap_id": "calculation-gap",
+                            "tool_name": "query_semantic_data",
+                            "arguments": {
+                                "metrics": ["METRIC:10:1"],
+                                "dimensions": ["DIMENSION:20:1"],
+                                "time_ranges": ["current"],
+                                "analysis": "breakdown",
+                                "purpose": "查询占比计算输入",
+                            },
+                        },
+                        {
+                            "addition_id": "share-compute",
+                            "gap_id": "calculation-gap",
+                            "dependency_node_ids": ["source-query"],
+                            "tool_name": "compute_evidence",
+                            "arguments": {
+                                "operation": "share",
+                                "metric_refs": ["METRIC:10:1"],
+                                "dimension_refs": ["DIMENSION:20:1"],
+                                "purpose": "计算维度占比",
+                            },
+                        },
+                    ),
+                }
+            },
+        ),
+        context,
+    )
+
+    assert result.data is not None and result.data.status.value == "succeeded"
+    assert tuple(node.id for node in context.ready_plan_nodes()) == ("source-query",)
+    context.mark_plan_node(
+        "source-query",
+        status=PlanNodeExecutionStatus.SUCCEEDED,
+        evidence_ids=("evidence-source",),
+    )
+    assert tuple(node.id for node in context.ready_plan_nodes()) == ("share-compute",)
+
+
+def test_assess_research_rejects_dependency_and_explicit_evidence_together() -> None:
+    """依赖边必须同时决定执行顺序和数据输入，不能再声明另一组 Evidence。"""
+
+    requirement = _governed_requirement()
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    result = build_research_tool_registry().execute(
+        ToolCall(
+            name="assess_research",
+            call_id="assessment-dependency-conflict",
+            args={
+                "assessment": {
+                    "status": "explicit_gap",
+                    "unresolved_gaps": (
+                        {"gap_id": "compute-gap", "description": "需要计算占比"},
+                    ),
+                    "proposed_plan_additions": (
+                        {
+                            "addition_id": "compute-share",
+                            "gap_id": "compute-gap",
+                            "dependency_node_ids": ["source-query"],
+                            "tool_name": "compute_evidence",
+                            "arguments": {
+                                "input_evidence_ids": ["existing-evidence"],
+                                "operation": "share",
+                                "metric_refs": ["METRIC:10:1"],
+                                "purpose": "计算占比",
+                            },
+                        },
+                    ),
+                }
+            },
+        ),
+        context,
+    )
+
+    assert result.data is not None
+    assert result.data.status.value == "failed"
+    assert result.data.error_code is ToolErrorCode.INVALID_REQUEST
+    assert context.plan_execution_state().nodes == ()
+    assert context.semantic_assessment() is None
+
+
+def test_assess_research_does_not_save_assessment_when_dag_append_fails() -> None:
+    """DAG 追加失败时，评估和计划必须保持同一原子结果。"""
+
+    requirement = _governed_requirement()
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    result = build_research_tool_registry().execute(
+        ToolCall(
+            name="assess_research",
+            call_id="assessment-unknown-dependency",
+            args={
+                "assessment": {
+                    "status": "explicit_gap",
+                    "unresolved_gaps": (
+                        {"gap_id": "query-gap", "description": "需要补充查询"},
+                    ),
+                    "proposed_plan_additions": (
+                        {
+                            "addition_id": "dependent-query",
+                            "gap_id": "query-gap",
+                            "dependency_node_ids": ["missing-node"],
+                            "tool_name": "query_semantic_data",
+                            "arguments": {
+                                "metrics": ["METRIC:10:1"],
+                                "time_ranges": ["current"],
+                                "purpose": "补充查询",
+                            },
+                        },
+                    ),
+                }
+            },
+        ),
+        context,
+    )
+
+    assert result.data is not None
+    assert result.data.status.value == "failed"
+    assert result.data.error_code is ToolErrorCode.INVALID_REQUEST
+    assert context.plan_execution_state().nodes == ()
+    assert context.semantic_assessment() is None
+
+
+def test_premise_gap_can_be_resolved_from_complete_breakdown_evidence() -> None:
+    requirement = ResearchAgentRequirement.model_validate(
+        {
+            **_governed_requirement().model_dump(mode="json"),
+            "premise_to_verify": {
+                "premise_type": "metric_change",
+                "metric_ref": "METRIC:10:1",
+                "expected_direction": "decrease",
+                "time_roles": ("current", "previous"),
+                "statement": "总 GMV 已下降",
+            },
+        }
+    )
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    evidence = ResearchEvidence.model_validate(
+        {
+            **_evidence().model_dump(mode="json"),
+            "purpose": "按地区分析 GMV 变化并同时验证总量前提",
+            "time_ranges": ("current", "previous"),
+            "logical_columns": (
+                ResearchLogicalColumn(
+                    asset_ref="DIMENSION:20:1",
+                    value_role="group_key",
+                    result_field="region",
+                ),
+                ResearchLogicalColumn(
+                    asset_ref="METRIC:10:1",
+                    value_role="current",
+                    result_field="current_value",
+                ),
+                ResearchLogicalColumn(
+                    asset_ref="METRIC:10:1",
+                    value_role="previous",
+                    result_field="previous_value",
+                ),
+            ),
+            "statistics": ResearchEvidenceStatistics(row_count=2),
+            "sample_rows": (
+                {"region": "华东", "current_value": 40, "previous_value": 60},
+                {"region": "华南", "current_value": 30, "previous_value": 35},
+            ),
+        }
+    )
+    context.register_evidence(evidence)
+    assessment = {
+        "status": "answerable",
+        "resolved_gaps": (
+            {
+                "gap_id": "premise",
+                "status": "supported",
+                "evidence_ids": (evidence.evidence_id,),
+                "reason": "完整地区结果汇总后，本期总量低于上期。",
+            },
+        ),
+    }
+
+    result = build_research_tool_registry().execute(
+        ToolCall(
+            name="assess_research",
+            call_id="assessment-premise",
+            args={"assessment": assessment},
+        ),
+        context,
+    )
+
+    assert result.data is not None
+    assert result.data.status.value == "succeeded"
+    assert context.premise_result is not None
+    assert context.premise_result["status"] == "supported"
+    assert context.premise_result["evidence_id"] == evidence.evidence_id
+
+
+def test_premise_gap_accepts_merged_analysis_query_plan() -> None:
+    requirement = ResearchAgentRequirement.model_validate(
+        {
+            **_governed_requirement().model_dump(mode="json"),
+            "premise_to_verify": {
+                "premise_type": "metric_change",
+                "metric_ref": "METRIC:10:1",
+                "expected_direction": "decrease",
+                "time_roles": ("current", "previous"),
+                "statement": "总 GMV 已下降",
+            },
+        }
+    )
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    arguments = {
+        "metrics": ["METRIC:10:1"],
+        "dimensions": ["DIMENSION:20:1"],
+        "time_ranges": ["current", "previous"],
+        "comparison": "difference",
+        "analysis": "breakdown",
+        "purpose": "同时确认总量变化并分析地区贡献",
+    }
+    result = build_research_tool_registry().execute(
+        ToolCall(
+            name="assess_research",
+            call_id="assessment-merged-plan",
+            args={
+                "assessment": {
+                    "status": "explicit_gap",
+                    "unresolved_gaps": (
+                        {"gap_id": "premise", "description": "需要确认总 GMV 是否下降"},
+                    ),
+                    "proposed_plan_additions": (
+                        {
+                            "addition_id": "merged-breakdown",
+                            "gap_id": "premise",
+                            "tool_name": "query_semantic_data",
+                            "arguments": arguments,
+                        },
+                    ),
+                }
+            },
+        ),
+        context,
+    )
+
+    assert result.data is not None
+    assert result.data.status.value == "succeeded"
+    assert context.plan_execution_state().nodes[0].arguments == arguments
 
 
 def _scope() -> dict[str, object]:
@@ -1318,26 +1689,24 @@ def test_freeze_classifies_explicit_drivers_before_projecting_relationships() ->
         item.driver_metric_ref for item in requirement.scope.driver_relationships
     ) == ("METRIC:11:1", "METRIC:12:1")
 
-
-def test_premise_preflight_builds_an_executable_difference_query() -> None:
-    """前提比较必须显式携带 difference，不能形成无计算类型的 compare。"""
-
-    requirement = ResearchAgentRequirement.model_validate(
-        {
-            **_governed_requirement().model_dump(mode="json"),
-            "premise_to_verify": {
-                "premise_type": "metric_change",
-                "metric_ref": "METRIC:10:1",
-                "expected_direction": "decrease",
-                "time_roles": ("current", "previous"),
-            },
-        }
+    direct_requirement = freeze_research_requirement(
+        semantic_parse=SemanticParseOutput.model_validate(
+            {
+                "status": "resolved",
+                "measures": [{"ref": "METRIC:10:1"}],
+                "group_by": [{"ref": "DIMENSION:20:1"}],
+            }
+        ),
+        schema=schema,
+        temporal_context=None,
+        tenant_scope="oid:1",
+        dataset_ref="ASSET:dataset:1",
+        goal="查询目标指标",
     )
 
-    args = build_premise_query_args(requirement)
-    assert args is not None
-    assert args["analysis"] == "compare"
-    assert args["comparison"] == "difference"
+    assert direct_requirement.reason.value == "direct_analysis"
+    assert direct_requirement.time_bindings == ()
+    assert direct_requirement.scope.dimension_refs
 
 
 def test_report_number_validation_accepts_dates_signs_and_display_rounding() -> None:

@@ -1,10 +1,10 @@
-"""补充资产定义、生成执行需求并选择 Fast 或 Plan。"""
+"""补充资产定义并生成冻结执行需求。"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from apps.chatbi.errors import (
@@ -32,18 +32,20 @@ from apps.temporal import TemporalContext
 from apps.temporal.resolver import resolve_time_range
 
 
-class ModeRoutingError(ValueError):
-    """无法生成可执行需求，或请求的模式不允许。"""
+class ExecutionRequirementBuildError(ValueError):
+    """无法生成合法的冻结执行需求。"""
 
 
 @dataclass(frozen=True, slots=True)
-class ModeRouteInput:
+class ExecutionRequirementInput:
     """已经校验过的语义解析结果和候选资产。"""
 
     semantic_parse: SemanticParseOutput
     candidate_groups: dict[str, list[dict[str, Any]]]
     dataset_id: int
     tenant_id: int
+    goal: str = ""
+    # 旧配置兼容字段，不参与规划或执行分发。
     enabled_modes: tuple[str, ...] = (
         AgentExecutionMode.FAST.value,
         AgentExecutionMode.PLAN.value,
@@ -56,7 +58,12 @@ class ModeRouteInput:
     research_budget: ResearchBudget | None = None
 
 
-class ModeRouter:
+# 迁移期兼容名称只服务旧调用方，生产入口使用 ExecutionRequirementBuilder。
+ModeRoutingError = ExecutionRequirementBuildError
+ModeRouteInput = ExecutionRequirementInput
+
+
+class ExecutionRequirementBuilder:
     """根据语义解析结果和候选资产生成执行需求。"""
 
     def __init__(
@@ -65,14 +72,13 @@ class ModeRouter:
         limited_multistep_decomposer: LimitedMultiStepDecomposer | None = None,
     ) -> None:
         if schema_provider is None:
-            raise ValueError("MODE_ROUTER_SCHEMA_PROVIDER_REQUIRED")
+            raise ValueError("EXECUTION_REQUIREMENT_SCHEMA_PROVIDER_REQUIRED")
         self._schema_provider = schema_provider
         self._limited_multistep_decomposer = limited_multistep_decomposer
 
-    def route(self, request: ModeRouteInput) -> dict[str, Any]:
-        """完成资产补充、绑定校验、执行需求分析和模式判断。"""
+    def build(self, request: ExecutionRequirementInput) -> dict[str, Any]:
+        """完成资产补充、绑定校验并冻结执行需求。"""
 
-        enabled = _normalize_modes(request.enabled_modes)
         semantic_parse = request.semantic_parse
         if semantic_parse.status != "resolved" or semantic_parse.unresolved:
             raise ModeRoutingError("SEMANTIC_PARSE_NOT_RESOLVED")
@@ -81,12 +87,6 @@ class ModeRouter:
             request.tenant_id,
             request.dataset_id,
         )
-        dynamic_research = (
-            semantic_parse.multi_step
-            if semantic_parse.multi_step is not None
-            and semantic_parse.multi_step.type == "dynamic_research"
-            else None
-        )
         selected_refs = _selected_refs(semantic_parse)
         candidates = self._resolve_candidates(request, schema, set(selected_refs))
         missing_refs = sorted(set(selected_refs) - set(candidates))
@@ -94,137 +94,55 @@ class ModeRouter:
             raise ModeRoutingError(
                 "SEMANTIC_PARSE_CANDIDATE_NOT_FOUND:" + ",".join(missing_refs)
             )
-        complete_dynamic_parse = _complete_dynamic_plan_parse(
-            semantic_parse,
-            candidates,
-        )
-        if dynamic_research is not None and complete_dynamic_parse is None:
-            if AgentExecutionMode.RESEARCH.value not in enabled:
-                raise ModeRoutingError("EXECUTION_MODE_NOT_AVAILABLE:research")
-            try:
-                research_requirement = freeze_research_requirement(
-                    semantic_parse=semantic_parse,
-                    schema=schema,
-                    temporal_context=request.temporal_context,
-                    budget=request.research_budget,
-                    tenant_scope=f"oid:{int(request.tenant_id)}",
-                    dataset_ref=f"ASSET:dataset:{request.dataset_id or 0}",
-                    user_id=request.user_id,
-                    datasource_id=request.datasource_id,
-                    permission_version=request.permission_version,
-                    authorized_tables=request.authorized_tables,
-                )
-            except ResearchRequirementError as exc:
-                raise ModeRoutingError(exc.code) from exc
-            except ValueError as exc:
-                # 新契约字段校验失败（如无时间过滤的问题无法满足时间绑定），
-                # 与旧路径投影失败同口径显式暴露。
-                raise ModeRoutingError(f"RESEARCH_REQUIREMENT_INVALID:{exc}") from exc
-            research_refs = {
-                *research_requirement.target_metric_refs,
-                *research_requirement.scope.dimension_refs,
-                *research_requirement.scope.driver_metric_refs,
-                *(item.target_ref for item in research_requirement.immutable_filters),
+        try:
+            research_requirement = freeze_research_requirement(
+                semantic_parse=semantic_parse,
+                schema=schema,
+                temporal_context=request.temporal_context,
+                budget=request.research_budget,
+                tenant_scope=f"oid:{int(request.tenant_id)}",
+                dataset_ref=f"ASSET:dataset:{request.dataset_id or 0}",
+                user_id=request.user_id,
+                datasource_id=request.datasource_id,
+                permission_version=request.permission_version,
+                authorized_tables=request.authorized_tables,
+                goal=request.goal,
+            )
+        except ResearchRequirementError as exc:
+            raise ModeRoutingError(exc.code) from exc
+        except ValueError as exc:
+            raise ModeRoutingError(f"RESEARCH_REQUIREMENT_INVALID:{exc}") from exc
+        research_refs = {
+            *research_requirement.target_metric_refs,
+            *research_requirement.scope.dimension_refs,
+            *research_requirement.scope.driver_metric_refs,
+            *(item.target_ref for item in research_requirement.immutable_filters),
+        }
+        schema_elements = {
+            **{f"METRIC:{item.id}:{item.model}": item for item in schema.metrics},
+            **{f"DIMENSION:{item.id}:{item.model}": item for item in schema.dimensions},
+        }
+        research_assets = {
+            ref: {
+                **_asset_definition(schema_elements[ref]),
+                "description": str(schema_elements[ref].description or ""),
             }
-            schema_elements = {
-                **{f"METRIC:{item.id}:{item.model}": item for item in schema.metrics},
-                **{
-                    f"DIMENSION:{item.id}:{item.model}": item
-                    for item in schema.dimensions
-                },
-            }
-            research_assets = {
-                ref: {
-                    **_asset_definition(schema_elements[ref]),
-                    "description": str(schema_elements[ref].description or ""),
-                }
-                for ref in sorted(research_refs)
-                if ref in schema_elements
-            }
-            missing_research_assets = sorted(research_refs - set(research_assets))
-            if missing_research_assets:
-                raise ModeRoutingError(
-                    "RESEARCH_ASSET_SNAPSHOT_INCOMPLETE:"
-                    + ",".join(missing_research_assets)
-                )
-            time_assets = {
-                item.dimension_ref: {
-                    **_asset_definition(schema_elements[item.dimension_ref]),
-                    "description": str(
-                        schema_elements[item.dimension_ref].description or ""
-                    ),
-                }
-                for item in research_requirement.time_bindings
-                if item.dimension_ref in schema_elements
-            }
-            research_assets.update(time_assets)
-            for bindings in research_requirement.time_bindings_by_model.values():
-                for item in bindings:
-                    if item.dimension_ref not in schema_elements:
-                        continue
-                    research_assets[item.dimension_ref] = {
-                        **_asset_definition(schema_elements[item.dimension_ref]),
-                        "description": str(
-                            schema_elements[item.dimension_ref].description or ""
-                        ),
-                    }
-            return ExecutionRequirement(
-                status="ready",
-                route=ExecutionRoute(
-                    mode=AgentExecutionMode.RESEARCH.value,
-                    reasons=(
-                        "dynamic_research",
-                        dynamic_research.reason,
-                    ),
-                ),
-                runtime={
-                    "tenant_id": request.tenant_id,
-                    "datasource_id": request.datasource_id,
-                    "dataset_id": request.dataset_id,
-                    "schema_version": schema.schema_version,
-                    "contract_version": schema.contract_version,
-                },
-                asset_snapshot={
-                    "schema_version": schema.schema_version,
-                    "contract_version": schema.contract_version,
-                    "schema_fingerprint": schema.schema_fingerprint,
-                    # Research 子计划必须持续使用启动时已发布的不可变 Schema。
-                    "dataset_schema": schema.model_dump(mode="json"),
-                    # 执行资产保留在服务端快照中，Research Policy 只读取清理后的逻辑目录。
-                    "research_assets": research_assets,
-                },
-                research_requirement=research_requirement.model_dump(mode="json"),
-            ).model_dump(mode="json")
-
-        # 动态语义只有在结构化输入不足以证明固定拓扑时才保留 Research。
-        # 已经明确的驱动指标和分析维度先进入普通执行需求，再由执行节点结构
-        # 判断 Fast 或 Plan，避免把“需要验证主要原因”误当成动态路由依据。
-        if complete_dynamic_parse is not None:
-            request = replace(request, semantic_parse=complete_dynamic_parse)
-        execution = self._build_execution_requirements(request, schema, candidates)
-        mode, reasons = self._select_mode(execution)
-        if dynamic_research is not None:
-            reasons = ["complete_initial_plan", *reasons]
-        if mode.value not in enabled:
-            raise ModeRoutingError(f"EXECUTION_MODE_NOT_AVAILABLE:{mode.value}")
-
-        scope_fingerprint = _analysis_scope_fingerprint(
-            execution,
-            schema_fingerprint=schema.schema_fingerprint,
-        )
-        permission_fingerprint = _analysis_permission_fingerprint(request)
-
+            for ref in sorted(research_refs)
+            if ref in schema_elements
+        }
+        missing_research_assets = sorted(research_refs - set(research_assets))
+        if missing_research_assets:
+            raise ModeRoutingError(
+                "RESEARCH_ASSET_SNAPSHOT_INCOMPLETE:"
+                + ",".join(missing_research_assets)
+            )
         return ExecutionRequirement(
             status="ready",
             route=ExecutionRoute(
-                mode=(
-                    AgentExecutionMode.FAST.value
-                    if mode is AgentExecutionMode.FAST
-                    else AgentExecutionMode.PLAN.value
-                ),
-                reasons=tuple(dict.fromkeys(reasons)),
+                # route 是快照审计字段，不再决定执行路径。
+                mode="agent",
+                reasons=("unified_plan_and_solve",),
             ),
-            **execution,
             runtime={
                 "tenant_id": request.tenant_id,
                 "datasource_id": request.datasource_id,
@@ -236,11 +154,16 @@ class ModeRouter:
                 "schema_version": schema.schema_version,
                 "contract_version": schema.contract_version,
                 "schema_fingerprint": schema.schema_fingerprint,
-                "scope_fingerprint": scope_fingerprint,
-                "permission_fingerprint": permission_fingerprint,
+                "dataset_schema": schema.model_dump(mode="json"),
+                "research_assets": research_assets,
             },
-            unresolved=(),
+            research_requirement=research_requirement.model_dump(mode="json"),
         ).model_dump(mode="json")
+
+    def route(self, request: ExecutionRequirementInput) -> dict[str, Any]:
+        """兼容旧调用；不再执行 Fast/Plan 模式分类。"""
+
+        return self.build(request)
 
     def _resolve_candidates(
         self,
@@ -449,8 +372,8 @@ class ModeRouter:
         raise ModeRoutingError("SEMANTIC_MULTI_STEP_TYPE_UNSUPPORTED")
 
     @staticmethod
-    def _select_mode(execution: dict[str, Any]) -> tuple[AgentExecutionMode, list[str]]:
-        """只依据已生成的执行需求选择模式。"""
+    def _execution_reasons(execution: dict[str, Any]) -> list[str]:
+        """记录固定计划的事实特征，不据此选择执行器。"""
 
         queries = execution["query_requirements"]
         models = {item["model_ref"] for item in queries}
@@ -470,9 +393,7 @@ class ModeRouter:
                 and (len(queries) > 1 or calculations)
             ):
                 reasons.append(str(analysis_type))
-        if not reasons:
-            return AgentExecutionMode.FAST, ["single_model", "single_query"]
-        return AgentExecutionMode.PLAN, reasons
+        return reasons or ["single_model", "single_query"]
 
 
 def _selected_refs(semantic_parse: SemanticParseOutput) -> list[str]:
@@ -1511,27 +1432,6 @@ def _common_group_columns(
     return tuple(sorted(common))
 
 
-def _normalize_modes(modes: tuple[str, ...] | list[str] | str) -> set[str]:
-    values = modes.split(",") if isinstance(modes, str) else modes
-    normalized = {_normalize_mode(item) for item in values}
-    return {item for item in normalized if item is not None}
-
-
-def _normalize_mode(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = str(value).strip().lower()
-    if not normalized:
-        return None
-    if normalized not in {
-        AgentExecutionMode.FAST.value,
-        AgentExecutionMode.PLAN.value,
-        AgentExecutionMode.RESEARCH.value,
-    }:
-        raise ModeRoutingError(f"EXECUTION_MODE_INVALID:{normalized}")
-    return normalized
-
-
 def _analysis_scope_fingerprint(
     execution: dict[str, Any],
     *,
@@ -1574,4 +1474,13 @@ def _fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-__all__ = ["ModeRouteInput", "ModeRouter", "ModeRoutingError"]
+ModeRouter = ExecutionRequirementBuilder
+
+__all__ = [
+    "ExecutionRequirementBuildError",
+    "ExecutionRequirementBuilder",
+    "ExecutionRequirementInput",
+    "ModeRouteInput",
+    "ModeRouter",
+    "ModeRoutingError",
+]

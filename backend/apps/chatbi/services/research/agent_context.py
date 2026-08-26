@@ -8,8 +8,8 @@
   受控摘要——目标、Scope 资产目录、预算、证据摘要与依赖、最近失败
   Observation 和证据需求完成度；绝不包含物理列、完整 Schema、完整大结果
   或其他 Run 的证据；
-- ``build_premise_query_args`` / ``evaluate_premise_verdict``：前提确认的
-  确定性查询构造与判定；无法判定时返回 ``undetermined`` 交给 Agent。
+- ``evaluate_premise_verdict``：校验模型引用的 Evidence 是否足以证明或
+  否定前提；无法确定时返回 ``undetermined``。
 """
 
 from __future__ import annotations
@@ -43,12 +43,15 @@ def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
         f"- {binding.role.value}: {binding.expression}"
         for binding in requirement.time_bindings
     )
+    if not time_lines:
+        time_lines = "- single: 无显式时间条件"
     hierarchy_lines = "\n".join(
         f"- {hierarchy.hierarchy_id}: {' -> '.join(hierarchy.dimension_refs)}"
         for hierarchy in scope.hierarchies
     )
     premise_line = (
-        "存在待验证前提：先验证该前提，再决定后续方向。"
+        "存在待验证前提 Evidence Gap：可以复用既有 Evidence、与原因分析任务"
+        "合并，或在必要时新增任务；不得假定必须执行独立前提查询。"
         if requirement.premise_to_verify is not None
         else "没有待验证前提；禁止执行任何未经要求固定的对比查询。"
     )
@@ -66,16 +69,18 @@ def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
         f"scope={scope.scope_fingerprint}\n"
         "</frozen-boundary>\n\n"
         "<protocol>\n"
-        "1. 每轮至少调用一个工具；纯文本回答不构成完成。\n"
+        "1. 每轮至少调用一个规划或完成工具；纯文本回答不构成完成。\n"
         "2. finish_research 必须单独一轮提交，不能和查询工具同批。\n"
         "3. 引用本轮才会产生的证据的工具会被拒绝；依赖工具必须分轮调用。\n"
         "4. 相同内容的查询会去重并返回既有观察，不重复消耗预算。\n"
-        "5. 只能使用提供的研究工具；不接受 SQL，不接受物理字段。\n"
+        "5. 你不能直接执行查询、计算或证据检查；只能通过 assess_research "
+        "提交计划节点，Runtime 会从 DAG 执行。\n"
         f"6. {premise_line}\n"
         "7. 你可以调整维度、排序、限制、拆分方式和 Scope 内驱动指标；"
         "不能修改目标指标、时间绑定、不可变筛选或冻结版本。\n"
-        "8. Evidence 内容不足时必须用 assess_research 说明明确缺口；需要继续时"
-        "同时提交可编译的计划增量，并在下一轮原样执行服务端批准的调用。\n"
+        "8. Evidence 内容不足时必须用 assess_research 说明明确缺口并提交可编译"
+        "的计划增量。首次计划和后续修订使用同一协议；计划批准后由 Runtime "
+        "自动执行 READY 节点，不需要也不允许你重放执行工具。\n"
         "9. finish_research 必须携带与当前 Evidence 一致的 SemanticAssessment；"
         "answerable 仍需通过结构覆盖和 Evidence 引用校验。\n"
         "10. 报告只能写证据样本或确定性计算证据中已经存在的数字；没有 "
@@ -126,20 +131,13 @@ def project_research_working_state(
     ][-_MAX_RECENT_FAILURES:]
 
     hypotheses = _project_hypotheses(ctx, evidences)
-    research_state = ctx.context.state.get("research_state")
-    initial_plan_state = (
-        research_state.get("initial_plan_state")
-        if isinstance(research_state, dict)
-        else None
-    )
-
     return {
         "iteration": ctx.iteration,
         "goal": requirement.goal,
         "reason": requirement.reason.value,
         "target_metric_refs": list(requirement.target_metric_refs),
-        "premise_to_verify": _premise_summary(requirement.premise_to_verify),
-        "premise_result": premise_result,
+        "output_requirements": list(requirement.output_requirements),
+        "evidence_gaps": _planning_evidence_gaps(requirement, premise_result),
         "immutable_filters": [
             {
                 "target_ref": item.target_ref,
@@ -151,7 +149,7 @@ def project_research_working_state(
         "time_bindings": [
             {"role": item.role.value, "expression": item.expression}
             for item in requirement.time_bindings
-        ],
+        ] or [{"role": "single", "expression": None}],
         "asset_catalog": {
             "dataset_ref": scope.dataset_ref,
             "target_metrics": list(scope.target_metric_refs),
@@ -180,42 +178,16 @@ def project_research_working_state(
             ),
             "remaining_iterations": max(budget.max_iterations - ctx.iteration, 0),
         },
-        "initial_plan": (
-            {
-                "status": initial_plan_state.get("status", "pending"),
-                "nodes": initial_plan_state.get("nodes", {}),
-            }
-            if isinstance(initial_plan_state, dict)
-            else None
+        "plan_execution_state": ctx.plan_execution_state().model_dump(mode="json"),
+        "evidence_requirements": _requirements_progress(
+            requirement,
+            evidences,
+            premise_result=premise_result,
         ),
-        "evidence_requirements": _requirements_progress(requirement, evidences),
         "hypotheses": hypotheses[:_MAX_HYPOTHESES],
         "evidences": evidence_items,
         "recent_failures": failures,
         "finished": ctx.finished,
-    }
-
-
-def build_premise_query_args(
-    requirement: ResearchAgentRequirement,
-) -> dict[str, Any] | None:
-    """构造前提确认的确定性查询参数；没有前提时返回 None。
-
-    服务端只查目标指标在前提时间角色上的取值，不带任何额外维度；
-    没有 premise 时绝不发起固定比较。
-    """
-
-    premise = requirement.premise_to_verify
-    if premise is None:
-        return None
-    statement = premise.statement or f"验证 {premise.metric_ref} 的变化方向"
-    return {
-        "metrics": (premise.metric_ref,),
-        "dimensions": (),
-        "time_ranges": premise.time_roles,
-        "analysis": "compare",
-        "comparison": "difference",
-        "purpose": f"前提确认：{statement}"[:1000],
     }
 
 
@@ -246,10 +218,23 @@ def _observed_direction(metric_ref: str, evidence: ResearchEvidence | None) -> s
             if column.value_role in ("current", "previous"):
                 fields[column.value_role] = column.result_field
     if evidence.sample_rows and {"current", "previous"} <= fields.keys():
-        row = evidence.sample_rows[0]
         try:
-            current = float(row[fields["current"]])
-            previous = float(row[fields["previous"]])
+            if evidence.dimension_refs:
+                if (
+                    evidence.statistics.truncated
+                    or len(evidence.sample_rows) != evidence.statistics.row_count
+                ):
+                    return "unknown"
+                current = sum(
+                    float(row[fields["current"]]) for row in evidence.sample_rows
+                )
+                previous = sum(
+                    float(row[fields["previous"]]) for row in evidence.sample_rows
+                )
+            else:
+                row = evidence.sample_rows[0]
+                current = float(row[fields["current"]])
+                previous = float(row[fields["previous"]])
         except (KeyError, TypeError, ValueError):
             pass
         else:
@@ -310,11 +295,26 @@ def _evidence_summary(item: ResearchEvidence) -> dict[str, Any]:
 def _requirements_progress(
     requirement: ResearchAgentRequirement,
     evidences: list[ResearchEvidence],
+    *,
+    premise_result: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     """确定性统计最低结构覆盖；该结果不表示内容足以回答问题。"""
 
     progress: list[dict[str, Any]] = []
     for req in requirement.evidence_requirements:
+        if req.kind == "premise_confirmation":
+            covered = req.minimum_count if premise_result is not None else 0
+            progress.append(
+                {
+                    "requirement_id": req.requirement_id,
+                    "kind": req.kind,
+                    "description": req.description[:200],
+                    "minimum_count": req.minimum_count,
+                    "covered_count": covered,
+                    "minimum_coverage_met": premise_result is not None,
+                }
+            )
+            continue
         required = set(req.required_asset_refs)
         covered = 0
         for item in evidences:
@@ -376,8 +376,47 @@ def _premise_summary(premise: ResearchPremise | None) -> dict[str, Any] | None:
     }
 
 
+def _planning_evidence_gaps(
+    requirement: ResearchAgentRequirement,
+    premise_result: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """把待验证前提投影为 Planner 可处理的 Evidence Gap。"""
+
+    premise = requirement.premise_to_verify
+    if premise is None:
+        return []
+    requirement_id = next(
+        (
+            item.requirement_id
+            for item in requirement.evidence_requirements
+            if item.kind == "premise_confirmation"
+        ),
+        "premise-gap",
+    )
+    return [
+        {
+            "gap_id": requirement_id,
+            "kind": "premise_confirmation",
+            "status": (
+                str(premise_result.get("status"))
+                if premise_result is not None
+                else "open"
+            ),
+            "description": premise.statement or "确认用户陈述的指标事实是否成立",
+            "metric_ref": premise.metric_ref,
+            "expected_direction": premise.expected_direction.value,
+            "time_roles": [item.value for item in premise.time_roles],
+            "resolution_evidence_ids": (
+                [premise_result["evidence_id"]]
+                if premise_result is not None
+                and isinstance(premise_result.get("evidence_id"), str)
+                else []
+            ),
+        }
+    ]
+
+
 __all__ = [
-    "build_premise_query_args",
     "build_research_system_context",
     "evaluate_premise_verdict",
     "project_research_working_state",

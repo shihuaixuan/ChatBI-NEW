@@ -60,23 +60,37 @@ def freeze_research_requirement(
     datasource_id: int | None = None,
     permission_version: str | None = None,
     authorized_tables: tuple[str, ...] = (),
+    goal: str | None = None,
 ) -> ResearchAgentRequirement:
     """冻结新契约 Requirement；run_id 由主路径适配层按 Run 身份补盖。"""
 
-    dynamic = semantic_parse.multi_step
-    if dynamic is None or dynamic.type != "dynamic_research":
-        raise ResearchRequirementError(ResearchRequirementError.TARGET_METRIC_REQUIRED)
+    multi_step = semantic_parse.multi_step
+    dynamic = (
+        multi_step
+        if multi_step is not None and multi_step.type == "dynamic_research"
+        else None
+    )
+    frozen_goal = dynamic.goal if dynamic is not None else (goal or "").strip()
+    reason = dynamic.reason if dynamic is not None else "direct_analysis"
     selected_metric_refs = tuple(
-        dict.fromkeys(item.ref for item in semantic_parse.measures)
+        dict.fromkeys(
+            (
+                *(item.ref for item in semantic_parse.measures),
+                *_multi_step_metric_refs(semantic_parse),
+            )
+        )
     )
     if not selected_metric_refs:
         raise ResearchRequirementError(ResearchRequirementError.TARGET_METRIC_REQUIRED)
+    if not frozen_goal:
+        # 非生产直调方可能没有问题文本；使用已绑定的语义目标形成稳定审计值。
+        frozen_goal = "分析 " + "、".join(selected_metric_refs)
 
     # dynamic_research 的 required_driver_metric_refs 是解析阶段已经明确的
     # 目标/驱动边界，必须先完成分类再投影治理关系。否则派生驱动指标自身的
     # 公式关系会被误当成目标关系，污染本次 Research Scope。
     declared_driver_refs = tuple(
-        dict.fromkeys(dynamic.required_driver_metric_refs)
+        dict.fromkeys(dynamic.required_driver_metric_refs if dynamic is not None else ())
     )
     declared_driver_set = set(declared_driver_refs)
     target_metric_refs = tuple(
@@ -98,7 +112,8 @@ def freeze_research_requirement(
             ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
         )
     if (
-        dynamic.premise_to_verify is not None
+        dynamic is not None
+        and dynamic.premise_to_verify is not None
         and dynamic.premise_to_verify.metric_ref in declared_driver_set
     ):
         raise ResearchRequirementError(
@@ -111,21 +126,24 @@ def freeze_research_requirement(
             ResearchRequirementError.TARGET_METRIC_NOT_FOUND
         ) from exc
     target_model_ids = {item.model for item in target_metrics}
-    if len(target_model_ids) != 1:
+    if None in target_model_ids:
         raise ResearchRequirementError(
             ResearchRequirementError.TARGET_METRIC_SINGLE_MODEL_REQUIRED
         )
-    target_model_id = next(iter(target_model_ids))
-    if target_model_id is None:
-        raise ResearchRequirementError(
-            ResearchRequirementError.TARGET_METRIC_SINGLE_MODEL_REQUIRED
-        )
+    resolved_target_model_ids = {int(item) for item in target_model_ids if item is not None}
+    target_model_id = min(resolved_target_model_ids)
 
     explicit_dimension_refs = tuple(
         dict.fromkeys(
             (
                 *(item.ref for item in semantic_parse.group_by),
-                *dynamic.required_dimension_refs,
+                *(
+                    item.target_ref
+                    for item in semantic_parse.filters
+                    if item.target_ref.startswith("DIMENSION:")
+                ),
+                *(dynamic.required_dimension_refs if dynamic is not None else ()),
+                *_multi_step_dimension_refs(semantic_parse),
             )
         )
     )
@@ -133,7 +151,7 @@ def freeze_research_requirement(
         dimension = dimensions.get(ref)
         if dimension is None:
             raise ResearchRequirementError(ResearchRequirementError.DIMENSION_NOT_FOUND)
-        if dimension.model != target_model_id:
+        if dimension.model not in resolved_target_model_ids:
             raise ResearchRequirementError(
                 ResearchRequirementError.DIMENSION_MODEL_MISMATCH
             )
@@ -201,6 +219,7 @@ def freeze_research_requirement(
     time_bindings_by_model = _time_bindings_by_model(
         schema=schema,
         target_model_id=target_model_id,
+        target_model_ids=resolved_target_model_ids,
         driver_relationships=driver_relationships,
         time_roles=time_roles,
         target_bindings=time_bindings,
@@ -227,8 +246,6 @@ def freeze_research_requirement(
         if set(item.component_metric_refs or (item.driver_metric_ref,))
         <= allowed_driver_refs
     )
-    if not scope_dimension_refs and not driver_metric_refs:
-        raise ResearchRequirementError(ResearchRequirementError.SCOPE_EMPTY)
     # 新契约要求时间绑定的维度必须在 Scope 内；旧冻结把默认时间维度单独
     # 挂在 time_bindings 上而不列入 scope.dimension_refs，这里做确定性并集
     # （原 shadow 投影器同口径，阶段 8 融合进路由冻结）。
@@ -325,8 +342,8 @@ def freeze_research_requirement(
     }
     scope_fingerprint = _fingerprint(
         {
-            "goal": dynamic.goal,
-            "reason": dynamic.reason,
+            "goal": frozen_goal,
+            "reason": reason,
             "target_metric_refs": target_metric_refs,
             "time_roles": time_roles,
             "time_bindings": [item.model_dump(mode="json") for item in time_bindings],
@@ -369,16 +386,18 @@ def freeze_research_requirement(
     )
     premise = (
         ResearchPremise.model_validate(dynamic.premise_to_verify.model_dump())
-        if dynamic.premise_to_verify is not None
+        if dynamic is not None and dynamic.premise_to_verify is not None
         else None
     )
     evidence_requirements: list[ResearchEvidenceRequirement] = []
     if premise is not None:
         evidence_requirements.append(
             ResearchEvidenceRequirement(
-                requirement_id="premise-confirmation",
+                requirement_id="evidence-gap-1",
                 kind="premise_confirmation",
-                description="确认用户陈述的指标事实是否成立",
+                description=(
+                    premise.statement or "确认用户陈述的指标事实是否成立"
+                ),
                 required_asset_refs=(premise.metric_ref,),
             )
         )
@@ -386,7 +405,7 @@ def freeze_research_requirement(
         ResearchEvidenceRequirement(
             requirement_id="target-analysis",
             kind="dimension_or_driver_analysis",
-            description="围绕目标指标完成归因分析",
+            description="完成目标指标查询并支持最终回答",
             required_asset_refs=target_metric_refs,
         )
     )
@@ -424,8 +443,8 @@ def freeze_research_requirement(
 
     requirement = ResearchAgentRequirement(
         run_id="routing",  # 占位：主路径适配层按 Run 身份覆盖。
-        goal=dynamic.goal,
-        reason=dynamic.reason,
+        goal=frozen_goal,
+        reason=reason,
         target_metric_refs=target_metric_refs,
         premise_to_verify=premise,
         time_bindings=time_bindings,
@@ -446,8 +465,68 @@ def freeze_research_requirement(
             scope_fingerprint=scope_fingerprint,
             permission_fingerprint=permission_fingerprint,
         ),
+        output_requirements=_output_requirements(semantic_parse),
     )
     return requirement
+
+
+def _multi_step_metric_refs(
+    semantic_parse: SemanticParseOutput,
+) -> tuple[str, ...]:
+    """读取多步语义中用户已经绑定的指标，不推导执行拓扑。"""
+
+    multi_step = semantic_parse.multi_step
+    if multi_step is None:
+        return ()
+    if multi_step.type in {"fixed_drilldown", "limited_multistep"}:
+        return tuple(multi_step.metric_refs)
+    if multi_step.type == "fixed_attribution":
+        return (multi_step.metric_ref,)
+    return ()
+
+
+def _multi_step_dimension_refs(
+    semantic_parse: SemanticParseOutput,
+) -> tuple[str, ...]:
+    """读取多步语义中用户已经绑定的维度，不在冻结阶段生成 DAG。"""
+
+    multi_step = semantic_parse.multi_step
+    if multi_step is None:
+        return ()
+    if multi_step.type == "fixed_drilldown":
+        return tuple(
+            dict.fromkeys(
+                ref for level in multi_step.levels for ref in level.dimension_refs
+            )
+        )
+    if multi_step.type == "fixed_attribution":
+        return (multi_step.dimension_ref,)
+    if multi_step.type == "limited_multistep":
+        return tuple(multi_step.dimension_refs)
+    return ()
+
+
+def _output_requirements(
+    semantic_parse: SemanticParseOutput,
+) -> tuple[str, ...]:
+    """冻结用户明确声明的计算和多步输出，但不提前展开计划节点。"""
+
+    outputs = [
+        f"calculation:{item.type.value}:{json.dumps(item.details, ensure_ascii=False, sort_keys=True)}"
+        for item in semantic_parse.calculations
+    ]
+    outputs.extend(
+        f"order_by:{item.target_ref}:{item.direction}"
+        for item in semantic_parse.order_by
+    )
+    if semantic_parse.limit is not None:
+        outputs.append(f"limit:{semantic_parse.limit}")
+    multi_step = semantic_parse.multi_step
+    if multi_step is not None:
+        outputs.append(multi_step.type)
+        if multi_step.type == "limited_multistep":
+            outputs.extend(multi_step.requested_outputs)
+    return tuple(dict.fromkeys(outputs))
 
 
 def _governed_dimensions(
@@ -673,15 +752,18 @@ def _driver_relationships(
         ):
             # 公式关系本身不限制比较时段；单时点是 Schema 中的默认标记。
             normalized_time_roles = time_roles
-        if (
-            any(not isinstance(item, str) for item in normalized_dimensions)
-            or any(not isinstance(item, str) for item in normalized_time_roles)
-            or not set(normalized_dimensions) <= set(dimension_refs)
-            or not set(normalized_time_roles) <= set(time_roles)
+        if any(not isinstance(item, str) for item in normalized_dimensions) or any(
+            not isinstance(item, str) for item in normalized_time_roles
         ):
             raise ResearchRequirementError(
                 ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
             )
+        # 已发布关系可能只适用于其他维度或比较时段。普通查询没有声明这些
+        # 条件时，该关系不进入本次 Scope；显式要求的驱动会在上层统一校验缺失。
+        if not set(normalized_dimensions) <= set(dimension_refs) or not set(
+            normalized_time_roles
+        ) <= set(time_roles):
+            continue
         relationships.append(
             ResearchDriverRelationship(
                 target_metric_ref=target_ref,
@@ -802,6 +884,7 @@ def _time_bindings_by_model(
     *,
     schema: DatasetSchema,
     target_model_id: int,
+    target_model_ids: set[int],
     driver_relationships: Sequence[ResearchDriverRelationship],
     time_roles: tuple[ResearchTimeRole, ...],
     target_bindings: tuple[ResearchTimeBinding, ...],
@@ -809,9 +892,9 @@ def _time_bindings_by_model(
 ) -> dict[str, tuple[ResearchTimeBinding, ...]]:
     """为跨模型驱动查询分别解析各模型的物理时间维度。"""
 
-    if time_roles == (ResearchTimeRole.SINGLE,) or not driver_relationships:
+    if time_roles == (ResearchTimeRole.SINGLE,):
         return {}
-    model_ids = {target_model_id}
+    model_ids = set(target_model_ids)
     for relationship in driver_relationships:
         driver_model = _asset_model_id(relationship.driver_metric_ref)
         if driver_model is not None and driver_model != target_model_id:

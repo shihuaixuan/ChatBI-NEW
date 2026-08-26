@@ -1,4 +1,4 @@
-"""RunOrchestrator：统一运行路由以及 Fast/Plan 执行管道。"""
+"""RunOrchestrator：构建冻结输入并进入统一计划执行入口。"""
 
 from __future__ import annotations
 
@@ -29,13 +29,11 @@ from apps.chatbi.orchestration.agent.state import (
 from apps.chatbi.orchestration.agent.tool_results import (
     semantic_incompatibility_answer,
 )
-from apps.chatbi.orchestration.pipeline.fast import FastPipeline, FastPipelineError
 from apps.chatbi.orchestration.pipeline.mode_router import (
-    ModeRouteInput,
-    ModeRouter,
-    ModeRoutingError,
+    ExecutionRequirementBuilder,
+    ExecutionRequirementBuildError,
+    ExecutionRequirementInput,
 )
-from apps.chatbi.orchestration.pipeline.plan_mode import PlanPipeline, PlanPipelineError
 from apps.chatbi.orchestration.pipeline.research_agent_pipeline import (
     ResearchAgentPipeline,
 )
@@ -65,10 +63,8 @@ class RunOrchestrator:
         lifecycle: AgentLifecycle,
         input_preparer: AgentInputPreparer,
         state_factory: AgentRuntimeStateFactory,
-        fast_pipeline: FastPipeline | None = None,
-        plan_pipeline: PlanPipeline | None = None,
         research_agent_pipeline: ResearchAgentPipeline | None = None,
-        mode_router: ModeRouter | None = None,
+        execution_requirement_builder: ExecutionRequirementBuilder | None = None,
     ) -> None:
         self.session = session
         self.event_publisher = event_publisher
@@ -76,14 +72,12 @@ class RunOrchestrator:
         self.lifecycle = lifecycle
         self.input_preparer = input_preparer
         self.state_factory = state_factory
-        self.fast_pipeline = fast_pipeline
-        self.plan_pipeline = plan_pipeline
-        # 阶段 8：agent 是唯一 Research 引擎；为空表示本进程未装配，
+        # Agent Runtime 是唯一分析引擎；为空表示本进程未装配，
         # 分发时显式失败，不存在旧管道回退目标。
         self.research_agent_pipeline = research_agent_pipeline
-        if mode_router is None:
-            raise ValueError("AGENT_MODE_ROUTER_REQUIRED")
-        self.mode_router = mode_router
+        if execution_requirement_builder is None:
+            raise ValueError("AGENT_EXECUTION_REQUIREMENT_BUILDER_REQUIRED")
+        self.execution_requirement_builder = execution_requirement_builder
 
     # ---- 入口 ----
 
@@ -142,58 +136,16 @@ class RunOrchestrator:
             if clarification_event is not None:
                 yield clarification_event
                 return
-            # 3. 执行模式选择与分发
-            selected_mode = self._select_mode(state)
-            if selected_mode == "fast":
-                if self.fast_pipeline is None:
-                    yield from self.lifecycle.fail(
-                        state,
-                        "FAST 编排器未装配。",
-                        AgentErrorClass.PLAN_INVALID.value,
-                    )
-                    return
-                agent_run_repository.update_run(
-                    self.session,
-                    state.run,
-                    execution_mode=selected_mode,
-                )
-                self.session.commit()
-                try:
-                    yield from self.fast_pipeline.run(state)
-                except FastPipelineError as exc:
-                    yield from self.lifecycle.fail(
-                        state,
-                        str(exc),
-                        AgentErrorClass.PLAN_INVALID.value,
-                        error_details={"code": exc.code},
-                    )
-                return
-            if selected_mode in {"plan", "research"}:
-                agent_run_repository.update_run(
-                    self.session,
-                    state.run,
-                    execution_mode=selected_mode,
-                )
-                self.session.commit()
-                if selected_mode == "plan" and self.plan_pipeline is not None:
-                    try:
-                        yield from self.plan_pipeline.run(state)
-                    except PlanPipelineError as exc:
-                        yield from self.lifecycle.fail(
-                            state,
-                            str(exc),
-                            AgentErrorClass.PLAN_INVALID.value,
-                            error_details={"code": exc.code},
-                        )
-                elif selected_mode == "research":
-                    yield from self._dispatch_research(state)
-                return
-            yield from self.lifecycle.fail(
-                state,
-                f"不支持的执行模式：{selected_mode}",
-                AgentErrorClass.PLAN_INVALID.value,
+            # 3. 冻结统一 Agent 输入并进入同一个 Plan-and-Solve 循环。
+            self._build_execution_requirement(state)
+            agent_run_repository.update_run(
+                self.session,
+                state.run,
+                execution_mode="research",
             )
-        except ModeRoutingError as exc:
+            self.session.commit()
+            yield from self._dispatch_research(state)
+        except ExecutionRequirementBuildError as exc:
             yield from self._finalize_mode_routing_error(state, exc)
         except QuestionUnderstandingError as exc:
             yield from self.lifecycle.fail(
@@ -253,36 +205,33 @@ class RunOrchestrator:
                 error=run.error,
             )
 
-    def _select_mode(self, state: AgentRuntimeState) -> str:
-        """模式选择。"""
+    def _build_execution_requirement(self, state: AgentRuntimeState) -> str:
+        """冻结执行输入，并返回迁移期执行类别。"""
 
         semantic_parse_payload = state.context.state.get("semantic_parse")
         candidate_groups = state.context.state.get("candidate_groups")
         if not isinstance(semantic_parse_payload, dict):
-            raise ModeRoutingError("SEMANTIC_PARSE_STATE_REQUIRED")
+            raise ExecutionRequirementBuildError("SEMANTIC_PARSE_STATE_REQUIRED")
         if not isinstance(candidate_groups, dict):
-            raise ModeRoutingError("SEMANTIC_CANDIDATES_STATE_REQUIRED")
+            raise ExecutionRequirementBuildError("SEMANTIC_CANDIDATES_STATE_REQUIRED")
 
         try:
             semantic_parse = SemanticParseOutput.model_validate(semantic_parse_payload)
         except ValueError as exc:
-            raise ModeRoutingError("SEMANTIC_PARSE_STATE_INVALID") from exc
+            raise ExecutionRequirementBuildError("SEMANTIC_PARSE_STATE_INVALID") from exc
         research_defaults = ResearchBudget()
         config = state.context.config
-        result = self.mode_router.route(
-            ModeRouteInput(
+        result = self.execution_requirement_builder.build(
+            ExecutionRequirementInput(
                 semantic_parse=semantic_parse,
                 candidate_groups=candidate_groups,
                 dataset_id=state.context.dataset_id or 0,
                 tenant_id=state.context.oid,
-                enabled_modes=tuple(
-                    getattr(state.context.config, "execution_modes", ())
-                    or ("fast", "plan")
-                ),
                 temporal_context=state.temporal_context,
                 datasource_id=state.context.datasource_id,
-                # Fast/Plan 的轻量状态不要求用户字段；Research 若缺失会在
-                # 执行前的权限指纹复核中显式拒绝，不能影响非 Research 路由。
+                goal=getattr(state.context, "rewritten_question", "") or str(
+                    state.context.state.get("question") or ""
+                ),
                 user_id=getattr(state.context, "user_id", None),
                 permission_version=getattr(state.context, "permission_version", None),
                 authorized_tables=tuple(
@@ -333,6 +282,11 @@ class RunOrchestrator:
         route_mode = str(result["route"]["mode"])
         return route_mode
 
+    def _select_mode(self, state: AgentRuntimeState) -> str:
+        """兼容旧测试入口；生产流程不再执行模式选择。"""
+
+        return self._build_execution_requirement(state)
+
     def _dispatch_research(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         """分发 Research 执行；首次运行与澄清恢复共用。
         """
@@ -365,9 +319,11 @@ class RunOrchestrator:
         if not isinstance(payload, dict) or payload.get("status") == "resolved":
             return None
         if payload.get("status") != "needs_clarification":
-            raise ModeRoutingError("SEMANTIC_PARSE_NOT_RESOLVED")
+            raise ExecutionRequirementBuildError("SEMANTIC_PARSE_NOT_RESOLVED")
         if not state.chatbi_budget.record_clarification().allowed:
-            raise ModeRoutingError("SEMANTIC_CLARIFICATION_BUDGET_EXHAUSTED")
+            raise ExecutionRequirementBuildError(
+                "SEMANTIC_CLARIFICATION_BUDGET_EXHAUSTED"
+            )
         unresolved = [
             item for item in payload.get("unresolved") or [] if isinstance(item, dict)
         ]
@@ -442,58 +398,15 @@ class RunOrchestrator:
             if clarification_event is not None:
                 yield clarification_event
                 return
-            selected_mode = self._select_mode(state)
-            if selected_mode == "fast" and self.fast_pipeline is not None:
-                agent_run_repository.update_run(
-                    self.session,
-                    state.run,
-                    execution_mode=selected_mode,
-                )
-                self.session.commit()
-                try:
-                    yield from self.fast_pipeline.run(state)
-                except FastPipelineError as exc:
-                    yield from self.lifecycle.fail(
-                        state,
-                        str(exc),
-                        AgentErrorClass.PLAN_INVALID.value,
-                        error_details={"code": exc.code},
-                    )
-                return
-            if selected_mode == "plan" and self.plan_pipeline is not None:
-                agent_run_repository.update_run(
-                    self.session,
-                    state.run,
-                    execution_mode=selected_mode,
-                )
-                self.session.commit()
-                try:
-                    yield from self.plan_pipeline.run(state)
-                except PlanPipelineError as exc:
-                    yield from self.lifecycle.fail(
-                        state,
-                        str(exc),
-                        AgentErrorClass.PLAN_INVALID.value,
-                        error_details={"code": exc.code},
-                    )
-                return
-            if selected_mode == "research":
-                # Research 恢复统一进入新 Agent 管道；未装配时由分发入口
-                # 返回稳定错误码，不能访问已经删除的旧管道字段。
-                agent_run_repository.update_run(
-                    self.session,
-                    state.run,
-                    execution_mode=selected_mode,
-                )
-                self.session.commit()
-                yield from self._dispatch_research(state)
-                return
-            yield from self.lifecycle.fail(
-                state,
-                f"不支持的执行模式：{selected_mode}",
-                AgentErrorClass.PLAN_INVALID.value,
+            self._build_execution_requirement(state)
+            agent_run_repository.update_run(
+                self.session,
+                state.run,
+                execution_mode="research",
             )
-        except ModeRoutingError as exc:
+            self.session.commit()
+            yield from self._dispatch_research(state)
+        except ExecutionRequirementBuildError as exc:
             yield from self._finalize_mode_routing_error(state, exc)
         except QuestionUnderstandingError as exc:
             yield from self.lifecycle.fail(
@@ -517,7 +430,7 @@ class RunOrchestrator:
     def _finalize_mode_routing_error(
         self,
         state: AgentRuntimeState,
-        error: ModeRoutingError,
+        error: ExecutionRequirementBuildError,
     ) -> Iterator[RenderEvent]:
         """路由期业务不兼容正常拒答，其余规划错误保持显式失败。"""
 

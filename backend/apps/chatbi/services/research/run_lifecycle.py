@@ -41,6 +41,10 @@ from apps.chatbi.models.orm.agent_run import (
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.evidence import ANALYSIS_EVIDENCE_REGISTRY_KEY
+from apps.chatbi.services.planning.execution_state import (
+    PLAN_EXECUTION_STATE_KEY,
+    PlanNodeExecutionStatus,
+)
 from apps.chatbi.services.research.state_snapshot import (
     build_research_run_snapshot,
 )
@@ -307,14 +311,15 @@ class ResearchToolCallCommit:
         research_state = self._ctx.context.state.get(RESEARCH_STATE_KEY)
         if isinstance(research_state, dict):
             derived[RESEARCH_STATE_KEY] = research_state
+        plan_execution_state = self._ctx.context.state.get(PLAN_EXECUTION_STATE_KEY)
+        if isinstance(plan_execution_state, dict):
+            derived[PLAN_EXECUTION_STATE_KEY] = plan_execution_state
         result_sets = self._ctx.context.state.get(_RESULT_SETS_KEY)
         if isinstance(result_sets, dict):
             merged = dict(derived.get(_RESULT_SETS_KEY) or {})
             merged.update(result_sets)
             derived[_RESULT_SETS_KEY] = merged
-        analysis_evidence = self._ctx.context.state.get(
-            ANALYSIS_EVIDENCE_REGISTRY_KEY
-        )
+        analysis_evidence = self._ctx.context.state.get(ANALYSIS_EVIDENCE_REGISTRY_KEY)
         if isinstance(analysis_evidence, dict):
             derived[ANALYSIS_EVIDENCE_REGISTRY_KEY] = dict(analysis_evidence)
         running_ids = [
@@ -382,6 +387,7 @@ def rebuild_research_context(
     requirement: ResearchAgentRequirement,
     research_state: Mapping[str, Any],
     analysis_evidence: Mapping[str, Any] | None = None,
+    plan_execution_state: Mapping[str, Any] | None = None,
     *,
     semantic_runtime: Any = None,
     compute_engine: Any = None,
@@ -412,6 +418,11 @@ def rebuild_research_context(
             RESEARCH_STATE_KEY: dict(research_state),
             _RESULT_SETS_KEY: {},
             ANALYSIS_EVIDENCE_REGISTRY_KEY: dict(analysis_evidence or {}),
+            **(
+                {PLAN_EXECUTION_STATE_KEY: dict(plan_execution_state)}
+                if plan_execution_state is not None
+                else {}
+            ),
         },
     )
     ctx = ResearchToolContext(
@@ -455,6 +466,7 @@ def recover_research_run(
     run_db_id = _require_id(run_row.id, "RESEARCH_RECOVERY_RUN_ID_REQUIRED")
 
     stored_snapshot: dict[str, Any] | None = None
+    snapshot_plan_execution_state: dict[str, Any] | None = None
     raw_snapshot = derived.get(_SNAPSHOT_KEY)
     if isinstance(raw_snapshot, dict):
         snapshot = ResearchRunSnapshot.model_validate(raw_snapshot)
@@ -464,6 +476,7 @@ def recover_research_run(
         ):
             raise ValueError("RESEARCH_RECOVERY_VERSION_CONFLICT")
         stored_snapshot = raw_snapshot
+        snapshot_plan_execution_state = snapshot.plan_execution_state
 
     ctx = rebuild_research_context(
         session,
@@ -474,6 +487,11 @@ def recover_research_run(
             derived.get(ANALYSIS_EVIDENCE_REGISTRY_KEY)
             if isinstance(derived.get(ANALYSIS_EVIDENCE_REGISTRY_KEY), dict)
             else None
+        ),
+        plan_execution_state=(
+            derived.get(PLAN_EXECUTION_STATE_KEY)
+            if isinstance(derived.get(PLAN_EXECUTION_STATE_KEY), dict)
+            else snapshot_plan_execution_state
         ),
         semantic_runtime=semantic_runtime,
         compute_engine=compute_engine,
@@ -495,6 +513,14 @@ def recover_research_run(
     repaired: list[str] = []
     interrupted: list[str] = []
     for row in agent_run_repository.list_running_tool_calls(session, run_db_id):
+        plan_node_id = next(
+            (
+                node_id
+                for node_id, task_state in ctx.plan_execution_state().task_states.items()
+                if task_state.tool_call_id == row.tool_call_id
+            ),
+            None,
+        )
         observation = ctx.observation(row.tool_call_id)
         if observation is not None:
             agent_run_repository.finish_tool_call(
@@ -504,6 +530,22 @@ def recover_research_run(
                 result_summary=_observation_summary(observation),
                 error_code=_row_error_code(observation),
             )
+            if plan_node_id is not None:
+                ctx.mark_plan_node(
+                    plan_node_id,
+                    status=(
+                        PlanNodeExecutionStatus.SUCCEEDED
+                        if observation.status is ToolObservationStatus.SUCCEEDED
+                        else PlanNodeExecutionStatus.FAILED
+                    ),
+                    tool_call_id=row.tool_call_id,
+                    evidence_ids=observation.evidence_ids,
+                    error_code=(
+                        observation.error_code.value
+                        if observation.error_code is not None
+                        else None
+                    ),
+                )
             repaired.append(row.tool_call_id)
         else:
             agent_run_repository.finish_tool_call(
@@ -517,6 +559,13 @@ def recover_research_run(
                 },
                 error_code="tool_call_interrupted",
             )
+            if plan_node_id is not None:
+                ctx.mark_plan_node(
+                    plan_node_id,
+                    status=PlanNodeExecutionStatus.FAILED,
+                    tool_call_id=row.tool_call_id,
+                    error_code="tool_call_interrupted",
+                )
             interrupted.append(row.tool_call_id)
 
     refreshed_state = ctx.context.state.get(RESEARCH_STATE_KEY)
@@ -532,6 +581,9 @@ def recover_research_run(
     analysis_evidence = ctx.context.state.get(ANALYSIS_EVIDENCE_REGISTRY_KEY)
     if isinstance(analysis_evidence, dict):
         derived[ANALYSIS_EVIDENCE_REGISTRY_KEY] = dict(analysis_evidence)
+    plan_execution_state = ctx.context.state.get(PLAN_EXECUTION_STATE_KEY)
+    if isinstance(plan_execution_state, dict):
+        derived[PLAN_EXECUTION_STATE_KEY] = dict(plan_execution_state)
     refreshed_snapshot = build_research_run_snapshot(
         ctx,
         running_tool_call_ids=[],
@@ -586,6 +638,21 @@ def cancel_research_run(
             },
             error_code="tool_call_interrupted",
         )
+        plan_node_id = next(
+            (
+                node_id
+                for node_id, task_state in ctx.plan_execution_state().task_states.items()
+                if task_state.tool_call_id == row.tool_call_id
+            ),
+            None,
+        )
+        if plan_node_id is not None:
+            ctx.mark_plan_node(
+                plan_node_id,
+                status=PlanNodeExecutionStatus.CANCELLED,
+                tool_call_id=row.tool_call_id,
+                error_code="tool_call_interrupted",
+            )
     if not ctx.finished:
         ctx.finish(
             ResearchCompletion(
@@ -608,6 +675,9 @@ def cancel_research_run(
     analysis_evidence = ctx.context.state.get(ANALYSIS_EVIDENCE_REGISTRY_KEY)
     if isinstance(analysis_evidence, dict):
         derived[ANALYSIS_EVIDENCE_REGISTRY_KEY] = dict(analysis_evidence)
+    plan_execution_state = ctx.context.state.get(PLAN_EXECUTION_STATE_KEY)
+    if isinstance(plan_execution_state, dict):
+        derived[PLAN_EXECUTION_STATE_KEY] = dict(plan_execution_state)
     snapshot = build_research_run_snapshot(
         ctx,
         running_tool_call_ids=[],

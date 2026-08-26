@@ -73,6 +73,9 @@ from apps.chatbi.services.research.hypothesis_evaluator import (
     HypothesisEvaluationError,
     evaluate_hypothesis_assessments,
 )
+from apps.chatbi.services.research.premise_gap import (
+    validate_premise_gap_assessment,
+)
 from apps.chatbi.services.research.report_validator import (
     validate_report_conclusions,
 )
@@ -1519,6 +1522,76 @@ class ComputeEvidenceTool(
         return build(metric_ref, "value")
 
 
+def validate_research_plan_addition(
+    ctx: ResearchToolContext,
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    dependency_node_ids: tuple[str, ...] = (),
+) -> None:
+    """使用实际工具契约校验计划节点，依赖输出在执行时解析为 Evidence。"""
+
+    if tool_name == "query_semantic_data":
+        query_args = QuerySemanticDataArgs.model_validate(arguments)
+        query = ResearchSemanticQuery(
+            run_id=ctx.run_id,
+            scope_fingerprint=ctx.requirement.scope.scope_fingerprint,
+            version_snapshot=ctx.requirement.version_snapshot,
+            **query_args.model_dump(),
+        )
+        ctx.requirement.validate_query(query, ctx.evidences())
+    elif tool_name == "inspect_evidence":
+        normalized = dict(arguments)
+        if dependency_node_ids and normalized.get("evidence_id"):
+            raise ValueError("RESEARCH_PLAN_DEPENDENCY_EVIDENCE_ARGUMENT_CONFLICT")
+        if dependency_node_ids:
+            normalized["evidence_id"] = "pending"
+        inspect_args = InspectEvidenceArgs.model_validate(normalized)
+        ResearchInspectEvidenceRequest(
+            run_id=ctx.run_id,
+            **inspect_args.model_dump(),
+        )
+        evidence = ctx.evidence(inspect_args.evidence_id)
+        if evidence is None and inspect_args.evidence_id != "pending":
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
+        available_refs = (
+            {item.asset_ref for item in evidence.logical_columns}
+            if evidence is not None
+            else set(ctx.requirement.scope.dimension_refs)
+            | set(ctx.requirement.scope.target_metric_refs)
+            | set(ctx.requirement.scope.driver_metric_refs)
+        )
+        if not set(inspect_args.logical_column_refs) <= available_refs:
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_COLUMN_NOT_FOUND")
+    else:
+        normalized = dict(arguments)
+        if dependency_node_ids and normalized.get("input_evidence_ids"):
+            raise ValueError("RESEARCH_PLAN_DEPENDENCY_EVIDENCE_ARGUMENT_CONFLICT")
+        if dependency_node_ids:
+            normalized["input_evidence_ids"] = ("pending",)
+        compute_args = ComputeEvidenceArgs.model_validate(normalized)
+        request = ResearchComputeRequest(
+            run_id=ctx.run_id,
+            **compute_args.model_dump(),
+        )
+        if any(
+            evidence_id != "pending" and ctx.evidence(evidence_id) is None
+            for evidence_id in request.input_evidence_ids
+        ):
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
+        allowed_refs = (
+            set(ctx.requirement.scope.target_metric_refs)
+            | set(ctx.requirement.scope.driver_metric_refs)
+            | set(ctx.requirement.scope.dimension_refs)
+        )
+        if not (
+            set(request.metric_refs)
+            | set(request.dimension_refs)
+            | set(request.group_by_refs)
+        ) <= allowed_refs:
+            raise ValueError("RESEARCH_AGENT_COMPUTE_REF_OUT_OF_SCOPE")
+
+
 class AssessResearchTool(
     Tool[ResearchToolContext, AssessResearchArgs, ToolObservation]
 ):
@@ -1569,10 +1642,27 @@ class AssessResearchTool(
                 details={"missing_evidence_ids": missing},
             )
 
+        try:
+            premise_result = validate_premise_gap_assessment(
+                ctx.requirement,
+                ctx.evidences(),
+                assessment,
+                current_result=ctx.premise_result,
+            )
+        except ValueError as exc:
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message=f"Evidence Gap 评估校验失败：{exc}",
+            ) from exc
+
         coverage = evaluate_structural_coverage(
             ctx.requirement,
             ctx.analysis_evidences(),
-            premise_result=ctx.premise_result,
+            premise_result=premise_result or ctx.premise_result,
         )
         if (
             assessment.status is SemanticAssessmentStatus.ANSWERABLE
@@ -1589,72 +1679,27 @@ class AssessResearchTool(
             )
 
         for addition in assessment.proposed_plan_additions:
-            self._validate_addition(ctx, addition.tool_name, addition.arguments)
-        ctx.set_semantic_assessment(assessment)
-        return _success(
-            ctx,
-            self.name,
-            message=f"语义评估已接受：{assessment.status.value}",
-            evidence_ids=tuple(sorted(finding_refs)),
-            statistics={
-                "unresolved_gaps": len(assessment.unresolved_gaps),
-                "approved_plan_additions": len(assessment.proposed_plan_additions),
-            },
-            limitations=assessment.limitations,
-        )
-
-    def _validate_addition(
-        self,
-        ctx: ResearchToolContext,
-        tool_name: str,
-        arguments: dict[str, Any],
-    ) -> None:
-        """使用实际工具契约编译计划增量，并提前执行 Scope 与引用校验。"""
-
+            try:
+                validate_research_plan_addition(
+                    ctx,
+                    addition.tool_name,
+                    addition.arguments,
+                    dependency_node_ids=addition.dependency_node_ids,
+                )
+            except (ValidationError, ValueError) as exc:
+                raise _fail(
+                    ctx,
+                    self.name,
+                    code=ToolErrorCode.INVALID_REQUEST,
+                    stage=ToolFailureStage.VALIDATION,
+                    parameter_retryable=True,
+                    message=f"计划增量无法编译或超出 Scope：{exc}",
+                    details={"tool_name": addition.tool_name},
+                ) from exc
+        if premise_result is not None:
+            ctx.set_premise_result(premise_result)
         try:
-            if tool_name == "query_semantic_data":
-                query_args = QuerySemanticDataArgs.model_validate(arguments)
-                query = ResearchSemanticQuery(
-                    run_id=ctx.run_id,
-                    scope_fingerprint=ctx.requirement.scope.scope_fingerprint,
-                    version_snapshot=ctx.requirement.version_snapshot,
-                    **query_args.model_dump(),
-                )
-                ctx.requirement.validate_query(query, ctx.evidences())
-            elif tool_name == "inspect_evidence":
-                inspect_args = InspectEvidenceArgs.model_validate(arguments)
-                ResearchInspectEvidenceRequest(
-                    run_id=ctx.run_id,
-                    **inspect_args.model_dump(),
-                )
-                evidence = ctx.evidence(inspect_args.evidence_id)
-                if evidence is None:
-                    raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
-                available_refs = {item.asset_ref for item in evidence.logical_columns}
-                if not set(inspect_args.logical_column_refs) <= available_refs:
-                    raise ValueError("RESEARCH_AGENT_EVIDENCE_COLUMN_NOT_FOUND")
-            else:
-                compute_args = ComputeEvidenceArgs.model_validate(arguments)
-                request = ResearchComputeRequest(
-                    run_id=ctx.run_id,
-                    **compute_args.model_dump(),
-                )
-                if any(
-                    ctx.evidence(evidence_id) is None
-                    for evidence_id in request.input_evidence_ids
-                ):
-                    raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
-                allowed_refs = (
-                    set(ctx.requirement.scope.target_metric_refs)
-                    | set(ctx.requirement.scope.driver_metric_refs)
-                    | set(ctx.requirement.scope.dimension_refs)
-                )
-                if not (
-                    set(request.metric_refs)
-                    | set(request.dimension_refs)
-                    | set(request.group_by_refs)
-                ) <= allowed_refs:
-                    raise ValueError("RESEARCH_AGENT_COMPUTE_REF_OUT_OF_SCOPE")
+            ctx.set_semantic_assessment(assessment)
         except (ValidationError, ValueError) as exc:
             raise _fail(
                 ctx,
@@ -1662,10 +1707,19 @@ class AssessResearchTool(
                 code=ToolErrorCode.INVALID_REQUEST,
                 stage=ToolFailureStage.VALIDATION,
                 parameter_retryable=True,
-                message=f"计划增量无法编译或超出 Scope：{exc}",
-                details={"tool_name": tool_name},
+                message=f"计划增量无法写入统一 DAG：{exc}",
             ) from exc
-
+        return _success(
+            ctx,
+            self.name,
+            message=f"语义评估已接受：{assessment.status.value}",
+            evidence_ids=tuple(sorted(finding_refs)),
+            statistics={
+                "unresolved_gaps": len(assessment.unresolved_gaps),
+                "plan_additions": len(assessment.proposed_plan_additions),
+            },
+            limitations=assessment.limitations,
+        )
 
 class FinishResearchTool(
     Tool[ResearchToolContext, FinishResearchArgs, ToolObservation]
@@ -1725,6 +1779,51 @@ class FinishResearchTool(
                 parameter_retryable=True,
                 message="finish 中的语义评估与当前 Evidence 已接受的评估不一致。",
             )
+        try:
+            premise_result = validate_premise_gap_assessment(
+                ctx.requirement,
+                ctx.evidences(),
+                request.semantic_assessment,
+                current_result=ctx.premise_result,
+            )
+        except ValueError as exc:
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message=f"Evidence Gap 评估校验失败：{exc}",
+            ) from exc
+        effective_premise_result = premise_result or ctx.premise_result
+        if (
+            effective_premise_result is not None
+            and effective_premise_result.get("status") == "not_supported"
+            and request.reason is not ResearchCompletionReason.PREMISE_NOT_SUPPORTED
+        ):
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message="Evidence 已否定用户前提，必须使用 premise_not_supported 收口。",
+            )
+        if (
+            request.reason is ResearchCompletionReason.PREMISE_NOT_SUPPORTED
+            and (
+                effective_premise_result is None
+                or effective_premise_result.get("status") != "not_supported"
+            )
+        ):
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message="当前 Evidence 没有否定用户前提，不能使用 premise_not_supported。",
+            )
         status = RESEARCH_COMPLETION_STATUS_BY_REASON[request.reason]
         evidences = ctx.evidences()
         try:
@@ -1762,7 +1861,7 @@ class FinishResearchTool(
             evaluation = evaluate_structural_coverage(
                 ctx.requirement,
                 ctx.analysis_evidences(),
-                premise_result=ctx.premise_result,
+                premise_result=effective_premise_result,
             )
             if not evaluation.minimum_requirements_met:
                 raise _fail(
@@ -1837,6 +1936,8 @@ class FinishResearchTool(
                 "claims": [item.model_dump(mode="json") for item in request.claims],
             }
         )
+        if premise_result is not None:
+            ctx.set_premise_result(premise_result)
         ctx.set_semantic_assessment(request.semantic_assessment)
         ctx.finish(completion)
         return _success(

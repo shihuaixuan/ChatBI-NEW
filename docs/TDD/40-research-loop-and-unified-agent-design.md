@@ -1,6 +1,6 @@
 # 40. Research 执行循环与统一 Agent 范式问题讨论
 
-> 状态：问题讨论与初步方案。
+> 状态：统一 Plan-and-Solve Runtime 设计修正版。
 >
 > 本文沉淀一次连续设计讨论中形成的三个问题。三个问题相互关联，但不是同一个问题，
 > 需要分别说明现状、初步解决方案和设计理由。
@@ -11,7 +11,7 @@
 
 1. 条件前提确认是否应该作为 Research `run()` 的固定逻辑；
 2. 服务端能否根据 Evidence 字段判断“证据需求已经满足”，并据此强制结束；
-3. Fast、Plan、Research 是否应该统一为一个 Agent 范式。
+3. Fast、Plan、Research 是否错误地被建模为三个模式，以及如何统一为一个 Agent Runtime。
 
 三个问题的关系如下：
 
@@ -22,8 +22,8 @@
 问题二：服务端把结构覆盖当成内容充分
   -> 需要拆分结构校验和语义判断
 
-问题三：三种模式使用不同执行流程
-  -> 需要统一计划、执行、评估和回复协议
+问题三：同一 PS Agent 的不同执行结果被拆成三个模式
+  -> 需要删除模式分发，统一计划、执行、评估和回复框架
 ~~~
 
 本文先确定设计方向，不直接给出完整实施细节。
@@ -138,15 +138,14 @@ query：查询目标指标的当前值和对比值
 “是否需要确认销售额下降”取决于用户问题；“如何安全执行一个查询节点”与具体问题无关。
 前者属于 Planner，后者属于 Runtime。
 
-这里的 Planner 不是固定规则的存放位置。Research 场景中的分析方向和任务组合由模型规划；
-服务端负责把计划绑定到冻结语义资产，并校验 Scope、权限、依赖、预算和执行能力。对于
-Fast 等完全确定的简单请求，可以使用确定性规划器生成线性计划，但 Runtime 仍不包含前提
-类型判断。
+这里的 Planner 不是固定规则的存放位置。所有请求都通过同一个 Planner 接口生成任务组合；
+服务端负责把计划绑定到冻结语义资产，并校验 Scope、权限、依赖、预算和执行能力。简单请求
+只会生成更少的节点，但不能因此进入另一个规划器或执行框架。
 
 统一控制关系为：
 
 ~~~text
-模型 Planner 或确定性规划器生成计划
+统一 Planner 生成首次计划或计划增量
   -> 服务端校验并编译计划
   -> Runtime 确定性执行 query / compute
   -> 模型根据 Evidence 判断内容和下一步方向
@@ -383,7 +382,7 @@ SemanticAssessment
 - Runtime 不再从模糊自然语言判断“继续”或“结束”；
 - 最低结构覆盖本身不能启动专用强制收口倒计时。
 
-# 3. 问题三：Fast、Plan、Research 是否应该统一为一个 Agent 范式
+# 3. 问题三：为什么不能继续保留 Fast、Plan、Research 三种模式
 
 ## 3.1 问题是什么
 
@@ -398,9 +397,10 @@ SemanticAssessment
 - 权限、版本和输出要求。
 
 这些信息已经可以组成 Agent 的冻结上下文。当前系统随后将请求路由到 Fast、Plan 或
-Research，并分别使用不同 Pipeline 或 Harness。
+Research，并分别使用不同 Pipeline 或 Harness。这种三分法的问题不只是代码重复，更重要的
+是概念本身不成立。
 
-但三种模式都在完成同一个基本过程：
+但当前三条路径都在完成同一个基本过程：
 
 ~~~text
 理解目标
@@ -410,26 +410,29 @@ Research，并分别使用不同 Pipeline 或 Harness。
   -> 生成回复
 ~~~
 
-它们真正的差异是计划复杂度和计划何时可以确定：
+所谓 Fast、Plan、Research 实际是同一个 AnalysisPlan 在不同运行中的事实表现：
 
-| 模式 | 计划特征 | 典型过程 |
-| --- | --- | --- |
-| Fast | 单查询线性计划 | 查询 -> 回复 |
-| Plan | 完整 DAG 可提前确定 | 查询 DAG -> 计算 -> 回复 |
-| Research | 后续节点依赖实际结果 | 查询 -> 分析 -> 重新规划 -> 行动 -> 回复 |
+- 单查询同样是 DAG，只是 DAG 中当前只有一个查询节点；
+- 多查询和计算仍然是同一个 DAG，只是节点与依赖更多；
+- 根据 Evidence 继续研究仍然是同一个 DAG，只是产生了新的计划修订并追加节点。
+
+三者是互相包含的关系，不是互斥模式。一个运行可以从单节点 DAG 开始，执行后根据明确 Gap
+追加计算或查询节点。这个过程不应发生 Fast 到 Plan 或 Plan 到 Research 的模式切换，因为
+从始至终只有同一个计划和同一个 Runtime。
 
 如果为三种模式分别维护流程，会带来：
 
 - 状态、预算、取消和恢复机制重复；
 - 查询、计算、Evidence 和错误协议不一致；
 - 新能力需要在多个执行器中重复接入；
-- 模式之间难以根据实际执行情况调整；
-- Research 执行循环持续吸收专用业务逻辑。
+- Research 执行循环持续吸收专用业务逻辑；
+- Router 被迫提前判断 Planner 执行后才能知道的计划结构；
+- 单节点、多节点和多修订被错误建模为三个互斥枚举。
 
-## 3.2 初步解决方案
+## 3.2 目标解决方案
 
-将 Fast、Plan、Research 统一为 Plan-and-Solve Agent 范式，三种模式只表示不同的
-执行策略。
+系统只保留一个 Plan-and-Solve Agent、一个 AnalysisPlan 和一个 Runtime。Fast、Plan、
+Research 不再是执行策略，也不参与路由、规划、预算或执行分发。
 
 ### 统一 Agent Context
 
@@ -453,27 +456,25 @@ AgentContext
 
 该上下文描述“要解决什么问题”和“允许使用什么”，不描述必须进入哪一套执行流程。
 
-### 路由输出执行策略
+### 统一执行约束
 
-路由可以保留，但改为输出统一 Runtime 的执行策略：
+执行前只冻结所有请求共用的硬性约束：
 
 ~~~text
 ExecutionPolicy
-  - plan_shape
-  - allow_replan
-  - max_iterations
+  - max_plan_revisions
+  - max_plan_nodes
   - max_model_calls
-  - max_queries
+  - max_query_tasks
+  - max_compute_tasks
   - timeout_seconds
+  - allowed_task_types
+  - require_explicit_gap_for_append
 ~~~
 
-三种模式对应：
-
-| 模式 | 计划结构 | 是否允许重新规划 | 典型执行 |
-| --- | --- | --- | --- |
-| Fast | 线性计划 | 否 | query -> answer |
-| Plan | 静态 DAG | 原则上否 | queries -> compute -> answer |
-| Research | 动态 DAG | 是 | plan -> execute -> analyze -> replan |
+`ExecutionPolicy` 只限制 Agent 最多可以做什么，不预先声明计划形态，也不根据问题内容选择
+Fast、Plan 或 Research。权限、租户 Scope、版本和产品资源档位可以影响这些上限，但不能
+替 Planner 决定节点数量和分析路径。
 
 ### 统一计划节点
 
@@ -486,16 +487,27 @@ ExecutionPolicy
 | analyze | 根据 Evidence 判断结论和缺口 | 模型 |
 | answer | 根据合法 Evidence 生成回复 | 模型与服务端报告组件 |
 
-重新规划是 Runtime 根据 `analyze` 的明确缺口追加计划的过程。是否持久化为独立节点，可以
-根据 Trace、恢复和审计要求再决定。
+所有计划始终使用同一个可追加 DAG 契约：
+
+~~~text
+AnalysisPlan
+  - plan_id
+  - revision
+  - nodes
+  - edges
+~~~
+
+没有 `linear`、`static_dag` 或 `dynamic_dag` 类型。单节点、多节点和追加节点都由同一个
+结构表达。已有成功节点不可修改；后续计划只能增加新节点和合法依赖，并递增 revision。
 
 ### 明确计划生成与计划执行的责任
 
-统一 Agent 不表示模型直接执行数据库查询，也不表示所有计划都必须由模型生成。
+统一 Agent 不表示模型直接执行数据库查询。PS Agent Planner 负责生成首次计划和后续计划
+增量，服务端不通过模式规则替 Planner 生成固定查询路径。
 
 | 环节 | 责任方 | 说明 |
 | --- | --- | --- |
-| 生成分析方向和计划候选 | 模型 Planner 或确定性规划器 | Research 由模型根据 Evidence 动态规划；Fast 可使用确定性线性规划 |
+| 生成分析方向和计划候选 | 统一 PS Agent Planner | 首次规划和后续增量使用同一个接口与协议 |
 | 计划绑定与校验 | 服务端 | 绑定逻辑资产，校验 Scope、权限、依赖、预算和能力 |
 | query / compute 执行 | 服务端 Runtime | 确定性执行，不接受模型直接 SQL |
 | 内容充分性判断 | 模型 | 根据用户问题和 Evidence 生成 `SemanticAssessment` |
@@ -508,53 +520,52 @@ ExecutionPolicy
 ### 统一执行循环
 
 ~~~text
-初始化冻结上下文和执行策略
+初始化冻结上下文、统一预算和空 AnalysisPlan
 
 while 未进入终态:
   1. 检查取消、权限、预算和超时
-  2. 如果没有当前计划，生成当前可确定计划
-  3. 执行所有当前可执行节点
-  4. 保存结果并注册 Evidence
-  5. 计算最低结构覆盖和执行缺口
-  6. 模型评估 Evidence 内容是否足以回答问题
-  7. 根据评估处理：
+  2. 如果没有待执行节点，Planner 根据 Context、Plan、Evidence 和 Gap 生成计划增量
+  3. 服务端校验增量并追加到同一个 DAG
+  4. Plan Executor 执行所有当前可执行节点
+  5. 保存结果并注册 Evidence
+  6. 计算最低结构覆盖和执行缺口
+  7. 模型评估 Evidence 内容是否足以回答问题
+  8. 根据评估处理：
        - answerable：校验并生成最终回复
-       - explicit_gap 且允许 replan：追加计划并继续
-       - explicit_gap 但不允许 replan：部分完成或调整策略
+       - explicit_gap：在统一预算允许时继续，由 Planner 生成下一次计划增量
        - no_new_direction：带限制结束
        - data_insufficient：说明数据限制后结束
-  8. 连续无有效进展时由服务端停止
+  9. 连续无有效进展时由服务端停止
 ~~~
 
-三种模式共享 Runtime，只读取不同的 `ExecutionPolicy`。
+所有请求都执行这个循环，不存在 Fast、Plan 或 Research 专用分支。
 
 ## 3.3 为什么这样设计
 
-### 三种模式的差异可以由计划表达
+### 不需要模式也能表达全部执行情况
 
 ~~~text
-Fast
-  一次生成简单计划 -> 执行 -> 回复
+单节点运行
+  Planner 追加一个 query -> 执行 -> 评估 -> 回复
 
-Plan
-  一次生成完整 DAG -> 执行 -> 回复
+多节点运行
+  Planner 追加多个 query / compute -> DAG 执行 -> 评估 -> 回复
 
-Research
-  生成部分计划 -> 执行 -> 评估 -> 追加计划 -> 回复
+多修订运行
+  执行当前节点 -> 评估得到 explicit_gap -> Planner 追加节点 -> 继续执行
 ~~~
 
-它们不需要三套不同的状态和执行协议。
+这三种情况不需要不同策略、不同 Pipeline 或不同状态契约。
 
-### 统一范式不等于所有问题都执行 Research
+### 统一循环不会强制简单问题执行多轮
 
-Fast 仍然可以使用确定性单查询计划，并严格限制模型调用和执行轮次；Plan 可以一次生成并
-执行完整 DAG；只有后续方向确实依赖 Evidence 时才允许重新规划。
-
-因此简单问题不会承担 Research 的执行成本。
+统一循环不等于每个问题都要追加计划。简单问题的 Planner 只生成一个查询节点，第一次
+Assessment 已经 `answerable` 时立即结束。复杂问题是否继续由实际 Evidence 和明确 Gap 决定，
+不是由执行前的模式判断决定。
 
 ### 通用能力可以统一复用
 
-三种模式可以共享：
+所有运行直接共用：
 
 - Agent State；
 - AnalysisPlan 和节点状态；
@@ -566,7 +577,9 @@ Fast 仍然可以使用确定性单查询计划，并严格限制模型调用和
 - 预算和取消；
 - 最终回复校验。
 
-模式只影响计划形态和资源限制。
+Fast、Plan、Research 如果因外部兼容需要暂时保留，只能在 Runtime 外部根据执行历史生成展示
+字段。本文不再定义这些标签的分类规则，避免分类逻辑重新进入 Runtime。标签不能反向影响
+规划、预算、节点调度、完成判断或恢复。
 
 # 4. 三个问题合并后的目标架构
 
@@ -577,17 +590,19 @@ Fast 仍然可以使用确定性单查询计划，并严格限制模型调用和
   -> Question Rewrite
   -> Semantic Binding
   -> 冻结 Agent Context
-  -> 路由或分类得到 ExecutionPolicy
-  -> Planner 根据冻结上下文生成当前可确定计划
-  -> 统一 Plan Executor
-       -> query
-       -> compute
+  -> 冻结统一 ExecutionPolicy 资源上限
+  -> 统一 Plan-and-Solve Runtime
+       -> Planner 生成 PlanRevision
+       -> 服务端校验并追加 AnalysisPlan DAG
+       -> Plan Executor 执行 ready nodes
+            -> query
+            -> compute
        -> Evidence Registry
-  -> Structural Coverage
-  -> Semantic Assessment
-       -> 可以回答：Answer
-       -> 明确缺口：追加计划
-       -> 无新方向：带限制结束
+       -> Structural Coverage
+       -> Semantic Assessment
+            -> 可以回答：Answer
+            -> 明确缺口：Planner 生成下一次 PlanRevision
+            -> 无新方向：带限制结束
   -> 服务端校验 Evidence 引用和终态
   -> 最终回复
 ~~~
@@ -598,8 +613,8 @@ Fast 仍然可以使用确定性单查询计划，并严格限制模型调用和
 | --- | --- |
 | Question Rewrite | 规范用户问题和对话指代 |
 | Semantic Binding | 绑定指标、维度、时间、筛选和语义关系 |
-| Planner | 根据冻结上下文生成当前可执行任务 |
-| ExecutionPolicy | 控制计划形态、是否允许重新规划和预算 |
+| Planner | 根据冻结上下文、现有 Plan、Evidence 和 Gap 生成首次计划或计划增量 |
+| ExecutionPolicy | 只控制统一预算、节点类型和资源上限，不决定计划形态 |
 | Runtime / Executor | 调度节点、执行工具、记录状态和 Evidence |
 | Structural Coverage | 检查最低结构条件和硬性事实 |
 | Semantic Assessment | 判断实际内容是否足以回答问题 |
@@ -636,31 +651,103 @@ Fast 仍然可以使用确定性单查询计划，并严格限制模型调用和
 - 无前提问题不产生该 Gap，直接生成普通计划；
 - 禁止以 `if premise_to_verify: build_fixed_premise_plan()` 作为阶段完成实现。
 
+实施结果：
+
+- `premise_to_verify` 只在 Working State 中投影为 `premise_confirmation` Evidence Gap；
+- `SemanticAssessment.resolved_gaps` 使用合法 Evidence ID 提交前提裁决；
+- `explicit_gap` 可以提交同时包含前提指标、比较时间角色和原因分析维度的合并查询；
+- 服务端校验 Evidence 是否能够确定前提方向，以及计划增量是否具备解决该 Gap 的输入；
+- 已删除 `ResearchInitialPlanner`、`ResearchInitialPlan` 和固定首轮计划字段；
+- Runtime 已删除 `_run_premise_preflight()` 和固定节点 ID 裁决逻辑；
+- 前提不成立改为模型提交 `premise_not_supported` 结束请求，服务端验证后收口。
+
 ## 阶段四：统一计划和执行状态
 
-- Fast 使用单查询线性计划；
-- Plan 使用完整静态 DAG；
-- Research 使用允许追加节点的动态 DAG；
-- 三种模式共用 Plan Executor、Evidence Registry、预算、Trace 和恢复协议。
+- 所有请求只使用一个可追加的 `AnalysisPlan` DAG；
+- 首次计划和后续计划增量使用同一个 `PlanRevision` 协议；
+- 单查询、多查询、计算和后续研究节点都写入同一个 Plan；
+- 所有节点共用 Plan Executor、Evidence Registry、预算、Trace 和恢复协议；
+- 删除计划状态中的 `mode` 和 `plan_shape`，不再表达 `linear`、`static_dag`、
+  `dynamic_dag` 三种互斥类型。
 
-## 阶段五：路由收敛为策略选择
+阶段四修正后的实现约束：
 
-- 路由不再选择三套执行器；
-- 路由输出计划形态、是否允许重新规划和预算；
-- 评估 Fast 执行后调整为 Plan、Plan 执行后调整为 Research 的必要性；
-- 在评测稳定前保留显式模式标签。
+- 统一持久化 `plan_execution_state`，其中包含计划 ID、修订号、节点依赖、拓扑批次和节点
+  终态；
+- Planner 每次提交合法计划增量都会递增修订号，只允许新增节点，不允许替换既有节点或
+  修改已完成节点；新增依赖形成环、引用未知节点或复用节点 ID 时由服务端拒绝；
+- 已删除 `initial_plan_state` 和 `approved_plan_additions`；规范执行事实只保存在
+  `plan_execution_state`；
+- 工具提交、取消和恢复统一更新节点状态；快照携带统一计划状态，恢复后
+  已完成节点保持终态，中断节点标记失败或取消后才允许受控重试；
+- Fast、Plan、Research 仅允许作为执行后统计标签，不得存入规范计划状态并控制执行。
+
+实施结果：
+
+- `UnifiedPlanExecutionState` 已删除 `mode`、`shape` 和 `allow_append`，并统一使用
+  `revision` 表达计划修订号；
+- 单节点计划、多节点计划和后续计划增量共用同一个可追加 DAG 契约；
+- Fast、Plan 和 Research 的现有入口均将节点状态写入 `plan_execution_state`；
+- 旧快照中的 `mode`、`shape` 和 `allow_append` 只在统一加载入口被删除，不再恢复为执行事实；
+- 追加节点仍统一校验节点 ID、依赖引用和 DAG 环路，已成功节点保持不可修改。
+
+阶段四完成的是规范计划状态统一，旧 Pipeline 的执行分发仍将在阶段五删除。仅把三个
+Pipeline 的状态投影到同一个 DTO 而保留模式不变量，不视为完成统一。
+
+## 阶段五：删除模式路由并接入统一 PS Agent Runtime
+
+- 删除 Mode Router 对 Fast、Plan、Research 的分类和 Pipeline 分发职责；
+- Semantic Binding 后直接构建统一 `AgentContext` 和资源上限；
+- 所有请求进入同一个 `PlanAndSolveRuntime`；
+- 统一 Planner 接口同时负责首次规划和根据明确 Gap 生成计划增量；
+- 统一 Plan Executor 执行 query 和 compute 节点，不按模式选择执行器；
+- 每次节点执行后统一进入 Structural Coverage 和 Semantic Assessment；
+- `explicit_gap` 且预算允许时继续规划，不发生模式升级或执行器切换；
+- 旧 Fast、Plan、Research Pipeline 只允许作为迁移期适配层，最终删除；
+- 如需兼容显式模式标签，只能在 Runtime 外生成展示字段，不能参与执行分发。
+
+当前实施进展：
+
+- 已删除确定性 `ResearchInitialPlanner` 及其 DTO、执行分支和状态投影；首次计划与后续修订
+  都只能通过 `SemanticAssessment.proposed_plan_additions` 提交；
+- Research Profile 只向模型暴露 `assess_research` 和 `finish_research`。模型不能直接调用
+  query、compute 或 inspect；
+- `ResearchPlanAddition` 使用显式 `dependency_node_ids` 表达 DAG 依赖，完整执行参数直接写入
+  现有 `UnifiedPlanNode`，不再通过 Evidence ID 事后反推依赖；依赖边同时定义执行顺序和
+  数据输入，声明依赖的 compute/inspect 节点不能再携带另一组 Evidence ID；
+- Runtime 每轮优先从 `plan_execution_state` 选择依赖全部成功的 READY 节点，再使用现有
+  `_execute_batch` 执行；不存在把 `decision.tool_calls` 事后包装成计划的路径；
+- 计划批准后由 Runtime 自动执行，不再要求模型下一轮原样重放 `approved_plan_additions`；
+- `explicit_gap` 产生的后续计划增量复用同一个追加入口和 DAG 校验；
+- 原 `ModeRouter` 的生产入口已改为 `ExecutionRequirementBuilder`；它只冻结目标、Scope、
+  时间条件、不可变筛选、输出要求和预算，不再生成固定查询 DAG；
+- 旧 `execution_modes` 配置不再控制规划或执行分发，只作为迁移期输入字段保留；
+- 普通单查询、固定多步和动态分析现在都生成同一种 Agent Requirement，均由模型 Planner
+  在首轮提交 query、compute 或 inspect 节点；服务端只负责校验、追加 DAG 和执行；
+- 无显式时间条件的请求使用 `single` 时间角色且不伪造时间过滤；`current`、`previous` 等
+  显式角色仍要求每个实际查询模型都有冻结时间绑定；
+- `RunOrchestrator` 已删除固定 Plan 与动态 Research 的执行分发，首次执行和澄清恢复都直接
+  进入同一个 Agent Runtime；
+- 生产组装已停止创建 `FastPipeline` 和根 `PlanPipeline`。query、compute 的确定性执行能力
+  继续由 Agent Runtime 内部复用 `AnalysisExecutionService`，不再作为另一条业务入口；
+- `route.mode` 只保留为快照兼容字段，新请求统一写入 `agent`，运行时不读取它决定执行路径。
+
+阶段五的生产执行入口已经统一。旧 Fast、Plan 代码和旧快照字段仍可在后续清理阶段删除，
+但它们不再参与新请求的规划或执行。
 
 # 6. 与现有设计文档的关系
 
-现有 `39A-unified-analysis-agent-planning-evidence-design.md` 已经提出统一 Plan Executor、
-统一 Evidence 和不同计划形态。本文补充并修正以下问题：
+现有 `39A-unified-analysis-agent-planning-evidence-design.md` 已经提出统一 Plan Executor 和
+统一 Evidence。本文进一步修正“不同计划形态对应不同模式”的残留设计：计划始终是同一个
+可追加 DAG，差异只来自实际节点和修订历史。
 
 1. 前提确认必须明确归入 Planner，而不是通用执行循环；
 2. Evidence Requirement 满足只能表达最低结构覆盖；
 3. 最低结构覆盖不能直接进入 Structured Findings；
 4. 最低结构覆盖不能成为禁止重新规划或强制收口的充分条件；
 5. 完成判断必须拆分为服务端结构校验和模型内容判断；
-6. 三种模式统一是第三个问题，不能替代前两个问题的独立说明。
+6. Fast、Plan、Research 不是三种执行策略，不能继续作为互斥模式分发；
+7. 单节点、多节点和多修订必须由同一个 Plan-and-Solve Runtime 处理。
 
 # 7. 结论
 
@@ -671,10 +758,11 @@ Fast 仍然可以使用确定性单查询计划，并严格限制模型调用和
    允许 Planner 复用已有 Evidence、合并查询或新增最小任务。
 2. **结构覆盖不等于内容充分。** 服务端只能检查字段、数量、权限和引用等硬条件；模型需要
    结合用户问题和实际 Evidence 判断是否真正回答了问题。
-3. **Fast、Plan、Research 应统一为一个 Agent 范式。** 三种模式只通过计划结构、是否允许
-   重新规划和资源预算表达差异，共用计划、执行、Evidence、评估和回复协议。
+3. **系统只应存在一个 Plan-and-Solve Agent Runtime。** Fast、Plan、Research 不是三种
+   执行策略：单查询是 DAG 的一个节点，多查询是同一 DAG 的多个节点，继续研究是同一 DAG
+   的下一次修订。任何请求都必须通过同一个规划、执行、Evidence、评估和回复循环。
 
 最终职责原则是：
 
-> Planner 决定需要执行什么任务；统一 Runtime 负责执行和硬性约束；模型判断内容是否足以
-> 回答用户问题；服务端校验计划和最终提交是否合法。
+> Planner 通过同一个协议生成首次计划和计划增量；统一 Runtime 执行同一个可追加 DAG 并
+> 负责硬性约束；模型判断内容是否足以回答用户问题；服务端校验计划和最终提交是否合法。

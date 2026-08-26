@@ -129,12 +129,14 @@ class SemanticQueryBuilder:
                 )
                 time_binding = role_bindings.get(model_id)
                 if time_binding is None:
-                    # 每个实际查询模型都必须拥有当前时间角色的明确绑定，不能
-                    # 用空时间条件或其他模型的时间维度继续执行。
-                    raise SemanticQueryBuildError("UNSUPPORTED_CAPABILITY")
-                binding_model_id, _ = self._parse_ref(time_binding.dimension_ref)
-                if binding_model_id != model_id:
-                    raise SemanticQueryBuildError("UNSUPPORTED_CAPABILITY")
+                    # SINGLE 表示用户没有声明时间条件，执行时保留 time=None；
+                    # current/previous 等显式角色仍必须绑定到每个查询模型。
+                    if role is not ResearchTimeRole.SINGLE:
+                        raise SemanticQueryBuildError("UNSUPPORTED_CAPABILITY")
+                else:
+                    binding_model_id, _ = self._parse_ref(time_binding.dimension_ref)
+                    if binding_model_id != model_id:
+                        raise SemanticQueryBuildError("UNSUPPORTED_CAPABILITY")
                 query_id = self._query_id(role, model_id, len(model_ids))
                 query_ids.append(query_id)
                 requirements.append(

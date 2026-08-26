@@ -53,6 +53,13 @@ from apps.chatbi.services.planning.dag_scheduler import (
     build_execution_batches,
     task_dependencies,
 )
+from apps.chatbi.services.planning.execution_state import (
+    PLAN_EXECUTION_STATE_KEY,
+    PlanNodeExecutionStatus,
+    UnifiedPlanTaskState,
+    build_analysis_plan_execution_state,
+    load_plan_execution_state,
+)
 from apps.chatbi.services.planning.plan_validation import validate_analysis_plan
 from apps.chatbi.services.planning.semantic_query_preparation import (
     prepare_strict_query_scope,
@@ -1572,6 +1579,10 @@ class AnalysisExecutionService:
 
     def _save_plan(self, state: AgentRuntimeState, plan: AnalysisPlan) -> None:
         state.context.state["analysis_plan"] = plan.model_dump(mode="json")
+        if not isinstance(state.context.state.get(PLAN_EXECUTION_STATE_KEY), dict):
+            state.context.state[PLAN_EXECUTION_STATE_KEY] = (
+                build_analysis_plan_execution_state(plan).model_dump(mode="json")
+            )
         self._persist_state(state)
         if self._trace_recorder is None:
             return
@@ -1604,8 +1615,43 @@ class AnalysisExecutionService:
             plan_node.set_output_detail({"analysis_plan": plan.model_dump(mode="json")})
 
     @staticmethod
-    @staticmethod
     def _persist_state(state: AgentRuntimeState) -> None:
+        raw_execution_state = state.context.state.get(PLAN_EXECUTION_STATE_KEY)
+        raw_task_states = state.context.state.get("plan_task_states")
+        if isinstance(raw_execution_state, dict) and isinstance(raw_task_states, dict):
+            execution_state = load_plan_execution_state(raw_execution_state)
+            if execution_state is None:
+                raise PlanPipelineError("PLAN_EXECUTION_STATE_REQUIRED")
+            status_mapping = {
+                "PENDING": PlanNodeExecutionStatus.PENDING,
+                "READY": PlanNodeExecutionStatus.PENDING,
+                "RUNNING": PlanNodeExecutionStatus.RUNNING,
+                "SUCCEEDED": PlanNodeExecutionStatus.SUCCEEDED,
+                "FAILED": PlanNodeExecutionStatus.FAILED,
+                "SKIPPED_DEPENDENCY": PlanNodeExecutionStatus.SKIPPED_DEPENDENCY,
+                "CANCELLED": PlanNodeExecutionStatus.CANCELLED,
+            }
+            normalized: dict[str, UnifiedPlanTaskState] = {}
+            for node_id, current in execution_state.task_states.items():
+                legacy = raw_task_states.get(node_id)
+                if not isinstance(legacy, dict):
+                    normalized[node_id] = current
+                    continue
+                normalized[node_id] = UnifiedPlanTaskState(
+                    status=status_mapping.get(
+                        str(legacy.get("status") or "PENDING").upper(),
+                        PlanNodeExecutionStatus.PENDING,
+                    ),
+                    attempt=int(legacy.get("attempt") or 0),
+                    error_code=(
+                        str(legacy["error_code"])
+                        if legacy.get("error_code") is not None
+                        else None
+                    ),
+                )
+            state.context.state[PLAN_EXECUTION_STATE_KEY] = execution_state.model_copy(
+                update={"task_states": normalized}
+            ).model_dump(mode="json")
         # 合并而不是整表替换：行上可能已有其他写入方落下的键——shadow 行的
         # ``shadow`` 标记、研究循环的 research_run_snapshot 等。run 1306 演练
         # 教训：整表替换曾把 shadow 标记抹掉，终态收口与就绪扫描都看不见该行。

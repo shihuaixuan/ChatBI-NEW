@@ -1,17 +1,14 @@
-"""Research Agent Harness：Function Calling 动态研究循环（doc38 §9）。
+"""统一 Plan-and-Solve Agent Runtime。
 
-取代旧 ``ResearchPolicyDecision`` / ``ResearchAction`` 计划式循环：模型每轮
-根据 Requirement、Working State 和 Observation 自己选择受控研究工具，服务端
-只负责协议规则、预算、停止条件和持久化边界。没有全局 DAG，也没有 Action
-物化器；每一步事实都落在阶段 4 的 ``ResearchToolCallCommit`` 边界上，
-可追踪、可恢复、可取消。
+模型只通过 ``assess_research`` 提交首次计划或后续计划增量，或通过
+``finish_research`` 提交完成判断。查询、计算和证据检查只能由 Runtime 从
+``plan_execution_state`` 中读取 READY 节点后执行；模型不能直接触发执行工具。
+计划、节点状态和 Evidence 均可持久化、恢复和审计。
 
 主流程集中在 :meth:`ResearchAgentHarness.run` 一个方法内（§9.3.2）；
 Tool 执行、批次校验和终态收口等复杂职责下沉为私有方法。阶段 7.5 起
 主路径经由 :class:`~apps.chatbi.orchestration.pipeline.research_agent_pipeline.
-ResearchAgentPipeline` 适配器接入 RunOrchestrator 分发（配置
-``research_execution_mode="agent"`` 时生效）；此前新路径只在测试或
-Shadow 场景运行。
+ResearchAgentPipeline` 适配器接入统一 RunOrchestrator 入口。
 """
 
 from __future__ import annotations
@@ -45,22 +42,24 @@ from apps.chatbi.orchestration.agent.reasoning_profile import RESEARCH_PROFILE
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.research import (
-    RESEARCH_TOOL_NAMES,
     build_research_tool_registry,
+    validate_research_plan_addition,
 )
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.evidence import (
     ANALYSIS_EVIDENCE_REGISTRY_KEY,
     EvidenceRegistry,
 )
+from apps.chatbi.services.planning.execution_state import (
+    PLAN_EXECUTION_STATE_KEY,
+    PlanNodeExecutionStatus,
+    UnifiedPlanNode,
+)
 from apps.chatbi.services.research.agent_context import (
-    build_premise_query_args,
     build_research_system_context,
-    evaluate_premise_verdict,
     project_research_working_state,
 )
 from apps.chatbi.services.research.completion import evaluate_structural_coverage
-from apps.chatbi.services.research.initial_plan import ResearchInitialPlanner
 from apps.chatbi.services.research.report_draft import (
     build_final_report,
     build_partial_report,
@@ -130,7 +129,6 @@ class ResearchAgentHarness:
         cancellation: Any = None,
         observation_recorder: Any = None,
         context_state_overlay: dict[str, Any] | None = None,
-        initial_planner: ResearchInitialPlanner | None = None,
     ) -> None:
         self._session = session
         self._config = config
@@ -151,8 +149,6 @@ class ResearchAgentHarness:
         # 主路径接线（阶段 7.5）：工具上下文需要路由期产出的边界输入
         # （盖戳后的 semantic_scope、permission_version），由适配层显式注入。
         self._context_state_overlay = dict(context_state_overlay or {})
-        # 主路径显式注入 Planner；旧的直接 Harness 调用不注入时保持原循环。
-        self._initial_planner = initial_planner
 
     # ------------------------------------------------------------------ #
     # 入口
@@ -173,15 +169,6 @@ class ResearchAgentHarness:
         if ctx is None:
             if requirement is None:
                 raise TypeError("RESEARCH_HARNESS_REQUIREMENT_REQUIRED")
-            if requirement.initial_plan is None and self._initial_planner is not None:
-                requirement = ResearchAgentRequirement.model_validate(
-                    {
-                        **requirement.model_dump(mode="json"),
-                        "initial_plan": self._initial_planner.plan(
-                            requirement
-                        ).model_dump(mode="json"),
-                    }
-                )
             ctx = self._initial_context(requirement)
             self._persist_initial_state(ctx)
         state = self._build_runtime_state(ctx)
@@ -190,20 +177,6 @@ class ResearchAgentHarness:
         stall_turns = 0
         structural_coverage_reminded = False
         turns = 0
-
-        # 冻结 Requirement 带有首轮计划时，先完成所有当前可确定节点，
-        if ctx.requirement.initial_plan is not None:
-            outcome = self._execute_initial_plan(ctx, turns, started_at)
-            if outcome is not None:
-                return outcome
-            if not ctx.initial_plan_complete():
-                state.messages.append(
-                    AgentMessage.user(
-                        "<system-reminder>首轮基础计划已全部尝试，但存在失败或未满足的"
-                        "最低结构覆盖缺口。只有根据当前 Evidence 和失败观察能够确定"
-                        "新增方向时，才生成下一批工具调用。</system-reminder>"
-                    )
-                )
 
         while True:
             # 1. 取消信号检查
@@ -220,15 +193,82 @@ class ResearchAgentHarness:
                     reason_key="budget_exhausted",
                 )
 
-            # ---- 条件前提确认（§9.3.3）：只在有 premise 且未确认时执行一次 ----
-            if (
-                ctx.requirement.initial_plan is None
-                and ctx.requirement.premise_to_verify is not None
-                and ctx.premise_result is None
-            ):
-                outcome = self._run_premise_preflight(ctx, turns)
-                if outcome is not None:
-                    return outcome
+            # 计划是执行的唯一事实来源：只要 DAG 中存在 READY 节点，就先执行，
+            # 不调用模型重新选择或重放执行工具。
+            ready_nodes = ctx.ready_plan_nodes()
+            if ready_nodes:
+                execution_index = ctx.iteration + 1
+                execution_step = agent_run_repository.start_step(
+                    self._session, self._run_row, execution_index
+                )
+                self._session.commit()
+                try:
+                    calls = self._calls_from_plan_nodes(ctx, ready_nodes)
+                    for node, call in zip(ready_nodes, calls, strict=True):
+                        ctx.mark_plan_node(
+                            node.id,
+                            status=PlanNodeExecutionStatus.RUNNING,
+                            tool_call_id=call.call_id,
+                        )
+                    observations = self._execute_batch(
+                        ctx,
+                        execution_step,
+                        calls,
+                    )
+                    for node, (call, observation) in zip(
+                        ready_nodes,
+                        observations,
+                        strict=True,
+                    ):
+                        ctx.mark_plan_node(
+                            node.id,
+                            status=(
+                                PlanNodeExecutionStatus.SUCCEEDED
+                                if observation.status
+                                is ToolObservationStatus.SUCCEEDED
+                                else PlanNodeExecutionStatus.FAILED
+                            ),
+                            tool_call_id=call.call_id,
+                            evidence_ids=observation.evidence_ids,
+                            error_code=(
+                                observation.error_code.value
+                                if observation.error_code is not None
+                                else None
+                            ),
+                        )
+                except AgentCancellationRequested:
+                    agent_run_repository.cancel_step(
+                        self._session,
+                        execution_step,
+                        "用户在计划节点执行期间请求取消",
+                    )
+                    return self._finalize_cancelled(
+                        ctx, turns, stage="during_plan_execution"
+                    )
+                except Exception as exc:  # noqa: BLE001 计划执行失败统一收口
+                    logger.warning("Research 计划节点执行失败", exc_info=True)
+                    agent_run_repository.fail_step(
+                        self._session, execution_step, str(exc)
+                    )
+                    return self._finalize_server_stop(
+                        ctx,
+                        turns,
+                        stop_reason="tool_failure",
+                        reason_key="execution_failed",
+                        extra_error=str(exc)[:500],
+                    )
+                agent_run_repository.finish_step(
+                    self._session,
+                    execution_step,
+                    {
+                        "plan_execution": True,
+                        "nodes": [node.id for node in ready_nodes],
+                    },
+                )
+                self._persist_plan_state(ctx)
+                ctx.advance_iteration(execution_index)
+                stall_turns = 0
+                continue
 
             # ---- 最低结构覆盖只提供评估提示，不能替代内容充分性判断或启动强制收口 ----
             if (
@@ -310,8 +350,6 @@ class ResearchAgentHarness:
                 continue
 
             # ---- 服务端批次规则校验（§9.3.5）----
-            known_before = set(ctx.known_evidence_ids())
-            executing_approved_additions = bool(ctx.approved_plan_additions())
             valid_batch, reject_reason = self._validate_batch(ctx, decision.tool_calls)
             try:
                 if not valid_batch:
@@ -321,8 +359,6 @@ class ResearchAgentHarness:
                     stall_turns += 1
                 else:
                     observations = self._execute_batch(ctx, step, decision.tool_calls)
-                    if executing_approved_additions:
-                        ctx.clear_approved_plan_additions()
             except AgentCancellationRequested:
                 agent_run_repository.cancel_step(
                     self._session, step, "用户在工具执行期间请求取消"
@@ -352,16 +388,8 @@ class ResearchAgentHarness:
 
             new_direction = any(
                 observation.status is ToolObservationStatus.SUCCEEDED
-                and (
-                    bool(set(observation.evidence_ids) - known_before)
-                    or (
-                        observation.tool_name == "assess_research"
-                        and observation.statistics.get(
-                            "approved_plan_additions", 0
-                        )
-                        > 0
-                    )
-                )
+                and observation.tool_name == "assess_research"
+                and observation.statistics.get("plan_additions", 0) > 0
                 for _call, observation in observations
             )
             actionable_failure = any(
@@ -372,9 +400,7 @@ class ResearchAgentHarness:
                 )
                 for _call, observation in observations
             )
-            stall_turns = (
-                0 if new_direction or actionable_failure else stall_turns + 1
-            )
+            stall_turns = 0 if new_direction or actionable_failure else stall_turns + 1
 
             agent_run_repository.finish_step(
                 self._session,
@@ -487,11 +513,49 @@ class ResearchAgentHarness:
         derived = dict(self._run_row.derived_state or {})
         derived[RESEARCH_STATE_KEY] = ctx.context.state[RESEARCH_STATE_KEY]
         derived[_RESULT_SETS_KEY] = {}
+        plan_execution_state = ctx.context.state.get(PLAN_EXECUTION_STATE_KEY)
+        if isinstance(plan_execution_state, dict):
+            derived[PLAN_EXECUTION_STATE_KEY] = plan_execution_state
         self._persist_analysis_evidence(derived, ctx)
         agent_run_repository.update_run(
             self._session, self._run_row, derived_state=derived
         )
         self._session.commit()
+
+    def _calls_from_plan_nodes(
+        self,
+        ctx: ResearchToolContext,
+        nodes: Sequence[UnifiedPlanNode],
+    ) -> list[ToolCall]:
+        """把已批准的 READY 节点转换为内部工具调用。"""
+
+        plan = ctx.plan_execution_state()
+        calls: list[ToolCall] = []
+        for node in nodes:
+            arguments = dict(node.arguments)
+            dependency_evidence_ids = tuple(
+                evidence_id
+                for dependency in node.dependencies
+                for evidence_id in plan.task_states[dependency].evidence_ids
+            )
+            if node.tool_name == "compute_evidence" and node.dependencies:
+                if not dependency_evidence_ids:
+                    raise ValueError("PLAN_COMPUTE_DEPENDENCY_EVIDENCE_REQUIRED")
+                arguments["input_evidence_ids"] = dependency_evidence_ids
+            elif node.tool_name == "inspect_evidence" and node.dependencies:
+                if len(dependency_evidence_ids) != 1:
+                    raise ValueError("PLAN_INSPECT_DEPENDENCY_EVIDENCE_REQUIRED")
+                arguments["evidence_id"] = dependency_evidence_ids[0]
+            validate_research_plan_addition(ctx, node.tool_name, arguments)
+            attempt = plan.task_states[node.id].attempt + 1
+            calls.append(
+                ToolCall(
+                    name=node.tool_name,
+                    args=arguments,
+                    call_id=f"{ctx.run_id}:plan:{node.id}:{attempt}",
+                )
+            )
+        return calls
 
     def _build_runtime_state(self, ctx: ResearchToolContext) -> AgentRuntimeState:
         return AgentRuntimeState(
@@ -509,244 +573,16 @@ class ResearchAgentHarness:
             system=AgentMessage.system(build_research_system_context(ctx.requirement)),
         )
 
-    # ------------------------------------------------------------------ #
-    # 前提确认（§9.3.3）
-    # ------------------------------------------------------------------ #
-
-    def _execute_initial_plan(
-        self,
-        ctx: ResearchToolContext,
-        turns: int,
-        started_at: float,
-    ) -> ResearchAgentRunOutcome | None:
-        """执行冻结首轮计划；节点全部尝试后才允许进入模型循环。"""
-
-        plan = ctx.requirement.initial_plan
-        if plan is None:
-            return None
-        if ctx.initial_plan_complete():
-            return None
-
-        batches = sorted({node.batch_index for node in plan.nodes})
-        for batch_index in batches:
-            if self._is_cancelled():
-                return self._finalize_cancelled(ctx, turns, stage="initial_plan")
-            exhaustion = self._budget_exhaustion(ctx, started_at)
-            if exhaustion is not None:
-                return self._finalize_server_stop(
-                    ctx,
-                    turns,
-                    stop_reason="budget_exhausted",
-                    reason_key="budget_exhausted",
-                )
-
-            pending = [
-                node
-                for node in plan.nodes
-                if node.batch_index == batch_index
-                and (ctx.initial_plan_node(node.node_id) or {}).get("status")
-                not in {"succeeded", "failed"}
-            ]
-            if not pending:
-                continue
-
-            step_index = max(ctx.iteration + 1, batch_index)
-            ctx.advance_iteration(step_index)
-            step = agent_run_repository.start_step(
-                self._session, self._run_row, step_index
-            )
-            self._session.commit()
-            calls: list[ToolCall] = []
-            call_nodes: dict[str, Any] = {}
-            for node in pending:
-                call_id = f"{ctx.run_id}:initial:{node.node_id}"
-                previous = ctx.observation(call_id)
-                if previous is not None:
-                    ctx.mark_initial_plan_node(
-                        node.node_id,
-                        status=(
-                            "succeeded"
-                            if previous.status is ToolObservationStatus.SUCCEEDED
-                            else "failed"
-                        ),
-                        tool_call_id=call_id,
-                        evidence_ids=previous.evidence_ids,
-                        message=previous.message,
-                    )
-                    continue
-                args = self._initial_plan_call_args(ctx, node)
-                if args is None:
-                    ctx.mark_initial_plan_node(
-                        node.node_id,
-                        status="failed",
-                        tool_call_id=f"{call_id}:skipped",
-                        message="计划节点依赖的前序 Evidence 未生成。",
-                    )
-                    continue
-                call = ToolCall(
-                    name=(
-                        "query_semantic_data"
-                        if node.node_type == "query"
-                        else "compute_evidence"
-                    ),
-                    args=args,
-                    call_id=call_id,
-                )
-                calls.append(call)
-                call_nodes[call_id] = node
-
-            try:
-                observations = self._execute_batch(ctx, step, calls) if calls else []
-            except AgentCancellationRequested:
-                agent_run_repository.cancel_step(
-                    self._session, step, "用户在首轮计划执行期间请求取消"
-                )
-                return self._finalize_cancelled(ctx, turns, stage="initial_plan")
-            except Exception as exc:  # noqa: BLE001 首轮工具失败转为失败终态
-                logger.warning("Research 首轮计划执行失败", exc_info=True)
-                agent_run_repository.fail_step(self._session, step, str(exc))
-                return self._finalize_server_stop(
-                    ctx,
-                    turns,
-                    stop_reason="tool_failure",
-                    reason_key="execution_failed",
-                    extra_error=str(exc)[:500],
-                )
-
-            for call, observation in observations:
-                node = call_nodes[call.call_id]
-                ctx.mark_initial_plan_node(
-                    node.node_id,
-                    status=(
-                        "succeeded"
-                        if observation.status is ToolObservationStatus.SUCCEEDED
-                        else "failed"
-                    ),
-                    tool_call_id=call.call_id,
-                    evidence_ids=observation.evidence_ids,
-                    message=observation.message,
-                )
-            agent_run_repository.finish_step(
-                self._session,
-                step,
-                {
-                    "initial_plan": True,
-                    "batch_index": batch_index,
-                    "nodes": [node.node_id for node in pending],
-                },
-            )
-            self._persist_plan_state(ctx)
-            if batch_index == 0:
-                outcome = self._initial_premise_check(ctx, turns)
-                if outcome is not None:
-                    return outcome
-
-        if not ctx.initial_plan_exhausted():
-            return self._finalize_server_stop(
-                ctx,
-                turns,
-                stop_reason="initial_plan_failure",
-                reason_key="execution_failed",
-                extra_error="首轮基础计划尚未全部尝试完成，暂不进入动态 Replan。",
-            )
-
-        return self._initial_premise_check(ctx, turns)
-
-    def _initial_premise_check(
-        self,
-        ctx: ResearchToolContext,
-        turns: int,
-    ) -> ResearchAgentRunOutcome | None:
-        """首轮前提节点完成后立即判定，避免继续执行无效批次。"""
-
-        premise = ctx.requirement.premise_to_verify
-        if premise is None or ctx.premise_result is not None:
-            return None
-        evidence_ids = ctx.initial_plan_node_evidence_ids("premise-confirmation")
-        premise_evidence = ctx.evidence(evidence_ids[0]) if evidence_ids else None
-        verdict, observed = evaluate_premise_verdict(premise, premise_evidence)
-        ctx.set_premise_result(
-            {
-                "status": verdict,
-                "metric_ref": premise.metric_ref,
-                "expected_direction": premise.expected_direction.value,
-                "observed_direction": observed,
-                "evidence_id": (
-                    premise_evidence.evidence_id
-                    if premise_evidence is not None
-                    else None
-                ),
-            }
-        )
-        self._persist_plan_state(ctx)
-        if verdict != "not_supported":
-            return None
-        completion = ResearchCompletion(
-            run_id=ctx.run_id,
-            status="succeeded",
-            reason=ResearchCompletionReason.PREMISE_NOT_SUPPORTED,
-            summary=(
-                f"前提不成立：{premise.metric_ref} 实际方向为 {observed}，"
-                f"与预期 {premise.expected_direction.value} 不符，研究提前结束。"
-            ),
-            evidence_ids=(
-                (premise_evidence.evidence_id,) if premise_evidence is not None else ()
-            ),
-            limitations=("premise_not_supported",),
-        )
-        ctx.finish(completion)
-        snapshot = self._persist_final_state(
-            ctx,
-            final_report=_report_json(self._final_report_payload(ctx, completion)),
-        )
-        return ResearchAgentRunOutcome(
-            completion=completion,
-            stop_reason="premise_not_supported",
-            turns=turns,
-            snapshot=snapshot,
-        )
-
-    def _initial_plan_call_args(
-        self,
-        ctx: ResearchToolContext,
-        node: Any,
-    ) -> dict[str, Any] | None:
-        """把计划节点转换成受工具契约约束的参数。"""
-
-        if node.node_type == "query":
-            return {
-                "metrics": list(node.metrics),
-                "dimensions": list(node.dimensions),
-                "time_ranges": [item.value for item in node.time_ranges],
-                "filters": [item.model_dump(mode="json") for item in node.filters],
-                "comparison": node.comparison.value,
-                "analysis": node.analysis,
-                "limit": 100,
-                "purpose": node.purpose,
-            }
-        evidence_ids: list[str] = []
-        for dependency in node.dependency_node_ids:
-            dependency_evidence = ctx.initial_plan_node_evidence_ids(dependency)
-            if not dependency_evidence:
-                return None
-            evidence_ids.append(dependency_evidence[0])
-        return {
-            "operation": node.compute_operation.value,
-            "input_evidence_ids": evidence_ids,
-            "metric_refs": list(node.metrics),
-            "dimension_refs": list(node.dimensions),
-            "group_by_refs": list(node.group_by_refs),
-            "tolerance": node.tolerance,
-            "purpose": node.purpose,
-        }
-
     def _persist_plan_state(self, ctx: ResearchToolContext) -> None:
-        """保存首轮节点状态，同时保留已有结果集和其他运行字段。"""
+        """保存统一计划节点状态，同时保留结果集和其他运行字段。"""
 
         derived = dict(self._run_row.derived_state or {})
         research_state = ctx.context.state.get(RESEARCH_STATE_KEY)
         if isinstance(research_state, dict):
             derived[RESEARCH_STATE_KEY] = research_state
+        plan_execution_state = ctx.context.state.get(PLAN_EXECUTION_STATE_KEY)
+        if isinstance(plan_execution_state, dict):
+            derived[PLAN_EXECUTION_STATE_KEY] = plan_execution_state
         result_sets = ctx.context.state.get(_RESULT_SETS_KEY)
         if isinstance(result_sets, dict):
             derived[_RESULT_SETS_KEY] = {
@@ -761,90 +597,6 @@ class ResearchAgentHarness:
         )
         self._session.commit()
 
-    def _run_premise_preflight(
-        self,
-        ctx: ResearchToolContext,
-        turns: int,
-    ) -> ResearchAgentRunOutcome | None:
-        """确定性验证前提；不成立直接进入 PREMISE_NOT_SUPPORTED 报告。
-
-        返回 None 表示前提已成立或无法判定，循环继续；否则返回终态结果。
-        """
-
-        premise = ctx.requirement.premise_to_verify
-        if premise is None:
-            return None
-        preflight_index = ctx.iteration + 1
-        step = agent_run_repository.start_step(
-            self._session, self._run_row, preflight_index
-        )
-        self._session.commit()
-        call = ToolCall(
-            name="query_semantic_data",
-            args=dict(build_premise_query_args(ctx.requirement) or {}),
-            call_id=f"{ctx.run_id}:premise-preflight",
-        )
-        try:
-            _call, observation = self._execute_batch(ctx, step, [call])[0]
-        except Exception as exc:  # noqa: BLE001 前提查询不可恢复失败按执行失败收口
-            logger.warning("Research 前提查询失败", exc_info=True)
-            agent_run_repository.fail_step(self._session, step, str(exc))
-            return self._finalize_server_stop(
-                ctx,
-                turns,
-                stop_reason="model_failure",
-                reason_key="execution_failed",
-                extra_error=str(exc)[:500],
-            )
-        evidence = (
-            ctx.evidence(observation.evidence_ids[0])
-            if observation.evidence_ids
-            else None
-        )
-        verdict, observed = evaluate_premise_verdict(premise, evidence)
-        ctx.set_premise_result(
-            {
-                "status": verdict,
-                "metric_ref": premise.metric_ref,
-                "expected_direction": premise.expected_direction.value,
-                "observed_direction": observed,
-                "evidence_id": (
-                    observation.evidence_ids[0] if observation.evidence_ids else None
-                ),
-            }
-        )
-        ctx.advance_iteration(preflight_index)
-        agent_run_repository.finish_step(
-            self._session,
-            step,
-            {"premise_preflight": verdict, "turn": turns},
-        )
-        self._persist_final_state(ctx)
-        if verdict != "not_supported":
-            return None
-        completion = ResearchCompletion(
-            run_id=ctx.run_id,
-            status="succeeded",
-            reason=ResearchCompletionReason.PREMISE_NOT_SUPPORTED,
-            summary=(
-                f"前提不成立：{premise.metric_ref} 实际方向为 {observed}，"
-                f"与预期 {premise.expected_direction.value} 不符，研究提前结束。"
-            ),
-            evidence_ids=tuple(observation.evidence_ids[:_MAX_COMPLETION_EVIDENCE_IDS]),
-            limitations=("premise_not_supported",),
-        )
-        ctx.finish(completion)
-        snapshot = self._persist_final_state(
-            ctx,
-            final_report=_report_json(self._final_report_payload(ctx, completion)),
-        )
-        return ResearchAgentRunOutcome(
-            completion=completion,
-            stop_reason="premise_not_supported",
-            turns=turns,
-            snapshot=snapshot,
-        )
-
     # ------------------------------------------------------------------ #
     # 批次规则与执行（§9.3.5）
     # ------------------------------------------------------------------ #
@@ -856,7 +608,7 @@ class ResearchAgentHarness:
     ) -> tuple[bool, str | None]:
         """校验一轮工具选择的协议规则；违规整批拒绝，不做部分执行。"""
 
-        allowlist = set(RESEARCH_TOOL_NAMES)
+        allowlist = {"assess_research", "finish_research"}
         unknown = sorted({call.name for call in calls} - allowlist)
         if unknown:
             return False, (
@@ -866,59 +618,8 @@ class ResearchAgentHarness:
         if len(calls) > 1 and any(call.name == "finish_research" for call in calls):
             return False, "finish_research 必须单独一轮提交，不能和其他工具同批。"
         if len(calls) > 1 and any(call.name == "assess_research" for call in calls):
-            return False, "assess_research 必须单独一轮提交，不能和执行工具同批。"
-        approved = ctx.approved_plan_additions()
-        if approved:
-            actual = [
-                (call.name, orjson.dumps(call.args or {}, option=orjson.OPT_SORT_KEYS))
-                for call in calls
-            ]
-            expected = [
-                (
-                    item.tool_name,
-                    orjson.dumps(item.arguments, option=orjson.OPT_SORT_KEYS),
-                )
-                for item in approved
-            ]
-            if actual != expected:
-                return False, "下一批工具调用必须与已批准的计划增量完全一致。"
-        known = set(ctx.known_evidence_ids())
-        assessment = ctx.semantic_assessment()
-        if (
-            assessment is not None
-            and not approved
-            and any(call.name != "finish_research" for call in calls)
-        ):
-            return False, (
-                f"当前语义评估状态为 {assessment.status.value}，"
-                "Runtime 只接受 finish_research 收口。"
-            )
-        for call in calls:
-            if call.name == "finish_research":
-                # finish 引用的证据是结论引用而非执行依赖，不受分轮规则限制。
-                continue
-            missing = [
-                evidence_id
-                for evidence_id in self._referenced_evidence_ids(call)
-                if evidence_id not in known
-            ]
-            if missing:
-                return False, (
-                    f"同批工具引用了尚不存在的证据 {', '.join(missing)}；"
-                    "依赖其他工具输出的调用必须拆到下一轮。"
-                )
+            return False, "assess_research 必须单独一轮提交。"
         return True, None
-
-    def _referenced_evidence_ids(self, call: ToolCall) -> list[str]:
-        args = call.args if isinstance(call.args, dict) else {}
-        if call.name == "inspect_evidence":
-            value = args.get("evidence_id")
-            return [value] if isinstance(value, str) and value else []
-        if call.name == "compute_evidence":
-            values = args.get("input_evidence_ids")
-            if isinstance(values, (list, tuple)):
-                return [item for item in values if isinstance(item, str) and item]
-        return []
 
     def _execute_batch(
         self,
@@ -1313,7 +1014,11 @@ class ResearchAgentHarness:
         )
         return ResearchAgentRunOutcome(
             completion=completion,
-            stop_reason="finished",
+            stop_reason=(
+                "premise_not_supported"
+                if completion.reason is ResearchCompletionReason.PREMISE_NOT_SUPPORTED
+                else "finished"
+            ),
             turns=turns,
             snapshot=snapshot,
         )
@@ -1394,6 +1099,9 @@ class ResearchAgentHarness:
         research_state = ctx.context.state.get(RESEARCH_STATE_KEY)
         if isinstance(research_state, dict):
             derived[RESEARCH_STATE_KEY] = research_state
+        plan_execution_state = ctx.context.state.get(PLAN_EXECUTION_STATE_KEY)
+        if isinstance(plan_execution_state, dict):
+            derived[PLAN_EXECUTION_STATE_KEY] = plan_execution_state
         result_sets = ctx.context.state.get(_RESULT_SETS_KEY)
         if isinstance(result_sets, dict):
             derived[_RESULT_SETS_KEY] = {

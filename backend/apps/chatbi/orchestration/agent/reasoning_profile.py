@@ -3,8 +3,8 @@
 历史上 ``normal`` / ``soft`` 是散落在 Reasoner / ToolExecutor / 可见性函数里的
 字符串约定。本模块把它们收敛为显式配置对象，并新增 Research Profile：
 
-- ``fixed_tool_allowlist``：非空时模型只能看到这组工具（Research 只暴露四个
-  研究工具），工具可见性不再走 ChatBI 阶段表；
+- ``fixed_tool_allowlist``：非空时模型只能看到这组工具（Research 只暴露规划
+  和完成工具），工具可见性不再走 ChatBI 阶段表；
 - ``working_state_builder``：非空时用它的投影代替通用 ``project_working_state``
   （Research 使用独立的受控推理上下文）；
 - ``direct_answer_finishes``：纯文本回答是否视为完成。ChatBI 为 True，
@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any
 from apps.chatbi.orchestration.agent.tool_visibility import (
     visible_tool_names as chatbi_visible_tool_names,
 )
-from apps.chatbi.orchestration.agent.tools.research import RESEARCH_TOOL_NAMES
 from apps.chatbi.orchestration.agent.working_state import (
     project_working_state as project_chatbi_working_state,
 )
@@ -97,7 +96,8 @@ SOFT_PROFILE = ReasoningProfile(
 RESEARCH_PROFILE = ReasoningProfile(
     name="research",
     direct_answer_finishes=False,
-    fixed_tool_allowlist=RESEARCH_TOOL_NAMES,
+    # 模型只负责提交计划修订或完成判断；查询、计算和检查由 DAG 驱动执行。
+    fixed_tool_allowlist=("assess_research", "finish_research"),
     working_state_note=RESEARCH_WORKING_STATE_NOTE,
 )
 

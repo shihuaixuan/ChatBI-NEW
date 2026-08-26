@@ -25,6 +25,10 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchRunStatus,
     ToolObservationStatus,
 )
+from apps.chatbi.services.planning.execution_state import (
+    PLAN_EXECUTION_STATE_KEY,
+    load_plan_execution_state,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Sequence
@@ -100,6 +104,12 @@ def build_research_run_snapshot(
     observations = ctx.observations()
     completion = ctx.completion
     evidences = ctx.evidences()
+    raw_plan_execution_state = ctx.context.state.get(PLAN_EXECUTION_STATE_KEY)
+    plan_execution_state = (
+        load_plan_execution_state(raw_plan_execution_state)
+        if isinstance(raw_plan_execution_state, dict)
+        else None
+    )
 
     validate_evidence_dag(evidences, run_id=requirement.run_id)
     if completion is not None:
@@ -167,6 +177,11 @@ def build_research_run_snapshot(
             observation
             for observation in observations
             if observation.status is not ToolObservationStatus.SUCCEEDED
+        ),
+        plan_execution_state=(
+            plan_execution_state.model_dump(mode="json")
+            if plan_execution_state is not None
+            else None
         ),
         report_draft=report_draft,
         final_report=final_report,

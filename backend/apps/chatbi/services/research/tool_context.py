@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from apps.chatbi.models.dto.analysis_evidence import AnalysisEvidence
 from apps.chatbi.models.dto.analysis_plan import ResultSetRef
@@ -36,6 +36,16 @@ from apps.chatbi.models.dto.research_agent import (
 from apps.chatbi.services.evidence import (
     EvidenceRegistry,
     build_research_analysis_evidence,
+)
+from apps.chatbi.services.planning.execution_state import (
+    PLAN_EXECUTION_STATE_KEY,
+    PlanNodeExecutionStatus,
+    UnifiedPlanExecutionState,
+    UnifiedPlanNode,
+    append_plan_nodes,
+    build_plan_execution_state,
+    load_plan_execution_state,
+    transition_plan_node,
 )
 from apps.chatbi.services.research.hypothesis_evaluator import HypothesisAuditRecord
 from apps.chatbi.services.research.state_snapshot import validate_evidence_dag
@@ -123,11 +133,10 @@ class ResearchToolContext:
             research["execution_id"] = self.context.execution_id
         if research.get("dataset_id") is None and self.context.dataset_id is not None:
             research["dataset_id"] = self.context.dataset_id
-        if self.requirement.initial_plan is not None:
-            research.setdefault(
-                "initial_plan_state",
-                {"status": "pending", "nodes": {}},
-            )
+        if not isinstance(state.get(PLAN_EXECUTION_STATE_KEY), dict):
+            state[PLAN_EXECUTION_STATE_KEY] = build_plan_execution_state(
+                f"research-{self.run_id}"
+            ).model_dump(mode="json")
         # 恢复旧快照时把 Research Evidence 投影到统一台账；原 Research 台账
         # 继续保留，避免破坏当前完成度和报告恢复协议。
         existing = tuple(
@@ -145,92 +154,6 @@ class ResearchToolContext:
                     for item in existing
                 )
             )
-
-    # ------------------------------------------------------------------ #
-    # 首轮计划状态
-    # ------------------------------------------------------------------ #
-
-    def initial_plan_complete(self) -> bool:
-        """判断首轮计划的所有节点是否都成功。"""
-
-        plan = self.requirement.initial_plan
-        if plan is None:
-            return True
-        state = self._state().get("initial_plan_state")
-        if not isinstance(state, dict):
-            return False
-        nodes = state.get("nodes")
-        if not isinstance(nodes, dict):
-            return False
-        return all(
-            isinstance(nodes.get(node.node_id), dict)
-            and nodes[node.node_id].get("status") == "succeeded"
-            for node in plan.nodes
-        )
-
-    def initial_plan_exhausted(self) -> bool:
-        """判断首轮计划的所有节点是否都已经尝试完成。"""
-
-        plan = self.requirement.initial_plan
-        if plan is None:
-            return True
-        state = self._state().get("initial_plan_state")
-        nodes = state.get("nodes") if isinstance(state, dict) else None
-        if not isinstance(nodes, dict):
-            return False
-        return all(
-            isinstance(nodes.get(node.node_id), dict)
-            and nodes[node.node_id].get("status") in {"succeeded", "failed"}
-            for node in plan.nodes
-        )
-
-    def initial_plan_node(self, node_id: str) -> dict[str, Any] | None:
-        state = self._state().get("initial_plan_state")
-        if not isinstance(state, dict) or not isinstance(state.get("nodes"), dict):
-            return None
-        value = state["nodes"].get(node_id)
-        return dict(value) if isinstance(value, dict) else None
-
-    def initial_plan_node_evidence_ids(self, node_id: str) -> tuple[str, ...]:
-        record = self.initial_plan_node(node_id) or {}
-        evidence_ids = record.get("evidence_ids")
-        if not isinstance(evidence_ids, list):
-            return ()
-        return tuple(item for item in evidence_ids if isinstance(item, str))
-
-    def mark_initial_plan_node(
-        self,
-        node_id: str,
-        *,
-        status: str,
-        tool_call_id: str,
-        evidence_ids: Sequence[str] = (),
-        message: str | None = None,
-    ) -> None:
-        """记录计划节点终态；计划定义本身仍来自冻结 Requirement。"""
-
-        if status not in {"succeeded", "failed"}:
-            raise ValueError("RESEARCH_PLAN_NODE_STATUS_INVALID")
-        state = self._state().setdefault(
-            "initial_plan_state", {"status": "pending", "nodes": {}}
-        )
-        if not isinstance(state, dict):
-            raise TypeError("RESEARCH_PLAN_STATE_INVALID")
-        nodes = state.setdefault("nodes", {})
-        if not isinstance(nodes, dict):
-            raise TypeError("RESEARCH_PLAN_NODES_INVALID")
-        nodes[node_id] = {
-            "status": status,
-            "tool_call_id": tool_call_id,
-            "evidence_ids": list(evidence_ids),
-            "message": message,
-        }
-        if self.initial_plan_complete():
-            state["status"] = "completed"
-        elif self.initial_plan_exhausted():
-            state["status"] = "exhausted"
-        else:
-            state["status"] = "running"
 
     # ------------------------------------------------------------------ #
     # 证据台账
@@ -408,27 +331,130 @@ class ResearchToolContext:
         return SemanticAssessment.model_validate(payload)
 
     def set_semantic_assessment(self, assessment: SemanticAssessment) -> None:
-        """保存模型评估，并把已批准的计划增量排入下一执行批次。"""
+        """保存模型评估，并将计划增量直接写入规范 DAG。"""
 
+        if assessment.proposed_plan_additions:
+            self.append_plan_additions(assessment.proposed_plan_additions)
         self._state()["semantic_assessment"] = {
             "evidence_ids": sorted(self.known_evidence_ids()),
             "assessment": assessment.model_dump(mode="json"),
         }
-        self._state()["approved_plan_additions"] = [
-            item.model_dump(mode="json")
-            for item in assessment.proposed_plan_additions
-        ]
 
-    def approved_plan_additions(self) -> tuple[ResearchPlanAddition, ...]:
-        """读取等待模型按原样执行的已批准计划增量。"""
+    def append_plan_additions(
+        self,
+        additions: Sequence[ResearchPlanAddition],
+    ) -> None:
+        """把模型生成的首次计划或后续增量追加到同一个规范 DAG。"""
 
-        raw_items = self._state().get("approved_plan_additions", [])
-        if not isinstance(raw_items, list):
-            raise TypeError("RESEARCH_APPROVED_PLAN_ADDITIONS_INVALID")
-        return tuple(ResearchPlanAddition.model_validate(item) for item in raw_items)
+        plan_state = self.plan_execution_state()
+        node_source: Literal["initial", "append"] = (
+            "append" if plan_state.nodes else "initial"
+        )
+        known_node_ids = {node.id for node in plan_state.nodes}
+        addition_ids = {item.addition_id for item in additions}
+        nodes: list[UnifiedPlanNode] = []
+        for item in additions:
+            dependencies = item.dependency_node_ids
+            if not set(dependencies) <= known_node_ids | addition_ids:
+                raise ValueError("RESEARCH_PLAN_DEPENDENCY_UNKNOWN")
+            task_type: Literal["query", "compute", "inspect"]
+            if item.tool_name == "query_semantic_data":
+                task_type = "query"
+            elif item.tool_name == "compute_evidence":
+                task_type = "compute"
+            else:
+                task_type = "inspect"
+            nodes.append(
+                UnifiedPlanNode(
+                    id=item.addition_id,
+                    task_type=task_type,
+                    dependencies=dependencies,
+                    tool_name=item.tool_name,
+                    source=node_source,
+                    gap_id=item.gap_id,
+                    arguments=dict(item.arguments),
+                )
+            )
+        self._save_plan_execution_state(
+            append_plan_nodes(plan_state, nodes)
+        )
 
-    def clear_approved_plan_additions(self) -> None:
-        self._state().pop("approved_plan_additions", None)
+    # ------------------------------------------------------------------ #
+    # 统一计划执行状态
+    # ------------------------------------------------------------------ #
+
+    def plan_execution_state(self) -> UnifiedPlanExecutionState:
+        """读取 Research 与其他模式共用的规范计划状态。"""
+
+        raw = self.context.state.get(PLAN_EXECUTION_STATE_KEY)
+        if not isinstance(raw, dict):
+            raise TypeError("RESEARCH_PLAN_EXECUTION_STATE_REQUIRED")
+        loaded = load_plan_execution_state(raw)
+        if loaded is None:
+            raise TypeError("RESEARCH_PLAN_EXECUTION_STATE_REQUIRED")
+        return loaded
+
+    def mark_plan_node(
+        self,
+        node_id: str,
+        *,
+        status: PlanNodeExecutionStatus,
+        tool_call_id: str | None = None,
+        evidence_ids: Sequence[str] = (),
+        error_code: str | None = None,
+    ) -> None:
+        self._save_plan_execution_state(
+            transition_plan_node(
+                self.plan_execution_state(),
+                node_id,
+                status,
+                tool_call_id=tool_call_id,
+                evidence_ids=evidence_ids,
+                error_code=error_code,
+            )
+        )
+
+    def ready_plan_nodes(self) -> tuple[UnifiedPlanNode, ...]:
+        """返回依赖全部成功的待执行节点，并标记依赖失败节点。"""
+
+        plan = self.plan_execution_state()
+        node_by_id = {node.id: node for node in plan.nodes}
+        changed = plan
+        ready: list[UnifiedPlanNode] = []
+        for node in plan.nodes:
+            task_state = changed.task_states[node.id]
+            if task_state.status is not PlanNodeExecutionStatus.PENDING:
+                continue
+            dependency_states = [
+                changed.task_states[dependency].status
+                for dependency in node.dependencies
+            ]
+            if any(
+                status
+                in {
+                    PlanNodeExecutionStatus.FAILED,
+                    PlanNodeExecutionStatus.SKIPPED_DEPENDENCY,
+                    PlanNodeExecutionStatus.CANCELLED,
+                }
+                for status in dependency_states
+            ):
+                changed = transition_plan_node(
+                    changed,
+                    node.id,
+                    PlanNodeExecutionStatus.SKIPPED_DEPENDENCY,
+                    error_code="PLAN_DEPENDENCY_FAILED",
+                )
+            elif all(
+                status is PlanNodeExecutionStatus.SUCCEEDED
+                for status in dependency_states
+            ):
+                ready.append(node_by_id[node.id])
+        if changed is not plan:
+            self._save_plan_execution_state(changed)
+        return tuple(ready)
+
+    def _save_plan_execution_state(self, state: UnifiedPlanExecutionState) -> None:
+        self.context.state[PLAN_EXECUTION_STATE_KEY] = state.model_dump(mode="json")
 
     # ------------------------------------------------------------------ #
     # 前提确认结果（阶段 5 preflight 写入，快照投影读取）
@@ -466,9 +492,7 @@ class ResearchToolContext:
             ResearchHypothesisAssessment.model_validate(item) for item in raw_items
         )
 
-    def set_hypothesis_audit(
-        self, records: Sequence[HypothesisAuditRecord]
-    ) -> None:
+    def set_hypothesis_audit(self, records: Sequence[HypothesisAuditRecord]) -> None:
         """保存服务端假设裁决审计（请求值 → 最终值），供快照与报告使用。"""
 
         self._state()["hypothesis_audit"] = [

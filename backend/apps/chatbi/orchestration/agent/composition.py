@@ -30,15 +30,7 @@ from apps.chatbi.orchestration.agent.tools.base import AgentToolContextServices
 from apps.chatbi.orchestration.agent.tools.core import FinishTool
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.chatbi.orchestration.agent.tools.temporal import ParseTimeRangeTool
-from apps.chatbi.orchestration.pipeline.fast import (
-    FastPipeline,
-    FastPipelineDependencies,
-)
-from apps.chatbi.orchestration.pipeline.mode_router import ModeRouter
-from apps.chatbi.orchestration.pipeline.plan_mode import (
-    PlanPipeline,
-    PlanPipelineDependencies,
-)
+from apps.chatbi.orchestration.pipeline.mode_router import ExecutionRequirementBuilder
 from apps.chatbi.orchestration.pipeline.research_agent_pipeline import (
     ResearchAgentPipeline,
     ResearchAgentPipelineDependencies,
@@ -51,7 +43,6 @@ from apps.chatbi.services.execution import (
 )
 from apps.chatbi.services.generation.agent_finalization import AgentFinalizationService
 from apps.chatbi.services.generation.answer_composer import AnswerComposer
-from apps.chatbi.services.generation.fallback_sql import AssistedFallbackSQLService
 from apps.chatbi.services.planning import (
     LimitedMultiStepDecomposer,
     PhysicalSchemaService,
@@ -86,7 +77,6 @@ from apps.tool.tools.semantic import (
     SearchTerminologyTool,
 )
 from apps.trace import AgentTraceRecorder
-from common.observability import build_metrics_recorder
 
 
 def build_agent_tool_registry(
@@ -145,7 +135,6 @@ def build_run_orchestrator(
     query_task_executor: QueryTaskExecutor | None = None,
     finalization_service: AgentFinalizationService | None = None,
     answer_composer: AnswerComposer | None = None,
-    assisted_fallback_service: AssistedFallbackSQLService | None = None,
     memory_service: MemoryService | None = None,
     limited_multistep_decomposer: LimitedMultiStepDecomposer | None = None,
 ) -> RunOrchestrator:
@@ -205,15 +194,6 @@ def build_run_orchestrator(
     else:
         resolved_finalization_service = finalization_service
         resolved_answer_composer = answer_composer
-    resolved_assisted_fallback = assisted_fallback_service
-    if (
-        resolved_assisted_fallback is None
-        and resolved_config.assisted_fallback_enabled
-        and finalization_service is None
-    ):
-        resolved_assisted_fallback = AssistedFallbackSQLService(
-            model_service, resolved_query_service
-        )
     resolved_registry = registry or build_agent_tool_registry(
         query_service=resolved_query_service,
         semantic_query_service=resolved_semantic_query_service,
@@ -228,7 +208,6 @@ def build_run_orchestrator(
     resolved_semantic_parse_service = (
         semantic_parse_service or build_semantic_parse_service(model_service)
     )
-    result_processor = ChatBIToolResultProcessor()
     if input_preparer is not None:
         resolved_input_preparer = input_preparer
     else:
@@ -245,7 +224,6 @@ def build_run_orchestrator(
     resolved_result_artifact_service = (
         result_artifact_service or build_result_artifact_service(session)
     )
-    metrics_recorder = build_metrics_recorder()
     tool_services = AgentToolContextServices(
         result_artifact_service=resolved_result_artifact_service,
         result_store=ResultStore(resolved_result_artifact_service),
@@ -271,26 +249,6 @@ def build_run_orchestrator(
         )
     else:
         resolved_query_task_executor = query_task_executor
-    resolved_plan_pipeline = PlanPipeline(
-        PlanPipelineDependencies(
-            registry=resolved_registry,
-            result_processor=result_processor,
-            finalization_service=resolved_finalization_service,
-            lifecycle=lifecycle,
-            event_publisher=resolved_publisher,
-            session=session,
-            max_query_tasks=resolved_config.plan_max_query_tasks,
-            query_task_executor=resolved_query_task_executor,
-            query_concurrency=resolved_config.plan_query_concurrency,
-            query_timeout_seconds=resolved_config.tool_timeout_seconds,
-            compute_engine=ComputeEngine(),
-            compute_enabled=resolved_config.compute_enabled,
-            answer_composer=resolved_answer_composer,
-            metrics=metrics_recorder,
-            trace_recorder=resolved_recorder,
-            semantic_schema_provider=resolved_semantic_schema_provider,
-        )
-    )
     return RunOrchestrator(
         session,
         event_publisher=resolved_publisher,
@@ -298,28 +256,11 @@ def build_run_orchestrator(
         lifecycle=lifecycle,
         input_preparer=resolved_input_preparer,
         state_factory=state_factory,
-        mode_router=ModeRouter(
+        execution_requirement_builder=ExecutionRequirementBuilder(
             resolved_semantic_schema_provider,
             resolved_limited_multistep_decomposer,
         ),
-        fast_pipeline=FastPipeline(
-            FastPipelineDependencies(
-                registry=resolved_registry,
-                result_processor=result_processor,
-                finalization_service=resolved_finalization_service,
-                lifecycle=lifecycle,
-                event_publisher=resolved_publisher,
-                session=session,
-                answer_composer=resolved_answer_composer,
-                assisted_fallback_service=resolved_assisted_fallback,
-                assisted_fallback_enabled=resolved_config.assisted_fallback_enabled,
-                semantic_schema_provider=resolved_semantic_schema_provider,
-                metrics=metrics_recorder,
-                trace_recorder=resolved_recorder,
-            )
-        ),
-        plan_pipeline=resolved_plan_pipeline,
-        # 阶段 8：agent 是唯一 Research 引擎，无条件装配。
+        # 所有分析请求无条件进入同一个 Plan-and-Solve Agent Runtime。
         research_agent_pipeline=build_research_agent_pipeline(
             session,
             resolved_config,

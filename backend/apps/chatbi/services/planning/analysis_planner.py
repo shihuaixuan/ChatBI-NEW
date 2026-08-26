@@ -42,7 +42,7 @@ class AnalysisPlanner:
     ) -> AnalysisPlan:
         """把完整执行需求投影为唯一 DAG，不允许补充或修改业务语义。"""
 
-        requirement.require_ready("plan")
+        requirement.require_ready()
         spec = AnalysisExecutionSpec(
             query_requirements=requirement.query_requirements,
             post_calculations=requirement.post_calculations,
