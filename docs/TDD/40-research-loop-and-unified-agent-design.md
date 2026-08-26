@@ -715,6 +715,9 @@ Pipeline 的状态投影到同一个 DTO 而保留模式不变量，不视为完
 - `ResearchPlanAddition` 使用显式 `dependency_node_ids` 表达 DAG 依赖，完整执行参数直接写入
   现有 `UnifiedPlanNode`，不再通过 Evidence ID 事后反推依赖；依赖边同时定义执行顺序和
   数据输入，声明依赖的 compute/inspect 节点不能再携带另一组 Evidence ID；
+- `UnifiedPlanNode` 已覆盖为完整计划步骤契约，统一保存步骤说明、执行参数、预期输出和
+  `plan_revision`，并预留 `respond` 节点；原 `source=initial/append` 不再作为业务状态；
+- 首次计划节点统一属于 revision 1，后续计划追加由统一入口自动分配下一 revision；
 - Runtime 每轮优先从 `plan_execution_state` 选择依赖全部成功的 READY 节点，再使用现有
   `_execute_batch` 执行；不存在把 `decision.tool_calls` 事后包装成计划的路径；
 - 计划批准后由 Runtime 自动执行，不再要求模型下一轮原样重放 `approved_plan_additions`；

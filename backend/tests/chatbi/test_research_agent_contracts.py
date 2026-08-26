@@ -44,7 +44,11 @@ from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
 from apps.chatbi.orchestration.agent.reasoning_profile import RESEARCH_PROFILE
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.research import build_research_tool_registry
-from apps.chatbi.services.planning.execution_state import PlanNodeExecutionStatus
+from apps.chatbi.services.planning.execution_state import (
+    PlanNodeExecutionStatus,
+    UnifiedPlanNode,
+    build_plan_execution_state,
+)
 from apps.chatbi.services.research.report_validator import validate_report_conclusions
 from apps.chatbi.services.research.routing_freeze import freeze_research_requirement
 from apps.chatbi.services.research.tool_context import ResearchToolContext
@@ -101,6 +105,67 @@ def test_research_profile_exposes_planning_tools_only() -> None:
         "assess_research",
         "finish_research",
     )
+
+
+def test_unified_plan_contract_supports_response_step() -> None:
+    """统一计划必须能够描述从数据获取到最终回复的完整步骤。"""
+
+    query_node = UnifiedPlanNode(
+        id="query-visits",
+        description="查询店铺今天的访问人数",
+        task_type="query",
+        tool_name="query_semantic_data",
+        arguments={"purpose": "查询店铺今天的访问人数"},
+        output_type="evidence",
+        expected_output="返回访问人数 Evidence",
+    )
+    response_node = UnifiedPlanNode(
+        id="respond-user",
+        description="根据访问人数回复用户",
+        task_type="respond",
+        dependencies=("query-visits",),
+        tool_name="generate_response",
+        arguments={"output_types": ["text"]},
+        output_type="response",
+        expected_output="返回引用访问人数 Evidence 的最终回复",
+    )
+
+    state = build_plan_execution_state(
+        "visit-plan",
+        (query_node, response_node),
+    )
+
+    assert state.execution_batches == (("query-visits",), ("respond-user",))
+    assert state.nodes[-1].plan_revision == 1
+
+
+@pytest.mark.parametrize(
+    ("task_type", "tool_name", "output_type", "error_code"),
+    (
+        ("respond", "query_semantic_data", "response", "PLAN_NODE_TOOL_TYPE_MISMATCH"),
+        ("query", "query_semantic_data", "response", "PLAN_NODE_OUTPUT_TYPE_MISMATCH"),
+    ),
+)
+def test_unified_plan_contract_rejects_inconsistent_node_facts(
+    task_type: str,
+    tool_name: str,
+    output_type: str,
+    error_code: str,
+) -> None:
+    """节点类型、执行工具和预期输出必须由同一契约统一校验。"""
+
+    with pytest.raises(ValidationError, match=error_code):
+        UnifiedPlanNode.model_validate(
+            {
+                "id": "invalid-node",
+                "description": "不一致的计划节点",
+                "task_type": task_type,
+                "tool_name": tool_name,
+                "arguments": {"purpose": "校验错误节点"},
+                "output_type": output_type,
+                "expected_output": "错误输出",
+            }
+        )
 
 
 def test_requirement_without_time_filter_accepts_single_role_query() -> None:
@@ -193,10 +258,14 @@ def test_assess_research_compiles_and_freezes_plan_additions() -> None:
     assert result.data is not None
     assert result.data.status.value == "succeeded"
     plan_state = context.plan_execution_state()
-    assert plan_state.revision == 2
+    assert plan_state.revision == 1
     assert plan_state.nodes[-1].id == "dimension-query"
+    assert plan_state.nodes[-1].plan_revision == 1
+    assert plan_state.nodes[-1].description == "补齐维度拆解"
     assert plan_state.nodes[-1].gap_id == "dimension-gap"
     assert plan_state.nodes[-1].arguments == arguments
+    assert plan_state.nodes[-1].output_type == "evidence"
+    assert plan_state.nodes[-1].expected_output == "返回受治理查询 Evidence"
 
 
 def test_assess_research_rejects_out_of_scope_plan_addition() -> None:

@@ -31,12 +31,15 @@ class UnifiedPlanNode(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(min_length=1, max_length=128)
-    task_type: Literal["query", "compute", "inspect"]
+    description: str = Field(min_length=1, max_length=1000)
+    task_type: Literal["query", "compute", "inspect", "respond"]
     dependencies: tuple[str, ...] = ()
     tool_name: str = Field(min_length=1, max_length=128)
-    source: Literal["initial", "append"]
+    plan_revision: int = Field(default=1, ge=1)
     gap_id: str | None = Field(default=None, min_length=1, max_length=128)
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: dict[str, Any]
+    output_type: Literal["evidence", "response"]
+    expected_output: str = Field(min_length=1, max_length=1000)
 
     @model_validator(mode="after")
     def validate_dependencies(self) -> UnifiedPlanNode:
@@ -44,12 +47,21 @@ class UnifiedPlanNode(BaseModel):
             raise ValueError("PLAN_NODE_SELF_DEPENDENCY")
         if len(self.dependencies) != len(set(self.dependencies)):
             raise ValueError("PLAN_NODE_DEPENDENCY_DUPLICATED")
-        if self.tool_name in {
-            "query_semantic_data",
-            "compute_evidence",
-            "inspect_evidence",
-        } and not self.arguments:
+        if not self.arguments:
             raise ValueError("PLAN_NODE_ARGUMENTS_REQUIRED")
+        allowed_tools = {
+            "query": {"query", "query_semantic_data"},
+            "compute": {"compute", "compute_evidence"},
+            "inspect": {"inspect_evidence"},
+            "respond": {"generate_response"},
+        }
+        if self.tool_name not in allowed_tools[self.task_type]:
+            raise ValueError("PLAN_NODE_TOOL_TYPE_MISMATCH")
+        expected_output_type = (
+            "response" if self.task_type == "respond" else "evidence"
+        )
+        if self.output_type != expected_output_type:
+            raise ValueError("PLAN_NODE_OUTPUT_TYPE_MISMATCH")
         return self
 
 
@@ -85,6 +97,10 @@ class UnifiedPlanExecutionState(BaseModel):
         for node in self.nodes:
             if not set(node.dependencies) <= known:
                 raise ValueError("PLAN_NODE_DEPENDENCY_UNKNOWN")
+            if node.plan_revision > self.revision:
+                raise ValueError("PLAN_NODE_REVISION_AHEAD")
+        if self.nodes and max(node.plan_revision for node in self.nodes) != self.revision:
+            raise ValueError("PLAN_NODE_REVISION_NOT_MATCHED")
         flattened = tuple(item for batch in self.execution_batches for item in batch)
         if len(flattened) != len(set(flattened)) or set(flattened) != known:
             raise ValueError("PLAN_EXECUTION_BATCH_NOT_MATCHED")
@@ -131,10 +147,22 @@ def build_analysis_plan_execution_state(
     nodes = tuple(
         UnifiedPlanNode(
             id=task.id,
+            description=(
+                f"执行计算任务 {task.id}"
+                if isinstance(task, ComputeTask)
+                else f"执行查询任务 {task.id}"
+            ),
             task_type="compute" if isinstance(task, ComputeTask) else "query",
             dependencies=tuple(dependencies[task.id]),
             tool_name="compute" if isinstance(task, ComputeTask) else "query",
-            source="initial",
+            plan_revision=plan.version,
+            arguments=task.model_dump(mode="json"),
+            output_type="evidence",
+            expected_output=(
+                "返回计算结果集"
+                if isinstance(task, ComputeTask)
+                else "返回查询结果集"
+            ),
         )
         for task in plan.tasks
     )
@@ -154,8 +182,10 @@ def build_plan_execution_state(
     """建立统一可追加 DAG；空计划允许 Planner 根据当前上下文生成首轮节点。"""
 
     frozen_nodes = tuple(nodes)
+    revision = max((node.plan_revision for node in frozen_nodes), default=1)
     return UnifiedPlanExecutionState(
         plan_id=plan_id,
+        revision=revision,
         nodes=frozen_nodes,
         execution_batches=_execution_batches(frozen_nodes),
         task_states={node.id: UnifiedPlanTaskState() for node in frozen_nodes},
@@ -175,13 +205,20 @@ def append_plan_nodes(
     addition_ids = {node.id for node in additions}
     if len(addition_ids) != len(additions) or existing & addition_ids:
         raise ValueError("PLAN_APPEND_NODE_CONFLICT")
-    combined = (*state.nodes, *additions)
+    target_revision = 1 if not state.nodes else state.revision + 1
+    revised_additions = tuple(
+        node.model_copy(update={"plan_revision": target_revision})
+        for node in additions
+    )
+    combined = (*state.nodes, *revised_additions)
     batches = _execution_batches(combined)
     task_states = dict(state.task_states)
-    task_states.update({node.id: UnifiedPlanTaskState() for node in additions})
+    task_states.update(
+        {node.id: UnifiedPlanTaskState() for node in revised_additions}
+    )
     return state.model_copy(
         update={
-            "revision": state.revision + 1,
+            "revision": target_revision,
             "nodes": combined,
             "execution_batches": batches,
             "task_states": task_states,
@@ -239,12 +276,36 @@ def load_plan_execution_state(
         normalized["revision"] = normalized.pop("version")
     raw_nodes = normalized.get("nodes")
     if isinstance(raw_nodes, (list, tuple)):
-        normalized["nodes"] = [
-            {**node, "source": "initial"}
-            if isinstance(node, dict) and node.get("source") == "static"
-            else node
-            for node in raw_nodes
-        ]
+        current_revision = int(normalized.get("revision") or 1)
+        migrated_nodes: list[Any] = []
+        for node in raw_nodes:
+            if not isinstance(node, dict) or "source" not in node:
+                migrated_nodes.append(node)
+                continue
+            migrated = dict(node)
+            migrated.pop("source", None)
+            # 旧状态只有 initial/append 标记，无法还原准确规划轮次；统一归入
+            # 快照当前 revision，保证恢复后不会伪造不存在的历史轮次。
+            migrated["plan_revision"] = current_revision
+            task_type = migrated.get("task_type")
+            arguments = migrated.get("arguments")
+            purpose = (
+                arguments.get("purpose") if isinstance(arguments, dict) else None
+            )
+            migrated.setdefault(
+                "description",
+                str(purpose or migrated.get("id") or "历史计划步骤"),
+            )
+            migrated.setdefault(
+                "output_type",
+                "response" if task_type == "respond" else "evidence",
+            )
+            migrated.setdefault(
+                "expected_output",
+                "返回最终响应" if task_type == "respond" else "返回执行 Evidence",
+            )
+            migrated_nodes.append(migrated)
+        normalized["nodes"] = migrated_nodes
     return UnifiedPlanExecutionState.model_validate(normalized)
 
 

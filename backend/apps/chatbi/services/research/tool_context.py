@@ -347,9 +347,6 @@ class ResearchToolContext:
         """把模型生成的首次计划或后续增量追加到同一个规范 DAG。"""
 
         plan_state = self.plan_execution_state()
-        node_source: Literal["initial", "append"] = (
-            "append" if plan_state.nodes else "initial"
-        )
         known_node_ids = {node.id for node in plan_state.nodes}
         addition_ids = {item.addition_id for item in additions}
         nodes: list[UnifiedPlanNode] = []
@@ -367,12 +364,24 @@ class ResearchToolContext:
             nodes.append(
                 UnifiedPlanNode(
                     id=item.addition_id,
+                    description=(
+                        item.description
+                        or str(item.arguments.get("purpose") or item.addition_id)
+                    ),
                     task_type=task_type,
                     dependencies=dependencies,
                     tool_name=item.tool_name,
-                    source=node_source,
                     gap_id=item.gap_id,
                     arguments=dict(item.arguments),
+                    output_type=item.output_type,
+                    expected_output=(
+                        item.expected_output
+                        or {
+                            "query": "返回受治理查询 Evidence",
+                            "compute": "返回确定性计算 Evidence",
+                            "inspect": "返回 Evidence 检查结果",
+                        }[task_type]
+                    ),
                 )
             )
         self._save_plan_execution_state(

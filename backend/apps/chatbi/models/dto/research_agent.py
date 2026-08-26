@@ -1527,7 +1527,10 @@ class ResearchPlanAddition(_ContractModel):
     """等待服务端编译和校验的单个研究计划增量。"""
 
     addition_id: str = Field(min_length=1, max_length=128)
-    gap_id: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(default=None, min_length=1, max_length=1000)
+    output_type: Literal["evidence"] = "evidence"
+    expected_output: str | None = Field(default=None, min_length=1, max_length=1000)
+    gap_id: str | None = Field(default=None, min_length=1, max_length=128)
     dependency_node_ids: tuple[str, ...] = ()
     tool_name: Literal[
         "query_semantic_data",
@@ -1539,7 +1542,8 @@ class ResearchPlanAddition(_ContractModel):
     @model_validator(mode="after")
     def validate_addition(self) -> ResearchPlanAddition:
         _id(self.addition_id, "RESEARCH_AGENT_PLAN_ADDITION_ID_INVALID")
-        _id(self.gap_id, "RESEARCH_AGENT_GAP_ID_INVALID")
+        if self.gap_id is not None:
+            _id(self.gap_id, "RESEARCH_AGENT_GAP_ID_INVALID")
         _unique(
             self.dependency_node_ids,
             "RESEARCH_AGENT_PLAN_ADDITION_DEPENDENCY_DUPLICATED",
@@ -1576,7 +1580,8 @@ class SemanticAssessment(_ContractModel):
         _unique(addition_ids, "RESEARCH_AGENT_PLAN_ADDITION_DUPLICATED")
         known_gaps = set(gap_ids)
         if any(
-            item.gap_id not in known_gaps for item in self.proposed_plan_additions
+            item.gap_id is not None and item.gap_id not in known_gaps
+            for item in self.proposed_plan_additions
         ):
             raise ValueError("RESEARCH_AGENT_PLAN_ADDITION_GAP_NOT_FOUND")
         if any(not item.strip() for item in self.limitations):
