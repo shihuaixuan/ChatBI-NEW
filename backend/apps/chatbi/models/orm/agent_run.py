@@ -28,6 +28,7 @@ class AgentRunStatus(str, Enum):
 
 
 class AgentExecutionMode(str, Enum):
+    AGENT = "agent"
     FAST = "fast"
     PLAN = "plan"
     RESEARCH = "research"

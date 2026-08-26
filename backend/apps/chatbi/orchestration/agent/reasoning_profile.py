@@ -35,9 +35,10 @@ DEFAULT_WORKING_STATE_NOTE = (
 )
 
 RESEARCH_WORKING_STATE_NOTE = (
-    "该状态由服务端根据可信工具结果生成。基于它决定下一个工具调用；"
-    "Evidence 产生后使用 assess_research 提交内容充分性判断；需要继续时必须携带"
-    "明确缺口和计划增量，结束时调用 finish_research，纯文本回答不构成完成。"
+    "该状态由服务端根据可信工具结果生成。没有 Evidence 时直接使用 "
+    "submit_research_plan 提交一份完整计划；当前计划执行完且仍需继续时，携带"
+    "explicit_gap 评估提交下一份完整计划。可以结束时调用 finish_research，"
+    "纯文本回答不构成完成。"
 )
 
 
@@ -96,8 +97,8 @@ SOFT_PROFILE = ReasoningProfile(
 RESEARCH_PROFILE = ReasoningProfile(
     name="research",
     direct_answer_finishes=False,
-    # 模型只负责提交计划修订或完成判断；查询、计算和检查由 DAG 驱动执行。
-    fixed_tool_allowlist=("assess_research", "finish_research"),
+    # 模型只负责提交完整计划或完成判断；查询、计算和检查由 DAG 驱动执行。
+    fixed_tool_allowlist=("submit_research_plan", "finish_research"),
     working_state_note=RESEARCH_WORKING_STATE_NOTE,
 )
 

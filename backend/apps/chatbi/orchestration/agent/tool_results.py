@@ -369,10 +369,11 @@ class ChatBIToolResultProcessor:
         )
         result_set_payload = result_set_ref.model_dump(mode="json")
         artifact_payload = result_set_ref.artifact_ref.model_dump(mode="json")
+        execution_mode = context.state.get("execution_mode")
         mode = (
-            "fast"
-            if context.state.get("execution_mode") == "fast"
-            else "plan"
+            str(execution_mode)
+            if execution_mode in {"agent", "fast", "plan", "research"}
+            else "agent"
         )
         EvidenceRegistry(context.state).register(
             build_analysis_evidence(

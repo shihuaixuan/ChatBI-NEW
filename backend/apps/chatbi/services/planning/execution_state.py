@@ -175,6 +175,35 @@ def build_analysis_plan_execution_state(
     )
 
 
+def ensure_analysis_plan_execution_state(
+    payload: Mapping[str, Any] | None,
+    plan: AnalysisPlan,
+) -> UnifiedPlanExecutionState:
+    """创建或校验 AnalysisPlan 对应的统一执行状态。"""
+
+    expected = build_analysis_plan_execution_state(plan)
+    existing = load_plan_execution_state(payload)
+    if existing is None:
+        return expected
+    expected_nodes = tuple(
+        (node.id, node.task_type, node.dependencies) for node in expected.nodes
+    )
+    existing_nodes = tuple(
+        (node.id, node.task_type, node.dependencies) for node in existing.nodes
+    )
+    if existing.plan_id != expected.plan_id or existing_nodes != expected_nodes:
+        raise ValueError("PLAN_EXECUTION_STATE_PLAN_MISMATCH")
+    if existing.nodes == expected.nodes:
+        return existing
+    if any(
+        task_state.status is not PlanNodeExecutionStatus.PENDING
+        for task_state in existing.task_states.values()
+    ):
+        raise ValueError("PLAN_EXECUTION_STATE_PLAN_IMMUTABLE")
+    # SQL 编译等确定性准备发生在执行前；只允许覆盖尚未启动节点的完整参数。
+    return existing.model_copy(update={"nodes": expected.nodes})
+
+
 def build_plan_execution_state(
     plan_id: str,
     nodes: Sequence[UnifiedPlanNode] = (),
@@ -318,6 +347,7 @@ __all__ = [
     "append_plan_nodes",
     "build_analysis_plan_execution_state",
     "build_plan_execution_state",
+    "ensure_analysis_plan_execution_state",
     "load_plan_execution_state",
     "transition_plan_node",
 ]

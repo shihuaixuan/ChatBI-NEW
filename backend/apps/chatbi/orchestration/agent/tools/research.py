@@ -51,6 +51,7 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchLogicalColumn,
     ResearchOrder,
     ResearchOrderDirection,
+    ResearchPlanNode,
     ResearchQueryComparison,
     ResearchReportFinding,
     ResearchResultRef,
@@ -105,7 +106,7 @@ RESEARCH_TOOL_NAMES: tuple[str, ...] = (
     "query_semantic_data",
     "inspect_evidence",
     "compute_evidence",
-    "assess_research",
+    "submit_research_plan",
     "finish_research",
 )
 
@@ -185,10 +186,11 @@ class FinishResearchArgs(_ToolArgsModel):
     unanswered_questions: tuple[str, ...] = ()
 
 
-class AssessResearchArgs(_ToolArgsModel):
-    """assess_research 参数：显式提交内容充分性判断和下一步计划。"""
+class SubmitResearchPlanArgs(_ToolArgsModel):
+    """submit_research_plan 参数：提交本轮完整计划和可选 Evidence 评估。"""
 
-    assessment: SemanticAssessment
+    plan_nodes: tuple[ResearchPlanNode, ...] = Field(min_length=1)
+    assessment: SemanticAssessment | None = None
 
 
 class _ObservationFailure(Exception):
@@ -499,7 +501,7 @@ class QuerySemanticDataTool(
             requirement=ctx.requirement,
             evidence=ctx.evidences(),
             plan_id=plan_id,
-            iteration=ctx.iteration,
+            iteration=ctx.evidence_iteration,
         )
         usage_after = ctx.consume_query()
         if outcome.status != "succeeded":
@@ -1392,7 +1394,7 @@ class ComputeEvidenceTool(
         fields: list[str],
         rows: list[dict[str, Any]],
     ) -> ResearchEvidence:
-        iteration = ctx.advance_iteration(
+        iteration = ctx.advance_evidence_iteration(
             minimum=max(item.iteration for item in inputs) + 1
         )
         logical_columns = self._derived_columns(request, inputs, fields)
@@ -1592,17 +1594,17 @@ def validate_research_plan_addition(
             raise ValueError("RESEARCH_AGENT_COMPUTE_REF_OUT_OF_SCOPE")
 
 
-class AssessResearchTool(
-    Tool[ResearchToolContext, AssessResearchArgs, ToolObservation]
+class SubmitResearchPlanTool(
+    Tool[ResearchToolContext, SubmitResearchPlanArgs, ToolObservation]
 ):
-    name = "assess_research"
-    title = "提交 Evidence 内容充分性评估"
+    name = "submit_research_plan"
+    title = "提交当前规划周期的完整计划"
     description = (
-        "读取用户问题和当前 Evidence 后提交四态语义评估。内容不足必须给出明确缺口；"
-        "需要继续时必须提交由 query_semantic_data、inspect_evidence 或 "
-        "compute_evidence 组成的计划增量。服务端校验引用、Scope 和工具参数后才批准执行。"
+        "首次规划直接提交解决当前问题所需的完整数据步骤；后续重新规划需要同时提交"
+        "当前 Evidence 的明确缺口评估。计划由 query_semantic_data、inspect_evidence "
+        "或 compute_evidence 节点组成，服务端整体校验后一次性写入新的 DAG revision。"
     )
-    args_model = AssessResearchArgs
+    args_model = SubmitResearchPlanArgs
     result_model = ToolObservation
     execution = ToolExecutionPolicy(
         side_effect=ToolSideEffect.WRITE,
@@ -1613,21 +1615,70 @@ class AssessResearchTool(
     def execute(
         self,
         ctx: ResearchToolContext,
-        args: AssessResearchArgs,
+        args: SubmitResearchPlanArgs,
     ) -> ToolResult[ToolObservation]:
         return _finalize(ctx, lambda: self._run(ctx, args))
 
     def _run(
         self,
         ctx: ResearchToolContext,
-        args: AssessResearchArgs,
+        args: SubmitResearchPlanArgs,
     ) -> ToolObservation:
         _guard_finished(ctx, self.name)
         assessment = args.assessment
+        if ctx.plan_execution_state().nodes and assessment is None:
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message="重新规划必须提交针对当前 Evidence 的内容充分性评估。",
+            )
+        if (
+            assessment is not None
+            and assessment.status is not SemanticAssessmentStatus.EXPLICIT_GAP
+        ):
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message="提交新计划时，Evidence 评估状态必须是 explicit_gap。",
+            )
+        known_gap_ids = (
+            {item.gap_id for item in assessment.unresolved_gaps}
+            if assessment is not None
+            else set()
+        )
+        if assessment is None and any(
+            item.gap_id is not None for item in args.plan_nodes
+        ):
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message="首次规划不得伪造 Gap，计划节点的 gap_id 必须为空。",
+            )
+        if any(
+            item.gap_id is not None and item.gap_id not in known_gap_ids
+            for item in args.plan_nodes
+        ):
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message="计划节点引用了当前评估中不存在的 Gap。",
+            )
         known = set(ctx.known_evidence_ids())
         finding_refs = {
             evidence_id
-            for finding in assessment.supported_findings
+            for finding in (assessment.supported_findings if assessment else ())
             for evidence_id in finding.evidence_ids
         }
         missing = sorted(finding_refs - known)
@@ -1648,6 +1699,7 @@ class AssessResearchTool(
                 ctx.evidences(),
                 assessment,
                 current_result=ctx.premise_result,
+                plan_nodes=args.plan_nodes,
             )
         except ValueError as exc:
             raise _fail(
@@ -1659,32 +1711,13 @@ class AssessResearchTool(
                 message=f"Evidence Gap 评估校验失败：{exc}",
             ) from exc
 
-        coverage = evaluate_structural_coverage(
-            ctx.requirement,
-            ctx.analysis_evidences(),
-            premise_result=premise_result or ctx.premise_result,
-        )
-        if (
-            assessment.status is SemanticAssessmentStatus.ANSWERABLE
-            and not coverage.minimum_requirements_met
-        ):
-            raise _fail(
-                ctx,
-                self.name,
-                code=ToolErrorCode.INVALID_REQUEST,
-                stage=ToolFailureStage.VALIDATION,
-                parameter_retryable=True,
-                message="最低结构要求尚未覆盖，不能判断为 answerable。",
-                details={"gaps": list(coverage.gap_messages())},
-            )
-
-        for addition in assessment.proposed_plan_additions:
+        for plan_node in args.plan_nodes:
             try:
                 validate_research_plan_addition(
                     ctx,
-                    addition.tool_name,
-                    addition.arguments,
-                    dependency_node_ids=addition.dependency_node_ids,
+                    plan_node.tool_name,
+                    plan_node.arguments,
+                    dependency_node_ids=plan_node.dependency_node_ids,
                 )
             except (ValidationError, ValueError) as exc:
                 raise _fail(
@@ -1693,13 +1726,15 @@ class AssessResearchTool(
                     code=ToolErrorCode.INVALID_REQUEST,
                     stage=ToolFailureStage.VALIDATION,
                     parameter_retryable=True,
-                    message=f"计划增量无法编译或超出 Scope：{exc}",
-                    details={"tool_name": addition.tool_name},
+                    message=f"计划节点无法编译或超出 Scope：{exc}",
+                    details={"tool_name": plan_node.tool_name},
                 ) from exc
-        if premise_result is not None:
-            ctx.set_premise_result(premise_result)
         try:
-            ctx.set_semantic_assessment(assessment)
+            ctx.submit_plan(args.plan_nodes)
+            if premise_result is not None:
+                ctx.set_premise_result(premise_result)
+            if assessment is not None:
+                ctx.set_semantic_assessment(assessment)
         except (ValidationError, ValueError) as exc:
             raise _fail(
                 ctx,
@@ -1707,18 +1742,20 @@ class AssessResearchTool(
                 code=ToolErrorCode.INVALID_REQUEST,
                 stage=ToolFailureStage.VALIDATION,
                 parameter_retryable=True,
-                message=f"计划增量无法写入统一 DAG：{exc}",
+                message=f"完整计划无法写入统一 DAG：{exc}",
             ) from exc
         return _success(
             ctx,
             self.name,
-            message=f"语义评估已接受：{assessment.status.value}",
+            message="完整计划已接受并写入统一 DAG",
             evidence_ids=tuple(sorted(finding_refs)),
             statistics={
-                "unresolved_gaps": len(assessment.unresolved_gaps),
-                "plan_additions": len(assessment.proposed_plan_additions),
+                "unresolved_gaps": (
+                    len(assessment.unresolved_gaps) if assessment else 0
+                ),
+                "plan_nodes": len(args.plan_nodes),
             },
-            limitations=assessment.limitations,
+            limitations=assessment.limitations if assessment else (),
         )
 
 class FinishResearchTool(
@@ -2008,7 +2045,7 @@ def build_research_tool_registry(
         QuerySemanticDataTool(),
         InspectEvidenceTool(),
         ComputeEvidenceTool(),
-        AssessResearchTool(),
+        SubmitResearchPlanTool(),
         FinishResearchTool(),
     ):
         registry.register(tool)
@@ -2017,8 +2054,8 @@ def build_research_tool_registry(
 
 __all__ = [
     "RESEARCH_TOOL_NAMES",
-    "AssessResearchArgs",
-    "AssessResearchTool",
+    "SubmitResearchPlanArgs",
+    "SubmitResearchPlanTool",
     "ComputeEvidenceArgs",
     "ComputeEvidenceTool",
     "FinishResearchArgs",

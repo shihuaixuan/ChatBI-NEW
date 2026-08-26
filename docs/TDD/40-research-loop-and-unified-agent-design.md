@@ -145,7 +145,7 @@ query：查询目标指标的当前值和对比值
 统一控制关系为：
 
 ~~~text
-统一 Planner 生成首次计划或计划增量
+统一 Planner 每轮生成一份完整计划
   -> 服务端校验并编译计划
   -> Runtime 确定性执行 query / compute
   -> 模型根据 Evidence 判断内容和下一步方向
@@ -281,7 +281,6 @@ SemanticAssessment
   - status: answerable | explicit_gap | no_new_direction | data_insufficient
   - supported_findings
   - unresolved_gaps
-  - proposed_plan_additions
   - limitations
 ~~~
 
@@ -290,12 +289,13 @@ SemanticAssessment
 | 状态 | 含义 | Runtime 行为 |
 | --- | --- | --- |
 | `answerable` | 当前 Evidence 足以回答用户问题 | 校验 Findings 和 Evidence 引用后生成回复 |
-| `explicit_gap` | 存在明确、可描述的内容缺口 | 校验计划增量；策略允许时追加计划 |
+| `explicit_gap` | 存在明确、可描述的内容缺口 | 允许 Planner 提交下一份完整计划 |
 | `no_new_direction` | 内容仍不充分，但没有新的合法执行方向 | 带限制结束 |
 | `data_insufficient` | Scope 内数据或能力不足，无法补齐 | 说明数据限制后结束 |
 
-`proposed_plan_additions` 不是任意工具调用列表。它必须描述目标、节点类型、输入依赖和预期
-补齐的 Gap，并由服务端编译、校验后才能进入执行计划。
+`SemanticAssessment` 只表达 Evidence 内容判断，不再夹带计划。Planner 通过
+`submit_research_plan.plan_nodes` 一次性提交当前规划周期的完整计划；首次规划不需要伪造
+`explicit_gap`，后续规划必须说明上一份计划执行后仍然存在的明确 Gap。
 
 模型负责判断：
 
@@ -306,8 +306,8 @@ SemanticAssessment
 - 缺口能否在冻结 Scope 内通过新增计划补足；
 - 如果不能继续，应如何说明限制。
 
-如果模型认为内容不足，不能只返回“还不够”，必须说明明确缺口；如果建议继续，还必须输出
-可执行的计划增量。
+如果模型认为内容不足，不能只返回“还不够”，必须说明明确缺口；如果建议继续，还必须另外
+提交一份完整、可执行的下一轮计划。
 
 ### 最终完成条件
 
@@ -377,7 +377,7 @@ SemanticAssessment
 
 - `StructuralCoverage` 有稳定 DTO 和明确字段语义；
 - `SemanticAssessment` 有稳定 DTO，状态互斥且终态行为明确；
-- 内容不足但要求继续时，必须携带可校验的计划增量；
+- 内容不足但要求继续时，必须携带可校验的下一份完整计划；
 - `answerable` 不绕过 Findings、Evidence 引用、Scope 和版本校验；
 - Runtime 不再从模糊自然语言判断“继续”或“结束”；
 - 最低结构覆盖本身不能启动专用强制收口倒计时。
@@ -524,15 +524,15 @@ AnalysisPlan
 
 while 未进入终态:
   1. 检查取消、权限、预算和超时
-  2. 如果没有待执行节点，Planner 根据 Context、Plan、Evidence 和 Gap 生成计划增量
-  3. 服务端校验增量并追加到同一个 DAG
+  2. 如果没有未完成计划，Planner 根据 Context、Plan、Evidence 和 Gap 生成一份完整计划
+  3. 服务端整体校验计划并一次性写入同一个 DAG 的下一 revision
   4. Plan Executor 执行所有当前可执行节点
   5. 保存结果并注册 Evidence
   6. 计算最低结构覆盖和执行缺口
   7. 模型评估 Evidence 内容是否足以回答问题
   8. 根据评估处理：
        - answerable：校验并生成最终回复
-       - explicit_gap：在统一预算允许时继续，由 Planner 生成下一次计划增量
+       - explicit_gap：在统一预算允许时继续，由 Planner 生成下一份完整计划
        - no_new_direction：带限制结束
        - data_insufficient：说明数据限制后结束
   9. 连续无有效进展时由服务端停止
@@ -613,7 +613,7 @@ Fast、Plan、Research 如果因外部兼容需要暂时保留，只能在 Runti
 | --- | --- |
 | Question Rewrite | 规范用户问题和对话指代 |
 | Semantic Binding | 绑定指标、维度、时间、筛选和语义关系 |
-| Planner | 根据冻结上下文、现有 Plan、Evidence 和 Gap 生成首次计划或计划增量 |
+| Planner | 根据冻结上下文、现有 Plan、Evidence 和 Gap 生成当前规划周期的完整计划 |
 | ExecutionPolicy | 只控制统一预算、节点类型和资源上限，不决定计划形态 |
 | Runtime / Executor | 调度节点、执行工具、记录状态和 Evidence |
 | Structural Coverage | 检查最低结构条件和硬性事实 |
@@ -638,7 +638,7 @@ Fast、Plan、Research 如果因外部兼容需要暂时保留，只能在 Runti
 - 定义 `SemanticAssessment`；
 - 明确 `answerable`、`explicit_gap`、`no_new_direction` 和 `data_insufficient` 的终态行为；
 - 规定内容不足时必须输出明确缺口；
-- 规定继续研究时必须输出可编译、可校验的计划增量；
+- 规定继续研究时必须输出可编译、可校验的下一份完整计划；
 - 规定最终结论必须引用合法 Evidence。
 
 ## 阶段三：将前提确认计划化
@@ -656,7 +656,7 @@ Fast、Plan、Research 如果因外部兼容需要暂时保留，只能在 Runti
 - `premise_to_verify` 只在 Working State 中投影为 `premise_confirmation` Evidence Gap；
 - `SemanticAssessment.resolved_gaps` 使用合法 Evidence ID 提交前提裁决；
 - `explicit_gap` 可以提交同时包含前提指标、比较时间角色和原因分析维度的合并查询；
-- 服务端校验 Evidence 是否能够确定前提方向，以及计划增量是否具备解决该 Gap 的输入；
+- 服务端校验 Evidence 是否能够确定前提方向，以及本轮完整计划是否具备解决该 Gap 的输入；
 - 已删除 `ResearchInitialPlanner`、`ResearchInitialPlan` 和固定首轮计划字段；
 - Runtime 已删除 `_run_premise_preflight()` 和固定节点 ID 裁决逻辑；
 - 前提不成立改为模型提交 `premise_not_supported` 结束请求，服务端验证后收口。
@@ -664,7 +664,7 @@ Fast、Plan、Research 如果因外部兼容需要暂时保留，只能在 Runti
 ## 阶段四：统一计划和执行状态
 
 - 所有请求只使用一个可追加的 `AnalysisPlan` DAG；
-- 首次计划和后续计划增量使用同一个 `PlanRevision` 协议；
+- 首次计划和后续完整计划使用同一个 revision 协议；
 - 单查询、多查询、计算和后续研究节点都写入同一个 Plan；
 - 所有节点共用 Plan Executor、Evidence Registry、预算、Trace 和恢复协议；
 - 删除计划状态中的 `mode` 和 `plan_shape`，不再表达 `linear`、`static_dag`、
@@ -674,7 +674,7 @@ Fast、Plan、Research 如果因外部兼容需要暂时保留，只能在 Runti
 
 - 统一持久化 `plan_execution_state`，其中包含计划 ID、修订号、节点依赖、拓扑批次和节点
   终态；
-- Planner 每次提交合法计划增量都会递增修订号，只允许新增节点，不允许替换既有节点或
+- Planner 每次提交下一份合法计划都会递增修订号，只允许新增节点，不允许替换既有节点或
   修改已完成节点；新增依赖形成环、引用未知节点或复用节点 ID 时由服务端拒绝；
 - 已删除 `initial_plan_state` 和 `approved_plan_additions`；规范执行事实只保存在
   `plan_execution_state`；
@@ -686,8 +686,14 @@ Fast、Plan、Research 如果因外部兼容需要暂时保留，只能在 Runti
 
 - `UnifiedPlanExecutionState` 已删除 `mode`、`shape` 和 `allow_append`，并统一使用
   `revision` 表达计划修订号；
-- 单节点计划、多节点计划和后续计划增量共用同一个可追加 DAG 契约；
+- 单节点计划、多节点计划和后续完整计划共用同一个可追加 DAG 契约；
 - Fast、Plan 和 Research 的现有入口均将节点状态写入 `plan_execution_state`；
+- Plan Executor 已删除运行期 `plan_task_states` 和 `plan_execution_batches` 平行状态，拓扑批次、
+  节点尝试次数、失败、跳过、取消和终态全部直接读写 `plan_execution_state`；
+- DRAFT 到 PROVEN 的确定性编译参数只允许在节点仍为 `pending` 时覆盖统一节点；节点开始执行后
+  计划参数不可修改，计划 ID、节点类型或依赖不一致会被统一入口拒绝；
+- Fast 和 Plan 节点成功后都会把统一 Evidence ID 写回节点状态，使计划执行事实能够直接追溯
+  对应结果；
 - 旧快照中的 `mode`、`shape` 和 `allow_append` 只在统一加载入口被删除，不再恢复为执行事实；
 - 追加节点仍统一校验节点 ID、依赖引用和 DAG 环路，已成功节点保持不可修改。
 
@@ -699,7 +705,7 @@ Pipeline 的状态投影到同一个 DTO 而保留模式不变量，不视为完
 - 删除 Mode Router 对 Fast、Plan、Research 的分类和 Pipeline 分发职责；
 - Semantic Binding 后直接构建统一 `AgentContext` 和资源上限；
 - 所有请求进入同一个 `PlanAndSolveRuntime`；
-- 统一 Planner 接口同时负责首次规划和根据明确 Gap 生成计划增量；
+- 统一 Planner 接口同时负责首次完整规划和根据明确 Gap 生成下一份完整计划；
 - 统一 Plan Executor 执行 query 和 compute 节点，不按模式选择执行器；
 - 每次节点执行后统一进入 Structural Coverage 和 Semantic Assessment；
 - `explicit_gap` 且预算允许时继续规划，不发生模式升级或执行器切换；
@@ -708,11 +714,13 @@ Pipeline 的状态投影到同一个 DTO 而保留模式不变量，不视为完
 
 当前实施进展：
 
-- 已删除确定性 `ResearchInitialPlanner` 及其 DTO、执行分支和状态投影；首次计划与后续修订
-  都只能通过 `SemanticAssessment.proposed_plan_additions` 提交；
-- Research Profile 只向模型暴露 `assess_research` 和 `finish_research`。模型不能直接调用
+- 已删除确定性 `ResearchInitialPlanner` 及其 DTO、执行分支和状态投影；首次计划与后续计划
+  都只能通过 `submit_research_plan.plan_nodes` 一次性提交；
+- Research Profile 只向模型暴露 `submit_research_plan` 和 `finish_research`。模型不能直接调用
   query、compute 或 inspect；
-- `ResearchPlanAddition` 使用显式 `dependency_node_ids` 表达 DAG 依赖，完整执行参数直接写入
+- `finish_research` 仅作为 `respond` 节点执行器接入前的过渡完成入口；它不再承担规划职责，
+  后续阶段由计划中的 `respond` 节点覆盖；
+- `ResearchPlanNode` 使用显式 `dependency_node_ids` 表达 DAG 依赖，完整执行参数直接写入
   现有 `UnifiedPlanNode`，不再通过 Evidence ID 事后反推依赖；依赖边同时定义执行顺序和
   数据输入，声明依赖的 compute/inspect 节点不能再携带另一组 Evidence ID；
 - `UnifiedPlanNode` 已覆盖为完整计划步骤契约，统一保存步骤说明、执行参数、预期输出和
@@ -721,7 +729,14 @@ Pipeline 的状态投影到同一个 DTO 而保留模式不变量，不视为完
 - Runtime 每轮优先从 `plan_execution_state` 选择依赖全部成功的 READY 节点，再使用现有
   `_execute_batch` 执行；不存在把 `decision.tool_calls` 事后包装成计划的路径；
 - 计划批准后由 Runtime 自动执行，不再要求模型下一轮原样重放 `approved_plan_additions`；
-- `explicit_gap` 产生的后续计划增量复用同一个追加入口和 DAG 校验；
+- `explicit_gap` 产生的下一份完整计划复用同一个提交入口和 DAG 校验；上一 revision 未完成时
+  服务端拒绝接受新计划；
+- `run()` 已改为显式的 Plan → 完整 Solve → Replan/Finish：恢复时存在未完成 revision 会先
+  继续 Solve，同一 revision 的所有拓扑批次完成之前不会再次调用 Planner；
+- READY 节点选择只处理当前 revision；节点失败后依赖节点进入 `skipped_dependency`，完整
+  `current_plan_result` 会向下一轮 Planner 投影成功、失败、跳过和 Evidence 引用；
+- 业务 `iteration` 只在完整 revision Solve 结束后推进一次；数据库 `step_index` 与 Evidence
+  DAG 层级分别维护，不再使用一个计数同时表示规划轮次、执行批次和证据依赖层级；
 - 原 `ModeRouter` 的生产入口已改为 `ExecutionRequirementBuilder`；它只冻结目标、Scope、
   时间条件、不可变筛选、输出要求和预算，不再生成固定查询 DAG；
 - 旧 `execution_modes` 配置不再控制规划或执行分发，只作为迁移期输入字段保留；
@@ -734,6 +749,15 @@ Pipeline 的状态投影到同一个 DTO 而保留模式不变量，不视为完
 - 生产组装已停止创建 `FastPipeline` 和根 `PlanPipeline`。query、compute 的确定性执行能力
   继续由 Agent Runtime 内部复用 `AnalysisExecutionService`，不再作为另一条业务入口；
 - `route.mode` 只保留为快照兼容字段，新请求统一写入 `agent`，运行时不读取它决定执行路径。
+- 原 `mode_router.py` 已收缩为纯 `ExecutionRequirementBuilder`：删除 Fast/Plan 分类、固定查询
+  DAG、固定多步分解和 `ModeRouter` 兼容入口，只冻结 Planner 所需的目标、Scope、权限、版本、
+  资产快照和预算；
+- 生产入口已统一命名为 `PlanAndSolvePipeline` 和 `PlanAndSolveRuntime`，旧
+  `ResearchAgentPipeline`、`ResearchAgentHarness` 名称及导入入口已删除；
+- `RunOrchestrator` 已删除 `_select_mode` 和 `_dispatch_research`，只保留
+  `_dispatch_plan_and_solve`；Run 行和运行上下文统一写入 `execution_mode=agent`；
+- `FastPipeline`、`PlanPipeline` 仍保留源码供迁移期专项调用，但不再从编排包导出，也不被生产
+  组装或 RunOrchestrator 引用。
 
 阶段五的生产执行入口已经统一。旧 Fast、Plan 代码和旧快照字段仍可在后续清理阶段删除，
 但它们不再参与新请求的规划或执行。
@@ -767,5 +791,5 @@ Pipeline 的状态投影到同一个 DTO 而保留模式不变量，不视为完
 
 最终职责原则是：
 
-> Planner 通过同一个协议生成首次计划和计划增量；统一 Runtime 执行同一个可追加 DAG 并
+> Planner 通过同一个协议生成首次计划和后续完整计划；统一 Runtime 执行同一个可追加 DAG 并
 > 负责硬性约束；模型判断内容是否足以回答用户问题；服务端校验计划和最终提交是否合法。

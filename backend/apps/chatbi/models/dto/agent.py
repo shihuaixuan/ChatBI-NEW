@@ -59,7 +59,7 @@ class AgentConfig(BaseModel):
     summary_max_chars: int = 4000
     history_rounds: int = 3
     context_fold_chars: int = 30000
-    # 阶段 8 后默认开放三条正式执行路径，Research 只使用新 Agent 引擎。
+    # 迁移期配置字段；统一 Runtime 不读取它决定执行路径。
     execution_modes: tuple[str, ...] = ("fast", "plan", "research")
     plan_max_query_tasks: int = Field(default=5, gt=0)
     plan_query_concurrency: int = Field(default=4, gt=0)

@@ -31,6 +31,8 @@ DELETED_MODULE_PREFIXES = (
     "apps.chatbi.services.research.rollout",
     "apps.chatbi.services.research.requirements",
     "apps.chatbi.orchestration.pipeline.research",
+    "apps.chatbi.orchestration.pipeline.research_agent",
+    "apps.chatbi.orchestration.pipeline.research_agent_pipeline",
     "apps.chatbi.adapters.prompts.research_policy",
 )
 
@@ -63,8 +65,18 @@ NEW_MODULES = (
     BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "report_draft.py",
     BACKEND_ROOT / "apps" / "chatbi" / "orchestration" / "agent" / "tools" / "research.py",
     BACKEND_ROOT / "apps" / "chatbi" / "orchestration" / "agent" / "reasoning_profile.py",
-    BACKEND_ROOT / "apps" / "chatbi" / "orchestration" / "pipeline" / "research_agent.py",
-    BACKEND_ROOT / "apps" / "chatbi" / "orchestration" / "pipeline" / "research_agent_pipeline.py",
+    BACKEND_ROOT
+    / "apps"
+    / "chatbi"
+    / "orchestration"
+    / "pipeline"
+    / "plan_and_solve_runtime.py",
+    BACKEND_ROOT
+    / "apps"
+    / "chatbi"
+    / "orchestration"
+    / "pipeline"
+    / "plan_and_solve_pipeline.py",
 )
 
 SCAN_ROOTS = (

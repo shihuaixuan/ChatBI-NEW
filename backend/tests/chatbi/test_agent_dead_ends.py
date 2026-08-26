@@ -47,6 +47,14 @@ from apps.chatbi.services.generation.agent_finalization import (
 )
 from apps.chatbi.services.planning.analysis_planner import AnalysisPlanner
 from apps.chatbi.services.planning.dag_scheduler import build_execution_batches
+from apps.chatbi.services.planning.execution_state import (
+    PLAN_EXECUTION_STATE_KEY,
+    PlanNodeExecutionStatus,
+    build_analysis_plan_execution_state,
+    ensure_analysis_plan_execution_state,
+    load_plan_execution_state,
+    transition_plan_node,
+)
 from apps.conversation import ChatRecordExecutionType
 from apps.datasource.models.dto.query import (
     DatasourceQueryData,
@@ -669,7 +677,13 @@ def test_plan_failed_dependency_is_skipped_after_parallel_batch() -> None:
 
     pipeline._run_compute_batch = run_compute_batch
     state = SimpleNamespace(
-        context=SimpleNamespace(state={}),
+        context=SimpleNamespace(
+            state={
+                PLAN_EXECUTION_STATE_KEY: build_analysis_plan_execution_state(
+                    plan
+                ).model_dump(mode="json")
+            }
+        ),
         record=SimpleNamespace(id=1),
         cancellation=NeverCancelled(),
         require_run_id=lambda: 1,
@@ -678,10 +692,21 @@ def test_plan_failed_dependency_is_skipped_after_parallel_batch() -> None:
     with pytest.raises(PlanPipelineError, match="PLAN_DEPENDENCY_FAILED"):
         list(pipeline._execute_plan_batches(state, plan, {}, {}))
 
-    task_states = state.context.state["plan_task_states"]
-    assert task_states["query-a"]["status"] == "FAILED"
-    assert task_states["query-b"]["status"] == "SUCCEEDED"
-    assert task_states["merge"]["status"] == "SKIPPED_DEPENDENCY"
+    execution_state = load_plan_execution_state(
+        state.context.state[PLAN_EXECUTION_STATE_KEY]
+    )
+    assert execution_state is not None
+    assert "plan_task_states" not in state.context.state
+    assert "plan_execution_batches" not in state.context.state
+    assert execution_state.task_states["query-a"].status is PlanNodeExecutionStatus.FAILED
+    assert (
+        execution_state.task_states["query-b"].status
+        is PlanNodeExecutionStatus.SUCCEEDED
+    )
+    assert (
+        execution_state.task_states["merge"].status
+        is PlanNodeExecutionStatus.SKIPPED_DEPENDENCY
+    )
 
 
 def test_plan_compute_input_lookup_isolated_by_plan_id() -> None:
@@ -706,6 +731,51 @@ def test_plan_compute_input_lookup_isolated_by_plan_id() -> None:
         )
         == "result:plan-b:q:current"
     )
+
+
+def test_unified_plan_allows_parameter_update_only_before_execution() -> None:
+    """PROVEN 参数可以覆盖待执行节点，节点启动后不得再修改计划事实。"""
+
+    draft_task = QueryTask(id="query-a", spec=QueryTaskSpec(dataset_id=1))
+    draft = AnalysisPlan(
+        id="plan-parameter-freeze",
+        tasks=(draft_task,),
+        presentation=PresentationHint(primary_result="query-a"),
+    )
+    proven_task = draft_task.model_copy(
+        update={
+            "compiled": CompiledQuery(
+                plan_fingerprint="proof:query-a",
+                sql="SELECT 1",
+                tables=("orders",),
+            )
+        }
+    )
+    proven = draft.model_copy(update={"tasks": (proven_task,)})
+
+    execution_state = ensure_analysis_plan_execution_state(None, draft)
+    execution_state = ensure_analysis_plan_execution_state(
+        execution_state.model_dump(mode="json"),
+        proven,
+    )
+    assert execution_state.nodes[0].arguments["compiled"]["sql"] == "SELECT 1"
+
+    running = transition_plan_node(
+        execution_state,
+        "query-a",
+        PlanNodeExecutionStatus.RUNNING,
+    )
+    changed_task = proven_task.model_copy(
+        update={
+            "compiled": proven_task.compiled.model_copy(update={"sql": "SELECT 2"})
+        }
+    )
+    changed = proven.model_copy(update={"tasks": (changed_task,)})
+    with pytest.raises(ValueError, match="PLAN_EXECUTION_STATE_PLAN_IMMUTABLE"):
+        ensure_analysis_plan_execution_state(
+            running.model_dump(mode="json"),
+            changed,
+        )
 
 
 def test_semantic_clarification_resume_only_reparses_candidates() -> None:

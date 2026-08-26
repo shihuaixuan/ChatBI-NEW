@@ -1523,13 +1523,13 @@ class ResearchGapResolution(_ContractModel):
         return self
 
 
-class ResearchPlanAddition(_ContractModel):
-    """等待服务端编译和校验的单个研究计划增量。"""
+class ResearchPlanNode(_ContractModel):
+    """Planner 提交的一份完整计划中的单个可执行步骤。"""
 
-    addition_id: str = Field(min_length=1, max_length=128)
-    description: str | None = Field(default=None, min_length=1, max_length=1000)
+    node_id: str = Field(min_length=1, max_length=128)
+    description: str = Field(min_length=1, max_length=1000)
     output_type: Literal["evidence"] = "evidence"
-    expected_output: str | None = Field(default=None, min_length=1, max_length=1000)
+    expected_output: str = Field(min_length=1, max_length=1000)
     gap_id: str | None = Field(default=None, min_length=1, max_length=128)
     dependency_node_ids: tuple[str, ...] = ()
     tool_name: Literal[
@@ -1540,8 +1540,8 @@ class ResearchPlanAddition(_ContractModel):
     arguments: dict[str, Any]
 
     @model_validator(mode="after")
-    def validate_addition(self) -> ResearchPlanAddition:
-        _id(self.addition_id, "RESEARCH_AGENT_PLAN_ADDITION_ID_INVALID")
+    def validate_plan_node(self) -> ResearchPlanNode:
+        _id(self.node_id, "RESEARCH_AGENT_PLAN_NODE_ID_INVALID")
         if self.gap_id is not None:
             _id(self.gap_id, "RESEARCH_AGENT_GAP_ID_INVALID")
         _unique(
@@ -1550,22 +1550,21 @@ class ResearchPlanAddition(_ContractModel):
         )
         for node_id in self.dependency_node_ids:
             _id(node_id, "RESEARCH_AGENT_PLAN_NODE_ID_INVALID")
-        if self.addition_id in self.dependency_node_ids:
-            raise ValueError("RESEARCH_AGENT_PLAN_ADDITION_SELF_DEPENDENCY")
+        if self.node_id in self.dependency_node_ids:
+            raise ValueError("RESEARCH_AGENT_PLAN_NODE_SELF_DEPENDENCY")
         if not self.arguments:
-            raise ValueError("RESEARCH_AGENT_PLAN_ADDITION_ARGUMENTS_REQUIRED")
+            raise ValueError("RESEARCH_AGENT_PLAN_NODE_ARGUMENTS_REQUIRED")
         _reject_physical_payload(self.arguments)
         return self
 
 
 class SemanticAssessment(_ContractModel):
-    """模型对当前 Evidence 内容充分性和下一步方向的结构化判断。"""
+    """模型对当前 Evidence 内容充分性的结构化判断，不承载计划节点。"""
 
     status: SemanticAssessmentStatus
     supported_findings: tuple[ResearchReportFinding, ...] = ()
     resolved_gaps: tuple[ResearchGapResolution, ...] = ()
     unresolved_gaps: tuple[ResearchGap, ...] = ()
-    proposed_plan_additions: tuple[ResearchPlanAddition, ...] = ()
     limitations: tuple[str, ...] = ()
 
     @model_validator(mode="after")
@@ -1576,30 +1575,18 @@ class SemanticAssessment(_ContractModel):
         _unique(resolved_gap_ids, "RESEARCH_AGENT_RESOLVED_GAP_DUPLICATED")
         if set(gap_ids) & set(resolved_gap_ids):
             raise ValueError("RESEARCH_AGENT_GAP_STATE_CONFLICT")
-        addition_ids = tuple(item.addition_id for item in self.proposed_plan_additions)
-        _unique(addition_ids, "RESEARCH_AGENT_PLAN_ADDITION_DUPLICATED")
-        known_gaps = set(gap_ids)
-        if any(
-            item.gap_id is not None and item.gap_id not in known_gaps
-            for item in self.proposed_plan_additions
-        ):
-            raise ValueError("RESEARCH_AGENT_PLAN_ADDITION_GAP_NOT_FOUND")
         if any(not item.strip() for item in self.limitations):
             raise ValueError("RESEARCH_AGENT_ASSESSMENT_LIMITATION_INVALID")
 
         if self.status is SemanticAssessmentStatus.ANSWERABLE:
-            if self.unresolved_gaps or self.proposed_plan_additions:
+            if self.unresolved_gaps:
                 raise ValueError("RESEARCH_AGENT_ANSWERABLE_GAP_FORBIDDEN")
         elif self.status is SemanticAssessmentStatus.EXPLICIT_GAP:
             if not self.unresolved_gaps:
                 raise ValueError("RESEARCH_AGENT_EXPLICIT_GAP_REQUIRED")
-            if not self.proposed_plan_additions:
-                raise ValueError("RESEARCH_AGENT_EXPLICIT_GAP_PLAN_REQUIRED")
         else:
             if not self.unresolved_gaps:
                 raise ValueError("RESEARCH_AGENT_TERMINAL_GAP_REQUIRED")
-            if self.proposed_plan_additions:
-                raise ValueError("RESEARCH_AGENT_TERMINAL_PLAN_FORBIDDEN")
             if not self.limitations:
                 raise ValueError("RESEARCH_AGENT_TERMINAL_LIMITATION_REQUIRED")
         return self
@@ -1901,7 +1888,7 @@ __all__ = [
     "ResearchLogicalColumn",
     "ResearchOrder",
     "ResearchOrderDirection",
-    "ResearchPlanAddition",
+    "ResearchPlanNode",
     "ResearchPremise",
     "ResearchPremiseType",
     "ResearchQueryComparison",

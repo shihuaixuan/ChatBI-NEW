@@ -793,3 +793,47 @@ def test_builder_ref_semantics_follow_production_asset_first_canon() -> None:
         None,
     )
     assert resolved is sentinel
+
+
+def test_embedded_execution_restores_outer_plan_state() -> None:
+    """内部查询执行计划不能读取、覆盖或持久化外层 Planner DAG。"""
+
+    outer_plan = {"plan_id": "research-run-1", "nodes": [{"id": "query-1"}]}
+    outer_analysis_plan = {"id": "outer-analysis-plan"}
+    context = SimpleNamespace(
+        context=SimpleNamespace(
+            state={
+                "plan_execution_state": outer_plan,
+                "analysis_plan": outer_analysis_plan,
+                "result_sets": {},
+            }
+        )
+    )
+
+    class EmbeddedExecutionState:
+        def __init__(self, ctx):
+            self.context = ctx.context
+
+    class ExecutionService:
+        def execute(self, state, spec, *, plan_id):  # noqa: ARG002
+            assert "plan_execution_state" not in state.context.state
+            assert "analysis_plan" not in state.context.state
+            state.context.state["plan_execution_state"] = {
+                "plan_id": plan_id,
+                "nodes": [{"id": "q:single"}],
+            }
+            state.context.state["analysis_plan"] = {"id": plan_id}
+            state.context.state["result_sets"]["result-1"] = {"id": "result-1"}
+            if False:
+                yield None
+            return "done"
+
+    runtime = SemanticQueryRuntime(
+        ExecutionService(),
+        execution_state_factory=EmbeddedExecutionState,
+    )
+
+    assert runtime._execute_spec(context, object(), "research-query-1") == "done"
+    assert context.context.state["plan_execution_state"] is outer_plan
+    assert context.context.state["analysis_plan"] is outer_analysis_plan
+    assert context.context.state["result_sets"] == {"result-1": {"id": "result-1"}}

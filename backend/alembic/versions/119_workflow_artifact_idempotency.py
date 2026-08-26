@@ -4,7 +4,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "119_workflow_artifact_idempotency"
+revision = "119_artifact_idempotency"
 down_revision = "118_semantic_contract_versions"
 branch_labels = None
 depends_on = None

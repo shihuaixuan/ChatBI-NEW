@@ -1,6 +1,6 @@
-"""Research Agent 主路径编排适配器（doc38 阶段 8 起唯一 Research 引擎）。
+"""统一 Plan-and-Solve Agent 主路径编排适配器。
 
-把 :class:`ResearchAgentHarness` 接入 RunOrchestrator 分发。适配器只做
+把 :class:`PlanAndSolveRuntime` 接入 RunOrchestrator。适配器只做
 四件事：
 
 1. 读取路由期冻结的新契约 Requirement（``routing_freeze`` 直接产出，
@@ -30,8 +30,8 @@ from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.models.dto.research_agent import ResearchAgentRequirement
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
-from apps.chatbi.orchestration.pipeline.research_agent import (
-    ResearchAgentHarness,
+from apps.chatbi.orchestration.pipeline.plan_and_solve_runtime import (
+    PlanAndSolveRuntime,
     ResearchAgentRunOutcome,
 )
 from apps.chatbi.services.research.routing_freeze import (
@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ResearchAgentPipelineDependencies:
+class PlanAndSolvePipelineDependencies:
     """主路径 Harness 所需的请求作用域服务。
 
     与 shadow 栈逐次重建不同，这里的会话/注册表/生命周期/事件发布都是
@@ -70,10 +70,10 @@ class ResearchAgentPipelineDependencies:
     compute_engine_factory: Callable[[], Any]
 
 
-class ResearchAgentPipeline:
-    """新契约 Research Agent 的主路径编排适配器。"""
+class PlanAndSolvePipeline:
+    """统一 Plan-and-Solve Runtime 的主路径编排适配器。"""
 
-    def __init__(self, dependencies: ResearchAgentPipelineDependencies) -> None:
+    def __init__(self, dependencies: PlanAndSolvePipelineDependencies) -> None:
         self._deps = dependencies
 
     def run(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
@@ -277,11 +277,11 @@ class ResearchAgentPipeline:
         self,
         state: AgentRuntimeState,
         context_state_overlay: dict[str, Any] | None = None,
-    ) -> ResearchAgentHarness:
+    ) -> PlanAndSolveRuntime:
         """组装研究循环宿主；``context_state_overlay`` 携带路由期冻结的
         上层上下文（semantic_scope 等），供工具上下文初始化时合并。"""
         deps = self._deps
-        return ResearchAgentHarness(
+        return PlanAndSolveRuntime(
             session=deps.session,
             config=deps.config,
             run_row=state.run,
@@ -356,6 +356,6 @@ class ResearchAgentPipeline:
         }
 
 __all__ = [
-    "ResearchAgentPipeline",
-    "ResearchAgentPipelineDependencies",
+    "PlanAndSolvePipeline",
+    "PlanAndSolvePipelineDependencies",
 ]

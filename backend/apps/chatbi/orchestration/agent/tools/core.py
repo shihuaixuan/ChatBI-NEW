@@ -80,7 +80,8 @@ class FinishTool(AgentTool):
             # legacy ReAct 保持原双模型收口；Composer 只对显式新模式或直接注入测试生效。
             use_composer = self._answer_composer is not None and (
                 "execution_mode" not in ctx.state
-                or ctx.state.get("execution_mode") in {"fast", "plan", "research"}
+                or ctx.state.get("execution_mode")
+                in {"agent", "fast", "plan", "research"}
             )
             if use_composer:
                 composed = self._answer_composer.compose(

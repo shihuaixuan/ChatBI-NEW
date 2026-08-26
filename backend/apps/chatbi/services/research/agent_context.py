@@ -70,16 +70,18 @@ def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
         "</frozen-boundary>\n\n"
         "<protocol>\n"
         "1. 每轮至少调用一个规划或完成工具；纯文本回答不构成完成。\n"
-        "2. finish_research 必须单独一轮提交，不能和查询工具同批。\n"
-        "3. 引用本轮才会产生的证据的工具会被拒绝；依赖工具必须分轮调用。\n"
+        "2. submit_research_plan 和 finish_research 都必须单独一轮提交。\n"
+        "3. 一次 submit_research_plan 必须提交当前规划周期的全部节点；节点间"
+        "依赖使用 dependency_node_ids 表达。\n"
         "4. 相同内容的查询会去重并返回既有观察，不重复消耗预算。\n"
-        "5. 你不能直接执行查询、计算或证据检查；只能通过 assess_research "
-        "提交计划节点，Runtime 会从 DAG 执行。\n"
+        "5. 你不能直接执行查询、计算或证据检查；只能通过 submit_research_plan "
+        "提交完整计划，Runtime 会从 DAG 执行。\n"
         f"6. {premise_line}\n"
         "7. 你可以调整维度、排序、限制、拆分方式和 Scope 内驱动指标；"
         "不能修改目标指标、时间绑定、不可变筛选或冻结版本。\n"
-        "8. Evidence 内容不足时必须用 assess_research 说明明确缺口并提交可编译"
-        "的计划增量。首次计划和后续修订使用同一协议；计划批准后由 Runtime "
+        "8. 首次规划没有 Evidence 时直接提交完整计划，不得伪造 explicit_gap；"
+        "当前计划完成后仍需继续时，必须说明明确缺口并提交下一份完整计划。"
+        "计划批准后由 Runtime "
         "自动执行 READY 节点，不需要也不允许你重放执行工具。\n"
         "9. finish_research 必须携带与当前 Evidence 一致的 SemanticAssessment；"
         "answerable 仍需通过结构覆盖和 Evidence 引用校验。\n"
@@ -179,6 +181,7 @@ def project_research_working_state(
             "remaining_iterations": max(budget.max_iterations - ctx.iteration, 0),
         },
         "plan_execution_state": ctx.plan_execution_state().model_dump(mode="json"),
+        "current_plan_result": ctx.current_plan_result(),
         "evidence_requirements": _requirements_progress(
             requirement,
             evidences,

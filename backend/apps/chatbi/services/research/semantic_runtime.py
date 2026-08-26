@@ -35,6 +35,7 @@ from apps.chatbi.services.execution.analysis_execution import (
     AnalysisExecutionService,
     PlanPipelineError,
 )
+from apps.chatbi.services.planning.execution_state import PLAN_EXECUTION_STATE_KEY
 from apps.chatbi.services.research.semantic_query_builder import SemanticQueryBuilder
 from apps.conversation import ChatRecordExecutionType
 from apps.semantic.errors import SemanticForbiddenError, SemanticValidationError
@@ -376,14 +377,36 @@ class SemanticQueryRuntime:
             if self._execution_state_factory is not None
             else context
         )
-        result = self._execution_service.execute(execution_state, spec, plan_id=plan_id)
-        if not isinstance(result, Generator):
-            return result
-        while True:
-            try:
-                next(result)
-            except StopIteration as completed:
-                return completed.value
+        # ResearchExecutionState 是外层 Plan 节点的内部执行投影。AnalysisExecutionService
+        # 会生成确定性的查询执行计划，但该计划不拥有 Run 的根计划状态；执行期间临时
+        # 移开根计划键，结束后无论成功失败都原样恢复，避免内部计划覆盖外层 Planner DAG。
+        projected = execution_state is not context
+        state = getattr(getattr(execution_state, "context", None), "state", None)
+        missing = object()
+        preserved: dict[str, Any] = {}
+        if projected and isinstance(state, dict):
+            for key in ("analysis_plan", PLAN_EXECUTION_STATE_KEY):
+                preserved[key] = state.pop(key, missing)
+        try:
+            result = self._execution_service.execute(
+                execution_state,
+                spec,
+                plan_id=plan_id,
+            )
+            if not isinstance(result, Generator):
+                return result
+            while True:
+                try:
+                    next(result)
+                except StopIteration as completed:
+                    return completed.value
+        finally:
+            if projected and isinstance(state, dict):
+                for key, value in preserved.items():
+                    if value is missing:
+                        state.pop(key, None)
+                    else:
+                        state[key] = value
 
     def _validate_runtime_boundary(
         self,
@@ -1001,7 +1024,15 @@ def semantic_query_plan_id(query: ResearchSemanticQuery) -> str:
     return SemanticQueryRuntime._plan_id(query)
 
 
-_STATE_EXCLUDED_KEYS = frozenset({"full_data", "tool_offloads", "semantic_schema"})
+_STATE_EXCLUDED_KEYS = frozenset(
+    {
+        "analysis_plan",
+        PLAN_EXECUTION_STATE_KEY,
+        "full_data",
+        "tool_offloads",
+        "semantic_schema",
+    }
+)
 
 
 class _ExecutionDeadlineBudget:

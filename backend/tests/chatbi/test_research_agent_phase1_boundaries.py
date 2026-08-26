@@ -51,6 +51,8 @@ def test_removal_boundary_dependency_guard_passes() -> None:
         "apps.chatbi.services.research.rollout",
         "apps.chatbi.services.research.requirements",
         "apps.chatbi.orchestration.pipeline.research",
+        "apps.chatbi.orchestration.pipeline.research_agent",
+        "apps.chatbi.orchestration.pipeline.research_agent_pipeline",
         "apps.chatbi.adapters.prompts.research_policy",
     ],
 )

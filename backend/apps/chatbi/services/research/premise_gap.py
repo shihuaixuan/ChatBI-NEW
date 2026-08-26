@@ -12,8 +12,9 @@ from typing import Any, Literal
 from apps.chatbi.models.dto.research_agent import (
     ResearchAgentRequirement,
     ResearchEvidence,
-    ResearchPlanAddition,
+    ResearchPlanNode,
     SemanticAssessment,
+    SemanticAssessmentStatus,
 )
 from apps.chatbi.services.research.agent_context import evaluate_premise_verdict
 
@@ -36,14 +37,24 @@ def premise_gap_id(requirement: ResearchAgentRequirement) -> str | None:
 def validate_premise_gap_assessment(
     requirement: ResearchAgentRequirement,
     evidences: Sequence[ResearchEvidence],
-    assessment: SemanticAssessment,
+    assessment: SemanticAssessment | None,
     *,
     current_result: dict[str, Any] | None,
+    plan_nodes: Sequence[ResearchPlanNode] = (),
 ) -> dict[str, Any] | None:
     """校验前提 Gap 的解决方式，返回需要持久化的裁决结果。"""
 
     gap_id = premise_gap_id(requirement)
     premise = requirement.premise_to_verify
+    if assessment is None:
+        if premise is None or gap_id is None or current_result is not None:
+            return None
+        if not any(
+            _plan_node_can_address_premise(requirement, evidences, item)
+            for item in plan_nodes
+        ):
+            raise ValueError("RESEARCH_AGENT_PREMISE_GAP_PLAN_INVALID")
+        return None
     if any(item.gap_id != gap_id for item in assessment.resolved_gaps):
         raise ValueError("RESEARCH_AGENT_RESOLVED_GAP_NOT_FOUND")
     if premise is None or gap_id is None or current_result is not None:
@@ -60,16 +71,16 @@ def validate_premise_gap_assessment(
     if resolution is None:
         if unresolved is None:
             raise ValueError("RESEARCH_AGENT_PREMISE_GAP_MUST_BE_HANDLED")
-        additions = tuple(
-            item
-            for item in assessment.proposed_plan_additions
-            if item.gap_id == gap_id
+        if assessment.status is not SemanticAssessmentStatus.EXPLICIT_GAP:
+            return None
+        relevant_nodes = tuple(
+            item for item in plan_nodes if item.gap_id in {None, gap_id}
         )
-        if not additions:
+        if not relevant_nodes:
             raise ValueError("RESEARCH_AGENT_PREMISE_GAP_PLAN_REQUIRED")
         if not any(
-            _addition_can_address_premise(requirement, evidences, item)
-            for item in additions
+            _plan_node_can_address_premise(requirement, evidences, item)
+            for item in relevant_nodes
         ):
             raise ValueError("RESEARCH_AGENT_PREMISE_GAP_PLAN_INVALID")
         return None
@@ -106,18 +117,18 @@ def validate_premise_gap_assessment(
     }
 
 
-def _addition_can_address_premise(
+def _plan_node_can_address_premise(
     requirement: ResearchAgentRequirement,
     evidences: Sequence[ResearchEvidence],
-    addition: ResearchPlanAddition,
+    plan_node: ResearchPlanNode,
 ) -> bool:
-    """判断计划增量是否具备确认前提所需的最小逻辑输入。"""
+    """判断计划步骤是否具备确认前提所需的最小逻辑输入。"""
 
     premise = requirement.premise_to_verify
     if premise is None:
         return False
-    arguments = addition.arguments
-    if addition.tool_name == "query_semantic_data":
+    arguments = plan_node.arguments
+    if plan_node.tool_name == "query_semantic_data":
         metrics = set(arguments.get("metrics") or ())
         time_roles = set(arguments.get("time_ranges") or ())
         return (
@@ -127,7 +138,7 @@ def _addition_can_address_premise(
         )
     referenced_ids = (
         (arguments.get("evidence_id"),)
-        if addition.tool_name == "inspect_evidence"
+        if plan_node.tool_name == "inspect_evidence"
         else tuple(arguments.get("input_evidence_ids") or ())
     )
     evidence_by_id = {item.evidence_id: item for item in evidences}

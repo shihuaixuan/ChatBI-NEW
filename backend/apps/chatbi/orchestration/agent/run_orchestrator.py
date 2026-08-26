@@ -34,8 +34,8 @@ from apps.chatbi.orchestration.pipeline.mode_router import (
     ExecutionRequirementBuildError,
     ExecutionRequirementInput,
 )
-from apps.chatbi.orchestration.pipeline.research_agent_pipeline import (
-    ResearchAgentPipeline,
+from apps.chatbi.orchestration.pipeline.plan_and_solve_pipeline import (
+    PlanAndSolvePipeline,
 )
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.event import EventPublisher, RenderEvent
@@ -63,7 +63,7 @@ class RunOrchestrator:
         lifecycle: AgentLifecycle,
         input_preparer: AgentInputPreparer,
         state_factory: AgentRuntimeStateFactory,
-        research_agent_pipeline: ResearchAgentPipeline | None = None,
+        plan_and_solve_pipeline: PlanAndSolvePipeline | None = None,
         execution_requirement_builder: ExecutionRequirementBuilder | None = None,
     ) -> None:
         self.session = session
@@ -74,7 +74,7 @@ class RunOrchestrator:
         self.state_factory = state_factory
         # Agent Runtime 是唯一分析引擎；为空表示本进程未装配，
         # 分发时显式失败，不存在旧管道回退目标。
-        self.research_agent_pipeline = research_agent_pipeline
+        self.plan_and_solve_pipeline = plan_and_solve_pipeline
         if execution_requirement_builder is None:
             raise ValueError("AGENT_EXECUTION_REQUIREMENT_BUILDER_REQUIRED")
         self.execution_requirement_builder = execution_requirement_builder
@@ -138,13 +138,14 @@ class RunOrchestrator:
                 return
             # 3. 冻结统一 Agent 输入并进入同一个 Plan-and-Solve 循环。
             self._build_execution_requirement(state)
+            state.context.state["execution_mode"] = "agent"
             agent_run_repository.update_run(
                 self.session,
                 state.run,
-                execution_mode="research",
+                execution_mode="agent",
             )
             self.session.commit()
-            yield from self._dispatch_research(state)
+            yield from self._dispatch_plan_and_solve(state)
         except ExecutionRequirementBuildError as exc:
             yield from self._finalize_mode_routing_error(state, exc)
         except QuestionUnderstandingError as exc:
@@ -205,8 +206,8 @@ class RunOrchestrator:
                 error=run.error,
             )
 
-    def _build_execution_requirement(self, state: AgentRuntimeState) -> str:
-        """冻结执行输入，并返回迁移期执行类别。"""
+    def _build_execution_requirement(self, state: AgentRuntimeState) -> None:
+        """冻结统一 Agent 执行输入。"""
 
         semantic_parse_payload = state.context.state.get("semantic_parse")
         candidate_groups = state.context.state.get("candidate_groups")
@@ -279,28 +280,23 @@ class RunOrchestrator:
             )
         )
         state.context.state["execution_requirement"] = result
-        route_mode = str(result["route"]["mode"])
-        return route_mode
 
-    def _select_mode(self, state: AgentRuntimeState) -> str:
-        """兼容旧测试入口；生产流程不再执行模式选择。"""
+    def _dispatch_plan_and_solve(
+        self,
+        state: AgentRuntimeState,
+    ) -> Iterator[RenderEvent]:
+        """进入统一 Plan-and-Solve Runtime；首次运行与恢复共用。"""
 
-        return self._build_execution_requirement(state)
-
-    def _dispatch_research(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
-        """分发 Research 执行；首次运行与澄清恢复共用。
-        """
-
-        if self.research_agent_pipeline is None:
+        if self.plan_and_solve_pipeline is None:
             yield from self.lifecycle.fail(
                 state,
-                "Research Agent 编排器未装配。",
+                "Plan-and-Solve Agent Runtime 未装配。",
                 AgentErrorClass.PLAN_INVALID.value,
-                error_details={"code": "RESEARCH_AGENT_PIPELINE_NOT_ASSEMBLED"},
+                error_details={"code": "PLAN_AND_SOLVE_RUNTIME_NOT_ASSEMBLED"},
             )
             return
         try:
-            yield from self.research_agent_pipeline.run(state)
+            yield from self.plan_and_solve_pipeline.run(state)
         except ResearchPipelineError as exc:
             yield from self.lifecycle.fail(
                 state,
@@ -399,13 +395,14 @@ class RunOrchestrator:
                 yield clarification_event
                 return
             self._build_execution_requirement(state)
+            state.context.state["execution_mode"] = "agent"
             agent_run_repository.update_run(
                 self.session,
                 state.run,
-                execution_mode="research",
+                execution_mode="agent",
             )
             self.session.commit()
-            yield from self._dispatch_research(state)
+            yield from self._dispatch_plan_and_solve(state)
         except ExecutionRequirementBuildError as exc:
             yield from self._finalize_mode_routing_error(state, exc)
         except QuestionUnderstandingError as exc:

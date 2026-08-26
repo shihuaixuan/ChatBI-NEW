@@ -29,7 +29,7 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchCompletion,
     ResearchEvidence,
     ResearchHypothesisAssessment,
-    ResearchPlanAddition,
+    ResearchPlanNode,
     SemanticAssessment,
     ToolObservation,
 )
@@ -100,6 +100,20 @@ class ResearchToolContext:
     @property
     def iteration(self) -> int:
         return int(self._state().get("iteration") or 0)
+
+    @property
+    def evidence_iteration(self) -> int:
+        """Evidence DAG 使用的拓扑层级，与 Plan-and-Solve 轮次分开。"""
+
+        return int(self._state().get("evidence_iteration") or 0)
+
+    def next_step_index(self) -> int:
+        """分配数据库 Step 唯一序号，不改变 Plan-and-Solve 业务迭代。"""
+
+        current = int(self._state().get("step_index") or self.iteration)
+        current += 1
+        self._state()["step_index"] = current
+        return current
 
     @property
     def finished(self) -> bool:
@@ -305,11 +319,27 @@ class ResearchToolContext:
     # 迭代推进与终态
     # ------------------------------------------------------------------ #
 
-    def advance_iteration(self, minimum: int = 0) -> int:
-        """把当前迭代推进到至少 ``minimum``，返回派生证据应使用的迭代号。"""
+    def advance_iteration(self, completed_revision: int) -> int:
+        """在指定 revision 完整 Solve 后推进业务迭代。"""
 
-        target = max(self.iteration, minimum)
-        self._state()["iteration"] = target
+        current_revision = self.plan_execution_state().revision
+        if completed_revision != current_revision:
+            raise ValueError("RESEARCH_PLAN_REVISION_NOT_CURRENT")
+        if not self.current_plan_complete():
+            raise ValueError("RESEARCH_CURRENT_PLAN_NOT_COMPLETED")
+        if self.iteration == completed_revision:
+            # 恢复时可能已经保存了迭代推进结果，重复确认必须保持幂等。
+            return self.iteration
+        if self.iteration != completed_revision - 1:
+            raise ValueError("RESEARCH_PLAN_ITERATION_OUT_OF_SYNC")
+        self._state()["iteration"] = completed_revision
+        return completed_revision
+
+    def advance_evidence_iteration(self, minimum: int = 0) -> int:
+        """推进 Evidence DAG 层级，不消耗 Plan-and-Solve 迭代预算。"""
+
+        target = max(self.evidence_iteration, minimum)
+        self._state()["evidence_iteration"] = target
         return target
 
     def finish(self, completion: ResearchCompletion) -> None:
@@ -331,28 +361,44 @@ class ResearchToolContext:
         return SemanticAssessment.model_validate(payload)
 
     def set_semantic_assessment(self, assessment: SemanticAssessment) -> None:
-        """保存模型评估，并将计划增量直接写入规范 DAG。"""
+        """保存对当前 Evidence 集合有效的内容充分性评估。"""
 
-        if assessment.proposed_plan_additions:
-            self.append_plan_additions(assessment.proposed_plan_additions)
         self._state()["semantic_assessment"] = {
             "evidence_ids": sorted(self.known_evidence_ids()),
             "assessment": assessment.model_dump(mode="json"),
         }
 
-    def append_plan_additions(
+    def submit_plan(
         self,
-        additions: Sequence[ResearchPlanAddition],
+        plan_nodes: Sequence[ResearchPlanNode],
     ) -> None:
-        """把模型生成的首次计划或后续增量追加到同一个规范 DAG。"""
+        """把 Planner 本轮生成的完整计划一次性写入下一个 DAG revision。"""
 
+        if self.iteration >= self.budget.max_iterations:
+            raise ValueError("RESEARCH_PLAN_ITERATION_BUDGET_EXHAUSTED")
         plan_state = self.plan_execution_state()
+        current_nodes = tuple(
+            node
+            for node in plan_state.nodes
+            if node.plan_revision == plan_state.revision
+        )
+        terminal_statuses = {
+            PlanNodeExecutionStatus.SUCCEEDED,
+            PlanNodeExecutionStatus.FAILED,
+            PlanNodeExecutionStatus.SKIPPED_DEPENDENCY,
+            PlanNodeExecutionStatus.CANCELLED,
+        }
+        if current_nodes and any(
+            plan_state.task_states[node.id].status not in terminal_statuses
+            for node in current_nodes
+        ):
+            raise ValueError("RESEARCH_CURRENT_PLAN_NOT_COMPLETED")
         known_node_ids = {node.id for node in plan_state.nodes}
-        addition_ids = {item.addition_id for item in additions}
+        submitted_node_ids = {item.node_id for item in plan_nodes}
         nodes: list[UnifiedPlanNode] = []
-        for item in additions:
+        for item in plan_nodes:
             dependencies = item.dependency_node_ids
-            if not set(dependencies) <= known_node_ids | addition_ids:
+            if not set(dependencies) <= known_node_ids | submitted_node_ids:
                 raise ValueError("RESEARCH_PLAN_DEPENDENCY_UNKNOWN")
             task_type: Literal["query", "compute", "inspect"]
             if item.tool_name == "query_semantic_data":
@@ -363,25 +409,15 @@ class ResearchToolContext:
                 task_type = "inspect"
             nodes.append(
                 UnifiedPlanNode(
-                    id=item.addition_id,
-                    description=(
-                        item.description
-                        or str(item.arguments.get("purpose") or item.addition_id)
-                    ),
+                    id=item.node_id,
+                    description=item.description,
                     task_type=task_type,
                     dependencies=dependencies,
                     tool_name=item.tool_name,
                     gap_id=item.gap_id,
                     arguments=dict(item.arguments),
                     output_type=item.output_type,
-                    expected_output=(
-                        item.expected_output
-                        or {
-                            "query": "返回受治理查询 Evidence",
-                            "compute": "返回确定性计算 Evidence",
-                            "inspect": "返回 Evidence 检查结果",
-                        }[task_type]
-                    ),
+                    expected_output=item.expected_output,
                 )
             )
         self._save_plan_execution_state(
@@ -402,6 +438,72 @@ class ResearchToolContext:
         if loaded is None:
             raise TypeError("RESEARCH_PLAN_EXECUTION_STATE_REQUIRED")
         return loaded
+
+    def current_plan_nodes(self) -> tuple[UnifiedPlanNode, ...]:
+        """返回当前 revision 的完整节点集合。"""
+
+        plan = self.plan_execution_state()
+        return tuple(
+            node for node in plan.nodes if node.plan_revision == plan.revision
+        )
+
+    def current_plan_complete(self) -> bool:
+        """当前 revision 的全部节点进入终态后才算完整 Solve。"""
+
+        nodes = self.current_plan_nodes()
+        if not nodes:
+            return False
+        plan = self.plan_execution_state()
+        terminal_statuses = {
+            PlanNodeExecutionStatus.SUCCEEDED,
+            PlanNodeExecutionStatus.FAILED,
+            PlanNodeExecutionStatus.SKIPPED_DEPENDENCY,
+            PlanNodeExecutionStatus.CANCELLED,
+        }
+        return all(
+            plan.task_states[node.id].status in terminal_statuses for node in nodes
+        )
+
+    def current_plan_result(self) -> dict[str, Any] | None:
+        """投影当前 revision 的完整执行结果，供下一轮 Planner 使用。"""
+
+        nodes = self.current_plan_nodes()
+        if not nodes:
+            return None
+        plan = self.plan_execution_state()
+        states = tuple(plan.task_states[node.id] for node in nodes)
+        if any(state.status is PlanNodeExecutionStatus.CANCELLED for state in states):
+            status = "cancelled"
+        elif any(
+            state.status
+            in {
+                PlanNodeExecutionStatus.FAILED,
+                PlanNodeExecutionStatus.SKIPPED_DEPENDENCY,
+            }
+            for state in states
+        ):
+            status = "completed_with_failures"
+        elif all(
+            state.status is PlanNodeExecutionStatus.SUCCEEDED for state in states
+        ):
+            status = "succeeded"
+        else:
+            status = "solving"
+        return {
+            "revision": plan.revision,
+            "status": status,
+            "nodes": [
+                {
+                    "node_id": node.id,
+                    "description": node.description,
+                    "task_type": node.task_type,
+                    "status": plan.task_states[node.id].status.value,
+                    "evidence_ids": list(plan.task_states[node.id].evidence_ids),
+                    "error_code": plan.task_states[node.id].error_code,
+                }
+                for node in nodes
+            ],
+        }
 
     def mark_plan_node(
         self,
@@ -430,7 +532,7 @@ class ResearchToolContext:
         node_by_id = {node.id: node for node in plan.nodes}
         changed = plan
         ready: list[UnifiedPlanNode] = []
-        for node in plan.nodes:
+        for node in self.current_plan_nodes():
             task_state = changed.task_states[node.id]
             if task_state.status is not PlanNodeExecutionStatus.PENDING:
                 continue

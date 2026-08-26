@@ -7,9 +7,6 @@ from typing import Any
 
 from sqlmodel import Session
 
-from apps.chatbi.adapters.prompts.limited_multistep import (
-    DefaultLimitedMultiStepPromptBuilder,
-)
 from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.composition import (
     build_agent_event_publisher,
@@ -31,9 +28,9 @@ from apps.chatbi.orchestration.agent.tools.core import FinishTool
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.chatbi.orchestration.agent.tools.temporal import ParseTimeRangeTool
 from apps.chatbi.orchestration.pipeline.mode_router import ExecutionRequirementBuilder
-from apps.chatbi.orchestration.pipeline.research_agent_pipeline import (
-    ResearchAgentPipeline,
-    ResearchAgentPipelineDependencies,
+from apps.chatbi.orchestration.pipeline.plan_and_solve_pipeline import (
+    PlanAndSolvePipeline,
+    PlanAndSolvePipelineDependencies,
 )
 from apps.chatbi.services.computation import ComputeEngine
 from apps.chatbi.services.execution import (
@@ -43,10 +40,7 @@ from apps.chatbi.services.execution import (
 )
 from apps.chatbi.services.generation.agent_finalization import AgentFinalizationService
 from apps.chatbi.services.generation.answer_composer import AnswerComposer
-from apps.chatbi.services.planning import (
-    LimitedMultiStepDecomposer,
-    PhysicalSchemaService,
-)
+from apps.chatbi.services.planning import PhysicalSchemaService
 from apps.chatbi.services.understanding import SemanticParseService
 from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
@@ -136,7 +130,6 @@ def build_run_orchestrator(
     finalization_service: AgentFinalizationService | None = None,
     answer_composer: AnswerComposer | None = None,
     memory_service: MemoryService | None = None,
-    limited_multistep_decomposer: LimitedMultiStepDecomposer | None = None,
 ) -> RunOrchestrator:
     """构造依赖完整的 RunOrchestrator；生产入口和测试统一使用此函数。"""
 
@@ -176,15 +169,8 @@ def build_run_orchestrator(
     resolved_sql_example_query_service = (
         sql_example_query_service or build_sql_example_query_service(session)
     )
-    # 重写、语义解析、回答和计划阶段共享同一个结构化模型服务。
+    # 重写、语义解析和回答阶段共享同一个结构化模型服务。
     model_service = build_question_model_service(enforce_json=True)
-    resolved_limited_multistep_decomposer = (
-        limited_multistep_decomposer
-        or LimitedMultiStepDecomposer(
-            model_service,
-            DefaultLimitedMultiStepPromptBuilder(),
-        )
-    )
     if finalization_service is None:
         resolved_finalization_service = AgentFinalizationService(model_service)
         resolved_answer_composer: AnswerComposer | None = answer_composer or AnswerComposer(
@@ -258,10 +244,9 @@ def build_run_orchestrator(
         state_factory=state_factory,
         execution_requirement_builder=ExecutionRequirementBuilder(
             resolved_semantic_schema_provider,
-            resolved_limited_multistep_decomposer,
         ),
         # 所有分析请求无条件进入同一个 Plan-and-Solve Agent Runtime。
-        research_agent_pipeline=build_research_agent_pipeline(
+        plan_and_solve_pipeline=build_plan_and_solve_pipeline(
             session,
             resolved_config,
             lifecycle=lifecycle,
@@ -274,7 +259,7 @@ def build_run_orchestrator(
     )
 
 
-def build_research_agent_pipeline(
+def build_plan_and_solve_pipeline(
     session: Any,
     config: AgentConfig,
     *,
@@ -284,8 +269,8 @@ def build_research_agent_pipeline(
     query_task_executor: QueryTaskExecutor,
     artifact_service: ResultArtifactService,
     recorder: AgentTraceRecorder | None = None,
-) -> ResearchAgentPipeline:
-    """装配主路径 Research Agent 管道（阶段 7.5 切流接线）。
+) -> PlanAndSolvePipeline:
+    """装配统一 Plan-and-Solve Agent Runtime。
 
     与 shadow 栈（逐次重建会话与服务）不同：复用请求作用域的会话、
     工具注册表和生命周期——主路径与用户可见执行共享同一事务边界，
@@ -320,8 +305,8 @@ def build_research_agent_pipeline(
             trace_recorder=resolved_recorder,
         )
     )
-    return ResearchAgentPipeline(
-        ResearchAgentPipelineDependencies(
+    return PlanAndSolvePipeline(
+        PlanAndSolvePipelineDependencies(
             config=config,
             session=session,
             lifecycle=lifecycle,
@@ -342,5 +327,5 @@ def build_research_agent_pipeline(
 __all__ = [
     "build_run_orchestrator",
     "build_agent_tool_registry",
-    "build_research_agent_pipeline",
+    "build_plan_and_solve_pipeline",
 ]

@@ -58,7 +58,7 @@ from apps.chatbi.services.planning.confidence import (
 from apps.chatbi.services.planning.execution_state import (
     PLAN_EXECUTION_STATE_KEY,
     PlanNodeExecutionStatus,
-    build_analysis_plan_execution_state,
+    ensure_analysis_plan_execution_state,
     load_plan_execution_state,
     transition_plan_node,
 )
@@ -174,21 +174,6 @@ class FastPipeline:
         )
         self._session.commit()
 
-        self._transition_plan_node(
-            state, query_task.id, PlanNodeExecutionStatus.RUNNING
-        )
-        yield self._events.task_started(
-            run_id,
-            {
-                "record_id": state.record.id,
-                "run_id": run_id,
-                "plan_id": plan_id,
-                "task_id": query_task.id,
-                "status": "running",
-            },
-        )
-        self._session.commit()
-
         # plan/validate：严格模式由语义计划指纹证明，迁移期模式由编译工具复用既有校验。
         compiled_result = self._call_tool(state, "compile_semantic_sql", {})
         compiled = compiled_result.data
@@ -228,6 +213,20 @@ class FastPipeline:
         self._session.commit()
 
         self._call_tool(state, "validate_sql", {"sql": str(compiled_payload["sql"])})
+        self._transition_plan_node(
+            state, query_task.id, PlanNodeExecutionStatus.RUNNING
+        )
+        yield self._events.task_started(
+            run_id,
+            {
+                "record_id": state.record.id,
+                "run_id": run_id,
+                "plan_id": plan_id,
+                "task_id": query_task.id,
+                "status": "running",
+            },
+        )
+        self._session.commit()
         state.context.state["result_node_id"] = query_task.id
         self._call_tool(
             state,
@@ -244,6 +243,11 @@ class FastPipeline:
             state,
             query_task.id,
             PlanNodeExecutionStatus.SUCCEEDED,
+            evidence_ids=tuple(
+                evidence.evidence_id
+                for evidence in EvidenceRegistry(state.context.state).evidences()
+                if evidence.plan_id == plan_id and evidence.node_id == query_task.id
+            ),
         )
         yield self._events.task_finished(
             run_id,
@@ -855,10 +859,12 @@ class FastPipeline:
         state: AgentRuntimeState,
         plan: AnalysisPlan,
     ) -> None:
-        if isinstance(state.context.state.get(PLAN_EXECUTION_STATE_KEY), dict):
-            return
+        raw = state.context.state.get(PLAN_EXECUTION_STATE_KEY)
         state.context.state[PLAN_EXECUTION_STATE_KEY] = (
-            build_analysis_plan_execution_state(plan).model_dump(mode="json")
+            ensure_analysis_plan_execution_state(
+                raw if isinstance(raw, dict) else None,
+                plan,
+            ).model_dump(mode="json")
         )
 
     def _transition_plan_node(
@@ -866,6 +872,8 @@ class FastPipeline:
         state: AgentRuntimeState,
         node_id: str,
         status: PlanNodeExecutionStatus,
+        *,
+        evidence_ids: tuple[str, ...] = (),
     ) -> None:
         raw = state.context.state.get(PLAN_EXECUTION_STATE_KEY)
         if not isinstance(raw, dict):
@@ -874,7 +882,10 @@ class FastPipeline:
         if execution_state is None:
             raise FastPipelineError("FAST_PLAN_EXECUTION_STATE_REQUIRED")
         state.context.state[PLAN_EXECUTION_STATE_KEY] = transition_plan_node(
-            execution_state, node_id, status
+            execution_state,
+            node_id,
+            status,
+            evidence_ids=evidence_ids,
         ).model_dump(mode="json")
         self._persist_state(state)
 

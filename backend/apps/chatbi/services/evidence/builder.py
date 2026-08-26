@@ -59,7 +59,7 @@ def build_analysis_version_snapshot(
 def build_analysis_evidence(
     *,
     run_id: str,
-    mode: Literal["fast", "plan", "research"],
+    mode: Literal["agent", "fast", "plan", "research"],
     plan_id: str,
     node_id: str,
     tool_call_id: str,

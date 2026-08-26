@@ -41,14 +41,22 @@ from apps.chatbi.models.dto.research_agent import (
     ToolObservation,
 )
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
+from apps.chatbi.models.orm.agent_run import AgentExecutionMode
 from apps.chatbi.orchestration.agent.reasoning_profile import RESEARCH_PROFILE
+from apps.chatbi.orchestration.agent.run_orchestrator import RunOrchestrator
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.orchestration.agent.tools.research import build_research_tool_registry
+from apps.chatbi.orchestration.pipeline import (
+    ExecutionRequirementBuilder,
+    PlanAndSolvePipeline,
+    PlanAndSolveRuntime,
+)
 from apps.chatbi.services.planning.execution_state import (
     PlanNodeExecutionStatus,
     UnifiedPlanNode,
     build_plan_execution_state,
 )
+from apps.chatbi.services.research.premise_gap import validate_premise_gap_assessment
 from apps.chatbi.services.research.report_validator import validate_report_conclusions
 from apps.chatbi.services.research.routing_freeze import freeze_research_requirement
 from apps.chatbi.services.research.tool_context import ResearchToolContext
@@ -71,17 +79,28 @@ def _version() -> dict[str, object]:
     }
 
 
+def test_stage5_exposes_only_unified_plan_and_solve_entry() -> None:
+    """生产编排入口不再暴露模式路由或 Fast、Plan、Research 分发。"""
+
+    assert AgentExecutionMode.AGENT.value == "agent"
+    assert not hasattr(ExecutionRequirementBuilder, "route")
+    assert not hasattr(RunOrchestrator, "_select_mode")
+    assert hasattr(RunOrchestrator, "_dispatch_plan_and_solve")
+    assert PlanAndSolvePipeline.__name__ == "PlanAndSolvePipeline"
+    assert PlanAndSolveRuntime.__name__ == "PlanAndSolveRuntime"
+
+
 def test_semantic_assessment_four_states_are_mutually_constrained() -> None:
     answerable = SemanticAssessment(status="answerable")
     assert answerable.status.value == "answerable"
 
-    with pytest.raises(ValidationError, match="RESEARCH_AGENT_EXPLICIT_GAP_PLAN_REQUIRED"):
-        SemanticAssessment(
-            status="explicit_gap",
-            unresolved_gaps=(
-                {"gap_id": "gap-1", "description": "还缺一个维度拆解。"},
-            ),
-        )
+    explicit_gap = SemanticAssessment(
+        status="explicit_gap",
+        unresolved_gaps=(
+            {"gap_id": "gap-1", "description": "还缺一个维度拆解。"},
+        ),
+    )
+    assert explicit_gap.status.value == "explicit_gap"
     with pytest.raises(ValidationError, match="RESEARCH_AGENT_TERMINAL_LIMITATION_REQUIRED"):
         SemanticAssessment(
             status="no_new_direction",
@@ -96,15 +115,28 @@ def test_semantic_assessment_four_states_are_mutually_constrained() -> None:
                 {"gap_id": "gap-1", "description": "不应存在的缺口。"},
             ),
         )
+    with pytest.raises(ValidationError):
+        SemanticAssessment.model_validate(
+            {
+                "status": "explicit_gap",
+                "unresolved_gaps": (
+                    {"gap_id": "gap-1", "description": "还缺一个维度拆解。"},
+                ),
+                "proposed_plan_additions": (),
+            }
+        )
 
 
 def test_research_profile_exposes_planning_tools_only() -> None:
     """模型只能提交计划或完成判断，不能绕过 DAG 直接执行节点。"""
 
+    registry_names = set(build_research_tool_registry().names())
     assert RESEARCH_PROFILE.fixed_tool_allowlist == (
-        "assess_research",
+        "submit_research_plan",
         "finish_research",
     )
+    assert "submit_research_plan" in registry_names
+    assert "assess_research" not in registry_names
 
 
 def test_unified_plan_contract_supports_response_step() -> None:
@@ -205,7 +237,7 @@ def test_structural_coverage_state_must_match_missing_requirements() -> None:
         )
 
 
-def test_assess_research_compiles_and_freezes_plan_additions() -> None:
+def test_submit_research_plan_accepts_initial_plan_without_fake_gap() -> None:
     requirement = _governed_requirement()
     context = ResearchToolContext(
         context=AgentToolContext(
@@ -233,23 +265,18 @@ def test_assess_research_compiles_and_freezes_plan_additions() -> None:
     }
     result = registry.execute(
         ToolCall(
-            name="assess_research",
-            call_id="assessment-1",
+            name="submit_research_plan",
+            call_id="plan-1",
             args={
-                "assessment": {
-                    "status": "explicit_gap",
-                    "unresolved_gaps": (
-                        {"gap_id": "dimension-gap", "description": "缺少维度拆解"},
-                    ),
-                    "proposed_plan_additions": (
-                        {
-                            "addition_id": "dimension-query",
-                            "gap_id": "dimension-gap",
-                            "tool_name": "query_semantic_data",
-                            "arguments": arguments,
-                        },
-                    ),
-                }
+                "plan_nodes": (
+                    {
+                        "node_id": "dimension-query",
+                        "description": "补齐维度拆解",
+                        "tool_name": "query_semantic_data",
+                        "arguments": arguments,
+                        "expected_output": "返回受治理查询 Evidence",
+                    },
+                ),
             },
         ),
         context,
@@ -262,13 +289,13 @@ def test_assess_research_compiles_and_freezes_plan_additions() -> None:
     assert plan_state.nodes[-1].id == "dimension-query"
     assert plan_state.nodes[-1].plan_revision == 1
     assert plan_state.nodes[-1].description == "补齐维度拆解"
-    assert plan_state.nodes[-1].gap_id == "dimension-gap"
+    assert plan_state.nodes[-1].gap_id is None
     assert plan_state.nodes[-1].arguments == arguments
     assert plan_state.nodes[-1].output_type == "evidence"
     assert plan_state.nodes[-1].expected_output == "返回受治理查询 Evidence"
 
 
-def test_assess_research_rejects_out_of_scope_plan_addition() -> None:
+def test_submit_research_plan_rejects_out_of_scope_node() -> None:
     requirement = _governed_requirement()
     context = ResearchToolContext(
         context=AgentToolContext(
@@ -288,27 +315,22 @@ def test_assess_research_rejects_out_of_scope_plan_addition() -> None:
     context.bind_to_context()
     result = build_research_tool_registry().execute(
         ToolCall(
-            name="assess_research",
-            call_id="assessment-2",
+            name="submit_research_plan",
+            call_id="plan-2",
             args={
-                "assessment": {
-                    "status": "explicit_gap",
-                    "unresolved_gaps": (
-                        {"gap_id": "metric-gap", "description": "缺少目标外指标"},
-                    ),
-                    "proposed_plan_additions": (
-                        {
-                            "addition_id": "invalid-query",
-                            "gap_id": "metric-gap",
-                            "tool_name": "query_semantic_data",
-                            "arguments": {
-                                "metrics": ["METRIC:999:9"],
-                                "time_ranges": ["current"],
-                                "purpose": "尝试查询目标外指标",
-                            },
+                "plan_nodes": (
+                    {
+                        "node_id": "invalid-query",
+                        "description": "查询目标范围外的指标",
+                        "tool_name": "query_semantic_data",
+                        "arguments": {
+                            "metrics": ["METRIC:999:9"],
+                            "time_ranges": ["current"],
+                            "purpose": "尝试查询目标外指标",
                         },
-                    ),
-                }
+                        "expected_output": "返回目标外指标 Evidence",
+                    },
+                ),
             },
         ),
         context,
@@ -342,41 +364,37 @@ def test_plan_dependencies_drive_ready_nodes_without_evidence_id_guessing() -> N
     context.bind_to_context()
     result = build_research_tool_registry().execute(
         ToolCall(
-            name="assess_research",
-            call_id="assessment-dag",
+            name="submit_research_plan",
+            call_id="plan-dag",
             args={
-                "assessment": {
-                    "status": "explicit_gap",
-                    "unresolved_gaps": (
-                        {"gap_id": "calculation-gap", "description": "需要计算占比"},
-                    ),
-                    "proposed_plan_additions": (
-                        {
-                            "addition_id": "source-query",
-                            "gap_id": "calculation-gap",
-                            "tool_name": "query_semantic_data",
-                            "arguments": {
-                                "metrics": ["METRIC:10:1"],
-                                "dimensions": ["DIMENSION:20:1"],
-                                "time_ranges": ["current"],
-                                "analysis": "breakdown",
-                                "purpose": "查询占比计算输入",
-                            },
+                "plan_nodes": (
+                    {
+                        "node_id": "source-query",
+                        "description": "查询占比计算输入",
+                        "tool_name": "query_semantic_data",
+                        "arguments": {
+                            "metrics": ["METRIC:10:1"],
+                            "dimensions": ["DIMENSION:20:1"],
+                            "time_ranges": ["current"],
+                            "analysis": "breakdown",
+                            "purpose": "查询占比计算输入",
                         },
-                        {
-                            "addition_id": "share-compute",
-                            "gap_id": "calculation-gap",
-                            "dependency_node_ids": ["source-query"],
-                            "tool_name": "compute_evidence",
-                            "arguments": {
-                                "operation": "share",
-                                "metric_refs": ["METRIC:10:1"],
-                                "dimension_refs": ["DIMENSION:20:1"],
-                                "purpose": "计算维度占比",
-                            },
+                        "expected_output": "返回占比计算输入 Evidence",
+                    },
+                    {
+                        "node_id": "share-compute",
+                        "description": "计算维度占比",
+                        "dependency_node_ids": ["source-query"],
+                        "tool_name": "compute_evidence",
+                        "arguments": {
+                            "operation": "share",
+                            "metric_refs": ["METRIC:10:1"],
+                            "dimension_refs": ["DIMENSION:20:1"],
+                            "purpose": "计算维度占比",
                         },
-                    ),
-                }
+                        "expected_output": "返回维度占比 Evidence",
+                    },
+                ),
             },
         ),
         context,
@@ -392,7 +410,165 @@ def test_plan_dependencies_drive_ready_nodes_without_evidence_id_guessing() -> N
     assert tuple(node.id for node in context.ready_plan_nodes()) == ("share-compute",)
 
 
-def test_assess_research_rejects_dependency_and_explicit_evidence_together() -> None:
+def test_current_plan_result_is_complete_only_after_whole_revision_finishes() -> None:
+    """READY 批次、数据库 Step 和业务 iteration 必须分别维护。"""
+
+    requirement = _governed_requirement()
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    registry = build_research_tool_registry()
+    result = registry.execute(
+        ToolCall(
+            name="submit_research_plan",
+            call_id="plan-two-batches",
+            args={
+                "plan_nodes": (
+                    {
+                        "node_id": "first-query",
+                        "description": "执行第一批查询",
+                        "tool_name": "query_semantic_data",
+                        "arguments": {
+                            "metrics": ["METRIC:10:1"],
+                            "time_ranges": ["current"],
+                            "purpose": "执行第一批查询",
+                        },
+                        "expected_output": "返回第一批 Evidence",
+                    },
+                    {
+                        "node_id": "second-query",
+                        "description": "执行第二批查询",
+                        "dependency_node_ids": ["first-query"],
+                        "tool_name": "query_semantic_data",
+                        "arguments": {
+                            "metrics": ["METRIC:10:1"],
+                            "time_ranges": ["current"],
+                            "purpose": "执行第二批查询",
+                        },
+                        "expected_output": "返回第二批 Evidence",
+                    },
+                    {
+                        "node_id": "dependent-compute",
+                        "description": "计算第二批查询结果",
+                        "dependency_node_ids": ["second-query"],
+                        "tool_name": "compute_evidence",
+                        "arguments": {
+                            "operation": "share",
+                            "metric_refs": ["METRIC:10:1"],
+                            "purpose": "计算第二批查询结果",
+                        },
+                        "expected_output": "返回计算 Evidence",
+                    },
+                )
+            },
+        ),
+        context,
+    )
+    assert result.data is not None and result.data.status.value == "succeeded"
+    assert context.iteration == 0
+    assert context.next_step_index() == 1
+    assert context.next_step_index() == 2
+    assert context.iteration == 0
+    assert context.current_plan_result() is not None
+    assert context.current_plan_result()["status"] == "solving"
+
+    context.mark_plan_node(
+        "first-query",
+        status=PlanNodeExecutionStatus.SUCCEEDED,
+        evidence_ids=("evidence-first",),
+    )
+    assert not context.current_plan_complete()
+    assert tuple(node.id for node in context.ready_plan_nodes()) == ("second-query",)
+    context.mark_plan_node(
+        "second-query",
+        status=PlanNodeExecutionStatus.FAILED,
+        error_code="QUERY_FAILED",
+    )
+    assert context.ready_plan_nodes() == ()
+
+    assert context.current_plan_complete()
+    plan_result = context.current_plan_result()
+    assert plan_result is not None
+    assert plan_result["status"] == "completed_with_failures"
+    assert plan_result["nodes"][0]["evidence_ids"] == ["evidence-first"]
+    assert plan_result["nodes"][1]["error_code"] == "QUERY_FAILED"
+    assert plan_result["nodes"][2]["status"] == "skipped_dependency"
+    context.advance_iteration(context.plan_execution_state().revision)
+    assert context.iteration == 1
+
+    context.advance_evidence_iteration(3)
+    assert context.evidence_iteration == 3
+    assert context.iteration == 1
+
+
+def test_advance_iteration_rejects_revision_and_iteration_mismatch() -> None:
+    """恢复状态不一致时必须明确失败，不能静默猜测已完成的业务轮次。"""
+
+    requirement = _governed_requirement()
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    result = build_research_tool_registry().execute(
+        ToolCall(
+            name="submit_research_plan",
+            call_id="plan-iteration-mismatch",
+            args={
+                "plan_nodes": (
+                    {
+                        "node_id": "completed-query",
+                        "description": "执行已完成查询",
+                        "tool_name": "query_semantic_data",
+                        "arguments": {
+                            "metrics": ["METRIC:10:1"],
+                            "time_ranges": ["current"],
+                            "purpose": "验证恢复迭代状态",
+                        },
+                        "expected_output": "返回查询 Evidence",
+                    },
+                )
+            },
+        ),
+        context,
+    )
+    assert result.data is not None and result.data.status.value == "succeeded"
+    context.mark_plan_node(
+        "completed-query",
+        status=PlanNodeExecutionStatus.SUCCEEDED,
+        evidence_ids=("evidence-completed",),
+    )
+    context.context.state["research_state"]["iteration"] = 2
+
+    with pytest.raises(ValueError, match="RESEARCH_PLAN_ITERATION_OUT_OF_SYNC"):
+        context.advance_iteration(context.plan_execution_state().revision)
+
+
+def test_submit_research_plan_rejects_dependency_and_explicit_evidence_together() -> None:
     """依赖边必须同时决定执行顺序和数据输入，不能再声明另一组 Evidence。"""
 
     requirement = _governed_requirement()
@@ -414,29 +590,24 @@ def test_assess_research_rejects_dependency_and_explicit_evidence_together() -> 
     context.bind_to_context()
     result = build_research_tool_registry().execute(
         ToolCall(
-            name="assess_research",
-            call_id="assessment-dependency-conflict",
+            name="submit_research_plan",
+            call_id="plan-dependency-conflict",
             args={
-                "assessment": {
-                    "status": "explicit_gap",
-                    "unresolved_gaps": (
-                        {"gap_id": "compute-gap", "description": "需要计算占比"},
-                    ),
-                    "proposed_plan_additions": (
-                        {
-                            "addition_id": "compute-share",
-                            "gap_id": "compute-gap",
-                            "dependency_node_ids": ["source-query"],
-                            "tool_name": "compute_evidence",
-                            "arguments": {
-                                "input_evidence_ids": ["existing-evidence"],
-                                "operation": "share",
-                                "metric_refs": ["METRIC:10:1"],
-                                "purpose": "计算占比",
-                            },
+                "plan_nodes": (
+                    {
+                        "node_id": "compute-share",
+                        "description": "使用依赖节点计算占比",
+                        "dependency_node_ids": ["source-query"],
+                        "tool_name": "compute_evidence",
+                        "arguments": {
+                            "input_evidence_ids": ["existing-evidence"],
+                            "operation": "share",
+                            "metric_refs": ["METRIC:10:1"],
+                            "purpose": "计算占比",
                         },
-                    ),
-                }
+                        "expected_output": "返回占比计算 Evidence",
+                    },
+                ),
             },
         ),
         context,
@@ -449,7 +620,7 @@ def test_assess_research_rejects_dependency_and_explicit_evidence_together() -> 
     assert context.semantic_assessment() is None
 
 
-def test_assess_research_does_not_save_assessment_when_dag_append_fails() -> None:
+def test_submit_research_plan_does_not_save_assessment_when_dag_write_fails() -> None:
     """DAG 追加失败时，评估和计划必须保持同一原子结果。"""
 
     requirement = _governed_requirement()
@@ -471,28 +642,30 @@ def test_assess_research_does_not_save_assessment_when_dag_append_fails() -> Non
     context.bind_to_context()
     result = build_research_tool_registry().execute(
         ToolCall(
-            name="assess_research",
-            call_id="assessment-unknown-dependency",
+            name="submit_research_plan",
+            call_id="plan-unknown-dependency",
             args={
                 "assessment": {
                     "status": "explicit_gap",
                     "unresolved_gaps": (
                         {"gap_id": "query-gap", "description": "需要补充查询"},
                     ),
-                    "proposed_plan_additions": (
-                        {
-                            "addition_id": "dependent-query",
-                            "gap_id": "query-gap",
-                            "dependency_node_ids": ["missing-node"],
-                            "tool_name": "query_semantic_data",
-                            "arguments": {
-                                "metrics": ["METRIC:10:1"],
-                                "time_ranges": ["current"],
-                                "purpose": "补充查询",
-                            },
+                },
+                "plan_nodes": (
+                    {
+                        "node_id": "dependent-query",
+                        "description": "执行依赖缺失节点的查询",
+                        "gap_id": "query-gap",
+                        "dependency_node_ids": ["missing-node"],
+                        "tool_name": "query_semantic_data",
+                        "arguments": {
+                            "metrics": ["METRIC:10:1"],
+                            "time_ranges": ["current"],
+                            "purpose": "补充查询",
                         },
-                    ),
-                }
+                        "expected_output": "返回补充查询 Evidence",
+                    },
+                ),
             },
         ),
         context,
@@ -503,6 +676,127 @@ def test_assess_research_does_not_save_assessment_when_dag_append_fails() -> Non
     assert result.data.error_code is ToolErrorCode.INVALID_REQUEST
     assert context.plan_execution_state().nodes == ()
     assert context.semantic_assessment() is None
+
+
+def test_submit_research_plan_rejects_new_plan_before_current_plan_completes() -> None:
+    """Planner 必须等待当前 revision 完整 Solve 后才能提交下一份计划。"""
+
+    requirement = _governed_requirement()
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    registry = build_research_tool_registry()
+    first = registry.execute(
+        ToolCall(
+            name="submit_research_plan",
+            call_id="plan-first",
+            args={
+                "plan_nodes": (
+                    {
+                        "node_id": "first-query",
+                        "description": "执行第一份计划中的查询",
+                        "tool_name": "query_semantic_data",
+                        "arguments": {
+                            "metrics": ["METRIC:10:1"],
+                            "time_ranges": ["current"],
+                            "purpose": "执行第一份计划",
+                        },
+                        "expected_output": "返回第一份计划的 Evidence",
+                    },
+                )
+            },
+        ),
+        context,
+    )
+    assert first.data is not None and first.data.status.value == "succeeded"
+
+    second = registry.execute(
+        ToolCall(
+            name="submit_research_plan",
+            call_id="plan-second",
+            args={
+                "assessment": {
+                    "status": "explicit_gap",
+                    "unresolved_gaps": (
+                        {"gap_id": "next-gap", "description": "需要继续查询"},
+                    ),
+                },
+                "plan_nodes": (
+                    {
+                        "node_id": "second-query",
+                        "description": "执行第二份计划中的查询",
+                        "gap_id": "next-gap",
+                        "tool_name": "query_semantic_data",
+                        "arguments": {
+                            "metrics": ["METRIC:10:1"],
+                            "time_ranges": ["current"],
+                            "purpose": "执行第二份计划",
+                        },
+                        "expected_output": "返回第二份计划的 Evidence",
+                    },
+                ),
+            },
+        ),
+        context,
+    )
+
+    assert second.data is not None
+    assert second.data.status.value == "failed"
+    assert second.data.error_code is ToolErrorCode.INVALID_REQUEST
+    assert context.plan_execution_state().revision == 1
+    assert context.semantic_assessment() is None
+
+    context.mark_plan_node(
+        "first-query",
+        status=PlanNodeExecutionStatus.SUCCEEDED,
+        evidence_ids=("evidence-first",),
+    )
+    third = registry.execute(
+        ToolCall(
+            name="submit_research_plan",
+            call_id="plan-third",
+            args={
+                "assessment": {
+                    "status": "explicit_gap",
+                    "unresolved_gaps": (
+                        {"gap_id": "next-gap", "description": "需要继续查询"},
+                    ),
+                },
+                "plan_nodes": (
+                    {
+                        "node_id": "second-query",
+                        "description": "执行第二份计划中的查询",
+                        "gap_id": "next-gap",
+                        "tool_name": "query_semantic_data",
+                        "arguments": {
+                            "metrics": ["METRIC:10:1"],
+                            "time_ranges": ["current"],
+                            "purpose": "执行第二份计划",
+                        },
+                        "expected_output": "返回第二份计划的 Evidence",
+                    },
+                ),
+            },
+        ),
+        context,
+    )
+
+    assert third.data is not None and third.data.status.value == "succeeded"
+    assert context.plan_execution_state().revision == 2
+    assert context.plan_execution_state().nodes[-1].plan_revision == 2
 
 
 def test_premise_gap_can_be_resolved_from_complete_breakdown_evidence() -> None:
@@ -576,20 +870,16 @@ def test_premise_gap_can_be_resolved_from_complete_breakdown_evidence() -> None:
         ),
     }
 
-    result = build_research_tool_registry().execute(
-        ToolCall(
-            name="assess_research",
-            call_id="assessment-premise",
-            args={"assessment": assessment},
-        ),
-        context,
+    premise_result = validate_premise_gap_assessment(
+        requirement,
+        context.evidences(),
+        SemanticAssessment.model_validate(assessment),
+        current_result=None,
     )
 
-    assert result.data is not None
-    assert result.data.status.value == "succeeded"
-    assert context.premise_result is not None
-    assert context.premise_result["status"] == "supported"
-    assert context.premise_result["evidence_id"] == evidence.evidence_id
+    assert premise_result is not None
+    assert premise_result["status"] == "supported"
+    assert premise_result["evidence_id"] == evidence.evidence_id
 
 
 def test_premise_gap_accepts_merged_analysis_query_plan() -> None:
@@ -631,23 +921,18 @@ def test_premise_gap_accepts_merged_analysis_query_plan() -> None:
     }
     result = build_research_tool_registry().execute(
         ToolCall(
-            name="assess_research",
-            call_id="assessment-merged-plan",
+            name="submit_research_plan",
+            call_id="plan-merged",
             args={
-                "assessment": {
-                    "status": "explicit_gap",
-                    "unresolved_gaps": (
-                        {"gap_id": "premise", "description": "需要确认总 GMV 是否下降"},
-                    ),
-                    "proposed_plan_additions": (
-                        {
-                            "addition_id": "merged-breakdown",
-                            "gap_id": "premise",
-                            "tool_name": "query_semantic_data",
-                            "arguments": arguments,
-                        },
-                    ),
-                }
+                "plan_nodes": (
+                    {
+                        "node_id": "merged-breakdown",
+                        "description": "同时确认总量变化并分析地区贡献",
+                        "tool_name": "query_semantic_data",
+                        "arguments": arguments,
+                        "expected_output": "返回总量变化和地区拆解 Evidence",
+                    },
+                ),
             },
         ),
         context,

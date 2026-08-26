@@ -2,7 +2,7 @@
 
 路由期检索产出的 ``SemanticAssetScope`` 不携带执行所需的三项边界输入：
 冻结 ``DatasetSchema`` 快照、Scope/权限指纹、可执行资产集。主路径适配器
-（``orchestration/pipeline/research_agent_pipeline.py``）与 shadow 双跑
+（``orchestration/pipeline/plan_and_solve_pipeline.py``）与 shadow 双跑
 （``services/research/shadow.py``）必须用**同一份实现**补齐这三项——
 §1.1 同源图要求两条引擎路径对同一冻结输入得到逐字节相同的工具上下文。
 

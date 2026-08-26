@@ -238,3 +238,28 @@ def test_removed_chatbi_top_level_path_does_not_return(
     """已归入 ChatBI 的顶级目录不得重新建立。"""
 
     assert not (BACKEND_ROOT / relative_path).exists()
+
+
+def test_alembic_revision_ids_fit_version_table() -> None:
+    """revision 必须能写入 Alembic 默认的 varchar(32) 版本字段。"""
+
+    versions_dir = BACKEND_ROOT / "alembic" / "versions"
+    invalid: list[str] = []
+    for path in sorted(versions_dir.glob("*.py")):
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for statement in module.body:
+            if not isinstance(statement, ast.Assign):
+                continue
+            if not any(
+                isinstance(target, ast.Name) and target.id == "revision"
+                for target in statement.targets
+            ):
+                continue
+            value = ast.literal_eval(statement.value)
+            if not isinstance(value, str) or not value or len(value) > 32:
+                invalid.append(f"{path.name}:{value!r}")
+            break
+        else:
+            invalid.append(f"{path.name}:missing")
+
+    assert invalid == []

@@ -50,15 +50,14 @@ from apps.chatbi.services.execution.query_task_executor import (
 from apps.chatbi.services.planning.analysis_planner import AnalysisPlanner
 from apps.chatbi.services.planning.dag_scheduler import (
     AnalysisTaskExecutionStatus,
-    build_execution_batches,
     task_dependencies,
 )
 from apps.chatbi.services.planning.execution_state import (
     PLAN_EXECUTION_STATE_KEY,
     PlanNodeExecutionStatus,
-    UnifiedPlanTaskState,
-    build_analysis_plan_execution_state,
+    ensure_analysis_plan_execution_state,
     load_plan_execution_state,
+    transition_plan_node,
 )
 from apps.chatbi.services.planning.plan_validation import validate_analysis_plan
 from apps.chatbi.services.planning.semantic_query_preparation import (
@@ -376,45 +375,31 @@ class AnalysisExecutionService:
         execution_records: dict[str, dict[str, Any]],
         full_data_records: dict[str, list[dict[str, Any]]],
     ) -> Generator[RenderEvent, None, bool]:
-        """按拓扑批次并行执行，所有共享状态只在主线程更新。"""
+        """按统一计划状态中的拓扑批次执行，节点状态只写一个事实入口。"""
 
-        try:
-            batches = build_execution_batches(plan)
-        except ValueError as exc:
-            raise PlanPipelineError(str(exc)) from exc
+        execution_state = self._required_plan_execution_state(state)
+        if execution_state.plan_id != plan.id:
+            raise PlanPipelineError("PLAN_EXECUTION_STATE_PLAN_MISMATCH")
+        batches = execution_state.execution_batches
         tasks = {task.id: task for task in plan.tasks}
         dependencies = task_dependencies(plan)
-        task_states = {
-            task.id: {
-                "status": AnalysisTaskExecutionStatus.PENDING.value,
-                "attempt": 0,
-                "error_code": None,
-            }
-            for task in plan.tasks
-        }
-        state.context.state["plan_execution_batches"] = [
-            list(batch) for batch in batches
-        ]
-        state.context.state["plan_task_states"] = task_states
-        self._persist_state(state)
-
         terminal_dependency_states = {
-            AnalysisTaskExecutionStatus.FAILED.value,
-            AnalysisTaskExecutionStatus.SKIPPED_DEPENDENCY.value,
-            AnalysisTaskExecutionStatus.CANCELLED.value,
+            PlanNodeExecutionStatus.FAILED,
+            PlanNodeExecutionStatus.SKIPPED_DEPENDENCY,
+            PlanNodeExecutionStatus.CANCELLED,
         }
         for batch_index, batch in enumerate(batches, start=1):
-            state.context.state["current_plan_batch"] = batch_index
             if state.cancellation.is_cancelled():
-                for task_id, task_state in task_states.items():
-                    if task_state["status"] not in {
-                        AnalysisTaskExecutionStatus.SUCCEEDED.value,
+                execution_state = self._required_plan_execution_state(state)
+                for task_id, task_state in execution_state.task_states.items():
+                    if task_state.status not in {
+                        PlanNodeExecutionStatus.SUCCEEDED,
                         *terminal_dependency_states,
                     }:
-                        self._set_task_state(
-                            task_states,
+                        self._transition_plan_node(
+                            state,
                             task_id,
-                            AnalysisTaskExecutionStatus.CANCELLED,
+                            PlanNodeExecutionStatus.CANCELLED,
                             error_code="query_cancelled",
                         )
                 self._persist_state(state)
@@ -426,19 +411,29 @@ class AnalysisExecutionService:
 
             executable_ids: list[str] = []
             for task_id in batch:
+                execution_state = self._required_plan_execution_state(state)
+                current_status = execution_state.task_states[task_id].status
+                if current_status in {
+                    PlanNodeExecutionStatus.SUCCEEDED,
+                    PlanNodeExecutionStatus.FAILED,
+                    PlanNodeExecutionStatus.SKIPPED_DEPENDENCY,
+                    PlanNodeExecutionStatus.CANCELLED,
+                }:
+                    continue
+                if current_status is PlanNodeExecutionStatus.RUNNING:
+                    raise PlanPipelineError("PLAN_RUNNING_TASK_RECOVERY_REQUIRED")
                 failed_dependencies = [
                     dependency_id
                     for dependency_id in dependencies[task_id]
-                    if task_states[dependency_id]["status"]
+                    if execution_state.task_states[dependency_id].status
                     in terminal_dependency_states
                 ]
                 if failed_dependencies:
-                    self._set_task_state(
-                        task_states,
+                    self._transition_plan_node(
+                        state,
                         task_id,
-                        AnalysisTaskExecutionStatus.SKIPPED_DEPENDENCY,
+                        PlanNodeExecutionStatus.SKIPPED_DEPENDENCY,
                         error_code="PLAN_DEPENDENCY_FAILED",
-                        failed_dependencies=failed_dependencies,
                     )
                     yield self._events.task_finished(
                         state.require_run_id(),
@@ -452,19 +447,13 @@ class AnalysisExecutionService:
                         ),
                     )
                     continue
-                self._set_task_state(
-                    task_states,
-                    task_id,
-                    AnalysisTaskExecutionStatus.READY,
-                )
                 executable_ids.append(task_id)
 
             for task_id in executable_ids:
-                self._set_task_state(
-                    task_states,
+                task_state = self._transition_plan_node(
+                    state,
                     task_id,
-                    AnalysisTaskExecutionStatus.RUNNING,
-                    increment_attempt=True,
+                    PlanNodeExecutionStatus.RUNNING,
                 )
                 yield self._events.task_started(
                     state.require_run_id(),
@@ -474,7 +463,7 @@ class AnalysisExecutionService:
                         task_id,
                         AnalysisTaskExecutionStatus.RUNNING,
                         batch_index=batch_index,
-                        attempt=task_states[task_id]["attempt"],
+                        attempt=task_state.attempt,
                     ),
                 )
             self._persist_state(state)
@@ -490,7 +479,7 @@ class AnalysisExecutionService:
             query_results = self._run_query_batch(
                 state,
                 query_tasks,
-                task_states,
+                self._required_plan_execution_state(state).task_states,
                 plan_id=plan.id,
             )
             compute_results = self._run_compute_batch(state, plan.id, compute_tasks)
@@ -514,12 +503,11 @@ class AnalysisExecutionService:
                             if result.status is QueryTaskExecutionStatus.CANCELLED
                             else AnalysisTaskExecutionStatus.FAILED
                         )
-                        self._set_task_state(
-                            task_states,
+                        self._transition_plan_node(
+                            state,
                             task_id,
-                            status,
+                            self._canonical_task_status(status),
                             error_code=result.error_code,
-                            message=result.message,
                         )
                         yield self._events.task_finished(
                             state.require_run_id(),
@@ -541,12 +529,11 @@ class AnalysisExecutionService:
                             if computed.code in {"COMPUTE_CANCELLED", "COMPUTE_TIMEOUT"}
                             else AnalysisTaskExecutionStatus.FAILED
                         )
-                        self._set_task_state(
-                            task_states,
+                        self._transition_plan_node(
+                            state,
                             task_id,
-                            compute_status,
+                            self._canonical_task_status(compute_status),
                             error_code=computed.code,
-                            message=str(computed),
                         )
                         yield self._events.task_finished(
                             state.require_run_id(),
@@ -560,9 +547,9 @@ class AnalysisExecutionService:
                             ),
                         )
                         continue
-                    attempt_value = task_states[task_id]["attempt"]
-                    if not isinstance(attempt_value, int):
-                        raise PlanPipelineError("PLAN_TASK_ATTEMPT_INVALID")
+                    attempt_value = self._required_plan_execution_state(
+                        state
+                    ).task_states[task_id].attempt
                     execution, rows = self._register_compute_result(
                         state,
                         plan.id,
@@ -584,11 +571,15 @@ class AnalysisExecutionService:
 
                 execution_records[task_id] = execution
                 full_data_records[task_id] = rows
-                self._set_task_state(
-                    task_states,
+                self._transition_plan_node(
+                    state,
                     task_id,
-                    AnalysisTaskExecutionStatus.SUCCEEDED,
-                    result_set_id=execution.get("result_set_id"),
+                    PlanNodeExecutionStatus.SUCCEEDED,
+                    evidence_ids=self._evidence_ids_for_node(
+                        state,
+                        plan.id,
+                        task_id,
+                    ),
                 )
                 yield self._events.task_finished(
                     state.require_run_id(),
@@ -604,16 +595,16 @@ class AnalysisExecutionService:
             self._persist_state(state)
 
             if state.cancellation.is_cancelled():
-                for task_id, task_state in task_states.items():
-                    if task_state["status"] in {
-                        AnalysisTaskExecutionStatus.PENDING.value,
-                        AnalysisTaskExecutionStatus.READY.value,
-                        AnalysisTaskExecutionStatus.RUNNING.value,
+                execution_state = self._required_plan_execution_state(state)
+                for task_id, task_state in execution_state.task_states.items():
+                    if task_state.status in {
+                        PlanNodeExecutionStatus.PENDING,
+                        PlanNodeExecutionStatus.RUNNING,
                     }:
-                        self._set_task_state(
-                            task_states,
+                        self._transition_plan_node(
+                            state,
                             task_id,
-                            AnalysisTaskExecutionStatus.CANCELLED,
+                            PlanNodeExecutionStatus.CANCELLED,
                             error_code="query_cancelled",
                         )
                 self._persist_state(state)
@@ -623,10 +614,12 @@ class AnalysisExecutionService:
                 )
                 return True
 
-        primary_state = task_states[plan.presentation.primary_result]
-        if primary_state["status"] != AnalysisTaskExecutionStatus.SUCCEEDED.value:
+        primary_state = self._required_plan_execution_state(state).task_states[
+            plan.presentation.primary_result
+        ]
+        if primary_state.status is not PlanNodeExecutionStatus.SUCCEEDED:
             raise PlanPipelineError(
-                str(primary_state.get("error_code") or "PLAN_PRIMARY_RESULT_FAILED")
+                str(primary_state.error_code or "PLAN_PRIMARY_RESULT_FAILED")
             )
         return False
 
@@ -634,7 +627,7 @@ class AnalysisExecutionService:
         self,
         state: AgentRuntimeState,
         tasks: list[QueryTask],
-        task_states: dict[str, dict[str, Any]],
+        task_states: dict[str, Any],
         *,
         plan_id: str | None = None,
     ) -> dict[str, QueryTaskExecutionResult]:
@@ -668,7 +661,7 @@ class AnalysisExecutionService:
             requests.append(
                 QueryTaskExecutionRequest(
                     task_id=task.id,
-                    attempt=int(task_states[task.id]["attempt"]),
+                    attempt=self._task_attempt(task_states[task.id]),
                     sql=compiled.sql,
                     datasource_id=datasource_id,
                     workspace_id=workspace_id,
@@ -1140,21 +1133,75 @@ class AnalysisExecutionService:
         }
 
     @staticmethod
-    def _set_task_state(
-        states: dict[str, dict[str, Any]],
+    def _required_plan_execution_state(state: AgentRuntimeState) -> Any:
+        """读取统一计划状态；Plan 执行过程不再读取平行任务状态。"""
+
+        raw = state.context.state.get(PLAN_EXECUTION_STATE_KEY)
+        if not isinstance(raw, dict):
+            raise PlanPipelineError("PLAN_EXECUTION_STATE_REQUIRED")
+        execution_state = load_plan_execution_state(raw)
+        if execution_state is None:
+            raise PlanPipelineError("PLAN_EXECUTION_STATE_REQUIRED")
+        return execution_state
+
+    @classmethod
+    def _transition_plan_node(
+        cls,
+        state: AgentRuntimeState,
         task_id: str,
-        status: AnalysisTaskExecutionStatus,
+        status: PlanNodeExecutionStatus,
         *,
-        increment_attempt: bool = False,
-        **details: Any,
-    ) -> None:
-        current = states[task_id]
-        states[task_id] = {
-            **current,
-            "status": status.value,
-            "attempt": int(current.get("attempt") or 0) + int(increment_attempt),
-            **details,
-        }
+        evidence_ids: tuple[str, ...] = (),
+        error_code: str | None = None,
+    ) -> Any:
+        """通过统一入口更新节点状态，并返回更新后的节点事实。"""
+
+        execution_state = transition_plan_node(
+            cls._required_plan_execution_state(state),
+            task_id,
+            status,
+            evidence_ids=evidence_ids,
+            error_code=error_code,
+        )
+        state.context.state[PLAN_EXECUTION_STATE_KEY] = execution_state.model_dump(
+            mode="json"
+        )
+        return execution_state.task_states[task_id]
+
+    @staticmethod
+    def _canonical_task_status(
+        status: AnalysisTaskExecutionStatus,
+    ) -> PlanNodeExecutionStatus:
+        """把迁移期事件状态映射为规范节点状态。"""
+
+        return PlanNodeExecutionStatus(status.value.lower())
+
+    @staticmethod
+    def _task_attempt(task_state: Any) -> int:
+        """读取规范节点尝试次数，并兼容执行器单元测试的最小输入。"""
+
+        attempt = (
+            task_state.get("attempt")
+            if isinstance(task_state, dict)
+            else getattr(task_state, "attempt", None)
+        )
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
+            raise PlanPipelineError("PLAN_TASK_ATTEMPT_INVALID")
+        return attempt
+
+    @staticmethod
+    def _evidence_ids_for_node(
+        state: AgentRuntimeState,
+        plan_id: str,
+        task_id: str,
+    ) -> tuple[str, ...]:
+        """返回当前节点已登记的统一 Evidence 引用。"""
+
+        return tuple(
+            evidence.evidence_id
+            for evidence in EvidenceRegistry(state.context.state).evidences()
+            if evidence.plan_id == plan_id and evidence.node_id == task_id
+        )
 
     @staticmethod
     def _task_event_payload(
@@ -1579,10 +1626,15 @@ class AnalysisExecutionService:
 
     def _save_plan(self, state: AgentRuntimeState, plan: AnalysisPlan) -> None:
         state.context.state["analysis_plan"] = plan.model_dump(mode="json")
-        if not isinstance(state.context.state.get(PLAN_EXECUTION_STATE_KEY), dict):
-            state.context.state[PLAN_EXECUTION_STATE_KEY] = (
-                build_analysis_plan_execution_state(plan).model_dump(mode="json")
-            )
+        raw_execution_state = state.context.state.get(PLAN_EXECUTION_STATE_KEY)
+        state.context.state[PLAN_EXECUTION_STATE_KEY] = (
+            ensure_analysis_plan_execution_state(
+                raw_execution_state
+                if isinstance(raw_execution_state, dict)
+                else None,
+                plan,
+            ).model_dump(mode="json")
+        )
         self._persist_state(state)
         if self._trace_recorder is None:
             return
@@ -1616,42 +1668,6 @@ class AnalysisExecutionService:
 
     @staticmethod
     def _persist_state(state: AgentRuntimeState) -> None:
-        raw_execution_state = state.context.state.get(PLAN_EXECUTION_STATE_KEY)
-        raw_task_states = state.context.state.get("plan_task_states")
-        if isinstance(raw_execution_state, dict) and isinstance(raw_task_states, dict):
-            execution_state = load_plan_execution_state(raw_execution_state)
-            if execution_state is None:
-                raise PlanPipelineError("PLAN_EXECUTION_STATE_REQUIRED")
-            status_mapping = {
-                "PENDING": PlanNodeExecutionStatus.PENDING,
-                "READY": PlanNodeExecutionStatus.PENDING,
-                "RUNNING": PlanNodeExecutionStatus.RUNNING,
-                "SUCCEEDED": PlanNodeExecutionStatus.SUCCEEDED,
-                "FAILED": PlanNodeExecutionStatus.FAILED,
-                "SKIPPED_DEPENDENCY": PlanNodeExecutionStatus.SKIPPED_DEPENDENCY,
-                "CANCELLED": PlanNodeExecutionStatus.CANCELLED,
-            }
-            normalized: dict[str, UnifiedPlanTaskState] = {}
-            for node_id, current in execution_state.task_states.items():
-                legacy = raw_task_states.get(node_id)
-                if not isinstance(legacy, dict):
-                    normalized[node_id] = current
-                    continue
-                normalized[node_id] = UnifiedPlanTaskState(
-                    status=status_mapping.get(
-                        str(legacy.get("status") or "PENDING").upper(),
-                        PlanNodeExecutionStatus.PENDING,
-                    ),
-                    attempt=int(legacy.get("attempt") or 0),
-                    error_code=(
-                        str(legacy["error_code"])
-                        if legacy.get("error_code") is not None
-                        else None
-                    ),
-                )
-            state.context.state[PLAN_EXECUTION_STATE_KEY] = execution_state.model_copy(
-                update={"task_states": normalized}
-            ).model_dump(mode="json")
         # 合并而不是整表替换：行上可能已有其他写入方落下的键——shadow 行的
         # ``shadow`` 标记、研究循环的 research_run_snapshot 等。run 1306 演练
         # 教训：整表替换曾把 shadow 标记抹掉，终态收口与就绪扫描都看不见该行。

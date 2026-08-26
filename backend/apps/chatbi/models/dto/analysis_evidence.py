@@ -70,7 +70,7 @@ class AnalysisEvidence(BaseModel):
 
     run_id: str = Field(min_length=1, max_length=128)
     evidence_id: str = Field(min_length=1, max_length=256)
-    mode: Literal["fast", "plan", "research"]
+    mode: Literal["agent", "fast", "plan", "research"]
     plan_id: str = Field(min_length=1, max_length=128)
     node_id: str = Field(min_length=1, max_length=128)
     source_tool_call_id: str = Field(min_length=1, max_length=256)
