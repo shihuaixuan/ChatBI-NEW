@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from collections.abc import Collection, Mapping, Sequence
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, ClassVar, Generic, Literal, TypeVar
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
@@ -2003,3 +2003,1100 @@ __all__ = [
     "validate_plan_required_operations",
     "validate_research_semantic_query",
 ]
+
+
+# ---------------------------------------------------------------------------
+# 41/42 目标契约
+# ---------------------------------------------------------------------------
+
+RESEARCH_AGENT_INPUT_SCHEMA_VERSION: Literal[1] = 1
+RESEARCH_STATE_SCHEMA_VERSION: Literal[1] = 1
+RESEARCH_STATE_SNAPSHOT_SCHEMA_VERSION: Literal[1] = 1
+
+
+class _ReactSchemaModel(_ContractModel):
+    """ReAct 跨边界契约的统一版本校验。"""
+
+    SCHEMA_VERSION: ClassVar[int] = 1
+    schema_version: int = Field(default=1, gt=0)
+
+    @model_validator(mode="after")
+    def validate_schema_version(self) -> Any:
+        if self.schema_version != type(self).SCHEMA_VERSION:
+            raise ValueError("RESEARCH_AGENT_SCHEMA_VERSION_UNSUPPORTED")
+        return self
+
+
+ScalarValue = str | int | float | bool | None
+
+
+def _require_ref_kind(value: str, kind: str, code: str) -> None:
+    """校验语义引用格式和资产类型。"""
+
+    _ref(value, code)
+    if not value.startswith(f"{kind}:"):
+        raise ValueError(code)
+
+
+def _validate_ref_tuple(values: Collection[str], kind: str, code: str) -> None:
+    """校验引用数组去重，并确保每项属于指定资产类型。"""
+
+    _unique(values, f"{code}_DUPLICATED")
+    for value in values:
+        _require_ref_kind(value, kind, code)
+
+
+class ConversationMessage(_ContractModel):
+    """进入 Research Agent 的必要对话消息。"""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+class SemanticMetric(_ContractModel):
+    ref: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=256)
+    description: str = Field(default="", max_length=2_000)
+    aggregation: str = Field(min_length=1, max_length=64)
+    unit: str | None = Field(default=None, max_length=64)
+    dimensions: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_metric(self) -> SemanticMetric:
+        _require_ref_kind(self.ref, "METRIC", "RESEARCH_AGENT_SEMANTIC_METRIC_REF_INVALID")
+        _validate_ref_tuple(
+            self.dimensions,
+            "DIMENSION",
+            "RESEARCH_AGENT_SEMANTIC_METRIC_DIMENSION_REF_INVALID",
+        )
+        return self
+
+
+class SemanticDimension(_ContractModel):
+    ref: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=256)
+    description: str = Field(default="", max_length=2_000)
+    grains: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_dimension(self) -> SemanticDimension:
+        _require_ref_kind(
+            self.ref,
+            "DIMENSION",
+            "RESEARCH_AGENT_SEMANTIC_DIMENSION_REF_INVALID",
+        )
+        _unique(self.grains, "RESEARCH_AGENT_SEMANTIC_DIMENSION_GRAIN_DUPLICATED")
+        return self
+
+
+class SemanticHierarchy(_ContractModel):
+    ref: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=256)
+    levels: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_hierarchy(self) -> SemanticHierarchy:
+        _require_ref_kind(
+            self.ref,
+            "HIERARCHY",
+            "RESEARCH_AGENT_SEMANTIC_HIERARCHY_REF_INVALID",
+        )
+        _validate_ref_tuple(
+            self.levels,
+            "DIMENSION",
+            "RESEARCH_AGENT_SEMANTIC_HIERARCHY_LEVEL_REF_INVALID",
+        )
+        return self
+
+
+class MetricFormula(_ContractModel):
+    target_metric_ref: str = Field(min_length=1)
+    expression: str = Field(min_length=1, max_length=2_000)
+    source_metric_refs: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_formula(self) -> MetricFormula:
+        _require_ref_kind(
+            self.target_metric_ref,
+            "METRIC",
+            "RESEARCH_AGENT_METRIC_FORMULA_TARGET_REF_INVALID",
+        )
+        _validate_ref_tuple(
+            self.source_metric_refs,
+            "METRIC",
+            "RESEARCH_AGENT_METRIC_FORMULA_SOURCE_REF_INVALID",
+        )
+        return self
+
+
+class MetricAnalysisRelation(_ContractModel):
+    metric_ref: str = Field(min_length=1)
+    related_metric_refs: tuple[str, ...] = Field(min_length=1)
+    analysis_type: str = Field(min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_analysis_relation(self) -> MetricAnalysisRelation:
+        _require_ref_kind(
+            self.metric_ref,
+            "METRIC",
+            "RESEARCH_AGENT_ANALYSIS_METRIC_REF_INVALID",
+        )
+        _validate_ref_tuple(
+            self.related_metric_refs,
+            "METRIC",
+            "RESEARCH_AGENT_ANALYSIS_RELATED_METRIC_REF_INVALID",
+        )
+        return self
+
+
+class SemanticAmbiguity(_ContractModel):
+    term: str = Field(min_length=1, max_length=256)
+    candidate_refs: tuple[str, ...] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def validate_ambiguity(self) -> SemanticAmbiguity:
+        _unique(self.candidate_refs, "RESEARCH_AGENT_AMBIGUITY_CANDIDATE_DUPLICATED")
+        for value in self.candidate_refs:
+            _ref(value, "RESEARCH_AGENT_AMBIGUITY_CANDIDATE_REF_INVALID")
+        return self
+
+
+class SemanticContext(_ContractModel):
+    """权限过滤和预算裁剪后的语义资产目录。"""
+
+    metrics: tuple[SemanticMetric, ...] = ()
+    dimensions: tuple[SemanticDimension, ...] = ()
+    hierarchies: tuple[SemanticHierarchy, ...] = ()
+    metric_formulas: tuple[MetricFormula, ...] = ()
+    metric_analysis_relations: tuple[MetricAnalysisRelation, ...] = ()
+    ambiguities: tuple[SemanticAmbiguity, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_context(self) -> SemanticContext:
+        for name, refs in (
+            ("metrics", tuple(item.ref for item in self.metrics)),
+            ("dimensions", tuple(item.ref for item in self.dimensions)),
+            ("hierarchies", tuple(item.ref for item in self.hierarchies)),
+            (
+                "metric_formulas",
+                tuple(item.target_metric_ref for item in self.metric_formulas),
+            ),
+            (
+                "metric_analysis_relations",
+                tuple(item.metric_ref for item in self.metric_analysis_relations),
+            ),
+            ("ambiguities", tuple(item.term for item in self.ambiguities)),
+        ):
+            _unique(refs, f"RESEARCH_AGENT_SEMANTIC_CONTEXT_{name.upper()}_DUPLICATED")
+        return self
+
+
+class ResearchAgentInput(_ReactSchemaModel):
+    """Research Run 使用的不可修改输入快照。"""
+
+    SCHEMA_VERSION: ClassVar[int] = RESEARCH_AGENT_INPUT_SCHEMA_VERSION
+    agent_input_ref: str | None = Field(default=None, max_length=256)
+    user_question: str = Field(min_length=1, max_length=20_000)
+    conversation_context: tuple[ConversationMessage, ...] = ()
+    semantic_context: SemanticContext
+
+    @model_validator(mode="after")
+    def validate_input(self) -> ResearchAgentInput:
+        if self.agent_input_ref is not None:
+            _id(self.agent_input_ref, "RESEARCH_AGENT_INPUT_REF_INVALID")
+        return self
+
+
+class RemainingBudget(_ContractModel):
+    """每轮投影给模型的剩余预算。"""
+
+    model_turns: int = Field(ge=0)
+    query_calls: int = Field(ge=0)
+    compute_calls: int = Field(ge=0)
+    semantic_search_calls: int = Field(ge=0)
+    wall_time_ms: int = Field(ge=0)
+    query_cost: float = Field(ge=0)
+
+
+class BudgetUsage(_ContractModel):
+    """Research Run 的累计资源使用量。"""
+
+    model_turns: int = Field(default=0, ge=0)
+    query_calls: int = Field(default=0, ge=0)
+    compute_calls: int = Field(default=0, ge=0)
+    semantic_search_calls: int = Field(default=0, ge=0)
+    wall_time_ms: int = Field(default=0, ge=0)
+    query_cost: float = Field(default=0, ge=0)
+
+
+class TimeRange(_ContractModel):
+    start: str = Field(min_length=1, max_length=64)
+    end: str = Field(min_length=1, max_length=64)
+    granularity: str = Field(min_length=1, max_length=32)
+
+
+class EvidenceFilter(_ContractModel):
+    field_ref: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=32)
+    value: ScalarValue
+
+    @model_validator(mode="after")
+    def validate_evidence_filter(self) -> EvidenceFilter:
+        _ref(self.field_ref, "RESEARCH_AGENT_EVIDENCE_FILTER_REF_INVALID")
+        _reject_physical_payload(self.value)
+        return self
+
+
+class EvidenceComparison(_ContractModel):
+    base_period: str = Field(min_length=1, max_length=64)
+    against_period: str = Field(min_length=1, max_length=64)
+    outputs: tuple[
+        Literal["current", "previous", "difference", "growth_rate"], ...
+    ] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_outputs(self) -> EvidenceComparison:
+        _unique(self.outputs, "RESEARCH_AGENT_EVIDENCE_COMPARISON_OUTPUT_DUPLICATED")
+        return self
+
+
+class EvidenceComputation(_ContractModel):
+    operation: str = Field(min_length=1, max_length=64)
+    input_evidence_ids: tuple[str, ...] = Field(min_length=1)
+    parameters: tuple[tuple[str, ScalarValue], ...] = ()
+
+    @model_validator(mode="after")
+    def validate_computation(self) -> EvidenceComputation:
+        _unique(
+            self.input_evidence_ids,
+            "RESEARCH_AGENT_EVIDENCE_COMPUTATION_INPUT_DUPLICATED",
+        )
+        for evidence_id in self.input_evidence_ids:
+            _id(evidence_id, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        _unique(
+            tuple(key for key, _value in self.parameters),
+            "RESEARCH_AGENT_EVIDENCE_COMPUTATION_PARAMETER_DUPLICATED",
+        )
+        _reject_physical_payload(self.parameters)
+        return self
+
+
+class EvidenceDefinition(_ContractModel):
+    metrics: tuple[str, ...] = ()
+    dimensions: tuple[str, ...] = ()
+    time_ranges: tuple[TimeRange, ...] = ()
+    filters: tuple[EvidenceFilter, ...] = ()
+    comparison: EvidenceComparison | None = None
+    computation: EvidenceComputation | None = None
+
+    @model_validator(mode="after")
+    def validate_definition(self) -> EvidenceDefinition:
+        _validate_ref_tuple(
+            self.metrics,
+            "METRIC",
+            "RESEARCH_AGENT_EVIDENCE_METRIC_REF_INVALID",
+        )
+        _validate_ref_tuple(
+            self.dimensions,
+            "DIMENSION",
+            "RESEARCH_AGENT_EVIDENCE_DIMENSION_REF_INVALID",
+        )
+        return self
+
+
+class EvidenceColumn(_ContractModel):
+    name: str = Field(min_length=1, max_length=256)
+    semantic_ref: str | None = Field(default=None, max_length=256)
+    role: Literal["dimension", "metric", "computed"]
+    data_type: str = Field(min_length=1, max_length=64)
+    unit: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_column(self) -> EvidenceColumn:
+        if self.semantic_ref is not None:
+            _ref(self.semantic_ref, "RESEARCH_AGENT_EVIDENCE_COLUMN_REF_INVALID")
+        return self
+
+
+class EvidenceStatistic(_ContractModel):
+    name: str = Field(min_length=1, max_length=128)
+    value: ScalarValue
+    unit: str | None = Field(default=None, max_length=64)
+
+
+class EvidenceData(_ContractModel):
+    row_count: int = Field(ge=0)
+    truncated: bool = False
+    rows: tuple[tuple[ScalarValue, ...], ...] = ()
+    statistics: tuple[EvidenceStatistic, ...] = ()
+
+
+class EvidenceLimitation(_ContractModel):
+    code: str = Field(min_length=1, max_length=128)
+    description: str = Field(min_length=1, max_length=2_000)
+    impact: str = Field(min_length=1, max_length=2_000)
+
+
+class Evidence(_ReactSchemaModel):
+    """查询或计算产生的、可审计的结果证据。"""
+
+    evidence_id: str = Field(min_length=1, max_length=256)
+    evidence_type: Literal["query_result", "computation_result"]
+    purpose: str = Field(min_length=1, max_length=2_000)
+    definition: EvidenceDefinition
+    columns: tuple[EvidenceColumn, ...] = Field(min_length=1)
+    data: EvidenceData
+    parent_evidence_ids: tuple[str, ...] = ()
+    limitations: tuple[EvidenceLimitation, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_evidence_contract(self) -> Evidence:
+        if not self.evidence_id.startswith("evidence:"):
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        _id(self.evidence_id, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        _unique(
+            self.parent_evidence_ids,
+            "RESEARCH_AGENT_EVIDENCE_PARENT_DUPLICATED",
+        )
+        for evidence_id in self.parent_evidence_ids:
+            _id(evidence_id, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        if self.data.row_count < len(self.data.rows):
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_ROW_COUNT_INVALID")
+        if any(len(row) != len(self.columns) for row in self.data.rows):
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_ROW_WIDTH_INVALID")
+        if self.evidence_type == "computation_result" and not self.parent_evidence_ids:
+            raise ValueError("RESEARCH_AGENT_COMPUTATION_PARENT_EVIDENCE_REQUIRED")
+        return self
+
+    @staticmethod
+    def evidence_id_for_tool_call(tool_call_id: str) -> str:
+        """按 Tool Call 标识生成确定性的 Evidence 标识。"""
+
+        _id(tool_call_id, "RESEARCH_AGENT_TOOL_CALL_ID_INVALID")
+        return f"evidence:{tool_call_id}"
+
+
+class EvidenceRows(_ContractModel):
+    evidence_id: str = Field(min_length=1, max_length=256)
+    columns: tuple[EvidenceColumn, ...] = Field(min_length=1)
+    rows: tuple[tuple[ScalarValue, ...], ...] = ()
+    total_row_count: int = Field(ge=0)
+    offset: int = Field(ge=0)
+    truncated: bool = False
+
+    @model_validator(mode="after")
+    def validate_rows(self) -> EvidenceRows:
+        if not self.evidence_id.startswith("evidence:"):
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        if self.total_row_count < self.offset + len(self.rows) and not self.truncated:
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_ROWS_RANGE_INVALID")
+        if any(len(row) != len(self.columns) for row in self.rows):
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_ROW_WIDTH_INVALID")
+        return self
+
+
+class ResearchExecutionErrorStage(StrEnum):
+    PARSING = "parsing"
+    VISIBILITY = "visibility"
+    VALIDATION = "validation"
+    PERMISSION = "permission"
+    PLANNING = "planning"
+    COMPILATION = "compilation"
+    EXECUTION = "execution"
+    PERSISTENCE = "persistence"
+    BUDGET = "budget"
+    COMPLETION = "completion"
+
+
+class ExecutionError(_ReactSchemaModel):
+    code: str = Field(min_length=1, max_length=128)
+    stage: ResearchExecutionErrorStage
+    message: str = Field(min_length=1, max_length=2_000)
+    retryable: bool = False
+    parameter_retryable: bool = False
+    same_parameter_retryable: bool = False
+
+    @model_validator(mode="after")
+    def validate_retry_flags(self) -> ExecutionError:
+        if self.parameter_retryable and not self.retryable:
+            raise ValueError("RESEARCH_AGENT_PARAMETER_RETRY_REQUIRES_RETRYABLE")
+        if self.same_parameter_retryable and not self.retryable:
+            raise ValueError("RESEARCH_AGENT_SAME_PARAMETER_RETRY_REQUIRES_RETRYABLE")
+        return self
+
+
+class ResearchActionType(StrEnum):
+    QUERY_SEMANTIC_DATA = "query_semantic_data"
+    COMPUTE_EVIDENCE = "compute_evidence"
+    READ_EVIDENCE_ROWS = "read_evidence_rows"
+    SEARCH_SEMANTIC_ASSETS = "search_semantic_assets"
+    REQUEST_CLARIFICATION = "request_clarification"
+    FINISH_RESEARCH = "finish_research"
+
+
+class ToolResultStatus(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    WAITING_FOR_USER = "waiting_for_user"
+
+
+_ResearchResultT = TypeVar("_ResearchResultT", bound=BaseModel)
+
+
+class ToolResult(_ReactSchemaModel, Generic[_ResearchResultT]):
+    """Research 工具统一结果信封；外层由 Runtime 构造。"""
+
+    tool_call_id: str = Field(min_length=1, max_length=256)
+    name: ResearchActionType
+    status: ToolResultStatus
+    result: _ResearchResultT | None = None
+    error: ExecutionError | None = None
+
+    @model_validator(mode="after")
+    def validate_result_envelope(self) -> ToolResult[_ResearchResultT]:
+        _id(self.tool_call_id, "RESEARCH_AGENT_TOOL_CALL_ID_INVALID")
+        if self.status is ToolResultStatus.SUCCEEDED:
+            if self.result is None or self.error is not None:
+                raise ValueError("RESEARCH_AGENT_TOOL_RESULT_SUCCESS_CONTRACT_INVALID")
+        elif self.status is ToolResultStatus.FAILED:
+            if self.error is None or self.result is not None:
+                raise ValueError("RESEARCH_AGENT_TOOL_RESULT_FAILURE_CONTRACT_INVALID")
+        else:
+            if self.name is not ResearchActionType.REQUEST_CLARIFICATION:
+                raise ValueError("RESEARCH_AGENT_WAITING_STATUS_TOOL_INVALID")
+            if self.result is None or self.error is not None:
+                raise ValueError("RESEARCH_AGENT_TOOL_RESULT_WAITING_CONTRACT_INVALID")
+        return self
+
+
+class QueryPeriod(_ContractModel):
+    role: str = Field(min_length=1, max_length=64)
+    start: str = Field(min_length=1, max_length=64)
+    end: str = Field(min_length=1, max_length=64)
+
+
+class QueryTimeSpec(_ContractModel):
+    dimension_ref: str = Field(min_length=1)
+    grain: Literal["day", "week", "month", "quarter", "year"]
+    periods: tuple[QueryPeriod, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_time_spec(self) -> QueryTimeSpec:
+        _require_ref_kind(
+            self.dimension_ref,
+            "DIMENSION",
+            "RESEARCH_AGENT_QUERY_TIME_DIMENSION_REF_INVALID",
+        )
+        roles = tuple(item.role for item in self.periods)
+        _unique(roles, "RESEARCH_AGENT_QUERY_TIME_PERIOD_ROLE_DUPLICATED")
+        return self
+
+
+class EvidenceSelector(_ContractModel):
+    evidence_id: str = Field(min_length=1, max_length=256)
+    column_ref: str = Field(min_length=1)
+    selection: Literal["all", "top", "bottom"]
+
+    @model_validator(mode="after")
+    def validate_selector(self) -> EvidenceSelector:
+        if not self.evidence_id.startswith("evidence:"):
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        _ref(self.column_ref, "RESEARCH_AGENT_EVIDENCE_SELECTOR_COLUMN_REF_INVALID")
+        return self
+
+
+class QueryFilter(_ContractModel):
+    field_ref: str = Field(min_length=1)
+    operator: str = Field(min_length=1, max_length=32)
+    value: ScalarValue = None
+    evidence_selector: EvidenceSelector | None = None
+
+    @model_validator(mode="after")
+    def validate_query_filter(self) -> QueryFilter:
+        _ref(self.field_ref, "RESEARCH_AGENT_QUERY_FILTER_REF_INVALID")
+        has_value = self.value is not None
+        has_selector = self.evidence_selector is not None
+        if has_value == has_selector:
+            raise ValueError("RESEARCH_AGENT_QUERY_FILTER_VALUE_EXCLUSIVE")
+        _reject_physical_payload(self.value)
+        return self
+
+
+class QueryComparison(_ContractModel):
+    base_period: str = Field(min_length=1, max_length=64)
+    against_period: str = Field(min_length=1, max_length=64)
+    outputs: tuple[
+        Literal["current", "previous", "difference", "growth_rate"], ...
+    ] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_comparison(self) -> QueryComparison:
+        _unique(self.outputs, "RESEARCH_AGENT_QUERY_COMPARISON_OUTPUT_DUPLICATED")
+        return self
+
+
+class QueryOrder(_ContractModel):
+    field_ref: str = Field(min_length=1)
+    value_role: str = Field(min_length=1, max_length=64)
+    direction: Literal["asc", "desc"]
+
+    @model_validator(mode="after")
+    def validate_order(self) -> QueryOrder:
+        _ref(self.field_ref, "RESEARCH_AGENT_QUERY_ORDER_REF_INVALID")
+        return self
+
+
+class QueryResultSpec(_ContractModel):
+    order_by: tuple[QueryOrder, ...] = ()
+    limit: int = Field(gt=0, le=10_000)
+
+
+class QuerySemanticDataArguments(_ReactSchemaModel):
+    metrics: tuple[str, ...] = Field(min_length=1)
+    dimensions: tuple[str, ...] = ()
+    time: QueryTimeSpec | None = None
+    filters: tuple[QueryFilter, ...] = ()
+    comparison: QueryComparison | None = None
+    result: QueryResultSpec
+
+    @model_validator(mode="after")
+    def validate_query_arguments(self) -> QuerySemanticDataArguments:
+        _validate_ref_tuple(
+            self.metrics,
+            "METRIC",
+            "RESEARCH_AGENT_QUERY_METRIC_REF_INVALID",
+        )
+        _validate_ref_tuple(
+            self.dimensions,
+            "DIMENSION",
+            "RESEARCH_AGENT_QUERY_DIMENSION_REF_INVALID",
+        )
+        return self
+
+
+class ComputeEvidenceArguments(_ReactSchemaModel):
+    operation: Literal[
+        "difference",
+        "growth_rate",
+        "ratio",
+        "share",
+        "contribution",
+        "ranking",
+        "topn_other",
+        "merge",
+        "reconciliation",
+    ]
+    input_evidence_ids: tuple[str, ...] = Field(min_length=1)
+    metric_refs: tuple[str, ...] = ()
+    dimension_refs: tuple[str, ...] = ()
+    group_by_refs: tuple[str, ...] = ()
+    order_by: tuple[QueryOrder, ...] = ()
+    limit: int | None = Field(default=None, gt=0, le=10_000)
+    tolerance: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_compute_arguments(self) -> ComputeEvidenceArguments:
+        _unique(self.input_evidence_ids, "RESEARCH_AGENT_COMPUTE_INPUT_DUPLICATED")
+        for evidence_id in self.input_evidence_ids:
+            if not evidence_id.startswith("evidence:"):
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        _validate_ref_tuple(
+            self.metric_refs,
+            "METRIC",
+            "RESEARCH_AGENT_COMPUTE_METRIC_REF_INVALID",
+        )
+        _validate_ref_tuple(
+            (*self.dimension_refs, *self.group_by_refs),
+            "DIMENSION",
+            "RESEARCH_AGENT_COMPUTE_DIMENSION_REF_INVALID",
+        )
+        return self
+
+
+class ReadEvidenceRowsArguments(_ReactSchemaModel):
+    evidence_id: str = Field(min_length=1, max_length=256)
+    column_refs: tuple[str, ...] = Field(min_length=1)
+    order_by: tuple[QueryOrder, ...] = ()
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(gt=0, le=10_000)
+
+    @model_validator(mode="after")
+    def validate_read_arguments(self) -> ReadEvidenceRowsArguments:
+        if not self.evidence_id.startswith("evidence:"):
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        for column_ref in self.column_refs:
+            _ref(column_ref, "RESEARCH_AGENT_READ_COLUMN_REF_INVALID")
+        _unique(self.column_refs, "RESEARCH_AGENT_READ_COLUMN_REF_DUPLICATED")
+        return self
+
+
+class SearchSemanticAssetsArguments(_ReactSchemaModel):
+    query: str = Field(min_length=1, max_length=2_000)
+    asset_types: tuple[
+        Literal["metric", "dimension", "hierarchy", "metric_formula", "metric_analysis_relation"], ...
+    ] = Field(min_length=1)
+    related_asset_refs: tuple[str, ...] = ()
+    limit: int = Field(gt=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_search_arguments(self) -> SearchSemanticAssetsArguments:
+        _unique(self.asset_types, "RESEARCH_AGENT_SEARCH_ASSET_TYPE_DUPLICATED")
+        _unique(self.related_asset_refs, "RESEARCH_AGENT_SEARCH_RELATED_REF_DUPLICATED")
+        for value in self.related_asset_refs:
+            _ref(value, "RESEARCH_AGENT_SEARCH_RELATED_REF_INVALID")
+        return self
+
+
+class ClarificationOption(_ContractModel):
+    option_id: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=256)
+    description: str = Field(min_length=1, max_length=1_000)
+    semantic_refs: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_option(self) -> ClarificationOption:
+        _id(self.option_id, "RESEARCH_AGENT_CLARIFICATION_OPTION_ID_INVALID")
+        _unique(self.semantic_refs, "RESEARCH_AGENT_CLARIFICATION_REF_DUPLICATED")
+        for value in self.semantic_refs:
+            _ref(value, "RESEARCH_AGENT_CLARIFICATION_REF_INVALID")
+        return self
+
+
+class RequestClarificationArguments(_ReactSchemaModel):
+    question: str = Field(min_length=1, max_length=2_000)
+    options: tuple[ClarificationOption, ...] = Field(min_length=1)
+    allow_free_text: bool = False
+
+    @model_validator(mode="after")
+    def validate_clarification_arguments(self) -> RequestClarificationArguments:
+        _unique(
+            tuple(item.option_id for item in self.options),
+            "RESEARCH_AGENT_CLARIFICATION_OPTION_DUPLICATED",
+        )
+        return self
+
+
+class CompletionLimitation(_ContractModel):
+    code: str = Field(min_length=1, max_length=128)
+    description: str = Field(min_length=1, max_length=2_000)
+    impact: str = Field(min_length=1, max_length=2_000)
+    attempt_ids: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_limitation(self) -> CompletionLimitation:
+        _unique(self.attempt_ids, "RESEARCH_AGENT_COMPLETION_ATTEMPT_DUPLICATED")
+        for attempt_id in self.attempt_ids:
+            _id(attempt_id, "RESEARCH_AGENT_ATTEMPT_ID_INVALID")
+        return self
+
+
+class Completion(_ReactSchemaModel):
+    status: Literal["complete", "partial", "unanswerable"]
+    summary: str = Field(min_length=1, max_length=4_000)
+    finding_ids: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()
+    limitations: tuple[CompletionLimitation, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_completion_contract(self) -> Completion:
+        _unique(self.finding_ids, "RESEARCH_AGENT_COMPLETION_FINDING_DUPLICATED")
+        _unique(self.evidence_ids, "RESEARCH_AGENT_COMPLETION_EVIDENCE_DUPLICATED")
+        for finding_id in self.finding_ids:
+            _id(finding_id, "RESEARCH_AGENT_FINDING_ID_INVALID")
+        for evidence_id in self.evidence_ids:
+            if not evidence_id.startswith("evidence:"):
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        if self.status == "complete" and not self.evidence_ids:
+            raise ValueError("RESEARCH_AGENT_COMPLETION_EVIDENCE_REQUIRED")
+        if self.status in {"partial", "unanswerable"} and not self.limitations:
+            raise ValueError("RESEARCH_AGENT_COMPLETION_LIMITATION_REQUIRED")
+        return self
+
+
+class FinishResearchResult(_ReactSchemaModel):
+    decision: Literal["accepted", "rejected"]
+    message: str = Field(min_length=1, max_length=2_000)
+    completion_status: Literal["complete", "partial", "unanswerable"] | None = None
+    validation_errors: tuple[CompletionValidationError, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_finish_result(self) -> FinishResearchResult:
+        if self.decision == "accepted" and self.completion_status is None:
+            raise ValueError("RESEARCH_AGENT_FINISH_STATUS_REQUIRED")
+        if self.decision == "rejected" and self.completion_status is not None:
+            raise ValueError("RESEARCH_AGENT_FINISH_REJECTED_STATUS_FORBIDDEN")
+        return self
+
+
+class CompletionValidationError(_ContractModel):
+    code: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=2_000)
+    finding_id: str | None = Field(default=None, max_length=128)
+    evidence_id: str | None = Field(default=None, max_length=256)
+
+
+class FinishResearchArguments(_ReactSchemaModel):
+    completion: Completion
+
+
+class FindingScope(_ContractModel):
+    metric_refs: tuple[str, ...] = ()
+    dimension_refs: tuple[str, ...] = ()
+    time_ranges: tuple[TimeRange, ...] = ()
+    filters: tuple[EvidenceFilter, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_finding_scope(self) -> FindingScope:
+        _validate_ref_tuple(
+            self.metric_refs,
+            "METRIC",
+            "RESEARCH_AGENT_FINDING_METRIC_REF_INVALID",
+        )
+        _validate_ref_tuple(
+            self.dimension_refs,
+            "DIMENSION",
+            "RESEARCH_AGENT_FINDING_DIMENSION_REF_INVALID",
+        )
+        return self
+
+
+class Finding(_ContractModel):
+    finding_id: str = Field(min_length=1, max_length=128)
+    statement: str = Field(min_length=1, max_length=4_000)
+    evidence_ids: tuple[str, ...] = Field(min_length=1)
+    scope: FindingScope
+    status: Literal["confirmed", "superseded"] = "confirmed"
+
+    @model_validator(mode="after")
+    def validate_finding_contract(self) -> Finding:
+        _id(self.finding_id, "RESEARCH_AGENT_FINDING_ID_INVALID")
+        _unique(self.evidence_ids, "RESEARCH_AGENT_FINDING_EVIDENCE_DUPLICATED")
+        for evidence_id in self.evidence_ids:
+            if not evidence_id.startswith("evidence:"):
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        return self
+
+
+class TodoItem(_ContractModel):
+    todo_id: str = Field(min_length=1, max_length=128)
+    goal: str = Field(min_length=1, max_length=2_000)
+    status: Literal["pending", "in_progress", "completed", "skipped"]
+    order: int = Field(gt=0)
+    related_evidence_ids: tuple[str, ...] = ()
+    result_reason: str | None = Field(default=None, max_length=2_000)
+
+    @model_validator(mode="after")
+    def validate_todo(self) -> TodoItem:
+        _id(self.todo_id, "RESEARCH_AGENT_TODO_ID_INVALID")
+        _unique(self.related_evidence_ids, "RESEARCH_AGENT_TODO_EVIDENCE_DUPLICATED")
+        for evidence_id in self.related_evidence_ids:
+            if not evidence_id.startswith("evidence:"):
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        if self.status in {"completed", "skipped"} and not self.result_reason:
+            raise ValueError("RESEARCH_AGENT_TODO_RESULT_REASON_REQUIRED")
+        return self
+
+
+class AttemptSummary(_ContractModel):
+    attempt_id: str = Field(min_length=1, max_length=128)
+    action_type: ResearchActionType
+    purpose: str = Field(min_length=1, max_length=2_000)
+    parameter_summary: str = Field(default="", max_length=2_000)
+    action_fingerprint: str = Field(min_length=1, max_length=256)
+    status: Literal["succeeded", "failed", "rejected", "waiting_for_user"]
+    produced_evidence_ids: tuple[str, ...] = ()
+    error: ExecutionError | None = None
+
+    @model_validator(mode="after")
+    def validate_attempt(self) -> AttemptSummary:
+        _id(self.attempt_id, "RESEARCH_AGENT_ATTEMPT_ID_INVALID")
+        _unique(
+            self.produced_evidence_ids,
+            "RESEARCH_AGENT_ATTEMPT_EVIDENCE_DUPLICATED",
+        )
+        for evidence_id in self.produced_evidence_ids:
+            if not evidence_id.startswith("evidence:"):
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        if self.status in {"failed", "rejected"} and self.error is None:
+            raise ValueError("RESEARCH_AGENT_ATTEMPT_ERROR_REQUIRED")
+        if self.status == "succeeded" and self.error is not None:
+            raise ValueError("RESEARCH_AGENT_ATTEMPT_SUCCESS_ERROR_FORBIDDEN")
+        return self
+
+
+class ResearchStateStatus(StrEnum):
+    RUNNING = "running"
+    WAITING_FOR_USER = "waiting_for_user"
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    UNANSWERABLE = "unanswerable"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ResearchState(_ReactSchemaModel):
+    """Research Run 的规范状态，不保存完整 Evidence 数据。"""
+
+    SCHEMA_VERSION: ClassVar[int] = RESEARCH_STATE_SCHEMA_VERSION
+    agent_input_ref: str = Field(min_length=1, max_length=256)
+    evidence_refs: tuple[str, ...] = ()
+    findings: tuple[Finding, ...] = ()
+    todo_items: tuple[TodoItem, ...] = ()
+    attempted_actions: tuple[AttemptSummary, ...] = ()
+    budget_usage: BudgetUsage = Field(default_factory=BudgetUsage)
+    current_status: ResearchStateStatus = ResearchStateStatus.RUNNING
+    completion: Completion | None = None
+
+    @model_validator(mode="after")
+    def validate_state_contract(self) -> ResearchState:
+        _id(self.agent_input_ref, "RESEARCH_AGENT_INPUT_REF_INVALID")
+        _unique(self.evidence_refs, "RESEARCH_AGENT_STATE_EVIDENCE_DUPLICATED")
+        for evidence_id in self.evidence_refs:
+            if not evidence_id.startswith("evidence:"):
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        _unique(
+            tuple(item.finding_id for item in self.findings),
+            "RESEARCH_AGENT_STATE_FINDING_DUPLICATED",
+        )
+        _unique(
+            tuple(item.todo_id for item in self.todo_items),
+            "RESEARCH_AGENT_STATE_TODO_DUPLICATED",
+        )
+        _unique(
+            tuple(item.attempt_id for item in self.attempted_actions),
+            "RESEARCH_AGENT_STATE_ATTEMPT_DUPLICATED",
+        )
+        terminal_statuses = {
+            ResearchStateStatus.COMPLETED,
+            ResearchStateStatus.PARTIAL,
+            ResearchStateStatus.UNANSWERABLE,
+        }
+        if self.current_status in terminal_statuses and self.completion is None:
+            raise ValueError("RESEARCH_AGENT_STATE_COMPLETION_REQUIRED")
+        if self.current_status is ResearchStateStatus.WAITING_FOR_USER and self.completion is not None:
+            raise ValueError("RESEARCH_AGENT_WAITING_COMPLETION_FORBIDDEN")
+        if self.completion is not None:
+            expected_status = {
+                "complete": ResearchStateStatus.COMPLETED,
+                "partial": ResearchStateStatus.PARTIAL,
+                "unanswerable": ResearchStateStatus.UNANSWERABLE,
+            }[self.completion.status]
+            if self.current_status is not expected_status:
+                raise ValueError("RESEARCH_AGENT_STATE_COMPLETION_STATUS_INVALID")
+        return self
+
+
+class FindingChange(_ContractModel):
+    change_type: Literal["add", "supersede"]
+    finding: Finding | None = None
+    finding_id: str | None = Field(default=None, max_length=128)
+    reason: str = Field(min_length=1, max_length=2_000)
+
+    @model_validator(mode="after")
+    def validate_finding_change(self) -> FindingChange:
+        if self.change_type == "add":
+            if self.finding is None or self.finding_id is not None:
+                raise ValueError("RESEARCH_AGENT_FINDING_ADD_PAYLOAD_INVALID")
+        elif self.finding_id is None or self.finding is not None:
+            raise ValueError("RESEARCH_AGENT_FINDING_SUPERSEDE_PAYLOAD_INVALID")
+        if self.finding_id is not None:
+            _id(self.finding_id, "RESEARCH_AGENT_FINDING_ID_INVALID")
+        return self
+
+
+class TodoChange(_ContractModel):
+    change_type: Literal["add", "set_status", "set_order"]
+    todo: TodoItem | None = None
+    todo_id: str | None = Field(default=None, max_length=128)
+    status: Literal["pending", "in_progress", "completed", "skipped"] | None = None
+    order: int | None = Field(default=None, gt=0)
+    result_reason: str | None = Field(default=None, max_length=2_000)
+
+    @model_validator(mode="after")
+    def validate_todo_change(self) -> TodoChange:
+        if self.change_type == "add":
+            if self.todo is None or any(
+                value is not None
+                for value in (self.todo_id, self.status, self.order, self.result_reason)
+            ):
+                raise ValueError("RESEARCH_AGENT_TODO_ADD_PAYLOAD_INVALID")
+        elif self.change_type == "set_status":
+            if self.todo is not None or self.todo_id is None or self.status is None or self.order is not None:
+                raise ValueError("RESEARCH_AGENT_TODO_STATUS_PAYLOAD_INVALID")
+            _id(self.todo_id, "RESEARCH_AGENT_TODO_ID_INVALID")
+            if self.status in {"completed", "skipped"} and not self.result_reason:
+                raise ValueError("RESEARCH_AGENT_TODO_RESULT_REASON_REQUIRED")
+        elif self.todo is not None or self.todo_id is None or self.order is None or self.status is not None or self.result_reason is not None:
+            raise ValueError("RESEARCH_AGENT_TODO_ORDER_PAYLOAD_INVALID")
+        if self.todo_id is not None:
+            _id(self.todo_id, "RESEARCH_AGENT_TODO_ID_INVALID")
+        return self
+
+
+class QuerySemanticDataAction(_ReactSchemaModel):
+    action_type: Literal[ResearchActionType.QUERY_SEMANTIC_DATA] = ResearchActionType.QUERY_SEMANTIC_DATA
+    purpose: str = Field(min_length=1, max_length=2_000)
+    expected_result: str | None = Field(default=None, max_length=2_000)
+    arguments: QuerySemanticDataArguments
+
+
+class ComputeEvidenceAction(_ReactSchemaModel):
+    action_type: Literal[ResearchActionType.COMPUTE_EVIDENCE] = ResearchActionType.COMPUTE_EVIDENCE
+    purpose: str = Field(min_length=1, max_length=2_000)
+    expected_result: str | None = Field(default=None, max_length=2_000)
+    arguments: ComputeEvidenceArguments
+
+
+class ReadEvidenceRowsAction(_ReactSchemaModel):
+    action_type: Literal[ResearchActionType.READ_EVIDENCE_ROWS] = ResearchActionType.READ_EVIDENCE_ROWS
+    purpose: str = Field(min_length=1, max_length=2_000)
+    expected_result: str | None = Field(default=None, max_length=2_000)
+    arguments: ReadEvidenceRowsArguments
+
+
+class SearchSemanticAssetsAction(_ReactSchemaModel):
+    action_type: Literal[ResearchActionType.SEARCH_SEMANTIC_ASSETS] = ResearchActionType.SEARCH_SEMANTIC_ASSETS
+    purpose: str = Field(min_length=1, max_length=2_000)
+    expected_result: str | None = Field(default=None, max_length=2_000)
+    arguments: SearchSemanticAssetsArguments
+
+
+class RequestClarificationAction(_ReactSchemaModel):
+    action_type: Literal[ResearchActionType.REQUEST_CLARIFICATION] = ResearchActionType.REQUEST_CLARIFICATION
+    purpose: str = Field(min_length=1, max_length=2_000)
+    expected_result: str | None = Field(default=None, max_length=2_000)
+    arguments: RequestClarificationArguments
+
+
+class FinishResearchAction(_ReactSchemaModel):
+    action_type: Literal[ResearchActionType.FINISH_RESEARCH] = ResearchActionType.FINISH_RESEARCH
+    purpose: str = Field(min_length=1, max_length=2_000)
+    expected_result: None = None
+    arguments: FinishResearchArguments
+
+
+ResearchAction = Annotated[
+    QuerySemanticDataAction
+    | ComputeEvidenceAction
+    | ReadEvidenceRowsAction
+    | SearchSemanticAssetsAction
+    | RequestClarificationAction
+    | FinishResearchAction,
+    Field(discriminator="action_type"),
+]
+
+
+class ResearchTurnDecision(_ReactSchemaModel):
+    """模型每轮提交的 Finding/Todo 增量和工具动作。"""
+
+    finding_changes: tuple[FindingChange, ...] = ()
+    todo_changes: tuple[TodoChange, ...] = ()
+    actions: tuple[ResearchAction, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_turn_decision(self) -> ResearchTurnDecision:
+        action_types = tuple(item.action_type for item in self.actions)
+        control_types = {
+            ResearchActionType.REQUEST_CLARIFICATION,
+            ResearchActionType.FINISH_RESEARCH,
+        }
+        if control_types.intersection(action_types):
+            if len(self.actions) != 1:
+                raise ValueError("RESEARCH_AGENT_CONTROL_ACTION_MUST_BE_ALONE")
+        elif len(self.actions) > 1:
+            read_only_types = {
+                ResearchActionType.QUERY_SEMANTIC_DATA,
+                ResearchActionType.COMPUTE_EVIDENCE,
+                ResearchActionType.READ_EVIDENCE_ROWS,
+            }
+            if not set(action_types) <= read_only_types:
+                raise ValueError("RESEARCH_AGENT_PARALLEL_ACTION_NOT_READ_ONLY")
+        return self
+
+
+class ResearchStateSnapshot(_ReactSchemaModel):
+    """ResearchState 的持久化快照。"""
+
+    SCHEMA_VERSION: ClassVar[int] = RESEARCH_STATE_SNAPSHOT_SCHEMA_VERSION
+    runtime_type: Literal["research_agent"] = "research_agent"
+    state: ResearchState
+    last_event_sequence: int = Field(ge=0)
+    input_snapshot_ref: str = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> ResearchStateSnapshot:
+        _id(self.input_snapshot_ref, "RESEARCH_AGENT_INPUT_REF_INVALID")
+        if self.state.agent_input_ref != self.input_snapshot_ref:
+            raise ValueError("RESEARCH_AGENT_SNAPSHOT_INPUT_REF_MISMATCH")
+        return self
+
+
+__all__.extend(
+    [
+        "AttemptSummary",
+        "BudgetUsage",
+        "ClarificationOption",
+        "Completion",
+        "CompletionLimitation",
+        "CompletionValidationError",
+        "ComputeEvidenceAction",
+        "ComputeEvidenceArguments",
+        "ConversationMessage",
+        "Evidence",
+        "EvidenceColumn",
+        "EvidenceComparison",
+        "EvidenceComputation",
+        "EvidenceData",
+        "EvidenceDefinition",
+        "EvidenceFilter",
+        "EvidenceLimitation",
+        "EvidenceRows",
+        "EvidenceSelector",
+        "EvidenceStatistic",
+        "ExecutionError",
+        "Finding",
+        "FindingChange",
+        "FindingScope",
+        "FinishResearchAction",
+        "FinishResearchArguments",
+        "FinishResearchResult",
+        "MetricAnalysisRelation",
+        "MetricFormula",
+        "QueryComparison",
+        "QueryFilter",
+        "QueryOrder",
+        "QueryPeriod",
+        "QueryResultSpec",
+        "QuerySemanticDataAction",
+        "QuerySemanticDataArguments",
+        "QueryTimeSpec",
+        "ReadEvidenceRowsAction",
+        "ReadEvidenceRowsArguments",
+        "RemainingBudget",
+        "RequestClarificationAction",
+        "RequestClarificationArguments",
+        "ResearchAction",
+        "ResearchActionType",
+        "ResearchAgentInput",
+        "ResearchExecutionErrorStage",
+        "ResearchState",
+        "ResearchStateSnapshot",
+        "ResearchStateStatus",
+        "ResearchTurnDecision",
+        "RESEARCH_AGENT_INPUT_SCHEMA_VERSION",
+        "RESEARCH_STATE_SCHEMA_VERSION",
+        "RESEARCH_STATE_SNAPSHOT_SCHEMA_VERSION",
+        "SearchSemanticAssetsAction",
+        "SearchSemanticAssetsArguments",
+        "SemanticAmbiguity",
+        "SemanticContext",
+        "SemanticDimension",
+        "SemanticHierarchy",
+        "SemanticMetric",
+        "TimeRange",
+        "TodoChange",
+        "TodoItem",
+        "ToolResult",
+        "ToolResultStatus",
+    ]
+)

@@ -1,0 +1,321 @@
+{
+  "version": 1,
+  "schema_version": 1,
+  "architecture_document": "docs/TDD/41-evidence-driven-governed-react-agent-architecture.md",
+  "implementation_plan": "docs/TDD/42-evidence-driven-react-agent-implementation-plan.md",
+  "created_at": "2026-08-27",
+  "description": "Evidence 驱动受控 ReAct Research Agent 阶段 0固定场景清单。该清单冻结问题、目标语义资产、预期动作和终态；没有运行事实时不得推断结果。",
+  "fixture": {
+    "tenant_id": 1,
+    "user_id": 1,
+    "datasource_id": 13,
+    "dataset_id": 243,
+    "target_metric_refs": ["METRIC:271:246"],
+    "merchant_dimension_ref": "DIMENSION:277:246",
+    "stall_dimension_ref": "DIMENSION:278:246",
+    "order_count_metric_ref": "METRIC:265:246",
+    "average_order_value_metric_ref": "METRIC:303:246",
+    "default_budget": {
+      "model_turns": 8,
+      "query_calls": 8,
+      "compute_calls": 4,
+      "semantic_search_calls": 2,
+      "wall_time_ms": 60000,
+      "query_cost": 100
+    }
+  },
+  "observability_required": [
+    "run_status",
+    "completion_status",
+    "action_sequence",
+    "action_fingerprints",
+    "tool_results",
+    "evidence_ids",
+    "finding_ids",
+    "todo_items",
+    "budget_usage",
+    "duration_ms",
+    "query_cost",
+    "recovery_result"
+  ],
+  "cases": [
+    {
+      "id": "react-basic-single-metric",
+      "name": "单指标查询",
+      "question": "请查询2026年6月29日的总GMV，并给出结果。",
+      "tags": ["single_metric", "single_period"],
+      "baseline_available": false,
+      "baseline_reference": null,
+      "expected": {
+        "terminal_statuses": ["completed"],
+        "required_actions": ["query_semantic_data", "finish_research"],
+        "required_evidence_types": ["query_result"],
+        "forbidden_actions": ["physical_sql"],
+        "finish_statuses": ["complete"]
+      }
+    },
+    {
+      "id": "react-period-comparison",
+      "name": "两期指标对比",
+      "question": "请比较2026年6月29日和6月28日的总GMV变化。",
+      "tags": ["period_comparison"],
+      "baseline_available": false,
+      "baseline_reference": "research-cause-001",
+      "expected": {
+        "terminal_statuses": ["completed"],
+        "required_actions": ["query_semantic_data", "finish_research"],
+        "required_time_roles": ["current", "previous"],
+        "required_evidence_types": ["query_result"],
+        "finish_statuses": ["complete"]
+      }
+    },
+    {
+      "id": "react-driver-analysis",
+      "name": "指标驱动分析",
+      "question": "请验证总订单数和订单平均客单价是否支持解释总GMV下降，并给出证据。",
+      "tags": ["driver_analysis", "governed_relation"],
+      "baseline_available": true,
+      "baseline_reference": "research-cause-005",
+      "expected": {
+        "terminal_statuses": ["completed", "partial"],
+        "required_actions": ["query_semantic_data", "finish_research"],
+        "required_metric_refs": ["METRIC:265:246", "METRIC:303:246"],
+        "forbidden_claim_types": ["unsupported_causal_claim"],
+        "finish_statuses": ["complete", "partial"]
+      }
+    },
+    {
+      "id": "react-hierarchy-drilldown",
+      "name": "商家和档口连续下钻",
+      "question": "请找出2026年6月29日相对6月28日GMV下降最大的商家，再继续分析该商家下各档口的下降情况。",
+      "tags": ["hierarchy_drilldown", "result_driven_direction"],
+      "baseline_available": true,
+      "baseline_reference": "research-cause-003",
+      "expected": {
+        "terminal_statuses": ["completed", "partial"],
+        "required_actions": ["query_semantic_data", "query_semantic_data", "finish_research"],
+        "required_dimension_refs": ["DIMENSION:277:246", "DIMENSION:278:246"],
+        "required_dependency": "second_query_uses_first_query_result",
+        "finish_statuses": ["complete", "partial"]
+      }
+    },
+    {
+      "id": "react-derived-metric",
+      "name": "派生指标",
+      "question": "请查询2026年6月29日的GMV、订单数和客单价，并说明客单价的计算口径。",
+      "tags": ["derived_metric", "metric_formula"],
+      "baseline_available": false,
+      "baseline_reference": null,
+      "expected": {
+        "terminal_statuses": ["completed", "partial"],
+        "required_actions": ["query_semantic_data", "finish_research"],
+        "required_semantic_context": ["metric_formulas", "source_metrics"],
+        "forbidden_behavior": "model_calculates_without_evidence",
+        "finish_statuses": ["complete", "partial"]
+      }
+    },
+    {
+      "id": "react-high-cardinality-topn",
+      "name": "高基数维度 Top N",
+      "question": "请找出2026年6月29日GMV最低的20个档口，并按GMV从低到高排列。",
+      "tags": ["high_cardinality", "topn", "stable_order"],
+      "baseline_available": false,
+      "baseline_reference": null,
+      "expected": {
+        "terminal_statuses": ["completed", "partial"],
+        "required_actions": ["query_semantic_data", "finish_research"],
+        "required_query_constraints": ["order_by", "limit"],
+        "required_limit": 20,
+        "forbidden_behavior": "unbounded_high_cardinality_query",
+        "finish_statuses": ["complete", "partial"]
+      }
+    },
+    {
+      "id": "react-compute-evidence",
+      "name": "Evidence 后续计算",
+      "question": "请计算各档口对2026年6月29日相对6月28日GMV下降的贡献度。",
+      "tags": ["compute_evidence", "contribution", "reconciliation"],
+      "baseline_available": true,
+      "baseline_reference": "research-cause-004",
+      "expected": {
+        "terminal_statuses": ["completed", "partial"],
+        "required_actions": ["query_semantic_data", "compute_evidence", "finish_research"],
+        "required_parent_evidence": true,
+        "required_reconciliation": true,
+        "finish_statuses": ["complete", "partial"]
+      }
+    },
+    {
+      "id": "react-semantic-asset-missing",
+      "name": "语义资产不足",
+      "question": "请分析各交易渠道对GMV下降的贡献。",
+      "tags": ["semantic_asset_missing", "partial_or_unanswerable"],
+      "baseline_available": true,
+      "baseline_reference": "research-cause-009",
+      "expected": {
+        "terminal_statuses": ["partial", "unanswerable"],
+        "required_actions": ["search_semantic_assets", "finish_research"],
+        "required_limitation": "missing_or_unauthorized_semantic_asset",
+        "forbidden_behavior": "invent_semantic_asset",
+        "finish_statuses": ["partial", "unanswerable"]
+      }
+    },
+    {
+      "id": "react-clarification-resume",
+      "name": "关键歧义澄清",
+      "question": "请分析销售额在2026年6月29日的变化。",
+      "tags": ["clarification", "resume"],
+      "baseline_available": false,
+      "baseline_reference": null,
+      "expected": {
+        "intermediate_statuses": ["waiting_for_user"],
+        "terminal_statuses": ["completed"],
+        "required_actions": ["request_clarification", "query_semantic_data", "finish_research"],
+        "required_clarification": true,
+        "required_same_run_resume": true,
+        "finish_statuses": ["complete"]
+      }
+    },
+    {
+      "id": "react-query-retry-with-new-args",
+      "name": "查询失败后换参",
+      "question": "请查询2026年6月29日按档口拆分的GMV。",
+      "tags": ["query_failure", "parameter_retry"],
+      "baseline_available": false,
+      "baseline_reference": null,
+      "expected": {
+        "terminal_statuses": ["completed", "partial"],
+        "required_actions": ["query_semantic_data", "query_semantic_data", "finish_research"],
+        "required_failure": "retryable_query_error",
+        "required_retry": "changed_arguments",
+        "forbidden_behavior": "same_parameter_retry_without_permission",
+        "finish_statuses": ["complete", "partial"]
+      }
+    },
+    {
+      "id": "react-partial-success",
+      "name": "部分查询成功部分失败",
+      "question": "请同时从商家和档口两个方向分析GMV下降原因。",
+      "tags": ["parallel", "partial_success", "partial_failure"],
+      "baseline_available": false,
+      "baseline_reference": null,
+      "expected": {
+        "terminal_statuses": ["partial"],
+        "required_actions": ["query_semantic_data", "query_semantic_data", "finish_research"],
+        "required_parallel_group": true,
+        "required_success_and_failure": true,
+        "required_limitation": "failed_direction",
+        "finish_statuses": ["partial"]
+      }
+    },
+    {
+      "id": "react-unanswerable",
+      "name": "无法回答",
+      "question": "请分析档口88888在2026年6月29日GMV下降的原因。",
+      "tags": ["empty_result", "unanswerable"],
+      "baseline_available": false,
+      "baseline_reference": "research-cause-007",
+      "expected": {
+        "terminal_statuses": ["unanswerable"],
+        "required_actions": ["query_semantic_data", "finish_research"],
+        "required_immutable_filter": {"target_ref": "DIMENSION:278:246", "operator": "=", "value": "88888"},
+        "required_limitation": "no_supporting_data",
+        "forbidden_finish_statuses": ["complete"],
+        "finish_statuses": ["unanswerable"]
+      }
+    },
+    {
+      "id": "react-budget-exhaustion",
+      "name": "预算耗尽",
+      "question": "请全面分析GMV下降原因，包括商家、档口、贡献度和多个驱动指标。",
+      "tags": ["budget", "forced_finish"],
+      "baseline_available": true,
+      "baseline_reference": "research-cause-011",
+      "expected": {
+        "terminal_statuses": ["partial", "unanswerable"],
+        "required_actions": ["finish_research"],
+        "required_budget_boundary": true,
+        "forbidden_after_exhaustion": ["query_semantic_data", "compute_evidence", "search_semantic_assets"],
+        "required_limitation": "budget_exhausted",
+        "finish_statuses": ["partial", "unanswerable"]
+      }
+    },
+    {
+      "id": "react-cancel-resume-idempotent",
+      "name": "取消和恢复",
+      "question": "请分析2026年6月29日相对6月28日GMV下降的原因。",
+      "tags": ["cancel", "recovery", "idempotency"],
+      "baseline_available": false,
+      "baseline_reference": null,
+      "expected": {
+        "intermediate_statuses": ["cancelled"],
+        "terminal_statuses": ["completed", "partial", "unanswerable"],
+        "required_recovery": true,
+        "required_no_duplicate_evidence": true,
+        "required_no_duplicate_tool_execution": true,
+        "finish_statuses": ["complete", "partial", "unanswerable"]
+      }
+    },
+    {
+      "id": "react-independent-parallel-queries",
+      "name": "并行独立查询",
+      "question": "请同时从商家和档口两个方向展开GMV下降分析。",
+      "tags": ["parallel", "independent_read_only"],
+      "baseline_available": true,
+      "baseline_reference": "research-cause-010",
+      "expected": {
+        "terminal_statuses": ["completed", "partial"],
+        "required_actions": ["query_semantic_data", "query_semantic_data", "finish_research"],
+        "required_parallel_group": true,
+        "forbidden_parallel_actions": ["finish_research", "dependent_query"],
+        "finish_statuses": ["complete", "partial"]
+      }
+    },
+    {
+      "id": "react-read-evidence-rows",
+      "name": "截断结果读取",
+      "question": "请列出GMV下降最多的档口；如果首批结果被截断，请继续读取后续结果。",
+      "tags": ["read_evidence_rows", "pagination", "stable_order"],
+      "baseline_available": false,
+      "baseline_reference": null,
+      "expected": {
+        "terminal_statuses": ["completed", "partial"],
+        "required_actions": ["query_semantic_data", "read_evidence_rows", "finish_research"],
+        "required_stable_pagination": true,
+        "required_same_evidence_id": true,
+        "finish_statuses": ["complete", "partial"]
+      }
+    },
+    {
+      "id": "react-stall-detection",
+      "name": "重复动作和停滞",
+      "question": "请分析GMV下降原因。",
+      "tags": ["deduplication", "stall_detection"],
+      "baseline_available": false,
+      "baseline_reference": null,
+      "expected": {
+        "terminal_statuses": ["partial", "unanswerable"],
+        "required_actions": ["finish_research"],
+        "required_action_fingerprint_deduplication": true,
+        "required_stall_reason": true,
+        "forbidden_behavior": "unbounded_repeated_equivalent_action",
+        "finish_statuses": ["partial", "unanswerable"]
+      }
+    },
+    {
+      "id": "react-permission-tenant-isolation",
+      "name": "权限和租户隔离",
+      "question": "请分析GMV下降原因，并读取不属于当前租户权限范围的渠道维度。",
+      "tags": ["permission", "tenant_isolation"],
+      "baseline_available": false,
+      "baseline_reference": "research-cause-008",
+      "expected": {
+        "terminal_statuses": ["partial", "unanswerable", "failed"],
+        "required_actions": ["finish_research"],
+        "required_permission_rejection": true,
+        "forbidden_behavior": "permission_scope_expansion",
+        "finish_statuses": ["partial", "unanswerable"]
+      }
+    }
+  ]
+}

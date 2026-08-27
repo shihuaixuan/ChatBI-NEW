@@ -1,4 +1,4 @@
-"""Research 统一评测：新旧引擎双跑判分（38 号文档 §4.3；阶段 7.5 起 --engine）。
+"""Research 统一评测：当前 Agent 引擎判分与历史结果对比。
 
 用例来自 ``data/research_agent_eval_cases.json``（结构化 Gold），通过生产入口
 ``create_agent_start_events`` 运行 Research 路径，然后对每个 Run 输出统一
@@ -9,9 +9,9 @@
    重复动作执行、报告数字溯源、相关性写成因果、Evidence 依赖顺序；
 3. 运行指标：迭代数、模型调用、查询数、耗时、错误码分布（§4.3.4 运行指标）。
 
-``--engine legacy|agent`` 选择被测引擎（默认 legacy）：agent 走阶段 7.5 接线的
-新契约主路径。当前判分视图仍以旧路径持久化形态为基准，agent 记录在投影层
-补齐前可能低估得分——比较两侧时以 run 行事实为准。
+当前仓库只保留 Agent 主路径；历史 legacy 结果只作为已落盘基线参与离线比较，
+不再通过运行时环境变量切换旧引擎。当前判分视图仍以历史路径持久化形态为基准，
+agent 记录在投影层补齐前可能低估得分——比较时以运行事实为准。
 
 结果分为五类，显式失败和静默错误被明确区分：
 ``pass`` / ``correct_reject`` / ``explicit_failure`` / ``silent_error`` / ``harness_error``。
@@ -19,7 +19,7 @@
 用法：
     python scripts/run_research_agent_eval.py --list-cases
     python scripts/run_research_agent_eval.py --case research-cause-003
-    python scripts/run_research_agent_eval.py --output data/research_agent_eval_baseline_20260822.json
+    python scripts/run_research_agent_eval.py --output data/research_agent_eval_agent.json
     python scripts/run_research_agent_eval.py --engine agent --case research-cause-001
 
 环境前置与 run_research_stage3_real_questions.py 相同：真实数据库 + 真实模型，
@@ -45,18 +45,6 @@ from typing import Any
 # 必须在导入任何应用模块前设置：Settings 在导入时实例化。
 os.environ["CHAT_AGENT_ENABLED"] = "true"
 os.environ["CHAT_AGENT_EXECUTION_MODES"] = "fast,plan,research"
-
-
-def _resolve_engine_env() -> str:
-    """``--engine`` 必须在导入期生效（Settings 导入即实例化），故先扫 argv。"""
-
-    pre_parser = argparse.ArgumentParser(add_help=False)
-    pre_parser.add_argument("--engine", choices=("legacy", "agent"), default="legacy")
-    known, _unknown = pre_parser.parse_known_args()
-    return known.engine
-
-
-os.environ["CHATBI_RESEARCH_EXECUTION_MODE"] = _resolve_engine_env()
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
@@ -2283,9 +2271,9 @@ def main() -> int:
     parser.add_argument("--cases-file", type=Path, default=CASES_FILE)
     parser.add_argument(
         "--engine",
-        choices=("legacy", "agent"),
-        default="legacy",
-        help="被测 Research 引擎；agent 走阶段 7.5 接线的新契约主路径（doc38 §11.8）",
+        choices=("agent",),
+        default="agent",
+        help="被测 Research 引擎；当前仓库只支持 agent，历史 legacy 结果仅用于离线比较",
     )
     parser.add_argument("--case", action="append", default=[], help="按用例 ID 选择，可重复")
     parser.add_argument("--list-cases", action="store_true")
