@@ -5,6 +5,12 @@ from sqlalchemy import and_, delete, desc, select
 from sqlmodel import col
 
 from apps.chatbi.models.dto.analysis_plan import AnalysisPlan, ResultSetRef
+from apps.chatbi.models.dto.research_agent import (
+    ToolResult as ResearchToolResult,
+)
+from apps.chatbi.models.dto.research_agent import (
+    ToolResultStatus as ResearchToolResultStatus,
+)
 from apps.chatbi.models.orm.agent_run import (
     AgentClarificationStatus,
     AgentExecutionMode,
@@ -18,6 +24,9 @@ from apps.chatbi.models.orm.agent_run import (
 )
 from apps.chatbi.repository.sqlmodel.agent_trace_repository import (
     delete_nodes_for_runs,
+)
+from apps.chatbi.services.research.tool_result_persistence import (
+    serialize_research_tool_result,
 )
 from apps.conversation.composition import build_chat_record_service
 from apps.event import (
@@ -193,6 +202,29 @@ def finish_tool_call(
             (tool_call.finished_at - tool_call.started_at).total_seconds() * 1000
         )
     session.add(tool_call)
+
+
+def finish_research_tool_call(
+    session,
+    tool_call: ChatbiAgentToolCall,
+    *,
+    result: ResearchToolResult,
+) -> None:
+    """使用旧 Tool Call 记录持久化新 ToolResult，不新增第二套事实表。"""
+
+    status_map = {
+        ResearchToolResultStatus.SUCCEEDED: AgentToolCallStatus.SUCCEEDED,
+        ResearchToolResultStatus.FAILED: AgentToolCallStatus.FAILED,
+        ResearchToolResultStatus.WAITING_FOR_USER: AgentToolCallStatus.WAITING_FOR_USER,
+    }
+    status = status_map[result.status]
+    finish_tool_call(
+        session,
+        tool_call,
+        status=status,
+        result_summary=serialize_research_tool_result(result),
+        error_code=result.error.code if result.error is not None else None,
+    )
 
 
 def update_run(

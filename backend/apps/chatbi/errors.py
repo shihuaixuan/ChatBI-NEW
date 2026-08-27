@@ -114,6 +114,45 @@ class ResearchExecutionError(ChatBIError, RuntimeError):
         super().__init__(code)
 
 
+class ResearchToolExecutionError(ChatBIError, RuntimeError):
+    """Research 工具准备或执行阶段的可映射领域错误。"""
+
+    TOOL_NOT_FOUND = "RESEARCH_TOOL_NOT_FOUND"
+    TOOL_NOT_VISIBLE = "RESEARCH_TOOL_NOT_VISIBLE"
+    PARSING_FAILED = "RESEARCH_TOOL_PARSING_FAILED"
+    RUN_NOT_EXECUTABLE = "RESEARCH_RUN_NOT_EXECUTABLE"
+    RUN_CANCELLED = "RESEARCH_RUN_CANCELLED"
+    ARGUMENTS_INVALID = "RESEARCH_TOOL_ARGUMENTS_INVALID"
+    PREPARE_FAILED = "RESEARCH_TOOL_PREPARE_FAILED"
+    PERMISSION_DENIED = "RESEARCH_TOOL_PERMISSION_DENIED"
+    PLANNING_FAILED = "RESEARCH_TOOL_PLANNING_FAILED"
+    COMPILATION_FAILED = "RESEARCH_TOOL_COMPILATION_FAILED"
+    EXECUTION_FAILED = "RESEARCH_TOOL_EXECUTION_FAILED"
+    RESULT_INVALID = "RESEARCH_TOOL_RESULT_INVALID"
+    PERSISTENCE_FAILED = "RESEARCH_TOOL_PERSISTENCE_FAILED"
+    BUDGET_EXHAUSTED = "RESEARCH_TOOL_BUDGET_EXHAUSTED"
+    ACTION_DUPLICATED = "RESEARCH_TOOL_ACTION_DUPLICATED"
+    ACTION_BATCH_INVALID = "RESEARCH_TOOL_ACTION_BATCH_INVALID"
+    COMPLETION_FAILED = "RESEARCH_TOOL_COMPLETION_FAILED"
+
+    def __init__(
+        self,
+        code: str,
+        message: str | None = None,
+        *,
+        details: dict[str, Any] | None = None,
+        retryable: bool = False,
+        parameter_retryable: bool = False,
+        same_parameter_retryable: bool = False,
+    ) -> None:
+        self.code = code
+        self.details = dict(details or {})
+        self.retryable = retryable
+        self.parameter_retryable = parameter_retryable
+        self.same_parameter_retryable = same_parameter_retryable
+        super().__init__(message or code)
+
+
 class AgentActionError(ChatBIError, ValueError):
     """Agent 提出的动作不满足当前可信进展。"""
 

@@ -48,6 +48,7 @@ class AgentToolCallStatus(str, Enum):
     REJECTED = "rejected"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
+    WAITING_FOR_USER = "waiting_for_user"
 
 
 class AgentErrorClass(str, Enum):
@@ -138,7 +139,6 @@ class ChatbiAgentRun(SQLModel, table=True):
     created_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
     updated_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
     created_by: int | None = Field(default=None, sa_column=Column(BigInteger, nullable=True))
-
 
 class ChatbiAgentStep(SQLModel, table=True):
     __tablename__ = "chatbi_agent_step"

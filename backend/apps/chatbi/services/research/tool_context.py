@@ -33,6 +33,9 @@ from apps.chatbi.models.dto.research_agent import (
     SemanticAssessment,
     ToolObservation,
 )
+from apps.chatbi.models.dto.research_agent import (
+    ToolResult as ResearchToolResult,
+)
 from apps.chatbi.services.evidence import (
     EvidenceRegistry,
     build_research_analysis_evidence,
@@ -49,6 +52,9 @@ from apps.chatbi.services.planning.execution_state import (
 )
 from apps.chatbi.services.research.hypothesis_evaluator import HypothesisAuditRecord
 from apps.chatbi.services.research.state_snapshot import validate_evidence_dag
+from apps.chatbi.services.research.tool_result_persistence import (
+    serialize_research_tool_result,
+)
 
 if TYPE_CHECKING:
     from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
@@ -254,6 +260,27 @@ class ResearchToolContext:
         )
         if self.trace_recorder is not None:
             self.trace_recorder(observation)
+
+    # ------------------------------------------------------------------ #
+    # 新 ToolResult 事实（阶段 3）；旧 Observation 暂时保留给兼容运行链。
+    # ------------------------------------------------------------------ #
+
+    def research_tool_result(self, tool_call_id: str) -> dict[str, Any] | None:
+        """读取已持久化的新 ToolResult 原始 payload，供 Runtime 重放。"""
+
+        raw = self._research_tool_results().get(tool_call_id)
+        return dict(raw) if isinstance(raw, dict) else None
+
+    def record_research_tool_result(self, result: ResearchToolResult[Any]) -> None:
+        """保存新 ToolResult，不覆盖旧 Observation 记录。"""
+
+        if not result.tool_call_id:
+            raise ValueError("RESEARCH_AGENT_TOOL_CALL_ID_REQUIRED")
+        self._research_tool_results()[result.tool_call_id] = (
+            serialize_research_tool_result(result)
+        )
+        if self.trace_recorder is not None:
+            self.trace_recorder(result)
 
     # ------------------------------------------------------------------ #
     # 请求指纹去重
@@ -692,6 +719,12 @@ class ResearchToolContext:
         if not isinstance(observations, dict):
             raise TypeError("RESEARCH_TOOL_OBSERVATIONS_INVALID")
         return observations
+
+    def _research_tool_results(self) -> dict[str, Any]:
+        results = self._state().setdefault("tool_results", {})
+        if not isinstance(results, dict):
+            raise TypeError("RESEARCH_TOOL_RESULTS_INVALID")
+        return results
 
     def _fingerprints(self) -> dict[str, Any]:
         fingerprints = self._state().setdefault("request_fingerprints", {})

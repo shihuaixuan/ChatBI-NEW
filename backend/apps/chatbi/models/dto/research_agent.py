@@ -2012,6 +2012,7 @@ __all__ = [
 RESEARCH_AGENT_INPUT_SCHEMA_VERSION: Literal[1] = 1
 RESEARCH_STATE_SCHEMA_VERSION: Literal[1] = 1
 RESEARCH_STATE_SNAPSHOT_SCHEMA_VERSION: Literal[1] = 1
+RESEARCH_TOOL_RESULT_SCHEMA_VERSION: Literal[1] = 1
 
 
 class _ReactSchemaModel(_ContractModel):
@@ -2445,6 +2446,8 @@ _ResearchResultT = TypeVar("_ResearchResultT", bound=BaseModel)
 
 class ToolResult(_ReactSchemaModel, Generic[_ResearchResultT]):
     """Research 工具统一结果信封；外层由 Runtime 构造。"""
+
+    SCHEMA_VERSION: ClassVar[int] = RESEARCH_TOOL_RESULT_SCHEMA_VERSION
 
     tool_call_id: str = Field(min_length=1, max_length=256)
     name: ResearchActionType
@@ -3086,6 +3089,7 @@ __all__.extend(
         "RESEARCH_AGENT_INPUT_SCHEMA_VERSION",
         "RESEARCH_STATE_SCHEMA_VERSION",
         "RESEARCH_STATE_SNAPSHOT_SCHEMA_VERSION",
+        "RESEARCH_TOOL_RESULT_SCHEMA_VERSION",
         "SearchSemanticAssetsAction",
         "SearchSemanticAssetsArguments",
         "SemanticAmbiguity",
