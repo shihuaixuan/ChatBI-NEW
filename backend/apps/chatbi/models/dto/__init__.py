@@ -79,6 +79,7 @@ from apps.chatbi.models.dto.execution_requirement import (
     ExecutionRequirement,
     ExecutionRoute,
     QueryRequirement,
+    SemanticOperation,
     execution_requirement_from_state,
     query_requirement_to_spec,
 )
@@ -169,9 +170,7 @@ from apps.chatbi.models.dto.result_artifact import (
 )
 from apps.chatbi.models.dto.semantic_parse import (
     SemanticParseAssetRef,
-    SemanticParseCalculation,
     SemanticParseFilter,
-    SemanticParseOrderBy,
     SemanticParseOutput,
     SemanticParseTimeFilter,
     SemanticParseUnresolved,
@@ -306,12 +305,11 @@ __all__ = [
     "SQLGenerationEvent",
     "SQLGenerationResult",
     "SemanticParseAssetRef",
-    "SemanticParseCalculation",
     "SemanticParseFilter",
-    "SemanticParseOrderBy",
     "SemanticParseOutput",
     "SemanticParseTimeFilter",
     "SemanticParseUnresolved",
+    "SemanticOperation",
     "SemanticMention",
     "TimeRange",
     "normalize_mention_graph_payload",

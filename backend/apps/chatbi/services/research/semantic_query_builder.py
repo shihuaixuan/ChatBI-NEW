@@ -146,7 +146,7 @@ class SemanticQueryBuilder:
                         metrics=metrics,
                         group_by=model_dimensions,
                         filters=tuple(self._filter_payload(item) for item in model_filters),
-                        time=self._time_payload(time_binding),
+                        time=self._time_payload(time_binding, query.time_grain),
                         order_by=self._order_by_for_model(
                             query,
                             metric_bindings,
@@ -567,7 +567,10 @@ class SemanticQueryBuilder:
         return dict(bindings.get(role, {}))
 
     @staticmethod
-    def _time_payload(binding: ResearchTimeBinding | None) -> dict[str, Any] | None:
+    def _time_payload(
+        binding: ResearchTimeBinding | None,
+        time_grain: str | None,
+    ) -> dict[str, Any] | None:
         if binding is None:
             return None
         _, dimension_id = SemanticQueryBuilder._parse_ref(binding.dimension_ref)
@@ -576,6 +579,7 @@ class SemanticQueryBuilder:
             "expression": binding.expression,
             "dimension_id": dimension_id,
             "normalized": dict(binding.normalized),
+            "grain": time_grain,
         }
 
     @staticmethod
@@ -588,7 +592,8 @@ class SemanticQueryBuilder:
         return {
             "shape": query.analysis,
             "select_mode": "aggregate",
-            "needs_group_by": bool(query.dimensions),
+            "needs_group_by": bool(query.dimensions or query.time_grain),
+            "time_grain": query.time_grain,
         }
 
     @staticmethod

@@ -13,6 +13,7 @@ from apps.chatbi.models.dto.analysis_evidence import (
     AnalysisEvidenceStatistics,
     AnalysisEvidenceVersion,
 )
+from apps.chatbi.models.dto.execution_requirement import SemanticOperation
 from apps.chatbi.models.dto.research_agent import ResearchEvidence
 
 
@@ -69,7 +70,9 @@ def build_analysis_evidence(
     row_count: int,
     metric_refs: Sequence[str] = (),
     dimension_refs: Sequence[str] = (),
+    time_grain: Literal["day", "week", "month", "quarter", "year"] | None = None,
     time_roles: Sequence[str] = (),
+    operations: Sequence[SemanticOperation] = (),
     filters: Sequence[Mapping[str, Any]] = (),
     purpose: str | None = None,
     iteration: int = 0,
@@ -105,7 +108,9 @@ def build_analysis_evidence(
         purpose=purpose or f"{mode} 执行节点 {node_id}",
         metric_refs=tuple(metric_refs),
         dimension_refs=tuple(dimension_refs),
+        time_grain=time_grain,
         time_roles=tuple(time_roles),
+        operations=tuple(operations),
         filters=normalized_filters,
         logical_columns=columns,
         statistics=AnalysisEvidenceStatistics(
@@ -139,7 +144,9 @@ def build_research_analysis_evidence(
         purpose=evidence.purpose,
         metric_refs=evidence.metric_refs,
         dimension_refs=evidence.dimension_refs,
+        time_grain=evidence.time_grain,
         time_roles=tuple(item.value for item in evidence.time_ranges),
+        operations=evidence.operations,
         filters=tuple(item.model_dump(mode="json") for item in evidence.filters),
         logical_columns=tuple(
             AnalysisEvidenceColumn(

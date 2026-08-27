@@ -19,11 +19,16 @@ from apps.chatbi.errors import (
 )
 from apps.chatbi.models import ChatbiAgentRun
 from apps.chatbi.models.dto.analysis_plan import ResultSetRef
+from apps.chatbi.models.dto.execution_requirement import (
+    CalculationOperation,
+    SemanticOperation,
+)
 from apps.chatbi.models.dto.research_agent import (
     ResearchAgentRequirement,
     ResearchEvidence,
     ResearchEvidenceStatistics,
     ResearchLogicalColumn,
+    ResearchQueryComparison,
     ResearchResultRef,
     ResearchSemanticQuery,
     ResearchSemanticQueryOutcome,
@@ -632,7 +637,9 @@ class SemanticQueryRuntime:
             purpose=query.purpose,
             metric_refs=query.metrics,
             dimension_refs=query.dimensions,
+            time_grain=query.time_grain,
             time_ranges=query.time_ranges,
+            operations=_query_operations(query),
             filters=query.filters,
             logical_columns=logical_columns,
             statistics=ResearchEvidenceStatistics(row_count=len(rows)),
@@ -640,7 +647,6 @@ class SemanticQueryRuntime:
             hypothesis_ids=query.hypothesis_ids,
             version_snapshot=query.version_snapshot,
         )
-
     @staticmethod
     def _schema_version(scope: Any) -> int:
         snapshot = getattr(scope, "schema_snapshot", None)
@@ -1016,6 +1022,33 @@ class SemanticQueryRuntime:
             "EVIDENCE_REFERENCE_INVALID",
             stage=ToolFailureStage.PROJECTION,
         )
+
+
+def _query_operations(query: ResearchSemanticQuery) -> tuple[SemanticOperation, ...]:
+    """从实际执行参数推导已完成操作，Evidence 不接受模型自行声明。"""
+
+    operations: list[SemanticOperation] = [
+        SemanticOperation(type="group", target_ref=ref) for ref in query.dimensions
+    ]
+    if query.time_grain is not None:
+        operations.append(SemanticOperation(type="group", time_grain=query.time_grain))
+    operations.extend(
+        SemanticOperation(
+            type="sort",
+            target_ref=item.ref,
+            direction=item.direction.value,
+        )
+        for item in query.order
+    )
+    operations.append(SemanticOperation(type="limit", value=query.limit))
+    if query.comparison is not ResearchQueryComparison.NONE:
+        operations.append(
+            SemanticOperation(
+                type="calculate",
+                calculation=CalculationOperation(query.comparison.value),
+            )
+        )
+    return tuple(operations)
 
 
 def semantic_query_plan_id(query: ResearchSemanticQuery) -> str:

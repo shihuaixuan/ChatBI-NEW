@@ -136,12 +136,21 @@ def freeze_research_requirement(
     explicit_dimension_refs = tuple(
         dict.fromkeys(
             (
-                *(item.ref for item in semantic_parse.group_by),
+                *semantic_parse.dimension_group_refs(),
                 *(
                     item.target_ref
                     for item in semantic_parse.filters
                     if item.target_ref.startswith("DIMENSION:")
                 ),
+                *(dynamic.required_dimension_refs if dynamic is not None else ()),
+                *_multi_step_dimension_refs(semantic_parse),
+            )
+        )
+    )
+    required_analysis_dimension_refs = tuple(
+        dict.fromkeys(
+            (
+                *semantic_parse.dimension_group_refs(),
                 *(dynamic.required_dimension_refs if dynamic is not None else ()),
                 *_multi_step_dimension_refs(semantic_parse),
             )
@@ -166,6 +175,7 @@ def freeze_research_requirement(
     time_roles, time_bindings = _time_bindings(
         semantic_parse,
         schema,
+        target_metrics,
         target_model_id,
         temporal_context,
     )
@@ -309,13 +319,13 @@ def freeze_research_requirement(
     )
     explicit_driver_refs = declared_driver_refs
     contribution_requested = any(
-        item.type.value == "contribution"
-        for item in semantic_parse.calculations
+        item.calculation is not None and item.calculation.value == "contribution"
+        for item in semantic_parse.calculation_operations()
     )
     required_contribution_dimensions = (
         tuple(
             ref
-            for ref in explicit_dimension_refs
+            for ref in required_analysis_dimension_refs
             if ref in set(contribution_dimension_refs)
         )
         if contribution_requested
@@ -365,10 +375,14 @@ def freeze_research_requirement(
                 for key, value in scope_fields.items()
             },
             "required_dimension_refs": explicit_dimension_refs,
+            "required_analysis_dimension_refs": required_analysis_dimension_refs,
             "required_driver_metric_refs": explicit_driver_refs,
             "required_contribution_dimension_refs": (
                 required_contribution_dimensions
             ),
+            "operations": [
+                item.model_dump(mode="json") for item in semantic_parse.operations
+            ],
             "schema_version": schema.schema_version,
             "contract_version": schema.contract_version,
             "schema_fingerprint": schema.schema_fingerprint,
@@ -409,7 +423,7 @@ def freeze_research_requirement(
             required_asset_refs=target_metric_refs,
         )
     )
-    for index, ref in enumerate(explicit_dimension_refs, start=1):
+    for index, ref in enumerate(required_analysis_dimension_refs, start=1):
         evidence_requirements.append(
             ResearchEvidenceRequirement(
                 requirement_id=f"required-dimension-{index}",
@@ -465,7 +479,7 @@ def freeze_research_requirement(
             scope_fingerprint=scope_fingerprint,
             permission_fingerprint=permission_fingerprint,
         ),
-        output_requirements=_output_requirements(semantic_parse),
+        operations=tuple(semantic_parse.operations),
     )
     return requirement
 
@@ -504,29 +518,6 @@ def _multi_step_dimension_refs(
     if multi_step.type == "limited_multistep":
         return tuple(multi_step.dimension_refs)
     return ()
-
-
-def _output_requirements(
-    semantic_parse: SemanticParseOutput,
-) -> tuple[str, ...]:
-    """冻结用户明确声明的计算和多步输出，但不提前展开计划节点。"""
-
-    outputs = [
-        f"calculation:{item.type.value}:{json.dumps(item.details, ensure_ascii=False, sort_keys=True)}"
-        for item in semantic_parse.calculations
-    ]
-    outputs.extend(
-        f"order_by:{item.target_ref}:{item.direction}"
-        for item in semantic_parse.order_by
-    )
-    if semantic_parse.limit is not None:
-        outputs.append(f"limit:{semantic_parse.limit}")
-    multi_step = semantic_parse.multi_step
-    if multi_step is not None:
-        outputs.append(multi_step.type)
-        if multi_step.type == "limited_multistep":
-            outputs.extend(multi_step.requested_outputs)
-    return tuple(dict.fromkeys(outputs))
 
 
 def _governed_dimensions(
@@ -842,6 +833,7 @@ def _formula_relationship_dimensions(
 def _time_bindings(
     semantic_parse: SemanticParseOutput,
     schema: DatasetSchema,
+    target_metrics: Sequence[_ResearchSchemaElement],
     model_id: int,
     temporal_context: TemporalContext | None,
 ) -> tuple[tuple[ResearchTimeRole, ...], tuple[ResearchTimeBinding, ...]]:
@@ -852,14 +844,7 @@ def _time_bindings(
         raise ResearchRequirementError(ResearchRequirementError.TIME_ROLE_DUPLICATED)
     if temporal_context is None:
         raise ResearchRequirementError(ResearchRequirementError.TIME_CONTEXT_REQUIRED)
-    time_dimension = next(
-        (
-            item
-            for item in schema.dimensions
-            if item.model == model_id and _is_time_dimension(item)
-        ),
-        None,
-    )
+    time_dimension = _target_time_dimension(schema, target_metrics, model_id)
     if time_dimension is None:
         raise ResearchRequirementError(ResearchRequirementError.TIME_DIMENSION_REQUIRED)
     bindings: list[ResearchTimeBinding] = []
@@ -878,6 +863,50 @@ def _time_bindings(
             )
         )
     return roles, tuple(bindings)
+
+
+def _target_time_dimension(
+    schema: DatasetSchema,
+    target_metrics: Sequence[_ResearchSchemaElement],
+    model_id: int,
+) -> _ResearchSchemaElement | None:
+    """优先使用指标契约的默认时间维度，避免按 Schema 顺序猜日期字段。"""
+
+    target_metric_ids = {item.id for item in target_metrics}
+    default_ids = {
+        int(item["default_time_dimension_id"])
+        for item in schema.metric_contracts
+        if isinstance(item, dict)
+        and item.get("metric_id") in target_metric_ids
+        and isinstance(item.get("default_time_dimension_id"), int)
+    }
+    if len(default_ids) > 1:
+        raise ResearchRequirementError(
+            ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+        )
+    if default_ids:
+        default_id = next(iter(default_ids))
+        dimension = next(
+            (
+                item
+                for item in schema.dimensions
+                if item.id == default_id and item.model == model_id
+            ),
+            None,
+        )
+        if dimension is None or not _is_time_dimension(dimension):
+            raise ResearchRequirementError(
+                ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            )
+        return dimension
+    return next(
+        (
+            item
+            for item in schema.dimensions
+            if item.model == model_id and _is_time_dimension(item)
+        ),
+        None,
+    )
 
 
 def _time_bindings_by_model(

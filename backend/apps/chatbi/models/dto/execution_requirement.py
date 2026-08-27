@@ -33,6 +33,84 @@ class CalculationOperation(StrEnum):
     CONTRIBUTION = "contribution"
 
 
+class SemanticOperation(BaseModel):
+    """用户明确要求的结果操作，统一承载分组、排序、限制和计算。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type: Literal["group", "sort", "limit", "calculate"]
+    target_ref: str | None = Field(default=None, min_length=1)
+    time_grain: Literal["day", "week", "month", "quarter", "year"] | None = None
+    direction: Literal["asc", "desc"] | None = None
+    value: int | None = Field(default=None, gt=0, le=1000)
+    calculation: CalculationOperation | None = None
+    current_time_role: str | None = Field(default=None, min_length=1)
+    previous_time_role: str | None = Field(default=None, min_length=1)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_operation(self) -> SemanticOperation:
+        """每种操作只接受自身需要的字段，防止同一要求出现多套表达。"""
+
+        if self.type == "group":
+            if (self.target_ref is None) == (self.time_grain is None):
+                raise ValueError("SEMANTIC_OPERATION_GROUP_TARGET_INVALID")
+            if any(
+                value is not None
+                for value in (
+                    self.direction,
+                    self.value,
+                    self.calculation,
+                    self.current_time_role,
+                    self.previous_time_role,
+                )
+            ) or self.details:
+                raise ValueError("SEMANTIC_OPERATION_GROUP_FIELDS_INVALID")
+        elif self.type == "sort":
+            if self.target_ref is None or self.direction is None:
+                raise ValueError("SEMANTIC_OPERATION_SORT_FIELDS_REQUIRED")
+            if any(
+                value is not None
+                for value in (
+                    self.time_grain,
+                    self.value,
+                    self.calculation,
+                    self.current_time_role,
+                    self.previous_time_role,
+                )
+            ) or self.details:
+                raise ValueError("SEMANTIC_OPERATION_SORT_FIELDS_INVALID")
+        elif self.type == "limit":
+            if self.value is None:
+                raise ValueError("SEMANTIC_OPERATION_LIMIT_VALUE_REQUIRED")
+            if any(
+                value is not None
+                for value in (
+                    self.target_ref,
+                    self.time_grain,
+                    self.direction,
+                    self.calculation,
+                    self.current_time_role,
+                    self.previous_time_role,
+                )
+            ) or self.details:
+                raise ValueError("SEMANTIC_OPERATION_LIMIT_FIELDS_INVALID")
+        else:
+            if self.calculation is None:
+                raise ValueError("SEMANTIC_OPERATION_CALCULATION_REQUIRED")
+            if any(
+                value is not None
+                for value in (
+                    self.target_ref,
+                    self.time_grain,
+                    self.direction,
+                    self.value,
+                )
+            ):
+                raise ValueError("SEMANTIC_OPERATION_CALCULATION_FIELDS_INVALID")
+        return self
+
+
 class ExecutionResultContract(BaseModel):
     """声明主要结果、辅助结果和回答展示顺序。"""
 
@@ -543,6 +621,7 @@ __all__ = [
     "ExecutionResultContract",
     "ExecutionRoute",
     "QueryRequirement",
+    "SemanticOperation",
     "execution_requirement_from_state",
     "query_requirement_to_spec",
 ]

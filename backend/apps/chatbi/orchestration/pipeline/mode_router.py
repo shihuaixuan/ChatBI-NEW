@@ -159,9 +159,13 @@ def _selected_refs(semantic_parse: SemanticParseOutput) -> tuple[str, ...]:
         dict.fromkeys(
             (
                 *(item.ref for item in semantic_parse.measures),
-                *(item.ref for item in semantic_parse.group_by),
+                *semantic_parse.dimension_group_refs(),
                 *(item.target_ref for item in semantic_parse.filters),
-                *(item.target_ref for item in semantic_parse.order_by),
+                *(
+                    item.target_ref
+                    for item in semantic_parse.operations
+                    if item.type == "sort" and item.target_ref is not None
+                ),
             )
         )
     )

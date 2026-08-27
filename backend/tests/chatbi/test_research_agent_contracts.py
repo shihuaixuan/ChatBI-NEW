@@ -5,6 +5,8 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
+from apps.chatbi.errors import QuestionUnderstandingError
+from apps.chatbi.models.dto.execution_requirement import SemanticOperation
 from apps.chatbi.models.dto.research_agent import (
     ResearchAgentReport,
     ResearchAgentRequirement,
@@ -15,6 +17,7 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchEvidence,
     ResearchEvidenceCitation,
     ResearchEvidenceRequirement,
+    ResearchPlanNode,
     ResearchEvidenceStatistics,
     ResearchEvidenceValueRef,
     ResearchFinishRequest,
@@ -39,6 +42,7 @@ from apps.chatbi.models.dto.research_agent import (
     ToolErrorCode,
     ToolFailureStage,
     ToolObservation,
+    validate_plan_required_operations,
 )
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
 from apps.chatbi.models.orm.agent_run import AgentExecutionMode
@@ -51,15 +55,25 @@ from apps.chatbi.orchestration.pipeline import (
     PlanAndSolvePipeline,
     PlanAndSolveRuntime,
 )
+from apps.chatbi.services.research.agent_context import _planning_evidence_gaps
+from apps.chatbi.services.evidence.builder import build_research_analysis_evidence
 from apps.chatbi.services.planning.execution_state import (
     PlanNodeExecutionStatus,
     UnifiedPlanNode,
     build_plan_execution_state,
 )
-from apps.chatbi.services.research.premise_gap import validate_premise_gap_assessment
+from apps.chatbi.services.research.completion import evaluate_structural_coverage
+from apps.chatbi.services.research.premise_gap import (
+    diagnose_premise_plan,
+    validate_premise_gap_assessment,
+)
 from apps.chatbi.services.research.report_validator import validate_report_conclusions
 from apps.chatbi.services.research.routing_freeze import freeze_research_requirement
 from apps.chatbi.services.research.tool_context import ResearchToolContext
+from apps.chatbi.services.understanding.semantic_parse import (
+    SemanticParseCandidateContext,
+    SemanticParseService,
+)
 from apps.semantic.models.dto import (
     DatasetSchema,
     MetricRelationshipRuntimeDTO,
@@ -67,6 +81,38 @@ from apps.semantic.models.dto import (
 )
 from apps.temporal import build_temporal_context
 from apps.tool import ToolCall
+
+
+def _semantic_parse_candidate_context() -> SemanticParseCandidateContext:
+    """构造统一操作解析所需的最小候选边界。"""
+
+    return SemanticParseCandidateContext.model_validate(
+        {
+            "rewrite_question": "查询档口100011的总GMV按天趋势",
+            "candidate_groups": {
+                "metrics": [
+                    {
+                        "ref": "METRIC:271:246",
+                        "asset_type": "METRIC",
+                        "asset_id": 271,
+                        "model_id": 246,
+                        "display_name": "总GMV",
+                        "biz_name": "gmv_total",
+                    }
+                ],
+                "dimensions": [
+                    {
+                        "ref": "DIMENSION:278:246",
+                        "asset_type": "DIMENSION",
+                        "asset_id": 278,
+                        "model_id": 246,
+                        "display_name": "档口ID",
+                        "biz_name": "stall_id",
+                    }
+                ],
+            },
+        }
+    )
 
 
 def _version() -> dict[str, object]:
@@ -219,6 +265,47 @@ def test_requirement_without_time_filter_accepts_single_role_query() -> None:
     )
 
     requirement.validate_query(query)
+
+
+def test_plan_required_operations_accept_union_coverage_across_queries() -> None:
+    """结果操作在计划级联合覆盖即可；单条查询允许自然分解。"""
+
+    operation_requirement = _requirement().model_copy(
+        update={
+            "operations": (
+                SemanticOperation(
+                    type="sort",
+                    target_ref="METRIC:10:1",
+                    direction="desc",
+                ),
+                SemanticOperation(type="limit", value=5),
+            )
+        }
+    )
+    incomplete_query = ResearchSemanticQuery(
+        **{
+            **_query().model_dump(),
+            "order": (
+                {
+                    "ref": "METRIC:10:1",
+                    "direction": "desc",
+                },
+            ),
+        }
+    )
+    # 单条查询不再强制执行全部冻结操作，允许"总量确认前提 + 分组归因"分解。
+    operation_requirement.validate_query(incomplete_query)
+
+    with pytest.raises(ValueError, match="RESEARCH_AGENT_QUERY_OPERATION_MISSING"):
+        validate_plan_required_operations(operation_requirement, [incomplete_query])
+
+    completed_query = ResearchSemanticQuery(
+        **{
+            **incomplete_query.model_dump(),
+            "limit": 5,
+        }
+    )
+    validate_plan_required_operations(operation_requirement, [completed_query])
 
 
 def test_structural_coverage_state_must_match_missing_requirements() -> None:
@@ -941,6 +1028,209 @@ def test_premise_gap_accepts_merged_analysis_query_plan() -> None:
     assert result.data is not None
     assert result.data.status.value == "succeeded"
     assert context.plan_execution_state().nodes[0].arguments == arguments
+
+
+def _premise_requirement() -> ResearchAgentRequirement:
+    """构造携带待验证前提的治理 Requirement（前提 Gap id 固定）。"""
+
+    return ResearchAgentRequirement.model_validate(
+        {
+            **_governed_requirement().model_dump(mode="json"),
+            "evidence_requirements": [
+                {
+                    "requirement_id": "evidence-gap-1",
+                    "kind": "premise_confirmation",
+                    "description": "确认总 GMV 下降前提",
+                }
+            ],
+            "premise_to_verify": {
+                "premise_type": "metric_change",
+                "metric_ref": "METRIC:10:1",
+                "expected_direction": "decrease",
+                "time_roles": ("current", "previous"),
+                "statement": "总 GMV 已下降",
+            },
+        }
+    )
+
+
+def test_submit_research_plan_allows_frozen_gap_reference_on_initial_plan() -> None:
+    """首次计划可直接引用冻结 Requirement 的前提 Gap，不再判为伪造。"""
+
+    requirement = _premise_requirement()
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    result = build_research_tool_registry().execute(
+        ToolCall(
+            name="submit_research_plan",
+            call_id="plan-frozen-gap",
+            args={
+                "plan_nodes": (
+                    {
+                        "node_id": "n1-premise",
+                        "description": "确认总量变化前提",
+                        "gap_id": "evidence-gap-1",
+                        "tool_name": "query_semantic_data",
+                        "arguments": {
+                            "metrics": ["METRIC:10:1"],
+                            "time_ranges": ["current", "previous"],
+                            "comparison": "difference",
+                            "purpose": "确认总 GMV 下降前提",
+                        },
+                        "expected_output": "返回 current/previous 总量差值 Evidence",
+                    },
+                ),
+            },
+        ),
+        context,
+    )
+
+    assert result.data is not None
+    assert result.data.status.value == "succeeded"
+    assert (
+        context.plan_execution_state().nodes[-1].gap_id == "evidence-gap-1"
+    )
+
+
+def test_submit_research_plan_still_rejects_unknown_gap_ids() -> None:
+    """凭空构造的 gap_id 仍按伪造 Gap 拒绝，并提示可用的冻结 id。"""
+
+    requirement = _premise_requirement()
+    context = ResearchToolContext(
+        context=AgentToolContext(
+            session=None,
+            oid=1,
+            user_id=1,
+            datasource_id=1,
+            execution_id="exec-1",
+            chat_id=1,
+            record_id=1,
+            dataset_id=1,
+            permission_version="permission-v1",
+            state={"research_run_id": requirement.run_id},
+        ),
+        requirement=requirement,
+    )
+    context.bind_to_context()
+    result = build_research_tool_registry().execute(
+        ToolCall(
+            name="submit_research_plan",
+            call_id="plan-fake-gap",
+            args={
+                "plan_nodes": (
+                    {
+                        "node_id": "n1-premise",
+                        "description": "确认总量变化前提",
+                        "gap_id": "made-up-gap",
+                        "tool_name": "query_semantic_data",
+                        "arguments": {
+                            "metrics": ["METRIC:10:1"],
+                            "time_ranges": ["current", "previous"],
+                            "comparison": "difference",
+                            "purpose": "确认总 GMV 下降前提",
+                        },
+                        "expected_output": "返回 current/previous 总量差值 Evidence",
+                    },
+                ),
+            },
+        ),
+        context,
+    )
+
+    assert result.data is not None
+    assert result.data.status.value == "failed"
+    assert result.data.error_code is ToolErrorCode.INVALID_REQUEST
+    assert "首次规划不得伪造 Gap" in (result.data.message or "")
+
+
+def test_plan_required_operations_cover_groups_across_nodes() -> None:
+    """分组操作允许拆分到不同节点；仅靠无法表达分组的节点必须拒绝。"""
+
+    requirement = _governed_requirement().model_copy(
+        update={
+            "operations": (
+                SemanticOperation(type="group", target_ref="DIMENSION:20:1"),
+                SemanticOperation(type="group", target_ref="DIMENSION:21:1"),
+            )
+        }
+    )
+    totals_query = ResearchSemanticQuery(
+        **{
+            **_query().model_dump(),
+            "dimensions": (),
+            "time_ranges": ("current", "previous"),
+            "comparison": "difference",
+        }
+    )
+    by_region_query = ResearchSemanticQuery(
+        **{
+            **_query().model_dump(),
+            "dimensions": ("DIMENSION:20:1",),
+        }
+    )
+    by_store_query = ResearchSemanticQuery(
+        **{
+            **_query().model_dump(),
+            "dimensions": ("DIMENSION:21:1",),
+        }
+    )
+    validate_plan_required_operations(
+        requirement, [totals_query, by_region_query, by_store_query]
+    )
+    with pytest.raises(ValueError, match="RESEARCH_AGENT_QUERY_OPERATION_MISSING"):
+        validate_plan_required_operations(requirement, [by_region_query])
+
+
+def test_diagnose_premise_plan_reports_actionable_argument_problems() -> None:
+    """前提校验失败时，诊断必须指出非正式参数名和缺失键。"""
+
+    bad_node = ResearchPlanNode.model_validate(
+        {
+            "node_id": "n1-premise",
+            "description": "确认总量变化前提",
+            "tool_name": "query_semantic_data",
+            "arguments": {
+                "metric_ref": "METRIC:10:1",
+                "time_roles": ["current", "previous"],
+            },
+            "expected_output": "返回 current/previous 总量差值 Evidence",
+        }
+    )
+    diagnoses = diagnose_premise_plan(_premise_requirement(), (bad_node,))
+
+    assert len(diagnoses) == 1
+    problems = diagnoses[0]["problems"]
+    assert "非正式参数名 ['metric_ref', 'time_roles']" in problems
+    assert "缺少必填数组参数 metrics" in problems
+    assert '"difference"' in problems
+
+
+def test_planning_evidence_gaps_expose_confirming_query_template() -> None:
+    """Gap 投影必须携带使用正式参数名的前提确认模板，避免模型误用投影字段。"""
+
+    gaps = _planning_evidence_gaps(_premise_requirement(), None)
+
+    assert len(gaps) == 1
+    example = gaps[0]["confirming_query_example"]
+    assert example["tool_name"] == "query_semantic_data"
+    assert example["arguments"]["metrics"] == ["METRIC:10:1"]
+    assert example["arguments"]["time_ranges"] == ["current", "previous"]
+    assert example["arguments"]["comparison"] == "difference"
+    assert example["arguments"]["purpose"]
 
 
 def _scope() -> dict[str, object]:
@@ -2003,7 +2293,9 @@ def test_freeze_classifies_explicit_drivers_before_projecting_relationships() ->
                 {"ref": "METRIC:11:1"},
                 {"ref": "METRIC:12:1"},
             ],
-            "group_by": [{"ref": "DIMENSION:20:1"}],
+            "operations": [
+                {"type": "group", "target_ref": "DIMENSION:20:1"}
+            ],
             "time_filters": [
                 {"expression": "2026年6月29日", "role": "current"},
                 {"expression": "2026年6月28日", "role": "previous"},
@@ -2048,7 +2340,9 @@ def test_freeze_classifies_explicit_drivers_before_projecting_relationships() ->
             {
                 "status": "resolved",
                 "measures": [{"ref": "METRIC:10:1"}],
-                "group_by": [{"ref": "DIMENSION:20:1"}],
+                "operations": [
+                    {"type": "group", "target_ref": "DIMENSION:20:1"}
+                ],
             }
         ),
         schema=schema,
@@ -2061,6 +2355,230 @@ def test_freeze_classifies_explicit_drivers_before_projecting_relationships() ->
     assert direct_requirement.reason.value == "direct_analysis"
     assert direct_requirement.time_bindings == ()
     assert direct_requirement.scope.dimension_refs
+
+
+def test_semantic_parse_uses_one_operation_contract_for_time_grouping() -> None:
+    output = SemanticParseService._validate_output(
+        {
+            "status": "resolved",
+            "measures": [{"ref": "METRIC:271:246"}],
+            "filters": [
+                {
+                    "target_ref": "DIMENSION:278:246",
+                    "operator": "=",
+                    "value": "100011",
+                }
+            ],
+            "time_filters": [
+                {"expression": "2026年6月1日至30日", "role": "single"}
+            ],
+            "operations": [{"type": "group", "time_grain": "day"}],
+        },
+        _semantic_parse_candidate_context(),
+    )
+
+    assert output.time_grain() == "day"
+    assert output.dimension_group_refs() == ()
+
+
+def test_semantic_parse_rejects_old_result_operation_fields() -> None:
+    with pytest.raises(ValidationError):
+        SemanticParseOutput.model_validate(
+            {
+                "status": "resolved",
+                "measures": [{"ref": "METRIC:271:246"}],
+                "group_by": [{"ref": "DIMENSION:278:246"}],
+            }
+        )
+
+
+def test_semantic_operation_asset_refs_use_candidate_boundary() -> None:
+    with pytest.raises(
+        QuestionUnderstandingError,
+        match="SEMANTIC_PARSE_ASSET_REF_OUT_OF_CANDIDATES",
+    ):
+        SemanticParseService._validate_output(
+            {
+                "status": "resolved",
+                "measures": [{"ref": "METRIC:271:246"}],
+                "operations": [
+                    {"type": "group", "target_ref": "DIMENSION:999:246"}
+                ],
+            },
+            _semantic_parse_candidate_context(),
+        )
+
+
+def test_completion_requires_evidence_to_execute_frozen_operation() -> None:
+    operation = SemanticOperation(type="group", time_grain="day")
+    requirement = _requirement().model_copy(update={"operations": (operation,)})
+    evidence = _evidence().model_copy(
+        update={"time_grain": "day", "operations": (operation,)}
+    )
+
+    completed = evaluate_structural_coverage(
+        requirement,
+        [evidence],
+        premise_result={"status": "supported"},
+    )
+    missing = evaluate_structural_coverage(
+        requirement,
+        [_evidence()],
+        premise_result={"status": "supported"},
+    )
+
+    assert completed.minimum_requirements_met is True
+    assert missing.minimum_requirements_met is False
+    assert missing.missing_requirements[-1].kind == "operation:group"
+
+
+def test_research_evidence_projection_preserves_executed_operations() -> None:
+    """统一 Evidence 台账不能丢失 Research 已实际执行的操作。"""
+
+    operation = SemanticOperation(type="group", time_grain="day")
+    requirement = _requirement().model_copy(update={"operations": (operation,)})
+    evidence = _evidence().model_copy(
+        update={"time_grain": "day", "operations": (operation,)}
+    )
+
+    projected = build_research_analysis_evidence(
+        evidence,
+        run_id="execution-1",
+    )
+    coverage = evaluate_structural_coverage(
+        requirement,
+        [projected],
+        premise_result={"status": "supported"},
+    )
+
+    assert projected.time_grain == "day"
+    assert projected.operations == evidence.operations
+    assert coverage.minimum_requirements_met is True
+
+
+def test_filter_dimension_is_not_frozen_as_result_grouping() -> None:
+    def element(asset_id: int, asset_type: str, *, model: int | None = 1):
+        return SchemaElement(
+            data_set_id=1,
+            data_set_name="test",
+            model=model,
+            id=asset_id,
+            name=str(asset_id),
+            biz_name=str(asset_id),
+            type=asset_type,
+            ext_info={"field_name": f"field_{asset_id}"},
+        )
+
+    schema = DatasetSchema(
+        data_set=element(1, "DATASET", model=None),
+        metrics=[element(10, "METRIC")],
+        dimensions=[element(20, "DIMENSION")],
+        metric_dimension_capabilities=[
+            {
+                "id": 1,
+                "metric_id": 10,
+                "logical_dimension_id": 20,
+                "physical_dimension_id": 20,
+                "usages": ["FILTER"],
+                "aggregation_safety": "SAFE",
+            }
+        ],
+        metric_contracts=[{"metric_id": 10, "additivity": "FULL"}],
+        schema_version=1,
+        contract_version=1,
+        schema_fingerprint="filter-dimension-schema",
+    )
+    semantic_parse = SemanticParseOutput.model_validate(
+        {
+            "status": "resolved",
+            "measures": [{"ref": "METRIC:10:1"}],
+            "filters": [
+                {
+                    "target_ref": "DIMENSION:20:1",
+                    "operator": "=",
+                    "value": "100011",
+                }
+            ],
+        }
+    )
+
+    requirement = freeze_research_requirement(
+        semantic_parse=semantic_parse,
+        schema=schema,
+        temporal_context=None,
+        tenant_scope="tenant-1",
+        dataset_ref="ASSET:dataset:1",
+        goal="查询档口100011的指标值",
+    )
+
+    assert all(
+        item.requirement_id != "required-dimension-1"
+        for item in requirement.evidence_requirements
+    )
+
+
+def test_freeze_uses_metric_default_time_dimension_instead_of_schema_order() -> None:
+    def element(
+        asset_id: int,
+        asset_type: str,
+        *,
+        time_dimension: bool = False,
+    ) -> SchemaElement:
+        return SchemaElement(
+            data_set_id=1,
+            data_set_name="test",
+            model=1,
+            id=asset_id,
+            name=str(asset_id),
+            biz_name=str(asset_id),
+            type=asset_type,
+            ext_info={
+                "field_name": f"field_{asset_id}",
+                "dimension_data_type": "date" if time_dimension else "string",
+            },
+        )
+
+    schema = DatasetSchema(
+        data_set=element(1, "DATASET"),
+        metrics=[element(10, "METRIC")],
+        dimensions=[
+            element(20, "DIMENSION", time_dimension=True),
+            element(21, "DIMENSION", time_dimension=True),
+        ],
+        metric_contracts=[
+            {
+                "metric_id": 10,
+                "additivity": "FULL",
+                "default_time_dimension_id": 21,
+            }
+        ],
+        schema_version=1,
+        contract_version=1,
+        schema_fingerprint="default-time-schema",
+    )
+    semantic_parse = SemanticParseOutput.model_validate(
+        {
+            "status": "resolved",
+            "measures": [{"ref": "METRIC:10:1"}],
+            "time_filters": [
+                {"expression": "2026年6月1日至30日", "role": "single"}
+            ],
+            "operations": [{"type": "group", "time_grain": "day"}],
+        }
+    )
+
+    requirement = freeze_research_requirement(
+        semantic_parse=semantic_parse,
+        schema=schema,
+        temporal_context=build_temporal_context(
+            reference_at=datetime.fromisoformat("2026-08-26T12:00:00+08:00")
+        ),
+        tenant_scope="tenant-1",
+        dataset_ref="ASSET:dataset:1",
+        goal="查询按天趋势",
+    )
+
+    assert requirement.time_bindings[0].dimension_ref == "DIMENSION:21:1"
 
 
 def test_report_number_validation_accepts_dates_signs_and_display_rounding() -> None:

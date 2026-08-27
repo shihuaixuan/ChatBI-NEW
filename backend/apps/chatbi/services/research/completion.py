@@ -85,6 +85,23 @@ def evaluate_structural_coverage(
         else:
             covered_requirements.append(req.requirement_id)
 
+    for index, operation in enumerate(requirement.operations, start=1):
+        requirement_id = f"required-operation-{index}"
+        if any(
+            _operation_covered(operation, item, target_refs)
+            for item in evidence_items
+        ):
+            covered_requirements.append(requirement_id)
+            continue
+        gaps.append(
+            StructuralCoverageGap(
+                requirement_id=requirement_id,
+                kind=f"operation:{operation.type}",
+                missing_count=1,
+                message=f"用户明确要求的操作尚未完成：{operation.model_dump(mode='json')}",
+            )
+        )
+
     core_supported = any(
         _is_governed(item)
         and target_refs & set(item.metric_refs)
@@ -154,6 +171,38 @@ def _is_governed(evidence: EvidenceItem) -> bool:
 
     level = evidence.evidence_level
     return getattr(level, "value", level) == "governed"
+
+
+def _operation_covered(
+    required: Any,
+    evidence: EvidenceItem,
+    target_refs: set[str],
+) -> bool:
+    """只使用实际 Evidence 记录的执行操作判断用户要求是否完成。"""
+
+    if not _is_governed(evidence) or not target_refs & set(evidence.metric_refs):
+        return False
+    actual_operations = getattr(evidence, "operations", ())
+    for actual in actual_operations:
+        if actual.type != required.type:
+            continue
+        if required.type == "group" and (
+            actual.target_ref == required.target_ref
+            and actual.time_grain == required.time_grain
+        ):
+            return True
+        if required.type == "sort" and (
+            actual.target_ref == required.target_ref
+            and actual.direction == required.direction
+        ):
+            return True
+        if required.type == "limit" and actual.value == required.value:
+            return True
+        if required.type == "calculate" and (
+            actual.calculation == required.calculation
+        ):
+            return True
+    return False
 
 
 __all__ = [

@@ -142,6 +142,25 @@ def test_builder_creates_plan_independent_analysis_spec() -> None:
     assert spec.runtime["run_id"] == "run-1"
 
 
+def test_builder_uses_frozen_time_dimension_for_time_grouping() -> None:
+    requirement = _governed_requirement()
+    query = _query().model_copy(
+        update={"dimensions": (), "time_grain": "day"}
+    )
+
+    spec = SemanticQueryBuilder(semantic_scope=_scope()).build(
+        query,
+        requirement=requirement,
+    )
+
+    query_requirement = spec.query_requirements[0]
+    assert query_requirement.group_by == ()
+    assert query_requirement.time is not None
+    assert query_requirement.time["dimension_id"] == 20
+    assert query_requirement.time["grain"] == "day"
+    assert query_requirement.query_shape["time_grain"] == "day"
+
+
 def test_builder_creates_current_previous_difference_dag() -> None:
     requirement = _governed_requirement()
     query = ResearchSemanticQuery(

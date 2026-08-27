@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from apps.chatbi.models.dto.execution_requirement import CalculationOperation
+from apps.chatbi.models.dto.execution_requirement import SemanticOperation
 from apps.chatbi.models.dto.research_agent import (
     ResearchDirection,
     ResearchPremiseType,
@@ -41,26 +41,6 @@ class SemanticParseTimeFilter(BaseModel):
 
     expression: str = Field(min_length=1)
     role: str = Field(min_length=1)
-
-
-class SemanticParseOrderBy(BaseModel):
-    """语义解析结果中的排序条件。"""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    target_ref: str = Field(min_length=1)
-    direction: Literal["asc", "desc"]
-
-
-class SemanticParseCalculation(BaseModel):
-    """语义解析结果中的计算要求。"""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    type: CalculationOperation
-    current_time_role: str | None = None
-    previous_time_role: str | None = None
-    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class SemanticParseDrilldownLevel(BaseModel):
@@ -164,19 +144,41 @@ class SemanticParseOutput(BaseModel):
 
     status: Literal["resolved", "needs_clarification", "missed"]
     measures: list[SemanticParseAssetRef] = Field(default_factory=list)
-    group_by: list[SemanticParseAssetRef] = Field(default_factory=list)
     filters: list[SemanticParseFilter] = Field(default_factory=list)
     time_filters: list[SemanticParseTimeFilter] = Field(default_factory=list)
-    order_by: list[SemanticParseOrderBy] = Field(default_factory=list)
-    limit: int | None = Field(default=None, gt=0)
-    calculations: list[SemanticParseCalculation] = Field(default_factory=list)
+    operations: list[SemanticOperation] = Field(default_factory=list)
     multi_step: SemanticParseMultiStep | None = None
     unresolved: list[SemanticParseUnresolved] = Field(default_factory=list)
+
+    def dimension_group_refs(self) -> tuple[str, ...]:
+        """返回用户明确要求的普通维度分组引用。"""
+
+        return tuple(
+            item.target_ref
+            for item in self.operations
+            if item.type == "group" and item.target_ref is not None
+        )
+
+    def time_grain(self) -> str | None:
+        """返回用户明确要求的唯一时间分组粒度。"""
+
+        return next(
+            (
+                item.time_grain
+                for item in self.operations
+                if item.type == "group" and item.time_grain is not None
+            ),
+            None,
+        )
+
+    def calculation_operations(self) -> tuple[SemanticOperation, ...]:
+        """返回用户明确声明的确定性计算操作。"""
+
+        return tuple(item for item in self.operations if item.type == "calculate")
 
 
 __all__ = [
     "SemanticParseAssetRef",
-    "SemanticParseCalculation",
     "SemanticParseFilter",
     "SemanticParseFixedAttribution",
     "SemanticParseFixedDrilldown",
@@ -184,7 +186,6 @@ __all__ = [
     "SemanticParseDynamicResearch",
     "SemanticParseLimitedMultiStep",
     "SemanticParseMultiStep",
-    "SemanticParseOrderBy",
     "SemanticParseOutput",
     "SemanticParseResearchPremise",
     "SemanticParseTimeFilter",

@@ -31,6 +31,10 @@ from apps.chatbi.models.dto.analysis_plan import (
     ResultSetRef,
     ResultSetSnapshot,
 )
+from apps.chatbi.models.dto.execution_requirement import (
+    CalculationOperation,
+    SemanticOperation,
+)
 from apps.chatbi.models.dto.research_agent import (
     RESEARCH_COMPLETION_STATUS_BY_REASON,
     ResearchBudgetUsage,
@@ -64,6 +68,7 @@ from apps.chatbi.models.dto.research_agent import (
     ToolFailureStage,
     ToolObservation,
     ToolObservationStatus,
+    validate_plan_required_operations,
 )
 from apps.chatbi.services.computation.errors import (
     ComputeEngineError,
@@ -75,6 +80,7 @@ from apps.chatbi.services.research.hypothesis_evaluator import (
     evaluate_hypothesis_assessments,
 )
 from apps.chatbi.services.research.premise_gap import (
+    diagnose_premise_plan,
     validate_premise_gap_assessment,
 )
 from apps.chatbi.services.research.report_validator import (
@@ -127,6 +133,7 @@ class QuerySemanticDataArgs(_ToolArgsModel):
 
     metrics: tuple[str, ...] = Field(min_length=1)
     dimensions: tuple[str, ...] = ()
+    time_grain: Literal["day", "week", "month", "quarter", "year"] | None = None
     time_ranges: tuple[ResearchTimeRole, ...] = Field(min_length=1)
     filters: tuple[ResearchLiteralFilter, ...] = ()
     evidence_value_filters: tuple[ResearchEvidenceValueRef, ...] = ()
@@ -429,7 +436,7 @@ class QuerySemanticDataTool(
     title = "执行受治理的语义查询"
     description = (
         "在冻结的语义 Scope 内执行一次声明式语义查询。参数只接受逻辑指标、"
-        "维度、时间角色和字面过滤；服务端注入 run 与版本边界。成功返回证据 ID、"
+        "维度、时间角色、排序、数量限制和字面过滤；服务端注入 run 与版本边界。成功返回证据 ID、"
         "有界样本和统计；失败返回结构化错误码与重试建议。不接受 SQL 或物理字段。"
     )
     args_model = QuerySemanticDataArgs
@@ -462,6 +469,7 @@ class QuerySemanticDataTool(
                 version_snapshot=ctx.requirement.version_snapshot,
                 metrics=args.metrics,
                 dimensions=args.dimensions,
+                time_grain=args.time_grain,
                 time_ranges=args.time_ranges,
                 filters=args.filters,
                 evidence_value_filters=args.evidence_value_filters,
@@ -1425,6 +1433,7 @@ class ComputeEvidenceTool(
                 dict.fromkeys((*request.dimension_refs, *request.group_by_refs))
             ),
             time_ranges=tuple(time_ranges),
+            operations=_compute_operations(request),
             logical_columns=logical_columns,
             statistics=ResearchEvidenceStatistics(row_count=len(rows)),
             sample_rows=tuple(dict(row) for row in rows[:10]),
@@ -1524,14 +1533,33 @@ class ComputeEvidenceTool(
         return build(metric_ref, "value")
 
 
+def _compute_operations(
+    request: ResearchComputeRequest,
+) -> tuple[SemanticOperation, ...]:
+    """从确定性计算请求推导 Evidence 已完成的用户操作。"""
+
+    if request.operation.value not in {item.value for item in CalculationOperation}:
+        return ()
+    return (
+        SemanticOperation(
+            type="calculate",
+            calculation=CalculationOperation(request.operation.value),
+        ),
+    )
+
+
 def validate_research_plan_addition(
     ctx: ResearchToolContext,
     tool_name: str,
     arguments: dict[str, Any],
     *,
     dependency_node_ids: tuple[str, ...] = (),
-) -> None:
-    """使用实际工具契约校验计划节点，依赖输出在执行时解析为 Evidence。"""
+) -> ResearchSemanticQuery | None:
+    """使用实际工具契约校验计划节点，依赖输出在执行时解析为 Evidence。
+
+    query 节点返回编译后的 ``ResearchSemanticQuery``，供调用方做计划级
+    的结果操作覆盖检查；其余节点返回 ``None``。
+    """
 
     if tool_name == "query_semantic_data":
         query_args = QuerySemanticDataArgs.model_validate(arguments)
@@ -1542,6 +1570,7 @@ def validate_research_plan_addition(
             **query_args.model_dump(),
         )
         ctx.requirement.validate_query(query, ctx.evidences())
+        return query
     elif tool_name == "inspect_evidence":
         normalized = dict(arguments)
         if dependency_node_ids and normalized.get("evidence_id"):
@@ -1565,6 +1594,7 @@ def validate_research_plan_addition(
         )
         if not set(inspect_args.logical_column_refs) <= available_refs:
             raise ValueError("RESEARCH_AGENT_EVIDENCE_COLUMN_NOT_FOUND")
+        return None
     else:
         normalized = dict(arguments)
         if dependency_node_ids and normalized.get("input_evidence_ids"):
@@ -1592,6 +1622,7 @@ def validate_research_plan_addition(
             | set(request.group_by_refs)
         ) <= allowed_refs:
             raise ValueError("RESEARCH_AGENT_COMPUTE_REF_OUT_OF_SCOPE")
+        return None
 
 
 class SubmitResearchPlanTool(
@@ -1603,6 +1634,15 @@ class SubmitResearchPlanTool(
         "首次规划直接提交解决当前问题所需的完整数据步骤；后续重新规划需要同时提交"
         "当前 Evidence 的明确缺口评估。计划由 query_semantic_data、inspect_evidence "
         "或 compute_evidence 节点组成，服务端整体校验后一次性写入新的 DAG revision。"
+        "节点 arguments 必须使用工具正式参数名：query_semantic_data 使用 "
+        "metrics、dimensions、time_grain、time_ranges、filters、comparison、"
+        "analysis、drilldown、order、limit、purpose、hypothesis_ids。order 每项使用 "
+        "ref、direction、value_role；按日环比差值排序使用指标 ref 加 "
+        "value_role=\"difference\"，不能把 difference 写进 ref。"
+        "analysis=\"contribution\" 仅用于 comparison=\"contribution\"；"
+        "按维度定位日环比来源使用 comparison=\"difference\"、"
+        "analysis=\"breakdown\"。禁止使用 metric、group_by、order_by、time_filter、"
+        "dataset_ref 等旧名。"
     )
     args_model = SubmitResearchPlanArgs
     result_model = ToolObservation
@@ -1652,8 +1692,15 @@ class SubmitResearchPlanTool(
             if assessment is not None
             else set()
         )
+        # 服务端冻结的 Evidence Gap（如前提确认）允许直接引用；只有引用
+        # 不存在的 gap_id 才视为伪造。Working State 会向模型投影这些 id。
+        frozen_gap_ids = {
+            item.requirement_id for item in ctx.requirement.evidence_requirements
+        }
+        known_gap_ids |= frozen_gap_ids
         if assessment is None and any(
-            item.gap_id is not None for item in args.plan_nodes
+            item.gap_id is not None and item.gap_id not in frozen_gap_ids
+            for item in args.plan_nodes
         ):
             raise _fail(
                 ctx,
@@ -1661,7 +1708,11 @@ class SubmitResearchPlanTool(
                 code=ToolErrorCode.INVALID_REQUEST,
                 stage=ToolFailureStage.VALIDATION,
                 parameter_retryable=True,
-                message="首次规划不得伪造 Gap，计划节点的 gap_id 必须为空。",
+                message=(
+                    "首次规划不得伪造 Gap：计划节点的 gap_id 必须留空，"
+                    "或引用冻结 Requirement 中已存在的 Evidence Gap "
+                    f"（当前可用：{sorted(frozen_gap_ids)}）。"
+                ),
             )
         if any(
             item.gap_id is not None and item.gap_id not in known_gap_ids
@@ -1693,27 +1744,12 @@ class SubmitResearchPlanTool(
                 details={"missing_evidence_ids": missing},
             )
 
-        try:
-            premise_result = validate_premise_gap_assessment(
-                ctx.requirement,
-                ctx.evidences(),
-                assessment,
-                current_result=ctx.premise_result,
-                plan_nodes=args.plan_nodes,
-            )
-        except ValueError as exc:
-            raise _fail(
-                ctx,
-                self.name,
-                code=ToolErrorCode.INVALID_REQUEST,
-                stage=ToolFailureStage.VALIDATION,
-                parameter_retryable=True,
-                message=f"Evidence Gap 评估校验失败：{exc}",
-            ) from exc
-
+        # 先逐节点编译：参数形状错误在这里获得最精确的定位（缺哪个键、
+        # 多了哪个键）；之后的语义校验只需面对形状合法的计划。
+        compiled_queries: list[ResearchSemanticQuery] = []
         for plan_node in args.plan_nodes:
             try:
-                validate_research_plan_addition(
+                compiled = validate_research_plan_addition(
                     ctx,
                     plan_node.tool_name,
                     plan_node.arguments,
@@ -1729,6 +1765,56 @@ class SubmitResearchPlanTool(
                     message=f"计划节点无法编译或超出 Scope：{exc}",
                     details={"tool_name": plan_node.tool_name},
                 ) from exc
+            if compiled is not None:
+                compiled_queries.append(compiled)
+
+        try:
+            validate_plan_required_operations(ctx.requirement, compiled_queries)
+        except ValueError as exc:
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message=f"完整计划未覆盖用户要求的结果操作：{exc}",
+                suggested_corrections=(
+                    "把缺失的操作并入现有查询节点（补充 dimensions/order/limit），"
+                    "或新增能够表达该操作的节点。",
+                ),
+            ) from exc
+
+        try:
+            premise_result = validate_premise_gap_assessment(
+                ctx.requirement,
+                ctx.evidences(),
+                assessment,
+                current_result=ctx.premise_result,
+                plan_nodes=args.plan_nodes,
+            )
+        except ValueError as exc:
+            details: dict[str, Any] | None = None
+            corrections: tuple[str, ...] = ()
+            if str(exc) == "RESEARCH_AGENT_PREMISE_GAP_PLAN_INVALID":
+                details = {
+                    "plan_node_diagnostics": list(
+                        diagnose_premise_plan(ctx.requirement, args.plan_nodes)
+                    ),
+                }
+                corrections = (
+                    "按 plan_node_diagnostics 逐节点修正 arguments；参数模板见 "
+                    "Working State 的 evidence_gaps[].confirming_query_example。",
+                )
+            raise _fail(
+                ctx,
+                self.name,
+                code=ToolErrorCode.INVALID_REQUEST,
+                stage=ToolFailureStage.VALIDATION,
+                parameter_retryable=True,
+                message=f"Evidence Gap 评估校验失败：{exc}",
+                details=details,
+                suggested_corrections=corrections,
+            ) from exc
         try:
             ctx.submit_plan(args.plan_nodes)
             if premise_result is not None:
@@ -1766,7 +1852,8 @@ class FinishResearchTool(
     description = (
         "提交结束请求：finish 原因、结论、证据引用、假设评估、局限和未解决问题。"
         "所有数据结论必须引用当前 Run 的既有证据；通过结构校验和引用存在性校验后"
-        "写入终态 completion。必须是当前轮最后的收口动作。"
+        "写入终态 completion。findings 必须与 semantic_assessment.supported_findings"
+        "完全一致。必须是当前轮最后的收口动作。"
     )
     args_model = FinishResearchArgs
     result_model = ToolObservation

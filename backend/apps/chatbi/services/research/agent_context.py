@@ -52,9 +52,16 @@ def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
     premise_line = (
         "存在待验证前提 Evidence Gap：可以复用既有 Evidence、与原因分析任务"
         "合并，或在必要时新增任务；不得假定必须执行独立前提查询。"
+        "用 query_semantic_data 确认前提时，节点 arguments 必须同时满足："
+        "metrics 数组包含前提指标、time_ranges 数组覆盖前提的全部时间角色、"
+        'comparison="difference"，并携带 purpose；Working State 的 '
+        "evidence_gaps[].confirming_query_example 给出了可直接套用的参数模板。"
         if requirement.premise_to_verify is not None
         else "没有待验证前提；禁止执行任何未经要求固定的对比查询。"
     )
+    operation_lines = "\n".join(
+        f"- {item.model_dump(mode='json')}" for item in requirement.operations
+    ) or "- 无额外结果操作"
     return (
         "你是治理范围内的数据研究代理。你的任务是围绕既定目标做多轮"
         "语义查询、检验假设并得出可审计的结论。\n\n"
@@ -62,6 +69,7 @@ def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
         f"研究目标（不可修改）：{requirement.goal}\n"
         f"目标指标（不可修改）：{', '.join(requirement.target_metric_refs)}\n"
         f"时间绑定（不可修改）：\n{time_lines}\n"
+        f"结果操作（不可修改）：\n{operation_lines}\n"
         + (f"不可变筛选（不可修改）：\n{immutable}\n" if immutable else "")
         + f"数据集：{scope.dataset_ref}；租户范围：{scope.tenant_scope}\n"
         "冻结版本："
@@ -78,7 +86,12 @@ def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
         "提交完整计划，Runtime 会从 DAG 执行。\n"
         f"6. {premise_line}\n"
         "7. 你可以调整维度、排序、限制、拆分方式和 Scope 内驱动指标；"
-        "不能修改目标指标、时间绑定、不可变筛选或冻结版本。\n"
+        "不能修改目标指标、时间绑定、结果操作、不可变筛选或冻结版本。"
+        "时间 group 操作使用 query_semantic_data.time_grain，不要把时间维度"
+        "猜成 dimensions；排序和数量限制必须在 query_semantic_data 的 order、limit"
+        "中直接执行，不能只依赖 inspect_evidence 的展示排序。按计算差值排序时，"
+        "order 使用指标 ref 并设置 value_role=difference；analysis=contribution"
+        "只用于 comparison=contribution，日环比差异的维度定位使用 analysis=breakdown。\n"
         "8. 首次规划没有 Evidence 时直接提交完整计划，不得伪造 explicit_gap；"
         "当前计划完成后仍需继续时，必须说明明确缺口并提交下一份完整计划。"
         "计划批准后由 Runtime "
@@ -138,7 +151,9 @@ def project_research_working_state(
         "goal": requirement.goal,
         "reason": requirement.reason.value,
         "target_metric_refs": list(requirement.target_metric_refs),
-        "output_requirements": list(requirement.output_requirements),
+        "operations": [
+            item.model_dump(mode="json") for item in requirement.operations
+        ],
         "evidence_gaps": _planning_evidence_gaps(requirement, premise_result),
         "immutable_filters": [
             {
@@ -279,7 +294,11 @@ def _evidence_summary(item: ResearchEvidence) -> dict[str, Any]:
         "purpose": item.purpose[:200],
         "metric_refs": list(item.metric_refs),
         "dimension_refs": list(item.dimension_refs),
+        "time_grain": item.time_grain,
         "time_ranges": [role.value for role in item.time_ranges],
+        "operations": [
+            operation.model_dump(mode="json") for operation in item.operations
+        ],
         "row_count": item.statistics.row_count,
         "truncated": item.statistics.truncated,
         "dependencies": [
@@ -396,6 +415,19 @@ def _planning_evidence_gaps(
         ),
         "premise-gap",
     )
+    # 参数模板使用 query_semantic_data 的正式参数名；投影字段（metric_ref/
+    # time_roles）只是 Gap 的描述词汇，不能直接当节点 arguments 使用。
+    confirming_query_example = {
+        "tool_name": "query_semantic_data",
+        "arguments": {
+            "metrics": [premise.metric_ref],
+            "time_ranges": list(
+                dict.fromkeys(item.value for item in premise.time_roles)
+            ),
+            "comparison": "difference",
+            "purpose": (f"确认前提：{premise.statement}" or "确认前提")[:1000],
+        },
+    }
     return [
         {
             "gap_id": requirement_id,
@@ -415,6 +447,7 @@ def _planning_evidence_gaps(
                 and isinstance(premise_result.get("evidence_id"), str)
                 else []
             ),
+            "confirming_query_example": confirming_query_example,
         }
     ]
 

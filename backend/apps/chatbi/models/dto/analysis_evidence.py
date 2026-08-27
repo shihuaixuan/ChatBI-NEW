@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from apps.chatbi.models.dto.execution_requirement import SemanticOperation
+
 
 class AnalysisEvidenceLevel(StrEnum):
     GOVERNED = "governed"
@@ -79,7 +81,9 @@ class AnalysisEvidence(BaseModel):
     purpose: str = Field(min_length=1, max_length=1000)
     metric_refs: tuple[str, ...] = ()
     dimension_refs: tuple[str, ...] = ()
+    time_grain: Literal["day", "week", "month", "quarter", "year"] | None = None
     time_roles: tuple[str, ...] = ()
+    operations: tuple[SemanticOperation, ...] = ()
     filters: tuple[dict[str, Any], ...] = ()
     logical_columns: tuple[AnalysisEvidenceColumn, ...] = Field(min_length=1)
     statistics: AnalysisEvidenceStatistics

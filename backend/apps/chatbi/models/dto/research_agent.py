@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
+from apps.chatbi.models.dto.execution_requirement import SemanticOperation
+
 RESEARCH_AGENT_CONTRACT_VERSION: Literal[1] = 1
 
 _ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
@@ -606,7 +608,7 @@ class ResearchAgentRequirement(_VersionedContractModel):
     evidence_requirements: tuple[ResearchEvidenceRequirement, ...] = Field(min_length=1)
     budget: ResearchBudget = Field(default_factory=ResearchBudget)
     version_snapshot: ResearchVersionSnapshot
-    output_requirements: tuple[str, ...] = ()
+    operations: tuple[SemanticOperation, ...] = ()
 
     @model_validator(mode="after")
     def validate_requirement(self) -> ResearchAgentRequirement:
@@ -677,6 +679,18 @@ class ResearchAgentRequirement(_VersionedContractModel):
         for requirement in self.evidence_requirements:
             if not set(requirement.required_asset_refs) <= scope_refs:
                 raise ValueError("RESEARCH_AGENT_EVIDENCE_REQUIREMENT_OUT_OF_SCOPE")
+        operation_refs = {
+            item.target_ref for item in self.operations if item.target_ref is not None
+        }
+        if not operation_refs <= scope_refs:
+            raise ValueError("RESEARCH_AGENT_OPERATION_REF_OUT_OF_SCOPE")
+        time_group_count = sum(
+            1
+            for item in self.operations
+            if item.type == "group" and item.time_grain is not None
+        )
+        if time_group_count > 1:
+            raise ValueError("RESEARCH_AGENT_TIME_GROUP_DUPLICATED")
         if self.version_snapshot.scope_fingerprint != self.scope.scope_fingerprint:
             raise ValueError("RESEARCH_AGENT_SCOPE_FINGERPRINT_MISMATCH")
         return self
@@ -721,6 +735,62 @@ class ResearchAgentRequirement(_VersionedContractModel):
             ):
                 raise ValueError("RESEARCH_AGENT_IMMUTABLE_FILTER_CHANGED")
         query.validate_scope(self.scope, evidence)
+
+
+def validate_plan_required_operations(
+    requirement: ResearchAgentRequirement,
+    queries: Sequence[ResearchSemanticQuery],
+    evidences: Sequence[ResearchEvidence] = (),
+) -> None:
+    """整份计划联合已有 Evidence 覆盖冻结结果操作即可；单条查询允许分解。
+
+    逐查询强制会禁止"总量确认前提 + 分组归因下钻"这类自然分解，
+    迫使每条查询都携带全部分组维度。重规划时，已经由上一轮 Evidence
+    实际执行的操作应视为已覆盖，当前计划只需补齐剩余操作。内容层面的
+    最终缺口仍由 finish 前的结构覆盖评估（Evidence 实际 operations）兜底。
+    """
+
+    dimensions: set[str] = set()
+    time_grains: set[str] = set()
+    order_keys: set[tuple[str, str]] = set()
+    limits: set[int] = set()
+    for evidence in evidences:
+        for operation in evidence.operations:
+            if operation.type == "group":
+                if operation.time_grain is not None:
+                    time_grains.add(operation.time_grain)
+                elif operation.target_ref is not None:
+                    dimensions.add(operation.target_ref)
+            elif operation.type == "sort":
+                if operation.target_ref is not None and operation.direction is not None:
+                    order_keys.add((operation.target_ref, operation.direction))
+            elif operation.type == "limit" and operation.value is not None:
+                limits.add(operation.value)
+    for query in queries:
+        dimensions |= set(query.dimensions)
+        if query.time_grain is not None:
+            time_grains.add(query.time_grain)
+        order_keys |= {(item.ref, item.direction.value) for item in query.order}
+        limits.add(query.limit)
+    missing_operations: list[str] = []
+    for operation in requirement.operations:
+        if operation.type == "group":
+            if operation.time_grain is not None:
+                completed = operation.time_grain in time_grains
+            else:
+                completed = operation.target_ref in dimensions
+        elif operation.type == "sort":
+            completed = (operation.target_ref, operation.direction) in order_keys
+        elif operation.type == "limit":
+            completed = operation.value in limits
+        else:
+            # 计算操作可以由 compute_evidence 在查询之后完成，不能在此处强制。
+            continue
+        if not completed:
+            missing_operations.append(operation.type)
+    if missing_operations:
+        missing = ",".join(dict.fromkeys(missing_operations))
+        raise ValueError(f"RESEARCH_AGENT_QUERY_OPERATION_MISSING:{missing}")
 
 
 class ResearchLiteralFilter(_ContractModel):
@@ -822,6 +892,7 @@ class ResearchSemanticQuery(_VersionedContractModel):
     version_snapshot: ResearchVersionSnapshot
     metrics: tuple[str, ...] = Field(min_length=1)
     dimensions: tuple[str, ...] = ()
+    time_grain: Literal["day", "week", "month", "quarter", "year"] | None = None
     time_ranges: tuple[ResearchTimeRole, ...] = Field(min_length=1)
     filters: tuple[ResearchLiteralFilter, ...] = ()
     evidence_value_filters: tuple[ResearchEvidenceValueRef, ...] = ()
@@ -1171,7 +1242,9 @@ class ResearchEvidence(_VersionedContractModel):
     purpose: str = Field(min_length=1, max_length=1000)
     metric_refs: tuple[str, ...] = ()
     dimension_refs: tuple[str, ...] = ()
+    time_grain: Literal["day", "week", "month", "quarter", "year"] | None = None
     time_ranges: tuple[ResearchTimeRole, ...] = ()
+    operations: tuple[SemanticOperation, ...] = ()
     filters: tuple[ResearchLiteralFilter, ...] = ()
     logical_columns: tuple[ResearchLogicalColumn, ...] = Field(min_length=1)
     statistics: ResearchEvidenceStatistics
@@ -1537,7 +1610,19 @@ class ResearchPlanNode(_ContractModel):
         "inspect_evidence",
         "compute_evidence",
     ]
-    arguments: dict[str, Any]
+    arguments: dict[str, Any] = Field(
+        description=(
+            "必须使用目标工具的正式参数名。query_semantic_data 使用 "
+            "metrics、dimensions、time_grain、time_ranges、filters、comparison、"
+            "analysis、drilldown、order、limit、purpose、hypothesis_ids。order 的每项 "
+            "使用 ref=指标或维度引用、direction=asc|desc、value_role=value|current|"
+            "previous|difference|growth_rate|share|contribution；按计算差值排序时 "
+            "使用指标 ref 加 value_role=difference，不要把 difference 写进 ref。"
+            "analysis=contribution 仅用于 comparison=contribution；日环比差异按维度"
+            "定位来源使用 comparison=difference 和 analysis=breakdown；"
+            "禁止使用 metric、group_by、order_by、time_filter、dataset_ref 等旧名。"
+        )
+    )
 
     @model_validator(mode="after")
     def validate_plan_node(self) -> ResearchPlanNode:
@@ -1915,5 +2000,6 @@ __all__ = [
     "ToolFailureStage",
     "ToolObservation",
     "ToolObservationStatus",
+    "validate_plan_required_operations",
     "validate_research_semantic_query",
 ]

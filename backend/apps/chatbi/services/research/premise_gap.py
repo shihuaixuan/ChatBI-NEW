@@ -150,4 +150,101 @@ def _plan_node_can_address_premise(
     )
 
 
-__all__ = ["premise_gap_id", "validate_premise_gap_assessment"]
+_QUERY_ARGUMENT_KEYS = frozenset(
+    {
+        "metrics",
+        "dimensions",
+        "time_grain",
+        "time_ranges",
+        "filters",
+        "evidence_value_filters",
+        "comparison",
+        "analysis",
+        "drilldown",
+        "order",
+        "limit",
+        "purpose",
+        "hypothesis_ids",
+    }
+)
+
+
+def diagnose_premise_plan(
+    requirement: ResearchAgentRequirement,
+    plan_nodes: Sequence[ResearchPlanNode],
+) -> tuple[dict[str, str], ...]:
+    """逐节点解释为什么它不能确认前提；供拒绝反馈的 details 使用。
+
+    与 ``_plan_node_can_address_premise`` 的判定口径一致，但把布尔结果
+    展开成可行动的问题清单——裸错误码无法帮助模型修正参数形状。
+    """
+
+    premise = requirement.premise_to_verify
+    if premise is None:
+        return ()
+    expected_roles = list(dict.fromkeys(item.value for item in premise.time_roles))
+    diagnoses: list[dict[str, str]] = []
+    for node in plan_nodes:
+        if node.tool_name == "query_semantic_data":
+            problems = _premise_query_argument_problems(
+                premise, node.arguments, expected_roles
+            )
+        else:
+            problems = [
+                "该工具不能直接确认指标变化前提；请提供一个 query_semantic_data "
+                f"节点，其 arguments 满足 metrics 包含 {premise.metric_ref}、"
+                f"time_ranges 覆盖 {expected_roles}、comparison=\"difference\""
+            ]
+        if problems:
+            diagnoses.append(
+                {"node_id": node.node_id, "problems": "；".join(problems)}
+            )
+    return tuple(diagnoses)
+
+
+def _premise_query_argument_problems(
+    premise: Any,
+    arguments: dict[str, Any],
+    expected_roles: list[str],
+) -> list[str]:
+    """对照前提确认所需的最小参数形状，列出单个查询节点的问题。"""
+
+    problems: list[str] = []
+    unknown_keys = sorted(set(arguments) - _QUERY_ARGUMENT_KEYS)
+    if unknown_keys:
+        problems.append(
+            f"存在非正式参数名 {unknown_keys}；必须使用正式参数名，"
+            "不要沿用 Requirement 投影里的字段名（如 metric_ref/time_roles）"
+        )
+    metrics = arguments.get("metrics")
+    if not isinstance(metrics, (list, tuple)) or not metrics:
+        problems.append(f"缺少必填数组参数 metrics（应包含 {premise.metric_ref}）")
+    elif premise.metric_ref not in metrics:
+        problems.append(f"metrics 未包含前提指标 {premise.metric_ref}")
+    time_ranges = arguments.get("time_ranges")
+    if not isinstance(time_ranges, (list, tuple)) or not time_ranges:
+        problems.append(
+            f"缺少必填数组参数 time_ranges（应覆盖 {expected_roles}）"
+        )
+    else:
+        missing_roles = sorted(
+            set(expected_roles) - {str(item) for item in time_ranges}
+        )
+        if missing_roles:
+            problems.append(f"time_ranges 缺少时间角色 {missing_roles}")
+    comparison = arguments.get("comparison")
+    if comparison != "difference":
+        problems.append(
+            f'comparison 必须为 "difference"（当前为 {comparison!r}）；'
+            "方向判定依赖 current 与 previous 的差值"
+        )
+    if not arguments.get("purpose"):
+        problems.append("缺少必填参数 purpose（一句话说明该节点的用途）")
+    return problems
+
+
+__all__ = [
+    "diagnose_premise_plan",
+    "premise_gap_id",
+    "validate_premise_gap_assessment",
+]
