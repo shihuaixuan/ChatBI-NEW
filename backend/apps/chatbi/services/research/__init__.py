@@ -20,9 +20,14 @@ from apps.chatbi.services.research.semantic_query_builder import SemanticQueryBu
 if TYPE_CHECKING:
     from apps.chatbi.services.research.tools import (
         ComputeEvidenceResearchTool,
+        FinishResearchResearchTool,
         QuerySemanticDataResearchTool,
         ReadEvidenceRowsResearchTool,
+        RequestClarificationResearchTool,
+        SearchSemanticAssetsResearchTool,
+        build_research_control_tool_registry,
         build_research_data_tool_registry,
+        build_research_tool_registry,
     )
 
 __all__ = [
@@ -32,11 +37,16 @@ __all__ = [
     "ResearchToolRegistry",
     "ResearchToolRuntime",
     "ComputeEvidenceResearchTool",
+    "FinishResearchResearchTool",
     "QuerySemanticDataResearchTool",
     "ReadEvidenceRowsResearchTool",
+    "RequestClarificationResearchTool",
+    "SearchSemanticAssetsResearchTool",
     "SemanticQueryBuilder",
     "build_research_action_fingerprint",
     "build_research_data_tool_registry",
+    "build_research_control_tool_registry",
+    "build_research_tool_registry",
     "research_action_fingerprint",
 ]
 
@@ -46,9 +56,14 @@ def __getattr__(name: str) -> Any:
 
     if name in {
         "ComputeEvidenceResearchTool",
+        "FinishResearchResearchTool",
         "QuerySemanticDataResearchTool",
         "ReadEvidenceRowsResearchTool",
+        "RequestClarificationResearchTool",
+        "SearchSemanticAssetsResearchTool",
+        "build_research_control_tool_registry",
         "build_research_data_tool_registry",
+        "build_research_tool_registry",
     }:
         from apps.chatbi.services.research import tools
 

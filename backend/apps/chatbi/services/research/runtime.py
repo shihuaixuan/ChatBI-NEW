@@ -531,7 +531,14 @@ class ResearchToolRuntime:
                     ),
                 )
             else:
-                result = self._success(tool_call_id, action_type, result_payload)
+                if action_type is ResearchActionType.REQUEST_CLARIFICATION:
+                    result = self._waiting_for_user(
+                        tool_call_id,
+                        action_type,
+                        result_payload,
+                    )
+                else:
+                    result = self._success(tool_call_id, action_type, result_payload)
 
         if self._persist_result is not None:
             result = self._persist(result)
@@ -582,6 +589,21 @@ class ResearchToolRuntime:
             tool_call_id=tool_call_id,
             name=action_type,
             status=ToolResultStatus.SUCCEEDED,
+            result=payload,
+        )
+
+    @staticmethod
+    def _waiting_for_user(
+        tool_call_id: str,
+        action_type: ResearchActionType,
+        payload: BaseModel,
+    ) -> ToolResult[Any]:
+        """澄清工具成功创建请求，但 Run 需要等待用户回答。"""
+
+        return ToolResult(
+            tool_call_id=tool_call_id,
+            name=action_type,
+            status=ToolResultStatus.WAITING_FOR_USER,
             result=payload,
         )
 

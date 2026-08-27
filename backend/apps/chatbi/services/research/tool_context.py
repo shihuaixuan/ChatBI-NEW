@@ -16,14 +16,21 @@ Context 只在服务端 Tool 执行时使用，不向模型序列化。所有值
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from apps.chatbi.models.dto.analysis_evidence import AnalysisEvidence
 from apps.chatbi.models.dto.analysis_plan import ResultSetRef
 from apps.chatbi.models.dto.research_agent import (
+    AttemptSummary,
+    ClarificationRequest,
+    ClarificationResponse,
+    Completion,
+    ConversationMessage,
     Evidence,
+    Finding,
+    ResearchAgentInput,
     ResearchAgentRequirement,
     ResearchBudget,
     ResearchBudgetUsage,
@@ -31,7 +38,9 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchEvidence,
     ResearchHypothesisAssessment,
     ResearchPlanNode,
+    ResearchStateStatus,
     SemanticAssessment,
+    SemanticContextDelta,
     ToolObservation,
 )
 from apps.chatbi.models.dto.research_agent import (
@@ -67,6 +76,7 @@ if TYPE_CHECKING:
 RESEARCH_STATE_KEY = "research_state"
 _RESULT_SETS_KEY = "result_sets"
 _RUN_ID_KEY = "research_run_id"
+_AGENT_INPUT_SNAPSHOTS_KEY = "agent_input_snapshots"
 
 
 @dataclass
@@ -76,7 +86,11 @@ class ResearchToolContext:
     context: AgentToolContext
     requirement: ResearchAgentRequirement
     semantic_runtime: SemanticQueryRuntime | None = None
+    # 补充语义检索服务由宿主注入；工具不能自行创建未带权限快照的服务。
+    semantic_retrieval_service: Any = None
     compute_engine: ComputeEngine | None = None
+    # 初始化输入可以直接注入，也可以从持久化 state 恢复。
+    agent_input: ResearchAgentInput | None = None
     budget: ResearchBudget = field(default_factory=ResearchBudget)
     cancellation: CancellationSignal | None = None
     # Trace Recorder 由宿主注入；观察记录是唯一回调点。
@@ -133,6 +147,220 @@ class ResearchToolContext:
             return None
         return ResearchCompletion.model_validate(raw)
 
+    @property
+    def current_status(self) -> ResearchStateStatus:
+        """读取阶段 5 ReAct 状态；没有新状态时兼容旧运行并视为 running。"""
+
+        raw = self._state().get("current_status")
+        if raw is None:
+            return ResearchStateStatus.RUNNING
+        return ResearchStateStatus(raw)
+
+    def set_current_status(self, status: ResearchStateStatus | str) -> None:
+        """集中保存 ReAct 状态，供控制工具和恢复逻辑共同使用。"""
+
+        resolved = ResearchStateStatus(status)
+        self._state()["current_status"] = resolved.value
+
+    # ------------------------------------------------------------------ #
+    # ResearchAgentInput 快照
+    # ------------------------------------------------------------------ #
+
+    def current_agent_input(self) -> ResearchAgentInput:
+        """读取当前输入快照；不存在时明确失败，不使用空语义上下文兜底。"""
+
+        if self.agent_input is not None:
+            return self.agent_input
+        raw = self._state().get("agent_input")
+        if not isinstance(raw, dict):
+            ref = self._state().get("agent_input_ref")
+            snapshots = self._state().get(_AGENT_INPUT_SNAPSHOTS_KEY)
+            if isinstance(ref, str) and isinstance(snapshots, dict):
+                raw = snapshots.get(ref)
+        if not isinstance(raw, dict):
+            raw = self.context.state.get("research_agent_input")
+        if not isinstance(raw, dict):
+            raise ValueError("RESEARCH_AGENT_INPUT_SNAPSHOT_REQUIRED")
+        loaded = ResearchAgentInput.model_validate(raw)
+        self.agent_input = loaded
+        return loaded
+
+    def save_agent_input(self, agent_input: ResearchAgentInput) -> ResearchAgentInput:
+        """保存不可修改输入快照，并把新引用投影到当前状态。"""
+
+        ref = agent_input.agent_input_ref or self.next_agent_input_ref()
+        if agent_input.agent_input_ref != ref:
+            agent_input = agent_input.model_copy(update={"agent_input_ref": ref})
+        payload = agent_input.model_dump(mode="json")
+        snapshots = self._state().setdefault(_AGENT_INPUT_SNAPSHOTS_KEY, {})
+        if not isinstance(snapshots, dict):
+            raise TypeError("RESEARCH_AGENT_INPUT_SNAPSHOTS_INVALID")
+        existing = snapshots.get(ref)
+        if isinstance(existing, dict) and existing != payload:
+            raise ValueError("RESEARCH_AGENT_INPUT_SNAPSHOT_IMMUTABLE")
+        snapshots[ref] = payload
+        self._state()["agent_input"] = payload
+        self._state()["agent_input_ref"] = ref
+        self.agent_input = agent_input
+        return agent_input
+
+    def next_agent_input_ref(self) -> str:
+        """按持久化快照数量生成稳定、可审计的输入引用。"""
+
+        snapshots = self._state().get(_AGENT_INPUT_SNAPSHOTS_KEY)
+        count = len(snapshots) if isinstance(snapshots, dict) else 0
+        return f"agent_input_{count + 1:02d}"
+
+    def record_semantic_context_delta(self, delta: SemanticContextDelta) -> None:
+        """按顺序保存语义增量，便于恢复和审计。"""
+
+        deltas = self._state().setdefault("semantic_context_deltas", [])
+        if not isinstance(deltas, list):
+            raise TypeError("RESEARCH_AGENT_SEMANTIC_CONTEXT_DELTAS_INVALID")
+        deltas.append(delta.model_dump(mode="json"))
+
+    # ------------------------------------------------------------------ #
+    # 澄清请求、回答和恢复
+    # ------------------------------------------------------------------ #
+
+    def clarification_request(self) -> ClarificationRequest | None:
+        raw = self._state().get("pending_clarification")
+        if not isinstance(raw, dict):
+            return None
+        return ClarificationRequest.model_validate(raw)
+
+    def save_clarification_request(self, request: ClarificationRequest) -> None:
+        """保存当前等待中的澄清请求并暂停 Run。"""
+
+        self._state()["pending_clarification"] = request.model_dump(mode="json")
+        self._state()["clarification_request"] = request.model_dump(mode="json")
+        self.set_current_status(ResearchStateStatus.WAITING_FOR_USER)
+
+    def resume_clarification(
+        self,
+        response: ClarificationResponse | Mapping[str, Any],
+    ) -> ResearchAgentInput:
+        """校验当前请求的回答，保存回答并生成新的输入快照。"""
+
+        if not isinstance(response, ClarificationResponse):
+            response = ClarificationResponse.model_validate(response)
+        request = self.clarification_request()
+        if request is None:
+            raise ValueError("RESEARCH_AGENT_CLARIFICATION_NOT_PENDING")
+        if response.clarification_request_id != request.clarification_request_id:
+            raise ValueError("RESEARCH_AGENT_CLARIFICATION_REQUEST_MISMATCH")
+        allowed_option_ids = {item.option_id for item in request.options}
+        if not set(response.selected_option_ids) <= allowed_option_ids:
+            raise ValueError("RESEARCH_AGENT_CLARIFICATION_OPTION_NOT_FOUND")
+        if response.free_text and not request.allow_free_text:
+            raise ValueError("RESEARCH_AGENT_CLARIFICATION_FREE_TEXT_FORBIDDEN")
+        if not response.selected_option_ids and not (response.free_text or "").strip():
+            raise ValueError("RESEARCH_AGENT_CLARIFICATION_RESPONSE_EMPTY")
+
+        current = self.current_agent_input()
+        selected_labels = [
+            item.label
+            for item in request.options
+            if item.option_id in set(response.selected_option_ids)
+        ]
+        answer_parts = [*selected_labels]
+        if response.free_text and response.free_text.strip():
+            answer_parts.append(response.free_text.strip())
+        updated_context = (
+            *current.conversation_context,
+            ConversationMessage(role="user", content="；".join(answer_parts)),
+        )
+        updated = current.model_copy(
+            update={
+                "agent_input_ref": self.next_agent_input_ref(),
+                "conversation_context": updated_context,
+            }
+        )
+        self.save_agent_input(updated)
+        self._state()["clarification_response"] = response.model_dump(mode="json")
+        responses = self._state().setdefault("clarification_responses", [])
+        if not isinstance(responses, list):
+            raise TypeError("RESEARCH_AGENT_CLARIFICATION_RESPONSES_INVALID")
+        responses.append(response.model_dump(mode="json"))
+        self._state()["pending_clarification"] = None
+        self.set_current_status(ResearchStateStatus.RUNNING)
+        return updated
+
+    # ------------------------------------------------------------------ #
+    # 阶段 5完成结果
+    # ------------------------------------------------------------------ #
+
+    def react_completion(self) -> Completion | None:
+        raw = self._state().get("react_completion")
+        if not isinstance(raw, dict):
+            return None
+        return Completion.model_validate(raw)
+
+    def save_react_completion(self, completion: Completion) -> None:
+        """保存通过确定性校验的 ReAct Completion 和对应终态。"""
+
+        self._state()["react_completion"] = completion.model_dump(mode="json")
+        status = {
+            "complete": ResearchStateStatus.COMPLETED,
+            "partial": ResearchStateStatus.PARTIAL,
+            "unanswerable": ResearchStateStatus.UNANSWERABLE,
+        }[completion.status]
+        self.set_current_status(status)
+
+    def react_findings(self) -> tuple[Finding, ...]:
+        """读取当前 ReAct 状态中的 Finding；无记录时返回空集合。"""
+
+        raw = self._state().get("findings")
+        if not isinstance(raw, list):
+            return ()
+        return tuple(Finding.model_validate(item) for item in raw if isinstance(item, dict))
+
+    def react_attempts(self) -> tuple[AttemptSummary, ...]:
+        """读取当前 ReAct 状态中的 AttemptSummary。"""
+
+        raw = self._state().get("attempted_actions")
+        if not isinstance(raw, list):
+            return ()
+        return tuple(
+            AttemptSummary.model_validate(item)
+            for item in raw
+            if isinstance(item, dict)
+        )
+
+    def running_tool_call_ids(self) -> tuple[str, ...]:
+        """读取尚未结束的工具调用，供 finish_research 做收口校验。"""
+
+        raw = self._state().get("running_tool_call_ids")
+        if raw is None:
+            raw = self.context.state.get("running_tool_call_ids")
+        if isinstance(raw, dict):
+            terminal_statuses = {
+                "completed",
+                "failed",
+                "rejected",
+                "cancelled",
+                "succeeded",
+                "waiting_for_user",
+            }
+            running: list[str] = []
+            for key, value in raw.items():
+                if isinstance(value, str):
+                    is_running = value.casefold() not in terminal_statuses
+                elif isinstance(value, Mapping):
+                    status = value.get("status")
+                    is_running = (
+                        status is None
+                        or str(status).casefold() not in terminal_statuses
+                    )
+                else:
+                    is_running = bool(value)
+                if is_running:
+                    running.append(str(key))
+            return tuple(running)
+        if isinstance(raw, (list, tuple, set)):
+            return tuple(str(item) for item in raw)
+        return ()
+
     # ------------------------------------------------------------------ #
     # 状态初始化
     # ------------------------------------------------------------------ #
@@ -157,6 +385,14 @@ class ResearchToolContext:
             research["execution_id"] = self.context.execution_id
         if research.get("dataset_id") is None and self.context.dataset_id is not None:
             research["dataset_id"] = self.context.dataset_id
+        if self.agent_input is not None:
+            self.save_agent_input(self.agent_input)
+        elif isinstance(research.get("agent_input"), dict):
+            self.agent_input = ResearchAgentInput.model_validate(
+                research["agent_input"]
+            )
+        if research.get("current_status") is None:
+            research["current_status"] = ResearchStateStatus.RUNNING.value
         if not isinstance(state.get(PLAN_EXECUTION_STATE_KEY), dict):
             state[PLAN_EXECUTION_STATE_KEY] = build_plan_execution_state(
                 f"research-{self.run_id}"
@@ -274,6 +510,15 @@ class ResearchToolContext:
 
         raw = self._research_tool_results().get(tool_call_id)
         return dict(raw) if isinstance(raw, dict) else None
+
+    def research_tool_results(self) -> tuple[dict[str, Any], ...]:
+        """按记录顺序返回新 ToolResult 原始 payload。"""
+
+        return tuple(
+            dict(item)
+            for item in self._research_tool_results().values()
+            if isinstance(item, dict)
+        )
 
     def record_research_tool_result(self, result: ResearchToolResult[Any]) -> None:
         """保存新 ToolResult，不覆盖旧 Observation 记录。"""

@@ -12,7 +12,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from hashlib import sha256
 from typing import Any, Literal, cast
 
 from pydantic import ValidationError
@@ -27,6 +28,9 @@ from apps.chatbi.models.dto.analysis_plan import (
     ResultSetRef,
 )
 from apps.chatbi.models.dto.research_agent import (
+    ClarificationRequest,
+    Completion,
+    CompletionValidationError,
     ComputeEvidenceAction,
     ComputeEvidenceArguments,
     Evidence,
@@ -38,10 +42,18 @@ from apps.chatbi.models.dto.research_agent import (
     EvidenceFilter,
     EvidenceLimitation,
     EvidenceRows,
+    Finding,
+    FinishResearchAction,
+    FinishResearchArguments,
+    FinishResearchResult,
+    MetricAnalysisRelation,
+    MetricFormula,
     QuerySemanticDataAction,
     QuerySemanticDataArguments,
     ReadEvidenceRowsAction,
     ReadEvidenceRowsArguments,
+    RequestClarificationAction,
+    RequestClarificationArguments,
     ResearchActionType,
     ResearchComputeOperation,
     ResearchComputeRequest,
@@ -57,8 +69,16 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchResultRef,
     ResearchRowSelector,
     ResearchSemanticQuery,
+    ResearchStateStatus,
     ResearchTimeRole,
     ResearchToolCallRef,
+    SearchSemanticAssetsAction,
+    SearchSemanticAssetsArguments,
+    SemanticContext,
+    SemanticContextDelta,
+    SemanticDimension,
+    SemanticHierarchy,
+    SemanticMetric,
     TimeRange,
     ToolErrorCode,
 )
@@ -82,6 +102,7 @@ from apps.chatbi.services.research.semantic_runtime import (
 )
 from apps.chatbi.services.research.tool_context import ResearchToolContext
 from apps.conversation import ChatRecordExecutionType
+from apps.retrieval import build_retrieval_request
 
 ValueRole = Literal[
     "value",
@@ -446,6 +467,175 @@ class ReadEvidenceRowsResearchTool(
         )
 
 
+class SearchSemanticAssetsResearchTool(
+    ResearchTool[SearchSemanticAssetsArguments, SemanticContextDelta, Any]
+):
+    """在冻结权限范围内补充语义资产，并生成新的输入快照。"""
+
+    name = ResearchActionType.SEARCH_SEMANTIC_ASSETS
+    args_model = SearchSemanticAssetsArguments
+    result_model = SemanticContextDelta
+    parallel_safe = False
+
+    def prepare(
+        self,
+        context: ResearchToolContext,
+        args: SearchSemanticAssetsArguments,
+    ) -> PreparedResearchAction[SearchSemanticAssetsArguments, Any]:
+        if _semantic_search_service(context) is None:
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.PREPARE_FAILED,
+                "补充语义检索服务未配置",
+            )
+        _validate_scope_refs(context, args.related_asset_refs)
+        retrieval_requests = _supplemental_retrieval_requests(context, args)
+        fingerprint = research_action_fingerprint(
+            SearchSemanticAssetsAction(purpose="fingerprint", arguments=args),
+            version_snapshot=context.requirement.version_snapshot,
+        )
+        return PreparedResearchAction(
+            args=args,
+            action_fingerprint=fingerprint,
+            cost=ResearchToolCostEstimate(
+                semantic_search_calls=len(retrieval_requests),
+                wall_time_ms=500 * len(retrieval_requests),
+            ),
+            domain=None,
+        )
+
+    def execute(
+        self,
+        context: ResearchToolContext,
+        prepared: PreparedResearchAction[SearchSemanticAssetsArguments, Any],
+    ) -> SemanticContextDelta:
+        current = context.current_agent_input()
+        payload = _execute_semantic_asset_search(context, prepared.args)
+        added = _semantic_context_from_search_payload(
+            context,
+            payload,
+            prepared.args,
+        )
+        new_assets = _semantic_context_difference(current.semantic_context, added)
+        merged = _merge_semantic_context(current.semantic_context, new_assets)
+        updated = current.model_copy(
+            update={
+                "agent_input_ref": context.next_agent_input_ref(),
+                "semantic_context": merged,
+            }
+        )
+        saved = context.save_agent_input(updated)
+        delta = SemanticContextDelta(
+            new_agent_input_ref=saved.agent_input_ref or updated.agent_input_ref or "",
+            added_semantic_context=new_assets,
+        )
+        context.record_semantic_context_delta(delta)
+        return delta
+
+
+class RequestClarificationResearchTool(
+    ResearchTool[RequestClarificationArguments, ClarificationRequest, Any]
+):
+    """保存澄清问题并将当前 Research Run 置为等待用户。"""
+
+    name = ResearchActionType.REQUEST_CLARIFICATION
+    args_model = RequestClarificationArguments
+    result_model = ClarificationRequest
+    parallel_safe = False
+
+    def prepare(
+        self,
+        context: ResearchToolContext,
+        args: RequestClarificationArguments,
+    ) -> PreparedResearchAction[RequestClarificationArguments, Any]:
+        _validate_scope_refs(
+            context,
+            tuple(
+                ref
+                for option in args.options
+                for ref in option.semantic_refs
+            ),
+        )
+        if context.clarification_request() is not None:
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                "当前 Research Run 已经存在等待回答的澄清请求",
+                retryable=True,
+                parameter_retryable=True,
+            )
+        fingerprint = research_action_fingerprint(
+            RequestClarificationAction(purpose="fingerprint", arguments=args),
+            version_snapshot=context.requirement.version_snapshot,
+        )
+        return PreparedResearchAction(
+            args=args,
+            action_fingerprint=fingerprint,
+            cost=ResearchToolCostEstimate(wall_time_ms=10),
+            domain=None,
+        )
+
+    def execute(
+        self,
+        context: ResearchToolContext,
+        prepared: PreparedResearchAction[RequestClarificationArguments, Any],
+    ) -> ClarificationRequest:
+        tool_call_id = prepared.tool_call_id or prepared.action_fingerprint
+        request = ClarificationRequest(
+            clarification_request_id=f"clarification:{tool_call_id}",
+            question=prepared.args.question,
+            options=prepared.args.options,
+            allow_free_text=prepared.args.allow_free_text,
+        )
+        context.save_clarification_request(request)
+        return request
+
+
+class FinishResearchResearchTool(
+    ResearchTool[FinishResearchArguments, FinishResearchResult, Any]
+):
+    """只执行确定性结束校验，并保存通过校验的 Completion。"""
+
+    name = ResearchActionType.FINISH_RESEARCH
+    args_model = FinishResearchArguments
+    result_model = FinishResearchResult
+    parallel_safe = False
+
+    def prepare(
+        self,
+        context: ResearchToolContext,
+        args: FinishResearchArguments,
+    ) -> PreparedResearchAction[FinishResearchArguments, Any]:
+        fingerprint = research_action_fingerprint(
+            FinishResearchAction(purpose="fingerprint", arguments=args),
+            version_snapshot=context.requirement.version_snapshot,
+        )
+        return PreparedResearchAction(
+            args=args,
+            action_fingerprint=fingerprint,
+            cost=ResearchToolCostEstimate(wall_time_ms=10),
+            domain=None,
+        )
+
+    def execute(
+        self,
+        context: ResearchToolContext,
+        prepared: PreparedResearchAction[FinishResearchArguments, Any],
+    ) -> FinishResearchResult:
+        errors = _validate_finish_completion(context, prepared.args.completion)
+        if errors:
+            return FinishResearchResult(
+                decision="rejected",
+                message="结束请求未通过确定性校验",
+                validation_errors=tuple(errors),
+            )
+        completion = prepared.args.completion
+        context.save_react_completion(completion)
+        return FinishResearchResult(
+            decision="accepted",
+            message="结束请求通过校验",
+            completion_status=completion.status,
+        )
+
+
 def build_research_data_tool_registry() -> ResearchToolRegistry:
     """创建阶段 4数据工具白名单。"""
 
@@ -456,10 +646,897 @@ def build_research_data_tool_registry() -> ResearchToolRegistry:
     return registry
 
 
+def build_research_control_tool_registry() -> ResearchToolRegistry:
+    """创建阶段 5控制工具白名单。"""
+
+    registry = ResearchToolRegistry()
+    registry.register(SearchSemanticAssetsResearchTool())
+    registry.register(RequestClarificationResearchTool())
+    registry.register(FinishResearchResearchTool())
+    return registry
+
+
+def build_research_tool_registry() -> ResearchToolRegistry:
+    """创建阶段 3～5完整 Research 工具白名单。"""
+
+    registry = build_research_data_tool_registry()
+    for tool in (
+        SearchSemanticAssetsResearchTool(),
+        RequestClarificationResearchTool(),
+        FinishResearchResearchTool(),
+    ):
+        registry.register(tool)
+    return registry
+
+
 # 提供短名称，便于编排层按工具名称直接导入。
 QuerySemanticDataTool = QuerySemanticDataResearchTool
 ComputeEvidenceTool = ComputeEvidenceResearchTool
 ReadEvidenceRowsTool = ReadEvidenceRowsResearchTool
+SearchSemanticAssetsTool = SearchSemanticAssetsResearchTool
+RequestClarificationTool = RequestClarificationResearchTool
+FinishResearchTool = FinishResearchResearchTool
+
+
+def _semantic_search_service(context: ResearchToolContext) -> Any:
+    """读取宿主注入的语义检索服务，不创建没有权限快照的默认实例。"""
+
+    service = context.semantic_retrieval_service
+    if service is not None:
+        return service
+    service = getattr(context.context, "semantic_retrieval_service", None)
+    if service is not None:
+        return service
+    return context.context.state.get("semantic_retrieval_service")
+
+
+def _validate_scope_refs(
+    context: ResearchToolContext,
+    refs: tuple[str, ...],
+) -> None:
+    """确保工具提交的语义引用仍属于启动时冻结的 Scope。"""
+
+    allowed = _allowed_semantic_refs(context)
+    if any(ref not in allowed for ref in refs):
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.PERMISSION_DENIED,
+            "语义引用不属于当前 Research Run 的冻结权限范围",
+            details={"invalid_refs": [ref for ref in refs if ref not in allowed]},
+        )
+
+
+def _allowed_semantic_refs(context: ResearchToolContext) -> set[str]:
+    scope = context.requirement.scope
+    refs = {
+        *scope.target_metric_refs,
+        *scope.driver_metric_refs,
+        *scope.contribution_metric_refs,
+        *scope.dimension_refs,
+        *scope.contribution_dimension_refs,
+        *scope.allowed_filter_refs,
+    }
+    return refs - set(scope.excluded_asset_refs)
+
+
+def _execute_semantic_asset_search(
+    context: ResearchToolContext,
+    args: SearchSemanticAssetsArguments,
+) -> Any:
+    """执行一个或两个独立检索通道，并合并返回结果。"""
+
+    service = _semantic_search_service(context)
+    if service is None:
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.PREPARE_FAILED,
+            "补充语义检索服务未配置",
+        )
+    retrieve = getattr(service, "retrieve", None)
+    search = getattr(service, "search", None)
+    if not callable(retrieve) and not callable(search):
+        search = getattr(service, "search_semantic_assets", None)
+    if not callable(retrieve) and not callable(search):
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.PREPARE_FAILED,
+            "语义检索服务未提供 retrieve 或 search 端口",
+        )
+
+    payloads: list[Any] = []
+    for request in _supplemental_retrieval_requests(context, args):
+        if callable(retrieve):
+            result = retrieve(request)
+        elif callable(search):
+            result = search(request)
+        else:
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.PREPARE_FAILED,
+                "语义检索服务未提供可调用的检索端口",
+            )
+        payload = getattr(result, "payload", result)
+        if isinstance(payload, SemanticContext):
+            payloads.append(payload)
+            continue
+        if isinstance(payload, Mapping):
+            payloads.append(dict(payload))
+            continue
+        model_dump = getattr(payload, "model_dump", None)
+        if callable(model_dump):
+            dumped = model_dump(mode="json")
+            if isinstance(dumped, dict):
+                payloads.append(dumped)
+                continue
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.RESULT_INVALID,
+            "补充语义检索返回了无法识别的结果",
+        )
+    return _merge_semantic_search_payloads(payloads)
+
+
+def _supplemental_retrieval_requests(
+    context: ResearchToolContext,
+    args: SearchSemanticAssetsArguments,
+) -> tuple[Any, ...]:
+    """复用初始检索的身份和权限字段，分别构造指标和维度通道。"""
+
+    base = getattr(context.context, "semantic_retrieval_request", None)
+    if callable(base):
+        base = base()
+    metric_requested = any(
+        item in {"metric", "metric_formula", "metric_analysis_relation"}
+        for item in args.asset_types
+    )
+    dimension_requested = any(
+        item in {"dimension", "hierarchy", "metric_analysis_relation"}
+        for item in args.asset_types
+    )
+    if not metric_requested and not dimension_requested:
+        metric_requested = True
+    current_question = context.current_agent_input().user_question
+    related_names = _related_asset_terms(context, args.related_asset_refs)
+    search_text = " ".join(
+        item
+        for item in (args.query, current_question, *related_names)
+        if item and item.strip()
+    ).strip()[:4_000]
+    query_hash = sha256(search_text.encode()).hexdigest()[:12]
+
+    def build_request(
+        metric_phrases: list[str],
+        dimension_phrases: list[str],
+        channel: str,
+    ) -> Any:
+        request_id = f"supplement:{context.run_id}:{query_hash}:{channel}"
+        if base is not None:
+            return base.model_copy(
+                update={
+                    "request_id": request_id,
+                    "metric_phrases": metric_phrases,
+                    "dimension_phrases": dimension_phrases,
+                }
+            )
+        if context.context.user_id is None or context.context.user_id <= 0:
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.PERMISSION_DENIED,
+                "补充语义检索缺少当前用户身份",
+            )
+        if context.dataset_id is None or context.dataset_id <= 0:
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.PERMISSION_DENIED,
+                "补充语义检索缺少当前数据集身份",
+            )
+        return build_retrieval_request(
+            tenant_id=context.workspace_id,
+            actor_id=context.context.user_id,
+            dataset_id=context.dataset_id,
+            metric_phrases=metric_phrases,
+            dimension_phrases=dimension_phrases,
+            request_id=request_id,
+            principal_roles=context.context.principal_roles or None,
+            principal_role_ids=context.context.principal_role_ids or None,
+            permission_version=context.context.permission_version,
+        )
+
+    requests: list[Any] = []
+    if metric_requested:
+        requests.append(build_request([search_text], [], "metric"))
+    if dimension_requested:
+        requests.append(build_request([], [search_text], "dimension"))
+    return tuple(requests)
+
+
+def _related_asset_terms(
+    context: ResearchToolContext,
+    refs: tuple[str, ...],
+) -> tuple[str, ...]:
+    """将关联资产引用投影为检索词，避免只校验引用而不参与检索。"""
+
+    if not refs:
+        return ()
+    labels: dict[str, str] = {}
+    current = context.current_agent_input().semantic_context
+    labels.update({item.ref: item.name for item in current.metrics})
+    labels.update({item.ref: item.name for item in current.dimensions})
+    schema = _frozen_schema(context)
+    if schema is not None:
+        for kind, elements in (
+            ("METRIC", getattr(schema, "metrics", ())),
+            ("DIMENSION", getattr(schema, "dimensions", ())),
+        ):
+            for raw in elements:
+                ref = _schema_element_ref(kind, raw)
+                if ref is not None:
+                    labels.setdefault(ref, str(_field(raw, "name", ref)))
+    return tuple(f"{ref} {labels[ref]}" if ref in labels else ref for ref in refs)
+
+
+def _merge_semantic_search_payloads(payloads: list[Any]) -> Any:
+    """合并双通道结果，保留语义上下文和候选分组两种返回格式。"""
+
+    if not payloads:
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.RESULT_INVALID,
+            "补充语义检索没有返回结果",
+        )
+    if len(payloads) == 1:
+        return payloads[0]
+    contexts: list[SemanticContext] = []
+    merged: dict[str, Any] = {}
+    for payload in payloads:
+        if isinstance(payload, SemanticContext):
+            contexts.append(payload)
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        raw_context = payload.get("semantic_context")
+        if isinstance(raw_context, SemanticContext):
+            contexts.append(raw_context)
+        elif isinstance(raw_context, Mapping):
+            contexts.append(SemanticContext.model_validate(raw_context))
+        candidate_groups = payload.get("candidate_groups")
+        selected_assets = payload.get("selected_assets")
+        candidate_groups = (
+            candidate_groups if isinstance(candidate_groups, Mapping) else {}
+        )
+        selected_assets = (
+            selected_assets if isinstance(selected_assets, Mapping) else {}
+        )
+        for group_name in ("metrics", "dimensions", "values", "terms"):
+            values = candidate_groups.get(group_name)
+            if isinstance(values, list):
+                merged.setdefault("candidate_groups", {}).setdefault(
+                    group_name, []
+                ).extend(values)
+            values = selected_assets.get(group_name)
+            if isinstance(values, list):
+                merged.setdefault("selected_assets", {}).setdefault(
+                    group_name, []
+                ).extend(values)
+    if contexts:
+        combined = SemanticContext()
+        for item in contexts:
+            combined = _merge_semantic_context(combined, item)
+        merged["semantic_context"] = combined
+    return merged
+
+
+def _semantic_context_from_search_payload(
+    context: ResearchToolContext,
+    payload: Any,
+    args: SearchSemanticAssetsArguments,
+) -> SemanticContext:
+    """把检索结果投影为有界 SemanticContext，并再次执行 Scope 过滤。"""
+
+    if isinstance(payload, SemanticContext):
+        source = payload
+    elif isinstance(payload, Mapping):
+        raw_context = payload.get("semantic_context")
+        if isinstance(raw_context, SemanticContext):
+            source = raw_context
+        elif isinstance(raw_context, Mapping):
+            source = SemanticContext.model_validate(raw_context)
+        else:
+            source = _context_from_candidate_payload(context, payload, args)
+    else:
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.RESULT_INVALID,
+            "补充语义检索结果不是对象",
+        )
+    filtered = _filter_semantic_context(context, source, args)
+    return filtered
+
+
+def _context_from_candidate_payload(
+    context: ResearchToolContext,
+    payload: Mapping[str, Any],
+    args: SearchSemanticAssetsArguments,
+) -> SemanticContext:
+    groups = payload.get("candidate_groups") or payload.get("selected_assets") or {}
+    if not isinstance(groups, Mapping):
+        groups = {}
+    metrics = tuple(
+        metric
+        for raw in _limited_items(groups.get("metrics"), args.limit)
+        if isinstance(raw, Mapping)
+        for metric in [_semantic_metric_from_item(raw)]
+        if metric is not None
+    )
+    dimensions = tuple(
+        dimension
+        for raw in _limited_items(groups.get("dimensions"), args.limit)
+        if isinstance(raw, Mapping)
+        for dimension in [_semantic_dimension_from_item(raw)]
+        if dimension is not None
+    )
+    schema = _frozen_schema(context)
+    schema_context = _semantic_context_from_schema(context, schema, args)
+    return SemanticContext(
+        metrics=metrics or schema_context.metrics,
+        dimensions=dimensions or schema_context.dimensions,
+        hierarchies=schema_context.hierarchies,
+        metric_formulas=schema_context.metric_formulas,
+        metric_analysis_relations=schema_context.metric_analysis_relations,
+        ambiguities=schema_context.ambiguities,
+    )
+
+
+def _filter_semantic_context(
+    context: ResearchToolContext,
+    source: SemanticContext,
+    args: SearchSemanticAssetsArguments,
+) -> SemanticContext:
+    allowed = _allowed_semantic_refs(context)
+    requested = set(args.asset_types)
+    metrics = tuple(
+        item.model_copy(
+            update={
+                "dimensions": tuple(
+                    ref for ref in item.dimensions if ref in allowed
+                )
+            }
+        )
+        for item in source.metrics
+        if "metric" in requested and item.ref in allowed
+    )[: args.limit]
+    dimensions = tuple(
+        item for item in source.dimensions
+        if "dimension" in requested and item.ref in allowed
+    )[: args.limit]
+    hierarchies = tuple(
+        item
+        for item in source.hierarchies
+        if "hierarchy" in requested
+        and all(ref in allowed for ref in item.levels)
+    )[: args.limit]
+    formulas = tuple(
+        item
+        for item in source.metric_formulas
+        if "metric_formula" in requested
+        and item.target_metric_ref in allowed
+        and all(ref in allowed for ref in item.source_metric_refs)
+    )[: args.limit]
+    relations = tuple(
+        item
+        for item in source.metric_analysis_relations
+        if "metric_analysis_relation" in requested
+        and item.metric_ref in allowed
+        and all(ref in allowed for ref in item.related_metric_refs)
+    )[: args.limit]
+    ambiguities = tuple(
+        item
+        for item in source.ambiguities
+        if all(ref in allowed for ref in item.candidate_refs)
+    )[: args.limit]
+    return SemanticContext(
+        metrics=metrics,
+        dimensions=dimensions,
+        hierarchies=hierarchies,
+        metric_formulas=formulas,
+        metric_analysis_relations=relations,
+        ambiguities=ambiguities,
+    )
+
+
+def _merge_semantic_context(
+    current: SemanticContext,
+    added: SemanticContext,
+) -> SemanticContext:
+    """按正式引用合并语义资产；已有资产优先，保证重放结果稳定。"""
+
+    def merge(
+        first: tuple[Any, ...],
+        second: tuple[Any, ...],
+        key: Any,
+    ) -> tuple[Any, ...]:
+        values: dict[Any, Any] = {key(item): item for item in first}
+        values.update({key(item): item for item in second if key(item) not in values})
+        return tuple(values.values())
+
+    return SemanticContext(
+        metrics=merge(current.metrics, added.metrics, lambda item: item.ref),
+        dimensions=merge(current.dimensions, added.dimensions, lambda item: item.ref),
+        hierarchies=merge(current.hierarchies, added.hierarchies, lambda item: item.ref),
+        metric_formulas=merge(
+            current.metric_formulas,
+            added.metric_formulas,
+            lambda item: item.target_metric_ref,
+        ),
+        metric_analysis_relations=merge(
+            current.metric_analysis_relations,
+            added.metric_analysis_relations,
+            lambda item: item.metric_ref,
+        ),
+        ambiguities=merge(current.ambiguities, added.ambiguities, lambda item: item.term),
+    )
+
+
+def _semantic_context_difference(
+    current: SemanticContext,
+    candidate: SemanticContext,
+) -> SemanticContext:
+    """只保留当前输入快照中尚不存在的正式语义资产。"""
+
+    def difference(
+        existing: tuple[Any, ...],
+        values: tuple[Any, ...],
+        key: Any,
+    ) -> tuple[Any, ...]:
+        existing_keys = {key(item) for item in existing}
+        return tuple(item for item in values if key(item) not in existing_keys)
+
+    return SemanticContext(
+        metrics=difference(current.metrics, candidate.metrics, lambda item: item.ref),
+        dimensions=difference(
+            current.dimensions,
+            candidate.dimensions,
+            lambda item: item.ref,
+        ),
+        hierarchies=difference(
+            current.hierarchies,
+            candidate.hierarchies,
+            lambda item: item.ref,
+        ),
+        metric_formulas=difference(
+            current.metric_formulas,
+            candidate.metric_formulas,
+            lambda item: item.target_metric_ref,
+        ),
+        metric_analysis_relations=difference(
+            current.metric_analysis_relations,
+            candidate.metric_analysis_relations,
+            lambda item: item.metric_ref,
+        ),
+        ambiguities=difference(
+            current.ambiguities,
+            candidate.ambiguities,
+            lambda item: item.term,
+        ),
+    )
+
+
+def _frozen_schema(context: ResearchToolContext) -> Any:
+    scope = context.context.semantic_asset_scope
+    return scope.schema_snapshot if scope is not None else None
+
+
+def _semantic_context_from_schema(
+    context: ResearchToolContext,
+    schema: Any,
+    args: SearchSemanticAssetsArguments,
+) -> SemanticContext:
+    if schema is None:
+        return SemanticContext()
+    allowed = _allowed_semantic_refs(context)
+    requested = set(args.asset_types)
+    metrics = tuple(
+        item
+        for raw in getattr(schema, "metrics", ())
+        for item in [_semantic_metric_from_schema_element(raw)]
+        if item is not None and item.ref in allowed and "metric" in requested
+    )[: args.limit]
+    dimensions = tuple(
+        item
+        for raw in getattr(schema, "dimensions", ())
+        for item in [_semantic_dimension_from_schema_element(raw)]
+        if item is not None and item.ref in allowed and "dimension" in requested
+    )[: args.limit]
+    hierarchies: tuple[SemanticHierarchy, ...] = ()
+    if "hierarchy" in requested:
+        hierarchy_items: list[SemanticHierarchy] = []
+        for raw in getattr(schema, "dimension_hierarchies", ()):
+            levels = tuple(
+                ref
+                for refs in _field(raw, "dimension_refs_by_model", {}).values()
+                for ref in refs
+                if ref in allowed
+            )
+            if len(levels) < 2:
+                continue
+            hierarchy_items.append(
+                SemanticHierarchy(
+                    ref=f"HIERARCHY:{_field(raw, 'id', 'unknown')}:{context.dataset_id}",
+                    name=str(_field(raw, "id", "hierarchy")),
+                    levels=tuple(dict.fromkeys(levels)),
+                )
+            )
+        hierarchies = tuple(hierarchy_items[: args.limit])
+    relations = _schema_relations(context, schema, args)
+    formulas = _schema_formulas(context, schema, args)
+    return SemanticContext(
+        metrics=metrics,
+        dimensions=dimensions,
+        hierarchies=hierarchies,
+        metric_formulas=formulas,
+        metric_analysis_relations=relations,
+    )
+
+
+def _schema_relations(
+    context: ResearchToolContext,
+    schema: Any,
+    args: SearchSemanticAssetsArguments,
+) -> tuple[Any, ...]:
+    if "metric_analysis_relation" not in set(args.asset_types):
+        return ()
+    allowed = _allowed_semantic_refs(context)
+    relations: list[Any] = []
+    for raw in getattr(schema, "research_relationships", ()):
+        target = _field(raw, "target_metric_ref")
+        related = tuple(
+            dict.fromkeys(
+                (
+                    _field(raw, "driver_metric_ref"),
+                    *_field(raw, "component_metric_refs", ()),
+                )
+            )
+        )
+        if (
+            isinstance(target, str)
+            and target in allowed
+            and related
+            and all(isinstance(ref, str) and ref in allowed for ref in related)
+        ):
+            relations.append(
+                # 同一指标允许多个关系类型时，DTO 目前按 metric_ref 去重；
+                # 使用治理关系类型作为稳定的分析类型摘要。
+                MetricAnalysisRelation(
+                    metric_ref=target,
+                    related_metric_refs=related,
+                    analysis_type=str(_field(raw, "relationship_type", "driver")),
+                )
+            )
+        if len(relations) >= args.limit:
+            break
+    return tuple(relations)
+
+
+def _schema_formulas(
+    context: ResearchToolContext,
+    schema: Any,
+    args: SearchSemanticAssetsArguments,
+) -> tuple[Any, ...]:
+    if "metric_formula" not in set(args.asset_types):
+        return ()
+    allowed = _allowed_semantic_refs(context)
+    by_id = {
+        getattr(item, "id", None): _schema_element_ref("METRIC", item)
+        for item in getattr(schema, "metrics", ())
+    }
+    formulas: list[Any] = []
+    for raw in getattr(schema, "metrics", ()):
+        target = _schema_element_ref("METRIC", raw)
+        definition = _field(_field(raw, "type_params", {}), "formula_definition")
+        if not isinstance(definition, Mapping):
+            definition = _field(_field(raw, "ext_info", {}), "formula_definition")
+        if target not in allowed or not isinstance(definition, Mapping):
+            continue
+        refs = tuple(
+            ref
+            for component in definition.get("components") or ()
+            if isinstance(component, Mapping)
+            for ref in [by_id.get(component.get("metric_id"))]
+            if isinstance(ref, str)
+        )
+        if len(refs) < 1 or any(ref not in allowed for ref in refs):
+            continue
+        operation = str(definition.get("operation") or "").upper()
+        separator = {"RATIO": " / ", "DIFFERENCE": " - ", "PRODUCT": " * ", "SUM": " + "}.get(operation, " + ")
+        formulas.append(
+            MetricFormula(
+                target_metric_ref=target,
+                expression=separator.join(refs),
+                source_metric_refs=refs,
+            )
+        )
+        if len(formulas) >= args.limit:
+            break
+    return tuple(formulas)
+
+
+def _semantic_metric_from_item(item: Mapping[str, Any]) -> SemanticMetric | None:
+    ref = item.get("ref")
+    if not isinstance(ref, str):
+        ref = _candidate_ref("METRIC", item)
+    if not isinstance(ref, str):
+        return None
+    dimensions = tuple(
+        value
+        for value in item.get("dimensions") or item.get("dimension_refs") or ()
+        if isinstance(value, str)
+    )
+    return SemanticMetric(
+        ref=ref,
+        name=str(item.get("name") or item.get("display_name") or item.get("biz_name") or ref),
+        description=str(item.get("description") or ""),
+        aggregation=str(item.get("aggregation") or item.get("default_agg") or "SUM"),
+        unit=item.get("unit") if isinstance(item.get("unit"), str) else None,
+        dimensions=dimensions,
+    )
+
+
+def _semantic_dimension_from_item(item: Mapping[str, Any]) -> SemanticDimension | None:
+    ref = item.get("ref")
+    if not isinstance(ref, str):
+        ref = _candidate_ref("DIMENSION", item)
+    if not isinstance(ref, str):
+        return None
+    grains = tuple(value for value in item.get("grains") or () if isinstance(value, str))
+    return SemanticDimension(
+        ref=ref,
+        name=str(item.get("name") or item.get("display_name") or item.get("biz_name") or ref),
+        description=str(item.get("description") or ""),
+        grains=grains,
+    )
+
+
+def _semantic_metric_from_schema_element(item: Any) -> SemanticMetric | None:
+    ref = _schema_element_ref("METRIC", item)
+    if ref is None:
+        return None
+    type_params = _field(item, "type_params", {})
+    unit = type_params.get("unit") if isinstance(type_params, Mapping) else None
+    return SemanticMetric(
+        ref=ref,
+        name=str(_field(item, "name", _field(item, "biz_name", ref))),
+        description=str(_field(item, "description", "") or ""),
+        aggregation=str(_field(item, "default_agg", "SUM") or "SUM"),
+        unit=unit if isinstance(unit, str) else None,
+    )
+
+
+def _semantic_dimension_from_schema_element(item: Any) -> SemanticDimension | None:
+    ref = _schema_element_ref("DIMENSION", item)
+    if ref is None:
+        return None
+    return SemanticDimension(
+        ref=ref,
+        name=str(_field(item, "name", _field(item, "biz_name", ref))),
+        description=str(_field(item, "description", "") or ""),
+    )
+
+
+def _schema_element_ref(kind: str, item: Any) -> str | None:
+    asset_id = _field(item, "id")
+    model_id = _field(item, "model")
+    if not isinstance(asset_id, int) or asset_id <= 0:
+        return None
+    if not isinstance(model_id, int) or model_id <= 0:
+        return None
+    return f"{kind}:{asset_id}:{model_id}"
+
+
+def _candidate_ref(kind: str, item: Mapping[str, Any]) -> str | None:
+    asset_id = item.get("asset_id")
+    model_id = item.get("model_id")
+    if isinstance(asset_id, int) and asset_id > 0 and isinstance(model_id, int) and model_id > 0:
+        return f"{kind}:{asset_id}:{model_id}"
+    return None
+
+
+def _limited_items(value: Any, limit: int) -> tuple[Any, ...]:
+    return tuple(value[:limit]) if isinstance(value, list) else ()
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _validate_finish_completion(
+    context: ResearchToolContext,
+    completion: Completion,
+) -> list[CompletionValidationError]:
+    """执行 finish_research 的全部确定性引用校验。"""
+
+    errors: list[CompletionValidationError] = []
+    if context.current_status is not ResearchStateStatus.RUNNING:
+        errors.append(
+            _completion_error(
+                "RESEARCH_AGENT_RUN_NOT_RUNNING",
+                "Research Run 当前不处于 running 状态",
+            )
+        )
+    if context.react_completion() is not None:
+        errors.append(
+            _completion_error(
+                "RESEARCH_AGENT_COMPLETION_ALREADY_ACCEPTED",
+                "Research Run 已经存在通过校验的 Completion",
+            )
+        )
+
+    evidences = {
+        evidence_id: context.research_evidence(evidence_id)
+        for evidence_id in completion.evidence_ids
+    }
+    produced_by_tool = _successful_react_evidence_ids(context)
+    for evidence_id, evidence in evidences.items():
+        if evidence is None:
+            errors.append(
+                _completion_error(
+                    "RESEARCH_AGENT_COMPLETION_EVIDENCE_NOT_FOUND",
+                    f"Evidence {evidence_id} 不属于当前 Run",
+                    evidence_id=evidence_id,
+                )
+            )
+        elif evidence_id not in produced_by_tool:
+            errors.append(
+                _completion_error(
+                    "RESEARCH_AGENT_COMPLETION_EVIDENCE_TOOL_RESULT_REQUIRED",
+                    f"Evidence {evidence_id} 没有来自 query 或 compute ToolResult",
+                    evidence_id=evidence_id,
+                )
+            )
+
+    findings = {item.finding_id: item for item in context.react_findings()}
+    allowed_refs = _allowed_semantic_refs(context)
+    for finding_id in completion.finding_ids:
+        finding = findings.get(finding_id)
+        if finding is None:
+            errors.append(
+                _completion_error(
+                    "RESEARCH_AGENT_COMPLETION_FINDING_NOT_FOUND",
+                    f"Finding {finding_id} 不属于当前 Run",
+                    finding_id=finding_id,
+                )
+            )
+            continue
+        if finding.status != "confirmed":
+            errors.append(
+                _completion_error(
+                    "RESEARCH_AGENT_COMPLETION_FINDING_NOT_CONFIRMED",
+                    f"Finding {finding_id} 不是 confirmed 状态",
+                    finding_id=finding_id,
+                )
+            )
+        missing_evidence = set(finding.evidence_ids) - set(completion.evidence_ids)
+        if missing_evidence:
+            errors.append(
+                _completion_error(
+                    "RESEARCH_AGENT_COMPLETION_FINDING_EVIDENCE_NOT_INCLUDED",
+                    f"Finding {finding_id} 的证据未全部列入 Completion",
+                    finding_id=finding_id,
+                )
+            )
+        for ref in (
+            *finding.scope.metric_refs,
+            *finding.scope.dimension_refs,
+            *(item.field_ref for item in finding.scope.filters),
+        ):
+            if ref not in allowed_refs:
+                errors.append(
+                    _completion_error(
+                        "RESEARCH_AGENT_COMPLETION_SCOPE_OUT_OF_SCOPE",
+                        f"Finding {finding_id} 的 Scope 引用 {ref} 超出冻结范围",
+                        finding_id=finding_id,
+                    )
+                )
+        for evidence_id in finding.evidence_ids:
+            evidence = context.research_evidence(evidence_id)
+            if evidence is not None:
+                errors.extend(_validate_finding_scope(finding, evidence))
+
+    attempts = {item.attempt_id for item in context.react_attempts()}
+    for limitation in completion.limitations:
+        for attempt_id in limitation.attempt_ids:
+            if attempt_id not in attempts:
+                errors.append(
+                    _completion_error(
+                        "RESEARCH_AGENT_COMPLETION_ATTEMPT_NOT_FOUND",
+                        f"限制引用的 Attempt {attempt_id} 不存在",
+                    )
+                )
+    for tool_call_id in context.running_tool_call_ids():
+        errors.append(
+            _completion_error(
+                "RESEARCH_AGENT_COMPLETION_TOOL_CALL_RUNNING",
+                f"工具调用 {tool_call_id} 尚未结束",
+            )
+        )
+    return errors
+
+
+def _successful_react_evidence_ids(context: ResearchToolContext) -> set[str]:
+    evidence_ids: set[str] = set()
+    for raw in context.research_tool_results():
+        result = raw.get("tool_result") if isinstance(raw.get("tool_result"), dict) else raw
+        if not isinstance(result, Mapping):
+            continue
+        if result.get("status") != "succeeded":
+            continue
+        if result.get("name") not in {
+            ResearchActionType.QUERY_SEMANTIC_DATA.value,
+            ResearchActionType.COMPUTE_EVIDENCE.value,
+        }:
+            continue
+        payload = result.get("result")
+        if isinstance(payload, Mapping) and isinstance(payload.get("evidence_id"), str):
+            evidence_ids.add(payload["evidence_id"])
+    return evidence_ids
+
+
+def _validate_finding_scope(
+    finding: Finding,
+    evidence: Evidence,
+) -> list[CompletionValidationError]:
+    available_refs = {
+        *evidence.definition.metrics,
+        *evidence.definition.dimensions,
+        *(
+            column.semantic_ref
+            for column in evidence.columns
+            if column.semantic_ref is not None
+        ),
+    }
+    errors: list[CompletionValidationError] = []
+    for ref in (*finding.scope.metric_refs, *finding.scope.dimension_refs):
+        if ref not in available_refs:
+            errors.append(
+                _completion_error(
+                    "RESEARCH_AGENT_COMPLETION_SCOPE_NOT_SUPPORTED",
+                    f"Evidence {evidence.evidence_id} 无法定位 Finding Scope 引用 {ref}",
+                    finding_id=finding.finding_id,
+                    evidence_id=evidence.evidence_id,
+                )
+            )
+    if finding.scope.time_ranges and not any(
+        time_range in evidence.definition.time_ranges
+        for time_range in finding.scope.time_ranges
+    ):
+        errors.append(
+            _completion_error(
+                "RESEARCH_AGENT_COMPLETION_TIME_SCOPE_NOT_SUPPORTED",
+                f"Evidence {evidence.evidence_id} 无法定位 Finding 的时间范围",
+                finding_id=finding.finding_id,
+                evidence_id=evidence.evidence_id,
+            )
+        )
+    filter_refs = {item.field_ref for item in evidence.definition.filters}
+    filter_refs.update(available_refs)
+    for item in finding.scope.filters:
+        if item.field_ref not in filter_refs:
+            errors.append(
+                _completion_error(
+                    "RESEARCH_AGENT_COMPLETION_FILTER_SCOPE_NOT_SUPPORTED",
+                    f"Evidence {evidence.evidence_id} 无法定位 Finding 的筛选字段 {item.field_ref}",
+                    finding_id=finding.finding_id,
+                    evidence_id=evidence.evidence_id,
+                )
+            )
+    return errors
+
+
+def _completion_error(
+    code: str,
+    message: str,
+    *,
+    finding_id: str | None = None,
+    evidence_id: str | None = None,
+) -> CompletionValidationError:
+    return CompletionValidationError(
+        code=code,
+        message=message,
+        finding_id=finding_id,
+        evidence_id=evidence_id,
+    )
 
 
 def _build_semantic_query(

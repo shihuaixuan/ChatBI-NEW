@@ -2192,6 +2192,18 @@ class SemanticContext(_ContractModel):
         return self
 
 
+class SemanticContextDelta(_ReactSchemaModel):
+    """一次补充语义检索新增的输入快照和语义资产。"""
+
+    new_agent_input_ref: str = Field(min_length=1, max_length=256)
+    added_semantic_context: SemanticContext
+
+    @model_validator(mode="after")
+    def validate_delta(self) -> SemanticContextDelta:
+        _id(self.new_agent_input_ref, "RESEARCH_AGENT_INPUT_REF_INVALID")
+        return self
+
+
 class ResearchAgentInput(_ReactSchemaModel):
     """Research Run 使用的不可修改输入快照。"""
 
@@ -2679,6 +2691,51 @@ class RequestClarificationArguments(_ReactSchemaModel):
         return self
 
 
+class ClarificationRequest(_ReactSchemaModel):
+    """暂停 Research Run 时保存的用户澄清请求。"""
+
+    clarification_request_id: str = Field(min_length=1, max_length=128)
+    question: str = Field(min_length=1, max_length=2_000)
+    options: tuple[ClarificationOption, ...] = Field(min_length=1)
+    allow_free_text: bool = False
+
+    @model_validator(mode="after")
+    def validate_request(self) -> ClarificationRequest:
+        _id(
+            self.clarification_request_id,
+            "RESEARCH_AGENT_CLARIFICATION_REQUEST_ID_INVALID",
+        )
+        _unique(
+            tuple(item.option_id for item in self.options),
+            "RESEARCH_AGENT_CLARIFICATION_OPTION_DUPLICATED",
+        )
+        return self
+
+
+class ClarificationResponse(_ReactSchemaModel):
+    """用户对当前澄清请求的一次结构化回答。"""
+
+    clarification_request_id: str = Field(min_length=1, max_length=128)
+    selected_option_ids: tuple[str, ...] = ()
+    free_text: str | None = Field(default=None, max_length=4_000)
+
+    @model_validator(mode="after")
+    def validate_response(self) -> ClarificationResponse:
+        _id(
+            self.clarification_request_id,
+            "RESEARCH_AGENT_CLARIFICATION_REQUEST_ID_INVALID",
+        )
+        _unique(
+            self.selected_option_ids,
+            "RESEARCH_AGENT_CLARIFICATION_SELECTION_DUPLICATED",
+        )
+        for option_id in self.selected_option_ids:
+            _id(option_id, "RESEARCH_AGENT_CLARIFICATION_OPTION_ID_INVALID")
+        if not self.selected_option_ids and not (self.free_text or "").strip():
+            raise ValueError("RESEARCH_AGENT_CLARIFICATION_RESPONSE_EMPTY")
+        return self
+
+
 class CompletionLimitation(_ContractModel):
     code: str = Field(min_length=1, max_length=128)
     description: str = Field(min_length=1, max_length=2_000)
@@ -2736,6 +2793,11 @@ class CompletionValidationError(_ContractModel):
     message: str = Field(min_length=1, max_length=2_000)
     finding_id: str | None = Field(default=None, max_length=128)
     evidence_id: str | None = Field(default=None, max_length=256)
+
+
+# 架构文档使用 CompletionResult 作为统一名称；保留已有 FinishResearchResult
+# 类名，避免破坏阶段 1～4已经使用的导入。
+CompletionResult = FinishResearchResult
 
 
 class FinishResearchArguments(_ReactSchemaModel):
@@ -3038,9 +3100,12 @@ __all__.extend(
     [
         "AttemptSummary",
         "BudgetUsage",
+        "ClarificationRequest",
         "ClarificationOption",
+        "ClarificationResponse",
         "Completion",
         "CompletionLimitation",
+        "CompletionResult",
         "CompletionValidationError",
         "ComputeEvidenceAction",
         "ComputeEvidenceArguments",
@@ -3094,6 +3159,7 @@ __all__.extend(
         "SearchSemanticAssetsArguments",
         "SemanticAmbiguity",
         "SemanticContext",
+        "SemanticContextDelta",
         "SemanticDimension",
         "SemanticHierarchy",
         "SemanticMetric",
