@@ -56,7 +56,6 @@ _ACTION_MODELS = {
 _READ_ONLY_ACTIONS = frozenset(
     {
         ResearchActionType.QUERY_SEMANTIC_DATA.value,
-        ResearchActionType.COMPUTE_EVIDENCE.value,
         ResearchActionType.READ_EVIDENCE_ROWS.value,
     }
 )
@@ -180,6 +179,12 @@ class ResearchToolRuntime:
                     default_stage=ResearchExecutionErrorStage.VALIDATION,
                 )
             )
+
+        prepared = replace(
+            prepared,
+            tool_call_id=tool_call_id,
+            purpose=getattr(action, "purpose", None),
+        )
 
         fingerprint = prepared.action_fingerprint
         with self._lock:

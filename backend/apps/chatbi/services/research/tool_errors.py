@@ -107,6 +107,22 @@ def _stage_for_tool_error(
         ResearchToolExecutionError.ACTION_DUPLICATED: ResearchExecutionErrorStage.VALIDATION,
         ResearchToolExecutionError.ACTION_BATCH_INVALID: ResearchExecutionErrorStage.VALIDATION,
         ResearchToolExecutionError.COMPLETION_FAILED: ResearchExecutionErrorStage.COMPLETION,
+        "INVALID_REQUEST": ResearchExecutionErrorStage.VALIDATION,
+        "EVIDENCE_REFERENCE_INVALID": ResearchExecutionErrorStage.VALIDATION,
+        "SCOPE_DENIED": ResearchExecutionErrorStage.PERMISSION,
+        "PERMISSION_DENIED": ResearchExecutionErrorStage.PERMISSION,
+        "UNSUPPORTED_CAPABILITY": ResearchExecutionErrorStage.PLANNING,
+        "SEMANTIC_PLAN_REJECTED": ResearchExecutionErrorStage.PLANNING,
+        "SQL_COMPILE_FAILED": ResearchExecutionErrorStage.COMPILATION,
+        "SQL_VALIDATION_FAILED": ResearchExecutionErrorStage.COMPILATION,
+        "EXECUTION_FAILED": ResearchExecutionErrorStage.EXECUTION,
+        "EXECUTION_TIMEOUT": ResearchExecutionErrorStage.EXECUTION,
+        "EMPTY_RESULT": ResearchExecutionErrorStage.EXECUTION,
+        "RESULT_CONTRACT_FAILED": ResearchExecutionErrorStage.EXECUTION,
+        "FANOUT_DETECTED": ResearchExecutionErrorStage.EXECUTION,
+        "RECONCILIATION_FAILED": ResearchExecutionErrorStage.EXECUTION,
+        "RESULT_STORE_FAILED": ResearchExecutionErrorStage.PERSISTENCE,
+        "CANCELLED": ResearchExecutionErrorStage.EXECUTION,
     }
     return stages.get(code, default_stage)
 

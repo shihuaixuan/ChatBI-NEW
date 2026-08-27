@@ -49,6 +49,9 @@ class PreparedResearchAction(Generic[ArgsT, DomainT]):
     action_fingerprint: str
     cost: ResearchToolCostEstimate
     domain: DomainT | None = None
+    # Runtime 在 prepare 完成后补齐，工具据此生成稳定的 Evidence ID。
+    tool_call_id: str | None = None
+    purpose: str | None = None
 
     def __post_init__(self) -> None:
         if not self.action_fingerprint.strip():

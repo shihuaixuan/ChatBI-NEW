@@ -200,12 +200,16 @@ class SubmitResearchPlanArgs(_ToolArgsModel):
     assessment: SemanticAssessment | None = None
 
 
-class _ObservationFailure(Exception):
-    """携带结构化观察的预期失败；工具边界把它转成成功信封里的失败观察。"""
+class ResearchToolObservationFailure(Exception):
+    """携带结构化观察的预期失败，供兼容适配层转换为统一失败结果。"""
 
     def __init__(self, observation: ToolObservation) -> None:
         self.observation = observation
         super().__init__(observation.message or observation.error_code or "failed")
+
+
+# 旧工具内部仍使用原名称，阶段 4适配层通过公开类型跨模块捕获预期失败。
+_ObservationFailure = ResearchToolObservationFailure
 
 
 _ERROR_CATEGORIES = {
@@ -2151,5 +2155,6 @@ __all__ = [
     "InspectEvidenceTool",
     "QuerySemanticDataArgs",
     "QuerySemanticDataTool",
+    "ResearchToolObservationFailure",
     "build_research_tool_registry",
 ]

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from apps.chatbi.models.dto.analysis_evidence import AnalysisEvidence
 from apps.chatbi.models.dto.analysis_plan import ResultSetRef
 from apps.chatbi.models.dto.research_agent import (
+    Evidence,
     ResearchAgentRequirement,
     ResearchBudget,
     ResearchBudgetUsage,
@@ -144,7 +145,10 @@ class ResearchToolContext:
         """
 
         state = self.context.state
-        if not state.get(_RUN_ID_KEY):
+        existing_run_id = state.get(_RUN_ID_KEY)
+        if existing_run_id and existing_run_id != self.run_id:
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_CROSS_RUN")
+        if not existing_run_id:
             state[_RUN_ID_KEY] = self.run_id
         research = self._state()
         if not research.get("requirement"):
@@ -281,6 +285,49 @@ class ResearchToolContext:
         )
         if self.trace_recorder is not None:
             self.trace_recorder(result)
+
+    def research_evidence(self, evidence_id: str) -> Evidence | None:
+        """读取新 Evidence 台账；完整结果仍通过独立 ResultStore 映射读取。"""
+
+        raw = self._research_evidence_map().get(evidence_id)
+        if not isinstance(raw, dict):
+            return None
+        ownership = self._research_evidence_results().get(evidence_id)
+        if isinstance(ownership, dict):
+            owner_run_id = ownership.get("run_id")
+            if owner_run_id is not None and owner_run_id != self.run_id:
+                return None
+        return Evidence.model_validate(raw)
+
+    def research_evidence_result_id(self, evidence_id: str) -> str | None:
+        """读取服务端维护的 Evidence 到 ResultStore 结果集映射。"""
+
+        raw = self._research_evidence_results().get(evidence_id)
+        if not isinstance(raw, dict):
+            return None
+        owner_run_id = raw.get("run_id")
+        if owner_run_id is not None and owner_run_id != self.run_id:
+            return None
+        result_id = raw.get("result_id")
+        return result_id if isinstance(result_id, str) and result_id else None
+
+    def record_research_evidence(self, evidence: Evidence, *, result_id: str) -> None:
+        """登记新 Evidence 和内部结果映射，不把内部引用暴露给模型。"""
+
+        if not evidence.evidence_id.startswith("evidence:"):
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        if not result_id:
+            raise ValueError("RESEARCH_AGENT_RESULT_ID_REQUIRED")
+        for parent_id in evidence.parent_evidence_ids:
+            if self.research_evidence(parent_id) is None:
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
+        self._research_evidence_map()[evidence.evidence_id] = evidence.model_dump(
+            mode="json"
+        )
+        self._research_evidence_results()[evidence.evidence_id] = {
+            "run_id": self.run_id,
+            "result_id": result_id,
+        }
 
     # ------------------------------------------------------------------ #
     # 请求指纹去重
@@ -724,6 +771,18 @@ class ResearchToolContext:
         results = self._state().setdefault("tool_results", {})
         if not isinstance(results, dict):
             raise TypeError("RESEARCH_TOOL_RESULTS_INVALID")
+        return results
+
+    def _research_evidence_map(self) -> dict[str, Any]:
+        evidence = self._state().setdefault("react_evidence", {})
+        if not isinstance(evidence, dict):
+            raise TypeError("RESEARCH_REACT_EVIDENCE_INVALID")
+        return evidence
+
+    def _research_evidence_results(self) -> dict[str, Any]:
+        results = self._state().setdefault("react_evidence_results", {})
+        if not isinstance(results, dict):
+            raise TypeError("RESEARCH_REACT_EVIDENCE_RESULTS_INVALID")
         return results
 
     def _fingerprints(self) -> dict[str, Any]:
