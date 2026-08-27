@@ -14,13 +14,21 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal, cast
 
 from apps.chatbi.models.dto.research_agent import (
+    AttemptSummary,
+    ConversationMessage,
+    Evidence,
+    RemainingBudget,
+    ResearchAgentInput,
     ResearchAgentRequirement,
     ResearchDirection,
     ResearchEvidence,
     ResearchPremise,
+    ResearchState,
+    SemanticContext,
     ToolObservationStatus,
 )
 from apps.chatbi.services.research.tool_context import ResearchToolContext
@@ -29,6 +37,258 @@ from apps.chatbi.services.research.tool_context import ResearchToolContext
 _MAX_EVIDENCE_ITEMS = 12
 _MAX_RECENT_FAILURES = 3
 _MAX_HYPOTHESES = 20
+
+# 阶段 2 的模型输入上限；完整事实仍保存在运行状态和结果存储中。
+_MAX_REACT_EVIDENCE_ITEMS = 12
+_MAX_REACT_EVIDENCE_ROWS = 20
+_MAX_REACT_FINDINGS = 20
+_MAX_REACT_TODOS = 20
+_MAX_REACT_ATTEMPTS = 20
+_MAX_SEMANTIC_ASSETS_PER_TYPE = 40
+_MAX_SEMANTIC_DESCRIPTION_CHARS = 1_000
+_MAX_SEMANTIC_CONTEXT_YAML_CHARS = 12_000
+_MIN_SEMANTIC_DESCRIPTION_CHARS = 128
+
+
+def build_research_agent_input(
+    user_question: str,
+    semantic_context: SemanticContext,
+    *,
+    conversation_context: Sequence[
+        ConversationMessage | Mapping[str, Any]
+    ] = (),
+    agent_input_ref: str | None = None,
+) -> ResearchAgentInput:
+    """构造不可修改的 ResearchAgentInput 快照。"""
+
+    messages = tuple(
+        item
+        if isinstance(item, ConversationMessage)
+        else ConversationMessage.model_validate(item)
+        for item in conversation_context
+    )
+    return ResearchAgentInput(
+        agent_input_ref=agent_input_ref,
+        user_question=user_question,
+        conversation_context=messages,
+        semantic_context=semantic_context,
+    )
+
+
+def build_research_agent_input_from_requirement(
+    requirement: ResearchAgentRequirement,
+    *,
+    user_question: str,
+    semantic_context: SemanticContext,
+    conversation_context: Sequence[
+        ConversationMessage | Mapping[str, Any]
+    ] = (),
+    agent_input_ref: str | None = None,
+) -> ResearchAgentInput:
+    """从路由冻结结果构造输入，并校验语义资产没有越过 Scope。"""
+
+    allowed_metrics = set(requirement.scope.target_metric_refs) | set(
+        requirement.scope.driver_metric_refs
+    )
+    allowed_dimensions = set(requirement.scope.dimension_refs)
+    allowed_hierarchy_levels = {
+        tuple(item.dimension_refs) for item in requirement.scope.hierarchies
+    }
+    allowed_refs = allowed_metrics | allowed_dimensions
+
+    def require_allowed(ref: str) -> None:
+        if ref not in allowed_refs:
+            raise ValueError("RESEARCH_AGENT_INPUT_SEMANTIC_REF_OUT_OF_SCOPE")
+
+    for metric in semantic_context.metrics:
+        require_allowed(metric.ref)
+        for dimension_ref in metric.dimensions:
+            require_allowed(dimension_ref)
+    for dimension in semantic_context.dimensions:
+        require_allowed(dimension.ref)
+    for hierarchy in semantic_context.hierarchies:
+        # Scope 中的 hierarchy_id 是治理存储 ID，不能与模型侧正式 ref 拼接；
+        # 通过冻结的层级维度顺序绑定语义引用，避免同 ID 不同资产被误放行。
+        if hierarchy.levels not in allowed_hierarchy_levels:
+            raise ValueError("RESEARCH_AGENT_INPUT_SEMANTIC_REF_OUT_OF_SCOPE")
+        for level_ref in hierarchy.levels:
+            require_allowed(level_ref)
+    for formula in semantic_context.metric_formulas:
+        require_allowed(formula.target_metric_ref)
+        for source_ref in formula.source_metric_refs:
+            require_allowed(source_ref)
+    for relation in semantic_context.metric_analysis_relations:
+        require_allowed(relation.metric_ref)
+        for related_ref in relation.related_metric_refs:
+            require_allowed(related_ref)
+    for ambiguity in semantic_context.ambiguities:
+        for candidate_ref in ambiguity.candidate_refs:
+            require_allowed(candidate_ref)
+
+    return build_research_agent_input(
+        user_question,
+        semantic_context,
+        conversation_context=conversation_context,
+        agent_input_ref=agent_input_ref,
+    )
+
+
+def serialize_semantic_context_yaml(
+    semantic_context: SemanticContext,
+    *,
+    max_chars: int = _MAX_SEMANTIC_CONTEXT_YAML_CHARS,
+) -> str:
+    """按固定字段顺序将语义上下文投影为有界 YAML。"""
+
+    if max_chars <= 0:
+        raise ValueError("RESEARCH_AGENT_SEMANTIC_CONTEXT_YAML_LIMIT_INVALID")
+
+    # 运行环境未安装 PyYAML 类型存根，运行时仍使用其稳定序列化接口。
+    import yaml  # type: ignore[import-untyped]
+
+    asset_limit = _MAX_SEMANTIC_ASSETS_PER_TYPE
+    description_limit = _MAX_SEMANTIC_DESCRIPTION_CHARS
+    while True:
+        bounded = _bound_semantic_context(
+            semantic_context,
+            asset_limit=asset_limit,
+            description_limit=description_limit,
+        )
+        payload = {"semantic_context": bounded.model_dump(mode="json")}
+        serialized = cast(
+            str,
+            yaml.safe_dump(
+                payload,
+                allow_unicode=True,
+                default_flow_style=False,
+                sort_keys=False,
+                width=120,
+            ),
+        )
+        if len(serialized) <= max_chars:
+            return serialized
+        if description_limit > _MIN_SEMANTIC_DESCRIPTION_CHARS:
+            description_limit = max(
+                _MIN_SEMANTIC_DESCRIPTION_CHARS,
+                description_limit // 2,
+            )
+        elif asset_limit > 1:
+            asset_limit = max(1, asset_limit // 2)
+        else:
+            raise ValueError("RESEARCH_AGENT_SEMANTIC_CONTEXT_YAML_BUDGET_EXCEEDED")
+
+
+def project_research_react_state(
+    agent_input: ResearchAgentInput,
+    state: ResearchState,
+    *,
+    evidence: Sequence[Evidence] = (),
+    remaining_budget: RemainingBudget,
+) -> dict[str, Any]:
+    """将 ResearchState 投影为模型可读的 ReAct Working State。"""
+
+    if agent_input.agent_input_ref != state.agent_input_ref:
+        raise ValueError("RESEARCH_AGENT_INPUT_STATE_REF_MISMATCH")
+    input_payload = agent_input.model_dump(mode="json", exclude={"semantic_context"})
+    input_payload["semantic_context"] = serialize_semantic_context_yaml(
+        agent_input.semantic_context
+    )
+    evidence_payload = _project_react_evidence(state, evidence)
+    return {
+        "research_agent_input": input_payload,
+        "evidence": evidence_payload,
+        "findings": [
+            item.model_dump(mode="json")
+            for item in state.findings
+            if item.status == "confirmed"
+        ][-_MAX_REACT_FINDINGS:],
+        "todo_items": [
+            item.model_dump(mode="json")
+            for item in state.todo_items
+            if item.status in {"pending", "in_progress"}
+        ][-_MAX_REACT_TODOS:],
+        "attempted_actions": _project_react_attempts(state.attempted_actions),
+        "remaining_budget": remaining_budget.model_dump(mode="json"),
+    }
+
+
+def _bound_semantic_context(
+    semantic_context: SemanticContext,
+    *,
+    asset_limit: int,
+    description_limit: int,
+) -> SemanticContext:
+    """限制资产数量和描述长度，保持原 DTO 的结构与字段顺序。"""
+
+    def clip(value: str) -> str:
+        return value[:description_limit]
+
+    return semantic_context.model_copy(
+        update={
+            "metrics": tuple(
+                item.model_copy(update={"description": clip(item.description)})
+                for item in semantic_context.metrics[:asset_limit]
+            ),
+            "dimensions": tuple(
+                item.model_copy(update={"description": clip(item.description)})
+                for item in semantic_context.dimensions[:asset_limit]
+            ),
+            "hierarchies": semantic_context.hierarchies[:asset_limit],
+            "metric_formulas": semantic_context.metric_formulas[:asset_limit],
+            "metric_analysis_relations": semantic_context.metric_analysis_relations[
+                :asset_limit
+            ],
+            "ambiguities": semantic_context.ambiguities[:asset_limit],
+        }
+    )
+
+
+def _project_react_evidence(
+    state: ResearchState,
+    evidence: Sequence[Evidence],
+) -> list[dict[str, Any]]:
+    """只投影 Evidence 定义、限制和有界结果行，不投影 Tool Call。"""
+
+    by_id = {item.evidence_id: item for item in evidence}
+    # Evidence 必须由 ResearchState 的引用集合授权，不能因调用方传入额外数据
+    # 就把其他 Run 或尚未挂接到当前状态的证据投影给模型。
+    ordered = [by_id[item] for item in state.evidence_refs if item in by_id]
+    projected: list[dict[str, Any]] = []
+    for item in ordered[-_MAX_REACT_EVIDENCE_ITEMS:]:
+        payload = item.model_dump(mode="json")
+        data = payload.get("data")
+        if isinstance(data, dict):
+            data["rows"] = list(data.get("rows") or [])[:_MAX_REACT_EVIDENCE_ROWS]
+        projected.append(payload)
+    return projected
+
+
+def _project_react_attempts(
+    attempts: Sequence[AttemptSummary],
+) -> list[dict[str, Any]]:
+    """按动作指纹合并重复失败摘要，并保留最近一次错误。"""
+
+    projected: list[dict[str, Any]] = []
+    failure_indexes: dict[str, int] = {}
+    failure_counts: dict[str, int] = {}
+    for attempt in attempts:
+        payload = attempt.model_dump(mode="json")
+        if attempt.status not in {"failed", "rejected"}:
+            projected.append(payload)
+            continue
+        fingerprint = attempt.action_fingerprint
+        failure_counts[fingerprint] = failure_counts.get(fingerprint, 0) + 1
+        index = failure_indexes.get(fingerprint)
+        if index is None:
+            failure_indexes[fingerprint] = len(projected)
+            projected.append(payload)
+        else:
+            # 保留最新错误内容，计数在循环结束后写入，避免旧错误覆盖新错误。
+            projected[index] = payload
+    for fingerprint, index in failure_indexes.items():
+        if failure_counts[fingerprint] > 1:
+            projected[index]["repeat_count"] = failure_counts[fingerprint]
+    return projected[-_MAX_REACT_ATTEMPTS:]
 
 
 def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
@@ -453,7 +713,11 @@ def _planning_evidence_gaps(
 
 
 __all__ = [
+    "build_research_agent_input",
+    "build_research_agent_input_from_requirement",
     "build_research_system_context",
     "evaluate_premise_verdict",
+    "project_research_react_state",
     "project_research_working_state",
+    "serialize_semantic_context_yaml",
 ]

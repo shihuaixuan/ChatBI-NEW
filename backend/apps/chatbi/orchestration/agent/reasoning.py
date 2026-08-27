@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from queue import Empty, Queue
 from threading import Event, Thread
 from typing import Any, Protocol
 
 import orjson
+from pydantic import ValidationError
 
 from apps.chatbi.models.dto.agent import AgentConfig
+from apps.chatbi.models.dto.research_agent import ResearchTurnDecision
 from apps.chatbi.orchestration.agent.cancellation import (
     AgentCancellationRequested,
     CancellationStage,
@@ -65,6 +68,32 @@ class AgentDecision:
         return not self.tool_calls
 
 
+@dataclass(frozen=True)
+class ResearchAgentDecision:
+    """Research Agent 解析后的单轮决策。"""
+
+    decision: ResearchTurnDecision
+    response: AgentMessage
+    usage: dict[str, Any]
+    repaired: bool = False
+
+
+class ResearchDecisionParseError(ValueError):
+    """ResearchTurnDecision 解析失败，携带可审计的稳定错误信息。"""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        raw_response_excerpt: str = "",
+    ) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
+        self.raw_response_excerpt = raw_response_excerpt[:2_000]
+
+
 @dataclass
 class _ModelInvocationResult:
     decision: ModelDecision | None = None
@@ -104,6 +133,11 @@ class AgentReasoner:
         resolved_profile = (
             profile if profile is not None else get_reasoning_profile(mode)
         )
+        if resolved_profile.prompt_version is not None:
+            # 将当前提示词版本写入可持久化运行上下文，便于恢复和回放时审计。
+            state.context.state["research_prompt_version"] = (
+                resolved_profile.prompt_version
+            )
         run_id = state.require_run_id()
         with self._recorder.node(
             TraceNodeSpec(
@@ -115,12 +149,14 @@ class AgentReasoner:
                 metadata={
                     "mode": resolved_profile.name,
                     "step_id": step_id,
+                    "prompt_version": resolved_profile.prompt_version,
                 },
             ),
             input_data={
                 "message_count": len(state.messages),
                 "message_chars": sum(len(item.content) for item in state.messages),
                 "mode": resolved_profile.name,
+                "prompt_version": resolved_profile.prompt_version,
             },
         ) as context_node:
             fold_tool_messages(state.messages, self._config.context_fold_chars)
@@ -167,12 +203,17 @@ class AgentReasoner:
                 name="chat",
                 display_name="Agent 推理模型",
                 attributes=llm_attributes_data,
-                metadata={"mode": resolved_profile.name, "step_id": step_id},
+                metadata={
+                    "mode": resolved_profile.name,
+                    "step_id": step_id,
+                    "prompt_version": resolved_profile.prompt_version,
+                },
             ),
             input_data={
                 "message_count": len(invoke_messages),
                 "available_tool_count": len(tool_definitions),
                 "mode": resolved_profile.name,
+                "prompt_version": resolved_profile.prompt_version,
             },
             input_detail={
                 "messages": [
@@ -221,7 +262,11 @@ class AgentReasoner:
                 node_type=TraceNodeType.PROJECTION,
                 name="project_agent_decision",
                 display_name="校验并整理模型决策",
-                metadata={"mode": resolved_profile.name, "step_id": step_id},
+            metadata={
+                "mode": resolved_profile.name,
+                "step_id": step_id,
+                "prompt_version": resolved_profile.prompt_version,
+            },
             ),
             input_data={
                 "original_tool_call_count": len(model_decision.tool_calls),
@@ -276,6 +321,73 @@ class AgentReasoner:
             usage=usage,
         )
 
+    def decide_research(
+        self,
+        state: AgentRuntimeState,
+        *,
+        profile: ReasoningProfile | None = None,
+        step_id: int | None = None,
+        step_index: int | None = None,
+    ) -> ResearchAgentDecision:
+        """调用一次 Research Agent，并允许一次结构修正重试。"""
+
+        resolved_profile = profile or get_reasoning_profile("research_react")
+        available_tools = resolved_profile.visible_tool_names(
+            state,
+            self._registry.names(),
+        )
+        first = self.decide(
+            state,
+            resolved_profile.name,
+            profile=resolved_profile,
+            step_id=step_id,
+            step_index=step_index,
+        )
+        try:
+            parsed = parse_research_turn_decision(
+                first,
+                available_tools=available_tools,
+            )
+        except ResearchDecisionParseError as first_error:
+            _record_research_decision_error(state, first_error, repaired=False)
+            state.messages.append(
+                AgentMessage.user(
+                    "上一次 Research Agent 输出未通过 ResearchTurnDecision 校验。"
+                    "请只重新提交符合当前工具 JSON Schema 的结构化动作；不要输出解释文本。"
+                    f"错误代码：{first_error.code}。"
+                )
+            )
+            repaired = self.decide(
+                state,
+                resolved_profile.name,
+                profile=resolved_profile,
+                step_id=step_id,
+                step_index=step_index,
+            )
+            try:
+                parsed = parse_research_turn_decision(
+                    repaired,
+                    available_tools=available_tools,
+                )
+            except ResearchDecisionParseError as second_error:
+                _record_research_decision_error(state, second_error, repaired=True)
+                raise ResearchDecisionParseError(
+                    "RESEARCH_AGENT_DECISION_REPAIR_FAILED",
+                    second_error.message,
+                    raw_response_excerpt=second_error.raw_response_excerpt,
+                ) from second_error
+            return ResearchAgentDecision(
+                decision=parsed,
+                response=repaired.response,
+                usage=repaired.usage,
+                repaired=True,
+            )
+        return ResearchAgentDecision(
+            decision=parsed,
+            response=first.response,
+            usage=first.usage,
+        )
+
     def _invoke_messages(
         self,
         state: AgentRuntimeState,
@@ -283,7 +395,11 @@ class AgentReasoner:
         available_tools: list[str],
         working_state_payload: dict[str, Any],
     ) -> list[AgentMessage]:
-        system = state.require_system()
+        system = (
+            AgentMessage.system(profile.system_prompt)
+            if profile.system_prompt is not None
+            else state.require_system()
+        )
         working_state = AgentMessage.user(
             "<agent-working-state>"
             + orjson.dumps(working_state_payload).decode()
@@ -422,6 +538,120 @@ def _invoke_model_with_cancellation(
         return result.decision
 
 
+def parse_research_turn_decision(
+    model_decision: AgentDecision,
+    *,
+    available_tools: Sequence[str],
+) -> ResearchTurnDecision:
+    """将模型的 JSON 或工具调用解析为 ResearchTurnDecision。"""
+
+    allowed_tools = set(available_tools)
+    if model_decision.tool_calls and model_decision.response.content.strip():
+        raise ResearchDecisionParseError(
+            "RESEARCH_AGENT_DECISION_MULTIPLE_PAYLOADS",
+            "模型同时返回了结构化正文和工具调用。",
+            raw_response_excerpt=model_decision.response.content,
+        )
+    if model_decision.tool_calls:
+        actions: list[dict[str, Any]] = []
+        for call in model_decision.tool_calls:
+            if not call.call_id:
+                raise ResearchDecisionParseError(
+                    "RESEARCH_AGENT_TOOL_CALL_ID_MISSING",
+                    "工具调用缺少 call_id。",
+                )
+            if call.name not in allowed_tools:
+                raise ResearchDecisionParseError(
+                    "RESEARCH_AGENT_DECISION_TOOL_NOT_VISIBLE",
+                    f"工具 {call.name} 不在本轮可见工具集合中。",
+                )
+            if not isinstance(call.args, dict):
+                raise ResearchDecisionParseError(
+                    "RESEARCH_AGENT_DECISION_ARGUMENTS_INVALID",
+                    f"工具 {call.name} 的 arguments 不是对象。",
+                )
+            arguments = dict(call.args)
+            purpose = arguments.pop("purpose", f"执行 {call.name}")
+            expected_result = arguments.pop("expected_result", None)
+            actions.append(
+                {
+                    "action_type": call.name,
+                    "purpose": purpose,
+                    "expected_result": expected_result,
+                    "arguments": arguments,
+                }
+            )
+        payload: dict[str, Any] = {"actions": actions}
+    else:
+        content = model_decision.response.content.strip()
+        if not content:
+            raise ResearchDecisionParseError(
+                "RESEARCH_AGENT_DECISION_ACTION_REQUIRED",
+                "模型没有返回动作或结构化决策。",
+            )
+        try:
+            payload = orjson.loads(content)
+        except orjson.JSONDecodeError as exc:
+            raise ResearchDecisionParseError(
+                "RESEARCH_AGENT_DECISION_JSON_INVALID",
+                "模型正文不是合法 JSON。",
+                raw_response_excerpt=content,
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ResearchDecisionParseError(
+                "RESEARCH_AGENT_DECISION_OBJECT_REQUIRED",
+                "ResearchTurnDecision 必须是 JSON 对象。",
+                raw_response_excerpt=content,
+            )
+
+    try:
+        decision = ResearchTurnDecision.model_validate(payload)
+    except ValidationError as exc:
+        raise ResearchDecisionParseError(
+            "RESEARCH_AGENT_DECISION_SCHEMA_INVALID",
+            str(exc).splitlines()[0],
+            raw_response_excerpt=model_decision.response.content,
+        ) from exc
+    _validate_research_decision_tools(decision, allowed_tools)
+    return decision
+
+
+def _validate_research_decision_tools(
+    decision: ResearchTurnDecision,
+    allowed_tools: set[str],
+) -> None:
+    """防止 JSON 正文绕过当前可见工具集合。"""
+
+    hidden = sorted(
+        {
+            action.action_type.value
+            for action in decision.actions
+            if action.action_type.value not in allowed_tools
+        }
+    )
+    if hidden:
+        raise ResearchDecisionParseError(
+            "RESEARCH_AGENT_DECISION_TOOL_NOT_VISIBLE",
+            f"工具不在本轮可见工具集合中：{', '.join(hidden)}。",
+        )
+
+
+def _record_research_decision_error(
+    state: AgentRuntimeState,
+    error: ResearchDecisionParseError,
+    *,
+    repaired: bool,
+) -> None:
+    """保存解析失败摘要，不保存完整模型输出到运行状态。"""
+
+    state.context.state["research_decision_parse_error"] = {
+        "code": error.code,
+        "message": error.message,
+        "raw_response_excerpt": error.raw_response_excerpt,
+        "repair_attempted": repaired,
+    }
+
+
 def _content_text(message: AgentMessage) -> str:
     return message.content.strip() or str(message.reasoning_content or "").strip()
 
@@ -467,4 +697,11 @@ def _tool_call_payload(call: ToolCall) -> dict[str, Any]:
     return {"name": call.name, "args": call.args, "call_id": call.call_id}
 
 
-__all__ = ["AgentDecision", "AgentModelClient", "AgentReasoner"]
+__all__ = [
+    "AgentDecision",
+    "AgentModelClient",
+    "AgentReasoner",
+    "ResearchAgentDecision",
+    "ResearchDecisionParseError",
+    "parse_research_turn_decision",
+]
