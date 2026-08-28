@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from apps.chatbi.models.dto.research_agent import (
     AttemptSummary,
+    ComputeEvidenceArguments,
     Evidence,
     EvidenceColumn,
     EvidenceData,
@@ -17,6 +18,9 @@ from apps.chatbi.models.dto.research_agent import (
     ExecutionError,
     Finding,
     FindingScope,
+    QueryPeriod,
+    QueryResultSpec,
+    ReadEvidenceRowsArguments,
     RemainingBudget,
     ResearchActionType,
     ResearchExecutionErrorStage,
@@ -298,6 +302,211 @@ def test_tool_call_is_parsed_as_research_turn_decision() -> None:
     assert decision.actions[0].arguments.metrics == ("METRIC:0:1",)
 
 
+def test_tool_call_ignores_narrative_and_unwraps_provider_argument_wrapper() -> None:
+    """兼容模型说明文字和兼容接口偶发的 query 参数外包层。"""
+
+    call = ToolCall(
+        name="query_semantic_data",
+        args={
+            "query": {
+                "metrics": ["METRIC:0:1"],
+                "result": {"limit": 20},
+            }
+        },
+        call_id="call-wrapped",
+    )
+    decision = parse_research_turn_decision(
+        AgentDecision(
+            response=AgentMessage.assistant("我先查询当前证据。", tool_calls=[call]),
+            reasoning="我先查询当前证据。",
+            tool_calls=[call],
+            usage={},
+        ),
+        available_tools=("query_semantic_data",),
+    )
+
+    assert decision.actions[0].arguments.metrics == ("METRIC:0:1",)
+    assert decision.actions[0].arguments.result.limit == 20
+
+
+def test_tool_call_preserves_finding_and_todo_sidecar() -> None:
+    """工具调用与同轮状态变更必须共同进入 ResearchTurnDecision。"""
+
+    call = ToolCall(
+        name="query_semantic_data",
+        args={"metrics": ["METRIC:0:1"], "result": {"limit": 20}},
+        call_id="call-with-sidecar",
+    )
+    content = '{"finding_changes":[],"todo_changes":[]}'
+    decision = parse_research_turn_decision(
+        AgentDecision(
+            response=AgentMessage.assistant(content, tool_calls=[call]),
+            reasoning=content,
+            tool_calls=[call],
+            usage={},
+        ),
+        available_tools=("query_semantic_data",),
+    )
+
+    assert decision.finding_changes == ()
+    assert decision.todo_changes == ()
+    assert decision.actions[0].action_type is ResearchActionType.QUERY_SEMANTIC_DATA
+
+
+def test_tool_call_accepts_current_finding_change_contract() -> None:
+    """sidecar 使用当前 FindingChange 字段时应与工具动作合并解析。"""
+
+    call = ToolCall(
+        name="finish_research",
+        args={
+            "completion": {
+                "status": "complete",
+                "summary": "证据已足够",
+                "finding_ids": ["finding-1"],
+                "evidence_ids": ["evidence:call-1"],
+            }
+        },
+        call_id="call-finish-with-sidecar",
+    )
+    content = (
+        '{"finding_changes":[{"change_type":"add","finding":{'
+        '"finding_id":"finding-1","statement":"GMV已下降",'
+        '"evidence_ids":["evidence:call-1"],"scope":{'
+        '"metric_refs":[],"dimension_refs":[],"time_ranges":[],"filters":[]},'
+        '"status":"confirmed"},"reason":"证据支持"}],"todo_changes":[]}'
+    )
+
+    decision = parse_research_turn_decision(
+        AgentDecision(
+            response=AgentMessage.assistant(content, tool_calls=[call]),
+            reasoning=content,
+            tool_calls=[call],
+            usage={},
+        ),
+        available_tools=("finish_research",),
+    )
+
+    assert decision.finding_changes[0].finding is not None
+    assert decision.finding_changes[0].finding.finding_id == "finding-1"
+    assert decision.actions[0].action_type is ResearchActionType.FINISH_RESEARCH
+
+
+def test_tool_call_does_not_unwrap_other_tool_arguments() -> None:
+    """其他工具仍按原始参数结构校验，避免兼容逻辑扩大范围。"""
+
+    call = ToolCall(
+        name="finish_research",
+        args={"query": {"completion": {"status": "answered"}}},
+        call_id="call-finish-wrapped",
+    )
+
+    with pytest.raises(ResearchDecisionParseError) as error:
+        parse_research_turn_decision(
+            _decision(call.name, call.args),
+            available_tools=("finish_research",),
+        )
+
+    assert error.value.code == "RESEARCH_AGENT_DECISION_SCHEMA_INVALID"
+
+
+def test_tool_call_unwraps_tool_name_argument_wrapper() -> None:
+    """兼容同一供应商返回的工具名参数外包层。"""
+
+    call = ToolCall(
+        name="query_semantic_data",
+        args={
+            "query_semantic_data": {
+                "metrics": ["METRIC:0:1"],
+                "result": {"limit": 20},
+            }
+        },
+        call_id="call-tool-name-wrapped",
+    )
+
+    decision = parse_research_turn_decision(
+        AgentDecision(
+            response=AgentMessage.assistant("", tool_calls=[call]),
+            reasoning="",
+            tool_calls=[call],
+            usage={},
+        ),
+        available_tools=("query_semantic_data",),
+    )
+
+    assert decision.actions[0].arguments.metrics == ("METRIC:0:1",)
+
+
+def test_tool_call_normalizes_comparison_dates_to_time_roles() -> None:
+    """将模型输出的唯一日期期间归一化为协议要求的时间角色。"""
+
+    call = ToolCall(
+        name="query_semantic_data",
+        args={
+            "metrics": ["METRIC:0:1"],
+            "time": {
+                "dimension_ref": "DIMENSION:20:1",
+                "grain": "day",
+                "periods": [
+                    {"role": "current", "start": "2026-06-29", "end": "2026-06-29"},
+                    {"role": "previous", "start": "2026-06-28", "end": "2026-06-28"},
+                ],
+            },
+            "comparison": {
+                "base_period": "2026-06-29",
+                "against_period": "2026-06-28",
+                "outputs": ["current", "previous", "difference", "growth_rate"],
+            },
+            "result": {"limit": 20},
+        },
+        call_id="call-date-comparison",
+    )
+
+    decision = parse_research_turn_decision(
+        AgentDecision(
+            response=AgentMessage.assistant("", tool_calls=[call]),
+            reasoning="",
+            tool_calls=[call],
+            usage={},
+        ),
+        available_tools=("query_semantic_data",),
+    )
+
+    comparison = decision.actions[0].arguments.comparison
+    assert comparison is not None
+    assert comparison.base_period == "current"
+    assert comparison.against_period == "previous"
+
+
+def test_query_period_rejects_uncontrolled_time_role() -> None:
+    with pytest.raises(ValidationError):
+        QueryPeriod(role="base", start="2026-06-29", end="2026-06-29")
+
+
+def test_all_result_tools_expose_the_same_maximum_row_limit() -> None:
+    assert QueryResultSpec(limit=1_000).limit == 1_000
+    with pytest.raises(ValidationError):
+        QueryResultSpec(limit=1_001)
+    with pytest.raises(ValidationError):
+        ComputeEvidenceArguments(
+            operation="ranking",
+            input_evidence_ids=["evidence:input"],
+            order_by=[
+                {
+                    "field_ref": "METRIC:0:1",
+                    "value_role": "value",
+                    "direction": "desc",
+                }
+            ],
+            limit=1_001,
+        )
+    with pytest.raises(ValidationError):
+        ReadEvidenceRowsArguments(
+            evidence_id="evidence:input",
+            column_refs=["METRIC:0:1"],
+            limit=1_001,
+        )
+
+
 def test_json_decision_and_visible_tool_boundary_are_validated() -> None:
     content = (
         '{"actions":[{"action_type":"query_semantic_data",'
@@ -324,7 +533,7 @@ def test_json_decision_and_visible_tool_boundary_are_validated() -> None:
 
 
 def test_research_react_profile_has_prompt_and_six_tools() -> None:
-    assert RESEARCH_REACT_PROFILE.prompt_version == "research-react-v1"
+    assert RESEARCH_REACT_PROFILE.prompt_version == "research-react-v2"
     assert RESEARCH_REACT_PROFILE.system_prompt is not None
     assert "plan_execution_state" not in RESEARCH_REACT_PROFILE.system_prompt
     assert RESEARCH_REACT_PROFILE.fixed_tool_allowlist == (

@@ -168,11 +168,13 @@ class Settings(BaseSettings):
     # 质量切流门槛（§11.3.4）的评测配置 JSON 路径；空表示未配置，
     # 未配置时切流判定一律阻断，不得在没有基线数据时发明阈值。
     CHATBI_RESEARCH_EVAL_CONFIG: str = ""
-    # Research 预算默认值与 AgentConfig.research_* 保持一致（doc §9.6 第一版建议默认）。
-    CHAT_AGENT_RESEARCH_MAX_ITERATIONS: int = 8
-    CHAT_AGENT_RESEARCH_MAX_QUERIES: int = 8
-    CHAT_AGENT_RESEARCH_MAX_MODEL_CALLS: int = 8
-    CHAT_AGENT_RESEARCH_MAX_DURATION_SECONDS: int = 300
+    # Research 预算默认值与 AgentConfig.research_* 保持一致，统一扩大一倍。
+    CHAT_AGENT_RESEARCH_MAX_ITERATIONS: int = 16
+    CHAT_AGENT_RESEARCH_MAX_QUERIES: int = 16
+    CHAT_AGENT_RESEARCH_MAX_MODEL_CALLS: int = 16
+    CHAT_AGENT_RESEARCH_MAX_DURATION_SECONDS: int = 600
+    CHAT_AGENT_RESEARCH_MAX_EVIDENCE_ROWS: int = 40
+    CHAT_AGENT_RESEARCH_MAX_EVIDENCE_CHARS: int = 24000
     CHATBI_PLAN_MAX_QUERY_TASKS: int = 5
     CHATBI_PLAN_QUERY_CONCURRENCY: int = 4
     CHATBI_PLANNER_TIMEOUT_MS: int = 60000

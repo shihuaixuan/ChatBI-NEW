@@ -153,6 +153,8 @@ def get_agent_config() -> AgentConfig:
         research_max_duration_seconds=(
             settings.CHAT_AGENT_RESEARCH_MAX_DURATION_SECONDS
         ),
+        research_max_evidence_rows=settings.CHAT_AGENT_RESEARCH_MAX_EVIDENCE_ROWS,
+        research_max_evidence_chars=settings.CHAT_AGENT_RESEARCH_MAX_EVIDENCE_CHARS,
         compute_enabled=settings.CHATBI_COMPUTE_ENABLED,
         answer_citation_enforced=settings.CHATBI_ANSWER_CITATION_ENFORCED,
         assisted_fallback_enabled=settings.CHATBI_ASSISTED_FALLBACK_ENABLED,

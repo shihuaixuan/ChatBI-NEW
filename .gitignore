@@ -14,13 +14,13 @@ extra
 # docs are part of the implementation plan and must be versioned.
 docs/tech
 docs/test-results
-backend/logs
 backend/data/workflow_artifacts/
 backend/tests
 # 阶段 1和阶段 10契约测试需要版本化；继续忽略其它 backend/tests 内容。
 !backend/tests/
 backend/tests/*
-
+backend/data
+backend/logs
 !backend/tests/chatbi/
 backend/tests/chatbi/*
 !backend/tests/chatbi/test_research_agent_contracts.py

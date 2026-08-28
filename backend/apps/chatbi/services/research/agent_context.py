@@ -9,10 +9,12 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from apps.chatbi.models.dto.research_agent import (
+    RESEARCH_QUERY_MAX_ROWS,
     AttemptSummary,
     ConversationMessage,
     Evidence,
@@ -169,6 +171,7 @@ def project_research_react_state(
     *,
     evidence: Sequence[Evidence] = (),
     remaining_budget: RemainingBudget,
+    requirement: ResearchAgentRequirement | None = None,
 ) -> dict[str, Any]:
     """将 ResearchState 投影为模型可读的 ReAct Working State。"""
 
@@ -179,8 +182,23 @@ def project_research_react_state(
         agent_input.semantic_context
     )
     evidence_payload = _project_react_evidence(state, evidence)
+    time_bindings = tuple(requirement.time_bindings) if requirement is not None else ()
     return {
         "research_agent_input": input_payload,
+        "research_constraints": {
+            "max_query_rows": RESEARCH_QUERY_MAX_ROWS,
+            "frozen_time_roles": [
+                item.role.value for item in time_bindings
+            ],
+            "frozen_time_bindings": [
+                {
+                    "role": item.role.value,
+                    "dimension_ref": item.dimension_ref,
+                    "normalized": item.normalized,
+                }
+                for item in time_bindings
+            ],
+        },
         "evidence": evidence_payload,
         "findings": [
             item.model_dump(mode="json")
@@ -285,11 +303,16 @@ def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
         for item in requirement.immutable_filters
     )
     time_lines = "\n".join(
-        f"- {binding.role.value}: {binding.expression}"
+        f"- role={binding.role.value}; dimension_ref={binding.dimension_ref}; "
+        f"expression={binding.expression}; normalized="
+        f"{json.dumps(binding.normalized, ensure_ascii=False, sort_keys=True)}"
         for binding in requirement.time_bindings
     )
     if not time_lines:
         time_lines = "- single: 无显式时间条件"
+    frozen_roles = ", ".join(
+        item.role.value for item in requirement.time_bindings
+    ) or "single"
     hierarchy_lines = "\n".join(
         f"- {hierarchy.hierarchy_id}: {' -> '.join(hierarchy.dimension_refs)}"
         for hierarchy in scope.hierarchies
@@ -303,7 +326,9 @@ def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
         "<frozen-boundary>\n"
         f"研究目标（不可修改）：{requirement.goal}\n"
         f"目标指标（不可修改）：{', '.join(requirement.target_metric_refs)}\n"
+        f"允许时间角色（不可修改）：{frozen_roles}\n"
         f"时间绑定（不可修改）：\n{time_lines}\n"
+        f"单次查询最大行数（不可超过）：{RESEARCH_QUERY_MAX_ROWS}\n"
         f"结果操作（不可修改）：\n{operation_lines}\n"
         + (f"不可变筛选（不可修改）：\n{immutable}\n" if immutable else "")
         + f"数据集：{scope.dataset_ref}；租户范围：{scope.tenant_scope}\n"
@@ -317,11 +342,19 @@ def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
         "3. 相同参数的动作会复用已保存结果，不重复执行或消耗预算。\n"
         "4. 你可以调整维度、排序、限制、拆分方式和 Scope 内驱动指标；"
         "不能修改目标指标、时间绑定、结果操作、不可变筛选或冻结版本。"
+        "QueryPeriod 的 start 和 end 都是包含边界的日期；normalized 中的"
+        " end_exclusive 是内部字段，不能直接填入 end。已有时间绑定时必须保留"
+        " time 并按绑定的日期提交，不能删除 time 来绕过校验。"
+        "当 time.periods 同时包含 current 和 previous 时，必须填写 comparison；"
+        "comparison.base_period 和 against_period 必须使用 current 或 previous"
+        "角色名，不能填写日期；只有单一时间角色才可以省略 comparison。"
         "时间 group 操作使用 query_semantic_data.time_grain，不要把时间维度"
         "猜成 dimensions；排序和数量限制必须在 query_semantic_data 的 order、limit"
         "中直接执行，不能只依赖 inspect_evidence 的展示排序。按计算差值排序时，"
         "order 使用指标 ref 并设置 value_role=difference；analysis=contribution"
         "只用于 comparison=contribution，日环比差异的维度定位使用 analysis=breakdown。\n"
+        "compute_evidence 会写入当前 Run 的 Evidence，必须单独提交；只有相互独立的"
+        "query_semantic_data 或 read_evidence_rows 才能放入同一并行批次。\n"
         "5. 先处理未完成 Todo；动作完成后根据 ToolResult 和 Evidence 决定下一步。\n"
         "6. 报告只能写证据样本或确定性计算证据中已经存在的数字；没有 "
         "growth_rate/share/contribution 证据时，不得自行换算百分比。\n"
@@ -330,6 +363,14 @@ def build_research_system_context(requirement: ResearchAgentRequirement) -> str:
         "correlation_clue，并明确为共同变化或相关线索。\n"
         "8. evidence ID 和资产 ref 只放在结构化引用字段中，不要写进 "
         "summary、finding 或 claim 的正文。\n"
+        "每轮必须至少有一个 tool_call；只有 JSON sidecar 而没有 tool_call 不是合法轮次。"
+        "当本轮需要新增或替代 Finding、或更新 Todo 时，工具调用继续放在 tool_calls 中，"
+        "助手正文必须同时提交 JSON 状态变更 sidecar，只能包含 finding_changes 和"
+        "todo_changes 两个字段，且必须使用 change_type、finding、finding_id、reason、"
+        "todo 等当前字段，不得使用 op、upsert 或 claim_level。Finding 只能引用当前"
+        "已存在的 Evidence；若本轮已获得足够 Evidence，应在同一轮 sidecar 提交 Finding"
+        "并提交单独的 finish_research tool_call，不能单独提交 sidecar。结束时在"
+        "finish_research.completion.finding_ids 中引用需要进入回答的 confirmed Finding。\n"
         "</protocol>\n"
         + (f"\n<available-hierarchies>\n{hierarchy_lines}\n</available-hierarchies>\n" if hierarchy_lines else "")
     )

@@ -14,6 +14,7 @@ from apps.chatbi.errors import (
 from apps.chatbi.models import (
     AgentClarificationResumeKind,
     AgentErrorClass,
+    AgentExecutionMode,
     AgentRunStatus,
     ChatbiAgentClarification,
     ChatbiAgentRun,
@@ -136,14 +137,15 @@ class RunOrchestrator:
                 yield clarification_event
                 return
             # 3. 冻结统一 Agent 输入并进入 Research ReAct 循环。
-            self._build_execution_requirement(state)
-            state.context.state["execution_mode"] = "agent"
+            # 先冻结运行模式，确保需求构建失败时也不会回到旧 Agent 模式。
+            state.context.state["execution_mode"] = AgentExecutionMode.RESEARCH.value
             agent_run_repository.update_run(
                 self.session,
                 state.run,
-                execution_mode="agent",
+                execution_mode=AgentExecutionMode.RESEARCH.value,
             )
             self.session.commit()
+            self._build_execution_requirement(state)
             yield from self._dispatch_research(state)
         except ExecutionRequirementBuildError as exc:
             yield from self._finalize_mode_routing_error(state, exc)
@@ -390,14 +392,15 @@ class RunOrchestrator:
             if clarification_event is not None:
                 yield clarification_event
                 return
-            self._build_execution_requirement(state)
-            state.context.state["execution_mode"] = "agent"
+            # 恢复路径与首次路径使用相同的模式冻结边界。
+            state.context.state["execution_mode"] = AgentExecutionMode.RESEARCH.value
             agent_run_repository.update_run(
                 self.session,
                 state.run,
-                execution_mode="agent",
+                execution_mode=AgentExecutionMode.RESEARCH.value,
             )
             self.session.commit()
+            self._build_execution_requirement(state)
             yield from self._dispatch_research(state)
         except ExecutionRequirementBuildError as exc:
             yield from self._finalize_mode_routing_error(state, exc)

@@ -17,6 +17,9 @@ from apps.chatbi.models.dto.execution_requirement import SemanticOperation
 
 RESEARCH_AGENT_CONTRACT_VERSION: Literal[1] = 1
 
+# 查询、计算和结果读取共用的单次最大结果行数，模型 Schema 与 Runtime 必须一致。
+RESEARCH_QUERY_MAX_ROWS = 1_000
+
 _ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _REF_PATTERN = re.compile(
     r"^(?:ASSET|METRIC|DIMENSION|FILTER|MODEL|HIERARCHY|RELATION|"
@@ -226,12 +229,13 @@ class ResearchVersionSnapshot(_ContractModel):
 
 
 class ResearchBudget(_ContractModel):
-    max_iterations: int = Field(default=8, gt=0, le=20)
-    max_queries: int = Field(default=8, gt=0, le=50)
-    max_model_calls: int = Field(default=8, gt=0, le=50)
-    max_duration_seconds: int = Field(default=300, gt=0, le=1800)
-    max_evidence_rows: int = Field(default=20, gt=0, le=100)
-    max_evidence_chars: int = Field(default=12_000, gt=0, le=100_000)
+    # 阶段 10 真实评测需要为动作纠错和结束判断保留更充足的研究预算。
+    max_iterations: int = Field(default=16, gt=0, le=20)
+    max_queries: int = Field(default=16, gt=0, le=50)
+    max_model_calls: int = Field(default=16, gt=0, le=50)
+    max_duration_seconds: int = Field(default=600, gt=0, le=1800)
+    max_evidence_rows: int = Field(default=40, gt=0, le=100)
+    max_evidence_chars: int = Field(default=24_000, gt=0, le=100_000)
 
 
 class ResearchTimeBinding(_ContractModel):
@@ -748,7 +752,7 @@ class ResearchSemanticQuery(_VersionedContractModel):
     ] = "exploration"
     drilldown: ResearchDrilldownSpec | None = None
     order: tuple[ResearchOrder, ...] = ()
-    limit: int = Field(default=100, gt=0, le=1000)
+    limit: int = Field(default=100, gt=0, le=RESEARCH_QUERY_MAX_ROWS)
     purpose: str = Field(min_length=1, max_length=1000)
     hypothesis_ids: tuple[str, ...] = ()
 
@@ -871,7 +875,11 @@ class ResearchComputeRequest(_VersionedContractModel):
     dimension_refs: tuple[str, ...] = ()
     group_by_refs: tuple[str, ...] = ()
     order: tuple[ResearchOrder, ...] = ()
-    limit: int | None = Field(default=None, gt=0, le=1000)
+    limit: int | None = Field(
+        default=None,
+        gt=0,
+        le=RESEARCH_QUERY_MAX_ROWS,
+    )
     tolerance: float | None = Field(default=None, ge=0)
     purpose: str | None = Field(default=None, min_length=1, max_length=1000)
 
@@ -913,7 +921,11 @@ class ResearchInspectEvidenceRequest(_VersionedContractModel):
     logical_column_refs: tuple[str, ...] = ()
     order: tuple[ResearchOrder, ...] = ()
     offset: int = Field(default=0, ge=0, le=100_000)
-    limit: int | None = Field(default=None, gt=0, le=1000)
+    limit: int | None = Field(
+        default=None,
+        gt=0,
+        le=RESEARCH_QUERY_MAX_ROWS,
+    )
     max_rows: int = Field(default=20, gt=0, le=100)
     max_chars: int = Field(default=12_000, gt=0, le=100_000)
 
@@ -1540,6 +1552,8 @@ class Evidence(_ReactSchemaModel):
     evidence_type: Literal["query_result", "computation_result"]
     purpose: str = Field(min_length=1, max_length=2_000)
     definition: EvidenceDefinition
+    # 保留 Research 查询的时间角色；单期查询没有显式时间范围时也必须可审计。
+    time_roles: tuple[ResearchTimeRole, ...] = ()
     columns: tuple[EvidenceColumn, ...] = Field(min_length=1)
     data: EvidenceData
     parent_evidence_ids: tuple[str, ...] = ()
@@ -1556,6 +1570,7 @@ class Evidence(_ReactSchemaModel):
         )
         for evidence_id in self.parent_evidence_ids:
             _id(evidence_id, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        _unique(self.time_roles, "RESEARCH_AGENT_EVIDENCE_TIME_ROLE_DUPLICATED")
         if self.data.row_count < len(self.data.rows):
             raise ValueError("RESEARCH_AGENT_EVIDENCE_ROW_COUNT_INVALID")
         if any(len(row) != len(self.columns) for row in self.data.rows):
@@ -1668,7 +1683,7 @@ class ToolResult(_ReactSchemaModel, Generic[_ResearchResultT]):
 
 
 class QueryPeriod(_ContractModel):
-    role: str = Field(min_length=1, max_length=64)
+    role: ResearchTimeRole
     start: str = Field(min_length=1, max_length=64)
     end: str = Field(min_length=1, max_length=64)
 
@@ -1746,7 +1761,7 @@ class QueryOrder(_ContractModel):
 
 class QueryResultSpec(_ContractModel):
     order_by: tuple[QueryOrder, ...] = ()
-    limit: int = Field(gt=0, le=10_000)
+    limit: int = Field(gt=0, le=RESEARCH_QUERY_MAX_ROWS)
 
 
 class QuerySemanticDataArguments(_ReactSchemaModel):
@@ -1789,7 +1804,11 @@ class ComputeEvidenceArguments(_ReactSchemaModel):
     dimension_refs: tuple[str, ...] = ()
     group_by_refs: tuple[str, ...] = ()
     order_by: tuple[QueryOrder, ...] = ()
-    limit: int | None = Field(default=None, gt=0, le=10_000)
+    limit: int | None = Field(
+        default=None,
+        gt=0,
+        le=RESEARCH_QUERY_MAX_ROWS,
+    )
     tolerance: float | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
@@ -1816,7 +1835,7 @@ class ReadEvidenceRowsArguments(_ReactSchemaModel):
     column_refs: tuple[str, ...] = Field(min_length=1)
     order_by: tuple[QueryOrder, ...] = ()
     offset: int = Field(default=0, ge=0)
-    limit: int = Field(gt=0, le=10_000)
+    limit: int = Field(gt=0, le=RESEARCH_QUERY_MAX_ROWS)
 
     @model_validator(mode="after")
     def validate_read_arguments(self) -> ReadEvidenceRowsArguments:
@@ -2252,9 +2271,9 @@ class ResearchTurnDecision(_ReactSchemaModel):
             if len(self.actions) != 1:
                 raise ValueError("RESEARCH_AGENT_CONTROL_ACTION_MUST_BE_ALONE")
         elif len(self.actions) > 1:
+            # 计算会写入当前 Run 的 Evidence 台账，不能与查询或读取动作并行。
             read_only_types = {
                 ResearchActionType.QUERY_SEMANTIC_DATA,
-                ResearchActionType.COMPUTE_EVIDENCE,
                 ResearchActionType.READ_EVIDENCE_ROWS,
             }
             if not set(action_types) <= read_only_types:
@@ -2335,6 +2354,7 @@ __all__.extend(
         "ResearchStateStatus",
         "ResearchTurnDecision",
         "RESEARCH_AGENT_INPUT_SCHEMA_VERSION",
+        "RESEARCH_QUERY_MAX_ROWS",
         "RESEARCH_STATE_SCHEMA_VERSION",
         "RESEARCH_STATE_SNAPSHOT_SCHEMA_VERSION",
         "RESEARCH_TOOL_RESULT_SCHEMA_VERSION",

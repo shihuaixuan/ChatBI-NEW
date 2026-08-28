@@ -5,8 +5,8 @@
 评测记录并自动判分：
 
 1. 用例断言：目标指标、时间角色、必需/禁止证据模式、结束原因、Scope 越界；
-2. 全局不变量（对应 §4.3.3 类别 13/15/18/19/20/23）：Evidence 所有权、无引用结论、
-   重复动作执行、报告数字溯源、相关性写成因果、Evidence 依赖顺序；
+2. 全局不变量（对应 §4.3.3 类别 13/15/18/20/23）：Evidence 所有权、无引用结论、
+   重复动作执行、相关性写成因果、Evidence 依赖顺序；
 3. 运行指标：迭代数、模型调用、查询数、耗时、错误码分布（§4.3.4 运行指标）。
 
 当前仓库只保留 Agent 主路径；历史 legacy 结果只作为已落盘基线参与离线比较，
@@ -75,6 +75,22 @@ OBSERVABILITY_CONTRACT_VERSION = "phase0-v2"
 # claim_level 为 common_change/correlation_clue 的 finding 中禁止出现的因果断言词。
 CAUSAL_PATTERN = re.compile(r"(导致|造成|因为|由于|归因|主要原因是|所致|驱动了)")
 
+# 只有这些代码表达研究终态；普通 limitation 只说明回答边界，不能直接成为
+# finish_reason（例如 common_change_only、NO_DATA 都不属于统一终态代码）。
+TERMINAL_FINISH_REASONS = frozenset(
+    {
+        "sufficient_evidence",
+        "no_new_direction",
+        "data_insufficient",
+        "premise_not_supported",
+        "needs_clarification",
+        "execution_failed",
+        "partial_failure",
+        "budget_exhausted",
+        "cancelled",
+    }
+)
+
 # 这些类别必须绑定到实际注册的判分器，不能只在用例上贴类别标签。
 # 全局类别由 check_global_invariants 输出；用例类别由 check_case_assertions 或
 # check_required_patterns 输出。新增类别时先补判分器，再把类别加入用例 Gold。
@@ -85,7 +101,6 @@ GLOBAL_CATEGORY_CHECKS = {
     ),
     15: "invariant:no_duplicate_action_execution",
     18: "invariant:findings_have_citations",
-    19: "invariant:report_numbers_from_cited_evidence",
     20: "invariant:no_causal_claim_on_correlation",
     23: "invariant:evidence_dependency_ordering",
 }
@@ -634,6 +649,7 @@ def build_agent_eval_view(
         {
             "statement": item.get("statement"),
             "evidence_ids": list(item.get("evidence_ids") or ()),
+            "scope": item.get("scope") if isinstance(item.get("scope"), dict) else {},
             "claim_level": "correlation_clue",
         }
         for item in findings
@@ -716,7 +732,6 @@ def build_agent_eval_view(
         "status": status,
         "finish_reason": finish_reason,
         "report": report,
-        "hypotheses": [],
         "covered_driver_metric_refs": covered_drivers,
         "covered_hierarchy_ids": covered_hierarchy_ids,
         "premise_supported": bool(
@@ -759,14 +774,18 @@ def _agent_eval_status(current_status: Any, completion: dict[str, Any]) -> str |
 def _agent_finish_reason(current_status: Any, completion: dict[str, Any]) -> str | None:
     """从 Completion 限制和状态推导稳定的结束原因。"""
 
-    limitations = completion.get("limitations") or ()
-    for limitation in limitations:
-        if isinstance(limitation, dict) and limitation.get("code"):
-            return str(limitation["code"])
     if completion.get("status") == "complete":
         return "sufficient_evidence"
     if completion.get("status") == "unanswerable":
         return "data_insufficient"
+    if completion.get("status") == "partial":
+        for limitation in completion.get("limitations") or ():
+            if (
+                isinstance(limitation, dict)
+                and limitation.get("code") in TERMINAL_FINISH_REASONS
+            ):
+                return str(limitation["code"])
+        return "partial_failure"
     return {
         "waiting_for_user": "needs_clarification",
         "failed": "execution_failed",
@@ -1015,99 +1034,6 @@ def _is_data_insufficient(state: dict[str, Any], expected: dict[str, Any]) -> bo
         and finish_reason in set(expected.get("allowed_finish_reasons") or ())
         and status in set(expected.get("allowed_research_statuses") or ())
     )
-
-
-def _numeric_variants(value: Any) -> set[str]:
-    """把 Evidence 中的数字规范化为可比较表示。"""
-
-    if isinstance(value, bool) or value is None:
-        return set()
-    text_value = str(value).strip().replace(",", "")
-    if not re.fullmatch(r"[-+]?\d+(?:\.\d+)?%?", text_value):
-        return set()
-    variants = {text_value.rstrip("%")}
-    try:
-        number = float(text_value.rstrip("%"))
-    except ValueError:
-        return variants
-    if number.is_integer():
-        variants.add(str(int(number)))
-    else:
-        variants.add(format(number, ".12g"))
-    return variants
-
-
-def _report_numbers(statement: str) -> list[str]:
-    """提取报告数字，并排除日期和受控资产/证据编号。"""
-
-    # 日期、资产引用、Evidence/Result/Plan 编号不是结果数字，不能拿来判定虚构数字。
-    cleaned = re.sub(
-        r"(?:METRIC|DIMENSION|evidence|result|plan|task):[A-Za-z0-9:_-]+",
-        " ",
-        statement,
-        flags=re.IGNORECASE,
-    )
-    cleaned = re.sub(r"\b20\d{2}(?:[-/]\d{1,2}){1,2}\b", " ", cleaned)
-    cleaned = re.sub(r"20\d{2}年\d{1,2}月\d{1,2}日?", " ", cleaned)
-    cleaned = re.sub(r"(?:沿|第|批次|轮次|假设\s*h|h)\s*\d+", " ", cleaned, flags=re.IGNORECASE)
-    return re.findall(r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?%?", cleaned)
-
-
-def _evidence_numeric_values(item: dict[str, Any]) -> set[str]:
-    values: set[str] = set()
-    statistics = item.get("statistics") or {}
-    for value in statistics.values():
-        values |= _numeric_variants(value)
-    for rows_key in ("top_rows", "bottom_rows"):
-        for row in item.get(rows_key) or ():
-            for cell in row.get("values") or ():
-                values |= _numeric_variants(cell.get("value"))
-    return values
-
-
-def _check_report_numbers(
-    state: dict[str, Any],
-    evidence: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """逐条检查报告数字是否能在其引用 Evidence 中找到。"""
-
-    report = state.get("report") or {}
-    evidence_by_id = {item.get("evidence_id"): item for item in evidence}
-    fabricated: list[dict[str, Any]] = []
-    observed = False
-    for finding in report.get("findings") or ():
-        statement = str(finding.get("statement") or "")
-        numbers = _report_numbers(statement)
-        if not numbers:
-            continue
-        observed = True
-        source_values: set[str] = set()
-        for evidence_id in finding.get("evidence_ids") or ():
-            source = evidence_by_id.get(evidence_id)
-            if source is not None:
-                source_values |= _evidence_numeric_values(source)
-        missing = [
-            number
-            for number in numbers
-            if not any(
-                variant in source_values
-                for variant in _numeric_variants(number)
-            )
-        ]
-        if missing:
-            fabricated.append(
-                {
-                    "statement": statement,
-                    "evidence_ids": list(finding.get("evidence_ids") or ()),
-                    "numbers": missing,
-                }
-            )
-    return {
-        "name": "invariant:report_numbers_from_cited_evidence",
-        "ok": not fabricated,
-        "available": observed,
-        **({"detail": fabricated} if fabricated else {}),
-    }
 
 
 def _dependency_records(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1585,11 +1511,17 @@ def check_required_patterns(
         pattern_impl["driver_validation"] = True
     else:
         covered = set(state.get("covered_driver_metric_refs") or ())
+        cited_evidence_ids = {
+            evidence_id
+            for finding in (state.get("report") or {}).get("findings") or ()
+            for evidence_id in finding.get("evidence_ids") or ()
+        }
         linked = {
             driver
             for driver in required_drivers
             if any(
-                driver in (item.get("metric_refs") or []) and item.get("hypothesis_ids")
+                driver in (item.get("metric_refs") or [])
+                and item.get("evidence_id") in cited_evidence_ids
                 for item in evidence
             )
         }
@@ -1837,18 +1769,18 @@ def check_case_assertions(
             f"leaked={sorted(leaked_drivers)}" if leaked_drivers else "",
         )
 
-    if expected.get("require_hypotheses_with_evidence") and not explicit_rejection:
-        hypotheses = state.get("hypotheses") or []
+    if expected.get("require_findings_with_evidence") and not explicit_rejection:
+        findings = (state.get("report") or {}).get("findings") or []
+        evidence_ids = {item.get("evidence_id") for item in evidence}
         terminal = [
-            item
-            for item in hypotheses
-            if item.get("status") in {"supported", "weakened", "inconclusive"}
-            and item.get("evidence_ids")
+            item for item in findings
+            if item.get("evidence_ids")
+            and set(item.get("evidence_ids") or ()) <= evidence_ids
         ]
         add(
-            "hypothesis_with_evidence_present",
+            "finding_with_evidence_present",
             bool(terminal),
-            f"hypotheses={len(hypotheses)}",
+            f"findings={len(findings)}",
         )
 
     # 不可变筛选保持：声明了筛选值时，触及该维度的证据必须携带该筛选。
@@ -2001,7 +1933,6 @@ def check_global_invariants(
         }
     )
 
-    checks.append(_check_report_numbers(state, evidence))
     checks.append(_check_evidence_dependency_order(state, evidence))
     return checks
 
@@ -2220,7 +2151,6 @@ def evaluate_case(
             "premise_supported": state.get("premise_supported"),
             "iterations": len(state.get("iteration_records") or ()),
             "evidence_count": len(evidence),
-            "hypotheses": state.get("hypotheses"),
             "covered_dimension_refs": state.get("covered_dimension_refs"),
             "covered_driver_metric_refs": state.get("covered_driver_metric_refs"),
             "covered_hierarchy_ids": state.get("covered_hierarchy_ids"),

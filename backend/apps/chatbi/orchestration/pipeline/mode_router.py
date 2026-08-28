@@ -110,8 +110,8 @@ class ExecutionRequirementBuilder:
             status="ready",
             route=ExecutionRoute(
                 # 仅用于快照审计，Runtime 不读取该字段进行分发。
-                mode="agent",
-                reasons=("unified_plan_and_solve",),
+                mode="research",
+                reasons=("unified_research_react",),
             ),
             runtime={
                 "tenant_id": request.tenant_id,

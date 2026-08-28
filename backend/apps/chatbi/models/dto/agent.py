@@ -65,14 +65,15 @@ class AgentConfig(BaseModel):
     plan_query_concurrency: int = Field(default=4, gt=0)
     # Research 预算（阶段 8 起新契约 Harness 是唯一引擎；shadow 切流配置
     # 与 max_actions_per_iteration 随旧 Action 架构删除）。
-    research_max_iterations: int = Field(default=8, gt=0, le=20)
-    research_max_queries: int = Field(default=8, gt=0, le=50)
-    research_max_model_calls: int = Field(default=8, gt=1, le=50)
+    # Research 预算与 ResearchBudget 保持一致，统一扩大一倍。
+    research_max_iterations: int = Field(default=16, gt=0, le=20)
+    research_max_queries: int = Field(default=16, gt=0, le=50)
+    research_max_model_calls: int = Field(default=16, gt=1, le=50)
     # Harness 连续无新方向轮数的服务端停止阈值（§9.3.5.7）。
     research_max_stall_turns: int = Field(default=3, gt=0, le=20)
-    research_max_duration_seconds: int = Field(default=300, gt=0, le=1800)
-    research_max_evidence_rows: int = Field(default=20, gt=0, le=100)
-    research_max_evidence_chars: int = Field(default=12_000, gt=0, le=100_000)
+    research_max_duration_seconds: int = Field(default=600, gt=0, le=1800)
+    research_max_evidence_rows: int = Field(default=40, gt=0, le=100)
+    research_max_evidence_chars: int = Field(default=24_000, gt=0, le=100_000)
     compute_enabled: bool = True
     answer_citation_enforced: bool = True
     assisted_fallback_enabled: bool = False

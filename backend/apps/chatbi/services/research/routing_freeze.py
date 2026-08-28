@@ -224,7 +224,7 @@ def freeze_research_requirement(
     }
     if not declared_driver_set <= governed_driver_refs:
         raise ResearchRequirementError(
-            ResearchRequirementError.GOVERNANCE_CONTRACT_INVALID
+            ResearchRequirementError.SEMANTIC_EXECUTION_ASSET_NOT_COVERED
         )
     time_bindings_by_model = _time_bindings_by_model(
         schema=schema,

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from datetime import date, timedelta
 from hashlib import sha256
 from typing import Any, Literal, cast
 
@@ -32,6 +33,7 @@ from apps.chatbi.models.dto.analysis_plan import (
     ResultSetSnapshot,
 )
 from apps.chatbi.models.dto.research_agent import (
+    RESEARCH_QUERY_MAX_ROWS,
     ClarificationRequest,
     Completion,
     CompletionValidationError,
@@ -128,7 +130,7 @@ class QuerySemanticDataResearchTool(
         context: ResearchToolContext,
         args: QuerySemanticDataArguments,
     ) -> PreparedResearchAction[QuerySemanticDataArguments, ResearchSemanticQuery]:
-        if args.result.limit > 1_000:
+        if args.result.limit > RESEARCH_QUERY_MAX_ROWS:
             raise ResearchToolExecutionError(
                 ResearchToolExecutionError.PLANNING_FAILED,
                 "语义查询单次最多返回 1000 行，请缩小 limit 或使用 read_evidence_rows 分页读取",
@@ -1497,11 +1499,23 @@ def _build_semantic_query(
     context: ResearchToolContext,
     args: QuerySemanticDataArguments,
 ) -> ResearchSemanticQuery:
-    time_roles = (
+    requested_time_roles = (
         tuple(ResearchTimeRole(item.role) for item in args.time.periods)
         if args.time is not None
         else (ResearchTimeRole.SINGLE,)
     )
+    frozen_time_roles = tuple(item.role for item in context.requirement.time_bindings)
+    if (
+        args.time is not None
+        and frozen_time_roles == (ResearchTimeRole.SINGLE,)
+        and len(args.time.periods) == 1
+    ):
+        # 单期冻结条件下，模型有时仍把唯一期间标成 current；按冻结角色归一化，
+        # 同时保留 time.dimension_ref 供冻结时间绑定校验，不放宽实际日期边界。
+        time_roles = (ResearchTimeRole.SINGLE,)
+    else:
+        time_roles = requested_time_roles
+    _validate_frozen_query_time(context, args.time, time_roles)
     comparison = ResearchQueryComparison.NONE
     if args.comparison is not None:
         if "growth_rate" in args.comparison.outputs:
@@ -1565,7 +1579,7 @@ def _build_semantic_query(
         expected_time_dimensions = {
             binding.dimension_ref
             for binding in context.requirement.time_bindings
-            if binding.role.value in time_roles
+            if binding.role in time_roles
         }
         if expected_time_dimensions and args.time.dimension_ref not in expected_time_dimensions:
             raise ResearchToolExecutionError(
@@ -1594,9 +1608,100 @@ def _build_semantic_query(
             )
             for item in args.result.order_by
         ),
-        limit=min(args.result.limit, 1_000),
+        limit=args.result.limit,
         purpose="query_semantic_data",
     )
+
+
+def _validate_frozen_query_time(
+    context: ResearchToolContext,
+    time_spec: Any,
+    time_roles: tuple[ResearchTimeRole, ...],
+) -> None:
+    """校验模型提交的日期和冻结时间绑定完全一致。"""
+
+    if time_spec is None:
+        return
+    bindings = tuple(context.requirement.time_bindings)
+    if not bindings:
+        # 没有显式时间绑定时，SINGLE 表示不向执行器下发日期过滤。
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.ARGUMENTS_INVALID,
+            "当前 Research Run 没有显式时间绑定，不能提交日期范围",
+            retryable=True,
+            parameter_retryable=True,
+        )
+    bindings_by_role = {item.role: item for item in bindings}
+    for period, role in zip(time_spec.periods, time_roles, strict=True):
+        binding = bindings_by_role.get(role)
+        if binding is None:
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                f"时间角色 {role.value} 不属于当前 Research Run 的冻结绑定",
+                retryable=True,
+                parameter_retryable=True,
+            )
+        if time_spec.dimension_ref != binding.dimension_ref:
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                "时间维度不属于当前 Research Run 的冻结时间绑定",
+                retryable=True,
+                parameter_retryable=True,
+            )
+        expected = _frozen_time_bounds(binding.normalized)
+        if expected is None:
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                f"冻结时间角色 {role.value} 没有可比较的绝对日期范围",
+                retryable=False,
+            )
+        expected_start, expected_end = expected
+        actual_start = _canonical_query_date(period.start)
+        actual_end = _canonical_query_date(period.end)
+        if actual_start != expected_start or (
+            expected_end is not None and actual_end != expected_end
+        ):
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                f"时间角色 {role.value} 的日期不能修改冻结绑定",
+                retryable=True,
+                parameter_retryable=True,
+            )
+
+
+def _frozen_time_bounds(normalized: Mapping[str, Any]) -> tuple[str, str | None] | None:
+    """从冻结时间解析结果提取可比较的起止日期。"""
+
+    kind = str(normalized.get("kind") or "")
+    if kind == "absolute_date":
+        value = _canonical_query_date(normalized.get("date"))
+        return (value, value) if value is not None else None
+    if kind != "absolute_range":
+        return None
+    start = _canonical_query_date(normalized.get("start"))
+    if start is None:
+        return None
+    end = _canonical_query_date(
+        normalized.get("end_inclusive") or normalized.get("end")
+    )
+    if end is None and normalized.get("end_exclusive") is not None:
+        try:
+            end = (
+                date.fromisoformat(str(normalized["end_exclusive"]))
+                - timedelta(days=1)
+            ).isoformat()
+        except ValueError:
+            return None
+    return start, end
+
+
+def _canonical_query_date(value: Any) -> str | None:
+    """将模型日期规范化为 ISO 日期，非法日期返回不可匹配。"""
+
+    try:
+        return date.fromisoformat(str(value)).isoformat()
+    except (TypeError, ValueError):
+        return None
 
 
 def _query_definition(args: QuerySemanticDataArguments) -> EvidenceDefinition:
@@ -1735,6 +1840,7 @@ def _evidence_from_semantic_result(
         evidence_type="query_result",
         purpose=purpose,
         definition=definition,
+        time_roles=legacy.time_ranges,
         columns=columns,
         data=EvidenceData(
             row_count=legacy.statistics.row_count,

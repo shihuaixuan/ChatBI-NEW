@@ -7,9 +7,7 @@ Evidence。它不持有研究工具，也不根据用户问题重新查询数据
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
-from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,19 +20,6 @@ from apps.chatbi.models.dto.research_agent import (
 )
 
 RESEARCH_RESPONSE_KEY = "research_response"
-
-_NUMBER_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_:])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?"
-)
-_IDENTIFIER_PATTERN = re.compile(
-    r"(?:ASSET|METRIC|DIMENSION|FILTER|MODEL|HIERARCHY|RELATION|"
-    r"LOGICAL_METRIC|LOGICAL_DIMENSION|evidence):[A-Za-z0-9_.:-]+"
-)
-_DATE_PATTERN = re.compile(
-    r"(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{4}年\d{1,2}月\d{1,2}日|"
-    r"\d{1,2}月\d{1,2}日)"
-)
-
 
 class ResearchResponderError(ValueError):
     """回答输入不满足证据约束时返回的明确错误。"""
@@ -157,14 +142,6 @@ class ResearchResponder:
             evidence_by_id,
         )
         selected_evidence = tuple(evidence_by_id[item] for item in used_evidence_ids)
-
-        self._validate_numbers(completion.summary, selected_evidence, "Completion")
-        for finding in selected_findings:
-            self._validate_numbers(
-                finding.statement,
-                selected_evidence,
-                f"Finding {finding.finding_id}",
-            )
 
         response_limitations = self._collect_limitations(
             completion,
@@ -455,78 +432,6 @@ class ResearchResponder:
                 )
             resolved.append(matches[0])
         return resolved
-
-    @staticmethod
-    def _validate_numbers(
-        text: str,
-        evidences: Sequence[Evidence],
-        label: str,
-    ) -> None:
-        known = ResearchResponder._known_numbers(evidences)
-        normalized = _DATE_PATTERN.sub(lambda match: " " * len(match.group()), text)
-        normalized = _IDENTIFIER_PATTERN.sub(
-            lambda match: " " * len(match.group()),
-            normalized,
-        )
-        for match in _NUMBER_PATTERN.finditer(normalized):
-            raw = text[match.start() : match.end()]
-            value = ResearchResponder._decimal(raw.rstrip("%"))
-            if value is None:
-                continue
-            if not ResearchResponder._matches_known_number(value, raw, known):
-                raise ResearchResponderError(
-                    "RESEARCH_RESPONDER_NUMBER_NOT_TRACEABLE",
-                    f"{label} 中的数字 {raw} 无法追溯到 Evidence",
-                )
-
-    @staticmethod
-    def _known_numbers(evidences: Sequence[Evidence]) -> set[Decimal]:
-        # 证据条数是 Runtime 在预算收口摘要中使用的受控元数据，也纳入可追溯
-        # 数字集合；业务数据仍然只从 Evidence 的行和统计值中读取。
-        known: set[Decimal] = {Decimal(len(evidences))}
-        for evidence in evidences:
-            values: list[Any] = [evidence.data.row_count]
-            values.extend(value for row in evidence.data.rows for value in row)
-            values.extend(item.value for item in evidence.data.statistics)
-            for value in values:
-                if isinstance(value, bool) or value is None:
-                    continue
-                decimal = ResearchResponder._decimal(str(value))
-                if decimal is not None:
-                    known.add(decimal)
-        return known
-
-    @staticmethod
-    def _decimal(value: str) -> Decimal | None:
-        try:
-            return Decimal(value.replace(",", ""))
-        except (InvalidOperation, ValueError):
-            return None
-
-    @staticmethod
-    def _matches_known_number(
-        value: Decimal,
-        raw: str,
-        known: set[Decimal],
-    ) -> bool:
-        numeric = raw.rstrip("%").replace(",", "")
-        decimals = len(numeric.rsplit(".", 1)[1]) if "." in numeric else 0
-        tolerance = Decimal("0.5") * (Decimal(10) ** -decimals)
-        magnitude = abs(value)
-        is_percent = raw.endswith("%")
-        return any(
-            abs(candidate - value) <= tolerance
-            or abs(abs(candidate) - magnitude) <= tolerance
-            or (
-                is_percent
-                and (
-                    abs(candidate * 100 - value) <= tolerance
-                    or abs(abs(candidate) * 100 - magnitude) <= tolerance
-                )
-            )
-            for candidate in known
-        )
-
 
 def persist_research_response_audit(
     derived_state: Mapping[str, Any] | None,

@@ -32,6 +32,7 @@ from apps.chatbi.models.dto.research_agent import (
     SemanticContext,
     SemanticDimension,
     SemanticMetric,
+    ToolErrorCode,
     ToolResult,
     ToolResultStatus,
 )
@@ -565,6 +566,7 @@ class ResearchAgentRuntime:
             ctx.research_state(),
             evidence=tuple(evidence_items),
             remaining_budget=self._remaining_budget(ctx),
+            requirement=ctx.requirement,
         )
 
     def _visible_tools(
@@ -1064,21 +1066,38 @@ class ResearchAgentRuntime:
         turns: int,
         state: AgentRuntimeState,
     ) -> ResearchAgentRunOutcome:
+        empty_result_observed = (
+            not ctx.known_evidence_ids()
+            and any(
+                attempt.error is not None
+                and attempt.error.code == ToolErrorCode.EMPTY_RESULT.value
+                for attempt in ctx.react_attempts()
+            )
+        )
+        stop_reason = "data_insufficient" if empty_result_observed else "stalled"
+        completion_code = (
+            "data_insufficient" if empty_result_observed else "stalled"
+        )
+        summary = (
+            "查询确认当前筛选条件下没有可用数据，研究无法继续。"
+            if empty_result_observed
+            else "连续多轮没有产生新的研究状态变化，研究已停止。"
+        )
         completion = self._business_completion(
             ctx,
             "partial" if ctx.known_evidence_ids() else "unanswerable",
-            "stalled",
-            "连续多轮没有产生新的研究状态变化，研究已停止。",
+            completion_code,
+            summary,
         )
         self._persist_state(
             ctx,
             messages=state.messages,
             terminal=True,
-            terminal_reason="stalled",
+            terminal_reason=completion_code,
         )
         return ResearchAgentRunOutcome(
             completion,
-            "stalled",
+            stop_reason,
             turns,
             snapshot=self._build_snapshot(ctx),
             evidences=self._react_evidences(ctx),

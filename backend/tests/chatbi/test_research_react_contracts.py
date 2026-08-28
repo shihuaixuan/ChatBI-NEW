@@ -328,8 +328,11 @@ def test_parallel_actions_only_allow_read_only_actions() -> None:
             input_evidence_ids=("evidence:tool_call_01",),
         ),
     )
-    decision = ResearchTurnDecision(actions=(_query_action(), compute))
-    assert len(decision.actions) == 2
+    with pytest.raises(
+        ValidationError,
+        match="RESEARCH_AGENT_PARALLEL_ACTION_NOT_READ_ONLY",
+    ):
+        ResearchTurnDecision(actions=(_query_action(), compute))
 
     with pytest.raises(ValidationError, match="RESEARCH_AGENT_CONTROL_ACTION_MUST_BE_ALONE"):
         ResearchTurnDecision(

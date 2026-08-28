@@ -31,6 +31,19 @@ GROUP_RUNTIME = "runtime"
 
 # 新 Completion 与 Finding 都通过 evidence_ids 建立回答溯源。
 _CITATION_KEYS = ("evidence_ids",)
+_TERMINAL_FINISH_REASONS = frozenset(
+    {
+        "sufficient_evidence",
+        "no_new_direction",
+        "data_insufficient",
+        "premise_not_supported",
+        "needs_clarification",
+        "execution_failed",
+        "partial_failure",
+        "budget_exhausted",
+        "cancelled",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -258,13 +271,18 @@ def _agent_status(state_status: Any, completion: dict[str, Any]) -> str | None:
 def _agent_finish_reason(state_status: Any, completion: dict[str, Any]) -> str | None:
     """从新 Completion 的限制或终态推导可比较的结束原因。"""
 
-    for limitation in completion.get("limitations") or ():
-        if isinstance(limitation, dict) and limitation.get("code"):
-            return str(limitation["code"])
     if completion.get("status") == "complete":
         return "sufficient_evidence"
     if completion.get("status") == "unanswerable":
         return "data_insufficient"
+    if completion.get("status") == "partial":
+        for limitation in completion.get("limitations") or ():
+            if (
+                isinstance(limitation, dict)
+                and limitation.get("code") in _TERMINAL_FINISH_REASONS
+            ):
+                return str(limitation["code"])
+        return "partial_failure"
     return {
         "waiting_for_user": "needs_clarification",
         "failed": "execution_failed",

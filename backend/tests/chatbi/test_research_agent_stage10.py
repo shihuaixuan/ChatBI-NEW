@@ -133,7 +133,7 @@ def test_research_trace_contains_decision_actions_evidence_budget_and_terminal()
     finished = {item.node_id: item for item in repository.finished}
 
     context_node = next(item for item in indexed.values() if item.name == "prepare_reasoning_context")
-    assert context_node.input_summary["prompt_version"] == "research-react-v1"
+    assert context_node.input_summary["prompt_version"] == "research-react-v2"
     assert context_node.input_summary["mode"] == "research_react"
     context_finish = finished[next(index for index, item in indexed.items() if item is context_node)]
     assert "query_semantic_data" in context_finish.output_summary["available_tools"]
@@ -142,7 +142,7 @@ def test_research_trace_contains_decision_actions_evidence_budget_and_terminal()
         index for index, item in indexed.items() if item.name == "research_turn_decision"
     )
     decision_node = indexed[decision_node_id]
-    assert decision_node.metadata["prompt_version"] == "research-react-v1"
+    assert decision_node.metadata["prompt_version"] == "research-react-v2"
     assert finished[decision_node_id].output_summary["action_count"] == 1
 
     batch_node_id = next(
@@ -176,7 +176,7 @@ def test_research_trace_contains_decision_actions_evidence_budget_and_terminal()
     assert terminal.status is TraceNodeStatus.SUCCEEDED
     assert terminal.output_summary["status"] == "completed"
     assert terminal.output_summary["reason"] == "finish_research_accepted"
-    assert session.run.derived_state["research_prompt_version"] == "research-react-v1"
+    assert session.run.derived_state["research_prompt_version"] == "research-react-v2"
 
 
 def test_offline_eval_view_and_aggregate_metrics_are_computable() -> None:

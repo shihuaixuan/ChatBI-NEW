@@ -7,6 +7,7 @@ import json
 import time
 from collections.abc import Callable, Collection, Generator
 from dataclasses import dataclass
+from threading import RLock
 from typing import Any
 
 from apps.chatbi.errors import (
@@ -172,6 +173,10 @@ class SemanticQueryRuntime:
     ) -> None:
         self._execution_service = execution_service
         self._query_builder = query_builder
+        # 同一请求作用域的 AnalysisExecutionService 绑定同一个 EventPublisher
+        # 和会话；Research 批次虽然可以并发准备动作，但底层执行必须串行，
+        # 防止共享会话同时分配相同事件序号。
+        self._execution_lock = RLock()
         # 阶段 7：宿主可注入状态投影（如 shadow 的 ResearchExecutionState），
         # 把工具上下文适配成执行服务要求的 run 状态表面；默认保持原样。
         self._execution_state_factory = execution_state_factory
@@ -393,18 +398,19 @@ class SemanticQueryRuntime:
             for key in ("analysis_plan", PLAN_EXECUTION_STATE_KEY):
                 preserved[key] = state.pop(key, missing)
         try:
-            result = self._execution_service.execute(
-                execution_state,
-                spec,
-                plan_id=plan_id,
-            )
-            if not isinstance(result, Generator):
-                return result
-            while True:
-                try:
-                    next(result)
-                except StopIteration as completed:
-                    return completed.value
+            with self._execution_lock:
+                result = self._execution_service.execute(
+                    execution_state,
+                    spec,
+                    plan_id=plan_id,
+                )
+                if not isinstance(result, Generator):
+                    return result
+                while True:
+                    try:
+                        next(result)
+                    except StopIteration as completed:
+                        return completed.value
         finally:
             if projected and isinstance(state, dict):
                 for key, value in preserved.items():

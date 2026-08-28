@@ -116,16 +116,31 @@ class ResearchToolRegistry:
         for name, tool in self._tools.items():
             if allow is not None and name not in allow:
                 continue
-            read_only = name != ResearchActionType.FINISH_RESEARCH.value
+            parallel_safe = bool(getattr(tool, "parallel_safe", False))
+            if name == ResearchActionType.COMPUTE_EVIDENCE.value:
+                description = (
+                    f"{descriptions.get(name, f'执行 Research 工具 {name}。')}"
+                    "该动作会写入当前 Run 的 Evidence，必须单独提交。"
+                )
+            elif parallel_safe:
+                description = (
+                    f"{descriptions.get(name, f'执行 Research 工具 {name}。')}"
+                    "仅在与同批动作相互独立时允许并行。"
+                )
+            else:
+                description = descriptions.get(name, f"执行 Research 工具 {name}。")
             definitions.append(
                 ToolDefinition(
                     name=name,
                     title=name,
-                    description=descriptions.get(name, f"执行 Research 工具 {name}。"),
+                    description=description,
                     input_schema=tool.args_model.model_json_schema(),
                     output_schema=tool.result_model.model_json_schema(),
                     annotations=ToolAnnotations(
-                        read_only=read_only,
+                        # 只有并行安全的只读工具才向模型标记为 read_only。
+                        read_only=(
+                            name in _READ_ONLY_ACTIONS and parallel_safe
+                        ),
                         idempotent=True,
                     ),
                 )
