@@ -28,11 +28,16 @@ from apps.retrieval.sources.semantic_projector import SemanticSourceProjector
 from apps.semantic.models.dto import DatasetIndexVersion, DatasetSchema, SchemaElement
 from apps.semantic.models.orm import (
     SemanticDataset,
+    SemanticDatasetModelConfig,
     SemanticDomain,
     SemanticMetric,
     SemanticModel,
 )
 from apps.semantic.repository.sqlmodel.schema_loader import SemanticSchemaLoader
+from apps.semantic.repository.sqlmodel.semantic_contract_repository import (
+    SqlModelSemanticContractRepository,
+)
+from apps.semantic.services.builders.schema_builder import SemanticSchemaBuilder
 from apps.semantic.services.schema_service import SemanticSchemaService
 from common.core.db import engine
 
@@ -424,6 +429,16 @@ def test_semantic_coordinator_writes_source_projection_and_jobs_in_caller_transa
     )
     session.add(dataset)
     session.flush()
+    session.add(
+        SemanticDatasetModelConfig(
+            oid=TENANT_ID,
+            dataset_id=dataset.id or 0,
+            model_id=model.id or 0,
+            includes_all=True,
+            is_default=True,
+        )
+    )
+    session.flush()
     metric = SemanticMetric(
         oid=TENANT_ID,
         model_id=model.id or 0,
@@ -436,6 +451,19 @@ def test_semantic_coordinator_writes_source_projection_and_jobs_in_caller_transa
     )
     session.add(metric)
     session.flush()
+
+    # SchemaService 只接受已发布快照，先按当前发布契约完成测试数据准备。
+    assets = SemanticSchemaLoader(session).load(
+        TENANT_ID,
+        dataset.id or 0,
+        include_drafts=True,
+    )
+    schema = SemanticSchemaBuilder().build(assets)
+    SqlModelSemanticContractRepository(session).publish_contract(
+        assets,
+        schema_fingerprint=schema.schema_fingerprint,
+        asset_snapshot={"schema": schema.model_dump(mode="json")},
+    )
 
     schema = SemanticSchemaService(SemanticSchemaLoader(session)).build_dataset_schema(
         TENANT_ID, dataset.id or 0

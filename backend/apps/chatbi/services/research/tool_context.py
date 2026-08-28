@@ -54,9 +54,9 @@ from apps.chatbi.services.research.tool_result_persistence import (
 )
 
 if TYPE_CHECKING:
-    from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
     from apps.chatbi.services.computation.engine import ComputeEngine
     from apps.chatbi.services.execution.result_store import ResultStore
+    from apps.chatbi.services.ports import AgentToolContext
     from apps.chatbi.services.research.semantic_runtime import SemanticQueryRuntime
     from apps.tool.context import CancellationSignal
 

@@ -18,7 +18,7 @@ from apps.chatbi.models.dto.question_understanding import (
 def project_mention_graph_to_intent(
     graph: MentionGraph,
     *,
-    rewritten_question: str = "",
+    rewritten_question: str = "",  # noqa: ARG001 保留兼容调用参数
 ) -> IntentRecognitionOutput:
     """把 MentionGraph 投影为执行层使用的自然语言意图。
 

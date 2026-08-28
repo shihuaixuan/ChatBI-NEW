@@ -61,6 +61,15 @@ class FakeRetrievalService:
 
     def retrieve(self, request):
         self.requests.append(request)
+        return self._result()
+
+    def retrieve_and_bind(self, request):
+        """按当前候选检索与语义绑定两阶段契约记录候选请求。"""
+
+        self.requests.append(request.candidate_request)
+        return self._result()
+
+    def _result(self):
         metric = {
             "asset_type": "METRIC",
             "asset_id": 100,

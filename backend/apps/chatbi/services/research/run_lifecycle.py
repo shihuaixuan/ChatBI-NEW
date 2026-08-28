@@ -17,9 +17,9 @@ from apps.chatbi.models.orm.agent_run import (
     AgentToolCallStatus,
     ChatbiAgentRun,
 )
-from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.evidence import ANALYSIS_EVIDENCE_REGISTRY_KEY
+from apps.chatbi.services.ports import AgentToolContext
 from apps.chatbi.services.research.state_snapshot import (
     RESEARCH_STATE_SNAPSHOT_KEY,
     build_research_state_snapshot,

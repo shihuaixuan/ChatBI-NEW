@@ -27,6 +27,11 @@ class _RecordingRetrievalService:
         self.requests.append(request)
         return SimpleNamespace(payload=self.payload)
 
+    def retrieve_and_bind(self, request):
+        # 绑定入口接收完整请求，但候选请求仍是适配器要验证的公开契约。
+        self.requests.append(request.candidate_request)
+        return SimpleNamespace(payload=self.payload)
+
 
 def _adapter(service: _RecordingRetrievalService) -> SemanticKnowledgeAdapter:
     # 测试替身只实现适配器依赖的 retrieve 协议。

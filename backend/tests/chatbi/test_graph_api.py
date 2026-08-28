@@ -395,6 +395,17 @@ def _seed_v1_semantic_dataset(session: Session, oid: int = 9501) -> int:
     )
     session.add(dataset)
     session.flush()
+    # 运行时 Schema 只读取独立的数据集模型配置，测试夹具也必须写入同一事实源。
+    session.add(
+        SemanticDatasetModelConfig(
+            oid=oid,
+            dataset_id=dataset.id or 0,
+            model_id=model.id or 0,
+            includes_all=True,
+            is_default=True,
+        )
+    )
+    session.flush()
     profile = build_semantic_index_profile()
     dataset.contract_version = 1
     model.contract_status = "READY"
@@ -407,7 +418,6 @@ def _seed_v1_semantic_dataset(session: Session, oid: int = 9501) -> int:
     schema = SemanticSchemaBuilder().build(assets)
     SqlModelSemanticContractRepository(session).publish_contract(
         assets,
-        1,
         schema_fingerprint=schema.schema_fingerprint,
         asset_snapshot={"schema": schema.model_dump(mode="json")},
     )

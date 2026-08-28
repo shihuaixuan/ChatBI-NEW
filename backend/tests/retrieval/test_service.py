@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
@@ -72,6 +74,18 @@ class _Runner:
     def retrieve_candidates(self, session, request, strategy_version, timeout_ms):
         self.calls.append((session, request, strategy_version, timeout_ms))
         return _execution(request)
+
+    def bind(self, session, request, recall, timeout_ms):
+        return SimpleNamespace(
+            payload={
+                "status": "missed",
+                "candidate_groups": {"metrics": [], "dimensions": []},
+                "selected_assets": {},
+                "decision": {},
+                "retrieval_strategy_version": SEMANTIC_BINDING_STRATEGY_VERSION,
+            },
+            filters={"plan_fingerprint": recall.plan.fingerprint},
+        )
 
 
 def test_request_factory_contains_only_candidate_retrieval_fields():

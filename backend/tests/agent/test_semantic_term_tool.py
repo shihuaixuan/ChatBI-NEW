@@ -6,7 +6,7 @@ from apps.chatbi.models import AgentQuestionRequest
 from apps.chatbi.orchestration.agent.service import create_record_and_run
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.conversation.models import Chat
-from apps.semantic.models.dto import TermSearchResult
+from apps.semantic.models.dto import DatasetCalendarContract, TermSearchResult
 from apps.tool import ToolStatus
 from apps.tool.tools.semantic import (
     SearchTerminologyArgs,
@@ -75,7 +75,7 @@ def test_search_terminology_requires_semantic_dataset():
     assert result.error_code == "semantic_dataset_not_found"
 
 
-def test_agent_record_inherits_chat_semantic_dataset():
+def test_agent_record_inherits_chat_semantic_dataset(monkeypatch):
     chat = Chat(
         id=3,
         oid=1,
@@ -85,6 +85,12 @@ def test_agent_record_inherits_chat_semantic_dataset():
         engine_type="PostgreSQL",
     )
     session = _RecordSession(chat)
+    monkeypatch.setattr(
+        "apps.chatbi.orchestration.agent.service.build_semantic_dataset_catalog_service",
+        lambda _session: SimpleNamespace(
+            get_calendar=lambda _workspace_id, _dataset_id: DatasetCalendarContract()
+        ),
+    )
 
     record, _run = create_record_and_run(
         session,

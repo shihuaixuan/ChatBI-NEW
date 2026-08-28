@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from sqlmodel import Session
 
@@ -19,6 +19,7 @@ from apps.chatbi.composition import (
 )
 from apps.chatbi.models.dto.agent import AgentConfig
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
+from apps.chatbi.orchestration.agent.model_client import DefaultAgentModelClient
 from apps.chatbi.orchestration.agent.preparation import AgentInputPreparer
 from apps.chatbi.orchestration.agent.run_orchestrator import RunOrchestrator
 from apps.chatbi.orchestration.agent.state import AgentRuntimeStateFactory
@@ -34,6 +35,8 @@ from apps.chatbi.orchestration.pipeline.research_agent_pipeline import (
 )
 from apps.chatbi.services.computation import ComputeEngine
 from apps.chatbi.services.execution import (
+    AnalysisExecutionDependencies,
+    AnalysisExecutionService,
     QueryTaskExecutor,
     ResultArtifactService,
     ResultStore,
@@ -41,6 +44,11 @@ from apps.chatbi.services.execution import (
 from apps.chatbi.services.generation.agent_finalization import AgentFinalizationService
 from apps.chatbi.services.generation.answer_composer import AnswerComposer
 from apps.chatbi.services.planning import PhysicalSchemaService
+from apps.chatbi.services.ports import AnalysisExecutionLifecycle
+from apps.chatbi.services.research.semantic_runtime import (
+    ResearchExecutionState,
+    SemanticQueryRuntime,
+)
 from apps.chatbi.services.understanding import SemanticParseService
 from apps.datasource.services import DatasourceQueryService
 from apps.event import EventPublisher
@@ -283,22 +291,12 @@ def build_research_agent_pipeline(
     （研究四工具由 Harness 自建），``resolved_registry`` 天然满足。
     """
 
-    from apps.chatbi.orchestration.agent.model_client import DefaultAgentModelClient
-    from apps.chatbi.services.execution.analysis_execution import (
-        AnalysisExecutionDependencies,
-        AnalysisExecutionService,
-    )
-    from apps.chatbi.services.research.semantic_runtime import (
-        ResearchExecutionState,
-        SemanticQueryRuntime,
-    )
-
     resolved_recorder = recorder or build_agent_trace_recorder()
     execution_service = AnalysisExecutionService(
         AnalysisExecutionDependencies(
             registry=registry,
             result_processor=ChatBIToolResultProcessor(),
-            lifecycle=lifecycle,
+            lifecycle=cast(AnalysisExecutionLifecycle, lifecycle),
             event_publisher=event_publisher,
             session=session,
             query_task_executor=query_task_executor,

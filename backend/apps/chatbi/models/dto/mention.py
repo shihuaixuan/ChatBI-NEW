@@ -314,7 +314,7 @@ def normalize_mention_graph_payload(
     raw_items = raw_mentions if isinstance(raw_mentions, list) else []
     duplicate_metric_spans: dict[int, tuple[int, int]] = {}
     duplicate_metric_texts: set[str] = set()
-    for index, raw in enumerate(raw_items):
+    for _index, raw in enumerate(raw_items):
         if not isinstance(raw, dict) or str(raw.get("kind") or "") != "metric_phrase":
             continue
         text = str(raw.get("text") or "").strip()

@@ -11,6 +11,7 @@ from apps.chatbi.models import (
     PhysicalSchemaResult,
     PhysicalSchemaTable,
 )
+from apps.chatbi.models.dto.result_artifact import ResultArtifactSnapshot
 from apps.chatbi.orchestration.agent.tool_results import (
     ChatBIToolResultProcessor,
 )
@@ -339,10 +340,11 @@ class RecordingQueryService:
 class RecordingResultArtifactService:
     def __init__(self) -> None:
         self.calls = []
+        self.snapshots = {}
 
     def save(self, data):
         self.calls.append(data)
-        return ChatBIResultArtifactRef(
+        result_ref = ChatBIResultArtifactRef(
             artifact_id="result-1",
             kind=data.kind,
             content_type="application/json",
@@ -355,6 +357,24 @@ class RecordingResultArtifactService:
                 "record_id": data.record_id,
             },
         )
+        idempotency_key = data.metadata.get("idempotency_key")
+        if isinstance(idempotency_key, str):
+            self.snapshots[(data.execution_id, data.kind, idempotency_key)] = (
+                ResultArtifactSnapshot(
+                    artifact_id=result_ref.artifact_id,
+                    run_id=data.execution_id,
+                    kind=data.kind,
+                    content_type=result_ref.content_type,
+                    size=result_ref.size,
+                    digest=result_ref.digest,
+                    metadata=dict(data.metadata),
+                    payload=dict(data.payload),
+                )
+            )
+        return result_ref
+
+    def find_by_idempotency_key(self, *, execution_id, kind, idempotency_key):
+        return self.snapshots.get((execution_id, kind, idempotency_key))
 
 
 class RecordingSemanticCompilationService:
@@ -748,7 +768,7 @@ def test_chatbi_result_processor_saves_public_sql_result_artifact():
     evidences = EvidenceRegistry(ctx.state).evidences()
     assert len(evidences) == 1
     assert evidences[0].run_id == "agent:10"
-    assert evidences[0].mode == "plan"
+    assert evidences[0].mode == "agent"
     assert evidences[0].result_set_id == result_set_id
     assert "last_execution" not in ctx.state
 

@@ -1,0 +1,235 @@
+"""ChatBI 服务之间及编排层使用的稳定端口。"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+from apps.retrieval import RetrievalRequest, build_retrieval_request
+from apps.temporal import TemporalContext
+from apps.tool.tools.semantic_contracts import SemanticAssetScope
+
+
+class ResultArtifactGateway(Protocol):
+    """ChatBI 依赖的通用 Artifact 存储与清理端口。"""
+
+    def put_json(
+        self,
+        run_id: str,
+        kind: str,
+        payload: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> Any: ...
+
+    def get_json(self, artifact_id: str) -> Any: ...
+
+    def find_json(
+        self,
+        *,
+        run_id: str,
+        kind: str,
+        idempotency_key: str,
+    ) -> Any | None: ...
+
+    def schedule_cleanup(
+        self,
+        *,
+        metadata: dict[str, str | int],
+        execution_ids: list[str] | None = None,
+    ) -> int: ...
+
+    def process_pending_cleanup(self) -> int: ...
+
+
+class ResultArtifactWriter(Protocol):
+    """Agent 对 ChatBI 结果 Artifact 服务的最小依赖。"""
+
+    def save(self, data: Any) -> Any: ...
+
+
+@dataclass(frozen=True)
+class AgentToolContextServices:
+    """创建工具执行上下文所需的稳定服务集合。"""
+
+    result_artifact_service: ResultArtifactWriter
+    result_store: Any | None = None
+
+
+@dataclass
+class AgentToolContext:
+    """一次运行的执行上下文，供工具和服务层共享。"""
+
+    session: Any
+    oid: int
+    user_id: int | None
+    datasource_id: int | None
+    execution_id: str | None = None
+    chat_id: int | None = None
+    record_id: int | None = None
+    dataset_id: int | None = None
+    result_artifact_service: ResultArtifactWriter | None = None
+    result_store: Any | None = None
+    config: Any = None
+    # Run 创建时固定的时间上下文，时间工具只能读取，不能重新生成。
+    temporal_context: TemporalContext | None = None
+    # 检索 ACL 请求侧身份由调用方注入，检索 SQL 端的可见性谓词始终生效。
+    principal_roles: list[str] = field(default_factory=list)
+    principal_role_ids: list[int] = field(default_factory=list)
+    permission_version: str | None = None
+    # 运行编排内跨工具共享的状态由运行编排器维护。
+    state: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def workspace_id(self) -> int:
+        return self.oid
+
+    @property
+    def selected_tables(self) -> list[str]:
+        """把 ChatBI 派生状态投影成公共 Tool 的可信选表范围。"""
+
+        return [
+            str(table)
+            for table in self.state.get("allowed_tables") or []
+            if str(table).strip()
+        ]
+
+    @property
+    def summary_max_chars(self) -> int:
+        return int(getattr(self.config, "summary_max_chars", 4000) or 4000)
+
+    @property
+    def semantic_default_limit(self) -> int:
+        return int(getattr(self.config, "default_limit", 100) or 100)
+
+    @property
+    def rewritten_question(self) -> str:
+        """读取问题重写结果；候选检索请求本身不保存完整问题。"""
+
+        rewrite = self.state.get("question_rewrite")
+        if isinstance(rewrite, dict):
+            value = rewrite.get("rewrite_question")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        understanding = self.state.get("question_understanding")
+        if not isinstance(understanding, dict):
+            return ""
+        return str(understanding.get("rewrite_question") or "").strip()
+
+    @property
+    def semantic_retrieval_request(self) -> RetrievalRequest | None:
+        """把 ChatBI 已确认问题投影为公共检索请求。"""
+
+        request = self.state.get("semantic_retrieval_request")
+        if isinstance(request, RetrievalRequest):
+            return request
+        if isinstance(request, dict):
+            return RetrievalRequest.model_validate(request)
+
+        rewrite = self.state.get("question_rewrite")
+        if isinstance(rewrite, dict):
+            rewrite_question = rewrite.get("rewrite_question")
+            dataset_id = self.dataset_id or self.state.get("dataset_id")
+            if (
+                isinstance(rewrite_question, str)
+                and rewrite_question.strip()
+                and isinstance(dataset_id, int)
+                and dataset_id > 0
+                and self.user_id is not None
+                and self.user_id > 0
+            ):
+                return build_retrieval_request(
+                    request_id=self.execution_id,
+                    tenant_id=self.oid,
+                    actor_id=self.user_id,
+                    dataset_id=dataset_id,
+                    metric_phrases=list(rewrite.get("metric_phrases") or []),
+                    dimension_phrases=list(rewrite.get("dimension_phrases") or []),
+                    principal_roles=self.principal_roles or None,
+                    principal_role_ids=self.principal_role_ids or None,
+                    permission_version=self.permission_version,
+                )
+
+        understanding = self.state.get("question_understanding")
+        if not isinstance(understanding, dict):
+            return None
+        rewrite_question = understanding.get("rewrite_question")
+        dataset_id = self.dataset_id or self.state.get("dataset_id")
+        if (
+            not isinstance(rewrite_question, str)
+            or not rewrite_question.strip()
+            or not isinstance(dataset_id, int)
+            or dataset_id <= 0
+            or self.user_id is None
+            or self.user_id <= 0
+        ):
+            return None
+        return build_retrieval_request(
+            request_id=self.execution_id,
+            tenant_id=self.oid,
+            actor_id=self.user_id,
+            dataset_id=dataset_id,
+            metric_phrases=list(understanding.get("metric_phrases") or []),
+            dimension_phrases=list(understanding.get("dimension_phrases") or []),
+            principal_roles=self.principal_roles or None,
+            principal_role_ids=self.principal_role_ids or None,
+            permission_version=self.permission_version,
+        )
+
+    @property
+    def semantic_asset_scope(self) -> SemanticAssetScope | None:
+        """读取由公共检索 Tool 结果处理器保存的可信编译范围。"""
+
+        value = self.state.get("semantic_scope")
+        if value is None:
+            return None
+        if isinstance(value, SemanticAssetScope):
+            return value
+        return SemanticAssetScope.model_validate(value)
+
+
+class AnalysisExecutionState(Protocol):
+    """分析执行服务需要的运行状态最小表面。"""
+
+    run: Any
+    record: Any
+    context: AgentToolContext
+    budget: Any
+    cancellation: Any
+    chatbi_budget: Any
+
+    def require_run_id(self) -> int: ...
+
+    def persistable_context(self) -> dict[str, Any]: ...
+
+
+class AnalysisExecutionLifecycle(Protocol):
+    """分析执行服务需要的生命周期端口。"""
+
+    def cancel(
+        self,
+        state: AnalysisExecutionState,
+        message: str = "用户已请求取消运行",
+    ) -> Iterator[Any]: ...
+
+    def suspend(
+        self,
+        state: AnalysisExecutionState,
+        question: str,
+        options: list[dict[str, Any]],
+        call_id: str | None,
+        step_id: int | None,
+        *,
+        resume_kind: Any,
+        resume_payload: dict[str, Any],
+    ) -> Any: ...
+
+
+__all__ = [
+    "AgentToolContext",
+    "AgentToolContextServices",
+    "AnalysisExecutionLifecycle",
+    "AnalysisExecutionState",
+    "ResultArtifactGateway",
+    "ResultArtifactWriter",
+]

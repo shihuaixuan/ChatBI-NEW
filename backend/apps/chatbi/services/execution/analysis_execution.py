@@ -25,11 +25,6 @@ from apps.chatbi.models.dto.execution_requirement import (
     ExecutionRequirement,
     execution_requirement_from_state,
 )
-from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
-from apps.chatbi.orchestration.agent.state import AgentRuntimeState
-from apps.chatbi.orchestration.agent.tools.interaction import (
-    prepare_semantic_clarification_args,
-)
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.computation import (
     ComputeEngine,
@@ -60,8 +55,15 @@ from apps.chatbi.services.planning.execution_state import (
     transition_plan_node,
 )
 from apps.chatbi.services.planning.plan_validation import validate_analysis_plan
+from apps.chatbi.services.planning.semantic_clarification import (
+    build_semantic_clarification,
+)
 from apps.chatbi.services.planning.semantic_query_preparation import (
     prepare_strict_query_scope,
+)
+from apps.chatbi.services.ports import (
+    AnalysisExecutionLifecycle,
+    AnalysisExecutionState,
 )
 from apps.conversation import ChatRecordExecutionType
 from apps.event import EventPublisher, RenderEvent
@@ -157,7 +159,7 @@ class AnalysisExecutionDependencies:
 
     registry: ToolRegistry
     result_processor: Any
-    lifecycle: AgentLifecycle
+    lifecycle: AnalysisExecutionLifecycle
     event_publisher: EventPublisher
     session: Any
     query_task_executor: QueryTaskExecutor
@@ -220,7 +222,7 @@ class AnalysisExecutionService:
 
     def execute(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         spec: AnalysisExecutionSpec,
         *,
         plan_id: str,
@@ -355,7 +357,7 @@ class AnalysisExecutionService:
 
     def execute_requirement(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         execution_requirement: ExecutionRequirement,
         *,
         plan_id: str,
@@ -370,7 +372,7 @@ class AnalysisExecutionService:
 
     def _execute_plan_batches(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         plan: AnalysisPlan,
         execution_records: dict[str, dict[str, Any]],
         full_data_records: dict[str, list[dict[str, Any]]],
@@ -625,7 +627,7 @@ class AnalysisExecutionService:
 
     def _run_query_batch(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         tasks: list[QueryTask],
         task_states: dict[str, Any],
         *,
@@ -738,7 +740,7 @@ class AnalysisExecutionService:
 
     def _run_compute_batch(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         plan_id: str,
         tasks: list[ComputeTask],
     ) -> dict[str, ComputeExecution | ComputeEngineError]:
@@ -817,7 +819,7 @@ class AnalysisExecutionService:
 
     def _load_compute_inputs(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         plan_id: str,
         task: ComputeTask,
     ) -> dict[str, Any]:
@@ -846,7 +848,7 @@ class AnalysisExecutionService:
 
     def _register_query_result(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         plan_id: str,
         task: QueryTask,
         result: QueryTaskExecutionResult,
@@ -904,7 +906,7 @@ class AnalysisExecutionService:
 
     def _register_compute_result(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         plan_id: str,
         task: ComputeTask,
         computed: ComputeExecution,
@@ -961,7 +963,7 @@ class AnalysisExecutionService:
 
     def _register_query_evidence(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         plan_id: str,
         task: QueryTask,
         *,
@@ -1014,7 +1016,7 @@ class AnalysisExecutionService:
 
     def _register_compute_evidence(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         plan_id: str,
         task: ComputeTask,
         *,
@@ -1074,23 +1076,23 @@ class AnalysisExecutionService:
 
     @staticmethod
     def _register_unified_evidence(
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         evidence: Any,
     ) -> None:
         EvidenceRegistry(state.context.state).register(evidence)
 
     @staticmethod
-    def _is_research_execution(state: AgentRuntimeState) -> bool:
+    def _is_research_execution(state: AnalysisExecutionState) -> bool:
         return isinstance(state.context.state.get("research_run_id"), str)
 
-    def _analysis_evidence_run_id(self, state: AgentRuntimeState) -> str:
+    def _analysis_evidence_run_id(self, state: AnalysisExecutionState) -> str:
         """统一使用工具与 ResultStore 已绑定的 Agent 执行 ID。"""
 
         return self._required_execution_id(state)
 
     @staticmethod
     def _query_requirement_payload(
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         requirement_id: str | None,
     ) -> dict[str, Any] | None:
         if not isinstance(requirement_id, str):
@@ -1111,7 +1113,7 @@ class AnalysisExecutionService:
         role = time.get("role")
         return (str(role),) if isinstance(role, str) and role else ()
 
-    def _evidence_version_snapshot(self, state: AgentRuntimeState) -> Any:
+    def _evidence_version_snapshot(self, state: AnalysisExecutionState) -> Any:
         execution = state.context.state.get("execution_requirement")
         asset_snapshot = (
             execution.get("asset_snapshot") if isinstance(execution, dict) else {}
@@ -1123,7 +1125,7 @@ class AnalysisExecutionService:
         )
 
     @staticmethod
-    def _merge_result_ref(state: AgentRuntimeState, result_ref: ResultSetRef) -> None:
+    def _merge_result_ref(state: AnalysisExecutionState, result_ref: ResultSetRef) -> None:
         result_sets = state.context.state.get("result_sets")
         if not isinstance(result_sets, dict):
             result_sets = {}
@@ -1133,7 +1135,7 @@ class AnalysisExecutionService:
         }
 
     @staticmethod
-    def _required_plan_execution_state(state: AgentRuntimeState) -> Any:
+    def _required_plan_execution_state(state: AnalysisExecutionState) -> Any:
         """读取统一计划状态；Plan 执行过程不再读取平行任务状态。"""
 
         raw = state.context.state.get(PLAN_EXECUTION_STATE_KEY)
@@ -1147,7 +1149,7 @@ class AnalysisExecutionService:
     @classmethod
     def _transition_plan_node(
         cls,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         task_id: str,
         status: PlanNodeExecutionStatus,
         *,
@@ -1191,7 +1193,7 @@ class AnalysisExecutionService:
 
     @staticmethod
     def _evidence_ids_for_node(
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         plan_id: str,
         task_id: str,
     ) -> tuple[str, ...]:
@@ -1205,7 +1207,7 @@ class AnalysisExecutionService:
 
     @staticmethod
     def _task_event_payload(
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         plan_id: str,
         task_id: str,
         status: AnalysisTaskExecutionStatus,
@@ -1221,7 +1223,7 @@ class AnalysisExecutionService:
         }
 
     @staticmethod
-    def _semantic_refs(state: AgentRuntimeState) -> list[dict[str, Any]]:
+    def _semantic_refs(state: AnalysisExecutionState) -> list[dict[str, Any]]:
         scope = state.context.state.get("semantic_scope")
         if not isinstance(scope, dict):
             return []
@@ -1232,21 +1234,21 @@ class AnalysisExecutionService:
         ]
 
     @staticmethod
-    def _required_execution_id(state: AgentRuntimeState) -> str:
+    def _required_execution_id(state: AnalysisExecutionState) -> str:
         value = state.context.execution_id
         if not isinstance(value, str) or not value:
             raise PlanPipelineError("PLAN_EXECUTION_ID_REQUIRED")
         return value
 
     @staticmethod
-    def _required_chat_id(state: AgentRuntimeState) -> int:
+    def _required_chat_id(state: AnalysisExecutionState) -> int:
         value = state.context.chat_id
         if not isinstance(value, int) or isinstance(value, bool):
             raise PlanPipelineError("PLAN_RESULT_OWNERSHIP_REQUIRED")
         return value
 
     @staticmethod
-    def _required_record_id(state: AgentRuntimeState) -> int:
+    def _required_record_id(state: AnalysisExecutionState) -> int:
         value = state.context.record_id
         if not isinstance(value, int) or isinstance(value, bool):
             raise PlanPipelineError("PLAN_RESULT_OWNERSHIP_REQUIRED")
@@ -1254,12 +1256,12 @@ class AnalysisExecutionService:
 
     def _suspend_semantic_clarification(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         plan_id: str,
     ) -> Iterator[RenderEvent]:
         """语义绑定存在歧义时暂停 PLAN，等待用户确认后再生成计划。"""
 
-        clarification = prepare_semantic_clarification_args(state.context.state)
+        clarification = build_semantic_clarification(state.context.state)
         if clarification is None or not clarification.options:
             raise PlanPipelineError("PLAN_SEMANTIC_CLARIFICATION_OPTIONS_MISSING")
         if not state.chatbi_budget.record_clarification().allowed:
@@ -1284,7 +1286,7 @@ class AnalysisExecutionService:
         )
 
     @staticmethod
-    def _is_ambiguous(state: AgentRuntimeState) -> bool:
+    def _is_ambiguous(state: AnalysisExecutionState) -> bool:
         scope = state.context.semantic_asset_scope
         return bool(
             scope is not None
@@ -1293,7 +1295,7 @@ class AnalysisExecutionService:
         )
 
     @staticmethod
-    def _load_execution_requirement(state: AgentRuntimeState) -> ExecutionRequirement:
+    def _load_execution_requirement(state: AnalysisExecutionState) -> ExecutionRequirement:
         """读取路由阶段产物；Plan 不再自行检索或重新绑定语义资产。"""
 
         try:
@@ -1303,7 +1305,7 @@ class AnalysisExecutionService:
 
     def _compile_task(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         task: QueryTask,
         *,
         strict_query_index: int = 0,
@@ -1544,7 +1546,7 @@ class AnalysisExecutionService:
 
     def _call_tool(
         self,
-        state: AgentRuntimeState,
+        state: AnalysisExecutionState,
         name: str,
         args: dict[str, Any],
     ) -> ToolResult[Any]:
@@ -1624,7 +1626,7 @@ class AnalysisExecutionService:
                 )
             return cast(ToolResult[Any], projection.result)
 
-    def _save_plan(self, state: AgentRuntimeState, plan: AnalysisPlan) -> None:
+    def _save_plan(self, state: AnalysisExecutionState, plan: AnalysisPlan) -> None:
         state.context.state["analysis_plan"] = plan.model_dump(mode="json")
         raw_execution_state = state.context.state.get(PLAN_EXECUTION_STATE_KEY)
         state.context.state[PLAN_EXECUTION_STATE_KEY] = (
@@ -1667,7 +1669,7 @@ class AnalysisExecutionService:
             plan_node.set_output_detail({"analysis_plan": plan.model_dump(mode="json")})
 
     @staticmethod
-    def _persist_state(state: AgentRuntimeState) -> None:
+    def _persist_state(state: AnalysisExecutionState) -> None:
         # 合并而不是整表替换：行上可能已有其他写入方落下的键——shadow 行的
         # ``shadow`` 标记、研究循环的状态快照等。run 1306 演练
         # 教训：整表替换曾把 shadow 标记抹掉，终态收口与就绪扫描都看不见该行。

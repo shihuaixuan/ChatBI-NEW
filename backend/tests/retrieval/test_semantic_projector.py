@@ -16,6 +16,7 @@ from apps.retrieval.sources.semantic_projector import (
 from apps.semantic.models.dto import DatasetSchema, JoinRelation, SchemaElement
 from apps.semantic.models.orm import (
     SemanticDataset,
+    SemanticDatasetModelConfig,
     SemanticDimension,
     SemanticMetric,
     SemanticModel,
@@ -510,6 +511,15 @@ def test_schema_builder_exposes_sensitive_level_to_the_single_projection_gate():
             )
         ],
         terms=[],
+        dataset_model_configs=[
+            SemanticDatasetModelConfig(
+                oid=1,
+                dataset_id=20,
+                model_id=10,
+                includes_all=True,
+                is_default=True,
+            )
+        ],
     )
 
     assert schema.metrics[0].ext_info["sensitive_level"] == 2
