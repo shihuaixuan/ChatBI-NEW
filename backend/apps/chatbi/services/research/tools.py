@@ -33,7 +33,6 @@ from apps.chatbi.models.dto.analysis_plan import (
     ResultSetSnapshot,
 )
 from apps.chatbi.models.dto.research_agent import (
-    RESEARCH_QUERY_MAX_ROWS,
     ClarificationRequest,
     Completion,
     CompletionValidationError,
@@ -48,7 +47,10 @@ from apps.chatbi.models.dto.research_agent import (
     EvidenceFilter,
     EvidenceLimitation,
     EvidenceRows,
+    FinalFindingDraft,
     Finding,
+    FindingChange,
+    FindingScope,
     FinishResearchAction,
     FinishResearchArguments,
     FinishResearchResult,
@@ -63,6 +65,7 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchActionType,
     ResearchComputeOperation,
     ResearchComputeRequest,
+    ResearchDrilldownSpec,
     ResearchEvidence,
     ResearchEvidenceValueRef,
     ResearchLiteralFilter,
@@ -130,13 +133,6 @@ class QuerySemanticDataResearchTool(
         context: ResearchToolContext,
         args: QuerySemanticDataArguments,
     ) -> PreparedResearchAction[QuerySemanticDataArguments, ResearchSemanticQuery]:
-        if args.result.limit > RESEARCH_QUERY_MAX_ROWS:
-            raise ResearchToolExecutionError(
-                ResearchToolExecutionError.PLANNING_FAILED,
-                "语义查询单次最多返回 1000 行，请缩小 limit 或使用 read_evidence_rows 分页读取",
-                retryable=True,
-                parameter_retryable=True,
-            )
         query = _build_semantic_query(context, args)
         try:
             context.requirement.validate_query(query, context.evidences())
@@ -199,7 +195,7 @@ class QuerySemanticDataResearchTool(
             semantic_evidence,
             evidence_id=evidence_id,
             purpose=purpose,
-            definition=_query_definition(prepared.args),
+            definition=_query_definition(query, context),
         )
         context.record_research_evidence(evidence, result_id=result_id)
         return evidence
@@ -576,14 +572,46 @@ class FinishResearchResearchTool(
         context: ResearchToolContext,
         prepared: PreparedResearchAction[FinishResearchArguments, Any],
     ) -> FinishResearchResult:
-        errors = _validate_finish_completion(context, prepared.args.completion)
+        findings = _findings_from_drafts(
+            context,
+            prepared.args.findings,
+            tool_call_id=prepared.tool_call_id or prepared.action_fingerprint,
+        )
+        completion = prepared.args.completion.model_copy(
+            update={
+                "finding_ids": tuple(
+                    dict.fromkeys(
+                        (
+                            *prepared.args.completion.finding_ids,
+                            *(item.finding_id for item in findings),
+                        )
+                    )
+                )
+            }
+        )
+        errors = _validate_finish_completion(
+            context,
+            completion,
+            additional_findings=findings,
+        )
         if errors:
             return FinishResearchResult(
                 decision="rejected",
                 message="结束请求未通过确定性校验",
                 validation_errors=tuple(errors),
             )
-        completion = prepared.args.completion
+        existing = {item.finding_id: item for item in context.react_findings()}
+        changes = tuple(
+            FindingChange(
+                change_type="add",
+                finding=finding,
+                reason="Runtime 根据 finish_research 引用的 Evidence 生成",
+            )
+            for finding in findings
+            if finding.finding_id not in existing
+        )
+        if changes:
+            context.apply_research_state_changes(changes, ())
         context.save_react_completion(completion)
         return FinishResearchResult(
             decision="accepted",
@@ -1300,6 +1328,8 @@ def _field(value: Any, name: str, default: Any = None) -> Any:
 def _validate_finish_completion(
     context: ResearchToolContext,
     completion: Completion,
+    *,
+    additional_findings: tuple[Finding, ...] = (),
 ) -> list[CompletionValidationError]:
     """执行 finish_research 的全部确定性引用校验。"""
 
@@ -1343,6 +1373,17 @@ def _validate_finish_completion(
             )
 
     findings = {item.finding_id: item for item in context.react_findings()}
+    for finding in additional_findings:
+        existing = findings.get(finding.finding_id)
+        if existing is not None and existing != finding:
+            errors.append(
+                _completion_error(
+                    "RESEARCH_AGENT_FINDING_ID_CONFLICT",
+                    f"Finding {finding.finding_id} 已存在且内容不一致",
+                    finding_id=finding.finding_id,
+                )
+            )
+        findings[finding.finding_id] = finding
     allowed_refs = _allowed_semantic_refs(context)
     for finding_id in completion.finding_ids:
         finding = findings.get(finding_id)
@@ -1408,6 +1449,56 @@ def _validate_finish_completion(
             )
         )
     return errors
+
+
+def _findings_from_drafts(
+    context: ResearchToolContext,
+    drafts: tuple[FinalFindingDraft, ...],
+    *,
+    tool_call_id: str,
+) -> tuple[Finding, ...]:
+    """将模型的最小结论转换为服务端治理 Finding。"""
+
+    findings: list[Finding] = []
+    for index, draft in enumerate(drafts, start=1):
+        digest = sha256(f"{tool_call_id}:{index}".encode()).hexdigest()[:16]
+        evidences = tuple(
+            evidence
+            for evidence_id in draft.evidence_ids
+            if (evidence := context.research_evidence(evidence_id)) is not None
+        )
+        findings.append(
+            Finding(
+                finding_id=f"finding:{digest}",
+                statement=draft.statement,
+                evidence_ids=draft.evidence_ids,
+                scope=_conservative_finding_scope(evidences),
+            )
+        )
+    return tuple(findings)
+
+
+def _conservative_finding_scope(evidences: tuple[Evidence, ...]) -> FindingScope:
+    """只保留所有引用 Evidence 都支持的公共 Scope，避免模型扩大结论范围。"""
+
+    if not evidences:
+        return FindingScope()
+
+    metric_refs = set(evidences[0].definition.metrics)
+    dimension_refs = set(evidences[0].definition.dimensions)
+    time_ranges = set(evidences[0].definition.time_ranges)
+    filters = set(evidences[0].definition.filters)
+    for evidence in evidences[1:]:
+        metric_refs.intersection_update(evidence.definition.metrics)
+        dimension_refs.intersection_update(evidence.definition.dimensions)
+        time_ranges.intersection_update(evidence.definition.time_ranges)
+        filters.intersection_update(evidence.definition.filters)
+    return FindingScope(
+        metric_refs=tuple(sorted(metric_refs)),
+        dimension_refs=tuple(sorted(dimension_refs)),
+        time_ranges=tuple(sorted(time_ranges, key=lambda item: (item.start, item.end, item.granularity))),
+        filters=tuple(sorted(filters, key=lambda item: (item.field_ref, item.operator, repr(item.value)))),
+    )
 
 
 def _successful_react_evidence_ids(context: ResearchToolContext) -> set[str]:
@@ -1499,46 +1590,108 @@ def _build_semantic_query(
     context: ResearchToolContext,
     args: QuerySemanticDataArguments,
 ) -> ResearchSemanticQuery:
-    requested_time_roles = (
-        tuple(ResearchTimeRole(item.role) for item in args.time.periods)
-        if args.time is not None
-        else (ResearchTimeRole.SINGLE,)
-    )
-    frozen_time_roles = tuple(item.role for item in context.requirement.time_bindings)
-    if (
-        args.time is not None
-        and frozen_time_roles == (ResearchTimeRole.SINGLE,)
-        and len(args.time.periods) == 1
-    ):
-        # 单期冻结条件下，模型有时仍把唯一期间标成 current；按冻结角色归一化，
-        # 同时保留 time.dimension_ref 供冻结时间绑定校验，不放宽实际日期边界。
-        time_roles = (ResearchTimeRole.SINGLE,)
-    else:
-        time_roles = requested_time_roles
-    _validate_frozen_query_time(context, args.time, time_roles)
+    request = args.request
+    operation = request.operation
+    frozen_time_roles = tuple(
+        item.role for item in context.requirement.time_bindings
+    ) or (ResearchTimeRole.SINGLE,)
+    time_roles: tuple[ResearchTimeRole, ...]
     comparison = ResearchQueryComparison.NONE
-    if args.comparison is not None:
-        if "growth_rate" in args.comparison.outputs:
-            comparison = ResearchQueryComparison.GROWTH_RATE
-        elif "difference" in args.comparison.outputs:
-            comparison = ResearchQueryComparison.DIFFERENCE
+    dimensions = tuple(getattr(request, "dimension_refs", ()))
+    drilldown = None
     analysis: Literal[
-        "compare",
-        "breakdown",
-        "drilldown",
-        "filter_from_result",
-        "contribution",
-        "exploration",
-    ] = (
-        "compare"
-        if comparison is not ResearchQueryComparison.NONE
-        else "breakdown"
-        if args.dimensions
-        else "exploration"
-    )
+        "compare", "breakdown", "drilldown", "filter_from_result", "contribution", "exploration"
+    ] = "exploration"
+
+    if operation == "metric_snapshot":
+        requested_role = request.time_role
+        if requested_role is not None and requested_role not in frozen_time_roles:
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                f"时间角色 {requested_role.value} 不属于当前 Research Run 的冻结绑定",
+                retryable=True,
+                parameter_retryable=True,
+            )
+        time_roles = (
+            (requested_role,)
+            if requested_role is not None
+            else (
+                (ResearchTimeRole.CURRENT,)
+                if ResearchTimeRole.CURRENT in frozen_time_roles
+                else (frozen_time_roles[0],)
+            )
+        )
+    elif operation == "multi_period_snapshot":
+        time_roles = frozen_time_roles
+        # 多期结果必须由确定性计算合成一个主结果，不能留下多个独立查询结果。
+        if {ResearchTimeRole.CURRENT, ResearchTimeRole.PREVIOUS} <= set(time_roles):
+            comparison = ResearchQueryComparison.DIFFERENCE
+            analysis = "compare"
+    elif operation in {"compare_metrics", "validate_drivers"}:
+        time_roles = _comparison_time_roles(frozen_time_roles)
+        comparison = ResearchQueryComparison(request.comparison)
+        analysis = "breakdown" if dimensions else "compare"
+    elif operation == "breakdown":
+        comparison = _comparison_from_value_mode(request.value_mode)
+        time_roles = (
+            _comparison_time_roles(frozen_time_roles)
+            if comparison is not ResearchQueryComparison.NONE
+            else _single_query_time_role(frozen_time_roles)
+        )
+        analysis = "breakdown"
+    elif operation == "drilldown":
+        dimensions = (request.next_dimension_ref,)
+        comparison = _comparison_from_value_mode(request.value_mode)
+        time_roles = (
+            _comparison_time_roles(frozen_time_roles)
+            if comparison is not ResearchQueryComparison.NONE
+            else _single_query_time_role(frozen_time_roles)
+        )
+        analysis = "drilldown"
+        drilldown = ResearchDrilldownSpec(
+            hierarchy_id=request.hierarchy_id,
+            source_evidence_id=request.source_evidence_id,
+            current_dimension_ref=request.current_dimension_ref,
+            next_dimension_ref=request.next_dimension_ref,
+        )
+    elif operation == "contribution":
+        time_roles = _comparison_time_roles(frozen_time_roles)
+        comparison = ResearchQueryComparison.CONTRIBUTION
+        analysis = "contribution"
+    else:
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.ARGUMENTS_INVALID,
+            f"不支持的 Research 查询动作：{operation}",
+            retryable=True,
+            parameter_retryable=True,
+        )
+
     filters: list[ResearchLiteralFilter] = []
     evidence_value_filters: list[ResearchEvidenceValueRef] = []
-    for item in args.filters:
+    immutable_filters = {
+        item.target_ref: item for item in context.requirement.immutable_filters
+    }
+    filters.extend(
+        ResearchLiteralFilter(
+            target_ref=item.target_ref,
+            operator=item.operator,
+            value=item.value,
+        )
+        for item in immutable_filters.values()
+    )
+    for item in request.filters:
+        immutable = immutable_filters.get(item.field_ref)
+        if immutable is not None:
+            if item.evidence_selector is not None or (
+                item.operator != immutable.operator or item.value != immutable.value
+            ):
+                raise ResearchToolExecutionError(
+                    ResearchToolExecutionError.ARGUMENTS_INVALID,
+                    f"冻结筛选 {item.field_ref} 不能修改",
+                    retryable=True,
+                    parameter_retryable=True,
+                )
+            continue
         if item.evidence_selector is None:
             filters.append(
                 ResearchLiteralFilter(
@@ -1575,42 +1728,69 @@ def _build_semantic_query(
                 ),
             )
         )
-    if args.time is not None:
-        expected_time_dimensions = {
-            binding.dimension_ref
-            for binding in context.requirement.time_bindings
-            if binding.role in time_roles
-        }
-        if expected_time_dimensions and args.time.dimension_ref not in expected_time_dimensions:
-            raise ResearchToolExecutionError(
-                ResearchToolExecutionError.ARGUMENTS_INVALID,
-                "时间维度不属于当前 Research Run 的冻结时间绑定",
-                retryable=True,
-                parameter_retryable=True,
-            )
     return ResearchSemanticQuery(
         run_id=context.run_id,
         scope_fingerprint=context.requirement.scope.scope_fingerprint,
         version_snapshot=context.requirement.version_snapshot,
-        metrics=args.metrics,
-        dimensions=args.dimensions,
-        time_grain=args.time.grain if args.time is not None else None,
+        metrics=request.metric_refs,
+        dimensions=dimensions,
+        time_grain=_frozen_time_grain(context),
         time_ranges=time_roles,
         filters=tuple(filters),
         evidence_value_filters=tuple(evidence_value_filters),
         comparison=comparison,
         analysis=analysis,
+        drilldown=drilldown,
         order=tuple(
             ResearchOrder(
                 ref=item.field_ref,
                 value_role=_value_role(item.value_role),
                 direction=ResearchOrderDirection(item.direction),
             )
-            for item in args.result.order_by
+            for item in request.order_by
         ),
-        limit=args.result.limit,
+        limit=request.limit,
         purpose="query_semantic_data",
     )
+
+
+def _comparison_time_roles(
+    frozen_time_roles: tuple[ResearchTimeRole, ...],
+) -> tuple[ResearchTimeRole, ...]:
+    required = {ResearchTimeRole.CURRENT, ResearchTimeRole.PREVIOUS}
+    if not required <= set(frozen_time_roles):
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.ARGUMENTS_INVALID,
+            "当前 Research Run 没有 current 和 previous 两个冻结时间角色",
+            retryable=True,
+            parameter_retryable=True,
+        )
+    return (ResearchTimeRole.CURRENT, ResearchTimeRole.PREVIOUS)
+
+
+def _single_query_time_role(
+    frozen_time_roles: tuple[ResearchTimeRole, ...],
+) -> tuple[ResearchTimeRole, ...]:
+    if ResearchTimeRole.CURRENT in frozen_time_roles:
+        return (ResearchTimeRole.CURRENT,)
+    return (frozen_time_roles[0],)
+
+
+def _comparison_from_value_mode(value_mode: str) -> ResearchQueryComparison:
+    if value_mode == "difference":
+        return ResearchQueryComparison.DIFFERENCE
+    if value_mode == "growth_rate":
+        return ResearchQueryComparison.GROWTH_RATE
+    return ResearchQueryComparison.NONE
+
+
+def _frozen_time_grain(context: ResearchToolContext) -> str | None:
+    grains = tuple(
+        item.time_grain
+        for item in context.requirement.operations
+        if item.type == "group" and item.time_grain is not None
+    )
+    return grains[0] if grains else None
 
 
 def _validate_frozen_query_time(
@@ -1704,37 +1884,52 @@ def _canonical_query_date(value: Any) -> str | None:
         return None
 
 
-def _query_definition(args: QuerySemanticDataArguments) -> EvidenceDefinition:
-    time_ranges: tuple[TimeRange, ...] = ()
-    if args.time is not None:
-        time_ranges = tuple(
+def _query_definition(
+    query: ResearchSemanticQuery,
+    context: ResearchToolContext,
+) -> EvidenceDefinition:
+    bindings = {item.role: item for item in context.requirement.time_bindings}
+    time_ranges: list[TimeRange] = []
+    for role in query.time_ranges:
+        binding = bindings.get(role)
+        bounds = _frozen_time_bounds(binding.normalized) if binding is not None else None
+        if bounds is None:
+            continue
+        start, end = bounds
+        time_ranges.append(
             TimeRange(
-                start=item.start,
-                end=item.end,
-                granularity=args.time.grain,
+                start=start,
+                end=end or start,
+                granularity=query.time_grain or "day",
             )
-            for item in args.time.periods
         )
     comparison = None
-    if args.comparison is not None:
+    if query.comparison is not ResearchQueryComparison.NONE:
+        outputs: tuple[str, ...] = ("current", "previous")
+        if query.comparison is ResearchQueryComparison.GROWTH_RATE:
+            outputs = (*outputs, "growth_rate")
+        elif query.comparison in {
+            ResearchQueryComparison.DIFFERENCE,
+            ResearchQueryComparison.CONTRIBUTION,
+        }:
+            outputs = (*outputs, "difference")
         comparison = EvidenceComparison(
-            base_period=args.comparison.base_period,
-            against_period=args.comparison.against_period,
-            outputs=args.comparison.outputs,
+            base_period=ResearchTimeRole.CURRENT.value,
+            against_period=ResearchTimeRole.PREVIOUS.value,
+            outputs=outputs,
         )
     filters = tuple(
         EvidenceFilter(
-            field_ref=item.field_ref,
+            field_ref=item.target_ref,
             operator=item.operator,
-            value=item.value,
+            value=tuple(item.value) if isinstance(item.value, list) else item.value,
         )
-        for item in args.filters
-        if item.evidence_selector is None
+        for item in query.filters
     )
     return EvidenceDefinition(
-        metrics=args.metrics,
-        dimensions=args.dimensions,
-        time_ranges=time_ranges,
+        metrics=query.metrics,
+        dimensions=query.dimensions,
+        time_ranges=tuple(time_ranges),
         filters=filters,
         comparison=comparison,
     )

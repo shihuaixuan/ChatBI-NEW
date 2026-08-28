@@ -141,7 +141,7 @@ def _runtime_failure(
 ) -> SemanticQueryRuntimeError:
     """把内部预期错误冻结为 Runtime 的结构化业务错误。"""
 
-    error_code = _BOUNDARY_ERROR_CODES.get(code, ToolErrorCode.INVALID_REQUEST)
+    error_code = _BOUNDARY_ERROR_CODES.get(code)
     if error_code is ToolErrorCode.UNSUPPORTED_CAPABILITY:
         capability_gap = True
     if retryable:
@@ -157,7 +157,11 @@ def _runtime_failure(
             sql_escalation_allowed
             and error_code is ToolErrorCode.UNSUPPORTED_CAPABILITY
         ),
-        details={"internal_code": code} if error_code.value != code else None,
+        details=(
+            {"internal_code": code}
+            if error_code is not None and error_code.value != code
+            else None
+        ),
     )
 
 
@@ -356,7 +360,8 @@ class SemanticQueryRuntime:
                 same_parameter_retryable = False
                 capability_gap = False
             else:
-                code = ToolErrorCode.INVALID_REQUEST
+                # 未知但稳定的语义校验码必须原样返回，模型和日志才能定位真实约束。
+                code = semantic_code or ToolErrorCode.INVALID_REQUEST.value
                 stage = ToolFailureStage.VALIDATION
                 retryable = False
                 parameter_retryable = False

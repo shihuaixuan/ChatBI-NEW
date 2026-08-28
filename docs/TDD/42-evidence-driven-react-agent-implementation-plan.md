@@ -295,7 +295,7 @@ ResearchAgentInput
 
 ### P4-01 参数 DTO
 
-实现指标、维度、时间、筛选、EvidenceSelector、对比、排序和 Limit 契约。
+实现带 `operation` 判别字段的高层查询动作契约：`metric_snapshot`、`multi_period_snapshot`、`compare_metrics`、`breakdown`、`drilldown`、`contribution` 和 `validate_drivers`。模型只提交业务资产、筛选、排序和 Limit；服务端从冻结 Requirement 补全时间、Scope、版本、不可变筛选和比较参数。
 
 ### P4-02 Semantic Query Engine 接口收敛
 
@@ -313,6 +313,10 @@ ResearchAgentInput
 ### P4-04 内部 DAG 回归
 
 覆盖总体查询、两期对比、派生指标、下钻、贡献度、Top N、EvidenceSelector 和多模型关系。
+
+### P4-04A 显式状态动作
+
+删除模型可见的状态更新工具和助手正文 sidecar。`finish_research` 只接收结论文本与 Evidence 引用，Runtime 根据 Evidence 生成 Finding ID、Scope、Todo 变化和状态事件。
 
 ## 7.2 compute_evidence
 

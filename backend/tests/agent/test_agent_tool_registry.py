@@ -103,9 +103,11 @@ def test_default_model_client_isolates_langchain_message_and_tool_conversion():
         def __init__(self):
             self.specs = []
             self.messages = []
+            self.tool_choice = None
 
-        def bind_tools(self, specs):
+        def bind_tools(self, specs, **kwargs):
             self.specs = specs
+            self.tool_choice = kwargs.get("tool_choice")
             return self
 
         def invoke(self, messages):
@@ -138,3 +140,6 @@ def test_default_model_client_isolates_langchain_message_and_tool_conversion():
 
     client.invoke([decision.message], [EchoTool.definition()])
     assert model.messages[0].additional_kwargs["reasoning_content"] == "先规划调用顺序"
+
+    client.invoke_required([AgentMessage.user("必须调用工具")], [EchoTool.definition()])
+    assert model.tool_choice == "required"

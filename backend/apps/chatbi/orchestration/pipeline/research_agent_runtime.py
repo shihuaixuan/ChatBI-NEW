@@ -118,6 +118,7 @@ class ResearchAgentRunOutcome:
     snapshot: ResearchStateSnapshot | None = None
     recovery: ResearchRecoveryReport | None = None
     evidences: tuple[Evidence, ...] = ()
+    direct_answer: str | None = None
 
 
 class ResearchAgentRuntime:
@@ -270,7 +271,34 @@ class ResearchAgentRuntime:
             turns += 1
             ctx.consume_react_model_turn(1 + int(decision_result.repaired))
 
+            if decision_result.is_direct_answer:
+                answer = decision_result.response.content.strip()
+                ctx.set_current_status(ResearchStateStatus.COMPLETED)
+                self._persist_state(
+                    ctx,
+                    messages=state.messages,
+                    terminal=True,
+                    terminal_reason="direct_answer",
+                )
+                agent_run_repository.finish_step(
+                    self._session,
+                    step,
+                    {"turn": turns, "direct_answer": True},
+                    token_usage=decision_result.usage,
+                )
+                self._session.commit()
+                return ResearchAgentRunOutcome(
+                    None,
+                    "direct_answer",
+                    turns,
+                    snapshot=self._build_snapshot(ctx),
+                    evidences=self._react_evidences(ctx),
+                    direct_answer=answer,
+                )
+
             try:
+                if decision_result.decision is None:
+                    raise ValueError("RESEARCH_AGENT_DECISION_MISSING")
                 ctx.apply_research_turn_decision(
                     decision_result.decision,
                     visible_tools=visible_tools,
@@ -581,7 +609,6 @@ class ResearchAgentRuntime:
         compute_budget_available = usage.compute_calls < ctx.budget.max_queries
         search_budget_available = usage.semantic_search_calls < ctx.budget.max_queries
         if not data_budget_available:
-            # 查询轴耗尽后不再暴露任何探索动作，只给模型一次结束判断机会。
             return (ResearchActionType.FINISH_RESEARCH.value,)
         visible = [
             ResearchActionType.FINISH_RESEARCH.value,

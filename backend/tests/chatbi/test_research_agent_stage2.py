@@ -291,15 +291,18 @@ def test_tool_call_is_parsed_as_research_turn_decision() -> None:
             "query_semantic_data",
             {
                 "purpose": "查询 GMV",
-                "metrics": ["METRIC:0:1"],
-                "result": {"limit": 20},
+                "request": {
+                    "operation": "metric_snapshot",
+                    "metric_refs": ["METRIC:0:1"],
+                    "limit": 20,
+                },
             },
         ),
         available_tools=("query_semantic_data",),
     )
 
     assert decision.actions[0].action_type is ResearchActionType.QUERY_SEMANTIC_DATA
-    assert decision.actions[0].arguments.metrics == ("METRIC:0:1",)
+    assert decision.actions[0].arguments.request.metric_refs == ("METRIC:0:1",)
 
 
 def test_tool_call_ignores_narrative_and_unwraps_provider_argument_wrapper() -> None:
@@ -309,8 +312,11 @@ def test_tool_call_ignores_narrative_and_unwraps_provider_argument_wrapper() -> 
         name="query_semantic_data",
         args={
             "query": {
-                "metrics": ["METRIC:0:1"],
-                "result": {"limit": 20},
+                "request": {
+                    "operation": "metric_snapshot",
+                    "metric_refs": ["METRIC:0:1"],
+                    "limit": 20,
+                },
             }
         },
         call_id="call-wrapped",
@@ -325,16 +331,16 @@ def test_tool_call_ignores_narrative_and_unwraps_provider_argument_wrapper() -> 
         available_tools=("query_semantic_data",),
     )
 
-    assert decision.actions[0].arguments.metrics == ("METRIC:0:1",)
-    assert decision.actions[0].arguments.result.limit == 20
+    assert decision.actions[0].arguments.request.metric_refs == ("METRIC:0:1",)
+    assert decision.actions[0].arguments.request.limit == 20
 
 
-def test_tool_call_preserves_finding_and_todo_sidecar() -> None:
-    """工具调用与同轮状态变更必须共同进入 ResearchTurnDecision。"""
+def test_tool_call_ignores_json_sidecar_in_narrative() -> None:
+    """正文不再承载状态协议，状态只能通过显式工具提交。"""
 
     call = ToolCall(
         name="query_semantic_data",
-        args={"metrics": ["METRIC:0:1"], "result": {"limit": 20}},
+        args={"request": {"operation": "metric_snapshot", "metric_refs": ["METRIC:0:1"], "limit": 20}},
         call_id="call-with-sidecar",
     )
     content = '{"finding_changes":[],"todo_changes":[]}'
@@ -348,33 +354,28 @@ def test_tool_call_preserves_finding_and_todo_sidecar() -> None:
         available_tools=("query_semantic_data",),
     )
 
-    assert decision.finding_changes == ()
-    assert decision.todo_changes == ()
     assert decision.actions[0].action_type is ResearchActionType.QUERY_SEMANTIC_DATA
 
 
-def test_tool_call_accepts_current_finding_change_contract() -> None:
-    """sidecar 使用当前 FindingChange 字段时应与工具动作合并解析。"""
+def test_finish_tool_accepts_minimal_finding_draft() -> None:
+    """模型只提交结论文本和 Evidence，完整 Finding 由 Runtime 生成。"""
 
     call = ToolCall(
         name="finish_research",
         args={
+            "findings": [{
+                "statement": "GMV已下降",
+                "evidence_ids": ["evidence:call-1"],
+            }],
             "completion": {
                 "status": "complete",
                 "summary": "证据已足够",
-                "finding_ids": ["finding-1"],
                 "evidence_ids": ["evidence:call-1"],
-            }
+            },
         },
         call_id="call-finish-with-sidecar",
     )
-    content = (
-        '{"finding_changes":[{"change_type":"add","finding":{'
-        '"finding_id":"finding-1","statement":"GMV已下降",'
-        '"evidence_ids":["evidence:call-1"],"scope":{'
-        '"metric_refs":[],"dimension_refs":[],"time_ranges":[],"filters":[]},'
-        '"status":"confirmed"},"reason":"证据支持"}],"todo_changes":[]}'
-    )
+    content = "准备更新状态"
 
     decision = parse_research_turn_decision(
         AgentDecision(
@@ -386,8 +387,9 @@ def test_tool_call_accepts_current_finding_change_contract() -> None:
         available_tools=("finish_research",),
     )
 
-    assert decision.finding_changes[0].finding is not None
-    assert decision.finding_changes[0].finding.finding_id == "finding-1"
+    finding = decision.actions[0].arguments.findings[0]
+    assert finding.statement == "GMV已下降"
+    assert finding.evidence_ids == ("evidence:call-1",)
     assert decision.actions[0].action_type is ResearchActionType.FINISH_RESEARCH
 
 
@@ -416,8 +418,11 @@ def test_tool_call_unwraps_tool_name_argument_wrapper() -> None:
         name="query_semantic_data",
         args={
             "query_semantic_data": {
-                "metrics": ["METRIC:0:1"],
-                "result": {"limit": 20},
+                "request": {
+                    "operation": "metric_snapshot",
+                    "metric_refs": ["METRIC:0:1"],
+                    "limit": 20,
+                },
             }
         },
         call_id="call-tool-name-wrapped",
@@ -433,11 +438,11 @@ def test_tool_call_unwraps_tool_name_argument_wrapper() -> None:
         available_tools=("query_semantic_data",),
     )
 
-    assert decision.actions[0].arguments.metrics == ("METRIC:0:1",)
+    assert decision.actions[0].arguments.request.metric_refs == ("METRIC:0:1",)
 
 
-def test_tool_call_normalizes_comparison_dates_to_time_roles() -> None:
-    """将模型输出的唯一日期期间归一化为协议要求的时间角色。"""
+def test_tool_call_rejects_legacy_full_query_payload() -> None:
+    """模型不能再提交日期和底层 comparison 结构。"""
 
     call = ToolCall(
         name="query_semantic_data",
@@ -461,20 +466,16 @@ def test_tool_call_normalizes_comparison_dates_to_time_roles() -> None:
         call_id="call-date-comparison",
     )
 
-    decision = parse_research_turn_decision(
-        AgentDecision(
-            response=AgentMessage.assistant("", tool_calls=[call]),
-            reasoning="",
-            tool_calls=[call],
-            usage={},
-        ),
-        available_tools=("query_semantic_data",),
-    )
-
-    comparison = decision.actions[0].arguments.comparison
-    assert comparison is not None
-    assert comparison.base_period == "current"
-    assert comparison.against_period == "previous"
+    with pytest.raises(ResearchDecisionParseError):
+        parse_research_turn_decision(
+            AgentDecision(
+                response=AgentMessage.assistant("", tool_calls=[call]),
+                reasoning="",
+                tool_calls=[call],
+                usage={},
+            ),
+            available_tools=("query_semantic_data",),
+        )
 
 
 def test_query_period_rejects_uncontrolled_time_role() -> None:
@@ -510,8 +511,9 @@ def test_all_result_tools_expose_the_same_maximum_row_limit() -> None:
 def test_json_decision_and_visible_tool_boundary_are_validated() -> None:
     content = (
         '{"actions":[{"action_type":"query_semantic_data",'
-        '"purpose":"查询 GMV","arguments":{"metrics":["METRIC:0:1"],'
-        '"result":{"limit":20}}}]}'
+        '"purpose":"查询 GMV","arguments":{"request":{'
+        '"operation":"metric_snapshot","metric_refs":["METRIC:0:1"],'
+        '"limit":20}}}]} '
     )
     decision = parse_research_turn_decision(
         AgentDecision(
@@ -532,7 +534,7 @@ def test_json_decision_and_visible_tool_boundary_are_validated() -> None:
     assert error.value.code == "RESEARCH_AGENT_DECISION_TOOL_NOT_VISIBLE"
 
 
-def test_research_react_profile_has_prompt_and_six_tools() -> None:
+def test_research_react_profile_has_prompt_and_runtime_owned_state() -> None:
     assert RESEARCH_REACT_PROFILE.prompt_version == "research-react-v2"
     assert RESEARCH_REACT_PROFILE.system_prompt is not None
     assert "plan_execution_state" not in RESEARCH_REACT_PROFILE.system_prompt

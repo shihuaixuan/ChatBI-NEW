@@ -1089,7 +1089,7 @@ class ResearchSemanticQueryOutcome(_VersionedContractModel):
     result_refs: tuple[ResearchResultRef, ...] = ()
     evidence: tuple[ResearchEvidence, ...] = ()
     primary_result_id: str | None = Field(default=None, min_length=1, max_length=256)
-    error_code: ToolErrorCode | None = None
+    error_code: ToolErrorCode | str | None = None
     failure_stage: ToolFailureStage | None = None
     retryable: bool = False
     parameter_retryable: bool = False
@@ -1446,7 +1446,7 @@ class TimeRange(_ContractModel):
 class EvidenceFilter(_ContractModel):
     field_ref: str = Field(min_length=1)
     operator: str = Field(min_length=1, max_length=32)
-    value: ScalarValue
+    value: ScalarValue | tuple[ScalarValue, ...]
 
     @model_validator(mode="after")
     def validate_evidence_filter(self) -> EvidenceFilter:
@@ -1764,27 +1764,118 @@ class QueryResultSpec(_ContractModel):
     limit: int = Field(gt=0, le=RESEARCH_QUERY_MAX_ROWS)
 
 
-class QuerySemanticDataArguments(_ReactSchemaModel):
-    metrics: tuple[str, ...] = Field(min_length=1)
-    dimensions: tuple[str, ...] = ()
-    time: QueryTimeSpec | None = None
+class _QueryOperationBase(_ContractModel):
+    """模型只选择分析动作和业务资产，运行边界由服务端补全。"""
+
+    metric_refs: tuple[str, ...] = Field(min_length=1)
     filters: tuple[QueryFilter, ...] = ()
-    comparison: QueryComparison | None = None
-    result: QueryResultSpec
+    order_by: tuple[QueryOrder, ...] = ()
+    limit: int = Field(default=100, gt=0, le=RESEARCH_QUERY_MAX_ROWS)
 
     @model_validator(mode="after")
-    def validate_query_arguments(self) -> QuerySemanticDataArguments:
+    def validate_common_query_assets(self) -> _QueryOperationBase:
         _validate_ref_tuple(
-            self.metrics,
+            self.metric_refs,
             "METRIC",
             "RESEARCH_AGENT_QUERY_METRIC_REF_INVALID",
         )
+        return self
+
+
+class MetricSnapshotOperation(_QueryOperationBase):
+    operation: Literal["metric_snapshot"] = "metric_snapshot"
+    time_role: ResearchTimeRole | None = None
+
+
+class MultiPeriodSnapshotOperation(_QueryOperationBase):
+    operation: Literal["multi_period_snapshot"] = "multi_period_snapshot"
+
+
+class CompareMetricsOperation(_QueryOperationBase):
+    operation: Literal["compare_metrics"] = "compare_metrics"
+    comparison: Literal["difference", "growth_rate"] = "growth_rate"
+
+
+class BreakdownOperation(_QueryOperationBase):
+    operation: Literal["breakdown"] = "breakdown"
+    dimension_refs: tuple[str, ...] = Field(min_length=1)
+    value_mode: Literal["value", "difference", "growth_rate"] = "value"
+
+    @model_validator(mode="after")
+    def validate_dimensions(self) -> BreakdownOperation:
         _validate_ref_tuple(
-            self.dimensions,
+            self.dimension_refs,
             "DIMENSION",
             "RESEARCH_AGENT_QUERY_DIMENSION_REF_INVALID",
         )
         return self
+
+
+class DrilldownOperation(_QueryOperationBase):
+    operation: Literal["drilldown"] = "drilldown"
+    hierarchy_id: str = Field(min_length=1, max_length=128)
+    source_evidence_id: str = Field(min_length=1, max_length=128)
+    current_dimension_ref: str = Field(min_length=1)
+    next_dimension_ref: str = Field(min_length=1)
+    value_mode: Literal["value", "difference", "growth_rate"] = "value"
+
+    @model_validator(mode="after")
+    def validate_drilldown_assets(self) -> DrilldownOperation:
+        _passthrough_id(self.hierarchy_id, "RESEARCH_AGENT_HIERARCHY_ID_INVALID")
+        _id(self.source_evidence_id, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        _validate_ref_tuple(
+            (self.current_dimension_ref, self.next_dimension_ref),
+            "DIMENSION",
+            "RESEARCH_AGENT_QUERY_DIMENSION_REF_INVALID",
+        )
+        return self
+
+
+class ContributionOperation(_QueryOperationBase):
+    operation: Literal["contribution"] = "contribution"
+    dimension_refs: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_dimensions(self) -> ContributionOperation:
+        _validate_ref_tuple(
+            self.dimension_refs,
+            "DIMENSION",
+            "RESEARCH_AGENT_QUERY_DIMENSION_REF_INVALID",
+        )
+        return self
+
+
+class ValidateDriversOperation(_QueryOperationBase):
+    operation: Literal["validate_drivers"] = "validate_drivers"
+    dimension_refs: tuple[str, ...] = ()
+    comparison: Literal["difference", "growth_rate"] = "growth_rate"
+
+    @model_validator(mode="after")
+    def validate_dimensions(self) -> ValidateDriversOperation:
+        _validate_ref_tuple(
+            self.dimension_refs,
+            "DIMENSION",
+            "RESEARCH_AGENT_QUERY_DIMENSION_REF_INVALID",
+        )
+        return self
+
+
+ResearchQueryOperation = Annotated[
+    MetricSnapshotOperation
+    | MultiPeriodSnapshotOperation
+    | CompareMetricsOperation
+    | BreakdownOperation
+    | DrilldownOperation
+    | ContributionOperation
+    | ValidateDriversOperation,
+    Field(discriminator="operation"),
+]
+
+
+class QuerySemanticDataArguments(_ReactSchemaModel):
+    """模型查询入口；不接受日期、Scope、版本和底层比较结构。"""
+
+    request: ResearchQueryOperation
 
 
 class ComputeEvidenceArguments(_ReactSchemaModel):
@@ -2002,8 +2093,34 @@ class CompletionValidationError(_ContractModel):
 CompletionResult = FinishResearchResult
 
 
+class FinalFindingDraft(_ContractModel):
+    """模型提交的最小结论；Scope 和状态字段由 Runtime 根据 Evidence 生成。"""
+
+    statement: str = Field(min_length=1, max_length=4_000)
+    evidence_ids: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_evidence_ids(self) -> FinalFindingDraft:
+        _unique(self.evidence_ids, "RESEARCH_AGENT_FINDING_EVIDENCE_DUPLICATED")
+        for evidence_id in self.evidence_ids:
+            if not evidence_id.startswith("evidence:"):
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
+        return self
+
+
 class FinishResearchArguments(_ReactSchemaModel):
     completion: Completion
+    findings: tuple[FinalFindingDraft, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_findings(self) -> FinishResearchArguments:
+        if (
+            self.completion.status == "complete"
+            and not self.findings
+            and not self.completion.finding_ids
+        ):
+            raise ValueError("RESEARCH_AGENT_FINISH_FINDING_REQUIRED")
+        return self
 
 
 class FindingScope(_ContractModel):
@@ -2254,10 +2371,8 @@ ResearchAction = Annotated[
 
 
 class ResearchTurnDecision(_ReactSchemaModel):
-    """模型每轮提交的 Finding/Todo 增量和工具动作。"""
+    """模型每轮只提交显式工具动作。"""
 
-    finding_changes: tuple[FindingChange, ...] = ()
-    todo_changes: tuple[TodoChange, ...] = ()
     actions: tuple[ResearchAction, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -2302,6 +2417,7 @@ __all__.extend(
     [
         "AttemptSummary",
         "BudgetUsage",
+        "BreakdownOperation",
         "ClarificationRequest",
         "ClarificationOption",
         "ClarificationResponse",
@@ -2309,6 +2425,8 @@ __all__.extend(
         "CompletionLimitation",
         "CompletionResult",
         "CompletionValidationError",
+        "CompareMetricsOperation",
+        "ContributionOperation",
         "ComputeEvidenceAction",
         "ComputeEvidenceArguments",
         "ConversationMessage",
@@ -2330,8 +2448,11 @@ __all__.extend(
         "FinishResearchAction",
         "FinishResearchArguments",
         "FinishResearchResult",
+        "DrilldownOperation",
         "MetricAnalysisRelation",
         "MetricFormula",
+        "MetricSnapshotOperation",
+        "MultiPeriodSnapshotOperation",
         "QueryComparison",
         "QueryFilter",
         "QueryOrder",
@@ -2353,6 +2474,7 @@ __all__.extend(
         "ResearchStateSnapshot",
         "ResearchStateStatus",
         "ResearchTurnDecision",
+        "ResearchQueryOperation",
         "RESEARCH_AGENT_INPUT_SCHEMA_VERSION",
         "RESEARCH_QUERY_MAX_ROWS",
         "RESEARCH_STATE_SCHEMA_VERSION",
@@ -2371,5 +2493,7 @@ __all__.extend(
         "TodoItem",
         "ToolResult",
         "ToolResultStatus",
+        "FinalFindingDraft",
+        "ValidateDriversOperation",
     ]
 )

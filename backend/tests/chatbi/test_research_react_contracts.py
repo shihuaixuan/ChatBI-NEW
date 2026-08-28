@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from apps.chatbi.models.dto.research_agent import (
     AttemptSummary,
     BudgetUsage,
+    CompareMetricsOperation,
     Completion,
     CompletionLimitation,
     ComputeEvidenceAction,
@@ -19,6 +20,7 @@ from apps.chatbi.models.dto.research_agent import (
     EvidenceData,
     EvidenceDefinition,
     ExecutionError,
+    FinalFindingDraft,
     Finding,
     FindingChange,
     FindingScope,
@@ -26,11 +28,8 @@ from apps.chatbi.models.dto.research_agent import (
     FinishResearchArguments,
     MetricFormula,
     QueryOrder,
-    QueryPeriod,
-    QueryResultSpec,
     QuerySemanticDataAction,
     QuerySemanticDataArguments,
-    QueryTimeSpec,
     ResearchActionType,
     ResearchAgentInput,
     ResearchExecutionErrorStage,
@@ -84,16 +83,8 @@ def _query_action() -> QuerySemanticDataAction:
         purpose="查询两期 GMV",
         expected_result="得到当前期和对比期 GMV",
         arguments=QuerySemanticDataArguments(
-            metrics=("METRIC:12:gmv",),
-            time=QueryTimeSpec(
-                dimension_ref="DIMENSION:12:pay_date",
-                grain="day",
-                periods=(
-                    QueryPeriod(role="current", start="2026-06-29", end="2026-06-29"),
-                    QueryPeriod(role="previous", start="2026-06-28", end="2026-06-28"),
-                ),
-            ),
-            result=QueryResultSpec(
+            request=CompareMetricsOperation(
+                metric_refs=("METRIC:12:gmv",),
                 order_by=(
                     QueryOrder(
                         field_ref="METRIC:12:gmv",
@@ -294,8 +285,11 @@ def test_research_turn_decision_parses_discriminated_action() -> None:
                     "action_type": "query_semantic_data",
                     "purpose": "查询 GMV",
                     "arguments": {
-                        "metrics": ["METRIC:12:gmv"],
-                        "result": {"limit": 20},
+                        "request": {
+                            "operation": "metric_snapshot",
+                            "metric_refs": ["METRIC:12:gmv"],
+                            "limit": 20,
+                        },
                     },
                 },
             ],
@@ -313,7 +307,15 @@ def test_finish_action_must_be_alone() -> None:
     )
     finish = FinishResearchAction(
         purpose="提交完成结果",
-        arguments=FinishResearchArguments(completion=completion),
+        arguments=FinishResearchArguments(
+            completion=completion,
+            findings=(
+                FinalFindingDraft(
+                    statement="已有证据足以回答",
+                    evidence_ids=("evidence:tool_call_01",),
+                ),
+            ),
+        ),
     )
 
     with pytest.raises(ValidationError, match="RESEARCH_AGENT_CONTROL_ACTION_MUST_BE_ALONE"):
@@ -340,13 +342,19 @@ def test_parallel_actions_only_allow_read_only_actions() -> None:
                 _query_action(),
                 FinishResearchAction(
                     purpose="提交完成结果",
-                    arguments=FinishResearchArguments(
-                        completion=Completion(
+                        arguments=FinishResearchArguments(
+                            completion=Completion(
                             status="complete",
                             summary="已有证据足以回答",
-                            evidence_ids=("evidence:tool_call_01",),
+                                evidence_ids=("evidence:tool_call_01",),
+                            ),
+                            findings=(
+                                FinalFindingDraft(
+                                    statement="已有证据足以回答",
+                                    evidence_ids=("evidence:tool_call_01",),
+                                ),
+                            ),
                         ),
-                    ),
                 ),
             ),
         )

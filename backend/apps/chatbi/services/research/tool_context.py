@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from apps.chatbi.models.dto.analysis_evidence import (
     AnalysisEvidence,
@@ -374,7 +374,10 @@ class ResearchToolContext:
         visible_tools: Sequence[str | ResearchActionType] | None = None,
     ) -> ResearchState:
         if not isinstance(decision, ResearchTurnDecision):
-            decision = ResearchTurnDecision.model_validate(decision)
+            decision = cast(
+                ResearchTurnDecision,
+                ResearchTurnDecision.model_validate(decision),
+            )
         if self.current_status is not ResearchStateStatus.RUNNING:
             raise ValueError("RESEARCH_AGENT_RUN_NOT_RUNNING")
         if visible_tools is not None:
@@ -384,12 +387,23 @@ class ResearchToolContext:
             }
             if any(item.action_type.value not in visible for item in decision.actions):
                 raise ValueError("RESEARCH_AGENT_ACTION_NOT_VISIBLE")
+        return self.research_state()
+
+    def apply_research_state_changes(
+        self,
+        finding_changes: Sequence[Any],
+        todo_changes: Sequence[Any],
+    ) -> ResearchState:
+        """原子应用显式状态工具提交的 Finding 和 Todo 增量。"""
+
+        if self.current_status is not ResearchStateStatus.RUNNING:
+            raise ValueError("RESEARCH_AGENT_RUN_NOT_RUNNING")
         known = set(self._research_evidence_map())
         findings = apply_finding_changes(
-            self.react_findings(), decision.finding_changes, evidence_ids=known
+            self.react_findings(), finding_changes, evidence_ids=known
         )
         todos = apply_todo_changes(
-            self.react_todos(), decision.todo_changes, evidence_ids=known
+            self.react_todos(), todo_changes, evidence_ids=known
         )
         state = self._state()
         events = state.get("state_events", [])
@@ -404,8 +418,8 @@ class ResearchToolContext:
         sequence = len(events) + 1
         new_events: list[dict[str, Any]] = []
         for event_type, changes in (
-            ("finding_change", decision.finding_changes),
-            ("todo_change", decision.todo_changes),
+            ("finding_change", finding_changes),
+            ("todo_change", todo_changes),
         ):
             for change in changes:
                 new_events.append(

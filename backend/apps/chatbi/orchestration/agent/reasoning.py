@@ -73,10 +73,16 @@ class AgentDecision:
 class ResearchAgentDecision:
     """Research Agent 解析后的单轮决策。"""
 
-    decision: ResearchTurnDecision
+    decision: ResearchTurnDecision | None
     response: AgentMessage
     usage: dict[str, Any]
     repaired: bool = False
+
+    @property
+    def is_direct_answer(self) -> bool:
+        """没有工具调用时，正文直接作为最终回答。"""
+
+        return self.decision is None
 
 
 class ResearchDecisionParseError(ValueError):
@@ -346,6 +352,12 @@ class AgentReasoner:
             step_id=step_id,
             step_index=step_index,
         )
+        if first.is_direct_answer:
+            return ResearchAgentDecision(
+                decision=None,
+                response=first.response,
+                usage=first.usage,
+            )
         try:
             parsed = parse_research_turn_decision(
                 first,
@@ -455,8 +467,6 @@ class AgentReasoner:
             decision_node.set_output(
                 {
                     "action_count": len(decision.actions),
-                    "finding_change_count": len(decision.finding_changes),
-                    "todo_change_count": len(decision.todo_changes),
                     "repaired": repaired,
                 }
             )
@@ -623,36 +633,7 @@ def parse_research_turn_decision(
 
     allowed_tools = set(available_tools)
     if model_decision.tool_calls:
-        # 部分兼容 OpenAI Function Calling 的模型会在 tool_calls 旁返回一段
-        # 说明文字；动作本身仍由结构化工具参数承载，可以安全忽略说明文字。
-        # 如果正文是状态变更 sidecar，则与工具动作合并；其他结构化正文仍然
-        # 视为第二份决策，避免同一轮提交两份动作。
-        content = model_decision.response.content.strip()
-        state_changes: dict[str, Any] = {}
-        if content:
-            try:
-                content_payload = orjson.loads(content)
-            except orjson.JSONDecodeError:
-                content_payload = None
-            if isinstance(content_payload, dict):
-                sidecar_keys = {"finding_changes", "todo_changes"}
-                if not set(content_payload) <= sidecar_keys:
-                    raise ResearchDecisionParseError(
-                        "RESEARCH_AGENT_DECISION_MULTIPLE_PAYLOADS",
-                        "模型同时返回了两份结构化决策。",
-                        raw_response_excerpt=content,
-                    )
-                state_changes = {
-                    key: content_payload[key]
-                    for key in sidecar_keys
-                    if key in content_payload
-                }
-            elif content_payload is not None:
-                raise ResearchDecisionParseError(
-                    "RESEARCH_AGENT_DECISION_OBJECT_REQUIRED",
-                    "结构化状态变更必须是 JSON 对象。",
-                    raw_response_excerpt=content,
-                )
+        # 工具调用是唯一结构化协议；正文只作为说明，不再承载隐藏状态 sidecar。
         actions: list[dict[str, Any]] = []
         for call in model_decision.tool_calls:
             if not call.call_id:
@@ -680,32 +661,6 @@ def parse_research_turn_decision(
                     wrapper_key = next(iter(wrapper_keys))
                     if isinstance(arguments[wrapper_key], dict):
                         arguments = dict(arguments[wrapper_key])
-                time = arguments.get("time")
-                comparison = arguments.get("comparison")
-                if isinstance(time, dict) and isinstance(comparison, dict):
-                    # 部分模型会把对比期间填成日期，而协议要求使用时间角色。
-                    # 只有日期唯一对应某个 period 时才规范化，避免猜测有歧义的期间。
-                    role_by_boundary: dict[str, set[str]] = {}
-                    for period in time.get("periods") or ():
-                        if not isinstance(period, dict):
-                            continue
-                        role = period.get("role")
-                        if not isinstance(role, str) or not role:
-                            continue
-                        for boundary in ("start", "end"):
-                            value = period.get(boundary)
-                            if isinstance(value, str) and value:
-                                role_by_boundary.setdefault(value, set()).add(role)
-                    normalized_comparison = dict(comparison)
-                    comparison_changed = False
-                    for field in ("base_period", "against_period"):
-                        value = comparison.get(field)
-                        roles = role_by_boundary.get(value, set())
-                        if len(roles) == 1:
-                            normalized_comparison[field] = next(iter(roles))
-                            comparison_changed = True
-                    if comparison_changed:
-                        arguments["comparison"] = normalized_comparison
             purpose = arguments.pop("purpose", f"执行 {call.name}")
             expected_result = arguments.pop("expected_result", None)
             actions.append(
@@ -716,7 +671,7 @@ def parse_research_turn_decision(
                     "arguments": arguments,
                 }
             )
-        payload = {**state_changes, "actions": actions}
+        payload = {"actions": actions}
     else:
         content = model_decision.response.content.strip()
         if not content:

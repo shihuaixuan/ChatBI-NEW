@@ -244,7 +244,7 @@ Research Agent 的模型调用由三部分组成：
 4. 从未完成 Todo 中选择当前最需要处理的方向；
 5. 选择能够取得下一项关键证据的最小工具动作；
 6. 根据工具定义生成参数；
-7. 提交 Finding 变更、Todo 变更和工具动作。
+7. 通过显式工具动作提交查询、计算或状态变更。
 
 使用 Evidence 时：
 
@@ -291,11 +291,9 @@ Research Agent 的模型调用由三部分组成：
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `finding_changes` | `FindingChange[]` | 基于已有 Evidence 增加或替代 Finding |
-| `todo_changes` | `TodoChange[]` | 增加 Todo 或改变 Todo 状态和顺序 |
 | `actions` | `ResearchAction[]` | 本轮需要执行的工具动作 |
 
-Runtime 先校验并应用 Finding 和 Todo 变更，再执行工具动作。`finish_research` 因此可以引用本轮新增加的 Finding。
+Finding、Todo、Scope 和状态事件不属于模型工具。模型在 `finish_research.findings` 中只提交结论文本和 Evidence 引用，Runtime 根据 Evidence 生成 Finding ID、Scope 和持久化事件。
 
 `FindingChange`：
 
@@ -330,32 +328,21 @@ Runtime 先校验并应用 Finding 和 Todo 变更，再执行工具动作。`fi
 
 ~~~json
 {
-  "finding_changes": [],
-  "todo_changes": [
-    {
-      "change_type": "add",
-      "todo": {"todo_id": "todo_01", "goal": "定位对GMV下降贡献最大的商家", "status": "in_progress", "order": 1, "related_evidence_ids": ["evidence:tool_call_query_01"], "result_reason": null},
-      "todo_id": null,
-      "status": null,
-      "order": null,
-      "result_reason": null
-    }
-  ],
   "actions": [
     {
       "action_type": "query_semantic_data",
       "purpose": "定位对GMV下降贡献最大的商家",
       "expected_result": "得到各商家的两期GMV、差值和增长率",
       "arguments": {
-        "metrics": ["METRIC:12:gmv"],
-        "dimensions": ["DIMENSION:12:merchant"],
-        "time": {"dimension_ref": "DIMENSION:12:pay_date", "grain": "day", "periods": [
-          {"role": "current", "start": "2026-06-29", "end": "2026-06-29"},
-          {"role": "previous", "start": "2026-06-28", "end": "2026-06-28"}
-        ]},
-        "filters": [],
-        "comparison": {"base_period": "current", "against_period": "previous", "outputs": ["current", "previous", "difference", "growth_rate"]},
-        "result": {"order_by": [{"field_ref": "METRIC:12:gmv", "value_role": "difference", "direction": "asc"}], "limit": 20}
+        "request": {
+          "operation": "breakdown",
+          "metric_refs": ["METRIC:12:gmv"],
+          "dimension_refs": ["DIMENSION:12:merchant"],
+          "value_mode": "growth_rate",
+          "filters": [],
+          "order_by": [{"field_ref": "METRIC:12:gmv", "value_role": "difference", "direction": "asc"}],
+          "limit": 20
+        }
       }
     }
   ]
@@ -471,32 +458,25 @@ Runtime 默认提供查询、计算和结束工具。Evidence 展示数据不足
 
 ## 5.2 query_semantic_data
 
-`query_semantic_data` 接收声明式语义查询，调用 Semantic Query Engine，并返回 `ToolResult<Evidence>`。
+`query_semantic_data` 接收高层分析动作和业务资产，服务端编译为内部声明式语义查询，并返回 `ToolResult<Evidence>`。
 
 ### 5.2.1 输入参数
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `metrics` | `string[]` | 正式指标引用 |
-| `dimensions` | `string[]` | 正式维度引用；总体查询为空数组 |
-| `time` | `Nullable<QueryTimeSpec>` | 时间维度、粒度和期间 |
-| `filters` | `QueryFilter[]` | 字面值或 Evidence 筛选 |
-| `comparison` | `Nullable<QueryComparison>` | 对比期间和输出值角色 |
-| `result` | `QueryResultSpec` | 排序和结果数量限制 |
+| `request` | `ResearchQueryOperation` | 带 `operation` 判别字段的标准分析动作 |
 
-`QueryTimeSpec` 包含 `dimension_ref: string`、`grain: enum[day, week, month, quarter, year]` 和 `periods: QueryPeriod[]`。`QueryPeriod` 包含 `role: string`、`start: string` 和 `end: string`。
+标准动作包括 `metric_snapshot`、`multi_period_snapshot`、`compare_metrics`、`breakdown`、`drilldown`、`contribution` 和 `validate_drivers`。动作只携带正式指标、维度、层级、Evidence 筛选、排序和 Limit；日期边界、时间维度、时间粒度、不可变筛选、Scope、权限与版本均由服务端从冻结 `ResearchRequirement` 补全。
 
 `QueryFilter` 包含 `field_ref: string`、`operator: string`、`value: Nullable<ScalarValue>` 和 `evidence_selector: Nullable<EvidenceSelector>`。`EvidenceSelector` 包含 `evidence_id: string`、`column_ref: string` 和 `selection: enum[all, top, bottom]`。
 
-`QueryComparison` 包含 `base_period: string`、`against_period: string` 和 `outputs: enum[current, previous, difference, growth_rate][]`。
-
-`QueryResultSpec` 包含 `order_by: QueryOrder[]` 和 `limit: integer`。`QueryOrder` 包含 `field_ref: string`、`value_role: string` 和 `direction: enum[asc, desc]`。
+`QueryOrder` 包含 `field_ref: string`、`value_role: string` 和 `direction: enum[asc, desc]`。
 
 ### 5.2.2 Semantic Query Engine
 
 Semantic Query Engine 执行：
 
-1. 校验并标准化指标、维度、时间、筛选、排序和对比；
+1. 根据 operation 确定分析类型，并补全冻结时间、筛选、Scope 和版本；
 2. 校验权限、资产存在性和指标维度兼容性；
 3. 展开派生指标公式；
 4. 选择已发布的语义模型关系；
@@ -505,7 +485,7 @@ Semantic Query Engine 执行：
 7. 将完整结果写入引擎内部存储；
 8. 返回逻辑列、统计信息和限制。
 
-查询内部 DAG 由确定性规则生成。模型只提交语义查询参数，不生成 DAG 节点、物理 SQL、Join 路径或执行顺序。
+查询内部 DAG 由确定性规则生成。模型只提交标准分析动作和业务资产，不生成日期边界、比较 DAG、物理 SQL、Join 路径或执行顺序。
 
 查询参数已经明确要求的派生指标、对比值、排序和 Top N 进入本次查询 DAG。取得 Evidence 后才决定的跨结果合并、对账、占比和重新排名由 `compute_evidence` 执行。
 

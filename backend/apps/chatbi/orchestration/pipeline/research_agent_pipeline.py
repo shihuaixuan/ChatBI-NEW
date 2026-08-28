@@ -330,6 +330,14 @@ class ResearchAgentPipeline:
         if outcome.stop_reason == "waiting_for_user":
             # 澄清请求已由 Research Tool 写入状态，生命周期不应提前结束。
             return
+        if outcome.direct_answer is not None:
+            yield from self._deps.lifecycle.finish(
+                state,
+                answer=outcome.direct_answer,
+                chart={},
+                sql=None,
+            )
+            return
         if completion is None:
             raise ResearchPipelineError(
                 "RESEARCH_AGENT_COMPLETION_MISSING",

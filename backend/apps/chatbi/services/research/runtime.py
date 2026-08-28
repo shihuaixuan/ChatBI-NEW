@@ -239,10 +239,11 @@ class ResearchToolRuntime:
             if cached_before_prepare is not None:
                 with self._lock:
                     self._cache[initial_fingerprint] = cached_before_prepare
-        if cached_before_prepare is not None and cached_before_prepare.status in {
-            ToolResultStatus.SUCCEEDED,
-            ToolResultStatus.WAITING_FOR_USER,
-        }:
+        if cached_before_prepare is not None and not (
+            cached_before_prepare.status is ToolResultStatus.FAILED
+            and cached_before_prepare.error is not None
+            and cached_before_prepare.error.same_parameter_retryable
+        ):
             return self._finalize_result(
                 context,
                 action,
@@ -859,7 +860,7 @@ def _restore_context_result(
     result_model: type[BaseModel],
     replacement_tool_call_id: str,
 ) -> ToolResult[Any] | None:
-    """从已持久化的 Attempt 恢复同指纹成功结果，避免恢复后重复执行。"""
+    """恢复同指纹结果；不可重试失败也不得在恢复后重复执行。"""
 
     attempts = getattr(context, "react_attempts", None)
     load_result = getattr(context, "research_tool_result", None)
@@ -868,7 +869,7 @@ def _restore_context_result(
     for attempt in reversed(attempts()):
         if attempt.action_fingerprint != fingerprint:
             continue
-        if attempt.status not in {"succeeded", "waiting_for_user"}:
+        if attempt.status not in {"succeeded", "waiting_for_user", "failed"}:
             return None
         original_call_id = attempt.attempt_id.removeprefix("attempt:")
         payload = load_result(original_call_id)
