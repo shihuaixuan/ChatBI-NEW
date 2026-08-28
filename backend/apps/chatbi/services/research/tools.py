@@ -24,8 +24,12 @@ from apps.chatbi.errors import (
     ResultArtifactWriteError,
 )
 from apps.chatbi.models.dto.analysis_plan import (
+    ComputeDerivation,
+    ComputeOperation,
+    ComputeTask,
     ResultSetKind,
     ResultSetRef,
+    ResultSetSnapshot,
 )
 from apps.chatbi.models.dto.research_agent import (
     ClarificationRequest,
@@ -58,20 +62,16 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchComputeOperation,
     ResearchComputeRequest,
     ResearchEvidence,
-    ResearchEvidenceDependency,
-    ResearchEvidenceStatistics,
     ResearchEvidenceValueRef,
     ResearchLiteralFilter,
     ResearchLogicalColumn,
     ResearchOrder,
     ResearchOrderDirection,
     ResearchQueryComparison,
-    ResearchResultRef,
     ResearchRowSelector,
     ResearchSemanticQuery,
     ResearchStateStatus,
     ResearchTimeRole,
-    ResearchToolCallRef,
     SearchSemanticAssetsAction,
     SearchSemanticAssetsArguments,
     SemanticContext,
@@ -82,11 +82,9 @@ from apps.chatbi.models.dto.research_agent import (
     TimeRange,
     ToolErrorCode,
 )
-from apps.chatbi.orchestration.agent.tools.research import (
-    ComputeEvidenceTool as LegacyComputeEvidenceTool,
-)
-from apps.chatbi.orchestration.agent.tools.research import (
-    ResearchToolObservationFailure,
+from apps.chatbi.services.computation.errors import (
+    ComputeEngineError,
+    ComputeOperationError,
 )
 from apps.chatbi.services.research.action_fingerprint import (
     research_action_fingerprint,
@@ -183,8 +181,8 @@ class QuerySemanticDataResearchTool(
         )
         if outcome.status != "succeeded" or not outcome.evidence:
             raise _semantic_outcome_error(outcome)
-        legacy = outcome.evidence[0]
-        result_id = outcome.primary_result_id or legacy.result_ref.result_id
+        semantic_evidence = outcome.evidence[0]
+        result_id = outcome.primary_result_id or semantic_evidence.result_ref.result_id
         if context.result_set_payload(result_id) is None:
             raise ResearchToolExecutionError(
                 ResearchToolExecutionError.PERSISTENCE_FAILED,
@@ -195,24 +193,11 @@ class QuerySemanticDataResearchTool(
         evidence_id = Evidence.evidence_id_for_tool_call(
             prepared.tool_call_id or prepared.action_fingerprint
         )
-        evidence = _evidence_from_legacy(
-            legacy,
+        evidence = _evidence_from_semantic_result(
+            semantic_evidence,
             evidence_id=evidence_id,
             purpose=purpose,
             definition=_query_definition(prepared.args),
-        )
-        context.register_evidence(
-            legacy.model_copy(
-                update={
-                    "evidence_id": evidence_id,
-                    "purpose": purpose,
-                    "source_tool_call": ResearchToolCallRef(
-                        run_id=context.run_id,
-                        tool_call_id=prepared.tool_call_id
-                        or prepared.action_fingerprint,
-                    ),
-                }
-            )
         )
         context.record_research_evidence(evidence, result_id=result_id)
         return evidence
@@ -289,26 +274,19 @@ class ComputeEvidenceResearchTool(
                 ResearchToolExecutionError.PREPARE_FAILED,
                 "计算准备结果缺少计算请求",
             )
-        legacy_inputs = tuple(
-            _legacy_evidence_from_react(context, evidence_id)
-            for evidence_id in request.input_evidence_ids
+        inputs = tuple(
+            context.evidence(evidence_id) for evidence_id in request.input_evidence_ids
         )
-        helper = LegacyComputeEvidenceTool()
-        try:
-            task = helper._build_task(
-                context,
-                request,
-                list(legacy_inputs),
-                prepared.action_fingerprint,
+        if any(item is None for item in inputs):
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                "计算输入 Evidence 不属于当前 Run",
+                retryable=True,
+                parameter_retryable=True,
             )
-            rows, fields, sql = helper._execute_plan(
-                context,
-                request,
-                list(legacy_inputs),
-                task,
-            )
-        except ResearchToolObservationFailure as exc:
-            raise _legacy_observation_error(exc.observation) from exc
+        compute_inputs = tuple(item for item in inputs if item is not None)
+        task = _build_compute_task(context, request, compute_inputs)
+        rows, fields, sql = _execute_compute_plan(context, request, compute_inputs, task)
         result_ref = _register_compute_result(
             context,
             request,
@@ -317,11 +295,7 @@ class ComputeEvidenceResearchTool(
             rows,
             sql,
         )
-        logical_columns = helper._derived_columns(
-            request,
-            list(legacy_inputs),
-            fields,
-        )
+        logical_columns = _derived_compute_columns(request, compute_inputs, fields)
         evidence_id = Evidence.evidence_id_for_tool_call(
             prepared.tool_call_id or prepared.action_fingerprint
         )
@@ -337,26 +311,6 @@ class ComputeEvidenceResearchTool(
         context.record_research_evidence(
             evidence,
             result_id=result_ref.result_set_id,
-        )
-        # 兼容阶段 3语义查询的 EvidenceSelector，同时保留新 Evidence 作为规范结果。
-        iteration = context.advance_evidence_iteration(
-            minimum=max(item.iteration for item in legacy_inputs) + 1
-        )
-        context.register_evidence(
-            _legacy_evidence_from_react(
-                context,
-                evidence_id,
-                iteration=iteration,
-                dependencies=tuple(
-                    ResearchEvidenceDependency(
-                        evidence_id=item.evidence_id,
-                        run_id=context.run_id,
-                        source_iteration=item.iteration,
-                        relation=request.operation.value,
-                    )
-                    for item in legacy_inputs
-                ),
-            )
         )
         return evidence
 
@@ -1755,14 +1709,14 @@ def _evidence_selector_values(
     return values
 
 
-def _evidence_from_legacy(
+def _evidence_from_semantic_result(
     legacy: ResearchEvidence,
     *,
     evidence_id: str,
     purpose: str,
     definition: EvidenceDefinition,
 ) -> Evidence:
-    columns = tuple(_column_from_legacy(item) for item in legacy.logical_columns)
+    columns = tuple(_column_from_semantic(item) for item in legacy.logical_columns)
     fields = tuple(item.name for item in columns)
     rows = tuple(
         tuple(_scalar(row.get(field)) for field in fields)
@@ -1801,7 +1755,7 @@ def _computed_evidence(
     logical_columns: tuple[ResearchLogicalColumn, ...],
     purpose: str,
 ) -> Evidence:
-    columns = tuple(_column_from_legacy(item) for item in logical_columns)
+    columns = tuple(_column_from_semantic(item) for item in logical_columns)
     if len(columns) != len(fields) or tuple(item.name for item in columns) != tuple(fields):
         raise ResearchToolExecutionError(
             ResearchToolExecutionError.RESULT_INVALID,
@@ -1877,59 +1831,477 @@ def _register_compute_result(
     return ref
 
 
-def _legacy_evidence_from_react(
+def _semantic_logical_field(
+    evidence: ResearchEvidence,
+    ref: str,
+    role: str | None = None,
+) -> str | None:
+    """按语义列映射读取结果字段，不按列位置推断。"""
+
+    fallback: str | None = None
+    for column in evidence.logical_columns:
+        if column.asset_ref != ref or not column.result_field:
+            continue
+        if role is not None and column.value_role == role:
+            return column.result_field
+        if fallback is None:
+            fallback = column.result_field
+    return fallback
+
+
+def _load_compute_snapshot(
     context: ResearchToolContext,
-    evidence_id: str,
-    *,
-    iteration: int | None = None,
-    dependencies: tuple[ResearchEvidenceDependency, ...] = (),
-) -> ResearchEvidence:
-    existing = context.evidence(evidence_id)
-    if existing is not None:
-        return existing
-    evidence = context.research_evidence(evidence_id)
-    result_id = context.research_evidence_result_id(evidence_id)
-    if evidence is None or result_id is None:
+    evidence: ResearchEvidence,
+) -> ResultSetSnapshot:
+    """从 ResultStore 读取计算输入的完整结果。"""
+
+    if context.result_store is None:
         raise ResearchToolExecutionError(
-            ResearchToolExecutionError.ARGUMENTS_INVALID,
-            f"Evidence {evidence_id} 不属于当前 Run",
+            ResearchToolExecutionError.PERSISTENCE_FAILED,
+            "ResultStore 未配置",
             retryable=True,
-            parameter_retryable=True,
+            same_parameter_retryable=True,
         )
-    logical_columns = tuple(
-        ResearchLogicalColumn(
-            asset_ref=column.semantic_ref or f"METRIC:computed:{index}",
-            value_role=("group_key" if column.role == "dimension" else "value"),
-            result_field=column.name,
+    payload = context.result_set_payload(evidence.result_ref.result_id)
+    if payload is None:
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.PERSISTENCE_FAILED,
+            f"结果集 {evidence.result_ref.result_id} 不存在或已清理",
+            retryable=True,
+            same_parameter_retryable=True,
         )
-        for index, column in enumerate(evidence.columns)
+    try:
+        ref = ResultSetRef.model_validate(payload)
+        execution_id, chat_id, record_id, _ = context.execution_identity()
+        return context.result_store.read(
+            ref,
+            execution_id=execution_id,
+            execution_type=ChatRecordExecutionType.AGENT,
+            chat_id=chat_id,
+            record_id=record_id,
+        )
+    except (ResultArtifactReadError, ValidationError, TypeError, ValueError) as exc:
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.PERSISTENCE_FAILED,
+            f"结果集读取失败：{exc}",
+            retryable=True,
+            same_parameter_retryable=True,
+        ) from exc
+
+
+def _compute_failure(
+    code: str,
+    message: str,
+    *,
+    parameter_retryable: bool = True,
+    same_parameter_retryable: bool = False,
+) -> ResearchToolExecutionError:
+    """把计算参数或引擎错误转换为 Research 工具错误。"""
+
+    return ResearchToolExecutionError(
+        code,
+        message,
+        retryable=True,
+        parameter_retryable=parameter_retryable,
+        same_parameter_retryable=same_parameter_retryable,
     )
-    rows = [
-        {
-            column.name: value
-            for column, value in zip(evidence.columns, row, strict=True)
-        }
-        for row in evidence.data.rows
-    ]
-    legacy = ResearchEvidence(
-        run_id=context.run_id,
-        evidence_id=evidence_id,
-        source_tool_call=ResearchToolCallRef(
-            run_id=context.run_id,
-            tool_call_id=evidence_id.removeprefix("evidence:"),
-        ),
-        result_ref=ResearchResultRef(run_id=context.run_id, result_id=result_id),
-        iteration=0 if iteration is None else iteration,
-        purpose=evidence.purpose,
-        metric_refs=evidence.definition.metrics,
-        dimension_refs=evidence.definition.dimensions,
-        logical_columns=logical_columns,
-        statistics=ResearchEvidenceStatistics(row_count=evidence.data.row_count),
-        sample_rows=tuple(rows),
-        dependencies=dependencies,
-        version_snapshot=context.requirement.version_snapshot,
+
+
+def _build_compute_task(
+    context: ResearchToolContext,
+    request: ResearchComputeRequest,
+    inputs: tuple[ResearchEvidence, ...],
+) -> ComputeTask | None:
+    """把白名单计算操作转换为 ComputeEngine 任务。"""
+
+    operation = request.operation
+    if operation is ResearchComputeOperation.RANKING:
+        return None
+    if operation in {
+        ResearchComputeOperation.DIFFERENCE,
+        ResearchComputeOperation.GROWTH_RATE,
+    }:
+        if len(inputs) != 2:
+            raise _compute_failure(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                "差值或增长率需要恰好 2 个输入 Evidence（当前期在前、对照期在后）",
+            )
+        keys = _compute_join_keys(context, request, inputs[0], inputs[1])
+        return ComputeTask(
+            id=f"{operation.value}-output",
+            operation=(
+                ComputeOperation.DIFFERENCE
+                if operation is ResearchComputeOperation.DIFFERENCE
+                else ComputeOperation.GROWTH_RATE
+            ),
+            inputs=request.input_evidence_ids,
+            join_on=keys,
+        )
+    if operation is ResearchComputeOperation.SHARE:
+        evidence = _single_compute_input(request, inputs)
+        metric = _compute_metric_field(request, evidence)
+        dimensions = _compute_dimension_fields(request, evidence)
+        options: dict[str, Any] = {"metrics": [metric]}
+        if dimensions:
+            options["dimensions"] = dimensions
+        return ComputeTask(
+            id="share-output",
+            operation=ComputeOperation.SHARE,
+            inputs=(request.input_evidence_ids[0],),
+            options=options,
+        )
+    if operation is ResearchComputeOperation.RATIO:
+        evidence = _single_compute_input(request, inputs)
+        if len(request.metric_refs) != 2:
+            raise _compute_failure(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                "ratio 需要恰好 2 个指标（分子、分母）",
+            )
+        numerator = _semantic_logical_field(evidence, request.metric_refs[0], "value")
+        denominator = _semantic_logical_field(evidence, request.metric_refs[1], "value")
+        if numerator is None or denominator is None:
+            raise _compute_failure(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                "ratio 的指标无法映射到 Evidence 字段",
+            )
+        name = f"{numerator}_ratio_{denominator}"[:128]
+        expression = (
+            f'TRY_CAST("{numerator}" AS DOUBLE) / '
+            f'NULLIF(TRY_CAST("{denominator}" AS DOUBLE), 0)'
+        )
+        return ComputeTask(
+            id="ratio-output",
+            operation=ComputeOperation.EXPR,
+            inputs=(request.input_evidence_ids[0],),
+            derive=(ComputeDerivation(name=name, expr=expression),),
+        )
+    if operation is ResearchComputeOperation.TOPN_OTHER:
+        evidence = _single_compute_input(request, inputs)
+        dimension_fields = _compute_dimension_fields(request, evidence)
+        if len(dimension_fields) != 1:
+            raise _compute_failure(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                "topn_other 需要恰好 1 个维度",
+            )
+        metric = _compute_metric_field(request, evidence)
+        if request.limit is None:
+            raise _compute_failure(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                "topn_other 必须提供 limit",
+            )
+        return ComputeTask(
+            id="topn-output",
+            operation=ComputeOperation.TOPN_OTHER,
+            inputs=(request.input_evidence_ids[0],),
+            options={
+                "dimension": dimension_fields[0],
+                "metrics": [metric],
+                "top_n": request.limit,
+            },
+        )
+    if operation is ResearchComputeOperation.MERGE:
+        if len(inputs) < 2:
+            raise _compute_failure(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                "merge 需要至少 2 个输入 Evidence",
+            )
+        return ComputeTask(
+            id="merge-output",
+            operation=ComputeOperation.MERGE,
+            inputs=request.input_evidence_ids,
+            join_on=_compute_join_keys(context, request, inputs[0], inputs[1]),
+        )
+    if operation in {
+        ResearchComputeOperation.CONTRIBUTION,
+        ResearchComputeOperation.RECONCILIATION,
+    }:
+        return _build_contribution_task(context, request, inputs)
+    raise ResearchToolExecutionError(
+        ResearchToolExecutionError.UNSUPPORTED_CAPABILITY,
+        f"操作 {operation.value} 暂不支持",
     )
-    return legacy
+
+
+def _single_compute_input(
+    request: ResearchComputeRequest,
+    inputs: tuple[ResearchEvidence, ...],
+) -> ResearchEvidence:
+    if len(inputs) != 1:
+        raise _compute_failure(
+            ResearchToolExecutionError.ARGUMENTS_INVALID,
+            f"{request.operation.value} 需要恰好 1 个输入 Evidence",
+        )
+    return inputs[0]
+
+
+def _compute_join_keys(
+    _context: ResearchToolContext,
+    request: ResearchComputeRequest,
+    left: ResearchEvidence,
+    right: ResearchEvidence,
+) -> tuple[str, ...]:
+    refs = request.group_by_refs or request.dimension_refs
+    keys: list[str] = []
+    for ref in refs:
+        left_field = _semantic_logical_field(left, ref, "group_key")
+        right_field = _semantic_logical_field(right, ref, "group_key")
+        if left_field is None or right_field is None:
+            raise _compute_failure(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                f"维度 {ref} 无法在两个输入 Evidence 上对齐",
+            )
+        keys.append(left_field)
+    if not keys:
+        raise _compute_failure(
+            ResearchToolExecutionError.ARGUMENTS_INVALID,
+            "至少提供一个分组维度用于输入对齐，避免笛卡尔积",
+        )
+    return tuple(keys)
+
+
+def _compute_metric_field(
+    request: ResearchComputeRequest,
+    evidence: ResearchEvidence,
+) -> str:
+    if len(request.metric_refs) != 1:
+        raise _compute_failure(
+            ResearchToolExecutionError.ARGUMENTS_INVALID,
+            f"{request.operation.value} 需要恰好 1 个指标",
+        )
+    field = _semantic_logical_field(evidence, request.metric_refs[0], "value")
+    if field is None:
+        raise _compute_failure(
+            ResearchToolExecutionError.ARGUMENTS_INVALID,
+            f"指标 {request.metric_refs[0]} 无法映射到 Evidence 字段",
+        )
+    return field
+
+
+def _compute_dimension_fields(
+    request: ResearchComputeRequest,
+    evidence: ResearchEvidence,
+) -> list[str]:
+    fields: list[str] = []
+    for ref in (*request.dimension_refs, *request.group_by_refs):
+        field = _semantic_logical_field(evidence, ref, "group_key")
+        if field is None:
+            raise _compute_failure(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                f"维度 {ref} 无法映射到 Evidence 字段",
+            )
+        fields.append(field)
+    return fields
+
+
+def _build_contribution_task(
+    _context: ResearchToolContext,
+    request: ResearchComputeRequest,
+    inputs: tuple[ResearchEvidence, ...],
+) -> ComputeTask:
+    if len(inputs) != 2:
+        raise _compute_failure(
+            ResearchToolExecutionError.ARGUMENTS_INVALID,
+            "contribution 或 reconciliation 需要恰好 2 个输入 Evidence（分解在前、总量在后）",
+        )
+    if len(request.metric_refs) != 1:
+        raise _compute_failure(
+            ResearchToolExecutionError.ARGUMENTS_INVALID,
+            "contribution 或 reconciliation 需要恰好 1 个指标",
+        )
+    breakdown, total = inputs
+    metric_ref = request.metric_refs[0]
+    difference_column = _semantic_logical_field(breakdown, metric_ref, "difference")
+    total_difference_column = _semantic_logical_field(total, metric_ref, "difference")
+    if difference_column is None:
+        raise _compute_failure(
+            ResearchToolExecutionError.ARGUMENTS_INVALID,
+            f"分解 Evidence 缺少指标 {metric_ref} 的差值列，请先执行对比查询",
+        )
+    if total_difference_column is None:
+        raise _compute_failure(
+            ResearchToolExecutionError.ARGUMENTS_INVALID,
+            f"总量 Evidence 缺少指标 {metric_ref} 的差值列",
+        )
+    dimensions = _compute_dimension_fields(request, breakdown)
+    options: dict[str, Any] = {
+        "difference_column": difference_column,
+        "total_difference_column": total_difference_column,
+        "output_column": f"{difference_column}_contribution",
+    }
+    if dimensions:
+        options["dimensions"] = dimensions
+    if request.tolerance is not None:
+        options["reconciliation_tolerance"] = request.tolerance
+    return ComputeTask(
+        id=f"{request.operation.value}-output",
+        operation=ComputeOperation.CONTRIBUTION,
+        inputs=request.input_evidence_ids,
+        options=options,
+    )
+
+
+def _execute_compute_plan(
+    context: ResearchToolContext,
+    request: ResearchComputeRequest,
+    inputs: tuple[ResearchEvidence, ...],
+    task: ComputeTask | None,
+) -> tuple[list[dict[str, Any]], list[str], str | None]:
+    if task is None:
+        evidence = inputs[0]
+        snapshot = _load_compute_snapshot(context, evidence)
+        if not request.order:
+            raise _compute_failure(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                "ranking 需要至少一个排序引用",
+            )
+        rows = [dict(row) for row in snapshot.rows]
+        for item in reversed(request.order):
+            field = _semantic_logical_field(evidence, item.ref, item.value_role)
+            if field is None:
+                raise _compute_failure(
+                    ResearchToolExecutionError.ARGUMENTS_INVALID,
+                    f"排序引用 {item.ref} 无法映射到 Evidence 字段",
+                )
+            rows = _safe_row_sort(
+                rows,
+                field,
+                item.direction is ResearchOrderDirection.DESC,
+            )
+        limit = min(request.limit or 100, 1_000)
+        return rows[:limit], [str(field) for field in snapshot.ref.fields], None
+    if context.compute_engine is None:
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.PREPARE_FAILED,
+            "计算引擎未配置",
+        )
+    snapshots = {
+        evidence_id: _load_compute_snapshot(context, evidence)
+        for evidence_id, evidence in zip(
+            request.input_evidence_ids, inputs, strict=True
+        )
+    }
+    try:
+        computed = context.compute_engine.execute(task, snapshots)
+    except ComputeEngineError as exc:
+        if exc.code == "COMPUTE_CONTRIBUTION_RECONCILIATION_FAILED":
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.RECONCILIATION_FAILED,
+                "贡献分解与总差值对账失败，分组数据与总量不一致",
+                retryable=True,
+                parameter_retryable=True,
+            ) from exc
+        if exc.code == "COMPUTE_SQL_EXECUTION_FAILED":
+            raise ResearchToolExecutionError(
+                ResearchToolExecutionError.EXECUTION_FAILED,
+                "计算引擎执行失败",
+                retryable=True,
+                same_parameter_retryable=True,
+            ) from exc
+        if isinstance(exc, ComputeOperationError) or exc.code.startswith("COMPUTE_EXPR"):
+            raise _compute_failure(
+                ResearchToolExecutionError.ARGUMENTS_INVALID,
+                f"计算参数不合法：{exc.code}",
+            ) from exc
+        raise ResearchToolExecutionError(
+            ResearchToolExecutionError.EXECUTION_FAILED,
+            f"计算失败：{exc.code}",
+            retryable=True,
+            same_parameter_retryable=True,
+        ) from exc
+    return [dict(row) for row in computed.rows], list(computed.fields), computed.sql
+
+
+def _safe_row_sort(
+    rows: list[dict[str, Any]],
+    field: str,
+    descending: bool,
+) -> list[dict[str, Any]]:
+    """确定性排序：NULL 排在最后，混合类型按字符串排序。"""
+
+    try:
+        return sorted(rows, key=lambda row: (row.get(field) is None, row.get(field)), reverse=descending)
+    except TypeError:
+        return sorted(
+            rows,
+            key=lambda row: (row.get(field) is None, str(row.get(field))),
+            reverse=descending,
+        )
+
+
+def _derived_compute_columns(
+    request: ResearchComputeRequest,
+    inputs: tuple[ResearchEvidence, ...],
+    fields: list[str],
+) -> tuple[ResearchLogicalColumn, ...]:
+    """继承输入逻辑列，并为计算输出列补充受控映射。"""
+
+    inherited: dict[str, ResearchLogicalColumn] = {}
+    for evidence in inputs:
+        for logical_column in evidence.logical_columns:
+            if logical_column.result_field and logical_column.result_field not in inherited:
+                inherited[logical_column.result_field] = logical_column
+    primary_metric = next(iter(request.metric_refs), None)
+    primary_dimension = next(
+        (ref for ref in (*request.dimension_refs, *request.group_by_refs)),
+        None,
+    )
+    result: list[ResearchLogicalColumn] = []
+    seen: set[tuple[str, str, str]] = set()
+    for field in fields:
+        column: ResearchLogicalColumn | None = inherited.get(field)
+        if column is None:
+            column = _synthetic_compute_column(
+                field,
+                primary_metric,
+                primary_dimension,
+            )
+        if column is None:
+            continue
+        key = (column.asset_ref, column.value_role, field)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(
+            ResearchLogicalColumn(
+                asset_ref=column.asset_ref,
+                value_role=column.value_role,
+                result_field=field,
+            )
+        )
+    return tuple(result)
+
+
+def _synthetic_compute_column(
+    field: str,
+    metric_ref: str | None,
+    dimension_ref: str | None,
+) -> ResearchLogicalColumn | None:
+    def build(asset_ref: str | None, role: str) -> ResearchLogicalColumn | None:
+        if asset_ref is None:
+            return None
+        return ResearchLogicalColumn(
+            asset_ref=asset_ref,
+            value_role=cast(Any, role),
+            result_field=field,
+        )
+
+    if field == "dimension_value":
+        return build(dimension_ref, "group_key")
+    if field == "metric_value":
+        return build(metric_ref, "value")
+    for suffix, role in (
+        ("_share", "share"),
+        ("_growth_rate", "growth_rate"),
+        ("_difference", "difference"),
+        ("_current", "current"),
+        ("_previous", "previous"),
+        ("_contribution", "contribution"),
+    ):
+        if field.endswith(suffix):
+            return build(metric_ref, role)
+    if field in {"total_difference", "reconciliation_difference"}:
+        return build(metric_ref, "difference")
+    return build(metric_ref, "value")
 
 
 def _selected_columns(evidence: Evidence, refs: tuple[str, ...]) -> tuple[EvidenceColumn, ...]:
@@ -1993,7 +2365,7 @@ def _sort_rows(
     return result
 
 
-def _column_from_legacy(column: ResearchLogicalColumn) -> EvidenceColumn:
+def _column_from_semantic(column: ResearchLogicalColumn) -> EvidenceColumn:
     role: Literal["dimension", "metric", "computed"] = (
         "dimension" if column.asset_ref.startswith("DIMENSION:") else "metric"
     )
@@ -2110,21 +2482,6 @@ def _evidence_order_field(
             if column.role in {"metric", "computed"}:
                 return column.name
     return candidates[0].name
-
-
-def _legacy_observation_error(observation: Any) -> ResearchToolExecutionError:
-    code = (
-        observation.error_code.value
-        if isinstance(observation.error_code, ToolErrorCode)
-        else str(observation.error_code or ToolErrorCode.EXECUTION_FAILED.value)
-    )
-    return ResearchToolExecutionError(
-        code,
-        observation.message or "计算失败",
-        retryable=observation.retryable,
-        parameter_retryable=observation.parameter_retryable,
-        same_parameter_retryable=observation.same_parameter_retryable,
-    )
 
 
 def _data_type(rows: Iterable[dict[str, Any]], field: str) -> str:

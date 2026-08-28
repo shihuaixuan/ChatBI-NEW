@@ -390,64 +390,135 @@ def _agent_field_role(field_name: str) -> str | None:
     return None
 
 
-def _project_agent_evidence(item: dict[str, Any]) -> dict[str, Any]:
-    """把新契约 ResearchEvidence 快照投成 legacy 判分证据形状。
+def _agent_time_roles(
+    item: dict[str, Any],
+    requirement: dict[str, Any],
+) -> list[str]:
+    """从新 Evidence 定义和冻结时间绑定恢复评测所需的时间角色。"""
 
-    保持原字段不动，只补齐判分器消费的派生视图：``time_roles`` 来自
-    ``time_ranges``；行样本转成 ``top_rows`` 单元格数组并按命名约定补全
-    ``logical_columns``，使数值对账与角色检查照常工作。
-    """
+    explicit = item.get("time_roles")
+    if isinstance(explicit, list):
+        return [str(value) for value in explicit]
+    definition = item.get("definition")
+    if not isinstance(definition, dict):
+        return []
+    comparison = definition.get("comparison")
+    if isinstance(comparison, dict):
+        roles = [comparison.get("base_period"), comparison.get("against_period")]
+        return [str(value) for value in roles if value]
+
+    ranges = [
+        value
+        for value in definition.get("time_ranges") or ()
+        if isinstance(value, dict)
+    ]
+    bindings = [
+        value
+        for value in requirement.get("time_bindings") or ()
+        if isinstance(value, dict) and value.get("role")
+    ]
+    if len(ranges) == len(bindings):
+        return [str(binding["role"]) for binding in bindings]
+    if len(ranges) == 1 and len(bindings) == 1:
+        return [str(bindings[0]["role"])]
+    roles: list[str] = []
+    for time_range in ranges:
+        for binding in bindings:
+            normalized = binding.get("normalized")
+            if not isinstance(normalized, dict):
+                continue
+            if normalized.get("start") == time_range.get("start") and (
+                normalized.get("end") in (None, time_range.get("end"))
+            ):
+                roles.append(str(binding["role"]))
+                break
+    return list(dict.fromkeys(roles))
+
+
+def _project_agent_evidence(
+    item: dict[str, Any],
+    *,
+    requirement: dict[str, Any],
+    result_id: str | None = None,
+    iteration: int | None = None,
+) -> dict[str, Any]:
+    """把新 Evidence 契约投成判分器消费的只读视图。"""
 
     projected = dict(item)
-    projected["time_roles"] = list(item.get("time_ranges") or [])
-    # 新引擎一次助手轮次发出的一批查询共享同一 iteration；legacy 判分器按
-    # batch_id 聚合"并行方向"，这里以 iteration 作批次标识忠实对应。
-    projected["batch_id"] = f"iteration-{item.get('iteration')}"
-    result_ref = item.get("result_ref") or {}
-    if isinstance(result_ref, dict) and result_ref.get("result_id"):
-        projected["result_id"] = result_ref["result_id"]
-    projected["applied_filters"] = list(item.get("filters") or [])
+    definition = item.get("definition") if isinstance(item.get("definition"), dict) else {}
+    data = item.get("data") if isinstance(item.get("data"), dict) else {}
+    metric_refs = [str(value) for value in definition.get("metrics") or ()]
+    dimension_refs = [str(value) for value in definition.get("dimensions") or ()]
+    projected["metric_refs"] = metric_refs
+    projected["dimension_refs"] = dimension_refs
+    projected["time_roles"] = _agent_time_roles(item, requirement)
+    if iteration is not None:
+        projected["iteration"] = iteration
+        projected["batch_id"] = f"iteration-{iteration}"
+    if result_id:
+        projected["result_id"] = result_id
 
-    declared = {
-        column.get("result_field")
-        for column in item.get("logical_columns") or ()
-        if isinstance(column, dict)
-    }
-    field_order: list[str] = []
-    for row in item.get("sample_rows") or []:
-        if not isinstance(row, dict):
+    applied_filters = []
+    for raw_filter in definition.get("filters") or ():
+        if not isinstance(raw_filter, dict):
             continue
-        for key in row:
-            if key not in field_order:
-                field_order.append(key)
-    columns = [
-        dict(column)
-        for column in (item.get("logical_columns") or [])
-        if isinstance(column, dict)
-    ]
-    for field_name in field_order:
-        if field_name in declared:
+        applied_filters.append(
+            {
+                "target_ref": raw_filter.get("field_ref", raw_filter.get("target_ref")),
+                "operator": raw_filter.get("operator"),
+                "value": raw_filter.get("value"),
+            }
+        )
+    projected["applied_filters"] = applied_filters
+
+    columns: list[dict[str, Any]] = []
+    for column in item.get("columns") or ():
+        if not isinstance(column, dict):
             continue
-        role = _agent_field_role(field_name)
+        field_name = column.get("name") or column.get("result_field")
+        if not isinstance(field_name, str) or not field_name:
+            continue
+        role = column.get("value_role")
+        if role is None:
+            column_role = column.get("role")
+            role = "group_key" if column_role == "dimension" else _agent_field_role(field_name)
         if role is not None:
-            columns.append({"result_field": field_name, "value_role": role})
+            columns.append(
+                {
+                    "result_field": field_name,
+                    "value_role": role,
+                    "metric_ref": column.get("semantic_ref")
+                    if column.get("role") == "metric"
+                    else None,
+                }
+            )
     projected["logical_columns"] = columns
 
     rows = []
-    for row in item.get("sample_rows") or []:
-        if not isinstance(row, dict):
+    for row in data.get("rows") or ():
+        if not isinstance(row, (list, tuple)):
             continue
         rows.append(
             {
                 "values": [
-                    {"value": row.get(column["result_field"]), "logical_column_index": index}
-                    for index, column in enumerate(columns)
-                    if column.get("result_field") in row
+                    {"value": value, "logical_column_index": index}
+                    for index, value in enumerate(row)
                 ]
             }
         )
     projected["top_rows"] = rows
     projected["bottom_rows"] = []
+    statistics = {
+        str(statistic["name"]): statistic.get("value")
+        for statistic in data.get("statistics") or ()
+        if isinstance(statistic, dict) and statistic.get("name")
+    }
+    statistics["row_count"] = data.get("row_count", 0)
+    statistics["truncated"] = data.get("truncated", False)
+    projected["statistics"] = statistics
+    projected["row_count"] = data.get("row_count", 0)
+    projected["truncated"] = data.get("truncated", False)
+    projected["dependencies"] = list(item.get("parent_evidence_ids") or ())
     return projected
 
 
@@ -455,95 +526,156 @@ def build_agent_eval_view(
     research_state: dict[str, Any],
     derived: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """把 agent 引擎的新契约派生状态确定性地投成 legacy 判分视图。
+    """把新 ResearchState 的持久化事实投成统一判分视图。"""
 
-    判分器（check_case_assertions / check_required_patterns /
-    check_global_invariants / classify_outcome）全部按 legacy research_state
-    形状实现；本投影不改变运行事实本身，只做形状翻译。快照缺失时退回
-    research_state 内已有的事实，保证失败 Run 也能按错误码判分。
-    """
-
-    snapshot = derived.get("research_run_snapshot")
+    snapshot = derived.get("research_state_snapshot")
     snapshot = snapshot if isinstance(snapshot, dict) else {}
-    completion = research_state.get("completion") or {}
-    evidences_raw = snapshot.get("evidences")
-    if not isinstance(evidences_raw, list):
-        evidences_raw = [
-            item
-            for item in (research_state.get("evidence") or {}).values()
-            if isinstance(item, dict)
-        ]
-    evidence = [_project_agent_evidence(item) for item in evidences_raw]
+    snapshot_state = snapshot.get("state")
+    snapshot_state = snapshot_state if isinstance(snapshot_state, dict) else {}
+    requirement = research_state.get("requirement")
+    requirement = requirement if isinstance(requirement, dict) else {}
+    if not requirement:
+        requirement = snapshot_state.get("requirement")
+        requirement = requirement if isinstance(requirement, dict) else {}
 
-    observations = research_state.get("observations") or {}
-    failed_actions = [
-        {
-            # message 携带内部门码（如 DATASOURCE_SCOPE_MISMATCH），
-            # _collect_error_codes 的正则据此还原可匹配错误码。
-            "error_code": (obs.get("message") or obs.get("error_code") or "")
-            if isinstance(obs, dict)
-            else ""
-        }
-        for obs in (
-            snapshot.get("failed_observations")
-            or [item for item in observations.values() if isinstance(item, dict)]
+    completion = research_state.get("react_completion")
+    if not isinstance(completion, dict):
+        completion = snapshot_state.get("completion")
+    completion = completion if isinstance(completion, dict) else {}
+    raw_evidences = research_state.get("react_evidence")
+    evidences_raw = [
+        item for item in raw_evidences.values() if isinstance(item, dict)
+    ] if isinstance(raw_evidences, dict) else [
+        item for item in raw_evidences or () if isinstance(item, dict)
+    ] if isinstance(raw_evidences, list) else []
+    result_refs = research_state.get("react_evidence_results")
+    result_refs = result_refs if isinstance(result_refs, dict) else {}
+    attempt_values = research_state.get("attempted_actions")
+    attempts = [
+        item for item in attempt_values if isinstance(item, dict)
+    ] if isinstance(attempt_values, list) else []
+    attempt_iterations = research_state.get("attempt_iterations")
+    attempt_iterations = attempt_iterations if isinstance(attempt_iterations, dict) else {}
+    evidence_iterations: dict[str, int] = {}
+    evidence_attempts: dict[str, str] = {}
+    for attempt in attempts:
+        attempt_id = attempt.get("attempt_id")
+        raw_iteration = attempt_iterations.get(attempt_id)
+        iteration = int(raw_iteration) if isinstance(raw_iteration, int) else 0
+        for evidence_id in attempt.get("produced_evidence_ids") or ():
+            evidence_iterations[str(evidence_id)] = iteration
+            if isinstance(attempt_id, str):
+                evidence_attempts[str(evidence_id)] = attempt_id
+    evidence = [
+        _project_agent_evidence(
+            item,
+            requirement=requirement,
+            result_id=(
+                result_refs.get(str(item.get("evidence_id")), {}).get("result_id")
+                if isinstance(result_refs.get(str(item.get("evidence_id"))), dict)
+                else None
+            ),
+            iteration=evidence_iterations.get(str(item.get("evidence_id"))),
         )
-        if isinstance(obs, dict) and obs.get("status") == "failed"
+        for item in evidences_raw
     ]
 
     iteration_records: dict[int, dict[str, Any]] = {}
-    for item in evidence:
-        record = iteration_records.setdefault(
-            int(item.get("iteration") or 0),
+
+    def iteration_record(iteration: int) -> dict[str, Any]:
+        return iteration_records.setdefault(
+            iteration,
             {
-                "iteration": int(item.get("iteration") or 0),
+                "iteration": iteration,
                 "evidence_ids": [],
-                "plan_ids": [],
+                "action_ids": [],
                 "result_ids": [],
                 "failed_actions": [],
             },
         )
-        evidence_id = item.get("evidence_id")
-        if evidence_id:
+
+    for attempt in attempts:
+        attempt_id = str(attempt.get("attempt_id") or "")
+        raw_iteration = attempt_iterations.get(attempt_id)
+        iteration = int(raw_iteration) if isinstance(raw_iteration, int) else 0
+        record = iteration_record(iteration)
+        if attempt_id:
+            record["action_ids"].append(attempt_id)
+        for evidence_id in attempt.get("produced_evidence_ids") or ():
+            evidence_id = str(evidence_id)
             record["evidence_ids"].append(evidence_id)
-            if str(evidence_id).startswith("evidence:"):
-                record["plan_ids"].append(str(evidence_id).split(":", 1)[1])
+            result = result_refs.get(evidence_id)
+            if isinstance(result, dict) and result.get("result_id"):
+                record["result_ids"].append(str(result["result_id"]))
+        if attempt.get("status") in {"failed", "rejected"}:
+            error = attempt.get("error")
+            record["failed_actions"].append(
+                {
+                    "error_code": error.get("code") if isinstance(error, dict) else "",
+                    "message": error.get("message") if isinstance(error, dict) else "",
+                }
+            )
+    for item in evidence:
+        evidence_id = str(item.get("evidence_id") or "")
+        if not evidence_id or evidence_attempts.get(evidence_id):
+            continue
+        record = iteration_record(int(item.get("iteration") or 0))
+        record["evidence_ids"].append(evidence_id)
         if item.get("result_id"):
-            record["result_ids"].append(item["result_id"])
-    terminal_record = iteration_records.setdefault(
-        int(snapshot.get("iteration") or len(iteration_records)),
-        {
-            "iteration": int(snapshot.get("iteration") or 0),
-            "evidence_ids": [],
-            "plan_ids": [],
-            "result_ids": [],
-            "failed_actions": [],
-        },
-    )
-    terminal_record["failed_actions"].extend(failed_actions)
+            record["result_ids"].append(str(item["result_id"]))
 
-    hypotheses = [
-        {
-            "status": item.get("assessment"),
-            "evidence_ids": list(item.get("evidence_ids") or []),
-        }
-        for item in snapshot.get("hypothesis_assessments") or ()
-        if isinstance(item, dict) and item.get("assessment") in {"supported", "weakened", "inconclusive"}
+    findings_raw = research_state.get("findings")
+    findings = [
+        item for item in findings_raw if isinstance(item, dict)
+    ] if isinstance(findings_raw, list) else [
+        item for item in snapshot_state.get("findings") or () if isinstance(item, dict)
     ]
-    covered_drivers = sorted(
+    report_findings = [
         {
-            ref
-            for item in evidence
-            if item.get("hypothesis_ids")
-            for ref in (item.get("metric_refs") or [])
+            "statement": item.get("statement"),
+            "evidence_ids": list(item.get("evidence_ids") or ()),
+            "claim_level": "correlation_clue",
+        }
+        for item in findings
+        if item.get("status", "confirmed") == "confirmed"
+    ]
+    citation_ids = list(completion.get("evidence_ids") or ())
+    for finding in report_findings:
+        citation_ids.extend(finding["evidence_ids"])
+    citations = [{"evidence_id": str(value)} for value in dict.fromkeys(citation_ids)]
+    report = {
+        "findings": report_findings,
+        "citations": citations,
+        "summary": completion.get("summary"),
+        "limitations": list(completion.get("limitations") or ()),
+    }
+    status = _agent_eval_status(
+        research_state.get("current_status") or snapshot_state.get("current_status"),
+        completion,
+    )
+    finish_reason = _agent_finish_reason(
+        research_state.get("current_status") or snapshot_state.get("current_status"),
+        completion,
+    )
+    usage = research_state.get("react_budget_usage")
+    usage = usage if isinstance(usage, dict) else snapshot_state.get("budget_usage")
+    usage = usage if isinstance(usage, dict) else {}
+    budget = requirement.get("budget") if isinstance(requirement.get("budget"), dict) else {}
+    remaining_budget = {
+        "queries": max(int(budget.get("max_queries", 0)) - int(usage.get("query_calls", 0)), 0),
+        "model_calls": max(int(budget.get("max_model_calls", 0)) - int(usage.get("model_turns", 0)), 0),
+    }
+    driver_refs = set((requirement.get("scope") or {}).get("driver_metric_refs") or ())
+    covered_drivers = sorted(
+        driver_refs & {
+            ref for item in evidence for ref in item.get("metric_refs") or ()
         }
     )
 
-    # 层级覆盖：legacy 由"声明 hierarchy_id 且完成的下钻动作"累计；新路径
+    # 层级覆盖：新路径通过 Evidence 定义中的维度和筛选确定性还原。
     # 证据不携带 hierarchy_id，但下钻的可观测特征是"证据维度位于层级深层、
     # 同时 applied filter 指向同一层级的上级维度"。按该特征从冻结 Scope 的
     # 层级定义确定性还原，口径不放宽（无下钻即空）。
-    requirement = research_state.get("requirement") or {}
     scope_payload = requirement.get("scope") or {}
     covered_hierarchy_ids: list[str] = []
     for hierarchy in scope_payload.get("hierarchies") or ():
@@ -562,71 +694,84 @@ def build_agent_eval_view(
         if drilled:
             covered_hierarchy_ids.append(str(hierarchy["hierarchy_id"]))
 
-    final_report = snapshot.get("final_report")
-    report: dict[str, Any] = {}
-    if isinstance(final_report, dict):
-        findings = []
-        citations = []
-        for finding in final_report.get("findings") or ():
-            if not isinstance(finding, dict):
-                continue
-            findings.append(
-                {
-                    "statement": finding.get("statement"),
-                    "evidence_ids": list(finding.get("evidence_ids") or []),
-                    # statement_kind → claim_level：保持"相关性表述不得使用
-                    # 因果措辞"不变量的判分语义。
-                    "claim_level": (
-                        "common_change"
-                        if finding.get("statement_kind") == "causal"
-                        else "correlation_clue"
-                    ),
-                }
-            )
-            citations.extend(
-                {"evidence_id": evidence_id}
-                for evidence_id in finding.get("evidence_ids") or ()
-            )
-        report = {
-            "findings": findings,
-            "citations": citations,
-            "summary": final_report.get("summary"),
-        }
-
-    premise_result = snapshot.get("premise_result")
-    premise_result = premise_result if isinstance(premise_result, dict) else {}
-
     ownership: dict[str, Any] = {}
     dependencies: dict[str, Any] = {}
-    run_id = research_state.get("run_id") or ""
-    fingerprints = research_state.get("request_fingerprints")
+    run_id = requirement.get("run_id") or ""
+    fingerprints = [
+        item.get("action_fingerprint")
+        for item in attempts
+        if item.get("action_fingerprint")
+    ]
     for item in evidence:
         evidence_id = item.get("evidence_id")
         if not evidence_id:
             continue
-        ownership[evidence_id] = item.get("run_id") or run_id
+        ownership[evidence_id] = run_id
         dependencies[evidence_id] = {
-            "depends_on_evidence_ids": list(item.get("dependencies") or []),
+            "depends_on_evidence_ids": list(item.get("parent_evidence_ids") or ()),
             "iteration": item.get("iteration"),
         }
 
     state = {
-        "status": completion.get("status"),
-        "finish_reason": completion.get("reason"),
+        "status": status,
+        "finish_reason": finish_reason,
         "report": report,
-        "hypotheses": hypotheses,
+        "hypotheses": [],
         "covered_driver_metric_refs": covered_drivers,
         "covered_hierarchy_ids": covered_hierarchy_ids,
-        "premise_supported": premise_result.get("status") == "supported",
-        "remaining_budget": snapshot.get("budget_remaining") or {},
-        "executed_action_fingerprints": list(fingerprints or ()),
+        "premise_supported": bool(
+            {"current", "previous"}
+            <= {role for item in evidence for role in item.get("time_roles") or ()}
+        ),
+        "remaining_budget": remaining_budget,
+        "budget_usage": usage,
+        "executed_action_fingerprints": list(fingerprints),
         "research_evidence_ownership": ownership,
         "research_evidence_dependencies": dependencies,
+        "attempted_actions": attempts,
         "iteration_records": [
             iteration_records[key] for key in sorted(iteration_records)
         ],
     }
     return state, evidence
+
+
+def _agent_eval_status(current_status: Any, completion: dict[str, Any]) -> str | None:
+    """把新状态枚举归一化为评测使用的运行状态。"""
+
+    if completion.get("status") == "complete":
+        return "succeeded"
+    if completion.get("status") == "partial":
+        return "partial"
+    if completion.get("status") == "unanswerable":
+        return "failed"
+    return {
+        "completed": "succeeded",
+        "partial": "partial",
+        "unanswerable": "failed",
+        "waiting_for_user": "needs_clarification",
+        "failed": "failed",
+        "cancelled": "cancelled",
+        "running": "running",
+    }.get(str(current_status))
+
+
+def _agent_finish_reason(current_status: Any, completion: dict[str, Any]) -> str | None:
+    """从 Completion 限制和状态推导稳定的结束原因。"""
+
+    limitations = completion.get("limitations") or ()
+    for limitation in limitations:
+        if isinstance(limitation, dict) and limitation.get("code"):
+            return str(limitation["code"])
+    if completion.get("status") == "complete":
+        return "sufficient_evidence"
+    if completion.get("status") == "unanswerable":
+        return "data_insufficient"
+    return {
+        "waiting_for_user": "needs_clarification",
+        "failed": "execution_failed",
+        "cancelled": "cancelled",
+    }.get(str(current_status))
 
 
 def _runtime_usage(
@@ -660,15 +805,25 @@ def _runtime_usage(
         for record in iterations
         for result_id in (record.get("result_ids") or [])
     ]
-    plan_ids = [
-        plan_id
+    action_ids = [
+        action_id
         for record in iterations
-        for plan_id in (record.get("plan_ids") or [])
+        for action_id in (record.get("action_ids") or [])
     ]
     remaining = state.get("remaining_budget") or {}
+    budget_usage = state.get("budget_usage") or {}
     configured_budget = case.budgets
-    query_lower_bound = len(result_ids)
-    model_lower_bound = len(iterations)
+    query_lower_bound = sum(
+        1
+        for attempt in state.get("attempted_actions") or ()
+        if isinstance(attempt, dict)
+        and attempt.get("action_type") == "query_semantic_data"
+    )
+    model_lower_bound = (
+        int(budget_usage["model_turns"])
+        if isinstance(budget_usage.get("model_turns"), int)
+        else len(iterations)
+    )
     budget_checks = {
         "max_queries": configured_budget.get("max_queries"),
         "max_model_calls": configured_budget.get("max_model_calls"),
@@ -685,26 +840,43 @@ def _runtime_usage(
             or trace_usage["tool_calls"]["available"]
         ),
     }
+    model_calls_observation = trace_usage["model_calls"]
+    if not model_calls_observation["available"] and isinstance(
+        budget_usage.get("model_turns"), int
+    ):
+        model_calls_observation = {
+            "value": int(budget_usage["model_turns"]),
+            "available": True,
+            "unavailable_reason": None,
+            "source": "research_state.budget_usage",
+        }
     return {
         **step_usage,
         "tool_calls": trace_usage["tool_calls"],
         "trace_nodes": trace_usage["trace_nodes"],
-        "model_calls": trace_usage["model_calls"],
+        "model_calls": model_calls_observation,
         "queries": {
-            "value": None,
-            "available": False,
+            "value": (
+                int(budget_usage["query_calls"])
+                if isinstance(budget_usage.get("query_calls"), int)
+                else None
+            ),
+            "available": isinstance(budget_usage.get("query_calls"), int),
             "lower_bound": query_lower_bound,
-            "unavailable_reason": "legacy_research_query_fact_not_persisted",
+            "unavailable_reason": (
+                None
+                if isinstance(budget_usage.get("query_calls"), int)
+                else "research_budget_usage_missing"
+            ),
         },
         "model_calls_lower_bound": model_lower_bound,
         "queries_lower_bound": query_lower_bound,
-        "plan_count": len(plan_ids),
+        "action_count": len(action_ids),
         "result_count": len(result_ids),
         "budget_check": budget_checks,
         "budget_remaining_snapshot": remaining,
         "artifact_size_bytes": _artifact_size(run.get("derived_state")),
         "artifact_size_available": _artifact_size(run.get("derived_state")) is not None,
-        # 旧字段保留，但不再用 remaining budget 伪造实际消耗。
         "model_calls_used_estimated": None,
         "queries_used_estimated": None,
     }
@@ -1773,7 +1945,11 @@ def check_global_invariants(
             )
         if owner is None or run_id is None:
             ownership_unobserved.append(evidence_id)
-        elif run_id is not None and str(owner) != str(run_id):
+        elif run_id is not None and str(owner) not in {
+            str(run_id),
+            f"research-{run_id}",
+            f"run-{run_id}",
+        }:
             ownership_violations.append({"evidence_id": evidence_id, "owner": owner})
     checks.append(
         {
@@ -1909,7 +2085,7 @@ def evaluate_case(
         },
         "model_calls_lower_bound": 0,
         "queries_lower_bound": 0,
-        "plan_count": 0,
+        "action_count": 0,
         "result_count": 0,
         "budget_check": {
             "max_queries": case.budgets.get("max_queries"),
@@ -1952,6 +2128,9 @@ def evaluate_case(
         or (
             (derived.get("execution_requirement") or {}).get("research_requirement")
             or {}
+        ).get("version_snapshot")
+        or (
+            (derived.get("research_state") or {}).get("requirement") or {}
         ).get("version_snapshot")
         or (derived.get("research_requirement") or {}).get("version_snapshot")
         or {}

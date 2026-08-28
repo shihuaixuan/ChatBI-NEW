@@ -32,7 +32,7 @@ from apps.chatbi.services.research.semantic_query_builder import SemanticQueryBu
 from apps.chatbi.services.research.semantic_runtime import SemanticQueryRuntime
 from apps.retrieval import ExecutableAssetReference
 from apps.tool.tools.semantic_contracts import SemanticAssetScope
-from tests.chatbi.test_research_agent_contracts import (
+from tests.chatbi.research_agent_fixtures import (
     _governed_requirement,
     _query,
     _version,

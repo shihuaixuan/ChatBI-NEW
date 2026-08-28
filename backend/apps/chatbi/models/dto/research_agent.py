@@ -176,11 +176,6 @@ class ResearchOrderDirection(StrEnum):
     DESC = "desc"
 
 
-class ToolObservationStatus(StrEnum):
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-
-
 class ToolFailureStage(StrEnum):
     VALIDATION = "validation"
     PERMISSION = "permission"
@@ -211,56 +206,6 @@ class ToolErrorCode(StrEnum):
     RESULT_STORE_FAILED = "RESULT_STORE_FAILED"
     CANCELLED = "CANCELLED"
     BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
-
-
-class ResearchRunStatus(StrEnum):
-    INITIALIZING = "initializing"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    PARTIAL = "partial"
-    NEEDS_CLARIFICATION = "needs_clarification"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-
-class ResearchCompletionReason(StrEnum):
-    SUFFICIENT_EVIDENCE = "sufficient_evidence"
-    PREMISE_NOT_SUPPORTED = "premise_not_supported"
-    NO_NEW_DIRECTION = "no_new_direction"
-    DATA_INSUFFICIENT = "data_insufficient"
-    NEEDS_CLARIFICATION = "needs_clarification"
-    EXECUTION_FAILED = "execution_failed"
-    PARTIAL_FAILURE = "partial_failure"
-    BUDGET_EXHAUSTED = "budget_exhausted"
-    CANCELLED = "cancelled"
-
-
-class SemanticAssessmentStatus(StrEnum):
-    """模型对当前 Evidence 内容充分性的四态判断。"""
-
-    ANSWERABLE = "answerable"
-    EXPLICIT_GAP = "explicit_gap"
-    NO_NEW_DIRECTION = "no_new_direction"
-    DATA_INSUFFICIENT = "data_insufficient"
-
-
-ResearchCompletionStatus = Literal[
-    "succeeded", "partial", "needs_clarification", "failed", "cancelled"
-]
-
-RESEARCH_COMPLETION_STATUS_BY_REASON: dict[
-    ResearchCompletionReason, ResearchCompletionStatus
-] = {
-    ResearchCompletionReason.SUFFICIENT_EVIDENCE: "succeeded",
-    ResearchCompletionReason.PREMISE_NOT_SUPPORTED: "succeeded",
-    ResearchCompletionReason.NO_NEW_DIRECTION: "succeeded",
-    ResearchCompletionReason.PARTIAL_FAILURE: "partial",
-    ResearchCompletionReason.BUDGET_EXHAUSTED: "partial",
-    ResearchCompletionReason.NEEDS_CLARIFICATION: "needs_clarification",
-    ResearchCompletionReason.EXECUTION_FAILED: "failed",
-    ResearchCompletionReason.DATA_INSUFFICIENT: "failed",
-    ResearchCompletionReason.CANCELLED: "cancelled",
-}
 
 
 class ResearchClaimLevel(StrEnum):
@@ -543,54 +488,6 @@ class ResearchEvidenceRequirement(_ContractModel):
         return self
 
 
-class StructuralCoverageGap(_ContractModel):
-    """服务端确定的一条最低结构覆盖缺口。"""
-
-    requirement_id: str | None = Field(default=None, max_length=128)
-    kind: str = Field(min_length=1, max_length=128)
-    missing_count: int = Field(gt=0, le=1000)
-    message: str = Field(min_length=1, max_length=2000)
-
-    @model_validator(mode="after")
-    def validate_gap(self) -> StructuralCoverageGap:
-        if self.requirement_id is not None:
-            _id(self.requirement_id, "RESEARCH_AGENT_COVERAGE_REQUIREMENT_ID_INVALID")
-        return self
-
-
-class StructuralCoverage(_ContractModel):
-    """服务端生成的最低结构覆盖结果，不代表内容已经足够。"""
-
-    minimum_requirements_met: bool
-    premise_handled: bool
-    core_supported: bool
-    covered_requirements: tuple[str, ...] = ()
-    missing_requirements: tuple[StructuralCoverageGap, ...] = ()
-    invalid_evidence_refs: tuple[str, ...] = ()
-    target_metric_coverage: dict[str, int] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_coverage(self) -> StructuralCoverage:
-        _unique(
-            self.covered_requirements,
-            "RESEARCH_AGENT_COVERED_REQUIREMENT_DUPLICATED",
-        )
-        _unique(
-            self.invalid_evidence_refs,
-            "RESEARCH_AGENT_INVALID_EVIDENCE_REF_DUPLICATED",
-        )
-        if self.minimum_requirements_met != (
-            not self.missing_requirements and not self.invalid_evidence_refs
-        ):
-            raise ValueError("RESEARCH_AGENT_STRUCTURAL_COVERAGE_STATE_INVALID")
-        if any(value < 0 for value in self.target_metric_coverage.values()):
-            raise ValueError("RESEARCH_AGENT_TARGET_COVERAGE_INVALID")
-        return self
-
-    def gap_messages(self) -> tuple[str, ...]:
-        return tuple(item.message for item in self.missing_requirements)
-
-
 class ResearchAgentRequirement(_VersionedContractModel):
     """Research Agent 的冻结输入；不包含 allowed_actions。"""
 
@@ -735,62 +632,6 @@ class ResearchAgentRequirement(_VersionedContractModel):
             ):
                 raise ValueError("RESEARCH_AGENT_IMMUTABLE_FILTER_CHANGED")
         query.validate_scope(self.scope, evidence)
-
-
-def validate_plan_required_operations(
-    requirement: ResearchAgentRequirement,
-    queries: Sequence[ResearchSemanticQuery],
-    evidences: Sequence[ResearchEvidence] = (),
-) -> None:
-    """整份计划联合已有 Evidence 覆盖冻结结果操作即可；单条查询允许分解。
-
-    逐查询强制会禁止"总量确认前提 + 分组归因下钻"这类自然分解，
-    迫使每条查询都携带全部分组维度。重规划时，已经由上一轮 Evidence
-    实际执行的操作应视为已覆盖，当前计划只需补齐剩余操作。内容层面的
-    最终缺口仍由 finish 前的结构覆盖评估（Evidence 实际 operations）兜底。
-    """
-
-    dimensions: set[str] = set()
-    time_grains: set[str] = set()
-    order_keys: set[tuple[str, str]] = set()
-    limits: set[int] = set()
-    for evidence in evidences:
-        for operation in evidence.operations:
-            if operation.type == "group":
-                if operation.time_grain is not None:
-                    time_grains.add(operation.time_grain)
-                elif operation.target_ref is not None:
-                    dimensions.add(operation.target_ref)
-            elif operation.type == "sort":
-                if operation.target_ref is not None and operation.direction is not None:
-                    order_keys.add((operation.target_ref, operation.direction))
-            elif operation.type == "limit" and operation.value is not None:
-                limits.add(operation.value)
-    for query in queries:
-        dimensions |= set(query.dimensions)
-        if query.time_grain is not None:
-            time_grains.add(query.time_grain)
-        order_keys |= {(item.ref, item.direction.value) for item in query.order}
-        limits.add(query.limit)
-    missing_operations: list[str] = []
-    for operation in requirement.operations:
-        if operation.type == "group":
-            if operation.time_grain is not None:
-                completed = operation.time_grain in time_grains
-            else:
-                completed = operation.target_ref in dimensions
-        elif operation.type == "sort":
-            completed = (operation.target_ref, operation.direction) in order_keys
-        elif operation.type == "limit":
-            completed = operation.value in limits
-        else:
-            # 计算操作可以由 compute_evidence 在查询之后完成，不能在此处强制。
-            continue
-        if not completed:
-            missing_operations.append(operation.type)
-    if missing_operations:
-        missing = ",".join(dict.fromkeys(missing_operations))
-        raise ValueError(f"RESEARCH_AGENT_QUERY_OPERATION_MISSING:{missing}")
 
 
 class ResearchLiteralFilter(_ContractModel):
@@ -1091,93 +932,6 @@ class ResearchInspectEvidenceRequest(_VersionedContractModel):
         return self
 
 
-class ResearchBudgetUsage(_ContractModel):
-    queries: int = Field(default=0, ge=0)
-    model_calls: int = Field(default=0, ge=0)
-    duration_seconds: float = Field(default=0, ge=0)
-    evidence_rows: int = Field(default=0, ge=0)
-    evidence_chars: int = Field(default=0, ge=0)
-
-
-class ToolObservation(_VersionedContractModel):
-    """所有工具成功和失败的统一事实结果。"""
-
-    run_id: str = Field(min_length=1, max_length=128)
-    tool_call_id: str = Field(min_length=1, max_length=128)
-    tool_name: str = Field(min_length=1, max_length=128)
-    status: ToolObservationStatus
-    failure_stage: ToolFailureStage | None = None
-    error_code: ToolErrorCode | None = None
-    error_category: str | None = Field(default=None, max_length=128)
-    retryable: bool = False
-    parameter_retryable: bool = False
-    same_parameter_retryable: bool = False
-    capability_gap: bool = False
-    sql_escalation_allowed: bool = False
-    message: str | None = Field(default=None, max_length=2000)
-    details: dict[str, Any] = Field(default_factory=dict)
-    semantic_plan_id: str | None = Field(default=None, max_length=128)
-    result_ids: tuple[str, ...] = ()
-    evidence_ids: tuple[str, ...] = ()
-    statistics: dict[str, Any] = Field(default_factory=dict)
-    sample_rows: tuple[dict[str, Any], ...] = ()
-    limitations: tuple[str, ...] = ()
-    suggested_corrections: tuple[str, ...] = ()
-    budget_consumed: ResearchBudgetUsage = Field(default_factory=ResearchBudgetUsage)
-
-    @model_validator(mode="after")
-    def validate_observation(self) -> ToolObservation:
-        _id(self.run_id, "RESEARCH_AGENT_RUN_ID_INVALID")
-        _id(self.tool_call_id, "RESEARCH_AGENT_TOOL_CALL_ID_INVALID")
-        _unique(self.result_ids, "RESEARCH_AGENT_OBSERVATION_RESULT_DUPLICATED")
-        _unique(self.evidence_ids, "RESEARCH_AGENT_OBSERVATION_EVIDENCE_DUPLICATED")
-        for value in (*self.result_ids, *self.evidence_ids):
-            _id(value, "RESEARCH_AGENT_OBSERVATION_REF_INVALID")
-        _reject_physical_payload(self.details)
-        _reject_physical_payload(self.statistics)
-        _reject_physical_payload(self.sample_rows)
-        failed = self.status is ToolObservationStatus.FAILED
-        if failed:
-            if self.error_code is None:
-                raise ValueError("RESEARCH_AGENT_FAILURE_ERROR_CODE_REQUIRED")
-            if self.failure_stage is None:
-                raise ValueError("RESEARCH_AGENT_FAILURE_STAGE_REQUIRED")
-            if not self.error_category:
-                raise ValueError("RESEARCH_AGENT_FAILURE_CATEGORY_REQUIRED")
-            if not self.message:
-                raise ValueError("RESEARCH_AGENT_FAILURE_MESSAGE_REQUIRED")
-            if not self.details:
-                raise ValueError("RESEARCH_AGENT_FAILURE_DETAILS_REQUIRED")
-        elif (
-            self.failure_stage is not None
-            or self.error_code is not None
-            or self.error_category is not None
-            or self.retryable
-            or self.parameter_retryable
-            or self.same_parameter_retryable
-            or self.capability_gap
-            or self.sql_escalation_allowed
-        ):
-            raise ValueError("RESEARCH_AGENT_SUCCESS_OBSERVATION_ERROR_FORBIDDEN")
-        if (
-            self.capability_gap
-            and self.error_code is not ToolErrorCode.UNSUPPORTED_CAPABILITY
-        ):
-            raise ValueError("RESEARCH_AGENT_CAPABILITY_GAP_INVALID")
-        if (
-            self.sql_escalation_allowed
-            and self.error_code is not ToolErrorCode.UNSUPPORTED_CAPABILITY
-        ):
-            raise ValueError("RESEARCH_AGENT_SQL_ESCALATION_INVALID")
-        return self
-
-    @property
-    def stage(self) -> ToolFailureStage | None:
-        """兼容工具层对 stage 的称呼；序列化字段固定为 failure_stage。"""
-
-        return self.failure_stage
-
-
 class ResearchToolCallRef(_ContractModel):
     run_id: str = Field(min_length=1, max_length=128)
     tool_call_id: str = Field(min_length=1, max_length=128)
@@ -1314,549 +1068,6 @@ class ResearchEvidence(_VersionedContractModel):
                 raise ValueError("RESEARCH_AGENT_EVIDENCE_DEPENDENCY_ITERATION_MISMATCH")
 
 
-class ResearchEvidenceRef(_ContractModel):
-    """WorkingState 中只保存的证据引用和逻辑列摘要。"""
-
-    run_id: str = Field(min_length=1, max_length=128)
-    evidence_id: str = Field(min_length=1, max_length=128)
-    iteration: int = Field(ge=0)
-    logical_columns: tuple[ResearchLogicalColumn, ...] = Field(min_length=1)
-
-
-class ResearchEvidenceEdge(_ContractModel):
-    """Evidence DAG 的显式依赖边，供审计和恢复时重建拓扑。"""
-
-    evidence_id: str = Field(min_length=1, max_length=128)
-    depends_on: str = Field(min_length=1, max_length=128)
-    relation: str = Field(min_length=1, max_length=128)
-    source_iteration: int = Field(ge=0)
-
-    @model_validator(mode="after")
-    def validate_edge(self) -> ResearchEvidenceEdge:
-        _id(self.evidence_id, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
-        _id(self.depends_on, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
-        if self.evidence_id == self.depends_on:
-            raise ValueError("RESEARCH_AGENT_EVIDENCE_SELF_DEPENDENCY")
-        return self
-
-
-class ResearchRunSnapshot(_VersionedContractModel):
-    """可持久化、可恢复的 Research Run 快照（阶段 4 §8.4.1）。
-
-    快照只保存受控摘要：完整结果在 ResultStore，样本行受 Evidence 自身
-    预算约束。``state["research_state"]`` 是规范事实源（含全部成功观察，
-    支撑同 tool_call_id 重放）；本快照是它的投影，额外携带运行中调用、
-    失败观察、依赖边和剩余预算，供审计、时间线和恢复入口使用。
-    """
-
-    run_id: str = Field(min_length=1, max_length=128)
-    goal: str = Field(min_length=1, max_length=1000)
-    status: ResearchRunStatus = ResearchRunStatus.INITIALIZING
-    finish_reason: ResearchCompletionReason | None = None
-    # 前提核验结果由阶段 6 回填；v1 固定为 None。
-    premise_result: dict[str, Any] | None = None
-    agent_run_id: int | None = Field(default=None, ge=1)
-    iteration: int = Field(default=0, ge=0)
-    version_snapshot: ResearchVersionSnapshot
-    scope_fingerprint: str = Field(min_length=1, max_length=256)
-    budget: ResearchBudget = Field(default_factory=ResearchBudget)
-    budget_usage: ResearchBudgetUsage = Field(default_factory=ResearchBudgetUsage)
-    budget_remaining: ResearchBudgetRemaining
-    evidences: tuple[ResearchEvidence, ...] = ()
-    dependency_edges: tuple[ResearchEvidenceEdge, ...] = ()
-    hypothesis_ids: tuple[str, ...] = ()
-    hypothesis_assessments: tuple[ResearchHypothesisAssessment, ...] = ()
-    completed_tool_call_ids: tuple[str, ...] = ()
-    running_tool_call_ids: tuple[str, ...] = ()
-    failed_observations: tuple[ToolObservation, ...] = ()
-    plan_execution_state: dict[str, Any] | None = None
-    report_draft: str | None = Field(default=None, max_length=100_000)
-    final_report: str | None = Field(default=None, max_length=200_000)
-
-    @model_validator(mode="after")
-    def validate_snapshot(self) -> ResearchRunSnapshot:
-        _id(self.run_id, "RESEARCH_AGENT_RUN_ID_INVALID")
-        if self.version_snapshot.scope_fingerprint != self.scope_fingerprint:
-            raise ValueError("RESEARCH_AGENT_STATE_SCOPE_FINGERPRINT_MISMATCH")
-        _unique(self.completed_tool_call_ids, "RESEARCH_AGENT_STATE_TOOL_CALL_DUPLICATED")
-        _unique(self.running_tool_call_ids, "RESEARCH_AGENT_STATE_TOOL_CALL_DUPLICATED")
-        overlap = set(self.completed_tool_call_ids) & set(self.running_tool_call_ids)
-        if overlap:
-            raise ValueError("RESEARCH_AGENT_SNAPSHOT_TOOL_CALL_STATE_CONFLICT")
-        evidence_ids = [item.evidence_id for item in self.evidences]
-        _unique(evidence_ids, "RESEARCH_AGENT_STATE_EVIDENCE_DUPLICATED")
-        known = set(evidence_ids)
-        for edge in self.dependency_edges:
-            if edge.evidence_id not in known or edge.depends_on not in known:
-                raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
-        assessments = [item.hypothesis_id for item in self.hypothesis_assessments]
-        _unique(assessments, "RESEARCH_AGENT_FINISH_HYPOTHESIS_DUPLICATED")
-        for assessment in self.hypothesis_assessments:
-            for evidence_id in assessment.evidence_ids:
-                if evidence_id not in known:
-                    raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
-        usage_axes = (
-            (self.budget.max_queries, self.budget_usage.queries),
-            (self.budget.max_model_calls, self.budget_usage.model_calls),
-            (self.budget.max_iterations, self.iteration),
-        )
-        for limit, used in usage_axes:
-            if used > limit:
-                raise ValueError("RESEARCH_AGENT_SNAPSHOT_BUDGET_OVERRUN")
-        expected_remaining = ResearchBudgetRemaining(
-            iterations=max(self.budget.max_iterations - self.iteration, 0),
-            queries=max(self.budget.max_queries - self.budget_usage.queries, 0),
-            model_calls=max(
-                self.budget.max_model_calls - self.budget_usage.model_calls, 0
-            ),
-            duration_seconds=float(
-                max(
-                    self.budget.max_duration_seconds
-                    - self.budget_usage.duration_seconds,
-                    0,
-                )
-            ),
-        )
-        if self.budget_remaining != expected_remaining:
-            raise ValueError("RESEARCH_AGENT_SNAPSHOT_BUDGET_REMAINING_MISMATCH")
-        terminal_statuses = {
-            ResearchRunStatus.SUCCEEDED,
-            ResearchRunStatus.PARTIAL,
-            ResearchRunStatus.NEEDS_CLARIFICATION,
-            ResearchRunStatus.FAILED,
-            ResearchRunStatus.CANCELLED,
-        }
-        is_terminal = self.status in terminal_statuses
-        if is_terminal != (self.finish_reason is not None):
-            raise ValueError("RESEARCH_AGENT_STATE_COMPLETION_MISMATCH")
-        return self
-
-
-class ResearchBudgetRemaining(_ContractModel):
-    iterations: int = Field(ge=0)
-    queries: int = Field(ge=0)
-    model_calls: int = Field(ge=0)
-    duration_seconds: float = Field(ge=0)
-
-
-class ResearchWorkingState(_VersionedContractModel):
-    """可恢复的受控摘要；不接受完整结果数据。"""
-
-    run_id: str = Field(min_length=1, max_length=128)
-    goal: str = Field(min_length=1, max_length=1000)
-    status: ResearchRunStatus = ResearchRunStatus.INITIALIZING
-    iteration: int = Field(default=0, ge=0)
-    target_metric_refs: tuple[str, ...] = Field(min_length=1)
-    time_bindings: tuple[ResearchTimeBinding, ...] = ()
-    time_bindings_by_model: dict[str, tuple[ResearchTimeBinding, ...]] = Field(
-        default_factory=dict
-    )
-    immutable_filters: tuple[ResearchImmutableFilter, ...] = ()
-    scope_fingerprint: str = Field(min_length=1, max_length=256)
-    version_snapshot: ResearchVersionSnapshot
-    tool_call_ids: tuple[str, ...] = ()
-    evidence_refs: tuple[ResearchEvidenceRef, ...] = ()
-    hypothesis_ids: tuple[str, ...] = ()
-    budget_remaining: ResearchBudgetRemaining
-    completion: ResearchCompletion | None = None
-
-    @model_validator(mode="after")
-    def validate_state(self) -> ResearchWorkingState:
-        _id(self.run_id, "RESEARCH_AGENT_RUN_ID_INVALID")
-        _unique(self.target_metric_refs, "RESEARCH_AGENT_STATE_TARGET_METRIC_DUPLICATED")
-        for ref in self.target_metric_refs:
-            _ref(ref, "RESEARCH_AGENT_STATE_TARGET_METRIC_REF_INVALID")
-        if self.version_snapshot.scope_fingerprint != self.scope_fingerprint:
-            raise ValueError("RESEARCH_AGENT_STATE_SCOPE_FINGERPRINT_MISMATCH")
-        _unique(
-            tuple(item.role for item in self.time_bindings),
-            "RESEARCH_AGENT_STATE_TIME_ROLE_DUPLICATED",
-        )
-        state_roles = {item.role for item in self.time_bindings}
-        for model_id, bindings in self.time_bindings_by_model.items():
-            if not str(model_id).isdigit() or int(model_id) <= 0:
-                raise ValueError("RESEARCH_AGENT_TIME_BINDING_MODEL_INVALID")
-            model_roles = tuple(item.role for item in bindings)
-            if len(model_roles) != len(set(model_roles)):
-                raise ValueError("RESEARCH_AGENT_TIME_BINDING_MODEL_ROLE_DUPLICATED")
-            if set(model_roles) != state_roles:
-                raise ValueError("RESEARCH_AGENT_TIME_BINDING_MODEL_ROLE_MISMATCH")
-        _unique(
-            tuple(item.target_ref for item in self.immutable_filters),
-            "RESEARCH_AGENT_IMMUTABLE_FILTER_DUPLICATED",
-        )
-        _unique(self.tool_call_ids, "RESEARCH_AGENT_STATE_TOOL_CALL_DUPLICATED")
-        _unique(self.hypothesis_ids, "RESEARCH_AGENT_STATE_HYPOTHESIS_DUPLICATED")
-        evidence_ids = [item.evidence_id for item in self.evidence_refs]
-        _unique(evidence_ids, "RESEARCH_AGENT_STATE_EVIDENCE_DUPLICATED")
-        for item in self.evidence_refs:
-            if item.run_id != self.run_id:
-                raise ValueError("RESEARCH_AGENT_EVIDENCE_CROSS_RUN")
-        if self.completion is not None and self.completion.run_id != self.run_id:
-            raise ValueError("RESEARCH_AGENT_COMPLETION_CROSS_RUN")
-        terminal = self.status in {
-            ResearchRunStatus.SUCCEEDED,
-            ResearchRunStatus.PARTIAL,
-            ResearchRunStatus.NEEDS_CLARIFICATION,
-            ResearchRunStatus.FAILED,
-            ResearchRunStatus.CANCELLED,
-        }
-        if terminal != (self.completion is not None):
-            raise ValueError("RESEARCH_AGENT_STATE_COMPLETION_MISMATCH")
-        if self.completion is not None and self.completion.status != self.status.value:
-            raise ValueError("RESEARCH_AGENT_STATE_COMPLETION_STATUS_MISMATCH")
-        return self
-
-    def evolve(self, **changes: Any) -> ResearchWorkingState:
-        """更新受控状态；冻结 WHAT 字段发生变化时明确失败。"""
-
-        frozen_fields = {
-            "run_id",
-            "goal",
-            "target_metric_refs",
-            "time_bindings",
-            "time_bindings_by_model",
-            "immutable_filters",
-            "scope_fingerprint",
-            "version_snapshot",
-        }
-        for field_name in frozen_fields:
-            if field_name in changes and changes[field_name] != getattr(self, field_name):
-                raise ValueError("RESEARCH_AGENT_FROZEN_WHAT_CHANGED")
-        payload = self.model_dump()
-        payload.update(changes)
-        return type(self).model_validate(payload)
-
-
-class ResearchClaim(_ContractModel):
-    statement: str = Field(min_length=1, max_length=2000)
-    evidence_ids: tuple[str, ...] = Field(min_length=1)
-    claim_level: ResearchClaimLevel = ResearchClaimLevel.CORRELATION_CLUE
-    confidence: Literal["high", "medium", "low"] = "medium"
-
-    @model_validator(mode="after")
-    def validate_claim(self) -> ResearchClaim:
-        _unique(self.evidence_ids, "RESEARCH_AGENT_CLAIM_EVIDENCE_DUPLICATED")
-        for evidence_id in self.evidence_ids:
-            _id(evidence_id, "RESEARCH_AGENT_CLAIM_EVIDENCE_ID_INVALID")
-        return self
-
-
-class ResearchReportFinding(_ContractModel):
-    """报告草案中的一条数据结论；数字必须能溯源到引用证据（§10.3.3）。"""
-
-    statement: str = Field(min_length=1, max_length=2000)
-    evidence_ids: tuple[str, ...] = Field(min_length=1)
-    confidence: Literal["high", "medium", "low"] = "medium"
-    # 相关性表述与因果性表述分开声明；服务端校验措辞与强度一致。
-    statement_kind: Literal["causal", "correlational"] = "correlational"
-    limitations: tuple[str, ...] = ()
-
-    @model_validator(mode="after")
-    def validate_finding(self) -> ResearchReportFinding:
-        _unique(self.evidence_ids, "RESEARCH_AGENT_FINDING_EVIDENCE_DUPLICATED")
-        for evidence_id in self.evidence_ids:
-            _id(evidence_id, "RESEARCH_AGENT_FINDING_EVIDENCE_ID_INVALID")
-        if any(not item.strip() for item in self.limitations):
-            raise ValueError("RESEARCH_AGENT_FINDING_LIMITATION_INVALID")
-        return self
-
-
-class ResearchGap(_ContractModel):
-    """模型根据 Evidence 内容识别出的明确缺口。"""
-
-    gap_id: str = Field(min_length=1, max_length=128)
-    description: str = Field(min_length=1, max_length=2000)
-
-    @model_validator(mode="after")
-    def validate_gap(self) -> ResearchGap:
-        _id(self.gap_id, "RESEARCH_AGENT_GAP_ID_INVALID")
-        return self
-
-
-class ResearchGapResolution(_ContractModel):
-    """模型使用既有 Evidence 对一个规划缺口作出的结构化裁决。"""
-
-    gap_id: str = Field(min_length=1, max_length=128)
-    status: Literal["supported", "not_supported", "undetermined"]
-    evidence_ids: tuple[str, ...] = ()
-    reason: str = Field(min_length=1, max_length=2000)
-
-    @model_validator(mode="after")
-    def validate_resolution(self) -> ResearchGapResolution:
-        _id(self.gap_id, "RESEARCH_AGENT_GAP_ID_INVALID")
-        _unique(
-            self.evidence_ids,
-            "RESEARCH_AGENT_GAP_RESOLUTION_EVIDENCE_DUPLICATED",
-        )
-        for evidence_id in self.evidence_ids:
-            _id(evidence_id, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
-        if self.status != "undetermined" and not self.evidence_ids:
-            raise ValueError("RESEARCH_AGENT_GAP_RESOLUTION_EVIDENCE_REQUIRED")
-        return self
-
-
-class ResearchPlanNode(_ContractModel):
-    """Planner 提交的一份完整计划中的单个可执行步骤。"""
-
-    node_id: str = Field(min_length=1, max_length=128)
-    description: str = Field(min_length=1, max_length=1000)
-    output_type: Literal["evidence"] = "evidence"
-    expected_output: str = Field(min_length=1, max_length=1000)
-    gap_id: str | None = Field(default=None, min_length=1, max_length=128)
-    dependency_node_ids: tuple[str, ...] = ()
-    tool_name: Literal[
-        "query_semantic_data",
-        "inspect_evidence",
-        "compute_evidence",
-    ]
-    arguments: dict[str, Any] = Field(
-        description=(
-            "必须使用目标工具的正式参数名。query_semantic_data 使用 "
-            "metrics、dimensions、time_grain、time_ranges、filters、comparison、"
-            "analysis、drilldown、order、limit、purpose、hypothesis_ids。order 的每项 "
-            "使用 ref=指标或维度引用、direction=asc|desc、value_role=value|current|"
-            "previous|difference|growth_rate|share|contribution；按计算差值排序时 "
-            "使用指标 ref 加 value_role=difference，不要把 difference 写进 ref。"
-            "analysis=contribution 仅用于 comparison=contribution；日环比差异按维度"
-            "定位来源使用 comparison=difference 和 analysis=breakdown；"
-            "禁止使用 metric、group_by、order_by、time_filter、dataset_ref 等旧名。"
-        )
-    )
-
-    @model_validator(mode="after")
-    def validate_plan_node(self) -> ResearchPlanNode:
-        _id(self.node_id, "RESEARCH_AGENT_PLAN_NODE_ID_INVALID")
-        if self.gap_id is not None:
-            _id(self.gap_id, "RESEARCH_AGENT_GAP_ID_INVALID")
-        _unique(
-            self.dependency_node_ids,
-            "RESEARCH_AGENT_PLAN_ADDITION_DEPENDENCY_DUPLICATED",
-        )
-        for node_id in self.dependency_node_ids:
-            _id(node_id, "RESEARCH_AGENT_PLAN_NODE_ID_INVALID")
-        if self.node_id in self.dependency_node_ids:
-            raise ValueError("RESEARCH_AGENT_PLAN_NODE_SELF_DEPENDENCY")
-        if not self.arguments:
-            raise ValueError("RESEARCH_AGENT_PLAN_NODE_ARGUMENTS_REQUIRED")
-        _reject_physical_payload(self.arguments)
-        return self
-
-
-class SemanticAssessment(_ContractModel):
-    """模型对当前 Evidence 内容充分性的结构化判断，不承载计划节点。"""
-
-    status: SemanticAssessmentStatus
-    supported_findings: tuple[ResearchReportFinding, ...] = ()
-    resolved_gaps: tuple[ResearchGapResolution, ...] = ()
-    unresolved_gaps: tuple[ResearchGap, ...] = ()
-    limitations: tuple[str, ...] = ()
-
-    @model_validator(mode="after")
-    def validate_semantic_assessment(self) -> SemanticAssessment:
-        gap_ids = tuple(item.gap_id for item in self.unresolved_gaps)
-        _unique(gap_ids, "RESEARCH_AGENT_GAP_DUPLICATED")
-        resolved_gap_ids = tuple(item.gap_id for item in self.resolved_gaps)
-        _unique(resolved_gap_ids, "RESEARCH_AGENT_RESOLVED_GAP_DUPLICATED")
-        if set(gap_ids) & set(resolved_gap_ids):
-            raise ValueError("RESEARCH_AGENT_GAP_STATE_CONFLICT")
-        if any(not item.strip() for item in self.limitations):
-            raise ValueError("RESEARCH_AGENT_ASSESSMENT_LIMITATION_INVALID")
-
-        if self.status is SemanticAssessmentStatus.ANSWERABLE:
-            if self.unresolved_gaps:
-                raise ValueError("RESEARCH_AGENT_ANSWERABLE_GAP_FORBIDDEN")
-        elif self.status is SemanticAssessmentStatus.EXPLICIT_GAP:
-            if not self.unresolved_gaps:
-                raise ValueError("RESEARCH_AGENT_EXPLICIT_GAP_REQUIRED")
-        else:
-            if not self.unresolved_gaps:
-                raise ValueError("RESEARCH_AGENT_TERMINAL_GAP_REQUIRED")
-            if not self.limitations:
-                raise ValueError("RESEARCH_AGENT_TERMINAL_LIMITATION_REQUIRED")
-        return self
-
-
-class ResearchHypothesisAssessment(_ContractModel):
-    """finish_research 返回的最小假设评估，不判断结论强度。"""
-
-    hypothesis_id: str = Field(min_length=1, max_length=128)
-    assessment: Literal["supported", "weakened", "inconclusive", "invalid"]
-    evidence_ids: tuple[str, ...] = ()
-    reason: str = Field(min_length=1, max_length=2000)
-
-    @model_validator(mode="after")
-    def validate_assessment(self) -> ResearchHypothesisAssessment:
-        _id(self.hypothesis_id, "RESEARCH_AGENT_HYPOTHESIS_ID_INVALID")
-        _unique(
-            self.evidence_ids,
-            "RESEARCH_AGENT_HYPOTHESIS_EVIDENCE_DUPLICATED",
-        )
-        for evidence_id in self.evidence_ids:
-            _id(evidence_id, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
-        return self
-
-
-class ResearchFinishRequest(_VersionedContractModel):
-    """finish_research 的独立参数；结束前由服务端再次校验证据存在性。"""
-
-    run_id: str = Field(min_length=1, max_length=128)
-    reason: ResearchCompletionReason
-    semantic_assessment: SemanticAssessment
-    summary: str = Field(min_length=1, max_length=4000)
-    claims: tuple[ResearchClaim, ...] = ()
-    findings: tuple[ResearchReportFinding, ...] = ()
-    evidence_ids: tuple[str, ...] = ()
-    hypothesis_assessments: tuple[ResearchHypothesisAssessment, ...] = ()
-    limitations: tuple[str, ...] = ()
-    unanswered_questions: tuple[str, ...] = ()
-
-    @model_validator(mode="after")
-    def validate_finish_request(self) -> ResearchFinishRequest:
-        _id(self.run_id, "RESEARCH_AGENT_RUN_ID_INVALID")
-        _unique(self.evidence_ids, "RESEARCH_AGENT_FINISH_EVIDENCE_DUPLICATED")
-        for evidence_id in self.evidence_ids:
-            _id(evidence_id, "RESEARCH_AGENT_EVIDENCE_ID_INVALID")
-        claim_ids = {
-            evidence_id
-            for claim in self.claims
-            for evidence_id in claim.evidence_ids
-        }
-        if not claim_ids <= set(self.evidence_ids):
-            raise ValueError("RESEARCH_AGENT_FINISH_CLAIM_CITATION_MISSING")
-        finding_ids = {
-            evidence_id
-            for finding in self.findings
-            for evidence_id in finding.evidence_ids
-        }
-        if not finding_ids <= set(self.evidence_ids):
-            raise ValueError("RESEARCH_AGENT_FINISH_FINDING_CITATION_MISSING")
-        hypothesis_ids = [item.hypothesis_id for item in self.hypothesis_assessments]
-        _unique(
-            hypothesis_ids,
-            "RESEARCH_AGENT_FINISH_HYPOTHESIS_DUPLICATED",
-        )
-        assessment_evidence_ids = {
-            evidence_id
-            for assessment in self.hypothesis_assessments
-            for evidence_id in assessment.evidence_ids
-        }
-        if not assessment_evidence_ids <= set(self.evidence_ids):
-            raise ValueError("RESEARCH_AGENT_FINISH_HYPOTHESIS_CITATION_MISSING")
-        gap_resolution_evidence_ids = {
-            evidence_id
-            for resolution in self.semantic_assessment.resolved_gaps
-            for evidence_id in resolution.evidence_ids
-        }
-        if not gap_resolution_evidence_ids <= set(self.evidence_ids):
-            raise ValueError("RESEARCH_AGENT_FINISH_GAP_CITATION_MISSING")
-        if any(not question.strip() for question in self.unanswered_questions):
-            raise ValueError("RESEARCH_AGENT_FINISH_QUESTION_INVALID")
-        expected_status = {
-            ResearchCompletionReason.SUFFICIENT_EVIDENCE: SemanticAssessmentStatus.ANSWERABLE,
-            ResearchCompletionReason.PREMISE_NOT_SUPPORTED: SemanticAssessmentStatus.ANSWERABLE,
-            ResearchCompletionReason.NO_NEW_DIRECTION: SemanticAssessmentStatus.NO_NEW_DIRECTION,
-            ResearchCompletionReason.DATA_INSUFFICIENT: SemanticAssessmentStatus.DATA_INSUFFICIENT,
-        }.get(self.reason)
-        if (
-            expected_status is not None
-            and self.semantic_assessment.status is not expected_status
-        ):
-            raise ValueError("RESEARCH_AGENT_FINISH_ASSESSMENT_STATUS_INVALID")
-        if self.semantic_assessment.status is SemanticAssessmentStatus.EXPLICIT_GAP:
-            raise ValueError("RESEARCH_AGENT_EXPLICIT_GAP_CANNOT_FINISH")
-        if self.findings != self.semantic_assessment.supported_findings:
-            raise ValueError("RESEARCH_AGENT_FINISH_FINDINGS_ASSESSMENT_MISMATCH")
-        return self
-
-
-class ResearchCompletion(_VersionedContractModel):
-    """结束请求；所有数据结论都必须带 Evidence 引用。"""
-
-    run_id: str = Field(min_length=1, max_length=128)
-    status: ResearchCompletionStatus
-    reason: ResearchCompletionReason
-    summary: str = Field(min_length=1, max_length=4000)
-    claims: tuple[ResearchClaim, ...] = ()
-    evidence_ids: tuple[str, ...] = ()
-    limitations: tuple[str, ...] = ()
-
-    @model_validator(mode="after")
-    def validate_completion(self) -> ResearchCompletion:
-        _id(self.run_id, "RESEARCH_AGENT_RUN_ID_INVALID")
-        if RESEARCH_COMPLETION_STATUS_BY_REASON[self.reason] != self.status:
-            raise ValueError("RESEARCH_AGENT_COMPLETION_REASON_INVALID")
-        if self.reason in {
-            ResearchCompletionReason.SUFFICIENT_EVIDENCE,
-            ResearchCompletionReason.PREMISE_NOT_SUPPORTED,
-            ResearchCompletionReason.NO_NEW_DIRECTION,
-        } and not self.evidence_ids:
-            raise ValueError("RESEARCH_AGENT_COMPLETION_EVIDENCE_REQUIRED")
-        cited = set(self.evidence_ids)
-        claim_ids = {evidence_id for claim in self.claims for evidence_id in claim.evidence_ids}
-        if not claim_ids <= cited:
-            raise ValueError("RESEARCH_AGENT_COMPLETION_CLAIM_CITATION_MISSING")
-        _unique(self.evidence_ids, "RESEARCH_AGENT_COMPLETION_EVIDENCE_DUPLICATED")
-        return self
-
-    def validate_evidence(self, evidence: Collection[ResearchEvidence]) -> None:
-        evidence_by_id = {item.evidence_id: item for item in evidence}
-        for evidence_id in self.evidence_ids:
-            item = evidence_by_id.get(evidence_id)
-            if item is None:
-                raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
-            if item.run_id != self.run_id:
-                raise ValueError("RESEARCH_AGENT_EVIDENCE_CROSS_RUN")
-
-
-class ResearchEvidenceCitation(_ContractModel):
-    evidence_id: str = Field(min_length=1, max_length=128)
-    run_id: str = Field(min_length=1, max_length=128)
-    purpose: str = Field(min_length=1, max_length=1000)
-
-
-class ResearchAgentReport(_VersionedContractModel):
-    """可审计的 Agent 报告；Finding 与引用必须一一对应。"""
-
-    run_id: str = Field(min_length=1, max_length=128)
-    goal: str = Field(min_length=1, max_length=1000)
-    summary: str = Field(min_length=1, max_length=4000)
-    completion: ResearchCompletion
-    findings: tuple[ResearchClaim, ...] = ()
-    citations: tuple[ResearchEvidenceCitation, ...] = ()
-    limitations: tuple[str, ...] = ()
-
-    @model_validator(mode="after")
-    def validate_report(self) -> ResearchAgentReport:
-        _id(self.run_id, "RESEARCH_AGENT_RUN_ID_INVALID")
-        if self.completion.run_id != self.run_id:
-            raise ValueError("RESEARCH_AGENT_COMPLETION_CROSS_RUN")
-        citation_id_values = [item.evidence_id for item in self.citations]
-        _unique(citation_id_values, "RESEARCH_AGENT_REPORT_CITATION_DUPLICATED")
-        citation_ids = {item.evidence_id for item in self.citations}
-        if any(item.run_id != self.run_id for item in self.citations):
-            raise ValueError("RESEARCH_AGENT_EVIDENCE_CROSS_RUN")
-        required_ids = {
-            evidence_id
-            for finding in self.findings
-            for evidence_id in finding.evidence_ids
-        }
-        if not required_ids <= citation_ids:
-            raise ValueError("RESEARCH_AGENT_REPORT_FINDING_CITATION_MISSING")
-        if not set(self.completion.evidence_ids) <= citation_ids:
-            raise ValueError("RESEARCH_AGENT_REPORT_COMPLETION_CITATION_MISSING")
-        return self
-
-    def validate_evidence(self, evidence: Collection[ResearchEvidence]) -> None:
-        evidence_by_id = {item.evidence_id: item for item in evidence}
-        for citation in self.citations:
-            item = evidence_by_id.get(citation.evidence_id)
-            if item is None:
-                raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
-            if item.run_id != self.run_id or citation.run_id != item.run_id:
-                raise ValueError("RESEARCH_AGENT_EVIDENCE_CROSS_RUN")
-
-
 class ResearchSemanticQueryOutcome(_VersionedContractModel):
     """Semantic Query Runtime 的统一成功或失败结果。"""
 
@@ -1929,59 +1140,40 @@ def validate_research_semantic_query(
     requirement.validate_query(query, evidence)
 
 
-# 阶段 1文档中的别名，保持命名向后兼容但不引入旧 Action。
-ResearchToolObservation = ToolObservation
+# Semantic Query Runtime 的内部结果仍使用旧命名类型；它不是 Agent 的模型输出。
 ResearchEvidenceRecord = ResearchEvidence
 
 
 __all__ = [
     "RESEARCH_AGENT_CONTRACT_VERSION",
-    "ResearchAgentReport",
     "ResearchAgentRequirement",
     "ResearchBudget",
-    "ResearchBudgetRemaining",
-    "ResearchBudgetUsage",
-    "ResearchClaim",
     "ResearchClaimLevel",
-    "ResearchCompletion",
-    "ResearchCompletionReason",
-    "ResearchCompletionStatus",
-    "RESEARCH_COMPLETION_STATUS_BY_REASON",
     "ResearchComputeOperation",
     "ResearchComputeRequest",
     "ResearchDirection",
     "ResearchDriverRelationship",
     "ResearchDrilldownSpec",
     "ResearchEvidence",
-    "ResearchEvidenceCitation",
     "ResearchEvidenceDependency",
-    "ResearchEvidenceEdge",
     "ResearchEvidenceLevel",
     "ResearchEvidenceRecord",
-    "ResearchEvidenceRef",
     "ResearchEvidenceRequirement",
     "ResearchEvidenceStatistics",
     "ResearchEvidenceValueRef",
-    "ResearchGap",
-    "ResearchGapResolution",
     "ResearchImmutableFilter",
-    "ResearchFinishRequest",
     "ResearchHierarchy",
-    "ResearchHypothesisAssessment",
     "ResearchInspectEvidenceRequest",
     "ResearchLiteralFilter",
     "ResearchLogicalColumn",
     "ResearchOrder",
     "ResearchOrderDirection",
-    "ResearchPlanNode",
     "ResearchPremise",
     "ResearchPremiseType",
     "ResearchQueryComparison",
     "ResearchReason",
     "ResearchResultRef",
     "ResearchRowSelector",
-    "ResearchRunSnapshot",
-    "ResearchRunStatus",
     "ResearchScope",
     "ResearchSemanticQuery",
     "ResearchSemanticQueryOutcome",
@@ -1989,18 +1181,9 @@ __all__ = [
     "ResearchTimeRole",
     "ResearchToolCall",
     "ResearchToolCallRef",
-    "ResearchToolObservation",
     "ResearchVersionSnapshot",
-    "ResearchWorkingState",
-    "SemanticAssessment",
-    "SemanticAssessmentStatus",
-    "StructuralCoverage",
-    "StructuralCoverageGap",
     "ToolErrorCode",
     "ToolFailureStage",
-    "ToolObservation",
-    "ToolObservationStatus",
-    "validate_plan_required_operations",
     "validate_research_semantic_query",
 ]
 

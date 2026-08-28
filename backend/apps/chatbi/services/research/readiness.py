@@ -244,12 +244,12 @@ def compute_quality_metrics(
         fingerprints = state.get("request_fingerprints")
         if isinstance(fingerprints, dict):
             fingerprint_requests += len(fingerprints)
-        snapshot = pair.agent_derived.get("research_run_snapshot") or {}
-        for observation in snapshot.get("failed_observations") or []:
+        state = pair.agent_derived.get("research_state") or {}
+        for attempt in state.get("attempted_actions") or []:
             if (
-                isinstance(observation, dict)
-                and observation.get("status") == "failed"
-                and observation.get("tool_name") in _QUERY_TOOL_NAMES
+                isinstance(attempt, dict)
+                and attempt.get("status") in {"failed", "rejected"}
+                and attempt.get("action_type") in _QUERY_TOOL_NAMES
             ):
                 invalid_queries += 1
     metrics["duplicate_invalid_query_rate"] = invalid_queries / max(

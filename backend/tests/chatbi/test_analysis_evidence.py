@@ -13,8 +13,6 @@ from apps.chatbi.services.evidence import (
     build_analysis_evidence,
     build_analysis_version_snapshot,
 )
-from apps.chatbi.services.research.completion import evaluate_structural_coverage
-from tests.chatbi.test_research_agent_contracts import _requirement
 
 
 def _version():
@@ -160,33 +158,3 @@ def test_merge_missing_preserves_existing_unified_evidence() -> None:
     registry.merge_missing((_evidence(purpose="旧 Research 投影"),))
 
     assert registry.get(existing.evidence_id) == existing
-
-
-def test_completion_reads_unified_evidence() -> None:
-    requirement = _requirement()
-    evidence = _evidence()
-
-    evaluation = evaluate_structural_coverage(
-        requirement,
-        [evidence],
-        premise_result={"status": "supported"},
-    )
-
-    assert evaluation.minimum_requirements_met is True
-    assert evaluation.core_supported is True
-
-
-def test_completion_only_reports_minimum_structural_coverage() -> None:
-    """字段覆盖满足时仍不能据此判断 Evidence 内容已经回答用户问题。"""
-
-    requirement = _requirement()
-    evidence = _evidence(purpose="只有结构字段，没有原因解释内容")
-
-    evaluation = evaluate_structural_coverage(
-        requirement,
-        [evidence],
-        premise_result={"status": "supported"},
-    )
-
-    assert evaluation.minimum_requirements_met is True
-    assert evaluation.missing_requirements == ()

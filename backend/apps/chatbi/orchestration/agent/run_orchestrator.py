@@ -34,8 +34,8 @@ from apps.chatbi.orchestration.pipeline.mode_router import (
     ExecutionRequirementBuildError,
     ExecutionRequirementInput,
 )
-from apps.chatbi.orchestration.pipeline.plan_and_solve_pipeline import (
-    PlanAndSolvePipeline,
+from apps.chatbi.orchestration.pipeline.research_agent_pipeline import (
+    ResearchAgentPipeline,
 )
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.event import EventPublisher, RenderEvent
@@ -63,8 +63,7 @@ class RunOrchestrator:
         lifecycle: AgentLifecycle,
         input_preparer: AgentInputPreparer,
         state_factory: AgentRuntimeStateFactory,
-        plan_and_solve_pipeline: PlanAndSolvePipeline | None = None,
-        research_agent_pipeline: PlanAndSolvePipeline | None = None,
+        research_agent_pipeline: ResearchAgentPipeline | None = None,
         execution_requirement_builder: ExecutionRequirementBuilder | None = None,
     ) -> None:
         self.session = session
@@ -73,11 +72,8 @@ class RunOrchestrator:
         self.lifecycle = lifecycle
         self.input_preparer = input_preparer
         self.state_factory = state_factory
-        # Agent Runtime 是唯一分析引擎；为空表示本进程未装配，
-        # 分发时显式失败，不存在旧管道回退目标。
-        if plan_and_solve_pipeline is not None and research_agent_pipeline is not None:
-            raise ValueError("AGENT_RESEARCH_PIPELINE_DUPLICATED")
-        self.plan_and_solve_pipeline = research_agent_pipeline or plan_and_solve_pipeline
+        # Research Agent Runtime 是唯一分析引擎；未装配时显式失败。
+        self.research_agent_pipeline = research_agent_pipeline
         if execution_requirement_builder is None:
             raise ValueError("AGENT_EXECUTION_REQUIREMENT_BUILDER_REQUIRED")
         self.execution_requirement_builder = execution_requirement_builder
@@ -139,7 +135,7 @@ class RunOrchestrator:
             if clarification_event is not None:
                 yield clarification_event
                 return
-            # 3. 冻结统一 Agent 输入并进入同一个 Plan-and-Solve 循环。
+            # 3. 冻结统一 Agent 输入并进入 Research ReAct 循环。
             self._build_execution_requirement(state)
             state.context.state["execution_mode"] = "agent"
             agent_run_repository.update_run(
@@ -148,7 +144,7 @@ class RunOrchestrator:
                 execution_mode="agent",
             )
             self.session.commit()
-            yield from self._dispatch_plan_and_solve(state)
+            yield from self._dispatch_research(state)
         except ExecutionRequirementBuildError as exc:
             yield from self._finalize_mode_routing_error(state, exc)
         except QuestionUnderstandingError as exc:
@@ -284,13 +280,10 @@ class RunOrchestrator:
         )
         state.context.state["execution_requirement"] = result
 
-    def _dispatch_plan_and_solve(
-        self,
-        state: AgentRuntimeState,
-    ) -> Iterator[RenderEvent]:
+    def _dispatch_research(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
         """进入统一 Research Agent Runtime；首次运行与恢复共用。"""
 
-        if self.plan_and_solve_pipeline is None:
+        if self.research_agent_pipeline is None:
             yield from self.lifecycle.fail(
                 state,
                 "Research Agent Runtime 未装配。",
@@ -299,7 +292,7 @@ class RunOrchestrator:
             )
             return
         try:
-            yield from self.plan_and_solve_pipeline.run(state)
+            yield from self.research_agent_pipeline.run(state)
         except ResearchPipelineError as exc:
             yield from self.lifecycle.fail(
                 state,
@@ -307,11 +300,6 @@ class RunOrchestrator:
                 AgentErrorClass.PLAN_INVALID.value,
                 error_details={"code": exc.code},
             )
-
-    def _dispatch_research(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
-        """Research Agent 正式分发入口；保留旧方法名的单一转发。"""
-
-        yield from self._dispatch_plan_and_solve(state)
 
     def _semantic_parse_clarification_event(
         self,
@@ -410,7 +398,7 @@ class RunOrchestrator:
                 execution_mode="agent",
             )
             self.session.commit()
-            yield from self._dispatch_plan_and_solve(state)
+            yield from self._dispatch_research(state)
         except ExecutionRequirementBuildError as exc:
             yield from self._finalize_mode_routing_error(state, exc)
         except QuestionUnderstandingError as exc:

@@ -1,11 +1,13 @@
-"""检查阶段 8 删除边界：旧 ResearchAction 架构不得再被引用。
+"""检查 Research ReAct 主路径的依赖边界和旧协议残留。
 
-阶段 8（doc38 §12 / doc39 §7）已物理删除旧架构（Action/Policy/物化器/
-shadow 双跑/rollout 采样/旧契约 DTO）。本守卫做两个方向的断言：
+阶段 8～10 已物理删除旧架构（Action/Policy/物化器、shadow 双跑、
+rollout 采样、旧契约 DTO 和 Planner/Solve 研究入口）。本守卫做两个方向的断言：
 
 1. 反向：全仓 ``apps/`` 与 ``scripts/`` 下任何模块都不得导入已删除模块，
-   也不得从新契约模块导入旧符号。
-2. 正向：阶段 1 列出的新契约模块必须仍然存在，且不引用旧符号。
+   也不得引用旧 Research DTO、Observation、快照键和 submit_research_plan。
+2. Research 生产路径不得保留 plan_execution_state；Fast/通用 planning
+   的合法使用不在该扫描范围内。
+3. 正向：当前 Research 主路径模块必须仍然存在，且不引用旧符号。
 """
 
 from __future__ import annotations
@@ -40,6 +42,33 @@ FORBIDDEN_NAMES = {
     "ResearchFilterFromResultAction",
     "EvidenceSnapshot",
     "ResearchRequirement",
+    "ResearchPlanNode",
+    "ResearchCompletion",
+    "ResearchAgentReport",
+    "ToolObservation",
+    "ToolObservationStatus",
+    "ResearchBudgetUsage",
+    "ResearchRunStatus",
+    "ResearchCompletionReason",
+    "SemanticAssessmentStatus",
+    "StructuralCoverage",
+    "StructuralCoverageGap",
+    "validate_plan_required_operations",
+}
+
+# 旧协议的字符串键也属于边界的一部分。state_snapshot.py 需要保留
+# research_run_snapshot 的拒绝分支，以便旧持久化数据显式失败，因此单独放行。
+FORBIDDEN_RESEARCH_KEYS = {
+    "research_run_snapshot",
+    "failed_observations",
+    "hypothesis_assessments",
+    "final_report",
+    "report_draft",
+    "submit_research_plan",
+    "plan_execution_state",
+}
+ALLOWED_LEGACY_REJECTION_KEYS = {
+    "state_snapshot.py": {"research_run_snapshot"},
 }
 
 # 阶段 1 起的新契约模块：必须存在并保持无旧符号。
@@ -53,11 +82,6 @@ NEW_MODULES = (
     BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "state_snapshot.py",
     BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "run_lifecycle.py",
     BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "agent_context.py",
-    BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "completion.py",
-    BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "hypothesis_evaluator.py",
-    BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "report_validator.py",
-    BACKEND_ROOT / "apps" / "chatbi" / "services" / "research" / "report_draft.py",
-    BACKEND_ROOT / "apps" / "chatbi" / "orchestration" / "agent" / "tools" / "research.py",
     BACKEND_ROOT / "apps" / "chatbi" / "orchestration" / "agent" / "reasoning_profile.py",
     BACKEND_ROOT
     / "apps"
@@ -77,6 +101,21 @@ SCAN_ROOTS = (
     BACKEND_ROOT / "apps",
     BACKEND_ROOT / "scripts",
 )
+
+
+def _is_research_production_path(path: Path) -> bool:
+    """判断文件是否属于 Research 主路径，排除 Fast 的计划执行状态。"""
+
+    normalized = path.as_posix()
+    return (
+        "/apps/chatbi/services/research/" in normalized
+        or path.name in {
+            "research_agent.py",
+            "research_agent_pipeline.py",
+            "research_agent_runtime.py",
+            "reasoning_profile.py",
+        }
+    )
 
 
 def _module_name(node: ast.ImportFrom) -> str:
@@ -106,15 +145,34 @@ def check_dependencies() -> list[str]:
             except SyntaxError as exc:
                 errors.append(f"{path}: 语法错误 {exc}")
                 continue
+            research_path = _is_research_production_path(path)
+            eval_script = path.name == "run_research_agent_eval.py"
+            allowed_keys = ALLOWED_LEGACY_REJECTION_KEYS.get(path.name, set())
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom):
                     module = _module_name(node)
                     if _is_deleted_module(module):
                         errors.append(f"{path}: 引用已删除模块 {module}")
+                    for alias in node.names:
+                        if alias.name in FORBIDDEN_NAMES:
+                            errors.append(f"{path}: 引用旧 Research 符号 {alias.name}")
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
                         if _is_deleted_module(alias.name):
                             errors.append(f"{path}: 引用已删除模块 {alias.name}")
+                        if alias.asname in FORBIDDEN_NAMES:
+                            errors.append(f"{path}: 引用旧 Research 符号 {alias.asname}")
+                elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
+                    errors.append(f"{path}: 引用旧 Research 符号 {node.id}")
+                elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    if node.value == "plan_execution_state" and research_path:
+                        errors.append(f"{path}: Research 路径引用 plan_execution_state")
+                    elif (
+                        node.value in FORBIDDEN_RESEARCH_KEYS - {"plan_execution_state"}
+                        and (research_path or eval_script)
+                        and node.value not in allowed_keys
+                    ):
+                        errors.append(f"{path}: Research 路径引用旧协议键 {node.value}")
 
     # 正向：新契约模块必须存在，且不引用旧架构符号。
     for path in NEW_MODULES:
@@ -143,7 +201,7 @@ def main() -> int:
         for error in errors:
             print(f"ERROR: {error}")
         return 1
-    print("Research 阶段 8 删除边界检查通过：旧架构无残留引用")
+    print("Research 阶段 10 边界检查通过：旧协议无残留引用")
     return 0
 
 

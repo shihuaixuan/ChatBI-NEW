@@ -1,4 +1,4 @@
-"""阶段 8 删除边界：旧 ResearchAction 架构与切流配置不得回流。"""
+"""阶段 10 删除边界：旧 ResearchAction/Planner 协议与切流配置不得回流。"""
 
 from __future__ import annotations
 
@@ -45,14 +45,19 @@ def test_removal_boundary_dependency_guard_passes() -> None:
         "apps.chatbi.services.research.policy_rules",
         "apps.chatbi.services.research.hypotheses",
         "apps.chatbi.services.research.evidence",
-        "apps.chatbi.services.research.ports",
         "apps.chatbi.services.research.report",
         "apps.chatbi.services.research.shadow",
         "apps.chatbi.services.research.rollout",
         "apps.chatbi.services.research.requirements",
+        "apps.chatbi.services.research.completion",
+        "apps.chatbi.services.research.hypothesis_evaluator",
+        "apps.chatbi.services.research.premise_gap",
+        "apps.chatbi.services.research.report_draft",
+        "apps.chatbi.services.research.report_validator",
+        "apps.chatbi.orchestration.agent.tools.research",
         "apps.chatbi.orchestration.pipeline.research",
-        "apps.chatbi.orchestration.pipeline.research_agent",
-        "apps.chatbi.orchestration.pipeline.research_agent_pipeline",
+        "apps.chatbi.orchestration.pipeline.plan_and_solve_pipeline",
+        "apps.chatbi.orchestration.pipeline.plan_and_solve_runtime",
         "apps.chatbi.adapters.prompts.research_policy",
     ],
 )

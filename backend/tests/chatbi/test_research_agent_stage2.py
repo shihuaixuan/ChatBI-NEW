@@ -44,7 +44,7 @@ from apps.chatbi.services.research.agent_context import (
     serialize_semantic_context_yaml,
 )
 from apps.tool import ToolCall
-from tests.chatbi.test_research_agent_contracts import _governed_requirement
+from tests.chatbi.research_agent_fixtures import _governed_requirement
 
 
 def _semantic_context(metric_count: int = 1) -> SemanticContext:

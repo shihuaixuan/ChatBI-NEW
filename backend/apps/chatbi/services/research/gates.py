@@ -12,7 +12,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -33,9 +32,9 @@ GATE_SILENT_FALLBACK = "silent_fallback"
 GATE_UNPROVEN_QUERY = "unproven_query"
 GATE_REPORT_CITATION_RATE = "report_citation_pass_rate"
 
-# 静默回退与计划证明失败在观察错误码中的特征。
+# 静默回退与语义证明失败在 Attempt 错误码中的特征。
 _FALLBACK_CODE_MARKERS = ("FALLBACK",)
-_PROOF_FAILED_CODE = "PLAN_PROOF_FAILED"
+_PROOF_FAILED_CODE_MARKERS = ("PROOF_FAILED", "SEMANTIC_PLAN_REJECTED")
 
 DECISION_PROMOTE = "promote"
 DECISION_BLOCKED = "blocked"
@@ -106,7 +105,7 @@ def evaluate_hard_gates(
         _gate_cross_run(agent_derived),
         _gate_unsourced(agent_derived),
         _gate_code_scan(GATE_SILENT_FALLBACK, _FALLBACK_CODE_MARKERS, agent),
-        _gate_code_scan(GATE_UNPROVEN_QUERY, (_PROOF_FAILED_CODE,), agent),
+        _gate_code_scan(GATE_UNPROVEN_QUERY, _PROOF_FAILED_CODE_MARKERS, agent),
         _gate_report_citations(agent_derived),
     ]
     return HardGateReport(results=results)
@@ -145,12 +144,7 @@ def _scope_violations(derived_state: dict[str, Any], *, legacy: bool) -> list[st
         ]
     else:
         requirement = _requirement_payload(derived_state, marker_key=True)
-        snapshot = dict(derived_state.get("research_run_snapshot") or {})
-        evidences = [
-            item
-            for item in (snapshot.get("evidences") or [])
-            if isinstance(item, dict)
-        ]
+        evidences = _agent_evidences(derived_state)
     if not requirement:
         # 冻结输入整体缺失时无法核对任何包含关系：直接记为越界，
         # 绝不因没有可检查的证据引用而空转通过。
@@ -183,18 +177,10 @@ def _requirement_payload(
     marker_key: bool,
 ) -> dict[str, Any]:
     if marker_key:
-        # 阶段 8 起 shadow.py 已删除；该键是历史双跑行落库的持久化键。
-        marker = derived_state.get("shadow")
-        requirement_payload = marker.get("requirement") if isinstance(marker, dict) else None
-        if isinstance(requirement_payload, dict):
-            resolved_requirement: dict[str, Any] = requirement_payload
-            return resolved_requirement
-        # 评测双跑的 agent 主路径行没有 shadow 标记；冻结 Requirement 锚在
-        # 新形状 research_state 的 requirement 字段上。回退读取与比较器
-        # normalize_agent_side 同口径；两处都没有时按缺失记越界。
-        embedded = (derived_state.get("research_state") or {}).get("requirement")
+        state = _agent_state(derived_state)
+        embedded = state.get("requirement")
         if isinstance(embedded, dict):
-            return embedded
+            return dict(embedded)
         return {}
     execution = derived_state.get("execution_requirement")
     if isinstance(execution, dict):
@@ -207,7 +193,12 @@ def _requirement_payload(
 def _evidence_refs(evidence: dict[str, Any]) -> list[str]:
     refs: list[str] = []
     for key in ("metric_refs", "dimension_refs"):
-        for ref in evidence.get(key) or ():
+        values = evidence.get(key)
+        if values is None and isinstance(evidence.get("definition"), dict):
+            values = evidence["definition"].get(
+                {"metric_refs": "metrics", "dimension_refs": "dimensions"}[key]
+            )
+        for ref in values or ():
             refs.append(str(ref))
     return refs
 
@@ -235,23 +226,14 @@ def _dimension_verdict(
 
 
 def _gate_cross_run(agent_derived: dict[str, Any]) -> GateResult:
-    """快照内所有证据及其依赖必须属于同一 run id。"""
+    """新 Evidence 只能引用当前台账中的父 Evidence。"""
 
-    snapshot = dict(agent_derived.get("research_run_snapshot") or {})
-    run_id = snapshot.get("run_id")
-    evidences = [item for item in (snapshot.get("evidences") or []) if isinstance(item, dict)]
-    cross: list[str] = [
-        str(item.get("evidence_id"))
-        for item in evidences
-        if item.get("run_id") != run_id
-    ]
+    evidences = _agent_evidences(agent_derived)
+    cross: list[str] = []
     by_id = {item.get("evidence_id"): item for item in evidences}
     for item in evidences:
-        for dependency in item.get("dependencies") or ():
-            if not isinstance(dependency, dict):
-                continue
-            source = by_id.get(dependency.get("evidence_id"))
-            if source is None or dependency.get("run_id") != run_id:
+        for parent_id in item.get("parent_evidence_ids") or ():
+            if parent_id not in by_id:
                 cross.append(str(item.get("evidence_id")))
     cross = sorted(set(cross))
     return GateResult(
@@ -308,37 +290,48 @@ def _gate_report_citations(agent_derived: dict[str, Any]) -> GateResult:
 
 
 def _snapshot_evidence_ids(agent_derived: dict[str, Any]) -> set[str]:
-    snapshot = dict(agent_derived.get("research_run_snapshot") or {})
+    state = _agent_state(agent_derived)
+    refs = state.get("evidence_refs")
+    if isinstance(refs, list):
+        return {str(item) for item in refs}
     return {
         str(item.get("evidence_id"))
-        for item in (snapshot.get("evidences") or [])
+        for item in _agent_evidences(agent_derived)
         if isinstance(item, dict) and item.get("evidence_id")
     }
 
 
-def _iter_report_findings(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-    findings: list[dict[str, Any]] = []
-    for payload_key in ("final_report", "report_draft"):
-        payload_raw = snapshot.get(payload_key)
-        if isinstance(payload_raw, str):
-            try:
-                payload = json.loads(payload_raw)
-            except ValueError:
-                continue
-        elif isinstance(payload_raw, dict):
-            payload = payload_raw
-        else:
-            continue
-        for finding in payload.get("findings") or []:
-            if isinstance(finding, dict):
-                findings.append(finding)
-    return findings
+def _agent_state(agent_derived: dict[str, Any]) -> dict[str, Any]:
+    state = agent_derived.get("research_state")
+    if isinstance(state, dict):
+        return state
+    snapshot = agent_derived.get("research_state_snapshot")
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("state"), dict):
+        return dict(snapshot["state"])
+    return {}
+
+
+def _agent_evidences(agent_derived: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = _agent_state(agent_derived).get("react_evidence")
+    if isinstance(raw, dict):
+        return [item for item in raw.values() if isinstance(item, dict)]
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    return []
+
+
+def _iter_report_findings(agent_derived: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in _agent_state(agent_derived).get("findings") or ()
+        if isinstance(item, dict) and item.get("status", "confirmed") == "confirmed"
+    ]
 
 
 def _report_unsourced_citations(agent_derived: dict[str, Any]) -> list[str]:
     known = _snapshot_evidence_ids(agent_derived)
     unsourced: set[str] = set()
-    for finding in _iter_report_findings(dict(agent_derived.get("research_run_snapshot") or {})):
+    for finding in _iter_report_findings(agent_derived):
         for citation in _finding_citations(finding):
             if citation not in known:
                 unsourced.add(citation)
@@ -346,22 +339,14 @@ def _report_unsourced_citations(agent_derived: dict[str, Any]) -> list[str]:
 
 
 def _finding_citations(finding: dict[str, Any]) -> list[str]:
-    citations: list[str] = []
-    for key in ("citations", "evidence_ids"):
-        for citation in finding.get(key) or ():
-            if isinstance(citation, dict):
-                citation = citation.get("evidence_id")
-            if citation:
-                citations.append(str(citation))
-    return citations
+    return [str(citation) for citation in finding.get("evidence_ids") or ()]
 
 
 def _count_report_citations(agent_derived: dict[str, Any]) -> tuple[int, int]:
-    snapshot = dict(agent_derived.get("research_run_snapshot") or {})
     known = _snapshot_evidence_ids(agent_derived)
     total = 0
     bad = 0
-    for finding in _iter_report_findings(snapshot):
+    for finding in _iter_report_findings(agent_derived):
         for citation in _finding_citations(finding):
             total += 1
             if citation not in known:

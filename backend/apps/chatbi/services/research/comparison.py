@@ -1,13 +1,12 @@
-"""阶段 7：新旧路径双跑结果比较器（doc38 §11.3.2）。
+"""Research 离线评测结果比较器（doc42 §13.2）。
 
 两侧的持久化形态不同：
 
 - 旧路径（用户可见）：``derived_state["research_state"]``（ResearchState）
   + ``derived_state["research_evidence"]``（EvidenceSnapshot 列表）
   + ``derived_state["execution_requirement"]["research_requirement"]``（冻结输入）；
-- 新路径（shadow）：``derived_state["research_run_snapshot"]``
-  （ResearchRunSnapshot）+ ``derived_state["shadow"]["requirement"]``
-  （投影后的冻结输入）。
+- 新路径：``derived_state["research_state"]`` 与
+  ``derived_state["research_state_snapshot"]``。
 
 比较器先把两侧归一化成同一组事实，再按四组维度输出逐项比较：
 输入 / 过程 / 输出 / 运行。任何一侧没有记录的维度标记为
@@ -30,8 +29,8 @@ GROUP_PROCESS = "process"
 GROUP_OUTPUT = "output"
 GROUP_RUNTIME = "runtime"
 
-# 报告引用指向的证据 id 集合键（final_report/draft 的 findings.citations）。
-_CITATION_KEYS = ("citations", "evidence_ids")
+# 新 Completion 与 Finding 都通过 evidence_ids 建立回答溯源。
+_CITATION_KEYS = ("evidence_ids",)
 
 
 @dataclass(frozen=True)
@@ -152,49 +151,61 @@ def normalize_legacy_side(derived_state: dict[str, Any]) -> RunFacts:
 
 
 def normalize_agent_side(derived_state: dict[str, Any]) -> RunFacts:
-    """从 shadow run 行的 derived_state 提取归一化事实。"""
+    """从新 ResearchState 和快照提取归一化事实。"""
 
-    snapshot = dict(derived_state.get("research_run_snapshot") or {})
-    marker = dict(derived_state.get(_shadow_marker_key()) or {})
-    requirement = dict(marker.get("requirement") or {})
+    snapshot = dict(derived_state.get("research_state_snapshot") or {})
+    state = dict(derived_state.get("research_state") or {})
+    snapshot_state = snapshot.get("state")
+    snapshot_state = snapshot_state if isinstance(snapshot_state, dict) else {}
+    if not state and isinstance(snapshot_state, dict):
+        state = dict(snapshot_state)
+    requirement = dict(state.get("requirement") or {})
     if not requirement:
-        # 评测双跑的 agent 主路径行没有 shadow 标记；其冻结 Requirement 锚在
-        # 新形状 research_state 的 requirement 字段上。回退读取保持输入组
-        # 维度可比；两处都没有时维持缺失语义，不猜测相等（§11.3.2）。
-        embedded = (derived_state.get("research_state") or {}).get("requirement")
-        if isinstance(embedded, dict):
-            requirement = embedded
-    evidences = [item for item in (snapshot.get("evidences") or []) if isinstance(item, dict)]
-    usage = dict(snapshot.get("budget_usage") or {})
+        execution = derived_state.get("execution_requirement")
+        if isinstance(execution, dict) and isinstance(
+            execution.get("research_requirement"), dict
+        ):
+            requirement = dict(execution["research_requirement"])
+
+    raw_evidences = state.get("react_evidence")
+    if isinstance(raw_evidences, dict):
+        evidences = [item for item in raw_evidences.values() if isinstance(item, dict)]
+    elif isinstance(raw_evidences, list):
+        evidences = [item for item in raw_evidences if isinstance(item, dict)]
+    else:
+        evidences = []
+    usage = dict(state.get("react_budget_usage") or state.get("budget_usage") or {})
     version = dict(requirement.get("version_snapshot") or {})
-    citations, findings_count = _report_citation_facts(snapshot)
-    failed_codes = tuple(
-        str(item.get("error_code"))
-        for item in (snapshot.get("failed_observations") or [])
-        if isinstance(item, dict) and item.get("error_code")
+    completion = dict(
+        state.get("react_completion")
+        or state.get("completion")
+        or snapshot_state.get("completion")
+        or {}
     )
-    assessments = [
-        item
-        for item in (snapshot.get("hypothesis_assessments") or [])
-        if isinstance(item, dict)
+    findings = [item for item in state.get("findings") or () if isinstance(item, dict)]
+    citation_values: list[str] = []
+    for evidence_id in completion.get("evidence_ids") or ():
+        citation_values.append(str(evidence_id))
+    for finding in findings:
+        for evidence_id in finding.get("evidence_ids") or ():
+            citation_values.append(str(evidence_id))
+    citations = tuple(dict.fromkeys(citation_values))
+    attempts = [
+        item for item in state.get("attempted_actions") or () if isinstance(item, dict)
     ]
-    hypothesis_ids = tuple(
-        dict.fromkeys(
-            [
-                *(str(item.get("hypothesis_id")) for item in assessments),
-                *(
-                    hypothesis_id
-                    for item in evidences
-                    for hypothesis_id in (item.get("hypothesis_ids") or [])
-                ),
-            ]
-        )
+    failed_codes = tuple(
+        str(error.get("code"))
+        for item in attempts
+        for error in (item.get("error"),)
+        if item.get("status") in {"failed", "rejected"}
+        and isinstance(error, dict)
+        and error.get("code")
     )
     return RunFacts(
         side="agent",
-        goal=_optional_str(snapshot.get("goal")) or _optional_str(requirement.get("goal")),
-        status=_optional_str(snapshot.get("status")),
-        finish_reason=_optional_str(snapshot.get("finish_reason")),
+        goal=_optional_str(requirement.get("goal")),
+        status=_agent_status(state.get("current_status"), completion),
+        finish_reason=_agent_finish_reason(state.get("current_status"), completion),
         premise_supported=None,
         target_metric_refs=_tuple(requirement.get("target_metric_refs")),
         immutable_filters=_filter_keys(requirement.get("immutable_filters")),
@@ -214,14 +225,51 @@ def normalize_agent_side(derived_state: dict[str, Any]) -> RunFacts:
         evidence_count=len(evidences),
         evidence_metric_refs=_union_refs(evidences, "metric_refs"),
         evidence_dimension_refs=_union_refs(evidences, "dimension_refs"),
-        hypothesis_ids=hypothesis_ids,
-        queries_used=_optional_int(usage.get("queries")),
-        model_calls_used=_optional_int(usage.get("model_calls")),
+        queries_used=_optional_int(usage.get("query_calls")),
+        model_calls_used=_optional_int(usage.get("model_turns")),
         error_codes=failed_codes,
-        report_present=bool(snapshot.get("final_report") or snapshot.get("report_draft")),
+        report_present=bool(completion or findings),
         report_citation_ids=citations,
-        findings_count=findings_count,
+        findings_count=len(findings) if findings else None,
     )
+
+
+def _agent_status(state_status: Any, completion: dict[str, Any]) -> str | None:
+    """把新 ResearchState 状态归一化为比较器的历史状态口径。"""
+
+    completion_status = completion.get("status")
+    if completion_status == "complete":
+        return "succeeded"
+    if completion_status == "partial":
+        return "partial"
+    if completion_status == "unanswerable":
+        return "failed"
+    return {
+        "completed": "succeeded",
+        "partial": "partial",
+        "unanswerable": "failed",
+        "waiting_for_user": "needs_clarification",
+        "failed": "failed",
+        "cancelled": "cancelled",
+        "running": "running",
+    }.get(str(state_status))
+
+
+def _agent_finish_reason(state_status: Any, completion: dict[str, Any]) -> str | None:
+    """从新 Completion 的限制或终态推导可比较的结束原因。"""
+
+    for limitation in completion.get("limitations") or ():
+        if isinstance(limitation, dict) and limitation.get("code"):
+            return str(limitation["code"])
+    if completion.get("status") == "complete":
+        return "sufficient_evidence"
+    if completion.get("status") == "unanswerable":
+        return "data_insufficient"
+    return {
+        "waiting_for_user": "needs_clarification",
+        "failed": "execution_failed",
+        "cancelled": "cancelled",
+    }.get(str(state_status))
 
 
 def compare_dual_runs(
@@ -408,12 +456,6 @@ def _set_compare(
 # --------------------------------------------------------------------- #
 
 
-def _shadow_marker_key() -> str:
-    # 阶段 8 起 shadow.py 已删除；该键是历史双跑行落库的持久化键，
-    # 比较器读取历史样本时仍按此键定位标记。
-    return "shadow"
-
-
 def _legacy_requirement(derived_state: dict[str, Any]) -> dict[str, Any]:
     execution = derived_state.get("execution_requirement")
     if isinstance(execution, dict):
@@ -440,7 +482,16 @@ def _filter_keys(raw: Any) -> tuple[str, ...]:
 def _union_refs(evidences: list[dict[str, Any]], key: str) -> tuple[str, ...]:
     refs: set[str] = set()
     for item in evidences:
-        for ref in item.get(key) or ():
+        values = item.get(key)
+        if values is None:
+            definition = item.get("definition")
+            if isinstance(definition, dict):
+                values = definition.get(
+                    {"metric_refs": "metrics", "dimension_refs": "dimensions"}.get(
+                        key, key
+                    )
+                )
+        for ref in values or ():
             if ref:
                 refs.add(str(ref))
     return tuple(sorted(refs))
@@ -455,37 +506,6 @@ def _used_from_remaining(maximum: Any, remaining: Any) -> int | None:
         return max(int(maximum) - int(remaining), 0)
     except (TypeError, ValueError):
         return None
-
-
-def _report_citation_facts(snapshot: dict[str, Any]) -> tuple[tuple[str, ...], int | None]:
-    """提取报告引用的证据 id 与 finding 数量（draft 与 final 取并集）。"""
-
-    citations: set[str] = set()
-    findings_count = 0
-    saw_findings = False
-    for payload_key in ("final_report", "report_draft"):
-        payload_raw = snapshot.get(payload_key)
-        if isinstance(payload_raw, str):
-            try:
-                payload = json.loads(payload_raw)
-            except ValueError:
-                continue
-        elif isinstance(payload_raw, dict):
-            payload = payload_raw
-        else:
-            continue
-        for finding in payload.get("findings") or []:
-            if not isinstance(finding, dict):
-                continue
-            saw_findings = True
-            findings_count += 1
-            for key in _CITATION_KEYS:
-                for citation in finding.get(key) or ():
-                    if isinstance(citation, dict):
-                        citation = citation.get("evidence_id")
-                    if citation:
-                        citations.add(str(citation))
-    return tuple(sorted(citations)), findings_count if saw_findings else None
 
 
 def _optional_str(value: Any) -> str | None:

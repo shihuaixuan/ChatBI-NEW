@@ -379,17 +379,76 @@ class AgentReasoner:
                     raw_response_excerpt=second_error.raw_response_excerpt,
                     model_turns=first_error.model_turns + second_error.model_turns,
                 ) from second_error
+            self._record_research_turn_trace(
+                state,
+                parsed,
+                step_id=step_id,
+                step_index=step_index,
+                repaired=True,
+            )
             return ResearchAgentDecision(
                 decision=parsed,
                 response=repaired.response,
                 usage=repaired.usage,
                 repaired=True,
             )
+        self._record_research_turn_trace(
+            state,
+            parsed,
+            step_id=step_id,
+            step_index=step_index,
+            repaired=False,
+        )
         return ResearchAgentDecision(
             decision=parsed,
             response=first.response,
             usage=first.usage,
         )
+
+    def _record_research_turn_trace(
+        self,
+        state: AgentRuntimeState,
+        decision: ResearchTurnDecision,
+        *,
+        step_id: int | None,
+        step_index: int | None,
+        repaired: bool,
+    ) -> None:
+        """记录通过契约校验的 ResearchTurnDecision。"""
+
+        run_id = state.require_run_id()
+        prompt_version = state.context.state.get("research_prompt_version")
+        with self._recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key=f"research_turn_decision:{step_index or 'unknown'}",
+                node_type=TraceNodeType.PROJECTION,
+                name="research_turn_decision",
+                display_name="Research 轮次决策",
+                metadata={
+                    "step_id": step_id,
+                    "prompt_version": prompt_version,
+                    "repaired": repaired,
+                },
+            ),
+            input_data={
+                "step_id": step_id,
+                "step_index": step_index,
+                "prompt_version": prompt_version,
+                "repaired": repaired,
+            },
+        ) as decision_node:
+            decision_node.set_output(
+                {
+                    "action_count": len(decision.actions),
+                    "finding_change_count": len(decision.finding_changes),
+                    "todo_change_count": len(decision.todo_changes),
+                    "repaired": repaired,
+                }
+            )
+            decision_node.set_output_detail(
+                {"research_turn_decision": decision.model_dump(mode="json")}
+            )
 
     def _invoke_messages(
         self,

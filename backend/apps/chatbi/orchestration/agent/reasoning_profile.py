@@ -72,9 +72,8 @@ partial 结束；当前条件下没有可支持问题的证据时以 unanswerabl
 """
 
 RESEARCH_WORKING_STATE_NOTE = (
-    "该状态由服务端根据可信工具结果生成。没有 Evidence 时直接使用 "
-    "submit_research_plan 提交一份完整计划；当前计划执行完且仍需继续时，携带"
-    "explicit_gap 评估提交下一份完整计划。可以结束时调用 finish_research，"
+    "该状态由服务端根据 ResearchState 和可信工具结果生成。请先处理未完成 Todo，"
+    "再选择能够补充证据、读取结果、补充语义资产或结束研究的最小动作；"
     "纯文本回答不构成完成。"
 )
 
@@ -133,14 +132,6 @@ SOFT_PROFILE = ReasoningProfile(
     ),
 )
 
-RESEARCH_PROFILE = ReasoningProfile(
-    name="research",
-    direct_answer_finishes=False,
-    # 模型只负责提交完整计划或完成判断；查询、计算和检查由 DAG 驱动执行。
-    fixed_tool_allowlist=("submit_research_plan", "finish_research"),
-    working_state_note=RESEARCH_WORKING_STATE_NOTE,
-)
-
 RESEARCH_REACT_PROFILE = ReasoningProfile(
     name="research_react",
     direct_answer_finishes=False,
@@ -163,7 +154,6 @@ RESEARCH_REACT_PROFILE = ReasoningProfile(
 REASONING_PROFILES: dict[str, ReasoningProfile] = {
     NORMAL_PROFILE.name: NORMAL_PROFILE,
     SOFT_PROFILE.name: SOFT_PROFILE,
-    RESEARCH_PROFILE.name: RESEARCH_PROFILE,
     RESEARCH_REACT_PROFILE.name: RESEARCH_REACT_PROFILE,
 }
 
@@ -180,7 +170,6 @@ def get_reasoning_profile(mode: str) -> ReasoningProfile:
 __all__ = [
     "NORMAL_PROFILE",
     "REASONING_PROFILES",
-    "RESEARCH_PROFILE",
     "RESEARCH_REACT_PROFILE",
     "RESEARCH_REACT_SYSTEM_PROMPT",
     "SOFT_PROFILE",

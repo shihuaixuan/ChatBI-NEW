@@ -2,7 +2,7 @@
 
 本模块只负责 Research Run 的生命周期和循环控制。研究判断由模型通过
 ``ResearchTurnDecision`` 提交，查询、计算、证据读取和结束校验由新的
-``ResearchToolRuntime`` 执行；主循环不创建或读取旧的 ``plan_execution_state``。
+``ResearchToolRuntime`` 执行；主循环只读写 ResearchState。
 """
 
 from __future__ import annotations
@@ -27,8 +27,6 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchActionType,
     ResearchAgentInput,
     ResearchAgentRequirement,
-    ResearchCompletion,
-    ResearchCompletionReason,
     ResearchStateSnapshot,
     ResearchStateStatus,
     SemanticContext,
@@ -55,6 +53,9 @@ from apps.chatbi.orchestration.agent.state import AgentRuntimeState
 from apps.chatbi.orchestration.agent.tools.base import AgentToolContext
 from apps.chatbi.repository.sqlmodel import agent_run_repository
 from apps.chatbi.services.evidence import ANALYSIS_EVIDENCE_REGISTRY_KEY
+from apps.chatbi.services.research.action_fingerprint import (
+    research_action_fingerprint,
+)
 from apps.chatbi.services.research.agent_context import (
     build_research_system_context,
     project_research_react_state,
@@ -75,7 +76,14 @@ from apps.chatbi.services.research.state_snapshot import (
 from apps.chatbi.services.research.tool_context import ResearchToolContext
 from apps.chatbi.services.research.tools import build_research_tool_registry
 from apps.tool import BudgetGuard, NeverCancelled
-from apps.trace import AgentTraceRecorder, DisabledAgentTraceRecorder
+from apps.trace import (
+    AgentTraceRecorder,
+    DisabledAgentTraceRecorder,
+    TraceNodeSpec,
+    TraceNodeStatus,
+    TraceNodeType,
+    tool_attributes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +98,20 @@ class ResearchRuntimeInterrupted(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ResearchRuntimeTermination:
+    """运行时因取消或系统错误产生的终止结果。"""
+
+    status: str
+    reason: str
+    summary: str
+    evidence_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ResearchAgentRunOutcome:
     """一次 Research Agent 执行的结果。"""
 
-    completion: Any | None
+    completion: Completion | ResearchRuntimeTermination | None
     stop_reason: str
     turns: int
     snapshot: ResearchStateSnapshot | None = None
@@ -136,11 +154,12 @@ class ResearchAgentRuntime:
         self._context_state_overlay = dict(context_state_overlay or {})
         self._failure_injector = failure_injector
         self._registry: ResearchToolRegistry = build_research_tool_registry()
+        self._recorder = recorder or DisabledAgentTraceRecorder()
         self._reasoner = AgentReasoner(
             config,
             model_client,
             cast(Any, self._registry),
-            recorder or DisabledAgentTraceRecorder(),
+            self._recorder,
         )
         self._restored_messages: list[AgentMessage] | None = None
 
@@ -413,7 +432,7 @@ class ResearchAgentRuntime:
             trace_recorder=self._observation_recorder,
             failure_injector=self._failure_injector,
         )
-        # 阶段 7只建立 ReAct 状态，不再创建旧计划状态。
+        # Research 主路径只建立 ReAct 状态。
         ctx.bind_to_context(include_legacy_plan_state=False)
         return ctx
 
@@ -655,6 +674,7 @@ class ResearchAgentRuntime:
         run_id = getattr(self._run_row, "id", None)
         if run_id is None or getattr(step, "id", None) is None:
             raise ValueError("RESEARCH_AGENT_TOOL_CALL_OWNERSHIP_MISSING")
+        budget_before = ctx.react_budget_usage()
         tool_runtime = ResearchToolRuntime(
             self._registry,
             max_workers=int(getattr(self._config, "tool_parallel_workers", 4) or 4),
@@ -662,6 +682,16 @@ class ResearchAgentRuntime:
             version_snapshot=ctx.requirement.version_snapshot,
         )
         rows = []
+        research_state = ctx.context.state.get(RESEARCH_STATE_KEY)
+        if not isinstance(research_state, dict):
+            raise ValueError("RESEARCH_AGENT_STATE_INVALID")
+        attempt_iterations = research_state.setdefault("attempt_iterations", {})
+        if not isinstance(attempt_iterations, dict):
+            raise ValueError("RESEARCH_AGENT_ATTEMPT_ITERATIONS_INVALID")
+        # AttemptSummary 只保存动作事实；轮次单独持久化，供恢复、评测和
+        # 并行方向判定使用，不把运行时字段混入跨边界 DTO。
+        step_index = getattr(step, "step_index", None)
+        iteration = int(step_index) if isinstance(step_index, int) else ctx.iteration
         for call_id, action in actions:
             args_summary = action.arguments.model_dump(mode="json")
             args_summary["_action_fingerprint"] = tool_runtime.action_fingerprint(
@@ -677,6 +707,7 @@ class ResearchAgentRuntime:
                     args_summary=args_summary,
                 )
             )
+            attempt_iterations[f"attempt:{call_id}"] = iteration
         # 先提交 RUNNING 行，进程中断时恢复逻辑可以识别未完成动作。
         self._session.commit()
         results = self._execute_tool_batch_with_cancellation(
@@ -693,6 +724,15 @@ class ResearchAgentRuntime:
                 row,
                 result=result,
             )
+        self._record_research_action_trace(
+            ctx,
+            step=step,
+            actions=actions,
+            results=results,
+            visible_tools=visible_tools,
+            budget_before=budget_before,
+            budget_after=ctx.react_budget_usage(),
+        )
         return results
 
     def _execute_tool_batch_with_cancellation(
@@ -752,6 +792,221 @@ class ResearchAgentRuntime:
                 raise RuntimeError("RESEARCH_TOOL_BATCH_RESULT_MISSING")
             return results
 
+    def _record_research_action_trace(
+        self,
+        ctx: ResearchToolContext,
+        *,
+        step: Any,
+        actions: Sequence[tuple[str, ResearchAction]],
+        results: Sequence[ToolResult[Any]],
+        visible_tools: Sequence[str],
+        budget_before: Any,
+        budget_after: Any,
+    ) -> None:
+        """记录动作批次及每个动作的 ToolResult 和 Evidence 依赖。"""
+
+        run_id = getattr(self._run_row, "id", None)
+        step_id = getattr(step, "id", None)
+        if not isinstance(run_id, int) or run_id <= 0 or not isinstance(step_id, int):
+            return
+        fingerprints = [
+            self._research_action_fingerprint(ctx, call_id, action)
+            for call_id, action in actions
+        ]
+        iteration = getattr(step, "step_index", None)
+        iteration = iteration if isinstance(iteration, int) else ctx.iteration
+        prompt_version = ctx.context.state.get("research_prompt_version")
+        with self._recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key=f"research_action_batch:{iteration}",
+                node_type=TraceNodeType.PHASE,
+                name="research_action_batch",
+                display_name="Research 动作批次",
+                metadata={
+                    "step_id": step_id,
+                    "iteration": iteration,
+                    "prompt_version": prompt_version,
+                },
+            ),
+            input_data={
+                "step_id": step_id,
+                "iteration": iteration,
+                "visible_tools": list(visible_tools),
+                "actions": [
+                    {
+                        "tool_call_id": call_id,
+                        "tool_name": action.action_type.value,
+                        "action_fingerprint": fingerprint,
+                    }
+                    for (call_id, action), fingerprint in zip(
+                        actions, fingerprints, strict=True
+                    )
+                ],
+            },
+        ) as batch_node:
+            batch_node.set_output(
+                {
+                    "action_count": len(actions),
+                    "result_count": len(results),
+                    "statuses": [item.status.value for item in results],
+                    "visible_tools": list(visible_tools),
+                }
+            )
+            batch_node.set_state_diff(
+                {"budget_usage": budget_before.model_dump(mode="json")},
+                {"budget_usage": budget_after.model_dump(mode="json")},
+            )
+            batch_node.set_output_detail(
+                {
+                    "actions": [
+                        {
+                            "tool_call_id": call_id,
+                            "tool_name": action.action_type.value,
+                            "purpose": action.purpose,
+                            "arguments": action.arguments.model_dump(mode="json"),
+                            "action_fingerprint": fingerprint,
+                        }
+                        for (call_id, action), fingerprint in zip(
+                            actions, fingerprints, strict=True
+                        )
+                    ],
+                    "tool_results": [
+                        item.model_dump(mode="json") for item in results
+                    ],
+                    "budget_before": budget_before.model_dump(mode="json"),
+                    "budget_after": budget_after.model_dump(mode="json"),
+                }
+            )
+            for (call_id, action), result, fingerprint in zip(
+                actions, results, fingerprints, strict=True
+            ):
+                self._record_research_tool_trace(
+                    run_id,
+                    step_id,
+                    iteration,
+                    prompt_version,
+                    call_id,
+                    action,
+                    result,
+                    fingerprint,
+                    budget_after,
+                )
+
+    @staticmethod
+    def _research_action_fingerprint(
+        ctx: ResearchToolContext,
+        call_id: str,
+        action: ResearchAction,
+    ) -> str:
+        """优先读取已持久化 Attempt 中的最终指纹。"""
+
+        attempt_id = f"attempt:{call_id}"
+        for attempt in ctx.react_attempts():
+            if attempt.attempt_id == attempt_id:
+                return attempt.action_fingerprint
+        return research_action_fingerprint(
+            action,
+            version_snapshot=ctx.requirement.version_snapshot,
+        )
+
+    def _record_research_tool_trace(
+        self,
+        run_id: int,
+        step_id: int,
+        iteration: int,
+        prompt_version: Any,
+        call_id: str,
+        action: ResearchAction,
+        result: ToolResult[Any],
+        fingerprint: str,
+        budget_after: Any,
+    ) -> None:
+        """记录单个 Research 工具结果，包含 Evidence 依赖摘要。"""
+
+        result_payload = result.model_dump(mode="json")
+        result_data = result_payload.get("result")
+        evidence_id = (
+            result_data.get("evidence_id")
+            if isinstance(result_data, dict)
+            else None
+        )
+        parent_evidence_ids = (
+            result_data.get("parent_evidence_ids", [])
+            if isinstance(result_data, dict)
+            else []
+        )
+        rejected = (
+            isinstance(result_data, dict)
+            and result_data.get("decision") == "rejected"
+        )
+        status = (
+            TraceNodeStatus.REJECTED
+            if rejected
+            else {
+                ToolResultStatus.SUCCEEDED: TraceNodeStatus.SUCCEEDED,
+                ToolResultStatus.FAILED: TraceNodeStatus.FAILED,
+                ToolResultStatus.WAITING_FOR_USER: TraceNodeStatus.WAITING,
+            }[result.status]
+        )
+        with self._recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key=f"research_tool_result:{iteration}:{call_id}",
+                node_type=TraceNodeType.TOOL,
+                name="research_tool_result",
+                display_name=f"Research 工具结果：{action.action_type.value}",
+                attributes=tool_attributes(
+                    tool_name=action.action_type.value,
+                    run_id=run_id,
+                    step_id=step_id,
+                    tool_call_id=call_id,
+                ),
+                metadata={
+                    "iteration": iteration,
+                    "prompt_version": prompt_version,
+                    "action_fingerprint": fingerprint,
+                },
+            ),
+            input_data={
+                "tool_call_id": call_id,
+                "tool_name": action.action_type.value,
+                "action_fingerprint": fingerprint,
+                "purpose": action.purpose,
+                "arguments": action.arguments.model_dump(mode="json"),
+            },
+        ) as result_node:
+            result_node.set_status(status)
+            result_node.set_attribute("gen_ai.tool.call.result", result.status.value)
+            if result.error is not None:
+                result_node.set_attribute("gen_ai.tool.error.type", result.error.code)
+            result_node.set_output(
+                {
+                    "tool_call_id": call_id,
+                    "tool_name": action.action_type.value,
+                    "status": result.status.value,
+                    "action_fingerprint": fingerprint,
+                    "evidence_id": evidence_id,
+                    "parent_evidence_ids": parent_evidence_ids,
+                    "completion_decision": (
+                        result_data.get("decision")
+                        if isinstance(result_data, dict)
+                        else None
+                    ),
+                    "error_code": result.error.code if result.error else None,
+                    "budget_usage_after": budget_after.model_dump(mode="json"),
+                }
+            )
+            result_node.set_output_detail(
+                {
+                    "tool_result": result_payload,
+                    "evidence_dependencies": {
+                        "evidence_id": evidence_id,
+                        "parent_evidence_ids": parent_evidence_ids,
+                    },
+                }
+            )
+
     # ------------------------------------------------------------------ #
     # 终态与持久化
     # ------------------------------------------------------------------ #
@@ -762,7 +1017,12 @@ class ResearchAgentRuntime:
         turns: int,
         state: AgentRuntimeState,
     ) -> ResearchAgentRunOutcome:
-        self._persist_state(ctx, messages=state.messages, terminal=True)
+        self._persist_state(
+            ctx,
+            messages=state.messages,
+            terminal=True,
+            terminal_reason="finish_research_accepted",
+        )
         return ResearchAgentRunOutcome(
             ctx.react_completion(),
             "finished",
@@ -784,7 +1044,12 @@ class ResearchAgentRuntime:
             "budget_exhausted",
             f"研究因预算不足结束，已保留 {len(ctx.known_evidence_ids())} 条 Evidence。",
         )
-        self._persist_state(ctx, messages=state.messages, terminal=True)
+        self._persist_state(
+            ctx,
+            messages=state.messages,
+            terminal=True,
+            terminal_reason=reason,
+        )
         return ResearchAgentRunOutcome(
             completion,
             "budget_exhausted",
@@ -805,7 +1070,12 @@ class ResearchAgentRuntime:
             "stalled",
             "连续多轮没有产生新的研究状态变化，研究已停止。",
         )
-        self._persist_state(ctx, messages=state.messages, terminal=True)
+        self._persist_state(
+            ctx,
+            messages=state.messages,
+            terminal=True,
+            terminal_reason="stalled",
+        )
         return ResearchAgentRunOutcome(
             completion,
             "stalled",
@@ -826,15 +1096,18 @@ class ResearchAgentRuntime:
             error_code="tool_call_interrupted",
         )
         ctx.set_current_status(ResearchStateStatus.CANCELLED)
-        completion = ResearchCompletion(
-            run_id=ctx.run_id,
+        completion = ResearchRuntimeTermination(
             status="cancelled",
-            reason=ResearchCompletionReason.CANCELLED,
+            reason="cancelled",
             summary=f"研究在 {stage} 阶段被取消，已完成的 Evidence 已保留。",
             evidence_ids=tuple(ctx.known_evidence_ids())[:_MAX_COMPLETION_EVIDENCE_IDS],
-            limitations=("cancelled",),
         )
-        self._persist_state(ctx, messages=state.messages, terminal=True)
+        self._persist_state(
+            ctx,
+            messages=state.messages,
+            terminal=True,
+            terminal_reason=stage,
+        )
         return ResearchAgentRunOutcome(
             completion,
             "cancelled",
@@ -855,15 +1128,18 @@ class ResearchAgentRuntime:
             error_code="tool_undeclared_exception",
         )
         ctx.set_current_status(ResearchStateStatus.FAILED)
-        completion = ResearchCompletion(
-            run_id=ctx.run_id,
+        completion = ResearchRuntimeTermination(
             status="failed",
-            reason=ResearchCompletionReason.EXECUTION_FAILED,
+            reason="execution_failed",
             summary=message[:4_000] or "Research Runtime 发生不可恢复错误。",
             evidence_ids=tuple(ctx.known_evidence_ids())[:_MAX_COMPLETION_EVIDENCE_IDS],
-            limitations=("execution_failed",),
         )
-        self._persist_state(ctx, messages=state.messages, terminal=True)
+        self._persist_state(
+            ctx,
+            messages=state.messages,
+            terminal=True,
+            terminal_reason="execution_failed",
+        )
         return ResearchAgentRunOutcome(
             completion,
             "failed",
@@ -929,6 +1205,7 @@ class ResearchAgentRuntime:
         *,
         messages: Sequence[AgentMessage],
         terminal: bool = False,
+        terminal_reason: str | None = None,
     ) -> None:
         derived = dict(getattr(self._run_row, "derived_state", None) or {})
         research_state = ctx.context.state.get(RESEARCH_STATE_KEY)
@@ -943,6 +1220,9 @@ class ResearchAgentRuntime:
         analysis = ctx.context.state.get(ANALYSIS_EVIDENCE_REGISTRY_KEY)
         if isinstance(analysis, dict):
             derived[ANALYSIS_EVIDENCE_REGISTRY_KEY] = dict(analysis)
+        prompt_version = ctx.context.state.get("research_prompt_version")
+        if isinstance(prompt_version, str) and prompt_version:
+            derived["research_prompt_version"] = prompt_version
         if messages:
             derived[_MESSAGES_KEY] = [item.model_dump(mode="json") for item in messages]
         snapshot = self._build_snapshot(ctx)
@@ -954,9 +1234,74 @@ class ResearchAgentRuntime:
             messages=[item.model_dump(mode="json") for item in messages],
         )
         if terminal:
+            self._record_research_terminal_trace(
+                ctx,
+                reason=terminal_reason or ctx.current_status.value,
+            )
             self._inject_failure("before_terminal_commit")
         self._session.commit()
         self._inject_failure("after_state_save")
+
+    def _record_research_terminal_trace(
+        self,
+        ctx: ResearchToolContext,
+        *,
+        reason: str,
+    ) -> None:
+        """记录 Research Run 的终态和结束原因。"""
+
+        run_id = getattr(self._run_row, "id", None)
+        if not isinstance(run_id, int) or run_id <= 0:
+            return
+        state_status = ctx.current_status
+        trace_status = {
+            ResearchStateStatus.COMPLETED: TraceNodeStatus.SUCCEEDED,
+            ResearchStateStatus.PARTIAL: TraceNodeStatus.PARTIAL,
+            ResearchStateStatus.UNANSWERABLE: TraceNodeStatus.REJECTED,
+            ResearchStateStatus.CANCELLED: TraceNodeStatus.CANCELLED,
+            ResearchStateStatus.FAILED: TraceNodeStatus.FAILED,
+            ResearchStateStatus.WAITING_FOR_USER: TraceNodeStatus.WAITING,
+            ResearchStateStatus.RUNNING: TraceNodeStatus.FAILED,
+        }[state_status]
+        prompt_version = ctx.context.state.get("research_prompt_version")
+        completion = ctx.react_completion()
+        with self._recorder.node(
+            TraceNodeSpec(
+                run_id=run_id,
+                node_key=f"research_terminal:{reason}",
+                node_type=TraceNodeType.VALIDATION,
+                name="research_terminal",
+                display_name="Research 终态",
+                metadata={
+                    "status": state_status.value,
+                    "reason": reason,
+                    "prompt_version": prompt_version,
+                },
+            ),
+            input_data={
+                "status": state_status.value,
+                "reason": reason,
+                "prompt_version": prompt_version,
+            },
+        ) as terminal_node:
+            terminal_node.set_status(trace_status)
+            terminal_node.set_output(
+                {
+                    "status": state_status.value,
+                    "reason": reason,
+                    "completion_status": completion.status if completion else None,
+                    "evidence_count": len(ctx.known_evidence_ids()),
+                    "budget_usage": ctx.react_budget_usage().model_dump(mode="json"),
+                }
+            )
+            terminal_node.set_output_detail(
+                {
+                    "completion": (
+                        completion.model_dump(mode="json") if completion else None
+                    ),
+                    "research_state": ctx.research_state().model_dump(mode="json"),
+                }
+            )
 
     def _close_running_tool_calls(
         self,
@@ -1053,4 +1398,5 @@ __all__ = [
     "ResearchAgentRunOutcome",
     "ResearchAgentRuntime",
     "ResearchRuntimeInterrupted",
+    "ResearchRuntimeTermination",
 ]

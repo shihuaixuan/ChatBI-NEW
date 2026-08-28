@@ -263,7 +263,7 @@ def build_run_orchestrator(
     )
 
 
-def build_plan_and_solve_pipeline(
+def build_research_agent_pipeline(
     session: Any,
     config: AgentConfig,
     *,
@@ -275,7 +275,7 @@ def build_plan_and_solve_pipeline(
     recorder: AgentTraceRecorder | None = None,
     semantic_retrieval_service: Any = None,
 ) -> ResearchAgentPipeline:
-    """装配统一 Plan-and-Solve Agent Runtime。
+    """装配 Evidence 驱动 Research Agent Runtime。
 
     与 shadow 栈（逐次重建会话与服务）不同：复用请求作用域的会话、
     工具注册表和生命周期——主路径与用户可见执行共享同一事务边界，
@@ -330,36 +330,8 @@ def build_plan_and_solve_pipeline(
     )
 
 
-def build_research_agent_pipeline(
-    session: Any,
-    config: AgentConfig,
-    *,
-    lifecycle: AgentLifecycle,
-    event_publisher: EventPublisher,
-    registry: ToolRegistry,
-    query_task_executor: QueryTaskExecutor,
-    artifact_service: ResultArtifactService,
-    recorder: AgentTraceRecorder | None = None,
-    semantic_retrieval_service: Any = None,
-) -> ResearchAgentPipeline:
-    """使用正式 Research Agent 名称装配同一个主路径管道。"""
-
-    return build_plan_and_solve_pipeline(
-        session,
-        config,
-        lifecycle=lifecycle,
-        event_publisher=event_publisher,
-        registry=registry,
-        query_task_executor=query_task_executor,
-        artifact_service=artifact_service,
-        recorder=recorder,
-        semantic_retrieval_service=semantic_retrieval_service,
-    )
-
-
 __all__ = [
     "build_run_orchestrator",
     "build_agent_tool_registry",
-    "build_plan_and_solve_pipeline",
     "build_research_agent_pipeline",
 ]
