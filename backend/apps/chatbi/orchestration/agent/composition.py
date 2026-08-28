@@ -28,9 +28,9 @@ from apps.chatbi.orchestration.agent.tools.core import FinishTool
 from apps.chatbi.orchestration.agent.tools.interaction import ClarifyTool
 from apps.chatbi.orchestration.agent.tools.temporal import ParseTimeRangeTool
 from apps.chatbi.orchestration.pipeline.mode_router import ExecutionRequirementBuilder
-from apps.chatbi.orchestration.pipeline.plan_and_solve_pipeline import (
-    PlanAndSolvePipeline,
-    PlanAndSolvePipelineDependencies,
+from apps.chatbi.orchestration.pipeline.research_agent_pipeline import (
+    ResearchAgentPipeline,
+    ResearchAgentPipelineDependencies,
 )
 from apps.chatbi.services.computation import ComputeEngine
 from apps.chatbi.services.execution import (
@@ -173,9 +173,12 @@ def build_run_orchestrator(
     model_service = build_question_model_service(enforce_json=True)
     if finalization_service is None:
         resolved_finalization_service = AgentFinalizationService(model_service)
-        resolved_answer_composer: AnswerComposer | None = answer_composer or AnswerComposer(
-            model_service,
-            citation_enforced=resolved_config.answer_citation_enforced,
+        resolved_answer_composer: AnswerComposer | None = (
+            answer_composer
+            or AnswerComposer(
+                model_service,
+                citation_enforced=resolved_config.answer_citation_enforced,
+            )
         )
     else:
         resolved_finalization_service = finalization_service
@@ -245,8 +248,8 @@ def build_run_orchestrator(
         execution_requirement_builder=ExecutionRequirementBuilder(
             resolved_semantic_schema_provider,
         ),
-        # 所有分析请求无条件进入同一个 Plan-and-Solve Agent Runtime。
-        plan_and_solve_pipeline=build_plan_and_solve_pipeline(
+        # 所有分析请求无条件进入同一个 Research Agent ReAct Runtime。
+        research_agent_pipeline=build_research_agent_pipeline(
             session,
             resolved_config,
             lifecycle=lifecycle,
@@ -255,6 +258,7 @@ def build_run_orchestrator(
             query_task_executor=resolved_query_task_executor,
             artifact_service=resolved_result_artifact_service,
             recorder=resolved_recorder,
+            semantic_retrieval_service=resolved_semantic_retrieval_service,
         ),
     )
 
@@ -269,7 +273,8 @@ def build_plan_and_solve_pipeline(
     query_task_executor: QueryTaskExecutor,
     artifact_service: ResultArtifactService,
     recorder: AgentTraceRecorder | None = None,
-) -> PlanAndSolvePipeline:
+    semantic_retrieval_service: Any = None,
+) -> ResearchAgentPipeline:
     """装配统一 Plan-and-Solve Agent Runtime。
 
     与 shadow 栈（逐次重建会话与服务）不同：复用请求作用域的会话、
@@ -305,8 +310,8 @@ def build_plan_and_solve_pipeline(
             trace_recorder=resolved_recorder,
         )
     )
-    return PlanAndSolvePipeline(
-        PlanAndSolvePipelineDependencies(
+    return ResearchAgentPipeline(
+        ResearchAgentPipelineDependencies(
             config=config,
             session=session,
             lifecycle=lifecycle,
@@ -320,7 +325,35 @@ def build_plan_and_solve_pipeline(
                 ),
             ),
             compute_engine_factory=ComputeEngine,
+            semantic_retrieval_service=semantic_retrieval_service,
         )
+    )
+
+
+def build_research_agent_pipeline(
+    session: Any,
+    config: AgentConfig,
+    *,
+    lifecycle: AgentLifecycle,
+    event_publisher: EventPublisher,
+    registry: ToolRegistry,
+    query_task_executor: QueryTaskExecutor,
+    artifact_service: ResultArtifactService,
+    recorder: AgentTraceRecorder | None = None,
+    semantic_retrieval_service: Any = None,
+) -> ResearchAgentPipeline:
+    """使用正式 Research Agent 名称装配同一个主路径管道。"""
+
+    return build_plan_and_solve_pipeline(
+        session,
+        config,
+        lifecycle=lifecycle,
+        event_publisher=event_publisher,
+        registry=registry,
+        query_task_executor=query_task_executor,
+        artifact_service=artifact_service,
+        recorder=recorder,
+        semantic_retrieval_service=semantic_retrieval_service,
     )
 
 
@@ -328,4 +361,5 @@ __all__ = [
     "build_run_orchestrator",
     "build_agent_tool_registry",
     "build_plan_and_solve_pipeline",
+    "build_research_agent_pipeline",
 ]

@@ -16,7 +16,7 @@ Context 只在服务端 Tool 执行时使用，不向模型序列化。所有值
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -24,12 +24,14 @@ from apps.chatbi.models.dto.analysis_evidence import AnalysisEvidence
 from apps.chatbi.models.dto.analysis_plan import ResultSetRef
 from apps.chatbi.models.dto.research_agent import (
     AttemptSummary,
+    BudgetUsage,
     ClarificationRequest,
     ClarificationResponse,
     Completion,
     ConversationMessage,
     Evidence,
     Finding,
+    ResearchActionType,
     ResearchAgentInput,
     ResearchAgentRequirement,
     ResearchBudget,
@@ -38,9 +40,12 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchEvidence,
     ResearchHypothesisAssessment,
     ResearchPlanNode,
+    ResearchState,
     ResearchStateStatus,
+    ResearchTurnDecision,
     SemanticAssessment,
     SemanticContextDelta,
+    TodoItem,
     ToolObservation,
 )
 from apps.chatbi.models.dto.research_agent import (
@@ -61,6 +66,13 @@ from apps.chatbi.services.planning.execution_state import (
     transition_plan_node,
 )
 from apps.chatbi.services.research.hypothesis_evaluator import HypothesisAuditRecord
+from apps.chatbi.services.research.ports import ResearchToolCostEstimate
+from apps.chatbi.services.research.state_changes import (
+    apply_finding_changes,
+    apply_todo_changes,
+    replay_state_events,
+    validate_event_sequence,
+)
 from apps.chatbi.services.research.state_snapshot import validate_evidence_dag
 from apps.chatbi.services.research.tool_result_persistence import (
     serialize_research_tool_result,
@@ -95,6 +107,8 @@ class ResearchToolContext:
     cancellation: CancellationSignal | None = None
     # Trace Recorder 由宿主注入；观察记录是唯一回调点。
     trace_recorder: Any = None
+    # 故障注入只存在于内存上下文，不会写入 derived_state。
+    failure_injector: Callable[[str], None] | None = None
 
     @property
     def run_id(self) -> str:
@@ -214,6 +228,9 @@ class ResearchToolContext:
     def record_semantic_context_delta(self, delta: SemanticContextDelta) -> None:
         """按顺序保存语义增量，便于恢复和审计。"""
 
+        if self.pending_tool_results_discarded():
+            return
+
         deltas = self._state().setdefault("semantic_context_deltas", [])
         if not isinstance(deltas, list):
             raise TypeError("RESEARCH_AGENT_SEMANTIC_CONTEXT_DELTAS_INVALID")
@@ -246,6 +263,17 @@ class ResearchToolContext:
             response = ClarificationResponse.model_validate(response)
         request = self.clarification_request()
         if request is None:
+            responses = self._state().get("clarification_responses")
+            if isinstance(responses, list):
+                for raw_response in responses:
+                    if not isinstance(raw_response, dict):
+                        continue
+                    if raw_response.get("clarification_request_id") != response.clarification_request_id:
+                        continue
+                    if raw_response != response.model_dump(mode="json"):
+                        raise ValueError("RESEARCH_AGENT_CLARIFICATION_RESPONSE_CONFLICT")
+                    # 已经处理过的回答直接返回当前输入，不重复生成输入快照。
+                    return self.current_agent_input()
             raise ValueError("RESEARCH_AGENT_CLARIFICATION_NOT_PENDING")
         if response.clarification_request_id != request.clarification_request_id:
             raise ValueError("RESEARCH_AGENT_CLARIFICATION_REQUEST_MISMATCH")
@@ -256,6 +284,22 @@ class ResearchToolContext:
             raise ValueError("RESEARCH_AGENT_CLARIFICATION_FREE_TEXT_FORBIDDEN")
         if not response.selected_option_ids and not (response.free_text or "").strip():
             raise ValueError("RESEARCH_AGENT_CLARIFICATION_RESPONSE_EMPTY")
+
+        response_payload = response.model_dump(mode="json")
+        responses = self._state().setdefault("clarification_responses", [])
+        if not isinstance(responses, list):
+            raise TypeError("RESEARCH_AGENT_CLARIFICATION_RESPONSES_INVALID")
+        for raw_response in responses:
+            if not isinstance(raw_response, dict):
+                continue
+            if raw_response.get("clarification_request_id") != response.clarification_request_id:
+                continue
+            if raw_response != response_payload:
+                raise ValueError("RESEARCH_AGENT_CLARIFICATION_RESPONSE_CONFLICT")
+            # 回答已经写入但进程可能在清理 pending 状态前中断，补做收口。
+            self._state()["pending_clarification"] = None
+            self.set_current_status(ResearchStateStatus.RUNNING)
+            return self.current_agent_input()
 
         current = self.current_agent_input()
         selected_labels = [
@@ -277,11 +321,8 @@ class ResearchToolContext:
             }
         )
         self.save_agent_input(updated)
-        self._state()["clarification_response"] = response.model_dump(mode="json")
-        responses = self._state().setdefault("clarification_responses", [])
-        if not isinstance(responses, list):
-            raise TypeError("RESEARCH_AGENT_CLARIFICATION_RESPONSES_INVALID")
-        responses.append(response.model_dump(mode="json"))
+        self._state()["clarification_response"] = response_payload
+        responses.append(response_payload)
         self._state()["pending_clarification"] = None
         self.set_current_status(ResearchStateStatus.RUNNING)
         return updated
@@ -313,7 +354,9 @@ class ResearchToolContext:
         raw = self._state().get("findings")
         if not isinstance(raw, list):
             return ()
-        return tuple(Finding.model_validate(item) for item in raw if isinstance(item, dict))
+        return tuple(
+            Finding.model_validate(item) for item in raw if isinstance(item, dict)
+        )
 
     def react_attempts(self) -> tuple[AttemptSummary, ...]:
         """读取当前 ReAct 状态中的 AttemptSummary。"""
@@ -326,6 +369,238 @@ class ResearchToolContext:
             for item in raw
             if isinstance(item, dict)
         )
+
+    def react_todos(self) -> tuple[TodoItem, ...]:
+        """读取当前 ReAct 状态中的 TodoItem。"""
+
+        raw = self._state().get("todo_items")
+        if not isinstance(raw, list):
+            return ()
+        return tuple(
+            TodoItem.model_validate(item) for item in raw if isinstance(item, dict)
+        )
+
+    def react_budget_usage(self) -> BudgetUsage:
+        """读取 ReAct 预算用量，并兼容阶段 3～5的旧预算字段。"""
+
+        raw = self._state().get("react_budget_usage")
+        if isinstance(raw, dict):
+            return BudgetUsage.model_validate(raw)
+        raw = self._state().get("budget_usage")
+        if isinstance(raw, dict) and "query_calls" in raw:
+            return BudgetUsage.model_validate(raw)
+        legacy = self.budget_usage()
+        return BudgetUsage(
+            model_turns=legacy.model_calls,
+            query_calls=legacy.queries,
+            wall_time_ms=round(legacy.duration_seconds * 1_000),
+        )
+
+    def research_state(self) -> ResearchState:
+        """将内部研究事实投影为阶段 6的规范 ResearchState。"""
+
+        agent_input = self.current_agent_input()
+        agent_input_ref = agent_input.agent_input_ref or self._state().get(
+            "agent_input_ref"
+        )
+        if not isinstance(agent_input_ref, str) or not agent_input_ref:
+            raise ValueError("RESEARCH_AGENT_INPUT_REF_REQUIRED")
+        completion = self.react_completion()
+        raw_schema_version = self._state().get("schema_version", 1)
+        if not isinstance(raw_schema_version, int):
+            raise ValueError("RESEARCH_AGENT_STATE_SCHEMA_VERSION_INVALID")
+        raw_evidence_refs = self._state().get("evidence_refs")
+        evidence_refs = (
+            tuple(item for item in raw_evidence_refs if isinstance(item, str))
+            if isinstance(raw_evidence_refs, list)
+            else tuple(self._research_evidence_map())
+        )
+        return ResearchState(
+            schema_version=raw_schema_version,
+            agent_input_ref=agent_input_ref,
+            evidence_refs=evidence_refs,
+            findings=self.react_findings(),
+            todo_items=self.react_todos(),
+            attempted_actions=self.react_attempts(),
+            budget_usage=self.react_budget_usage(),
+            current_status=self.current_status,
+            completion=completion,
+        )
+
+    def apply_research_turn_decision(
+        self,
+        decision: ResearchTurnDecision | Mapping[str, Any],
+        *,
+        visible_tools: Sequence[str | ResearchActionType] | None = None,
+    ) -> ResearchState:
+        """先完成整轮校验，再原子提交 Finding、Todo 及事件。"""
+
+        if not isinstance(decision, ResearchTurnDecision):
+            decision = ResearchTurnDecision.model_validate(decision)
+        if self.current_status is not ResearchStateStatus.RUNNING:
+            raise ValueError("RESEARCH_AGENT_RUN_NOT_RUNNING")
+        if visible_tools is not None:
+            visible = {
+                item.value if isinstance(item, ResearchActionType) else str(item)
+                for item in visible_tools
+            }
+            hidden = [
+                action.action_type.value
+                for action in decision.actions
+                if action.action_type.value not in visible
+            ]
+            if hidden:
+                raise ValueError("RESEARCH_AGENT_ACTION_NOT_VISIBLE")
+
+        known_evidence_ids = set(self._research_evidence_map())
+        current_findings = self.react_findings()
+        current_todos = self.react_todos()
+        updated_findings = apply_finding_changes(
+            current_findings,
+            decision.finding_changes,
+            evidence_ids=known_evidence_ids,
+        )
+        updated_todos = apply_todo_changes(
+            current_todos,
+            decision.todo_changes,
+            evidence_ids=known_evidence_ids,
+        )
+
+        state = self._state()
+        raw_events = state.get("state_events", [])
+        if not isinstance(raw_events, list) or any(
+            not isinstance(item, dict) for item in raw_events
+        ):
+            raise ValueError("RESEARCH_AGENT_STATE_EVENTS_INVALID")
+        validate_event_sequence(raw_events)
+        if state.get("last_event_sequence", 0) != len(raw_events):
+            raise ValueError("RESEARCH_AGENT_STATE_EVENT_SEQUENCE_INVALID")
+        replayed_findings, replayed_todos = replay_state_events(
+            raw_events,
+            evidence_ids=known_evidence_ids,
+        )
+        if replayed_findings != current_findings or replayed_todos != current_todos:
+            raise ValueError("RESEARCH_AGENT_STATE_EVENT_REPLAY_MISMATCH")
+        next_sequence = len(raw_events) + 1
+        new_events: list[dict[str, Any]] = []
+        for change in decision.finding_changes:
+            new_events.append(
+                {
+                    "event_sequence": next_sequence,
+                    "event_type": "finding_change",
+                    "change": change.model_dump(mode="json"),
+                }
+            )
+            next_sequence += 1
+        for todo_change in decision.todo_changes:
+            new_events.append(
+                {
+                    "event_sequence": next_sequence,
+                    "event_type": "todo_change",
+                    "change": todo_change.model_dump(mode="json"),
+                }
+            )
+            next_sequence += 1
+
+        # 先用候选快照完成一次完整 DTO 校验，校验通过后才写入底层 state。
+        current = self.research_state()
+        candidate = ResearchState.model_validate(
+            {
+                **current.model_dump(mode="json"),
+                "schema_version": ResearchState.SCHEMA_VERSION,
+                "findings": [item.model_dump(mode="json") for item in updated_findings],
+                "todo_items": [item.model_dump(mode="json") for item in updated_todos],
+            }
+        )
+        updated_state = dict(state)
+        updated_state["schema_version"] = ResearchState.SCHEMA_VERSION
+        updated_state["findings"] = [
+            item.model_dump(mode="json") for item in updated_findings
+        ]
+        updated_state["todo_items"] = [
+            item.model_dump(mode="json") for item in updated_todos
+        ]
+        updated_state["state_events"] = [*raw_events, *new_events]
+        updated_state["last_event_sequence"] = next_sequence - 1
+        self.context.state[RESEARCH_STATE_KEY] = updated_state
+        return candidate
+
+    def replay_research_state_events(self) -> ResearchState:
+        """用已保存事件重建 Finding 和 Todo，并校验当前状态没有漂移。"""
+
+        state = self._state()
+        raw_events = state.get("state_events", [])
+        if not isinstance(raw_events, list) or any(
+            not isinstance(item, dict) for item in raw_events
+        ):
+            raise ValueError("RESEARCH_AGENT_STATE_EVENTS_INVALID")
+        validate_event_sequence(raw_events)
+        expected_last_sequence = len(raw_events)
+        if state.get("last_event_sequence", 0) != expected_last_sequence:
+            raise ValueError("RESEARCH_AGENT_STATE_EVENT_SEQUENCE_INVALID")
+        findings, todos = replay_state_events(
+            raw_events,
+            evidence_ids=set(self._research_evidence_map()),
+        )
+        if findings != self.react_findings() or todos != self.react_todos():
+            raise ValueError("RESEARCH_AGENT_STATE_EVENT_REPLAY_MISMATCH")
+        return self.research_state()
+
+    def record_research_attempt(self, attempt: AttemptSummary) -> None:
+        """按 Attempt ID 幂等保存一次工具尝试摘要。"""
+
+        if self.pending_tool_results_discarded():
+            return
+
+        attempts = self._state().setdefault("attempted_actions", [])
+        if not isinstance(attempts, list):
+            raise TypeError("RESEARCH_AGENT_ATTEMPTS_INVALID")
+        payload = attempt.model_dump(mode="json")
+        for existing in attempts:
+            if not isinstance(existing, dict):
+                continue
+            if existing.get("attempt_id") != attempt.attempt_id:
+                continue
+            if existing != payload:
+                raise ValueError("RESEARCH_AGENT_ATTEMPT_IMMUTABLE")
+            return
+        attempts.append(payload)
+
+    def consume_research_cost(self, cost: ResearchToolCostEstimate) -> BudgetUsage:
+        """保存 ReAct 工具成本，不覆盖旧执行链使用的预算字段。"""
+
+        usage = self.react_budget_usage()
+        if self.pending_tool_results_discarded():
+            return usage
+        updated = BudgetUsage(
+            model_turns=usage.model_turns,
+            query_calls=usage.query_calls + cost.query_calls,
+            compute_calls=usage.compute_calls + cost.compute_calls,
+            semantic_search_calls=(
+                usage.semantic_search_calls + cost.semantic_search_calls
+            ),
+            wall_time_ms=usage.wall_time_ms + cost.wall_time_ms,
+            query_cost=usage.query_cost + cost.query_cost,
+        )
+        self._state()["react_budget_usage"] = updated.model_dump(mode="json")
+        return updated
+
+    def consume_react_model_turn(self, count: int = 1) -> BudgetUsage:
+        """保存 ReAct 模型调用次数，包含结构修正重试。"""
+
+        if count < 0:
+            raise ValueError("RESEARCH_AGENT_MODEL_TURN_COUNT_INVALID")
+        usage = self.react_budget_usage()
+        updated = BudgetUsage(
+            model_turns=usage.model_turns + count,
+            query_calls=usage.query_calls,
+            compute_calls=usage.compute_calls,
+            semantic_search_calls=usage.semantic_search_calls,
+            wall_time_ms=usage.wall_time_ms,
+            query_cost=usage.query_cost,
+        )
+        self._state()["react_budget_usage"] = updated.model_dump(mode="json")
+        return updated
 
     def running_tool_call_ids(self) -> tuple[str, ...]:
         """读取尚未结束的工具调用，供 finish_research 做收口校验。"""
@@ -365,7 +640,7 @@ class ResearchToolContext:
     # 状态初始化
     # ------------------------------------------------------------------ #
 
-    def bind_to_context(self) -> None:
+    def bind_to_context(self, *, include_legacy_plan_state: bool = True) -> None:
         """把 run 身份和冻结 Requirement 写入底层 state。
 
         Requirement 以 JSON 形式随 research_state 一起持久化，恢复时只使用
@@ -391,9 +666,13 @@ class ResearchToolContext:
             self.agent_input = ResearchAgentInput.model_validate(
                 research["agent_input"]
             )
+        if research.get("schema_version") is None:
+            research["schema_version"] = ResearchState.SCHEMA_VERSION
         if research.get("current_status") is None:
             research["current_status"] = ResearchStateStatus.RUNNING.value
-        if not isinstance(state.get(PLAN_EXECUTION_STATE_KEY), dict):
+        if include_legacy_plan_state and not isinstance(
+            state.get(PLAN_EXECUTION_STATE_KEY), dict
+        ):
             state[PLAN_EXECUTION_STATE_KEY] = build_plan_execution_state(
                 f"research-{self.run_id}"
             ).model_dump(mode="json")
@@ -450,6 +729,8 @@ class ResearchToolContext:
             raise ValueError("RESEARCH_AGENT_EVIDENCE_CROSS_RUN")
         if evidence.version_snapshot != self.requirement.version_snapshot:
             raise ValueError("RESEARCH_AGENT_EVIDENCE_VERSION_MISMATCH")
+        if self.pending_tool_results_discarded():
+            return
         candidate = [
             item
             for item in self.evidences()
@@ -525,11 +806,25 @@ class ResearchToolContext:
 
         if not result.tool_call_id:
             raise ValueError("RESEARCH_AGENT_TOOL_CALL_ID_REQUIRED")
-        self._research_tool_results()[result.tool_call_id] = (
-            serialize_research_tool_result(result)
-        )
+        if self.pending_tool_results_discarded():
+            return
+        payload = serialize_research_tool_result(result)
+        results = self._research_tool_results()
+        existing = results.get(result.tool_call_id)
+        if isinstance(existing, dict):
+            if existing != payload:
+                raise ValueError("RESEARCH_AGENT_TOOL_RESULT_IMMUTABLE")
+            return
+        results[result.tool_call_id] = payload
         if self.trace_recorder is not None:
             self.trace_recorder(result)
+        self.inject_failure("after_tool_result_saved")
+
+    def inject_failure(self, point: str) -> None:
+        """触发测试用进程中断点；正式运行没有注入器时不执行任何操作。"""
+
+        if self.failure_injector is not None:
+            self.failure_injector(point)
 
     def research_evidence(self, evidence_id: str) -> Evidence | None:
         """读取新 Evidence 台账；完整结果仍通过独立 ResultStore 映射读取。"""
@@ -563,16 +858,31 @@ class ResearchToolContext:
             raise ValueError("RESEARCH_AGENT_EVIDENCE_ID_INVALID")
         if not result_id:
             raise ValueError("RESEARCH_AGENT_RESULT_ID_REQUIRED")
+        if self.pending_tool_results_discarded():
+            return
         for parent_id in evidence.parent_evidence_ids:
             if self.research_evidence(parent_id) is None:
                 raise ValueError("RESEARCH_AGENT_EVIDENCE_NOT_FOUND")
-        self._research_evidence_map()[evidence.evidence_id] = evidence.model_dump(
-            mode="json"
-        )
-        self._research_evidence_results()[evidence.evidence_id] = {
+        evidence_payload = evidence.model_dump(mode="json")
+        evidence_map = self._research_evidence_map()
+        existing_evidence = evidence_map.get(evidence.evidence_id)
+        if isinstance(existing_evidence, dict) and existing_evidence != evidence_payload:
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_IMMUTABLE")
+        result_payload = {
             "run_id": self.run_id,
             "result_id": result_id,
         }
+        result_map = self._research_evidence_results()
+        existing_result = result_map.get(evidence.evidence_id)
+        if isinstance(existing_result, dict) and existing_result != result_payload:
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_RESULT_IMMUTABLE")
+        evidence_map[evidence.evidence_id] = evidence_payload
+        result_map[evidence.evidence_id] = result_payload
+        evidence_refs = self._state().setdefault("evidence_refs", [])
+        if not isinstance(evidence_refs, list):
+            raise TypeError("RESEARCH_AGENT_STATE_EVIDENCE_REFS_INVALID")
+        if evidence.evidence_id not in evidence_refs:
+            evidence_refs.append(evidence.evidence_id)
 
     # ------------------------------------------------------------------ #
     # 请求指纹去重
@@ -588,12 +898,18 @@ class ResearchToolContext:
         evidence_id: str | None = None,
         result_id: str | None = None,
     ) -> None:
+        if self.pending_tool_results_discarded():
+            return
         entry: dict[str, str] = {}
         if evidence_id is not None:
             entry["evidence_id"] = evidence_id
         if result_id is not None:
             entry["result_id"] = result_id
-        self._fingerprints()[fingerprint] = entry
+        fingerprints = self._fingerprints()
+        existing = fingerprints.get(fingerprint)
+        if isinstance(existing, dict) and existing != entry:
+            raise ValueError("RESEARCH_AGENT_ACTION_FINGERPRINT_CONFLICT")
+        fingerprints[fingerprint] = entry
 
     def fingerprint_entry(self, fingerprint: str) -> dict[str, str]:
         return dict(self._fingerprints().get(fingerprint) or {})
@@ -658,8 +974,20 @@ class ResearchToolContext:
         """推进 Evidence DAG 层级，不消耗 Plan-and-Solve 迭代预算。"""
 
         target = max(self.evidence_iteration, minimum)
+        if self.pending_tool_results_discarded():
+            return self.evidence_iteration
         self._state()["evidence_iteration"] = target
         return target
+
+    def discard_pending_tool_results(self) -> None:
+        """标记取消边界后的迟到工具结果，不再写入研究事实。"""
+
+        self._state()["discard_pending_tool_results"] = True
+
+    def pending_tool_results_discarded(self) -> bool:
+        """返回当前上下文是否已进入迟到工具结果丢弃状态。"""
+
+        return self._state().get("discard_pending_tool_results") is True
 
     def finish(self, completion: ResearchCompletion) -> None:
         if completion.run_id != self.run_id:
@@ -739,9 +1067,7 @@ class ResearchToolContext:
                     expected_output=item.expected_output,
                 )
             )
-        self._save_plan_execution_state(
-            append_plan_nodes(plan_state, nodes)
-        )
+        self._save_plan_execution_state(append_plan_nodes(plan_state, nodes))
 
     # ------------------------------------------------------------------ #
     # 统一计划执行状态
@@ -762,9 +1088,7 @@ class ResearchToolContext:
         """返回当前 revision 的完整节点集合。"""
 
         plan = self.plan_execution_state()
-        return tuple(
-            node for node in plan.nodes if node.plan_revision == plan.revision
-        )
+        return tuple(node for node in plan.nodes if node.plan_revision == plan.revision)
 
     def current_plan_complete(self) -> bool:
         """当前 revision 的全部节点进入终态后才算完整 Solve。"""
@@ -802,9 +1126,7 @@ class ResearchToolContext:
             for state in states
         ):
             status = "completed_with_failures"
-        elif all(
-            state.status is PlanNodeExecutionStatus.SUCCEEDED for state in states
-        ):
+        elif all(state.status is PlanNodeExecutionStatus.SUCCEEDED for state in states):
             status = "succeeded"
         else:
             status = "solving"

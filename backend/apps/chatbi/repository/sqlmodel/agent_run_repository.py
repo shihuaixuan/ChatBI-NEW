@@ -1,3 +1,4 @@
+import copy
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -155,6 +156,29 @@ def list_running_tool_calls(
     return list(session.exec(statement).scalars().all())
 
 
+def get_tool_call(
+    session,
+    *,
+    run_id: int,
+    tool_call_id: str,
+) -> ChatbiAgentToolCall | None:
+    """按 Run 和 Tool Call ID 查找事实行，支持恢复时幂等复用。"""
+
+    statement = select(ChatbiAgentToolCall).where(
+        ChatbiAgentToolCall.run_id == run_id,
+        ChatbiAgentToolCall.tool_call_id == tool_call_id,
+    )
+    rows = session.exec(statement).scalars().all()
+    return next(
+        (
+            row
+            for row in rows
+            if row.run_id == run_id and row.tool_call_id == tool_call_id
+        ),
+        None,
+    )
+
+
 def start_tool_call(
     session,
     *,
@@ -164,7 +188,37 @@ def start_tool_call(
     tool_name: str,
     args_summary: dict,
 ) -> ChatbiAgentToolCall:
-    """创建独立 Tool Call 记录；事务提交由编排层统一控制。"""
+    """创建或幂等复用 Tool Call 记录；事务提交由编排层统一控制。"""
+
+    existing = get_tool_call(
+        session,
+        run_id=run_id,
+        tool_call_id=tool_call_id,
+    )
+    if existing is not None:
+        existing_args = dict(existing.args_summary or {})
+        requested_args = dict(args_summary)
+        existing_fingerprint = existing_args.get("_action_fingerprint")
+        requested_fingerprint = requested_args.get("_action_fingerprint")
+        if (
+            existing_fingerprint is not None
+            and requested_fingerprint is not None
+            and existing_fingerprint != requested_fingerprint
+        ):
+            raise ValueError("RESEARCH_AGENT_TOOL_CALL_FINGERPRINT_CONFLICT")
+        existing_args.pop("_action_fingerprint", None)
+        requested_args.pop("_action_fingerprint", None)
+        if existing.tool_name != tool_name or existing_args != requested_args:
+            raise ValueError("RESEARCH_AGENT_TOOL_CALL_ID_CONFLICT")
+        if existing.status == AgentToolCallStatus.INTERRUPTED.value:
+            # 未完成动作恢复后允许用相同幂等键再次执行；成功动作不会回到运行态。
+            existing.status = AgentToolCallStatus.RUNNING.value
+            existing.result_summary = {}
+            existing.error_code = None
+            existing.finished_at = None
+            existing.started_at = now()
+            session.add(existing)
+        return existing
 
     tool_call = ChatbiAgentToolCall(
         run_id=run_id,
@@ -193,6 +247,14 @@ def finish_tool_call(
 
     if status == AgentToolCallStatus.RUNNING:
         raise ValueError("TOOL_CALL_TERMINAL_STATUS_REQUIRED")
+    if tool_call.status != AgentToolCallStatus.RUNNING.value:
+        if (
+            tool_call.status == status.value
+            and (tool_call.result_summary or {}) == result_summary
+            and tool_call.error_code == error_code
+        ):
+            return
+        raise ValueError("RESEARCH_AGENT_TOOL_CALL_TERMINAL_CONFLICT")
     tool_call.status = status.value
     tool_call.result_summary = result_summary
     tool_call.error_code = error_code
@@ -260,7 +322,8 @@ def update_run(
 def validate_derived_state(derived_state: dict[str, Any]) -> dict[str, Any]:
     """统一校验并规范化计划与命名结果集快照。"""
 
-    normalized = dict(derived_state)
+    # JSONB 提交后与内存上下文断开，避免进程中断前的未提交修改污染恢复源。
+    normalized = copy.deepcopy(derived_state)
     for version_key in ("semantic_contract_version", "binding_contract_version"):
         version = normalized.get(version_key)
         if version is not None and (

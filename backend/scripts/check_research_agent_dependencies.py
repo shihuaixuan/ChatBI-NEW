@@ -25,27 +25,21 @@ DELETED_MODULE_PREFIXES = (
     "apps.chatbi.services.research.policy_rules",
     "apps.chatbi.services.research.hypotheses",
     "apps.chatbi.services.research.evidence",
-    "apps.chatbi.services.research.ports",
     "apps.chatbi.services.research.report",
     "apps.chatbi.services.research.shadow",
     "apps.chatbi.services.research.rollout",
     "apps.chatbi.services.research.requirements",
     "apps.chatbi.orchestration.pipeline.research",
-    "apps.chatbi.orchestration.pipeline.research_agent",
-    "apps.chatbi.orchestration.pipeline.research_agent_pipeline",
     "apps.chatbi.adapters.prompts.research_policy",
 )
 
-# 旧架构独有符号：即使模块被重建，这些名字也不得回流新契约模块。
+# 旧架构独有符号：现行 ReAct 的 Action 和 State 契约不属于删除范围。
 FORBIDDEN_NAMES = {
-    "ResearchActionType",
-    "ResearchAction",
     "ResearchPolicyDecision",
     "ResearchBreakdownAction",
     "ResearchFilterFromResultAction",
     "EvidenceSnapshot",
     "ResearchRequirement",
-    "ResearchState",
 }
 
 # 阶段 1 起的新契约模块：必须存在并保持无旧符号。
@@ -70,13 +64,13 @@ NEW_MODULES = (
     / "chatbi"
     / "orchestration"
     / "pipeline"
-    / "plan_and_solve_runtime.py",
+    / "research_agent_runtime.py",
     BACKEND_ROOT
     / "apps"
     / "chatbi"
     / "orchestration"
     / "pipeline"
-    / "plan_and_solve_pipeline.py",
+    / "research_agent_pipeline.py",
 )
 
 SCAN_ROOTS = (

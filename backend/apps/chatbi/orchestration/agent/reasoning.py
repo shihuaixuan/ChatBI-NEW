@@ -87,11 +87,13 @@ class ResearchDecisionParseError(ValueError):
         message: str,
         *,
         raw_response_excerpt: str = "",
+        model_turns: int = 1,
     ) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
         self.raw_response_excerpt = raw_response_excerpt[:2_000]
+        self.model_turns = model_turns
 
 
 @dataclass
@@ -375,6 +377,7 @@ class AgentReasoner:
                     "RESEARCH_AGENT_DECISION_REPAIR_FAILED",
                     second_error.message,
                     raw_response_excerpt=second_error.raw_response_excerpt,
+                    model_turns=first_error.model_turns + second_error.model_turns,
                 ) from second_error
             return ResearchAgentDecision(
                 decision=parsed,

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from apps.chatbi.models.dto.research_agent import (
@@ -23,6 +24,7 @@ from apps.chatbi.models.dto.research_agent import (
     ResearchEvidenceEdge,
     ResearchRunSnapshot,
     ResearchRunStatus,
+    ResearchStateSnapshot,
     ToolObservationStatus,
 )
 from apps.chatbi.services.planning.execution_state import (
@@ -36,6 +38,88 @@ if TYPE_CHECKING:
     from apps.chatbi.services.research.tool_context import ResearchToolContext
 
 MAX_SNAPSHOT_JSON_CHARS = 400_000
+RESEARCH_STATE_SNAPSHOT_KEY = "research_state_snapshot"
+
+
+def build_research_state_snapshot(
+    ctx: ResearchToolContext,
+) -> ResearchStateSnapshot:
+    """把内部研究事实投影为阶段 8使用的规范状态快照。"""
+
+    state = ctx.research_state()
+    raw_state = ctx.context.state.get("research_state")
+    events = raw_state.get("state_events", []) if isinstance(raw_state, dict) else []
+    if not isinstance(events, list):
+        raise ValueError("RESEARCH_AGENT_STATE_EVENTS_INVALID")
+    raw_sequence = raw_state.get("last_event_sequence", len(events)) if isinstance(raw_state, dict) else len(events)
+    if not isinstance(raw_sequence, int) or raw_sequence < 0:
+        raise ValueError("RESEARCH_AGENT_STATE_EVENT_SEQUENCE_INVALID")
+    if raw_sequence != len(events):
+        raise ValueError("RESEARCH_AGENT_STATE_EVENT_SEQUENCE_INVALID")
+    return ResearchStateSnapshot(
+        state=state,
+        last_event_sequence=raw_sequence,
+        input_snapshot_ref=state.agent_input_ref,
+    )
+
+
+def load_research_state_snapshot(
+    derived_state: Mapping[str, Any] | None,
+) -> ResearchStateSnapshot:
+    """严格加载新 Research 状态快照，并把旧/未知版本转换为稳定错误。"""
+
+    if not isinstance(derived_state, Mapping):
+        raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_MISSING")
+    raw = derived_state.get(RESEARCH_STATE_SNAPSHOT_KEY)
+    if raw is None:
+        if "research_run_snapshot" in derived_state:
+            raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_VERSION_UNSUPPORTED")
+        raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_MISSING")
+    if not isinstance(raw, Mapping):
+        raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_INVALID")
+
+    schema_version = raw.get("schema_version")
+    if schema_version is None:
+        raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_SCHEMA_VERSION_MISSING")
+    if schema_version != ResearchStateSnapshot.SCHEMA_VERSION:
+        raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_VERSION_UNSUPPORTED")
+    runtime_type = raw.get("runtime_type")
+    if runtime_type != "research_agent":
+        raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_RUNTIME_TYPE_INVALID")
+    for field_name, error_code in (
+        ("state", "RESEARCH_AGENT_STATE_SNAPSHOT_STATE_MISSING"),
+        ("last_event_sequence", "RESEARCH_AGENT_STATE_SNAPSHOT_EVENT_SEQUENCE_MISSING"),
+        ("input_snapshot_ref", "RESEARCH_AGENT_STATE_SNAPSHOT_INPUT_REF_MISSING"),
+    ):
+        if field_name not in raw:
+            raise ValueError(error_code)
+    try:
+        return ResearchStateSnapshot.model_validate(dict(raw))
+    except ValueError as exc:
+        message = str(exc)
+        if "RESEARCH_AGENT_SCHEMA_VERSION_UNSUPPORTED" in message:
+            raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_VERSION_UNSUPPORTED") from exc
+        raise ValueError(f"RESEARCH_AGENT_STATE_SNAPSHOT_INVALID:{message}") from exc
+
+
+def validate_research_state_snapshot(
+    snapshot: ResearchStateSnapshot,
+    ctx: ResearchToolContext,
+) -> None:
+    """校验快照与当前已提交内部状态一致，防止恢复时状态漂移。"""
+
+    expected = ctx.research_state()
+    if snapshot.state != expected:
+        raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_STATE_MISMATCH")
+    raw_state = ctx.context.state.get("research_state")
+    if not isinstance(raw_state, dict):
+        raise ValueError("RESEARCH_AGENT_RECOVERY_STATE_MISSING")
+    events = raw_state.get("state_events", [])
+    last_sequence = raw_state.get("last_event_sequence", len(events) if isinstance(events, list) else -1)
+    if not isinstance(events, list) or last_sequence != snapshot.last_event_sequence:
+        raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_EVENT_SEQUENCE_MISMATCH")
+    if raw_state.get("agent_input_ref") not in (None, snapshot.input_snapshot_ref):
+        raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_INPUT_REF_MISMATCH")
 
 
 def validate_evidence_dag(
@@ -203,8 +287,13 @@ def ensure_snapshot_size(snapshot: ResearchRunSnapshot) -> int:
 
 __all__ = [
     "MAX_SNAPSHOT_JSON_CHARS",
+    "RESEARCH_STATE_SNAPSHOT_KEY",
     "ResearchRunSnapshot",
+    "ResearchStateSnapshot",
     "build_research_run_snapshot",
+    "build_research_state_snapshot",
     "ensure_snapshot_size",
+    "load_research_state_snapshot",
+    "validate_research_state_snapshot",
     "validate_evidence_dag",
 ]

@@ -27,12 +27,24 @@ from typing import Any
 
 from apps.chatbi.errors import ResearchPipelineError
 from apps.chatbi.models.dto.agent import AgentConfig
-from apps.chatbi.models.dto.research_agent import ResearchAgentRequirement
+from apps.chatbi.models.dto.research_agent import (
+    Completion,
+    Evidence,
+    Finding,
+    ResearchAgentRequirement,
+)
 from apps.chatbi.orchestration.agent.lifecycle import AgentLifecycle
 from apps.chatbi.orchestration.agent.state import AgentRuntimeState
-from apps.chatbi.orchestration.pipeline.plan_and_solve_runtime import (
-    PlanAndSolveRuntime,
+from apps.chatbi.orchestration.pipeline.research_agent_runtime import (
     ResearchAgentRunOutcome,
+    ResearchAgentRuntime,
+)
+from apps.chatbi.repository.sqlmodel import agent_run_repository
+from apps.chatbi.services.research.responder import (
+    ResearchResponder,
+    ResearchResponderError,
+    ResearchResponse,
+    persist_research_response_audit,
 )
 from apps.chatbi.services.research.routing_freeze import (
     research_permission_fingerprint,
@@ -68,6 +80,7 @@ class PlanAndSolvePipelineDependencies:
     recorder: AgentTraceRecorder
     semantic_runtime_factory: Callable[[Any, Any], Any]
     compute_engine_factory: Callable[[], Any]
+    semantic_retrieval_service: Any = None
 
 
 class PlanAndSolvePipeline:
@@ -277,18 +290,26 @@ class PlanAndSolvePipeline:
         self,
         state: AgentRuntimeState,
         context_state_overlay: dict[str, Any] | None = None,
-    ) -> PlanAndSolveRuntime:
+    ) -> ResearchAgentRuntime:
         """组装研究循环宿主；``context_state_overlay`` 携带路由期冻结的
         上层上下文（semantic_scope 等），供工具上下文初始化时合并。"""
         deps = self._deps
-        return PlanAndSolveRuntime(
+        runtime_overlay = {
+            **(context_state_overlay or {}),
+            # 阶段 2生成的输入快照优先由路由状态传入；若尚未物化，Runtime
+            # 会根据冻结的 asset_snapshot 构造最小合法 SemanticContext。
+            "research_agent_input": state.context.state.get("research_agent_input"),
+            "execution_requirement": state.context.state.get("execution_requirement"),
+        }
+        return ResearchAgentRuntime(
             session=deps.session,
             config=deps.config,
             run_row=state.run,
             record=state.record,
             model_client=deps.model_client,
             semantic_runtime=deps.semantic_runtime_factory(state.run, state.record),
-            context_state_overlay=context_state_overlay,
+            semantic_retrieval_service=deps.semantic_retrieval_service,
+            context_state_overlay=runtime_overlay,
             compute_engine=deps.compute_engine_factory(),
             result_store=deps.result_store,
             recorder=deps.recorder,
@@ -305,6 +326,14 @@ class PlanAndSolvePipeline:
         outcome: ResearchAgentRunOutcome,
     ) -> Iterator[RenderEvent]:
         completion = outcome.completion
+        if outcome.stop_reason == "waiting_for_user":
+            # 澄清请求已由 Research Tool 写入状态，生命周期不应提前结束。
+            return
+        if completion is None:
+            raise ResearchPipelineError(
+                "RESEARCH_AGENT_COMPLETION_MISSING",
+                "Research Runtime 未返回完成结果。",
+            )
         if completion.status == "cancelled":
             # cancel_research_run 只收口研究事实；Run 与 ChatRecord 的取消
             # 终态由通用生命周期负责（run_lifecycle 契约）。
@@ -316,21 +345,124 @@ class PlanAndSolvePipeline:
             return
         if completion.status == "failed":
             raise ResearchPipelineError(
-                f"RESEARCH_{completion.reason.value.upper()}",
+                f"RESEARCH_{getattr(completion.reason, 'value', 'EXECUTION_FAILED').upper()}",
                 completion.summary,
             )
-        answer = self._answer_payload(outcome)
+        if isinstance(completion, Completion):
+            response = self._build_research_response(state, outcome, completion)
+            answer = response.answer_payload()
+            chart = response.chart or {}
+            sql = None
+        else:
+            # 旧 ResearchCompletion 只为历史运行和阶段 2～8兼容测试保留；
+            # 新 ReAct Completion 必须经过 Responder 的证据门禁。
+            answer = self._answer_payload(outcome)
+            chart = {}
+            sql = None
         yield from self._deps.lifecycle.finish(
             state,
             answer=json.dumps(answer, ensure_ascii=False, sort_keys=True),
-            chart={},
-            sql=None,
+            chart=chart,
+            sql=sql,
         )
+
+    def _build_research_response(
+        self,
+        state: AgentRuntimeState,
+        outcome: ResearchAgentRunOutcome,
+        completion: Completion,
+    ) -> ResearchResponse:
+        """从当前 Run 的已提交事实构建回答，并保存回答审计信息。"""
+
+        try:
+            findings, evidences = self._react_facts(state, outcome)
+            response = ResearchResponder().respond(
+                completion=completion,
+                findings=findings,
+                evidences=evidences,
+            )
+        except (ResearchResponderError, ValueError, TypeError) as exc:
+            raise ResearchPipelineError(
+                "RESEARCH_AGENT_RESPONSE_INVALID",
+                str(exc),
+            ) from exc
+
+        derived_state = persist_research_response_audit(
+            getattr(state.run, "derived_state", None),
+            response,
+        )
+        state.run.derived_state = derived_state
+        # 正式数据库 Session 具备 add 端口；单元测试中的轻量状态对象不需要
+        # 强行伪造数据库行为，但仍会保留内存中的审计载荷。
+        if callable(getattr(self._deps.session, "add", None)):
+            agent_run_repository.update_run(
+                self._deps.session,
+                state.run,
+                derived_state=derived_state,
+            )
+        return response
+
+    @staticmethod
+    def _react_facts(
+        state: AgentRuntimeState,
+        outcome: ResearchAgentRunOutcome,
+    ) -> tuple[tuple[Finding, ...], tuple[Evidence, ...]]:
+        """读取新 ReAct 状态中的 Finding 和完整 Evidence。"""
+
+        raw_state = getattr(state.run, "derived_state", None)
+        research_state = (
+            raw_state.get("research_state")
+            if isinstance(raw_state, dict)
+            else None
+        )
+        raw_findings = (
+            research_state.get("findings")
+            if isinstance(research_state, dict)
+            else None
+        )
+        raw_evidence = (
+            research_state.get("react_evidence")
+            if isinstance(research_state, dict)
+            else None
+        )
+        if raw_findings is not None and not isinstance(raw_findings, list):
+            raise ValueError("RESEARCH_AGENT_FINDINGS_INVALID")
+        evidence_values = (
+            raw_evidence.values() if isinstance(raw_evidence, dict) else ()
+        )
+        if raw_evidence is not None and not isinstance(raw_evidence, dict):
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_INVALID")
+        finding_values: list[dict[str, Any]] = []
+        for item in raw_findings or []:
+            if not isinstance(item, dict):
+                raise ValueError("RESEARCH_AGENT_FINDINGS_INVALID")
+            finding_values.append(item)
+        evidence_values = tuple(evidence_values)
+        evidence_payloads: list[dict[str, Any]] = []
+        for item in evidence_values:
+            if not isinstance(item, dict):
+                raise ValueError("RESEARCH_AGENT_EVIDENCE_INVALID")
+            evidence_payloads.append(item)
+        findings = tuple(Finding.model_validate(item) for item in finding_values)
+        evidences = tuple(Evidence.model_validate(item) for item in evidence_payloads)
+        # 允许 Runtime 直接提供证据，方便恢复边界和独立管道测试复用。
+        outcome_evidences = getattr(outcome, "evidences", ())
+        if any(not isinstance(item, Evidence) for item in outcome_evidences):
+            raise ValueError("RESEARCH_AGENT_EVIDENCE_INVALID")
+        if outcome_evidences:
+            evidences = outcome_evidences
+        return findings, evidences
 
     @staticmethod
     def _answer_payload(outcome: ResearchAgentRunOutcome) -> dict[str, Any]:
         """优先级 final_report > report_draft > 完成态摘要。"""
 
+        completion = outcome.completion
+        if completion is None:
+            raise ResearchPipelineError(
+                "RESEARCH_AGENT_COMPLETION_MISSING",
+                "Research Runtime 未返回完成结果。",
+            )
         snapshot = outcome.snapshot
         for key in ("final_report", "report_draft"):
             raw = getattr(snapshot, key, None) if snapshot is not None else None
@@ -350,10 +482,14 @@ class PlanAndSolvePipeline:
                 f"研究报告 {key} 必须是 JSON 对象。",
             )
         return {
-            "summary": outcome.completion.summary,
-            "evidence_ids": list(outcome.completion.evidence_ids),
-            "limitations": list(outcome.completion.limitations),
+            "summary": completion.summary,
+            "evidence_ids": list(completion.evidence_ids),
+            "limitations": [
+                item if isinstance(item, str) else item.model_dump(mode="json")
+                for item in completion.limitations
+            ],
         }
+
 
 __all__ = [
     "PlanAndSolvePipeline",

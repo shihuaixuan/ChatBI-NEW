@@ -46,7 +46,11 @@ from apps.chatbi.services.planning.execution_state import (
     PlanNodeExecutionStatus,
 )
 from apps.chatbi.services.research.state_snapshot import (
+    RESEARCH_STATE_SNAPSHOT_KEY,
     build_research_run_snapshot,
+    build_research_state_snapshot,
+    load_research_state_snapshot,
+    validate_research_state_snapshot,
 )
 from apps.chatbi.services.research.tool_context import (
     RESEARCH_STATE_KEY,
@@ -394,6 +398,9 @@ def rebuild_research_context(
     result_store: Any = None,
     cancellation: Any = None,
     trace_recorder: Any = None,
+    semantic_retrieval_service: Any = None,
+    context_state_overlay: Mapping[str, Any] | None = None,
+    include_legacy_plan_state: bool = True,
 ) -> ResearchToolContext:
     agent_context = AgentToolContext(
         session=session,
@@ -414,6 +421,7 @@ def rebuild_research_context(
         ),
         result_store=result_store,
         state={
+            **dict(context_state_overlay or {}),
             "research_run_id": requirement.run_id,
             RESEARCH_STATE_KEY: dict(research_state),
             _RESULT_SETS_KEY: {},
@@ -429,13 +437,156 @@ def rebuild_research_context(
         context=agent_context,
         requirement=requirement,
         semantic_runtime=semantic_runtime,
+        semantic_retrieval_service=semantic_retrieval_service,
         compute_engine=compute_engine,
         budget=requirement.budget,
         cancellation=cancellation,
         trace_recorder=trace_recorder,
     )
-    ctx.bind_to_context()
+    ctx.bind_to_context(include_legacy_plan_state=include_legacy_plan_state)
     return ctx
+
+
+def _new_tool_result_repair(
+    ctx: ResearchToolContext,
+    tool_call_id: str,
+) -> tuple[AgentToolCallStatus, dict[str, Any]] | None:
+    """读取已提交的新 ToolResult，供恢复时修复仍为 RUNNING 的事实行。"""
+
+    payload = ctx.research_tool_result(tool_call_id)
+    if not isinstance(payload, dict):
+        return None
+    raw_result = payload.get("tool_result")
+    if not isinstance(raw_result, dict):
+        raise ValueError("RESEARCH_AGENT_RECOVERY_TOOL_RESULT_INVALID")
+    status = raw_result.get("status")
+    if not isinstance(status, str):
+        raise ValueError("RESEARCH_AGENT_RECOVERY_TOOL_RESULT_INVALID")
+    status_map = {
+        "succeeded": AgentToolCallStatus.SUCCEEDED,
+        "failed": AgentToolCallStatus.FAILED,
+        "waiting_for_user": AgentToolCallStatus.WAITING_FOR_USER,
+    }
+    mapped_status = status_map.get(status)
+    if mapped_status is None:
+        raise ValueError("RESEARCH_AGENT_RECOVERY_TOOL_RESULT_INVALID")
+    error = raw_result.get("error")
+    error_code = error.get("code") if isinstance(error, dict) else None
+    return mapped_status, {**payload, "error_code": error_code}
+
+
+def recover_research_agent_run(
+    session: Any,
+    run_row: ChatbiAgentRun,
+    *,
+    semantic_runtime: Any = None,
+    semantic_retrieval_service: Any = None,
+    compute_engine: Any = None,
+    result_store: Any = None,
+    cancellation: Any = None,
+    trace_recorder: Any = None,
+    context_state_overlay: Mapping[str, Any] | None = None,
+) -> tuple[ResearchToolContext, ResearchRecoveryReport]:
+    """只按新 ResearchState 快照恢复 Research Agent Run。"""
+
+    derived = dict(run_row.derived_state or {})
+    research_state = load_research_state(derived)
+    if not research_state:
+        raise ValueError("RESEARCH_AGENT_RECOVERY_STATE_MISSING")
+    requirement = load_frozen_requirement(research_state)
+    run_db_id = _require_id(run_row.id, "RESEARCH_AGENT_RECOVERY_RUN_ID_REQUIRED")
+    snapshot = load_research_state_snapshot(derived)
+
+    raw_input_ref = research_state.get("agent_input_ref")
+    if isinstance(raw_input_ref, str) and snapshot.state.agent_input_ref != raw_input_ref:
+        raise ValueError("RESEARCH_AGENT_STATE_SNAPSHOT_INPUT_REF_MISMATCH")
+    ctx = rebuild_research_context(
+        session,
+        run_row,
+        requirement,
+        research_state,
+        analysis_evidence=(
+            derived.get(ANALYSIS_EVIDENCE_REGISTRY_KEY)
+            if isinstance(derived.get(ANALYSIS_EVIDENCE_REGISTRY_KEY), dict)
+            else None
+        ),
+        semantic_runtime=semantic_runtime,
+        semantic_retrieval_service=semantic_retrieval_service,
+        compute_engine=compute_engine,
+        result_store=result_store,
+        cancellation=cancellation,
+        trace_recorder=trace_recorder,
+        context_state_overlay=context_state_overlay,
+        include_legacy_plan_state=False,
+    )
+    if ctx.react_findings() or ctx.react_todos() or research_state.get("state_events"):
+        ctx.replay_research_state_events()
+    validate_research_state_snapshot(snapshot, ctx)
+
+    closed_steps: list[int] = []
+    running_step = agent_run_repository.get_running_step(session, run_db_id)
+    if running_step is not None:
+        agent_run_repository.cancel_step(
+            session,
+            running_step,
+            "运行中断，恢复时收口未完成步骤",
+        )
+        closed_steps.append(int(running_step.step_index))
+
+    repaired: list[str] = []
+    interrupted: list[str] = []
+    for row in agent_run_repository.list_running_tool_calls(session, run_db_id):
+        repair = _new_tool_result_repair(ctx, row.tool_call_id)
+        if repair is not None:
+            status, result_summary = repair
+            agent_run_repository.finish_tool_call(
+                session,
+                row,
+                status=status,
+                result_summary=result_summary,
+                error_code=result_summary.get("error_code"),
+            )
+            repaired.append(row.tool_call_id)
+            continue
+        agent_run_repository.finish_tool_call(
+            session,
+            row,
+            status=AgentToolCallStatus.INTERRUPTED,
+            result_summary={
+                "success": False,
+                "status": AgentToolCallStatus.INTERRUPTED.value,
+                "error_code": "tool_call_interrupted",
+            },
+            error_code="tool_call_interrupted",
+        )
+        interrupted.append(row.tool_call_id)
+
+    refreshed_state = ctx.context.state.get(RESEARCH_STATE_KEY)
+    if not isinstance(refreshed_state, dict):
+        raise ValueError("RESEARCH_AGENT_RECOVERY_STATE_INVALID")
+    derived[RESEARCH_STATE_KEY] = refreshed_state
+    result_sets = ctx.context.state.get(_RESULT_SETS_KEY)
+    if isinstance(result_sets, dict) and result_sets:
+        derived[_RESULT_SETS_KEY] = {
+            **dict(derived.get(_RESULT_SETS_KEY) or {}),
+            **result_sets,
+        }
+    analysis_evidence = ctx.context.state.get(ANALYSIS_EVIDENCE_REGISTRY_KEY)
+    if isinstance(analysis_evidence, dict):
+        derived[ANALYSIS_EVIDENCE_REGISTRY_KEY] = dict(analysis_evidence)
+    refreshed_snapshot = build_research_state_snapshot(ctx)
+    derived[RESEARCH_STATE_SNAPSHOT_KEY] = refreshed_snapshot.model_dump(mode="json")
+    agent_run_repository.update_run(session, run_row, derived_state=derived)
+    session.commit()
+
+    report = ResearchRecoveryReport(
+        closed_steps=tuple(closed_steps),
+        repaired_tool_calls=tuple(repaired),
+        interrupted_tool_calls=tuple(interrupted),
+        resumed_iteration=ctx.iteration,
+        resumed_from_snapshot=True,
+    )
+    return ctx, report
 
 
 def recover_research_run(
@@ -443,10 +594,12 @@ def recover_research_run(
     run_row: ChatbiAgentRun,
     *,
     semantic_runtime: Any = None,
+    semantic_retrieval_service: Any = None,
     compute_engine: Any = None,
     result_store: Any = None,
     cancellation: Any = None,
     trace_recorder: Any = None,
+    context_state_overlay: Mapping[str, Any] | None = None,
 ) -> tuple[ResearchToolContext, ResearchRecoveryReport]:
     """按 §8.4.5 恢复一个中断的 Research Run。
 
@@ -461,6 +614,20 @@ def recover_research_run(
     """
 
     derived = dict(run_row.derived_state or {})
+    if RESEARCH_STATE_SNAPSHOT_KEY in derived:
+        # 新路径只恢复 ResearchState；旧 ResearchRunSnapshot 逻辑仅供历史
+        # Plan-and-Solve 运行兼容，不参与 Research Agent 新快照恢复。
+        return recover_research_agent_run(
+            session,
+            run_row,
+            semantic_runtime=semantic_runtime,
+            semantic_retrieval_service=semantic_retrieval_service,
+            compute_engine=compute_engine,
+            result_store=result_store,
+            cancellation=cancellation,
+            trace_recorder=trace_recorder,
+            context_state_overlay=context_state_overlay,
+        )
     research_state = load_research_state(derived)
     requirement = load_frozen_requirement(research_state)
     run_db_id = _require_id(run_row.id, "RESEARCH_RECOVERY_RUN_ID_REQUIRED")
@@ -698,6 +865,7 @@ __all__ = [
     "cancel_research_run",
     "load_frozen_requirement",
     "load_research_state",
+    "recover_research_agent_run",
     "rebuild_research_context",
     "recover_research_run",
 ]

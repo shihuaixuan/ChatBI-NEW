@@ -64,6 +64,7 @@ class RunOrchestrator:
         input_preparer: AgentInputPreparer,
         state_factory: AgentRuntimeStateFactory,
         plan_and_solve_pipeline: PlanAndSolvePipeline | None = None,
+        research_agent_pipeline: PlanAndSolvePipeline | None = None,
         execution_requirement_builder: ExecutionRequirementBuilder | None = None,
     ) -> None:
         self.session = session
@@ -74,7 +75,9 @@ class RunOrchestrator:
         self.state_factory = state_factory
         # Agent Runtime 是唯一分析引擎；为空表示本进程未装配，
         # 分发时显式失败，不存在旧管道回退目标。
-        self.plan_and_solve_pipeline = plan_and_solve_pipeline
+        if plan_and_solve_pipeline is not None and research_agent_pipeline is not None:
+            raise ValueError("AGENT_RESEARCH_PIPELINE_DUPLICATED")
+        self.plan_and_solve_pipeline = research_agent_pipeline or plan_and_solve_pipeline
         if execution_requirement_builder is None:
             raise ValueError("AGENT_EXECUTION_REQUIREMENT_BUILDER_REQUIRED")
         self.execution_requirement_builder = execution_requirement_builder
@@ -285,14 +288,14 @@ class RunOrchestrator:
         self,
         state: AgentRuntimeState,
     ) -> Iterator[RenderEvent]:
-        """进入统一 Plan-and-Solve Runtime；首次运行与恢复共用。"""
+        """进入统一 Research Agent Runtime；首次运行与恢复共用。"""
 
         if self.plan_and_solve_pipeline is None:
             yield from self.lifecycle.fail(
                 state,
-                "Plan-and-Solve Agent Runtime 未装配。",
+                "Research Agent Runtime 未装配。",
                 AgentErrorClass.PLAN_INVALID.value,
-                error_details={"code": "PLAN_AND_SOLVE_RUNTIME_NOT_ASSEMBLED"},
+                error_details={"code": "RESEARCH_AGENT_PIPELINE_NOT_ASSEMBLED"},
             )
             return
         try:
@@ -304,6 +307,11 @@ class RunOrchestrator:
                 AgentErrorClass.PLAN_INVALID.value,
                 error_details={"code": exc.code},
             )
+
+    def _dispatch_research(self, state: AgentRuntimeState) -> Iterator[RenderEvent]:
+        """Research Agent 正式分发入口；保留旧方法名的单一转发。"""
+
+        yield from self._dispatch_plan_and_solve(state)
 
     def _semantic_parse_clarification_event(
         self,

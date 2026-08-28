@@ -9,9 +9,19 @@ from apps.chatbi.orchestration.pipeline.plan_and_solve_pipeline import (
 from apps.chatbi.orchestration.pipeline.plan_and_solve_runtime import (
     PlanAndSolveRuntime,
 )
+from apps.chatbi.orchestration.pipeline.research_agent_pipeline import (
+    ResearchAgentPipeline,
+    ResearchAgentPipelineDependencies,
+)
+from apps.chatbi.orchestration.pipeline.research_agent_runtime import (
+    ResearchAgentRuntime,
+)
 
 __all__ = [
     "ExecutionRequirementBuilder",
     "PlanAndSolvePipeline",
     "PlanAndSolveRuntime",
+    "ResearchAgentRuntime",
+    "ResearchAgentPipeline",
+    "ResearchAgentPipelineDependencies",
 ]
