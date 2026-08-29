@@ -89,7 +89,6 @@ def test_analysis_prediction_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
 # ======================================================================
@@ -121,50 +120,10 @@ def test_answer_generation_service_has_no_executor_or_framework_dependency():
     assert "sqlmodel" not in imports
 
 
-def test_answer_adapter_uses_chatbi_service_and_shared_model_boundary():
-    graph_source = (
-        BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/capabilities/adapters/answer.py"
-    ).read_text(encoding="utf-8")
-
-    assert "AnswerGenerationService" in graph_source
-    assert "AnswerGenerationData" in graph_source
-    assert "build_question_model_service" in graph_source
-    assert "DefaultAnswerModelClient" not in graph_source
-    assert "LLMFactory" not in graph_source
-    assert "get_default_config" not in graph_source
-    assert "SystemMessage" not in graph_source
-    assert "HumanMessage" not in graph_source
-    assert "langchain" not in graph_source
-    assert "def _extract_json_object" not in graph_source
-    assert "def _answer_dump" not in graph_source
-    assert "def _fallback_with_warning" not in graph_source
 
 
-def test_answer_prompt_and_output_contract_are_owned_by_chatbi():
-    service_source = (
-        BACKEND_DIR__answer_generation / "apps/chatbi/services/generation/answer_generation.py"
-    ).read_text(encoding="utf-8")
-    graph_source = (
-        BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/capabilities/adapters/answer.py"
-    ).read_text(encoding="utf-8")
-    schema_source = (BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/schemas/v1.py").read_text(
-        encoding="utf-8"
-    )
-
-    assert "def build_answer_generation_prompt" in service_source
-    assert "def build_answer_generation_prompt" not in graph_source
-    assert "class AnswerOutput(AnswerGenerationResult)" in schema_source
-    assert "class AnswerGenerationResult" not in schema_source
 
 
-def test_graph_keeps_answer_context_projection_and_final_composition():
-    graph_source = (
-        BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/capabilities/adapters/answer.py"
-    ).read_text(encoding="utf-8")
-
-    assert "def build_answer_projection" in graph_source
-    assert "def compose" in graph_source
-    assert "ChatBIRunContext" in graph_source
 
 
 def test_answer_projection_service_has_no_executor_or_framework_dependency():
@@ -178,23 +137,6 @@ def test_answer_projection_service_has_no_executor_or_framework_dependency():
     assert "sqlmodel" not in imports
 
 
-def test_graph_answer_projection_only_reads_context_and_calls_chatbi_service():
-    graph_source = (
-        BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/capabilities/adapters/answer.py"
-    ).read_text(encoding="utf-8")
-
-    assert "project_answer_context" in graph_source
-    assert "AnswerProjectionData" in graph_source
-    assert "project_answer_context(" in graph_source
-    assert "def _project_plan" not in graph_source
-    assert "def _project_execution_result" not in graph_source
-    assert "def _project_validation" not in graph_source
-    assert "def _project_multi_query_analysis" not in graph_source
-    assert "def _results_by_role" not in graph_source
-    assert "def _share_analysis" not in graph_source
-    assert "def _comparison_analysis" not in graph_source
-    assert "def _numeric_value" not in graph_source
-    assert "def _project_error" not in graph_source
 
 
 def test_final_reply_projection_service_has_no_executor_or_framework_dependency():
@@ -208,23 +150,6 @@ def test_final_reply_projection_service_has_no_executor_or_framework_dependency(
     assert "sqlmodel" not in imports
 
 
-def test_final_reply_contract_and_composition_are_owned_by_chatbi():
-    graph_source = (
-        BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/capabilities/adapters/answer.py"
-    ).read_text(encoding="utf-8")
-    service_source = (
-        BACKEND_DIR__answer_generation / "apps/chatbi/services/generation/final_reply.py"
-    ).read_text(encoding="utf-8")
-    schema_source = (BACKEND_DIR__answer_generation / "apps/chatbi/orchestration/graph/schemas/v1.py").read_text(
-        encoding="utf-8"
-    )
-
-    assert "project_final_reply" in graph_source
-    assert "FinalReplyProjectionData" in graph_source
-    assert "FinalReplyOutput" not in graph_source
-    assert "real_chatbi_v1" not in graph_source
-    assert "real_chatbi_v1" in service_source
-    assert "class FinalReplyOutput(FinalReplyProjectionResult)" in schema_source
 
 
 def test_agent_finish_uses_chatbi_agent_finalization_service():
@@ -264,27 +189,14 @@ def _imports__artifact(relative_path: str) -> set[str]:
     return modules
 
 
-def test_chatbi_artifact_service_has_no_workflow_or_persistence_dependency():
+def test_chatbi_artifact_service_has_no_persistence_dependency():
     imports = _imports__artifact("apps/chatbi/services/execution/result_artifacts.py")
 
     assert "sqlmodel" not in imports
-    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
     assert not any(".infrastructure" in module for module in imports)
     assert not any(".models.orm" in module for module in imports)
 
 
-def test_agent_and_graph_share_chatbi_result_artifact_service():
-    agent_source = (
-        BACKEND_DIR__artifact / "apps/chatbi/orchestration/agent/tool_results.py"
-    ).read_text(encoding="utf-8")
-    graph_source = (
-        BACKEND_DIR__artifact / "apps/chatbi/orchestration/graph/capabilities/adapters/sql.py"
-    ).read_text(encoding="utf-8")
-    execution_imports = _imports__artifact("apps/chatbi/orchestration/graph/capabilities/execution.py")
-
-    assert "result_artifact_service.save" in agent_source
-    assert "result_artifact_service.save" in graph_source
-    assert "sqlbot_platform.workflow_engine.domain.artifact" not in execution_imports
 
 
 def test_chat_deletion_uses_unified_artifact_and_agent_cleanup_entries():
@@ -295,7 +207,7 @@ def test_chat_deletion_uses_unified_artifact_and_agent_cleanup_entries():
 
     assert "schedule_chat_cleanup" in source
     assert "process_pending_cleanup" in source
-    assert "GraphCleanupGateway" in source
+    assert "GraphCleanupGateway" not in source
     assert "WorkflowArtifactModel" not in source
     assert "AgentExecutionDeletionService" not in source
 
@@ -343,7 +255,6 @@ def test_chart_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
 def _imports__conversation(path: Path) -> set[str]:
@@ -373,7 +284,6 @@ def test_conversation_service_depends_on_ports_not_session_or_legacy_chat():
     assert not any(module.startswith("apps.datasource.") for module in imports)
     assert not any(module.startswith("apps.semantic.") for module in imports)
     assert not any(module.startswith("apps.knowledge.") for module in imports)
-    assert not any(module.startswith("sqlbot_platform.workflow_engine.") for module in imports)
 
 
 def test_legacy_conversation_mutations_have_moved_out_of_read_projection():
@@ -502,7 +412,6 @@ def test_dynamic_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
 # ======================================================================
@@ -721,7 +630,6 @@ def test_permission_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
 # ======================================================================
@@ -809,15 +717,6 @@ def test_agent_production_code_uses_recorder_without_legacy_trace_entry():
     assert "timeline" not in trace_details.lower()
 
 
-def test_graph_sql_adapter_does_not_maintain_second_execution_chain():
-    path = BACKEND_DIR__query / "apps/chatbi/orchestration/graph/capabilities/adapters/sql.py"
-    source = path.read_text(encoding="utf-8")
-    imports = _imports__query("apps/chatbi/orchestration/graph/capabilities/adapters/sql.py")
-
-    assert "apps.chatbi.services.execution" in imports
-    assert "self._execute_tool" not in source
-    assert "self._validate_tool" not in source
-    assert "self._permission_adapter.apply" not in source
 
 
 def test_datasource_query_service_has_no_session_or_repository_dependency():
@@ -827,7 +726,7 @@ def test_datasource_query_service_has_no_session_or_repository_dependency():
     assert not any(".repository" in module for module in imports)
 
 
-def test_agent_uses_public_semantic_tool_and_graph_keeps_its_adapter():
+def test_agent_uses_public_semantic_tool():
     public_tool_source = (
         BACKEND_DIR__query / "apps/tool/tools/semantic.py"
     ).read_text(encoding="utf-8")
@@ -835,15 +734,10 @@ def test_agent_uses_public_semantic_tool_and_graph_keeps_its_adapter():
     agent_core_source = (
         BACKEND_DIR__query / "apps/chatbi/orchestration/agent/tools/core.py"
     ).read_text(encoding="utf-8")
-    graph_source = (
-        BACKEND_DIR__query / "apps/chatbi/orchestration/graph/capabilities/adapters/sql.py"
-    ).read_text(encoding="utf-8")
 
     assert "self._compilation_service.compile" in public_tool_source
     assert not any(module.startswith("apps.chatbi") for module in public_tool_imports)
     assert "class CompileSemanticSqlTool" not in agent_core_source
-    assert "_compile_semantic_query" in graph_source
-    assert "self._compiler.compile" not in graph_source
 
 
 def test_chatbi_no_longer_owns_semantic_forwarding_services_or_dtos():
@@ -881,16 +775,6 @@ def test_public_semantic_retrieval_and_physical_schema_use_domain_services():
     assert "class GetDatasetSchemaTool" not in core_source
 
 
-def test_graph_semantic_retrieval_uses_public_retrieval_service():
-    imports = _imports__query("apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py")
-    source = (
-        BACKEND_DIR__query / "apps/chatbi/orchestration/graph/capabilities/adapters/knowledge.py"
-    ).read_text(encoding="utf-8")
-
-    assert "apps.retrieval" in imports
-    assert "apps.chatbi.services.planning" not in imports
-    assert "build_retrieval_request" in source
-    assert "self._retrieval_service.retrieve" in source
 
 
 def test_chatbi_physical_schema_service_has_no_runtime_dependency():
@@ -996,17 +880,6 @@ def test_agent_and_graph_share_question_understanding_validation_rules():
     assert validation_module in graph_contract_imports
 
 
-def test_graph_layers_do_not_reimplement_dimension_time_rule():
-    question_source = (
-        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
-    ).read_text(encoding="utf-8")
-    graph_contracts_source = (
-        BACKEND_DIR__question_understanding
-        / f"{UNDERSTANDING__question_understanding}/graph_contracts.py"
-    ).read_text(encoding="utf-8")
-
-    assert "def _is_time_expression" not in question_source
-    assert "_dimension_time_value_violations" not in graph_contracts_source
 
 
 def test_time_rules_are_owned_by_temporal_module():
@@ -1037,8 +910,6 @@ def test_time_rules_are_owned_by_temporal_module():
     production_paths = (
         "apps/retrieval/query/policy.py",
         "apps/retrieval/projection/payload.py",
-        "apps/chatbi/orchestration/graph/capabilities/adapters/question.py",
-        "apps/chatbi/orchestration/graph/capabilities/planning.py",
         f"{UNDERSTANDING__question_understanding}/intent_projection.py",
         f"{UNDERSTANDING__question_understanding}/understanding_service.py",
         f"{UNDERSTANDING__question_understanding}/validation.py",
@@ -1069,23 +940,17 @@ def test_structured_model_service_has_no_executor_or_model_framework_dependency(
     assert "sqlmodel" not in imports
 
 
-def test_agent_and_graph_share_structured_model_service():
+def test_agent_uses_structured_model_service():
     agent_source = (
         BACKEND_DIR__question_understanding / f"{UNDERSTANDING__question_understanding}/understanding_service.py"
     ).read_text(encoding="utf-8")
-    graph_source = (
-        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
-    ).read_text(encoding="utf-8")
 
-    for source in (agent_source, graph_source):
-        assert "StructuredModelService" in source
-        assert "QuestionModelInvocationData" in source
-        assert "LLMFactory" not in source
-        assert "get_default_config" not in source
-        assert "SystemMessage" not in source
-        assert "HumanMessage" not in source
-
-    assert "QuestionModelJSONMode.EXTRACT_OBJECT" in graph_source
+    assert "StructuredModelService" in agent_source
+    assert "QuestionModelInvocationData" in agent_source
+    assert "LLMFactory" not in agent_source
+    assert "get_default_config" not in agent_source
+    assert "SystemMessage" not in agent_source
+    assert "HumanMessage" not in agent_source
     assert "QuestionModelJSONMode.EXTRACT_OBJECT" not in agent_source
     assert "build_question_model_service" not in agent_source
     assert "infrastructure.question_model" not in agent_source
@@ -1101,14 +966,10 @@ def test_default_question_model_client_stays_in_chatbi_adapter():
     composition_source = (BACKEND_DIR__question_understanding / "apps/chatbi/composition.py").read_text(
         encoding="utf-8"
     )
-    graph_source = (
-        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
-    ).read_text(encoding="utf-8")
 
     assert "class LangChainQuestionModelClient" in adapter_source
     assert "LLMFactory" in adapter_source
     assert "DefaultQuestionUnderstandingModelClient" not in agent_source
-    assert "DefaultQuestionClassificationModelClient" not in graph_source
     assert "build_question_model_service" in composition_source
 
 
@@ -1117,9 +978,6 @@ def test_question_understanding_dtos_are_owned_by_chatbi():
         BACKEND_DIR__question_understanding
         / "apps/chatbi/models/dto/question_understanding.py"
     ).read_text(encoding="utf-8")
-    graph_source = (BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/schemas/v1.py").read_text(
-        encoding="utf-8"
-    )
 
     for class_name in (
         "QuestionRewriteOutput",
@@ -1133,30 +991,13 @@ def test_question_understanding_dtos_are_owned_by_chatbi():
     ):
         assert f"class {class_name}" in dto_source
 
-    assert "QuestionClassificationOutputBase" in graph_source
-    assert "SharedQuestionRewriteOutput" in graph_source
-    assert "NaturalLanguageIntentOutputBase" in graph_source
-
 
 def test_question_understanding_prompt_rules_are_owned_by_chatbi():
     prompt_import = "apps.chatbi.services.understanding.prompts"
     agent_imports = _imports__question_understanding(f"{UNDERSTANDING__question_understanding}/understanding_service.py")
-    graph_prompt_imports = set().union(
-        *(
-            _imports__question_understanding(
-                f"apps/chatbi/orchestration/graph/capabilities/adapters/{filename}"
-            )
-            for filename in (
-                "question_input.py",
-                "question_intent.py",
-                "question_dimension.py",
-            )
-        )
-    )
     prompt_imports = _imports__question_understanding(f"{UNDERSTANDING__question_understanding}/prompts.py")
 
     assert prompt_import in agent_imports
-    assert prompt_import in graph_prompt_imports
     assert not any(module.startswith("apps.agent") for module in prompt_imports)
     assert not any(module.startswith("apps.workflow") for module in prompt_imports)
     assert not any(module.startswith("apps.ai_model") for module in prompt_imports)
@@ -1237,12 +1078,9 @@ def test_agent_runtime_dependencies_are_owned_by_composition():
     assert "AgentToolContext(" not in loop_source
 
 
-def test_graph_intent_projection_rules_are_owned_by_chatbi():
+def test_intent_projection_rules_are_owned_by_chatbi():
     service_path = f"{UNDERSTANDING__question_understanding}/intent_projection.py"
     service_imports = _imports__question_understanding(service_path)
-    graph_source = (
-        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
-    ).read_text(encoding="utf-8")
 
     assert not any(module.startswith("apps.agent") for module in service_imports)
     assert not any(module.startswith("apps.workflow") for module in service_imports)
@@ -1251,24 +1089,7 @@ def test_graph_intent_projection_rules_are_owned_by_chatbi():
     assert not any(module.startswith("langchain") for module in service_imports)
     assert "sqlmodel" not in service_imports
 
-    assert "intent_projection.project_question_intent" in graph_source
-    assert "QuestionIntentProjectionData" in graph_source
-    assert "def _merge_intent_parts" not in graph_source
-    assert "def _valid_required_slot_types" not in graph_source
-    assert "def _apply_intent_feedback" not in graph_source
 
-
-def test_graph_keeps_intent_orchestration_and_candidate_mapping():
-    graph_source = (
-        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
-    ).read_text(encoding="utf-8")
-
-    assert "ThreadPoolExecutor" in graph_source
-    assert "_run_intent_subtasks" in graph_source
-    assert "_fallback_intent_subtask_result" in graph_source
-    assert "_record_intent_subtask_trace" in graph_source
-    assert "_normalize_subject_domain_output" in graph_source
-    assert "_normalize_dimension_slots_payload" in graph_source
 
 
 def test_graph_contracts_have_no_graph_or_framework_dependency():
@@ -1282,71 +1103,19 @@ def test_graph_contracts_have_no_graph_or_framework_dependency():
     assert "sqlmodel" not in imports
 
 
-def test_graph_uses_chatbi_intent_validation_directly():
-    graph_source = (
-        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
-    ).read_text(encoding="utf-8")
-
-    assert "graph_contracts.validate_intent" in graph_source
-    assert "apps.chatbi.orchestration.graph.capabilities.adapters.intent_validation" not in graph_source
 
 
-def test_old_graph_understanding_compatibility_paths_are_removed():
-    adapter_dir = (
-        BACKEND_DIR__question_understanding
-        / "apps/chatbi/orchestration/graph/capabilities/adapters"
-    )
-    contracts_source = (
-        BACKEND_DIR__question_understanding
-        / f"{UNDERSTANDING__question_understanding}/graph_contracts.py"
-    ).read_text(encoding="utf-8")
-
-    assert not (adapter_dir / "intent_validation.py").exists()
-    assert not (adapter_dir / "time_slots.py").exists()
-    assert "class QuestionIntentValidationService" not in contracts_source
 
 
-def test_graph_keeps_intent_model_retry_orchestration():
-    graph_source = (
-        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
-    ).read_text(encoding="utf-8")
-
-    assert "def _recognize_subtask" in graph_source
-    assert "for retry_count in range" in graph_source
-    assert "def _run_intent_subtasks" in graph_source
 
 
-def test_question_input_projection_rules_are_owned_by_chatbi():
-    graph_source = (
-        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
-    ).read_text(encoding="utf-8")
-
-    assert "graph_contracts.classification_precondition" in graph_source
-    assert "graph_contracts.project_classification" in graph_source
-    assert "graph_contracts.project_rewrite" in graph_source
-    assert "def _dump" not in graph_source
-    assert "def _rewrite_dump" not in graph_source
-    assert "def _normalize_rewrite_output" not in graph_source
-    assert "def _rewrite_fallback" not in graph_source
 
 
-def test_graph_rejects_invalid_rewrite_output_without_fallback():
-    graph_source = (
-        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
-    ).read_text(encoding="utf-8")
-
-    assert "CLASSIFICATION_MODEL_CALL_FAILED" in graph_source
-    assert "CLASSIFICATION_MODEL_OUTPUT_INVALID" in graph_source
-    assert "graph_contracts.fallback_rewrite" not in graph_source
-    assert "original_question=question" in graph_source
 
 
-def test_question_intent_fallback_rules_are_owned_by_chatbi():
+def test_intent_fallback_rules_are_owned_by_chatbi():
     service_path = f"{UNDERSTANDING__question_understanding}/intent_fallback.py"
     service_imports = _imports__question_understanding(service_path)
-    graph_source = (
-        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
-    ).read_text(encoding="utf-8")
 
     assert not any(module.startswith("apps.agent") for module in service_imports)
     assert not any(module.startswith("apps.workflow") for module in service_imports)
@@ -1355,29 +1124,7 @@ def test_question_intent_fallback_rules_are_owned_by_chatbi():
     assert not any(module.startswith("langchain") for module in service_imports)
     assert "sqlmodel" not in service_imports
 
-    assert "QuestionIntentFallbackService" in graph_source
-    assert "_intent_fallback_service.infer" in graph_source
-    assert "def _intent_dump" not in graph_source
-    assert "def _intent_fallback" not in graph_source
-    assert "def _dimension_slots_from_question" not in graph_source
-    assert "def _extract_metric_mentions" not in graph_source
-    assert "def _extract_dimension_mentions" not in graph_source
-    assert "def _extract_time_mentions" not in graph_source
-    assert "def _infer_time_grain" not in graph_source
-    assert "def _infer_order_direction" not in graph_source
-    assert "def _infer_limit" not in graph_source
 
-
-def test_graph_keeps_intent_fallback_trigger_and_subtask_projection():
-    graph_source = (
-        BACKEND_DIR__question_understanding / "apps/chatbi/orchestration/graph/capabilities/adapters/question.py"
-    ).read_text(encoding="utf-8")
-
-    assert "def _intent_subtask_fallback_payloads" in graph_source
-    assert "def _fallback_intent_subtask_result" in graph_source
-    assert "exception_fallback" in graph_source
-    assert "timeout_fallback" in graph_source
-    assert "_record_intent_subtask_trace" in graph_source
 
 
 # ======================================================================
@@ -1425,7 +1172,6 @@ def test_recommended_question_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
 # ======================================================================
@@ -1479,7 +1225,6 @@ def test_chat_record_service_has_no_runtime_or_session_dependency():
 
     assert "sqlmodel" not in imports
     assert not any(module.startswith("apps.agent.") for module in imports)
-    assert not any(module.startswith("sqlbot_platform.workflow_engine.") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
 
 
@@ -1524,44 +1269,8 @@ def test_agent_record_terminal_projection_uses_chatbi_service():
     assert "ChatRecordStatus" not in loop_source
 
 
-def test_workflow_projector_and_api_service_have_no_business_imports():
-    service_imports = _imports__record(
-        _tree__record("platform/workflow_engine/api/service.py")
-    )
-    extension_imports = _imports__record(
-        _tree__record("apps/chatbi/orchestration/graph/api_extension.py")
-    )
-
-    assert not (
-        BACKEND_DIR__record / "platform/workflow_engine/api/chat_history.py"
-    ).exists()
-    assert not any(module.startswith("apps.") for module in service_imports)
-    assert "apps.chatbi.orchestration.graph.runtime" in extension_imports
-    assert "apps.semantic.composition" in extension_imports
-    assert "GraphChatRecordProjector" in (
-        BACKEND_DIR__record / "apps/chatbi/orchestration/graph/api_extension.py"
-    ).read_text(encoding="utf-8")
 
 
-def test_graph_chat_binding_rule_is_owned_by_chatbi_extension():
-    tree = _tree__record("apps/chatbi/orchestration/graph/api_extension.py")
-    service_class = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef)
-        and node.name == "ChatBIWorkflowApiExtension"
-    )
-    method = next(
-        node
-        for node in service_class.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "validate_chat_query"
-    )
-    service_source = ast.unparse(method)
-
-    assert "resolve_execution_binding" in service_source
-    assert "chat.dataset_id" in service_source
-    assert "CHAT_DATASET_MISMATCH" not in service_source
 
 
 def test_chat_record_service_owns_final_result_size_policy():
@@ -1620,55 +1329,8 @@ def test_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("langchain") for module in imports)
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
-    assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
-# ======================================================================
-# 来源：test_legacy_chat_llm_adapter_boundary.py
-# ======================================================================
-
-BACKEND_DIR__legacy_chat_llm_adapter = Path(__file__).resolve().parents[2]
-
-
-def _tree__legacy_chat_llm_adapter(relative_path: str) -> ast.Module:
-    path = BACKEND_DIR__legacy_chat_llm_adapter / relative_path
-    return ast.parse(path.read_text(encoding="utf-8"))
-
-
-def _imports__legacy_chat_llm_adapter(tree: ast.Module) -> set[str]:
-    modules: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            modules.add(node.module)
-    return modules
-
-
-# ======================================================================
-# 来源：test_legacy_chat_query_service_boundary.py
-# ======================================================================
-
-BACKEND_DIR__legacy_chat_query_service = Path(__file__).resolve().parents[2]
-
-
-def _tree__legacy_chat_query_service(relative_path: str) -> ast.Module:
-    path = BACKEND_DIR__legacy_chat_query_service / relative_path
-    return ast.parse(path.read_text(encoding="utf-8"))
-
-
-def _class_method_source__legacy_chat_query_service(tree: ast.Module, class_name: str, name: str) -> str:
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == class_name
-    )
-    method = next(
-        node
-        for node in class_node.body
-        if isinstance(node, ast.FunctionDef) and node.name == name
-    )
-    return ast.unparse(method)
 
 
 # ======================================================================

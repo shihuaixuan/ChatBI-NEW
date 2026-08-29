@@ -6,10 +6,6 @@ from sqlmodel import Session
 
 from apps.chatbi.services.conversation.ports import ExecutionCleanupGateway
 from apps.chatbi.services.execution import ResultArtifactService
-from sqlbot_platform.workflow_engine.run_cleanup import (
-    delete_runs,
-    list_run_ids_for_chat,
-)
 
 
 class CommittedAgentCleanupGateway:
@@ -29,28 +25,6 @@ class CommittedAgentCleanupGateway:
                 deleted = self._cleanup_factory(session).delete_for_chat(chat_id)
                 session.commit()
                 return deleted
-            except Exception:
-                session.rollback()
-                raise
-
-
-class WorkflowRunCleanupGateway:
-    """在独立 Session 中查询并清理 Graph 运行数据。"""
-
-    def __init__(self, session_factory: Callable[[], Session]) -> None:
-        self._session_factory = session_factory
-
-    def list_run_ids_for_chat(self, chat_id: int) -> list[str]:
-        with self._session_factory() as session:
-            return list_run_ids_for_chat(session, chat_id)
-
-    def delete_for_chat(self, chat_id: int) -> int:
-        with self._session_factory() as session:
-            try:
-                run_ids = list_run_ids_for_chat(session, chat_id)
-                delete_runs(session, run_ids)
-                session.commit()
-                return len(run_ids)
             except Exception:
                 session.rollback()
                 raise
@@ -99,5 +73,4 @@ class WorkflowArtifactCleanupGateway:
 __all__ = [
     "CommittedAgentCleanupGateway",
     "WorkflowArtifactCleanupGateway",
-    "WorkflowRunCleanupGateway",
 ]

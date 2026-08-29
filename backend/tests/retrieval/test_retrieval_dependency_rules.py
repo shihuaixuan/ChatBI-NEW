@@ -5,7 +5,6 @@ from pathlib import Path
 
 RETRIEVAL_DIR = Path(__file__).resolve().parents[2] / "apps" / "retrieval"
 FORBIDDEN = (
-    "sqlbot_platform.workflow_engine",
     "apps.workflow",
     "apps.agent",
     "apps.agentic_chat",

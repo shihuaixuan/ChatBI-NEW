@@ -134,6 +134,8 @@ from apps.chatbi.models.orm import (
     ChatbiAgentToolCall,
     ChatbiAgentTraceNode,
     EventLog,
+    WorkflowArtifactCleanupModel,
+    WorkflowArtifactModel,
 )
 
 __all__ = [
@@ -270,4 +272,6 @@ __all__ = [
     "SemanticParseTimeFilter",
     "SemanticParseUnresolved",
     "TimeRange",
+    "WorkflowArtifactCleanupModel",
+    "WorkflowArtifactModel",
 ]

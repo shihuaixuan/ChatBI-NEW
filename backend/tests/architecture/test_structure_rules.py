@@ -114,18 +114,6 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
         reason="ChatBI Tool 只做能力适配，不得直接处理宿主生命周期、持久化、Event 或 Trace。",
     ),
     ForbiddenImportRule(
-        rule_id="engine-domain-no-business-imports",
-        scope="platform/workflow_engine",
-        forbidden=("apps",),
-        reason="通用 Workflow Engine 的所有分层均不得依赖业务应用。",
-    ),
-    ForbiddenImportRule(
-        rule_id="engine-tests-no-business-imports",
-        scope="tests/workflow_engine",
-        forbidden=("apps",),
-        reason="Workflow Engine 测试环境只能依赖通用平台和公共基础设施。",
-    ),
-    ForbiddenImportRule(
         rule_id="mcp-no-chat-internals",
         scope="interfaces/mcp",
         forbidden=(
@@ -154,7 +142,6 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
             "apps.chatbi",
             "apps.agent",
             "apps.workflow",
-            "sqlbot_platform.workflow_engine",
         ),
         reason="Conversation 只拥有会话数据，不得依赖问数编排或工作流平台。",
     ),

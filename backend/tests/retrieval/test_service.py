@@ -7,9 +7,6 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from apps.chatbi.orchestration.graph.capabilities.adapters.knowledge import (
-    SemanticKnowledgeAdapter,
-)
 from apps.retrieval import filter_semantic_payload_tables
 from apps.retrieval.errors import RetrievalQueryError
 from apps.retrieval.models.dto import (
@@ -138,31 +135,6 @@ def test_service_executes_candidate_retrieval_only():
     ]
 
 
-def test_graph_consumes_candidate_retrieval_payload_directly():
-    service = RetrievalService(object(), semantic_binding_runner=_Runner())
-    graph = SemanticKnowledgeAdapter(retrieval_service=service).retrieve(
-        {
-            "run_id": "run-1",
-            "request": {
-                "question": "GMV",
-                "dataset_id": 20,
-                "tenant_id": 1,
-                "user_id": 2,
-            },
-            "variables": {
-                "rewrite": {
-                    "rewrite_question": "GMV",
-                    "metric_phrases": ["GMV"],
-                    "dimension_phrases": [],
-                },
-            },
-        }
-    )
-    direct = service.retrieve(_request()).payload
-
-    assert graph["status"] == direct["status"] == "missed"
-    assert graph["decision"] == direct["decision"] == {}
-    assert graph["retrieval_strategy_version"] == SEMANTIC_BINDING_STRATEGY_VERSION
 
 
 def test_semantic_payload_filter_removes_nested_unauthorized_tables():

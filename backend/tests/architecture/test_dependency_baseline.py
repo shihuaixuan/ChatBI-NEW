@@ -11,14 +11,12 @@ import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 APPS_DIR = BACKEND_DIR / "apps"
-WORKFLOW_ENGINE_DIR = BACKEND_DIR / "platform" / "workflow_engine"
 BASELINE_PATH = Path(__file__).with_name("known_dependency_violations.json")
 
 # 旧模块尚未统一 models/orm，迁移期通过这些前缀识别其内部模型。
 LEGACY_INTERNAL_MODEL_PREFIXES = (
     "apps.datasource.models",
     "apps.semantic.models.orm",
-    "sqlbot_platform.workflow_engine.infrastructure.persistence.models",
 )
 
 # 这些路径表示具体实现，而不是可供跨领域依赖的公开契约。
@@ -34,7 +32,6 @@ RULE_NAMES = (
     "cross_domain_internal_models",
     "cross_domain_concrete_implementations",
     "cross_domain_api_imports",
-    "workflow_engine_business_imports",
     "function_local_app_imports",
     "tool_runtime_langchain_imports",
 )
@@ -105,7 +102,6 @@ def _iter_imports() -> list[ImportRecord]:
     records: list[ImportRecord] = []
     source_files = [
         *((path, path.relative_to(APPS_DIR).parts[0]) for path in APPS_DIR.rglob("*.py")),
-        *((path, "workflow_engine") for path in WORKFLOW_ENGINE_DIR.rglob("*.py")),
     ]
     for path, source_app in sorted(source_files):
         if "__pycache__" in path.parts:
@@ -143,9 +139,6 @@ def _collect_violations() -> dict[str, set[str]]:
         )
         if is_cross_domain_api:
             violations["cross_domain_api_imports"].add(record.key)
-
-        if record.source_app == "workflow_engine" and is_cross_domain:
-            violations["workflow_engine_business_imports"].add(record.key)
 
         if record.function_local and record.module.startswith("apps."):
             violations["function_local_app_imports"].add(record.key)

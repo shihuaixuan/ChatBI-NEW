@@ -9,6 +9,7 @@ from apps.chatbi.adapters.agent_trace import (
     ChatBITraceDetailGateway,
     ChatBITraceRepository,
 )
+from apps.chatbi.adapters.artifact_store import build_workflow_artifact_gateway
 from apps.chatbi.adapters.embedding_ranking import (
     EmbeddingDatasourceSelectionCandidateRanker,
     EmbeddingSchemaRankingClient,
@@ -16,7 +17,6 @@ from apps.chatbi.adapters.embedding_ranking import (
 from apps.chatbi.adapters.execution_cleanup import (
     CommittedAgentCleanupGateway,
     WorkflowArtifactCleanupGateway,
-    WorkflowRunCleanupGateway,
 )
 from apps.chatbi.adapters.question_model import build_question_model_service
 from apps.chatbi.services.conversation import (
@@ -84,9 +84,6 @@ from apps.semantic.services.schema_service import DatasetSchemaProvider
 from apps.trace import AgentTraceRecorder, TraceConfig, build_trace_exporter
 from common.core.config import settings
 from common.core.db import engine
-from sqlbot_platform.workflow_engine.artifact_gateway import (
-    build_workflow_artifact_gateway,
-)
 
 
 def build_agent_event_publisher(session: Session) -> EventPublisher:
@@ -317,7 +314,6 @@ def build_chat_deletion_service(
             cleanup_session_factory,
             agent_cleanup_factory,
         ),
-        graph_cleanup=WorkflowRunCleanupGateway(cleanup_session_factory),
         artifact_cleanup=WorkflowArtifactCleanupGateway(
             cleanup_session_factory,
             build_result_artifact_service,

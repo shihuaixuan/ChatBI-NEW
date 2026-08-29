@@ -12,6 +12,10 @@ from apps.chatbi.models.orm.agent_run import (
     ChatbiAgentToolCall,
 )
 from apps.chatbi.models.orm.agent_trace import ChatbiAgentTraceNode
+from apps.chatbi.models.orm.artifact import (
+    WorkflowArtifactCleanupModel,
+    WorkflowArtifactModel,
+)
 from apps.event import EventLog
 
 __all__ = [
@@ -28,4 +32,6 @@ __all__ = [
     "ChatbiAgentToolCall",
     "ChatbiAgentTraceNode",
     "EventLog",
+    "WorkflowArtifactCleanupModel",
+    "WorkflowArtifactModel",
 ]

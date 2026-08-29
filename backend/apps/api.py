@@ -10,9 +10,6 @@ from apps.ai_model.api import model_config as ai_model
 from apps.assistant.api import assistants as assistant
 from apps.assistant.api import page_embedded
 from apps.chatbi.api.router import compose_chatbi_router
-from apps.chatbi.orchestration.graph.api_extension import (
-    build_chatbi_workflow_api_extension,
-)
 from apps.dashboard.api import dashboard_api
 from apps.datasource.api import datasource, table_relation
 from apps.knowledge.api import recommended_problem, sql_example
@@ -24,16 +21,9 @@ from apps.semantic.api.router import router as semantic_router
 from apps.system.api import user
 from interfaces.http import file_download
 from interfaces.mcp import router as mcp_router
-from sqlbot_platform.workflow_engine.api import router as graph_workflow
-from sqlbot_platform.workflow_engine.api.extension import (
-    register_workflow_api_extension,
-)
 
 api_router = APIRouter()
-register_workflow_api_extension(build_chatbi_workflow_api_extension)
-chatbi_router = compose_chatbi_router(
-    graph_router=graph_workflow.router,
-)
+chatbi_router = compose_chatbi_router()
 api_router.include_router(access_login.router)
 api_router.include_router(access_user.router)
 api_router.include_router(user.router)

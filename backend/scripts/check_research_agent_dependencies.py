@@ -51,6 +51,10 @@ DELETED_MODULE_PREFIXES = (
     "apps.chatbi.orchestration.pipeline.research_agent",
     "apps.chatbi.orchestration.pipeline.stages",
     "apps.chatbi.services.planning.limited_multistep",
+    # 2026-08-28 Graph 引擎退役：引擎包与 Graph 编排目录已物理删除，禁止回归。
+    "apps.chatbi.orchestration.graph",
+    "sqlbot_platform",
+    "platform.workflow_engine",
 )
 
 # 旧架构独有符号：现行 ReAct 的 Action 和 State 契约不属于删除范围。
@@ -118,6 +122,7 @@ NEW_MODULES = (
 SCAN_ROOTS = (
     BACKEND_ROOT / "apps",
     BACKEND_ROOT / "scripts",
+    BACKEND_ROOT / "main.py",
 )
 
 
@@ -155,9 +160,13 @@ def check_dependencies() -> list[str]:
 
     # 反向：全仓扫描，禁止任何对已删除模块的导入。
     for root in SCAN_ROOTS:
-        if not root.is_dir():
+        if root.is_file():
+            candidates = [root]
+        elif root.is_dir():
+            candidates = sorted(root.rglob("*.py"))
+        else:
             continue
-        for path in sorted(root.rglob("*.py")):
+        for path in candidates:
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             except SyntaxError as exc:

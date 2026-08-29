@@ -19,6 +19,7 @@ from apps.access_control.permission import RequestContextMiddleware
 from apps.ai_model.composition import migrate_ai_model_secrets
 from apps.api import api_router
 from apps.assistant.public import init_dynamic_cors
+from apps.chatbi.adapters.artifact_store.cleanup import ArtifactCleanupService
 from apps.retrieval.embedding import preload_retrieval_embedding_model
 from apps.retrieval.indexing.worker import submit_pending_index_jobs
 from common.audit.schemas.request_context import RequestContextMiddlewareCommon
@@ -34,9 +35,6 @@ from common.interfaces.i18n import (
     tags_metadata,
 )
 from common.utils.utils import SQLBotLogUtil
-from sqlbot_platform.workflow_engine.infrastructure.artifacts.cleanup import (
-    ArtifactCleanupService,
-)
 
 
 def run_migrations():
