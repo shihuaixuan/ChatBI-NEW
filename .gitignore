@@ -216,3 +216,6 @@ test.py
 .env
 
 !/.venv/
+
+# Claude 个人本地配置
+.claude/settings.local.json
