@@ -140,6 +140,4 @@ def test_default_model_client_isolates_langchain_message_and_tool_conversion():
 
     client.invoke([decision.message], [EchoTool.definition()])
     assert model.messages[0].additional_kwargs["reasoning_content"] == "先规划调用顺序"
-
-    client.invoke_required([AgentMessage.user("必须调用工具")], [EchoTool.definition()])
-    assert model.tool_choice == "required"
+    assert model.tool_choice is None
