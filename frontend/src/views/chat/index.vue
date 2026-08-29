@@ -485,7 +485,6 @@ import { Chat, chatApi, ChatInfo, type ChatMessage, ChatRecord } from '@/api/cha
 import ChatRow from './ChatRow.vue'
 import ChartAnswer from './answer/ChartAnswer.vue'
 import AgentAnswer from './answer/AgentAnswer.vue'
-import GraphWorkflowAnswer from './answer/GraphWorkflowAnswer.vue'
 import AnalysisAnswer from './answer/AnalysisAnswer.vue'
 import PredictAnswer from './answer/PredictAnswer.vue'
 import UserChat from './chat-block/UserChat.vue'
@@ -555,14 +554,13 @@ const chatFlowStore = useChatFlowStore()
 const chatFlowSelectorEnabled = computed(() => chatFlowStore.getSelectorEnabled)
 
 const flowComponents: Record<ChatFlowMode, any> = {
-  graph: GraphWorkflowAnswer,
   agent: AgentAnswer,
 }
 
 function answerComponentForRecord(record?: ChatRecord) {
-  // 新记录只允许 graph/agent；无有效类型的旧记录仅保留只读展示。
-  if (record?.execution_type && flowComponents[record.execution_type]) {
-    return flowComponents[record.execution_type]
+  // 新记录只允许 agent；graph/无有效类型的旧记录仅保留只读展示。
+  if (record?.execution_type && flowComponents[record.execution_type as ChatFlowMode]) {
+    return flowComponents[record.execution_type as ChatFlowMode]
   }
   return ChartAnswer
 }
@@ -863,7 +861,7 @@ function onAnswerLoadingChange(value: boolean) {
   }
 }
 
-// 仅 Agent 的待澄清会接管输入框；Graph 的交互卡片仍在消息内。
+// 仅 Agent 的待澄清会接管输入框；Graph 已退役，历史记录只读展示。
 const pendingClarificationRecord = computed<ChatRecord | undefined>(() => {
   const records = currentChat.value.records
   if (!records.length) return undefined

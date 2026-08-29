@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { store } from '@/stores/index.ts'
 
-export type ChatFlowMode = 'graph' | 'agent'
+export type ChatFlowMode = 'agent'
 
 const STORAGE_KEY = 'numora_chat_flow_mode'
 const PREVIOUS_STORAGE_KEY = 'sqlbot_chat_flow_mode'
