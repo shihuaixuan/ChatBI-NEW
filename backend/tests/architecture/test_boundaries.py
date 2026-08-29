@@ -92,26 +92,6 @@ def test_analysis_prediction_service_only_depends_on_stable_ports():
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
-def test_legacy_chat_question_no_longer_owns_analysis_prediction_templates():
-    tree = _tree__analysis_prediction("apps/chatbi/models/dto/legacy_query.py")
-    imports = _imports__analysis_prediction(tree)
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "AiModelQuestion"
-    )
-    method_names = {
-        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
-    }
-
-    assert "apps.template.generate_analysis.generator" not in imports
-    assert "apps.template.generate_predict.generator" not in imports
-    assert "analysis_sys_question" not in method_names
-    assert "analysis_user_question" not in method_names
-    assert "predict_sys_question" not in method_names
-    assert "predict_user_question" not in method_names
-
-
 # ======================================================================
 # 来源：test_chatbi_answer_generation_boundary.py
 # ======================================================================
@@ -366,30 +346,6 @@ def test_chart_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
-def test_legacy_chat_question_no_longer_owns_chart_templates():
-    tree = _tree__chart_generation("apps/chatbi/models/dto/legacy_query.py")
-    imports = _imports__chart_generation(tree)
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "AiModelQuestion"
-    )
-    method_names = {
-        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
-    }
-
-    assert "apps.template.generate_chart.generator" not in imports
-    assert "chart_sys_question" not in method_names
-    assert "chart_user_question" not in method_names
-
-
-# ======================================================================
-# 来源：test_chatbi_conversation_boundary.py
-# ======================================================================
-
-BACKEND_DIR__conversation = Path(__file__).resolve().parents[2]
-
-
 def _imports__conversation(path: Path) -> set[str]:
     modules: set[str] = set()
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -399,6 +355,13 @@ def _imports__conversation(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.add(node.module)
     return modules
+
+
+# ======================================================================
+# 来源：test_chatbi_conversation_boundary.py
+# ======================================================================
+
+BACKEND_DIR__conversation = Path(__file__).resolve().parents[2]
 
 
 def test_conversation_service_depends_on_ports_not_session_or_legacy_chat():
@@ -494,23 +457,6 @@ def test_datasource_selection_service_only_depends_on_stable_ports():
     assert not any(module.startswith("apps.datasource") for module in imports)
 
 
-def test_legacy_chat_question_no_longer_owns_datasource_selection_template():
-    tree = _tree__datasource_selection("apps/chatbi/models/dto/legacy_query.py")
-    imports = _imports__datasource_selection(tree)
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "AiModelQuestion"
-    )
-    method_names = {
-        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
-    }
-
-    assert "apps.template.select_datasource.generator" not in imports
-    assert "datasource_sys_question" not in method_names
-    assert "datasource_user_question" not in method_names
-
-
 # ======================================================================
 # 来源：test_chatbi_dynamic_sql_generation_boundary.py
 # ======================================================================
@@ -557,23 +503,6 @@ def test_dynamic_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
-
-
-def test_legacy_chat_question_no_longer_owns_dynamic_sql_templates():
-    tree = _tree__dynamic_sql_generation("apps/chatbi/models/dto/legacy_query.py")
-    imports = _imports__dynamic_sql_generation(tree)
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "AiModelQuestion"
-    )
-    method_names = {
-        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
-    }
-
-    assert "apps.template.generate_dynamic.generator" not in imports
-    assert "dynamic_sys_question" not in method_names
-    assert "dynamic_user_question" not in method_names
 
 
 # ======================================================================
@@ -793,23 +722,6 @@ def test_permission_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
-
-
-def test_legacy_chat_question_no_longer_owns_permission_sql_templates():
-    tree = _tree__permission_sql_generation("apps/chatbi/models/dto/legacy_query.py")
-    imports = _imports__permission_sql_generation(tree)
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "AiModelQuestion"
-    )
-    method_names = {
-        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
-    }
-
-    assert "apps.template.filter.generator" not in imports
-    assert "filter_sys_question" not in method_names
-    assert "filter_user_question" not in method_names
 
 
 # ======================================================================
@@ -1516,23 +1428,6 @@ def test_recommended_question_service_only_depends_on_stable_ports():
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
 
 
-def test_legacy_chat_question_no_longer_owns_recommendation_templates():
-    tree = _tree__recommended_question("apps/chatbi/models/dto/legacy_query.py")
-    imports = _imports__recommended_question(tree)
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "AiModelQuestion"
-    )
-    method_names = {
-        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
-    }
-
-    assert "apps.template.generate_guess_question.generator" not in imports
-    assert "guess_sys_question" not in method_names
-    assert "guess_user_question" not in method_names
-
-
 # ======================================================================
 # 来源：test_chatbi_record_boundary.py
 # ======================================================================
@@ -1590,17 +1485,6 @@ def test_chat_record_service_has_no_runtime_or_session_dependency():
 
 def test_chat_history_dto_has_no_legacy_chat_or_framework_dependency():
     imports = _imports__record(_tree__record("apps/conversation/models/dto/chat_history.py"))
-
-    assert not any(module.startswith("apps.chat") for module in imports)
-    assert not any(module.startswith("apps.agent") for module in imports)
-    assert not any(module.startswith("apps.workflow") for module in imports)
-    assert "fastapi" not in imports
-    assert "langchain" not in imports
-    assert "sqlmodel" not in imports
-
-
-def test_legacy_query_dto_has_no_transport_or_model_framework_dependency():
-    imports = _imports__record(_tree__record("apps/chatbi/models/dto/legacy_query.py"))
 
     assert not any(module.startswith("apps.chat") for module in imports)
     assert not any(module.startswith("apps.agent") for module in imports)
@@ -1737,23 +1621,6 @@ def test_sql_generation_service_only_depends_on_stable_ports():
     assert not any(module.startswith("apps.template") for module in imports)
     assert not any(module.startswith("apps.chat.") for module in imports)
     assert not any(module.startswith("sqlbot_platform.workflow_engine") for module in imports)
-
-
-def test_legacy_chat_question_no_longer_owns_sql_templates():
-    tree = _tree__sql_generation("apps/chatbi/models/dto/legacy_query.py")
-    imports = _imports__sql_generation(tree)
-    class_node = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "AiModelQuestion"
-    )
-    method_names = {
-        node.name for node in class_node.body if isinstance(node, ast.FunctionDef)
-    }
-
-    assert "apps.template.generate_sql.generator" not in imports
-    assert "sql_sys_question" not in method_names
-    assert "sql_user_question" not in method_names
 
 
 # ======================================================================

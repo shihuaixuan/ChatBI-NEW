@@ -73,24 +73,6 @@ async def get_chat_with_data(session: SessionDep, current_user: CurrentUser, cha
     return await asyncio.to_thread(inner)
 
 
-""" @router.get("/record/{chat_record_id}/data", summary=f"{PLACEHOLDER_PREFIX}get_chart_data")
-async def chat_record_data(session: SessionDep, chat_record_id: int):
-    def inner():
-        data = get_chat_chart_data(chat_record_id=chat_record_id, session=session)
-        return format_json_data(data)
-
-    return await asyncio.to_thread(inner)
-
-
-@router.get("/record/{chat_record_id}/predict_data", summary=f"{PLACEHOLDER_PREFIX}get_chart_predict_data")
-async def chat_predict_data(session: SessionDep, chat_record_id: int):
-    def inner():
-        data = get_chat_predict_data(chat_record_id=chat_record_id, session=session)
-        return format_json_list_data(data)
-
-    return await asyncio.to_thread(inner) """
-
-
 @router.get("/record/{chat_record_id}/data", summary=f"{PLACEHOLDER_PREFIX}get_chart_data")
 async def chat_record_data(session: SessionDep, current_user: CurrentUser, chat_record_id: int):
     def inner():
@@ -150,22 +132,6 @@ async def chat_record_usage(session: SessionDep, current_user: CurrentUser, chat
     return await asyncio.to_thread(inner)
 
 
-""" @router.post("/rename", response_model=str, summary=f"{PLACEHOLDER_PREFIX}rename_chat")
-@system_log(LogConfig(
-    operation_type=OperationType.UPDATE,
-    module=OperationModules.CHAT,
-    resource_id_expr="chat.id"
-))
-async def rename(session: SessionDep, chat: RenameChat):
-    try:
-        return rename_chat(session=session, rename_object=chat)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        ) """
-
-
 @router.post("/rename", response_model=str, summary=f"{PLACEHOLDER_PREFIX}rename_chat")
 @system_log(LogConfig(
     operation_type=OperationType.UPDATE,
@@ -180,23 +146,6 @@ async def rename(session: SessionDep, current_user: CurrentUser, chat: RenameCha
             status_code=500,
             detail=str(e)
         )
-
-
-""" @router.delete("/{chart_id}/{brief}", response_model=str, summary=f"{PLACEHOLDER_PREFIX}delete_chat")
-@system_log(LogConfig(
-    operation_type=OperationType.DELETE,
-    module=OperationModules.CHAT,
-    resource_id_expr="chart_id",
-    remark_expr="brief"
-))
-async def delete(session: SessionDep, chart_id: int, brief: str):
-    try:
-        return delete_chat(session=session, chart_id=chart_id)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        ) """
 
 
 @router.delete("/{chart_id}/{brief}", response_model=str, summary=f"{PLACEHOLDER_PREFIX}delete_chat")

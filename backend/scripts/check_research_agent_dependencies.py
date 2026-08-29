@@ -33,6 +33,24 @@ DELETED_MODULE_PREFIXES = (
     "apps.chatbi.services.research.requirements",
     "apps.chatbi.orchestration.pipeline.research",
     "apps.chatbi.adapters.prompts.research_policy",
+    # 2026-08-28 冗余清理追加：以下模块已随本轮删除落地，同样禁止回归。
+    "apps.chatbi.adapters.chart_generation",
+    "apps.chatbi.adapters.datasource_selection",
+    "apps.chatbi.adapters.dynamic_sql_generation",
+    "apps.chatbi.adapters.permission_sql_generation",
+    "apps.chatbi.adapters.prompts.limited_multistep",
+    "apps.chatbi.adapters.query_result_projection",
+    "apps.chatbi.adapters.sql_generation",
+    "apps.chatbi.models.dto.legacy_query",
+    "apps.chatbi.orchestration.agent.prompts",
+    "apps.chatbi.orchestration.agent.tool_execution",
+    "apps.chatbi.orchestration.pipeline.events",
+    "apps.chatbi.orchestration.pipeline.fast",
+    "apps.chatbi.orchestration.pipeline.mode_router_legacy",
+    "apps.chatbi.orchestration.pipeline.plan_mode",
+    "apps.chatbi.orchestration.pipeline.research_agent",
+    "apps.chatbi.orchestration.pipeline.stages",
+    "apps.chatbi.services.planning.limited_multistep",
 )
 
 # 旧架构独有符号：现行 ReAct 的 Action 和 State 契约不属于删除范围。

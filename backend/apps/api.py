@@ -29,9 +29,6 @@ from sqlbot_platform.workflow_engine.api.extension import (
     register_workflow_api_extension,
 )
 
-#from audit.api import audit_api
-
-
 api_router = APIRouter()
 register_workflow_api_extension(build_chatbi_workflow_api_extension)
 chatbi_router = compose_chatbi_router(
@@ -62,5 +59,3 @@ api_router.include_router(memory_router)
 api_router.include_router(access_variable.router)
 api_router.include_router(legacy_terms.router)
 api_router.include_router(semantic_router)
-
-#api_router.include_router(audit_api.router)

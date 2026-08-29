@@ -12,11 +12,6 @@ from apps.chatbi.models.dto.execution_requirement import (
 )
 from apps.chatbi.models.dto.research_agent import ResearchBudget
 from apps.chatbi.models.dto.semantic_parse import SemanticParseOutput
-from apps.chatbi.orchestration.pipeline.mode_router_legacy import (
-    ModeRouteInput,
-    ModeRouter,
-    ModeRoutingError,
-)
 from apps.chatbi.services.research.routing_freeze import freeze_research_requirement
 from apps.semantic.models.dto import DatasetSchema, SchemaElement
 from apps.semantic.services.schema_service import DatasetSchemaProvider
@@ -25,6 +20,10 @@ from apps.temporal import TemporalContext
 
 class ExecutionRequirementBuildError(ValueError):
     """无法生成合法的冻结执行需求。"""
+
+
+class ModeRoutingError(ValueError):
+    """无法生成可执行需求，或请求的模式不允许。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,8 +249,6 @@ def _metric_expression(element: SchemaElement) -> str:
 
 __all__ = [
     "ExecutionRequirementBuildError",
-    "ModeRouteInput",
-    "ModeRouter",
     "ModeRoutingError",
     "ExecutionRequirementBuilder",
     "ExecutionRequirementInput",

@@ -108,7 +108,6 @@ from apps.chatbi.models.dto.generation_schema_context import (
     GenerationSchemaTableCandidate,
 )
 from apps.chatbi.models.dto.intent_projection import project_mention_graph_to_intent
-from apps.chatbi.models.dto.legacy_query import AiModelQuestion, ChatQuestion
 from apps.chatbi.models.dto.mention import (
     AnalysisExpression,
     DecompositionHint,
@@ -237,8 +236,6 @@ __all__ = [
     "AnswerProjectionResult",
     "AnalysisPredictionGenerationData",
     "AnalysisPredictionGenerationEvent",
-    "AiModelQuestion",
-    "ChatQuestion",
     "ChatBIResultArtifactRef",
     "ChartGenerationData",
     "ChartGenerationEvent",

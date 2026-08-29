@@ -107,7 +107,6 @@ FORBIDDEN_IMPORT_RULES: tuple[ForbiddenImportRule, ...] = (
         scope="apps/chatbi/orchestration/agent/tools",
         forbidden=(
             "apps.chatbi.orchestration.agent.lifecycle",
-            "apps.chatbi.orchestration.agent.tool_execution",
             "apps.chatbi.repository",
             "apps.event",
             "apps.trace",
