@@ -9,8 +9,6 @@ import DashboardEditor from '@/views/dashboard/editor/index.vue'
 import DashboardPreview from '@//views/dashboard/preview/SQPreviewSingle.vue'
 import Dashboard from '@/views/dashboard/index.vue'
 import Model from '@/views/system/model/Model.vue'
-// import Embedded from '@/views/system/embedded/index.vue'
-// import SetAssistant from '@/views/system/embedded/iframe.vue'
 import SystemEmbedded from '@/views/system/embedded/Page.vue'
 import Variables from '@/views/system/variables/index.vue'
 
@@ -22,7 +20,6 @@ import Member from '@/views/system/member/index.vue'
 import Professional from '@/views/system/professional/index.vue'
 import Training from '@/views/system/training/index.vue'
 import Semantic from '@/views/system/semantic/index.vue'
-import Audit from '@/views/system/audit/index.vue'
 import Appearance from '@/views/system/appearance/index.vue'
 import Parameter from '@/views/system/parameter/index.vue'
 import Permission from '@/views/system/permission/index.vue'
@@ -230,12 +227,6 @@ export const routes = [
             meta: { title: t('variables.system_variables') },
           },
         ],
-      },
-      {
-        path: 'audit',
-        name: 'audit',
-        component: Audit,
-        meta: { title: t('audit.system_log'), iconActive: 'log', iconDeActive: 'noLog' },
       },
     ],
   },
